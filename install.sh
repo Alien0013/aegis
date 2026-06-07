@@ -43,7 +43,8 @@ if [ -n "$REPO" ]; then
 elif [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/pyproject.toml" ]; then
   SOURCE="$SCRIPT_DIR"
 else
-  SOURCE="aegis-agent"   # PyPI (once published)
+  # Piped install (curl | bash) with no local checkout: install straight from git.
+  SOURCE="git+https://github.com/Alien0013/aegis.git"
 fi
 [ -n "$EXTRAS" ] && SOURCE="${SOURCE}[${EXTRAS}]"
 say "Install source: $SOURCE"

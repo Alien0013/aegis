@@ -77,14 +77,61 @@ class Mem0Provider(MemoryProvider):
             pass
 
 
+class HonchoProvider(MemoryProvider):
+    """Personal memory via Honcho (plastic-labs). Optional dep: `honcho-ai`.
+
+    Set HONCHO_API_KEY (or HONCHO_ENVIRONMENT=demo for the public demo). Messages
+    are added to a Honcho session; recall uses the dialectic `peer.chat()` endpoint.
+    """
+
+    def __init__(self, user_id: str = "user", session_id: str = "aegis"):
+        try:
+            from honcho import Honcho
+        except ImportError as e:  # noqa: BLE001
+            raise RuntimeError("honcho provider needs `pip install honcho-ai`") from e
+        import os
+        kwargs = {}
+        if os.environ.get("HONCHO_ENVIRONMENT"):
+            kwargs["environment"] = os.environ["HONCHO_ENVIRONMENT"]
+        self._honcho = Honcho(**kwargs)
+        self._user = self._honcho.peer(user_id)
+        self._assistant = self._honcho.peer("assistant")
+        self._session = self._honcho.session(session_id)
+        self._last_query = ""
+
+    def system_prompt_block(self) -> str:
+        try:
+            q = self._last_query or "What do you know about this user that's relevant right now?"
+            resp = self._user.chat(q)
+            text = resp if isinstance(resp, str) else getattr(resp, "content", "") or str(resp)
+            return "# Personal memory (Honcho)\n" + text.strip() if text and text.strip() else ""
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def sync_turn(self, messages) -> None:
+        try:
+            self._last_query = next((m.content for m in reversed(messages) if m.role == "user"), "")
+            batch = []
+            for m in messages[-4:]:
+                if m.role == "user" and m.content:
+                    batch.append(self._user.message(m.content))
+                elif m.role == "assistant" and m.content:
+                    batch.append(self._assistant.message(m.content))
+            if batch:
+                self._session.add_messages(batch)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def build_memory_provider(name: str, config) -> MemoryProvider | None:
     name = (name or "").strip().lower()
     if name == "jsonl":
         return JSONLMemoryProvider()
-    if name == "mem0":
-        try:
-            return Mem0Provider()
-        except RuntimeError as e:
-            print(f"  ! {e}")
-            return None
+    for key, cls in (("mem0", Mem0Provider), ("honcho", HonchoProvider)):
+        if name == key:
+            try:
+                return cls()
+            except RuntimeError as e:
+                print(f"  ! {e}")
+                return None
     return None

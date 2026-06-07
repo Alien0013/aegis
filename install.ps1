@@ -25,7 +25,7 @@ Ok "Using $(& $py --version)"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 if ($Repo) { $source = "git+$Repo" }
 elseif (Test-Path "$scriptDir\pyproject.toml") { $source = $scriptDir }
-else { $source = "aegis-agent" }
+else { $source = "git+https://github.com/Alien0013/aegis.git" }
 if ($Extras) { $source = "$source[$Extras]" }
 Say "Install source: $source"
 

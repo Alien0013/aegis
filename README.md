@@ -110,6 +110,9 @@ allowed. Set the policy with `aegis config set tools.exec_mode ask` (or pass
 * **Memory** — `~/.aegis/memories/{MEMORY.md,USER.md}` (`§`-delimited, char-capped,
   atomic writes) plus an append-only `history.jsonl`. The agent persists facts via
   the `memory` tool; a frozen snapshot keeps the system prompt cache-stable.
+  Pluggable external backends: set `memory.provider` to `honcho` (`pip install
+  honcho-ai`), `mem0` (`pip install mem0ai`), or `jsonl` (zero-dep) — they layer on
+  top of the always-on file memory.
 * **Skills** — `SKILL.md` packages (agentskills.io-compatible frontmatter) loaded
   with progressive disclosure and tiered precedence (workspace > personal >
   configured > bundled). `aegis skills new <name>` scaffolds one;
