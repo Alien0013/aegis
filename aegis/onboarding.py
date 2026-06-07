@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import getpass
+import os
 import secrets
 import sys
 from dataclasses import dataclass
@@ -19,10 +20,15 @@ Output = Callable[[str], None]
 MODEL_PRESETS: dict[str, list[tuple[str, str]]] = {
     "openai": [
         ("gpt-5.2", "GPT-5.2 (latest frontier)"),
+        ("gpt-5.2-chat-latest", "GPT-5.2 Chat"),
+        ("gpt-5-mini", "GPT-5 mini"),
+        ("gpt-5-nano", "GPT-5 nano"),
         ("gpt-5.1", "GPT-5.1"),
         ("gpt-5", "GPT-5"),
-        ("gpt-4o", "GPT-4o"),
         ("gpt-4.1", "GPT-4.1"),
+        ("gpt-4.1-mini", "GPT-4.1 mini"),
+        ("gpt-4o", "GPT-4o"),
+        ("gpt-4o-mini", "GPT-4o mini"),
     ],
     "anthropic": [
         ("claude-sonnet-4-5", "Claude Sonnet 4.5"),
@@ -157,10 +163,10 @@ def _choose(
 
     output_func(f"? {prompt}")
     for i, (_, label) in enumerate(options, 1):
-        marker = ">" if i == default + 1 else " "
-        output_func(f"  {marker} {i}. {label}")
+        marker = "❯" if i == default + 1 else " "
+        output_func(f"  {marker} {label}")
     for _ in range(3):
-        raw = input_func(f"selection [{default + 1}]: ").strip()
+        raw = input_func(f"choice [{options[default][1]}]: ").strip()
         if not raw:
             return options[default][0]
         if raw.isdigit() and 1 <= int(raw) <= len(options):
@@ -190,10 +196,10 @@ def _multi_choose(
         return picked
 
     output_func(f"? {prompt}")
-    for i, (value, label) in enumerate(options, 1):
-        marker = "x" if value in default_values else " "
-        output_func(f"  [{marker}] {i}. {label}")
-    output_func("  enter comma-separated selections, or leave blank for none")
+    for _i, (value, label) in enumerate(options, 1):
+        marker = "⬢" if value in default_values else "⬡"
+        output_func(f"  {marker} {label}")
+    output_func("  enter comma-separated names, or leave blank for none")
     raw = input_func("selection(s) []: ").strip()
     if not raw:
         return list(default_values)
@@ -289,7 +295,8 @@ def _dialog_multi_choose(
 
 def _can_use_dialogs(input_func: Input, output_func: Output) -> bool:
     return (
-        input_func is input
+        os.environ.get("AEGIS_ONBOARD_DIALOGS") == "1"
+        and input_func is input
         and output_func is print
         and sys.stdin.isatty()
         and sys.stdout.isatty()
@@ -333,6 +340,7 @@ def _configure_model(
         return
     state.provider = provider
     config.set("model.provider", provider)
+    auth_ready = spec.auth_scheme == "none"
 
     if spec.env_vars:
         env_name = spec.env_vars[0]
@@ -357,15 +365,18 @@ def _configure_model(
         )
         state.auth_method = auth_method
         if auth_method == "api_key":
-            key = secret_func(f"🔑 Enter {env_name}: ").strip()
-            if key:
-                config.set(env_name, key)
-                out(f"✓ saved {env_name} to {cfg.env_path()}")
-            else:
-                out(f"! {env_name} skipped.")
+            auth_ready = _configure_api_key(config, env_name, secret_func, out)
+            if not auth_ready:
+                state.auth_method = "skipped"
         elif auth_method == "oauth" and spec.oauth:
-            if not _oauth_login(provider, spec, out):
+            auth_ready = _oauth_login(provider, spec, out)
+            if not auth_ready:
                 out("  Use an API key if your OAuth client cannot grant model inference scopes.")
+                if _confirm(f"Configure {env_name} instead?", True, input_func, out):
+                    auth_ready = _configure_api_key(config, env_name, secret_func, out)
+                    state.auth_method = "api_key" if auth_ready else "skipped"
+                else:
+                    state.auth_method = "skipped"
     elif spec.auth_scheme == "none":
         state.auth_method = "local"
         base_url = _ask("Base URL", spec.base_url, input_func)
@@ -383,8 +394,20 @@ def _configure_model(
         mode = "ask"
     config.set("tools.exec_mode", mode)
 
-    if probe:
+    if probe and auth_ready:
         _probe_model(config, out)
+    elif probe:
+        out("Skipping model connection test until usable credentials are configured.")
+
+
+def _configure_api_key(config: Config, env_name: str, secret_func: Input, out: Output) -> bool:
+    key = secret_func(f"🔑 Enter {env_name}: ").strip()
+    if key:
+        config.set(env_name, key)
+        out(f"✓ saved {env_name} to {cfg.env_path()}")
+        return True
+    out(f"! {env_name} skipped.")
+    return False
 
 
 def _oauth_login(provider: str, spec, out: Output) -> bool:

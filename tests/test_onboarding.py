@@ -79,6 +79,111 @@ def test_onboarding_can_select_oauth(monkeypatch):
     assert "OAuth browser login" in text
 
 
+def test_onboarding_oauth_missing_scope_falls_back_to_api_key(monkeypatch):
+    from aegis.config import Config
+    from aegis.onboarding import run_onboarding
+
+    monkeypatch.setattr("aegis.onboarding._oauth_login", lambda *_args: False)
+    cfg = Config.load()
+    answers = iter([
+        "y",           # security notice
+        "1",           # OpenAI
+        "1",           # OAuth auth
+        "y",           # configure API key fallback
+        "",            # model default
+        "",            # exec mode default
+        "6",           # skip web setup
+        "",            # no messaging integrations
+    ])
+    out: list[str] = []
+
+    rc = run_onboarding(
+        cfg,
+        quick=True,
+        probe=False,
+        services=False,
+        input_func=lambda _prompt: next(answers),
+        secret_func=lambda _prompt: "sk-fallback",
+        output_func=out.append,
+    )
+
+    assert rc == 0
+    assert os.environ["OPENAI_API_KEY"] == "sk-fallback"
+    text = "\n".join(out)
+    assert "Use an API key if your OAuth client cannot grant model inference scopes." in text
+    assert "Auth:            api_key" in text
+
+
+def test_onboarding_oauth_missing_scope_can_skip_without_probe(monkeypatch):
+    from aegis.config import Config
+    from aegis.onboarding import run_onboarding
+
+    monkeypatch.setattr("aegis.onboarding._oauth_login", lambda *_args: False)
+
+    def fail_probe(*_args):
+        raise AssertionError("probe should not run without usable credentials")
+
+    monkeypatch.setattr("aegis.onboarding._probe_model", fail_probe)
+    cfg = Config.load()
+    answers = iter([
+        "y",           # security notice
+        "1",           # OpenAI
+        "1",           # OAuth auth
+        "n",           # do not configure API key fallback
+        "",            # model default
+        "",            # exec mode default
+        "6",           # skip web setup
+        "",            # no messaging integrations
+    ])
+    out: list[str] = []
+
+    rc = run_onboarding(
+        cfg,
+        quick=True,
+        probe=True,
+        services=False,
+        input_func=lambda _prompt: next(answers),
+        output_func=out.append,
+    )
+
+    assert rc == 0
+    text = "\n".join(out)
+    assert "Skipping model connection test until usable credentials are configured." in text
+    assert "Auth:            skipped" in text
+
+
+def test_onboarding_terminal_menu_uses_selector_markers(monkeypatch):
+    from aegis.config import Config
+    from aegis.onboarding import run_onboarding
+
+    cfg = Config.load()
+    answers = iter([
+        "y",           # security notice
+        "1",           # OpenAI
+        "3",           # skip credentials
+        "",            # model default
+        "",            # exec mode default
+        "6",           # skip web setup
+        "",            # no messaging integrations
+    ])
+    out: list[str] = []
+
+    rc = run_onboarding(
+        cfg,
+        quick=True,
+        probe=False,
+        services=False,
+        input_func=lambda _prompt: next(answers),
+        output_func=out.append,
+    )
+
+    assert rc == 0
+    text = "\n".join(out)
+    assert "  ❯ OpenAI" in text
+    assert "  ⬡ Telegram" in text
+    assert "OpenAI (GPT-4o / GPT-5 API) (1)" not in text
+
+
 def test_onboarding_can_select_a_provider_model(monkeypatch):
     from aegis.config import Config
     from aegis.onboarding import run_onboarding
