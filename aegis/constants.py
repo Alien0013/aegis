@@ -11,7 +11,8 @@ COMPRESS_PRESERVE_LAST = 20
 MAX_PARALLEL_TOOLS = 8
 
 # --- Context window ---------------------------------------------------------
-MIN_CONTEXT_LENGTH = 8_000          # reject models below this at startup
+# Match Hermes: models need a real working window for multi-step tool loops.
+MIN_CONTEXT_LENGTH = 64_000          # reject models below this at startup (override per-model)
 DEFAULT_CONTEXT_LENGTH = 128_000
 # Fraction of the context window we allow message history to fill before
 # triggering compaction.

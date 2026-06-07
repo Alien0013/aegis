@@ -34,7 +34,7 @@ except Exception:  # noqa: BLE001
 _approve_lock = threading.Lock()
 
 SLASH = ["/help", "/model", "/tools", "/skills", "/memory", "/usage", "/compress",
-         "/background", "/tasks", "/rollback", "/personality",
+         "/background", "/tasks", "/rollback", "/personality", "/save",
          "/sessions", "/new", "/clear", "/quit", "/exit"]
 
 
@@ -201,6 +201,14 @@ def handle_slash(cmd: str, agent: Agent) -> str:
         from ..checkpoints import CheckpointStore
         restored = CheckpointStore(agent.cwd).rollback(arg or None)
         _out(f"rolled back {len(restored)} file(s): {', '.join(restored) or '(none)'}", style="yellow")
+    elif name == "/save":
+        out = Path(arg).expanduser() if arg else (agent.cwd / f"{agent.session.id}.md")
+        lines = [f"# {agent.session.title}\n"]
+        for m in agent.session.messages:
+            if m.role in ("user", "assistant") and m.content:
+                lines.append(f"\n## {m.role}\n\n{m.content}")
+        out.write_text("\n".join(lines), encoding="utf-8")
+        _out(f"saved session → {out}", style="green")
     elif name == "/sessions":
         for s in SessionStore().list(20):
             _out(f"  {s['id']}  {s['title']}  ({s['updated_at']})")

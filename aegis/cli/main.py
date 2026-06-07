@@ -332,6 +332,31 @@ def cmd_config(args, config: Config) -> int:
         where = config.set(args.key, args.value)
         _print(f"set {args.key} -> {where}")
         return 0
+    if args.action in ("check", "migrate"):
+        from ..config import DEFAULT_CONFIG, _deep_merge
+
+        def flat(d, prefix=""):
+            out = {}
+            for k, v in d.items():
+                key = f"{prefix}{k}"
+                if isinstance(v, dict):
+                    out.update(flat(v, key + "."))
+                else:
+                    out[key] = v
+            return out
+
+        defaults, current = flat(DEFAULT_CONFIG), flat(config.data)
+        missing = [k for k in defaults if k not in current]
+        unknown = [k for k in current if k not in defaults and not k.split(".")[0] in
+                   ("custom_providers", "fallback_providers", "hooks", "mcp", "routing")]
+        if args.action == "check":
+            _print(f"missing default keys: {', '.join(missing) or '(none)'}")
+            _print(f"unknown keys: {', '.join(unknown) or '(none)'}")
+            return 0
+        config.data = _deep_merge(DEFAULT_CONFIG, config.data)
+        config.save()
+        _print(f"migrated: added {len(missing)} missing default key(s).")
+        return 0
     # dump
     import yaml
     _print(yaml.safe_dump(config.data, sort_keys=False))
@@ -433,14 +458,63 @@ def cmd_doctor(args, config: Config) -> int:
 def cmd_update(args, config: Config) -> int:
     import aegis
     pkg_root = Path(aegis.__file__).resolve().parent.parent
-    if (pkg_root / ".git").exists():
-        _print(f"updating from git at {pkg_root}…")
-        subprocess.run(["git", "pull", "--ff-only"], cwd=str(pkg_root))
+    branch = getattr(args, "branch", None) or "main"
+    is_git = (pkg_root / ".git").exists()
+
+    if getattr(args, "check", False):
+        if is_git:
+            subprocess.run(["git", "fetch", "-q", "origin", branch], cwd=str(pkg_root))
+            behind = subprocess.run(["git", "rev-list", "--count", f"HEAD..origin/{branch}"],
+                                    cwd=str(pkg_root), capture_output=True, text=True).stdout.strip()
+            _print(f"{behind} commit(s) behind origin/{branch}" if behind not in ("", "0")
+                   else "up to date.")
+        else:
+            _print("git/pip install — run `aegis update` to reinstall from "
+                   "git+https://github.com/Alien0013/aegis.git")
+        return 0
+
+    if is_git:
+        _print(f"updating from git ({branch}) at {pkg_root}…")
+        subprocess.run(["git", "fetch", "-q", "origin", branch], cwd=str(pkg_root))
+        subprocess.run(["git", "checkout", "-q", branch], cwd=str(pkg_root))
+        subprocess.run(["git", "pull", "--ff-only", "origin", branch], cwd=str(pkg_root))
         subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-e", "."], cwd=str(pkg_root))
     else:
-        _print("updating from PyPI…")
-        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--upgrade", "aegis-agent"])
+        _print("reinstalling from git…")
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--upgrade",
+                        f"git+https://github.com/Alien0013/aegis.git@{branch}"])
     _print("✓ updated. Run `aegis doctor` to confirm.")
+    return 0
+
+
+def cmd_uninstall(args, config: Config) -> int:
+    import shutil
+    home = cfg.get_home()
+    if getattr(args, "purge", False):
+        if home.exists():
+            shutil.rmtree(home)
+        _print(f"purged {home}")
+    else:
+        _print(f"kept your data at {home} (pass --purge to delete config/sessions/memory/skills).")
+    _print("To remove the program: delete the venv and the `aegis` launcher on your PATH, e.g.\n"
+           "  rm -rf ~/.aegis/venv ~/.local/bin/aegis   (or run the repo's ./uninstall.sh)")
+    return 0
+
+
+def cmd_batch(args, config: Config) -> int:
+    """Run a prompt per line of a file (or '-' for stdin); print results."""
+    from ..session import Session
+    from . import repl
+    src = args.file
+    lines = (sys.stdin.read() if src == "-" else Path(src).expanduser().read_text(encoding="utf-8")).splitlines()
+    prompts = [ln.strip() for ln in lines if ln.strip() and not ln.lstrip().startswith("#")]
+    _print(f"running {len(prompts)} prompt(s)…")
+    for i, prompt in enumerate(prompts, 1):
+        _print(f"\n=== [{i}/{len(prompts)}] {prompt[:70]} ===")
+        out = repl.run_once(config, prompt, model=args.model, provider_name=args.provider,
+                            session=Session.create(), auto=True)
+        if not config.get("agent.stream", True):
+            _print(out)
     return 0
 
 
@@ -549,7 +623,17 @@ def build_parser() -> argparse.ArgumentParser:
     ob.set_defaults(func=cmd_setup)
 
     up = sub.add_parser("update", help="update AEGIS to the latest version")
+    up.add_argument("--check", action="store_true", help="report if an update is available, don't install")
+    up.add_argument("--branch", help="update against a non-default branch")
     up.set_defaults(func=cmd_update)
+
+    un = sub.add_parser("uninstall", help="remove AEGIS (--purge also deletes ~/.aegis)")
+    un.add_argument("--purge", action="store_true")
+    un.set_defaults(func=cmd_uninstall)
+
+    ba = sub.add_parser("batch", help="run a prompt per line of a file (or - for stdin)")
+    ba.add_argument("file"); ba.add_argument("-m", "--model"); ba.add_argument("--provider")
+    ba.set_defaults(func=cmd_batch)
 
     cm = sub.add_parser("completion", help="output shell completion script")
     cm.add_argument("shell", choices=["bash", "zsh", "fish"])
@@ -658,7 +742,8 @@ def build_parser() -> argparse.ArgumentParser:
     mem.set_defaults(func=cmd_memory)
 
     cf = sub.add_parser("config", help="get/set configuration")
-    cf.add_argument("action", nargs="?", choices=["get", "set", "path", "dump"], default="dump")
+    cf.add_argument("action", nargs="?", choices=["get", "set", "path", "dump", "check", "migrate"],
+                    default="dump")
     cf.add_argument("key", nargs="?")
     cf.add_argument("value", nargs="?")
     cf.set_defaults(func=cmd_config)

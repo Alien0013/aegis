@@ -190,7 +190,7 @@ PROVIDERS: dict[str, ProviderSpec] = {
     ),
     "vllm": ProviderSpec(
         "vllm", ApiMode.CHAT_COMPLETIONS, "http://localhost:8000/v1",
-        "local-model", 32_000, [], "none",
+        "local-model", 64_000, [], "none",
     ),
     "ollama": ProviderSpec(
         "ollama", ApiMode.CHAT_COMPLETIONS, "http://localhost:11434/v1",
@@ -198,7 +198,7 @@ PROVIDERS: dict[str, ProviderSpec] = {
     ),
     "lmstudio": ProviderSpec(
         "lmstudio", ApiMode.CHAT_COMPLETIONS, "http://localhost:1234/v1",
-        "local-model", 32_000, [], "none",
+        "local-model", 64_000, [], "none",
     ),
 }
 
@@ -234,7 +234,7 @@ def _custom_specs(config: cfg.Config) -> dict[str, ProviderSpec]:
                 api_mode=ApiMode(c.get("api_mode", "chat_completions")),
                 base_url=c["base_url"],
                 default_model=c.get("default_model", c.get("model", "local-model")),
-                context_length=int(c.get("context_length", 32_000)),
+                context_length=int(c.get("context_length", 64_000)),
                 env_vars=[c["env_var"]] if c.get("env_var") else [],
                 auth_scheme=c.get("auth_scheme", "none" if not c.get("env_var") else "bearer"),
             )
@@ -277,7 +277,7 @@ def build_provider(config: cfg.Config, *, model: str | None = None, name: str | 
                 api_mode=ApiMode(api_mode_override or "chat_completions"),
                 base_url=base_url_override,
                 default_model=model or config.get("model.default", "local-model"),
-                context_length=int(ctx_override or 32_000),
+                context_length=int(ctx_override or 64_000),
                 auth_scheme="none",
             )
         else:
