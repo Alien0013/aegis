@@ -8,13 +8,14 @@
 # Env overrides:
 #   AEGIS_INSTALL_DIR  venv location      (default ~/.aegis/venv)
 #   AEGIS_BIN_DIR      launcher location  (default ~/.local/bin)
-#   AEGIS_EXTRAS       pip extras         (e.g. "all" -> .[all]; default none)
+#   AEGIS_EXTRAS       pip extras         (default "all"; set "" or use --core for core only)
 #   AEGIS_REPO         git URL to install (default: local dir if present, else PyPI)
 #   AEGIS_ONBOARD      run onboarding     (default 1; set 0 to skip)
 #   AEGIS_NO_PROMPT    disable interactive prompts/onboarding (default 0)
 #   AEGIS_VERIFY_INSTALL run `aegis doctor` after install (default 0)
 #   AEGIS_DRY_RUN      print the install plan without making changes (default 0)
 #   AEGIS_BRANCH       branch for the default GitHub source (default main)
+#   AEGIS_SKIP_BROWSER skip Playwright Chromium install for full/browser profiles
 set -euo pipefail
 
 if [ -n "${PYTHONPATH:-}" ]; then
@@ -29,22 +30,77 @@ export PIP_DISABLE_PIP_VERSION_CHECK=1
 
 APP="aegis"
 PACKAGE="aegis-agent-harness"
-INSTALL_DIR="${AEGIS_INSTALL_DIR:-$HOME/.aegis/venv}"
+AEGIS_HOME_DIR="${AEGIS_HOME:-$HOME/.aegis}"
+INSTALL_DIR="${AEGIS_INSTALL_DIR:-$AEGIS_HOME_DIR/venv}"
 BIN_DIR="${AEGIS_BIN_DIR:-$HOME/.local/bin}"
-EXTRAS="${AEGIS_EXTRAS:-}"
+EXTRAS="${AEGIS_EXTRAS-all}"
 REPO="${AEGIS_REPO:-}"
 RUN_ONBOARD="${AEGIS_ONBOARD:-1}"
 NO_PROMPT="${AEGIS_NO_PROMPT:-0}"
 VERIFY_INSTALL="${AEGIS_VERIFY_INSTALL:-0}"
 DRY_RUN="${AEGIS_DRY_RUN:-0}"
 BRANCH="${AEGIS_BRANCH:-main}"
+SKIP_BROWSER="${AEGIS_SKIP_BROWSER:-0}"
 PYTHON_OVERRIDE="${AEGIS_PYTHON:-}"
 ONBOARD_ARGS="${AEGIS_ONBOARD_ARGS:-}"
+STAGE=0
+TOTAL_STAGES=8
+BROWSER_STATUS="not selected"
 
 say()  { printf '\033[1;35m▸\033[0m %s\n' "$*"; }
 ok()   { printf '\033[1;32m✓\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
+kv()    { printf '  \033[2m%s:\033[0m %s\n' "$1" "$2"; }
+
+banner() {
+  printf '\n\033[1;35m'
+  printf '┌─────────────────────────────────────────────────────────┐\n'
+  printf '│                  AEGIS Installer                        │\n'
+  printf '├─────────────────────────────────────────────────────────┤\n'
+  printf '│        One-line install, onboarding, and verify.         │\n'
+  printf '└─────────────────────────────────────────────────────────┘\n'
+  printf '\033[0m\n'
+}
+
+stage() {
+  STAGE=$((STAGE + 1))
+  printf '\n\033[1;35m[%s/%s] %s\033[0m\n' "$STAGE" "$TOTAL_STAGES" "$1"
+}
+
+print_plan() {
+  printf '\n\033[1;35mInstall plan\033[0m\n'
+  kv "Python" "$("$PYTHON" --version 2>/dev/null) ($(command -v "$PYTHON"))"
+  kv "Source" "$SOURCE"
+  kv "Extras" "${EXTRAS:-core only}"
+  kv "Browser engine" "$(wants_browser && [ "$SKIP_BROWSER" != "1" ] && echo enabled || echo skipped)"
+  kv "Data home" "$AEGIS_HOME_DIR"
+  kv "Venv" "$INSTALL_DIR"
+  kv "Launcher" "$BIN_DIR/$APP"
+  kv "Onboarding" "$([ "$RUN_ONBOARD" = "0" ] && echo skipped || echo enabled)"
+  kv "Verify" "$([ "$VERIFY_INSTALL" = "1" ] && echo enabled || echo skipped)"
+}
+
+print_success() {
+  printf '\n\033[1;32m'
+  printf '┌─────────────────────────────────────────────────────────┐\n'
+  printf '│              ✓ AEGIS installation complete              │\n'
+  printf '└─────────────────────────────────────────────────────────┘\n'
+  printf '\033[0m\n'
+  printf '\033[1;35mYour files\033[0m\n'
+  kv "Config" "$AEGIS_HOME_DIR/config.yaml"
+  kv "Secrets" "$AEGIS_HOME_DIR/.env"
+  kv "Workspace" "$AEGIS_HOME_DIR/workspace"
+  kv "Venv" "$INSTALL_DIR"
+  kv "Launcher" "$BIN_DIR/$APP"
+  kv "Browser engine" "$BROWSER_STATUS"
+  printf '\n\033[1;35mCommands\033[0m\n'
+  kv "Start" "aegis"
+  kv "Setup" "aegis setup"
+  kv "Doctor" "aegis doctor"
+  kv "Update" "aegis update"
+  kv "Uninstall" "aegis uninstall --purge  # or repo ./uninstall.sh --purge"
+}
 
 usage() {
   cat <<EOF
@@ -57,6 +113,10 @@ Options:
   --no-probe                    Pass --no-probe to onboarding
   --no-services                 Pass --no-services to onboarding
   --no-prompt                   Disable interactive prompts/onboarding
+  --full                        Install the full curated extras set (default)
+  --core, --minimal             Install only the core CLI
+  --extras <names>              Install explicit extras, e.g. browser,discord
+  --skip-browser, --no-browser  Skip Playwright Chromium download
   --verify                      Run 'aegis doctor' after install
   --dry-run                     Print the install plan without changing files
   --branch <name>               Install default GitHub source from branch
@@ -70,12 +130,47 @@ has_tty() {
   (: </dev/tty) 2>/dev/null
 }
 
+wants_browser() {
+  case ",$EXTRAS," in
+    *,all,*|*,browser,*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+check_network() {
+  if ! command -v curl >/dev/null 2>&1; then
+    warn "curl not found; skipping network probe"
+    return 0
+  fi
+  local failed=0
+  for url in "https://pypi.org/simple/" "https://github.com/"; do
+    if ! curl -fsSI --max-time 8 "$url" >/dev/null 2>&1; then
+      warn "Could not reach $url"
+      failed=1
+    fi
+  done
+  if [ "$failed" = "0" ]; then
+    ok "Internet connectivity looks good"
+  else
+    warn "Network probe failed; install may still work if pip can reach the source."
+  fi
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --skip-onboard|--no-onboard)
       RUN_ONBOARD=0; shift ;;
     --no-prompt)
       NO_PROMPT=1; RUN_ONBOARD=0; shift ;;
+    --full)
+      EXTRAS="all"; shift ;;
+    --core|--minimal)
+      EXTRAS=""; shift ;;
+    --extras)
+      [ $# -ge 2 ] || die "missing value for --extras"
+      EXTRAS="$2"; shift 2 ;;
+    --skip-browser|--no-browser)
+      SKIP_BROWSER=1; shift ;;
     --verify)
       VERIFY_INSTALL=1; shift ;;
     --dry-run)
@@ -106,7 +201,9 @@ if [ -n "${PREFIX:-}" ] && printf '%s' "$PREFIX" | grep -q "com.termux"; then
   BIN_DIR="${AEGIS_BIN_DIR:-$PREFIX/bin}"
 fi
 
-# --- 1. find a suitable python (>=3.10) ------------------------------------
+banner
+stage "Preparing environment"
+
 say "Looking for Python >= 3.10…"
 PYTHON=""
 if [ -n "$PYTHON_OVERRIDE" ]; then
@@ -127,7 +224,6 @@ fi
 [ -n "$PYTHON" ] || die "Python 3.10+ not found. Install it (e.g. 'brew install python' or 'apt install python3') and re-run."
 ok "Using $("$PYTHON" --version) ($(command -v "$PYTHON"))"
 
-# --- 2. resolve the install source ----------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
 EXTRAS_APPLIED=0
 if [ -n "$REPO" ]; then
@@ -143,41 +239,61 @@ else
 fi
 [ -n "$EXTRAS" ] && [ "$EXTRAS_APPLIED" = "0" ] && SOURCE="${SOURCE}[${EXTRAS}]"
 say "Install source: $SOURCE"
+check_network
+print_plan
 
 if [ "$DRY_RUN" = "1" ]; then
   echo ""
   ok "Dry run complete. No files changed."
-  echo "  Python:       $PYTHON"
-  echo "  Source:       $SOURCE"
-  echo "  Venv:         $INSTALL_DIR"
-  echo "  Launcher:     $BIN_DIR/$APP"
-  echo "  Onboarding:   $([ "$RUN_ONBOARD" = "0" ] && echo skipped || echo enabled)"
-  echo "  Verify:       $([ "$VERIFY_INSTALL" = "1" ] && echo enabled || echo skipped)"
   exit 0
 fi
 
-# --- 3. create the isolated venv ------------------------------------------
+stage "Creating Python virtual environment"
 say "Creating venv at $INSTALL_DIR…"
 mkdir -p "$INSTALL_DIR"
 "$PYTHON" -m venv "$INSTALL_DIR"
 "$INSTALL_DIR/bin/pip" install -q --upgrade pip wheel
+
+stage "Installing AEGIS package"
 say "Installing AEGIS (this can take a minute)…"
 "$INSTALL_DIR/bin/pip" install -q --upgrade "$SOURCE"
 ok "Installed."
 
-# --- 4. global launcher ----------------------------------------------------
+stage "Installing browser engine"
+if wants_browser; then
+  if [ "$SKIP_BROWSER" = "1" ]; then
+    BROWSER_STATUS="skipped"
+    warn "Browser engine skipped. Run '$INSTALL_DIR/bin/python -m playwright install chromium' later."
+  else
+    say "Installing Playwright Chromium…"
+    if "$INSTALL_DIR/bin/python" -m playwright install chromium; then
+      BROWSER_STATUS="installed"
+      ok "Browser engine installed."
+    else
+      BROWSER_STATUS="failed"
+      warn "Browser engine install failed; browser tools may not work yet."
+      warn "Try later: $INSTALL_DIR/bin/python -m playwright install chromium"
+    fi
+  fi
+else
+  BROWSER_STATUS="not selected"
+  warn "Browser engine skipped (core/browser extra not selected)."
+fi
+
+stage "Installing command launcher"
 mkdir -p "$BIN_DIR"
 rm -f "$BIN_DIR/$APP"
 cat > "$BIN_DIR/$APP" <<EOF
 #!/usr/bin/env bash
 unset PYTHONPATH
 unset PYTHONHOME
+$(if [ "${AEGIS_HOME:-}" ]; then printf 'export AEGIS_HOME=%q\n' "$AEGIS_HOME_DIR"; fi)
 exec "$INSTALL_DIR/bin/$APP" "\$@"
 EOF
 chmod +x "$BIN_DIR/$APP"
 ok "Installed launcher $BIN_DIR/$APP -> $INSTALL_DIR/bin/$APP"
 
-# --- 5. PATH wiring --------------------------------------------------------
+stage "Checking PATH and optional tools"
 hash -r 2>/dev/null || true
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
@@ -208,9 +324,7 @@ if ! command -v rg >/dev/null 2>&1; then
   fi
 fi
 
-# --- 7. first-run onboarding ----------------------------------------------
-echo
-ok "AEGIS installed."
+stage "Running onboarding"
 if [ "$RUN_ONBOARD" != "0" ] && has_tty; then
   say "Starting first-run onboarding…"
   if "$BIN_DIR/$APP" onboard $ONBOARD_ARGS < /dev/tty; then
@@ -219,19 +333,24 @@ if [ "$RUN_ONBOARD" != "0" ] && has_tty; then
     warn "Onboarding did not finish. Run 'aegis setup' when ready."
   fi
 else
+  warn "Onboarding skipped. Run 'aegis setup' when ready."
   echo "  Next:"
   echo "    aegis setup                 # first-run onboarding"
   echo "    aegis                       # start chatting"
   echo "    aegis doctor                # verify the install"
-  if [ -n "$EXTRAS" ]; then
+  if wants_browser && [ "$BROWSER_STATUS" != "installed" ]; then
     echo "    playwright install chromium # if you installed the 'browser'/'all' extra"
   fi
 fi
 
+stage "Verifying installation"
 if [ "$VERIFY_INSTALL" = "1" ]; then
-  echo
   say "Running install verify…"
   "$BIN_DIR/$APP" doctor
   ok "Install verify complete."
+else
+  warn "Verify skipped. Run 'aegis doctor' to check the install."
 fi
+
+print_success
 exit 0

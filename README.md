@@ -44,22 +44,25 @@ aegis
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash
 ```
 
-The installer (like Hermes) finds Python 3.10+, builds an isolated venv at
-`~/.aegis/venv`, installs AEGIS, drops a global `aegis` command on your PATH, and
-grabs ripgrep if missing. When a terminal is attached it immediately launches the
-guided onboarding flow (provider, API key or OAuth, web tools, optional
-channels, dashboard, and workspace files) using `/dev/tty`, so `curl | bash`
-prompts work correctly. In a real terminal it uses arrow-key menus and
-Space-toggle checkboxes; in scripts it falls back to simple text prompts.
+The installer (like Hermes/OpenClaw) finds Python 3.10+, builds an isolated venv
+at `~/.aegis/venv`, installs the full curated AEGIS stack (`.[all]`) by default,
+drops a global `aegis` launcher on your PATH, installs Playwright Chromium for
+browser tools, and grabs ripgrep if missing. When a terminal is attached it
+immediately launches the guided onboarding flow (provider, OAuth/API key, model,
+web tools, optional channels, dashboard, and workspace files) using `/dev/tty`,
+so `curl | bash` prompts work correctly. In a real terminal it uses arrow-key
+menus and Space-toggle checkboxes; in scripts it falls back to simple text prompts.
 Skip onboarding with `--skip-onboard` or `AEGIS_ONBOARD=0`; automation can use
-`--no-prompt`, `--dry-run`, and `--verify`.
+`--no-prompt`, `--dry-run`, and `--verify`. Use `--core` for a smaller CLI-only
+install, or `--skip-browser` to skip the Chromium download.
 Windows: `irm …/install.ps1 | iex`.
 Everything in one go:
 
 ```bash
-AEGIS_EXTRAS=all curl -fsSL …/install.sh | bash   # + browser, computer, Discord, Slack
+curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- --advanced
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- --no-prompt --verify
+curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- --core
 ```
 
 From a clone, or for development:

@@ -6,21 +6,24 @@
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash
 ```
 
-Finds Python 3.10+, builds an isolated venv at `~/.aegis/venv`, installs from git,
-puts a global `aegis` on your PATH, then starts guided onboarding when a terminal
-is available. Prompts are read from `/dev/tty`, so `curl | bash` works. The wizard
-offers API key or OAuth auth, arrow-key menus, Space-toggle channel selection, and
-starter files in `~/.aegis/workspace`. Skip that step with `--skip-onboard` or
-`AEGIS_ONBOARD=0`; automation can use `--no-prompt`, `--dry-run`, and `--verify`.
-Windows: `irm …/install.ps1 | iex`.
+Finds Python 3.10+, builds an isolated venv at `~/.aegis/venv`, installs the full
+curated stack (`.[all]`) from git, installs Playwright Chromium for browser tools,
+puts a global `aegis` launcher on your PATH, then starts guided onboarding when a
+terminal is available. Prompts are read from `/dev/tty`, so `curl | bash` works.
+The wizard offers OAuth or API-key auth first, then model selection, web tools,
+Space-toggle channel selection, and starter files in `~/.aegis/workspace`. Skip
+onboarding with `--skip-onboard` or `AEGIS_ONBOARD=0`; automation can use
+`--no-prompt`, `--dry-run`, and `--verify`. Use `--core` for a smaller CLI-only
+install, or `--skip-browser` to skip the Chromium download. Windows:
+`irm …/install.ps1 | iex`.
 
 Everything in one go (browser, computer-use, Discord, Slack, Matrix, memory backends):
 
 ```bash
-AEGIS_EXTRAS=all curl -fsSL …/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- --advanced
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- --no-prompt --verify
-playwright install chromium     # if you took the browser extra
+curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- --core
 ```
 
 ## From a clone / for development

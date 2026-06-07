@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.metadata as importlib_metadata
 import os
 import subprocess
 import sys
@@ -442,13 +443,19 @@ def cmd_doctor(args, config: Config) -> int:
         except Exception:  # noqa: BLE001
             _print(f"  ✗ {mod} (missing)")
     _print("optional extras:")
-    for mod, extra in (("playwright", "browser"), ("pyautogui", "computer"),
-                       ("discord", "discord"), ("slack_bolt", "slack")):
+    for mod, package, extra in (("playwright", "playwright", "browser"),
+                                ("pyautogui", "PyAutoGUI", "computer"),
+                                ("discord", "discord.py", "discord"),
+                                ("slack_bolt", "slack-bolt", "slack")):
         try:
             __import__(mod)
             _print(f"  ✓ {mod}")
-        except Exception:  # noqa: BLE001
-            _print(f"  – {mod} (pip install aegis-agent[{extra}])")
+        except Exception as e:  # noqa: BLE001
+            try:
+                importlib_metadata.version(package)
+                _print(f"  ✓ {mod} installed (import blocked: {type(e).__name__})")
+            except importlib_metadata.PackageNotFoundError:
+                _print(f"  – {mod} (pip install aegis-agent[{extra}])")
     tools = config.get("tools.toolsets", [])
     mcp_servers = config.get("mcp.servers", {}) or {}
     _print(f"toolsets: {tools} · mcp servers: {len(mcp_servers)}")
