@@ -18,6 +18,13 @@ BIN_DIR="${AEGIS_BIN_DIR:-$HOME/.local/bin}"
 EXTRAS="${AEGIS_EXTRAS:-}"
 REPO="${AEGIS_REPO:-}"
 
+# Termux (Android): link into $PREFIX/bin (already on PATH) and use pkg for system tools.
+IS_TERMUX=""
+if [ -n "${PREFIX:-}" ] && printf '%s' "$PREFIX" | grep -q "com.termux"; then
+  IS_TERMUX=1
+  BIN_DIR="${AEGIS_BIN_DIR:-$PREFIX/bin}"
+fi
+
 say()  { printf '\033[1;35m▸\033[0m %s\n' "$*"; }
 ok()   { printf '\033[1;32m✓\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!\033[0m %s\n' "$*"; }
@@ -81,7 +88,8 @@ esac
 
 # --- 6. optional system tool: ripgrep (faster search) ----------------------
 if ! command -v rg >/dev/null 2>&1; then
-  if   command -v brew   >/dev/null 2>&1; then brew install ripgrep   >/dev/null 2>&1 && ok "installed ripgrep" || true
+  if   [ "$IS_TERMUX" = 1 ] && command -v pkg >/dev/null 2>&1; then pkg install -y ripgrep >/dev/null 2>&1 && ok "installed ripgrep" || true
+  elif command -v brew   >/dev/null 2>&1; then brew install ripgrep   >/dev/null 2>&1 && ok "installed ripgrep" || true
   elif command -v apt-get>/dev/null 2>&1; then sudo apt-get install -y ripgrep >/dev/null 2>&1 && ok "installed ripgrep" || warn "skip ripgrep (optional)"
   elif command -v dnf    >/dev/null 2>&1; then sudo dnf install -y ripgrep >/dev/null 2>&1 && ok "installed ripgrep" || true
   elif command -v pacman >/dev/null 2>&1; then sudo pacman -S --noconfirm ripgrep >/dev/null 2>&1 && ok "installed ripgrep" || true

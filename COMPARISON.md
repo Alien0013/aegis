@@ -96,6 +96,14 @@ Originally-missing Hermes features now implemented in AEGIS:
 | **Fail-closed sandboxing** (no silent local fallback) | ✅ `tools.allow_local_fallback` |
 | `/retry`, `/undo`, `/learn` TUI commands | ✅ |
 | CI (multi-OS × py3.10–3.13) + SECURITY/CONTRIBUTING + issue/PR templates + examples | ✅ |
+| **Gateway maturity**: Email + webhook(WhatsApp-bridge) channels, voice-memo transcription, durable delivery queue + retries + restart recovery | ✅ |
+| **Sandbox backends**: local/docker/ssh/**singularity**/**modal**, fail-closed | ✅ |
+| **Tool gateway**: cloud image (fal), cloud browser (browserless), `tools status` | ✅ |
+| **Trajectory/research tooling** (record/export JSONL/compress/stats) | ✅ `aegis trajectory` |
+| **Process management**, GitHub tool, tool-search (self-discovery) | ✅ |
+| **MCP server mode** (expose AEGIS tools to other clients) | ✅ `aegis mcp serve` |
+| Docs site (mkdocs-material) + PyPI/TestPyPI release workflow + Termux installer | ✅ |
+| 8 channels · 30 tools · 36 commands · 87 tests | ✅ |
 
 ## Where AEGIS intentionally differs
 

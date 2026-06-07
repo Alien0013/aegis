@@ -146,8 +146,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "deny_groups": [],           # e.g. ["runtime", "automation"]
         "allowlist": [],             # shell command prefixes auto-approved
         "toolsets": ["core", "mcp"], # enabled toolsets (add "browser","computer" to opt in)
-        "terminal_backend": "local", # local | docker | ssh
+        "terminal_backend": "local", # local | docker | ssh | singularity | modal
         "docker_image": "python:3.12-slim",
+        "singularity_image": "docker://python:3.12-slim",
+        "modal_pip": [],             # extra pip packages for the modal sandbox image
         "allow_local_fallback": False,  # if a sandbox backend is down, refuse (fail closed)
     },
     "auxiliary": {                   # small/cheap model for compaction, vision, smart-approval

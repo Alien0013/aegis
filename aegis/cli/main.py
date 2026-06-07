@@ -239,6 +239,10 @@ def cmd_skills(args, config: Config) -> int:
 def cmd_mcp(args, config: Config) -> int:
     from ..mcp.client import build_manager
 
+    if args.action == "serve":
+        from ..mcp.server import run_mcp_server
+        run_mcp_server(config)
+        return 0
     if args.action == "add":
         if not args.name or not args.cmd:
             return _die('usage: aegis mcp add <name> "<command> [args...]"')
@@ -308,6 +312,9 @@ def cmd_cron(args, config: Config) -> int:
 def cmd_tools(args, config: Config) -> int:
     from ..tools.registry import default_registry
 
+    if getattr(args, "action", None) == "status":
+        from ..tools.cloud import cmd_tools_status
+        return cmd_tools_status(args, config)
     for t in default_registry().all():
         g = f"[{','.join(t.groups)}]" if t.groups else "[safe]"
         _print(f"  {t.name:<14} {g:<22} {t.description.splitlines()[0]}")
@@ -753,6 +760,12 @@ def build_parser() -> argparse.ArgumentParser:
     ln.add_argument("id", nargs="?")
     ln.set_defaults(func=_learn.cmd_learn)
 
+    from .. import trajectory as _traj
+    tj = sub.add_parser("trajectory", help="record/export/compress session trajectories")
+    tj.add_argument("action", nargs="?", choices=["stats", "export", "compress"], default="stats")
+    tj.add_argument("--out")
+    tj.set_defaults(func=_traj.cmd_trajectory)
+
     sk = sub.add_parser("skills", help="list/view/create/install/search/remove skills")
     sk.add_argument("action", nargs="?",
                     choices=["list", "view", "new", "install", "search", "remove", "hub"], default="list")
@@ -760,8 +773,8 @@ def build_parser() -> argparse.ArgumentParser:
     sk.add_argument("--force", action="store_true", help="install even if the security scan flags it")
     sk.set_defaults(func=cmd_skills)
 
-    mc = sub.add_parser("mcp", help="manage MCP servers")
-    mc.add_argument("action", nargs="?", choices=["list", "add", "remove", "test"], default="list")
+    mc = sub.add_parser("mcp", help="manage MCP servers (or `serve` to be one)")
+    mc.add_argument("action", nargs="?", choices=["list", "add", "remove", "test", "serve"], default="list")
     mc.add_argument("name", nargs="?")
     mc.add_argument("cmd", nargs="?", help='command line, e.g. "npx -y @modelcontextprotocol/server-filesystem /tmp"')
     mc.set_defaults(func=cmd_mcp)
@@ -777,7 +790,8 @@ def build_parser() -> argparse.ArgumentParser:
     cr.add_argument("prompt", nargs="*")
     cr.set_defaults(func=cmd_cron)
 
-    t = sub.add_parser("tools", help="list built-in tools")
+    t = sub.add_parser("tools", help="list built-in tools, or `status` for tool-gateway backends")
+    t.add_argument("action", nargs="?", choices=["list", "status"], default="list")
     t.set_defaults(func=cmd_tools)
 
     mem = sub.add_parser("memory", help="show/add long-term memory")

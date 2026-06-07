@@ -1,0 +1,31 @@
+site_name: AEGIS
+site_description: A self-improving, multi-provider, multi-channel terminal agent harness.
+repo_url: https://github.com/Alien0013/aegis
+docs_dir: docs
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: deep purple
+  features:
+    - navigation.sections
+    - content.code.copy
+
+nav:
+  - Home: index.md
+  - Install: install.md
+  - Quickstart: quickstart.md
+  - Providers & Auth: providers.md
+  - Tools & Permissions: tools.md
+  - Memory, Skills & Learning: memory-skills.md
+  - Gateway & Channels: gateway.md
+  - MCP: mcp.md
+  - Serve API: serve.md
+  - Security: security.md
+  - CLI Reference: cli.md
+  - Architecture: architecture.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.superfences
+  - tables

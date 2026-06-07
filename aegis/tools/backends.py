@@ -50,6 +50,10 @@ def run_command(
         return _run_docker(command, cwd, timeout, config)
     if backend == "ssh":
         return _run_ssh(command, cwd, timeout, config)
+    if backend in ("singularity", "apptainer"):
+        return _run_singularity(command, cwd, timeout, config)
+    if backend == "modal":
+        return _run_modal(command, cwd, timeout, config)
     if backend != "local":
         out, code = _run_local(command, cwd, timeout)
         return _note(f"unknown backend {backend!r}; ran locally", out), code
@@ -161,6 +165,65 @@ def _run_ssh(command: str, cwd: str, timeout: int, config: Any = None) -> tuple[
         return _degraded(config, f"ssh connection to {target} failed: {out.strip() or 'unknown error'}",
                          command, cwd, timeout)
     return out, proc.returncode
+
+
+# --------------------------------------------------------------------------- #
+# singularity / apptainer (HPC-style container)
+# --------------------------------------------------------------------------- #
+def _run_singularity(command: str, cwd: str, timeout: int, config: Any) -> tuple[str, int]:
+    binp = shutil.which("apptainer") or shutil.which("singularity")
+    if binp is None:
+        return _degraded(config, "apptainer/singularity not found", command, cwd, timeout)
+    image = "docker://python:3.12-slim"
+    if config is not None:
+        try:
+            image = config.get("tools.singularity_image", image) or image
+        except Exception:  # noqa: BLE001
+            pass
+    argv = [binp, "exec", "--containall", "--writable-tmpfs",
+            "--bind", f"{cwd}:/work", "--pwd", "/work", image, "bash", "-c", command]
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return f"singularity command timed out after {timeout}s", 124
+    except OSError as e:
+        return _degraded(config, f"singularity failed to start ({e})", command, cwd, timeout)
+    out = _merge(proc.stdout, proc.stderr)
+    if proc.returncode == 255 and "/work" not in out:
+        return _degraded(config, f"singularity run failed: {out.strip() or 'unknown'}", command, cwd, timeout)
+    return out, proc.returncode
+
+
+# --------------------------------------------------------------------------- #
+# modal (cloud sandbox via the modal SDK)
+# --------------------------------------------------------------------------- #
+def _run_modal(command: str, cwd: str, timeout: int, config: Any) -> tuple[str, int]:
+    try:
+        import modal
+    except ImportError:
+        return _degraded(config, "modal SDK not installed (pip install modal; modal token set)",
+                         command, cwd, timeout)
+    try:
+        app = modal.App.lookup("aegis-sandbox", create_if_missing=True)
+        image = modal.Image.debian_slim()
+        if config is not None:
+            try:
+                pkgs = config.get("tools.modal_pip", []) or []
+                if pkgs:
+                    image = image.pip_install(*pkgs)
+            except Exception:  # noqa: BLE001
+                pass
+        sb = modal.Sandbox.create(app=app, image=image, timeout=timeout)
+        try:
+            p = sb.exec("bash", "-c", command)
+            out = p.stdout.read()
+            err = p.stderr.read()
+            code = p.wait()
+        finally:
+            sb.terminate()
+        return _merge(out, err), code
+    except Exception as e:  # noqa: BLE001
+        return _degraded(config, f"modal sandbox error ({e})", command, cwd, timeout)
 
 
 # --------------------------------------------------------------------------- #

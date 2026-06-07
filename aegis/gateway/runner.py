@@ -72,6 +72,9 @@ class GatewayRunner:
             for trig in self.mention_triggers:
                 text = text.replace(trig, "").replace(trig.title(), "").strip() or text
 
+        # Voice memos / audio attachments -> transcribe and prepend.
+        text = self._maybe_transcribe(ev, text)
+
         # Serialize per session so an agent isn't re-entered concurrently.
         with self._lock:
             session = self._session(key)
@@ -82,15 +85,53 @@ class GatewayRunner:
         except Exception as e:  # noqa: BLE001
             return f"⚠ error: {type(e).__name__}: {e}"
 
+    def _maybe_transcribe(self, ev: MessageEvent, text: str) -> str:
+        audio = next((a for a in (ev.attachments or [])
+                      if str(a.get("type", "")).startswith("audio") or a.get("path", "").endswith(
+                          (".ogg", ".mp3", ".m4a", ".wav"))), None)
+        if not audio or not audio.get("path"):
+            return text
+        try:
+            from ..tools.voice import TranscribeTool
+            from ..tools.base import ToolContext
+            res = TranscribeTool().run({"path": audio["path"]},
+                                       ToolContext(cwd=self.cwd, config=self.config))
+            if not res.is_error:
+                return (text + "\n\n[voice memo transcript]\n" + res.content).strip()
+        except Exception:  # noqa: BLE001
+            pass
+        return text
+
+    def enqueue(self, platform: str, chat_id: str, text: str) -> None:
+        """Durably queue an outbound message (used by cron + retry on send failure)."""
+        from .queue import DeliveryQueue
+        DeliveryQueue().enqueue(platform, chat_id, text)
+
+    def _send_via_adapter(self, platform: str, chat_id: str, text: str) -> bool:
+        adapter = next((a for a in self.adapters if a.name == platform), None)
+        if adapter is None:
+            return False
+        try:
+            adapter.send(chat_id, text)
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
     def run(self) -> None:
         if not self.adapters:
             raise RuntimeError("No channels configured for the gateway.")
+        from .queue import DeliveryQueue
         threads: list[threading.Thread] = []
         for adapter in self.adapters:
             t = threading.Thread(target=adapter.start, args=(self.dispatch,), daemon=True)
             t.start()
             threads.append(t)
             print(f"  ▸ channel up: {adapter.name}")
+        # durable delivery drainer (retries queued/failed sends across restarts)
+        q = DeliveryQueue()
+        threading.Thread(target=q.run, args=(self._send_via_adapter,), daemon=True).start()
+        if q.pending_count():
+            print(f"  ▸ delivery queue: {q.pending_count()} pending (will retry)")
         print("Gateway running. Ctrl+C to stop.")
         try:
             for t in threads:

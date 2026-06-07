@@ -107,4 +107,11 @@ def build_adapter(name: str) -> BasePlatformAdapter:
     if name == "matrix":
         from .matrix_channel import MatrixAdapter
         return MatrixAdapter()
-    raise ValueError(f"Unknown channel '{name}'. Available: cli, telegram, discord, slack, signal, matrix.")
+    if name == "email":
+        from .email_channel import EmailAdapter
+        return EmailAdapter()
+    if name == "webhook":
+        from .webhook_channel import WebhookChannel
+        return WebhookChannel()
+    raise ValueError(f"Unknown channel '{name}'. Available: cli, telegram, discord, slack, "
+                     "signal, matrix, email, webhook.")
