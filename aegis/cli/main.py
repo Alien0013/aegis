@@ -215,6 +215,21 @@ def cmd_skills(args, config: Config) -> int:
         from .. import marketplace
         _print("removed" if marketplace.remove(args.name) else "not found")
         return 0
+    if args.action == "hub":
+        from .. import marketplace
+        taps = marketplace.list_taps(config)
+        if not args.name:
+            _print("known skill hubs (install all with `aegis skills hub <name>`):")
+            for k, v in taps.items():
+                _print(f"  {k:<12} {v}")
+            return 0
+        try:
+            names = marketplace.install_hub(args.name, config)
+            _print(f"✓ imported {len(names)} skill(s) from {args.name}: {', '.join(names[:20])}"
+                   + (" …" if len(names) > 20 else ""))
+        except Exception as e:  # noqa: BLE001
+            return _die(str(e))
+        return 0
     # list
     for s in sorted(loader.available(), key=lambda s: s.name):
         _print(f"  {s.name:<24} {s.description[:80]}")
@@ -725,8 +740,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sk = sub.add_parser("skills", help="list/view/create/install/search/remove skills")
     sk.add_argument("action", nargs="?",
-                    choices=["list", "view", "new", "install", "search", "remove"], default="list")
-    sk.add_argument("name", nargs="?", help="skill name or install source")
+                    choices=["list", "view", "new", "install", "search", "remove", "hub"], default="list")
+    sk.add_argument("name", nargs="?", help="skill name, install source, or hub name")
     sk.set_defaults(func=cmd_skills)
 
     mc = sub.add_parser("mcp", help="manage MCP servers")

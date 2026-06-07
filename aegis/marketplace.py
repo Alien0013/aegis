@@ -83,8 +83,9 @@ def _git_clone(repo: str, ref: str | None, subdir: str | None) -> list[Path]:
     base = tmp / subdir if subdir else tmp
     if (base / "SKILL.md").exists():
         return [base]
-    # otherwise every immediate subdir that has a SKILL.md
-    return [p for p in base.iterdir() if p.is_dir() and (p / "SKILL.md").exists()]
+    # otherwise every directory containing a SKILL.md (recursive — handles nested hub layouts)
+    found = sorted({md.parent for md in base.rglob("SKILL.md")}, key=lambda p: str(p))
+    return found[:500]
 
 
 def install(source: str) -> list[str]:
@@ -155,6 +156,28 @@ def remove(name: str) -> bool:
 
 def installed() -> dict:
     return _load_lock()
+
+
+# Known skill hubs (taps). `aegis skills hub install <name>` installs all SKILL.md packages.
+DEFAULT_TAPS = {
+    "hermeshub": "amanning3390/hermeshub",
+    "openclaw": "VoltAgent/awesome-openclaw-skills",
+    "anthropic": "anthropics/skills",
+}
+
+
+def list_taps(config) -> dict:
+    taps = dict(DEFAULT_TAPS)
+    taps.update(config.get("skills.taps", {}) or {})
+    return taps
+
+
+def install_hub(name: str, config) -> list[str]:
+    """Install every SKILL.md package from a known/configured hub (tap)."""
+    taps = list_taps(config)
+    if name not in taps:
+        raise ValueError(f"unknown hub '{name}'. Known: {', '.join(taps)}")
+    return install(f"git:{taps[name]}")
 
 
 def search(query: str, registries: list[str] | None = None) -> list[dict]:
