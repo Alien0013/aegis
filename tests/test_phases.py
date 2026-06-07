@@ -251,7 +251,14 @@ def test_daemon_status_includes_failed_unit_hint(monkeypatch):
         return subprocess.CompletedProcess(
             ["systemctl", *args],
             0,
-            stdout="loaded\nfailed\nfailed\nbad-setting\nexit-code\n1\n",
+            stdout=(
+                "LoadState=loaded\n"
+                "ActiveState=failed\n"
+                "SubState=failed\n"
+                "UnitFileState=enabled\n"
+                "Result=exit-code\n"
+                "ExecMainStatus=1\n"
+            ),
             stderr="",
         )
 
@@ -261,6 +268,48 @@ def test_daemon_status_includes_failed_unit_hint(monkeypatch):
 
     assert "failed" in st["aegis-dashboard.service"]
     assert "journalctl --user -u aegis-dashboard.service" in st["aegis-dashboard.service"]
+
+
+def test_daemon_status_parses_active_running_unit(monkeypatch):
+    import subprocess
+
+    import aegis.daemon as daemon
+
+    monkeypatch.setattr(daemon, "systemd_available", lambda: True)
+    monkeypatch.setattr(
+        daemon,
+        "_systemctl",
+        lambda *_args: subprocess.CompletedProcess(
+            ["systemctl"],
+            0,
+            stdout=(
+                "Result=success\n"
+                "ExecMainStatus=0\n"
+                "LoadState=loaded\n"
+                "ActiveState=active\n"
+                "SubState=running\n"
+                "UnitFileState=enabled\n"
+            ),
+            stderr="",
+        ),
+    )
+
+    st = daemon.status()
+
+    assert st["aegis-dashboard.service"] == "active (running, enabled)"
+
+
+def test_dashboard_service_refuses_occupied_port(monkeypatch):
+    import aegis.daemon as daemon
+    from aegis.config import Config
+
+    monkeypatch.setattr(daemon.shutil, "which", lambda *_args: "/usr/bin/systemctl")
+    monkeypatch.setattr(daemon, "port_available", lambda _host, _port: False)
+
+    res = daemon.install_dashboard_service(Config.load())
+
+    assert not res.ok
+    assert "already in use" in res.message
 
 
 def test_github_tool_needs_gh(tmp_path, monkeypatch):

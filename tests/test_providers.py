@@ -105,6 +105,7 @@ def test_responses_payload_includes_instructions(monkeypatch):
     assert resp.text == "ok"
     assert captured["url"] == "https://chatgpt.com/backend-api/codex/responses"
     assert captured["json"]["instructions"] == DEFAULT_INSTRUCTIONS
+    assert captured["json"]["store"] is False
 
 
 def test_anthropic_coalesces_tool_results():

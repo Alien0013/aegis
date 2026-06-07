@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import socket
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -43,17 +44,19 @@ def _unit_state(unit: str) -> str:
         "show",
         unit,
         "--property=LoadState,ActiveState,SubState,UnitFileState,Result,ExecMainStatus",
-        "--value",
     )
     if res.returncode != 0:
         return res.stderr.strip() or "unknown"
-    keys = ("load", "active", "sub", "enabled", "result", "exit")
-    values = dict(zip(keys, [line.strip() for line in res.stdout.splitlines()]))
-    active = values.get("active") or "unknown"
-    enabled = values.get("enabled") or "unknown"
-    sub = values.get("sub") or "unknown"
-    result = values.get("result") or "success"
-    exit_status = values.get("exit") or "0"
+    values: dict[str, str] = {}
+    for line in res.stdout.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            values[key] = value.strip()
+    active = values.get("ActiveState") or "unknown"
+    enabled = values.get("UnitFileState") or "unknown"
+    sub = values.get("SubState") or "unknown"
+    result = values.get("Result") or "success"
+    exit_status = values.get("ExecMainStatus") or "0"
     summary = f"{active} ({sub}, {enabled})"
     if active == "failed" or result not in ("", "success") or exit_status not in ("", "0"):
         summary += (
@@ -75,11 +78,23 @@ def systemd_available() -> bool:
     )
 
 
+def port_available(host: str, port: int) -> bool:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((host, port))
+        return True
+    except OSError:
+        return False
+
+
 def install_dashboard_service(config: Config, *, enable_now: bool = True) -> ServiceResult:
     if shutil.which("systemctl") is None:
         return ServiceResult(False, "systemctl not found")
     port = int(config.get("server.dashboard_port", 9119))
     host = config.get("server.dashboard_host", "127.0.0.1")
+    if enable_now and not port_available(host, port):
+        return ServiceResult(False, f"dashboard port {host}:{port} is already in use")
     unit = _unit_dir() / "aegis-dashboard.service"
     content = f"""[Unit]
 Description=AEGIS local dashboard

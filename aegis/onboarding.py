@@ -371,7 +371,7 @@ def _multi_choose(
     for _i, (value, label) in enumerate(options, 1):
         marker = "⬢" if value in default_values else "⬡"
         output_func(f"  {marker} {label}")
-    output_func("  enter comma-separated names, or leave blank for none")
+    output_func("  type names separated by commas; blank keeps the marked defaults")
     raw = input_func("selection(s) []: ").strip()
     if not raw:
         return list(default_values)
@@ -467,7 +467,7 @@ def _dialog_multi_choose(
 
 def _can_use_dialogs(input_func: Input, output_func: Output) -> bool:
     flag = os.environ.get("AEGIS_ONBOARD_DIALOGS", "").strip().lower()
-    if flag in {"0", "false", "no", "off"}:
+    if flag not in {"1", "true", "yes", "on"}:
         return False
     return (
         input_func is input
@@ -832,6 +832,19 @@ def _configure_dashboard(config: Config, state: OnboardingState, out: Output) ->
         config.save()
     host = config.get("server.dashboard_host", "127.0.0.1")
     port = int(config.get("server.dashboard_port", 9119))
+    from .daemon import port_available
+
+    if not port_available(host, port):
+        original = port
+        for candidate in range(port + 1, port + 51):
+            if port_available(host, candidate):
+                port = candidate
+                config.data.setdefault("server", {})["dashboard_port"] = port
+                config.save()
+                out(f"✓ dashboard port {original} is busy; using {port}.")
+                break
+        else:
+            out(f"! dashboard port {original} is busy and no free nearby port was found.")
     state.dashboard_url = f"http://{host}:{port}/?token={token}"
 
 

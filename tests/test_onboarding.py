@@ -340,7 +340,7 @@ def test_setup_json_requires_noninteractive(capsys):
     assert "--json requires --non-interactive" in capsys.readouterr().err
 
 
-def test_dialogs_default_on_real_tty(monkeypatch):
+def test_dialogs_are_opt_in(monkeypatch):
     from aegis.onboarding import _can_use_dialogs
 
     class Tty:
@@ -351,21 +351,41 @@ def test_dialogs_default_on_real_tty(monkeypatch):
     monkeypatch.setattr("sys.stdin", Tty())
     monkeypatch.setattr("sys.stdout", Tty())
 
-    assert _can_use_dialogs(input, print)
+    assert not _can_use_dialogs(input, print)
 
 
-def test_dialogs_can_be_disabled(monkeypatch):
+def test_dialogs_can_be_enabled(monkeypatch):
     from aegis.onboarding import _can_use_dialogs
 
     class Tty:
         def isatty(self):
             return True
 
-    monkeypatch.setenv("AEGIS_ONBOARD_DIALOGS", "0")
+    monkeypatch.setenv("AEGIS_ONBOARD_DIALOGS", "1")
     monkeypatch.setattr("sys.stdin", Tty())
     monkeypatch.setattr("sys.stdout", Tty())
 
-    assert not _can_use_dialogs(input, print)
+    assert _can_use_dialogs(input, print)
+
+
+def test_onboarding_picks_free_dashboard_port(monkeypatch):
+    from aegis.config import Config
+    from aegis.onboarding import OnboardingState, _configure_dashboard
+
+    cfg = Config.load()
+    cfg.data["server"]["dashboard_port"] = 9119
+    monkeypatch.setattr(
+        "aegis.daemon.port_available",
+        lambda _host, port: port == 9121,
+    )
+    out: list[str] = []
+    state = OnboardingState()
+
+    _configure_dashboard(cfg, state, out.append)
+
+    assert cfg.get("server.dashboard_port") == 9121
+    assert "using 9121" in "\n".join(out)
+    assert ":9121/" in state.dashboard_url
 
 
 def test_onboarding_existing_config_can_keep(monkeypatch):

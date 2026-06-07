@@ -50,8 +50,9 @@ drops a global `aegis` launcher on your PATH, installs Playwright Chromium for
 browser tools, and grabs ripgrep if missing. When a terminal is attached it
 immediately launches the guided onboarding flow (provider, OAuth/API key, model,
 web tools, optional channels, dashboard, and workspace files) using `/dev/tty`,
-so `curl | bash` prompts work correctly. In a real terminal it uses arrow-key
-menus and Space-toggle checkboxes; in scripts it falls back to simple text prompts.
+so `curl | bash` prompts work correctly. It uses inline selector and checkbox
+markers by default so the flow stays readable in terminal logs; set
+`AEGIS_ONBOARD_DIALOGS=1` if you prefer fullscreen prompt-toolkit dialogs.
 Onboarding is included by default. Headless automation can use `--no-prompt` or
 `--non-interactive` for safe default setup with JSON output; opt out completely
 with `--skip-onboard` or `AEGIS_ONBOARD=0`. Use `--core` for a smaller CLI-only

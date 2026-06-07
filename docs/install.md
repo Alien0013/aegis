@@ -11,7 +11,8 @@ curated stack (`.[all]`) from git, installs Playwright Chromium for browser tool
 puts a global `aegis` launcher on your PATH, then starts guided onboarding when a
 terminal is available. Prompts are read from `/dev/tty`, so `curl | bash` works.
 The wizard offers OAuth or API-key auth first, then model selection, web tools,
-Space-toggle channel selection, and starter files in `~/.aegis/workspace`. Skip
+inline channel selection, and starter files in `~/.aegis/workspace`. Set
+`AEGIS_ONBOARD_DIALOGS=1` for fullscreen prompt-toolkit selectors. Skip
 prompts for headless automation with `--no-prompt` or `--non-interactive`; this
 still runs safe default onboarding and prints JSON. Skip onboarding entirely with
 `--skip-onboard` or `AEGIS_ONBOARD=0`. Use `--core` for a smaller CLI-only install, or

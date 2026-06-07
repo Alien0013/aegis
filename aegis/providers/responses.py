@@ -111,6 +111,7 @@ class ResponsesTransport(ProviderTransport):
             "instructions": self._instructions(messages),
             "input": self._to_wire_input(messages),
             "stream": stream,
+            "store": False,
             "max_output_tokens": max_tokens,
         }
         eff = {"minimal": "low", "low": "low", "medium": "medium", "high": "high",
