@@ -21,6 +21,7 @@ class GatewayRunner:
         self.adapters: list[BasePlatformAdapter] = []
         self._sessions: dict[str, Session] = {}
         self._lock = threading.Lock()
+        self._key_locks: dict[str, threading.Lock] = {}   # per-session serialization
         self.session_mode = config.get("gateway.session_mode", "per_channel_peer")
         self.require_mention = bool(config.get("gateway.require_mention", False))
         self.mention_triggers = [t.lower() for t in config.get("gateway.mention_triggers", []) or []]
@@ -75,15 +76,18 @@ class GatewayRunner:
         # Voice memos / audio attachments -> transcribe and prepend.
         text = self._maybe_transcribe(ev, text)
 
-        # Serialize per session so an agent isn't re-entered concurrently.
+        # Serialize per session so one session isn't run concurrently (race on messages).
         with self._lock:
-            session = self._session(key)
-        agent = Agent.create(self.config, session=session, cwd=self.cwd, store=self.store)
-        try:
-            final = agent.run(text)
-            return final.content or "(no response)"
-        except Exception as e:  # noqa: BLE001
-            return f"⚠ error: {type(e).__name__}: {e}"
+            lock = self._key_locks.setdefault(key, threading.Lock())
+        with lock:
+            with self._lock:
+                session = self._session(key)
+            agent = Agent.create(self.config, session=session, cwd=self.cwd, store=self.store)
+            try:
+                final = agent.run(text)
+                return final.content or "(no response)"
+            except Exception as e:  # noqa: BLE001
+                return f"⚠ error: {type(e).__name__}: {e}"
 
     def _maybe_transcribe(self, ev: MessageEvent, text: str) -> str:
         audio = next((a for a in (ev.attachments or [])

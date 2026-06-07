@@ -119,10 +119,11 @@ class _RpcServer:
 class ExecuteCodeTool(Tool):
     name = "execute_code"
     description = (
-        "Run a Python script in a sandboxed child process. The script can call tools via "
-        "helpers: call_tool(name, **args), read_file, write_file, search_files, web_search, "
-        "web_fetch, bash. ONLY what the script prints to stdout is returned — use this to "
-        "collapse many tool calls into one cheap turn."
+        "Run a Python script in a child process to collapse many tool calls into one cheap "
+        "turn. Helpers: call_tool(name, **args), read_file, write_file, search_files, "
+        "web_search, web_fetch, bash. ONLY stdout is returned. NOTE: this is a context-saving "
+        "device, not a security sandbox — the script can do anything the agent's tools can "
+        "(set tools.terminal_backend=docker for isolation)."
     )
     groups = ["runtime"]
     parameters = {

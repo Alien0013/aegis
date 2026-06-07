@@ -10,7 +10,19 @@ from __future__ import annotations
 from ..types import Message
 
 
+def _strip_surrogates(s: str) -> str:
+    """Remove lone UTF-16 surrogates that crash JSON/UTF-8 serialization."""
+    if not s:
+        return s
+    return "".join(c for c in s if not 0xD800 <= ord(c) <= 0xDFFF)
+
+
 def normalize(messages: list[Message]) -> list[Message]:
+    # Defensive: scrub lone surrogates a model may have emitted (would crash the
+    # next request's JSON encode). Mutate in place.
+    for m in messages:
+        if m.content and any(0xD800 <= ord(c) <= 0xDFFF for c in m.content):
+            m.content = _strip_surrogates(m.content)
     # Pass 1: drop tool results whose call id was never requested before them.
     seen_call_ids: set[str] = set()
     pass1: list[Message] = []

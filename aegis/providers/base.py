@@ -98,10 +98,19 @@ class Provider:
                     reasoning=reasoning,
                 )
             except Exception as e:  # noqa: BLE001
-                # On rate-limit / auth errors, rotate the credential pool and retry.
+                # Classify: retry transient errors (rate-limit, 5xx, timeouts, dropped
+                # streams) with jittered exponential backoff; rotate keys on 401/429.
+                import random
+                import time
                 status = getattr(e, "status", None)
-                if (status in (401, 429, 529) and attempts < 5
-                        and hasattr(self.auth, "rotate") and self.auth.rotate()):
+                transient_status = status in (408, 409, 425, 429, 500, 502, 503, 504, 529)
+                transient_net = type(e).__name__ in (
+                    "TimeoutException", "ConnectError", "ConnectTimeout", "ReadTimeout",
+                    "ReadError", "RemoteProtocolError", "PoolTimeout")
+                if attempts < 4 and (transient_status or transient_net):
+                    if status in (401, 429) and hasattr(self.auth, "rotate"):
+                        self.auth.rotate()
+                    time.sleep(min(30.0, (2 ** attempts) * 1.5) + random.random())
                     attempts += 1
                     continue
                 raise

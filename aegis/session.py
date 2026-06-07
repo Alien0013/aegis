@@ -66,8 +66,15 @@ class SessionStore:
         self._init()
 
     def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db)
+        # 30s busy timeout + WAL so concurrent gateway threads don't hit
+        # "database is locked" under load.
+        conn = sqlite3.connect(self.db, timeout=30)
         conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=30000")
+        except sqlite3.OperationalError:
+            pass
         return conn
 
     def _init(self) -> None:
@@ -144,6 +151,8 @@ class SessionStore:
     def delete(self, sid: str) -> bool:
         with self._conn() as c:
             cur = c.execute("DELETE FROM sessions WHERE id=?", (sid,))
+            if getattr(self, "_fts", False):
+                c.execute("DELETE FROM messages_fts WHERE session_id=?", (sid,))  # no orphan rows
             return cur.rowcount > 0
 
     def search(self, query: str, limit: int = 20) -> list[dict]:

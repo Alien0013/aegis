@@ -132,6 +132,13 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
         session.messages.extend(results)
         agent.tools_used += len(resp.tool_calls)
 
+        # Incremental persist so a crash mid-turn doesn't lose progress.
+        if agent.store is not None:
+            try:
+                agent.store.save(session)
+            except Exception:  # noqa: BLE001
+                pass
+
         if compaction.should_compress(session.messages, agent.provider.context_length):
             emit({"type": "compacting"})
             comp = agent.config.get("agent.compression", {}) or {}

@@ -19,23 +19,40 @@ from .base import Tool, ToolContext
 
 # Catastrophic commands that are NEVER allowed — even in full/yolo mode.
 HARDLINE_PATTERNS = [
-    re.compile(r"\brm\s+-[a-z]*r[a-z]*f?\s+(/|~|\$HOME|/\*)(\s|$)"),  # rm -rf / | ~ | /*
-    re.compile(r"\brm\s+-[a-z]*f[a-z]*r\s+(/|~)(\s|$)"),
     re.compile(r":\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:"),           # fork bomb
     re.compile(r"\bmkfs\.\w+\s+/dev/"),                                # format a device
     re.compile(r"\bdd\b.*\bof=/dev/(sd|nvme|disk|hd)"),               # raw disk write
     re.compile(r">\s*/dev/(sd|nvme|disk|hd)\w*"),                      # redirect to block device
     re.compile(r"\b(curl|wget)\b[^|]*\|\s*(sudo\s+)?(bash|sh|zsh)\b"),  # pipe-to-shell
-    re.compile(r"\bchmod\s+-R\s+0?00\s+/(\s|$)"),                      # nuke perms on /
-    re.compile(r"\bsudo\s+rm\s+-[a-z]*r"),                            # sudo recursive rm
+    re.compile(r"\bchmod\s+-R\s+0?0?0\s+/(\s|$)"),                     # nuke perms on /
 ]
+
+_DANGER_TARGETS = {"/", "~", "/*", "$HOME", "/.", "~/", "/root", "/home"}
+
+
+def _dangerous_rm(cmd: str) -> bool:
+    """Catch a recursive+force rm aimed at a catastrophic target, in any flag order."""
+    for m in re.finditer(r"(?:\bsudo\s+)?\brm\b([^;&|\n]*)", cmd):
+        tokens = m.group(1).split()
+        short = [t for t in tokens if t.startswith("-") and not t.startswith("--")]
+        long = [t for t in tokens if t.startswith("--")]
+        recursive = any("r" in t.lower() for t in short) or "--recursive" in long
+        force = any("f" in t.lower() for t in short) or "--force" in long
+        no_preserve = "--no-preserve-root" in long
+        paths = [t for t in tokens if not t.startswith("-")]
+        target = any(t in _DANGER_TARGETS or t.rstrip("/") == "" for t in paths)
+        if recursive and (force or no_preserve) and (target or no_preserve):
+            return True
+    return False
 
 
 def is_hardline_blocked(args: dict) -> str | None:
-    """Return the offending text if any arg matches a catastrophic pattern."""
+    """Return the offending text if any arg is a catastrophic command."""
     for key in ("command", "cmd", "code", "combo"):
         val = args.get(key)
         if isinstance(val, str):
+            if _dangerous_rm(val):
+                return val[:120]
             for pat in HARDLINE_PATTERNS:
                 if pat.search(val):
                     return val[:120]
