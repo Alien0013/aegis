@@ -65,7 +65,11 @@ class TelegramAdapter(BasePlatformAdapter):
                 if not msg or "text" not in msg:
                     continue
                 user_id = str(msg["from"]["id"])
-                if self.allowed and user_id not in self.allowed:
+                username = msg["from"].get("username")
+                names = {user_id}
+                if username:
+                    names.update({username, f"@{username}"})
+                if self.allowed and not (names & self.allowed):
                     self.send(str(msg["chat"]["id"]), "⛔ not authorized.")
                     continue
                 ev = MessageEvent(
@@ -73,7 +77,7 @@ class TelegramAdapter(BasePlatformAdapter):
                     chat_id=str(msg["chat"]["id"]),
                     text=msg["text"],
                     user_id=user_id,
-                    user_name=msg["from"].get("username"),
+                    user_name=username,
                 )
                 reply = dispatch(ev)
                 if reply:

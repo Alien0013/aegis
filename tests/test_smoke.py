@@ -141,6 +141,31 @@ def test_oauth_configs_present():
         assert spec.oauth is not None and spec.oauth.client_id
 
 
+def test_mcp_json_servers_wrapper_is_unwrapped():
+    import json
+
+    from aegis import config as cfg
+    from aegis.config import Config
+    from aegis.mcp.client import _server_configs
+
+    cfg.sub("mcp.json").write_text(json.dumps({
+        "servers": {
+            "filesystem": {"command": "echo", "args": ["ok"]},
+        },
+    }))
+
+    servers = _server_configs(Config.load())
+    assert "filesystem" in servers
+    assert "servers" not in servers
+
+
+def test_pairing_allows_telegram_handle(monkeypatch):
+    from aegis.gateway.pairing import PairingStore
+
+    monkeypatch.setenv("TELEGRAM_ALLOWED_USERS", "@alienai")
+    assert PairingStore().is_authorized("telegram", "12345", "alienai")
+
+
 def test_fallback_provider():
     from aegis.providers.fallback import FallbackProvider
     from aegis.types import LLMResponse

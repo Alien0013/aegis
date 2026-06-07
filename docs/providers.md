@@ -14,15 +14,20 @@ aegis auth status
 
 ## Auth
 
-Per provider, AEGIS resolves: explicit `base_url` → OAuth login → API key. OAuth uses
-PKCE S256 with localhost-callback or manual-paste flows, auto-refresh, and `auth.json`
-(0600). **Anthropic, OpenAI, Google** ship with working OAuth:
+Per provider, AEGIS resolves: explicit `base_url` → API key → OAuth login. API keys
+win when both are present because some OAuth tokens are identity-only. OAuth uses PKCE
+S256 with localhost-callback or manual-paste flows, auto-refresh, and `auth.json`
+(0600). **Anthropic, OpenAI, Google** ship with OAuth configs:
 
 ```bash
 aegis auth login anthropic     # paste code
 aegis auth login openai        # ChatGPT login (localhost:1455)
 aegis auth login google        # Google sign-in
 ```
+
+OpenAI OAuth login may succeed without the `model.request` scope required for model
+inference. `aegis auth status` reports that state; use `OPENAI_API_KEY` for the
+reliable OpenAI path.
 
 A comma-separated env value is a **credential pool** that rotates on 429/401:
 `OPENAI_API_KEY=sk-1,sk-2,sk-3`.

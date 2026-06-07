@@ -6,13 +6,16 @@
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash
 ```
 
-Finds Python 3.10+, builds an isolated venv at `~/.aegis/venv`, installs from git, and
-puts a global `aegis` on your PATH. Windows: `irm …/install.ps1 | iex`.
+Finds Python 3.10+, builds an isolated venv at `~/.aegis/venv`, installs from git,
+puts a global `aegis` on your PATH, then starts guided onboarding when a terminal
+is available. Prompts are read from `/dev/tty`, so `curl | bash` works. Skip that
+step with `--skip-onboard` or `AEGIS_ONBOARD=0`. Windows: `irm …/install.ps1 | iex`.
 
 Everything in one go (browser, computer-use, Discord, Slack, Matrix, memory backends):
 
 ```bash
 AEGIS_EXTRAS=all curl -fsSL …/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- --advanced
 playwright install chromium     # if you took the browser extra
 ```
 

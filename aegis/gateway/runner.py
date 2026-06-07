@@ -53,7 +53,7 @@ class GatewayRunner:
         # Authorization: unknown users must pair first.
         from .pairing import PairingStore
         pairing = PairingStore()
-        if not pairing.is_authorized(ev.platform, ev.user_id):
+        if not pairing.is_authorized(ev.platform, ev.user_id, ev.user_name):
             code = pairing.request_code(ev.platform, ev.user_id or "?")
             return (f"⛔ Not authorized. Ask the operator to run:\n"
                     f"  aegis pairing approve {ev.platform} {code}")

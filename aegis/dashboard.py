@@ -45,8 +45,10 @@ h2{margin:.2em 0 .6em;font-size:16px}pre{white-space:pre-wrap;word-wrap:break-wo
 <script>
 const V=document.getElementById('view'),NAV=document.getElementById('nav');let sid=null;
 const TABS=['Chat','Sessions','Memory','Skills','Tools','Status'];
-async function api(p){const r=await fetch('/api/'+p);return r.json()}
-async function post(p,b){const r=await fetch('/api/'+p,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)});return r.json()}
+const qs=new URLSearchParams(location.search),tok=qs.get('token')||localStorage.aegisToken||'';if(tok)localStorage.aegisToken=tok;
+function withTok(p){return '/api/'+p+(tok?(p.includes('?')?'&':'?')+'token='+encodeURIComponent(tok):'')}
+async function api(p){const r=await fetch(withTok(p));return r.json()}
+async function post(p,b){const r=await fetch(withTok(p),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)});return r.json()}
 function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
 TABS.forEach(t=>{const b=document.createElement('button');b.textContent=t;b.onclick=()=>show(t,b);NAV.appendChild(b)});
 async function boot(){const s=await api('status');document.getElementById('sub').textContent='v'+s.version+' \\u00b7 '+s.provider+'/'+s.model;
@@ -73,11 +75,27 @@ def make_handler(config: Config):
         def log_message(self, *a):
             pass
 
+        def _authorized(self) -> bool:
+            token = config.get("server.dashboard_token")
+            if not token:
+                return True
+            parsed = urlparse(self.path)
+            query_token = parse_qs(parsed.query).get("token", [""])[0]
+            auth = self.headers.get("Authorization", "")
+            header_token = auth.removeprefix("Bearer ").strip() if auth.startswith("Bearer ") else ""
+            return token in (query_token, header_token, self.headers.get("X-Aegis-Token", ""))
+
         def _json(self, obj):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps(obj).encode())
+
+        def _unauthorized(self):
+            self.send_response(401)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": "unauthorized"}).encode())
 
         def do_GET(self):  # noqa: N802
             from .session import SessionStore
@@ -88,6 +106,8 @@ def make_handler(config: Config):
                 self.send_header("Content-Type", "text/html")
                 self.end_headers()
                 self.wfile.write(PAGE.encode())
+            elif not self._authorized():
+                self._unauthorized()
             elif path == "/api/status":
                 from .skills import SkillsLoader
                 from .tools.registry import default_registry
@@ -119,6 +139,9 @@ def make_handler(config: Config):
                 self._json({"error": "not found"})
 
         def do_POST(self):  # noqa: N802
+            if not self._authorized():
+                self._unauthorized()
+                return
             from .agent.agent import Agent
             from .session import Session, SessionStore
             n = int(self.headers.get("content-length", 0))
@@ -145,7 +168,7 @@ def serve_dashboard(config: Config, host: str = "127.0.0.1", port: int = 9119) -
 
 
 def cmd_dashboard(args, config: Config) -> int:
-    host = getattr(args, "host", None) or config.get("server.host", "127.0.0.1")
-    port = getattr(args, "port", None) or 9119
+    host = getattr(args, "host", None) or config.get("server.dashboard_host", "127.0.0.1")
+    port = getattr(args, "port", None) or config.get("server.dashboard_port", 9119)
     serve_dashboard(config, host=host, port=int(port))
     return 0

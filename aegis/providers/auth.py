@@ -125,6 +125,7 @@ class OAuthConfig:
     authorize_url: str
     token_url: str
     scopes: list[str] = field(default_factory=list)
+    required_api_scopes: list[str] = field(default_factory=list)
     client_secret: str | None = None        # required by some IdPs (e.g. Google installed apps)
     # redirect handling
     redirect_uri: str | None = None        # if None -> localhost callback
@@ -150,7 +151,7 @@ class OAuthAuth(AuthProvider):
     # -- credential state ---------------------------------------------------
     def _creds(self) -> dict | None:
         c = self.store.load(self.oauth.provider)
-        if c and not c.get("quarantined"):
+        if c and not c.get("quarantined") and not self.missing_required_scopes(c):
             return c
         return None
 
@@ -163,12 +164,42 @@ class OAuthAuth(AuthProvider):
             return f"oauth ({self.oauth.provider}: not logged in)"
         if c.get("quarantined"):
             return f"oauth ({self.oauth.provider}: QUARANTINED — re-login)"
+        missing = self.missing_required_scopes(c)
+        if missing:
+            return f"oauth ({self.oauth.provider}: logged in, missing scopes: {', '.join(missing)})"
         return f"oauth ({self.oauth.provider}: logged in)"
+
+    def missing_required_scopes(self, creds: dict | None = None) -> list[str]:
+        required = set(self.oauth.required_api_scopes or [])
+        if not required:
+            return []
+        granted = self._granted_scopes(creds or self.store.load(self.oauth.provider) or {})
+        return sorted(required - granted)
+
+    @staticmethod
+    def _granted_scopes(creds: dict) -> set[str]:
+        scopes: set[str] = set()
+        raw = creds.get("scope")
+        if isinstance(raw, str):
+            scopes.update(s for s in raw.replace(",", " ").split() if s)
+        elif isinstance(raw, list):
+            scopes.update(str(s) for s in raw if s)
+        token = creds.get("access_token")
+        if isinstance(token, str):
+            scopes.update(_jwt_scopes(token))
+        return scopes
 
     # -- request headers ----------------------------------------------------
     def headers(self) -> dict[str, str]:
         creds = self._creds()
         if not creds:
+            missing = self.missing_required_scopes()
+            if missing:
+                raise AuthError(
+                    f"{self.oauth.provider} OAuth token is missing required API scope(s): "
+                    f"{', '.join(missing)}. Use an API key or re-login with a client that can "
+                    "request model scopes."
+                )
             raise AuthError(
                 f"Not logged in to {self.oauth.provider} via OAuth. "
                 f"Run `aegis auth login {self.oauth.provider}`."
@@ -387,3 +418,22 @@ class AuthStore:
 
 class AuthError(RuntimeError):
     pass
+
+
+def _jwt_scopes(token: str) -> set[str]:
+    """Best-effort, non-validating JWT payload decode for OAuth scope diagnostics."""
+    parts = token.split(".")
+    if len(parts) < 2:
+        return set()
+    payload = parts[1]
+    payload += "=" * (-len(payload) % 4)
+    try:
+        data = json.loads(base64.urlsafe_b64decode(payload.encode()).decode("utf-8"))
+    except Exception:  # noqa: BLE001
+        return set()
+    raw = data.get("scp") or data.get("scope") or []
+    if isinstance(raw, str):
+        return {s for s in raw.replace(",", " ").split() if s}
+    if isinstance(raw, list):
+        return {str(s) for s in raw if s}
+    return set()

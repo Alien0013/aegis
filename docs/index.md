@@ -5,8 +5,7 @@ an open, self-hostable replacement for Hermes Agent and OpenClaw, in ~10k audita
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash
-aegis setup        # pick a provider + key
-aegis              # chat
+aegis              # chat after onboarding
 ```
 
 ## What you get

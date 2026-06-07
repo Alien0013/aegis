@@ -115,8 +115,11 @@ def cmd_auth(args, config: Config) -> int:
         for name in registry.list_providers():
             spec = registry.get_spec(name)
             api = "set" if any(__import__("os").environ.get(v) for v in spec.env_vars) else "—"
-            oauth = "logged in" if (spec.oauth and store.load(name) and not store.load(name).get("quarantined")) else (
-                "available" if spec.oauth else "—")
+            if spec.oauth:
+                oauth_auth = OAuthAuth(spec.oauth, store)
+                oauth = oauth_auth.describe().removeprefix(f"oauth ({name}: ").removesuffix(")")
+            else:
+                oauth = "—"
             _print(f"  {name:<12} api-key: {api:<5} oauth: {oauth}")
         return 0
     if args.action == "login":
@@ -126,8 +129,16 @@ def cmd_auth(args, config: Config) -> int:
         if not spec or not spec.oauth:
             return _die(f"provider '{args.provider}' has no OAuth config.")
         try:
-            OAuthAuth(spec.oauth, store).login(manual=args.manual)
+            oauth = OAuthAuth(spec.oauth, store)
+            creds = oauth.login(manual=args.manual)
             _print(f"✓ logged in to {args.provider} via OAuth.")
+            missing = oauth.missing_required_scopes(creds)
+            if missing:
+                _print(
+                    "  ! Token is missing API scope(s): "
+                    + ", ".join(missing)
+                    + ". Use an API key for model inference."
+                )
         except AuthError as e:
             return _die(str(e))
         return 0
@@ -144,33 +155,15 @@ def cmd_auth(args, config: Config) -> int:
 # setup wizard
 # --------------------------------------------------------------------------- #
 def cmd_setup(args, config: Config) -> int:
-    from ..providers import registry
+    from ..onboarding import run_onboarding
 
-    _print("AEGIS setup\n-----------")
-    _print("Providers: " + ", ".join(registry.list_providers()))
-    provider = input(f"provider [{config.get('model.provider')}]: ").strip() or config.get("model.provider")
-    spec = registry.get_spec(provider)
-    if not spec:
-        return _die(f"unknown provider '{provider}'")
-    config.set("model.provider", provider)
-    model = input(f"model [{spec.default_model}]: ").strip() or spec.default_model
-    config.set("model.default", model)
-
-    if spec.env_vars:
-        key = input(f"{spec.env_vars[0]} (blank to skip / use OAuth): ").strip()
-        if key:
-            config.set(spec.env_vars[0], key)
-    elif spec.auth_scheme == "none":
-        url = input(f"base_url [{spec.base_url}]: ").strip()
-        if url:
-            config.set("model.base_url", url)
-
-    mode = input("exec mode [ask/auto/allowlist/deny/full] (ask): ").strip() or "ask"
-    config.set("tools.exec_mode", mode)
-    _print(f"\n✓ wrote {cfg.config_path()}")
-    if spec.oauth:
-        _print(f"  Tip: `aegis auth login {provider}` to use OAuth instead of an API key.")
-    return 0
+    return run_onboarding(
+        config,
+        quick=getattr(args, "quick", False),
+        advanced=getattr(args, "advanced", False),
+        probe=not getattr(args, "no_probe", False),
+        services=not getattr(args, "no_services", False),
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -422,7 +415,8 @@ def cmd_gateway(args, config: Config) -> int:
     from ..gateway.runner import GatewayRunner
 
     runner = GatewayRunner(config)
-    channels = (args.channels or "cli").split(",")
+    configured = ",".join(config.get("gateway.channels", []) or [])
+    channels = (args.channels or configured or "cli").split(",")
     for ch in channels:
         try:
             runner.add(build_adapter(ch.strip()))
@@ -551,7 +545,7 @@ def cmd_batch(args, config: Config) -> int:
 
 _CMDS = ("chat model auth setup onboard update skills mcp serve cron tools memory "
          "config sessions gateway doctor completion backup import insights webhook "
-         "hooks kanban curator dashboard acp pairing checkpoints background")
+         "hooks kanban curator dashboard daemon acp pairing checkpoints background")
 
 
 def cmd_checkpoints(args, config: Config) -> int:
@@ -648,9 +642,17 @@ def build_parser() -> argparse.ArgumentParser:
     a.set_defaults(func=cmd_auth)
 
     s = sub.add_parser("setup", help="interactive setup wizard")
+    s.add_argument("--quick", action="store_true", help="apply fast local defaults")
+    s.add_argument("--advanced", action="store_true", help="show advanced setup choices")
+    s.add_argument("--no-probe", action="store_true", help="skip provider connection test")
+    s.add_argument("--no-services", action="store_true", help="skip user systemd service setup")
     s.set_defaults(func=cmd_setup)
 
     ob = sub.add_parser("onboard", help="interactive setup wizard (alias of setup)")
+    ob.add_argument("--quick", action="store_true", help="apply fast local defaults")
+    ob.add_argument("--advanced", action="store_true", help="show advanced setup choices")
+    ob.add_argument("--no-probe", action="store_true", help="skip provider connection test")
+    ob.add_argument("--no-services", action="store_true", help="skip user systemd service setup")
     ob.set_defaults(func=cmd_setup)
 
     up = sub.add_parser("update", help="update AEGIS to the latest version")
@@ -722,6 +724,14 @@ def build_parser() -> argparse.ArgumentParser:
     db = sub.add_parser("dashboard", help="local web dashboard")
     db.add_argument("--host"); db.add_argument("--port", type=int)
     db.set_defaults(func=_dash.cmd_dashboard)
+
+    from ..daemon import cmd_daemon as _cmd_daemon
+    dm = sub.add_parser("daemon", help="install/control user services")
+    dm.add_argument("action", nargs="?", choices=["status", "install", "start", "stop", "restart", "remove"],
+                    default="status")
+    dm.add_argument("--channels", help="gateway channels for service install, e.g. telegram,discord")
+    dm.add_argument("--no-start", action="store_true", help="write units but do not start them")
+    dm.set_defaults(func=_cmd_daemon)
 
     ac = sub.add_parser("acp", help="run as an ACP stdio server for IDEs")
     ac.set_defaults(func=_acp.cmd_acp)

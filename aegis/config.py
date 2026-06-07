@@ -184,8 +184,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "host": "127.0.0.1",
         "port": 8790,
         "api_key": None,             # optional bearer required by `aegis serve`
+        "dashboard_host": "127.0.0.1",
+        "dashboard_port": 9119,
+        "dashboard_token": None,      # optional bearer/query token for `aegis dashboard`
     },
     "gateway": {
+        "channels": [],
         "group_sessions_per_user": True,
         "session_mode": "per_channel_peer",  # main | per_channel | per_channel_peer | per_peer
         "require_mention": False,             # in group chats, only respond when mentioned

@@ -2,9 +2,10 @@
 
 Auth precedence (per provider):
   1. explicit ``base_url`` override in config -> treat as custom/local (api-key or none)
-  2. a valid OAuth login in auth.json  -> OAuth
-  3. an API key in the environment      -> API key
-Whichever is *available* first wins; ``aegis auth status`` prints the resolution.
+  2. an API key in the environment            -> API key
+  3. a valid OAuth login in auth.json         -> OAuth
+API keys win when both are configured because OAuth scopes can be identity-only.
+``aegis auth status`` prints the resolution.
 """
 
 from __future__ import annotations
@@ -61,6 +62,7 @@ OPENAI_OAUTH = OAuthConfig(
     authorize_url="https://auth.openai.com/oauth/authorize",
     token_url="https://auth.openai.com/oauth/token",
     scopes=["openid", "profile", "email", "offline_access"],
+    required_api_scopes=["model.request"],
     use_localhost_callback=True,
     localhost_port=1455,
     callback_host="localhost",
@@ -253,7 +255,10 @@ def _resolve_auth(spec: ProviderSpec, prefer: str | None = None) -> AuthProvider
         return oauth
     if prefer == "apikey":
         return api
-    # auto: OAuth if logged in, else API key
+    # auto: API key first, then OAuth. This avoids using identity-only OAuth
+    # tokens for providers that need model-request scopes (notably OpenAI).
+    if api.available():
+        return api
     if oauth and oauth.available():
         return oauth
     return api

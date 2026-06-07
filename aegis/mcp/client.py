@@ -233,10 +233,27 @@ def _server_configs(config) -> dict:
     if raw.strip():
         try:
             data = json.loads(raw)
-            servers.update(data.get("mcpServers", data) or {})
+            servers.update(_normalize_external_mcp_config(data))
         except json.JSONDecodeError:
             pass
     return servers
+
+
+def _looks_like_server_spec(value: object) -> bool:
+    return isinstance(value, dict) and any(k in value for k in ("command", "url"))
+
+
+def _normalize_external_mcp_config(data: object) -> dict:
+    """Accept Claude, AEGIS, and common wrapper shapes for mcp.json."""
+    if not isinstance(data, dict):
+        return {}
+    if isinstance(data.get("mcpServers"), dict):
+        return data["mcpServers"]
+    if isinstance(data.get("mcp"), dict) and isinstance(data["mcp"].get("servers"), dict):
+        return data["mcp"]["servers"]
+    if isinstance(data.get("servers"), dict) and not _looks_like_server_spec(data["servers"]):
+        return data["servers"]
+    return data
 
 
 def build_manager(config) -> MCPManager:

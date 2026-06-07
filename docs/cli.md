@@ -30,6 +30,7 @@ Run any command with `-h` for details. `aegis` alone opens the REPL.
 
 ## Services
 - `aegis gateway --channels …`
+- `aegis daemon [status|install|start|stop|restart|remove]` — user systemd services
 - `aegis serve [--port]` — OpenAI-compatible API
 - `aegis mcp [list|add|remove|test|serve]`
 - `aegis cron [list|add|rm|run]`, `aegis webhook [list|add|remove|serve]`

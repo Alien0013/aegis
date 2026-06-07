@@ -10,6 +10,7 @@
 #   AEGIS_BIN_DIR      launcher location  (default ~/.local/bin)
 #   AEGIS_EXTRAS       pip extras         (e.g. "all" -> .[all]; default none)
 #   AEGIS_REPO         git URL to install (default: local dir if present, else PyPI)
+#   AEGIS_ONBOARD      run onboarding     (default 1; set 0 to skip)
 set -euo pipefail
 
 APP="aegis"
@@ -17,6 +18,27 @@ INSTALL_DIR="${AEGIS_INSTALL_DIR:-$HOME/.aegis/venv}"
 BIN_DIR="${AEGIS_BIN_DIR:-$HOME/.local/bin}"
 EXTRAS="${AEGIS_EXTRAS:-}"
 REPO="${AEGIS_REPO:-}"
+RUN_ONBOARD="${AEGIS_ONBOARD:-1}"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --skip-onboard|--no-onboard)
+      RUN_ONBOARD=0; shift ;;
+    --quick)
+      AEGIS_ONBOARD_ARGS="${AEGIS_ONBOARD_ARGS:-} --quick"; shift ;;
+    --advanced)
+      AEGIS_ONBOARD_ARGS="${AEGIS_ONBOARD_ARGS:-} --advanced"; shift ;;
+    --no-probe)
+      AEGIS_ONBOARD_ARGS="${AEGIS_ONBOARD_ARGS:-} --no-probe"; shift ;;
+    --no-services)
+      AEGIS_ONBOARD_ARGS="${AEGIS_ONBOARD_ARGS:-} --no-services"; shift ;;
+    -h|--help)
+      echo "Usage: install.sh [--skip-onboard] [--quick|--advanced] [--no-probe] [--no-services]"
+      exit 0 ;;
+    *)
+      warn "Ignoring unknown installer argument: $1"; shift ;;
+  esac
+done
 
 # Termux (Android): link into $PREFIX/bin (already on PATH) and use pkg for system tools.
 IS_TERMUX=""
@@ -96,14 +118,23 @@ if ! command -v rg >/dev/null 2>&1; then
   fi
 fi
 
-# --- 7. done ---------------------------------------------------------------
+# --- 7. first-run onboarding ----------------------------------------------
 echo
 ok "AEGIS installed."
-echo "  Next:"
-echo "    aegis setup                 # pick a provider + key (or 'aegis auth login anthropic')"
-echo "    aegis                       # start chatting"
-echo "    aegis doctor                # verify the install"
-if [ -n "$EXTRAS" ]; then
-  echo "    playwright install chromium # if you installed the 'browser'/'all' extra"
+if [ "$RUN_ONBOARD" != "0" ] && [ -r /dev/tty ]; then
+  say "Starting first-run onboarding…"
+  if "$BIN_DIR/$APP" onboard ${AEGIS_ONBOARD_ARGS:-} < /dev/tty; then
+    ok "Onboarding complete."
+  else
+    warn "Onboarding did not finish. Run 'aegis setup' when ready."
+  fi
+else
+  echo "  Next:"
+  echo "    aegis setup                 # first-run onboarding"
+  echo "    aegis                       # start chatting"
+  echo "    aegis doctor                # verify the install"
+  if [ -n "$EXTRAS" ]; then
+    echo "    playwright install chromium # if you installed the 'browser'/'all' extra"
+  fi
 fi
 exit 0

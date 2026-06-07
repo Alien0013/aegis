@@ -42,7 +42,7 @@ class PairingStore:
         except OSError:
             pass
 
-    def is_authorized(self, platform: str, user_id: str | None) -> bool:
+    def is_authorized(self, platform: str, user_id: str | None, user_name: str | None = None) -> bool:
         if user_id is None:
             return True  # channels without a user concept (e.g. cli)
         if os.environ.get("GATEWAY_ALLOW_ALL_USERS") in ("1", "true", "True"):
@@ -50,7 +50,11 @@ class PairingStore:
         if os.environ.get(f"{platform.upper()}_ALLOW_ALL_USERS") in ("1", "true", "True"):
             return True
         allowed = os.environ.get(f"{platform.upper()}_ALLOWED_USERS", "")
-        if user_id in {u.strip() for u in allowed.split(",") if u.strip()}:
+        allowed_set = {u.strip() for u in allowed.split(",") if u.strip()}
+        names = {user_id}
+        if user_name:
+            names.update({user_name, f"@{user_name.lstrip('@')}"})
+        if names & allowed_set:
             return True
         return user_id in self._load()["approved"].get(platform, [])
 

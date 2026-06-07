@@ -18,7 +18,7 @@ lines** instead of hundreds of thousands.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash
-aegis setup && aegis
+aegis
 ```
 
 <p align="center"><img src="assets/screenshot.svg" alt="AEGIS session" width="700"></p>
@@ -46,11 +46,16 @@ curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | b
 
 The installer (like Hermes) finds Python 3.10+, builds an isolated venv at
 `~/.aegis/venv`, installs AEGIS, drops a global `aegis` command on your PATH, and
-grabs ripgrep if missing — no venv juggling. Windows: `irm …/install.ps1 | iex`.
+grabs ripgrep if missing. When a terminal is attached it immediately launches the
+guided onboarding flow (provider, key, web tools, optional channels, dashboard,
+and user services) using `/dev/tty`, so `curl | bash` prompts work correctly.
+Skip onboarding with `--skip-onboard` or `AEGIS_ONBOARD=0`.
+Windows: `irm …/install.ps1 | iex`.
 Everything in one go:
 
 ```bash
 AEGIS_EXTRAS=all curl -fsSL …/install.sh | bash   # + browser, computer, Discord, Slack
+curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- --advanced
 ```
 
 From a clone, or for development:
@@ -73,7 +78,10 @@ voice) is in the core install.
 ## Quick start
 
 ```bash
-# 1. point it at a provider (any of these)
+# 1. run or re-run guided onboarding
+aegis setup
+
+# or point it at a provider manually
 aegis config set ANTHROPIC_API_KEY  sk-ant-...        # Claude
 aegis config set OPENAI_API_KEY     sk-...            # OpenAI
 aegis auth login anthropic                            # …or OAuth instead of a key
@@ -95,8 +103,9 @@ aegis gateway --channels telegram,cli
 `xai`, `mistral`, `together`, `ollama`, `lmstudio`, plus any OpenAI-compatible
 endpoint via `model.base_url` and `custom_providers` in config.
 
-Auth resolution per provider: explicit `base_url` → OAuth login (if present) →
-API key from the environment. Inspect it with `aegis auth status`.
+Auth resolution per provider: explicit `base_url` → API key from the environment →
+OAuth login (if usable for model requests). API keys intentionally win when both
+exist because some OAuth tokens are identity-only. Inspect it with `aegis auth status`.
 
 OAuth is implemented generically (PKCE S256, `client_secret` support,
 localhost-callback **and** manual-paste flows, automatic refresh, `auth.json` at
@@ -109,10 +118,10 @@ aegis auth login openai        # ChatGPT login, localhost:1455 callback
 aegis auth login google        # Google sign-in, loopback callback
 ```
 
-(OpenAI/Google login + token storage/refresh work today; using those bearer
-tokens for *inference* depends on the granted scopes / the provider's own backend
-endpoint — API keys remain the always-reliable path. Any other IdP wires up by
-overriding `OAuthConfig`.)
+OpenAI login + token storage/refresh can succeed while the token lacks the
+`model.request` scope needed for inference; AEGIS detects that and falls back to
+API-key auth when available. API keys remain the reliable OpenAI path. Any other
+IdP wires up by overriding `OAuthConfig`.
 
 ## Tools & permissions
 

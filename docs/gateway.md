@@ -22,6 +22,7 @@ aegis gateway --channels telegram,discord,slack,signal,matrix,email,webhook
 - **Durable delivery** — a SQLite outbox queues replies and **retries with backoff**;
   pending messages survive restarts.
 - **Authorization** — unknown users must pair: `aegis pairing approve <platform> <code>`.
+  Telegram allowlists accept numeric ids or `@username` handles.
   Group **mention gating** via `gateway.require_mention`.
 - **Session isolation** — `gateway.session_mode`: `main | per_channel | per_channel_peer
   | per_peer`.
@@ -31,4 +32,11 @@ aegis gateway --channels telegram,discord,slack,signal,matrix,email,webhook
 ```bash
 aegis cron add "@daily" "summarize today's commits"
 aegis cron run        # runs jobs; the gateway also ticks them
+```
+
+## User services
+
+```bash
+aegis daemon install --channels telegram
+aegis daemon status
 ```

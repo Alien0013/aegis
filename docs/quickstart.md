@@ -4,6 +4,7 @@
 aegis setup                                   # interactive: provider + key + exec mode
 # or pick directly:
 aegis config set ANTHROPIC_API_KEY sk-ant-…   # API key
+aegis config set OPENAI_API_KEY sk-…          # OpenAI API key
 aegis auth login anthropic                     # …or OAuth
 aegis model set ollama llama3.1                # …or fully local
 ```

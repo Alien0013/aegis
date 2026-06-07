@@ -91,6 +91,31 @@ def test_provider_count_and_oauth():
     assert all(registry.get_spec(p).oauth for p in ("anthropic", "openai", "google"))
 
 
+def test_openai_api_key_wins_over_identity_only_oauth(monkeypatch):
+    from aegis.config import Config
+    from aegis.providers import build_provider, registry
+    from aegis.providers.auth import AuthError, AuthStore, OAuthAuth
+
+    cfg = Config.load()
+    cfg.data["model"]["provider"] = "openai"
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    AuthStore().save("openai", {
+        "access_token": "opaque",
+        "token_type": "Bearer",
+        "scope": "openid profile email offline_access",
+        "quarantined": False,
+    })
+
+    provider = build_provider(cfg)
+    assert provider.auth.describe().startswith("api-key")
+
+    oauth = OAuthAuth(registry.get_spec("openai").oauth, AuthStore())
+    assert oauth.missing_required_scopes() == ["model.request"]
+    assert not oauth.available()
+    with pytest.raises(AuthError, match="missing required API scope"):
+        oauth.headers()
+
+
 def test_fallback_provider_retries():
     from aegis.providers.fallback import FallbackProvider
     from aegis.types import LLMResponse
