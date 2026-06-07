@@ -78,21 +78,42 @@ class SessionStore:
                        title TEXT,
                        created_at TEXT,
                        updated_at TEXT,
+                       summary TEXT,
                        data TEXT
                    )"""
             )
+            # add `summary` to pre-existing tables
+            cols = {r[1] for r in c.execute("PRAGMA table_info(sessions)").fetchall()}
+            if "summary" not in cols:
+                c.execute("ALTER TABLE sessions ADD COLUMN summary TEXT")
+            # full-text index over message content (graceful if FTS5 is unavailable)
+            try:
+                c.execute("CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5("
+                          "content, session_id UNINDEXED, title UNINDEXED, role UNINDEXED, ts UNINDEXED)")
+                self._fts = True
+            except sqlite3.OperationalError:
+                self._fts = False
 
     def save(self, session: Session) -> None:
         row = session.to_row()
         session.updated_at = row["updated_at"]
+        row["summary"] = session.meta.get("summary", "")
         with self._conn() as c:
             c.execute(
-                """INSERT INTO sessions (id, title, created_at, updated_at, data)
-                   VALUES (:id, :title, :created_at, :updated_at, :data)
+                """INSERT INTO sessions (id, title, created_at, updated_at, summary, data)
+                   VALUES (:id, :title, :created_at, :updated_at, :summary, :data)
                    ON CONFLICT(id) DO UPDATE SET
-                     title=excluded.title, updated_at=excluded.updated_at, data=excluded.data""",
+                     title=excluded.title, updated_at=excluded.updated_at,
+                     summary=excluded.summary, data=excluded.data""",
                 row,
             )
+            if getattr(self, "_fts", False):
+                c.execute("DELETE FROM messages_fts WHERE session_id=?", (session.id,))
+                for m in session.messages:
+                    if m.role in ("user", "assistant") and m.content:
+                        c.execute("INSERT INTO messages_fts (content, session_id, title, role, ts) "
+                                  "VALUES (?,?,?,?,?)",
+                                  (m.content, session.id, session.title, m.role, session.updated_at))
 
     def load(self, sid: str) -> Session | None:
         with self._conn() as c:
@@ -134,24 +155,59 @@ class SessionStore:
             return [dict(r) for r in rows]
 
     def search_messages(self, query: str, limit: int = 8) -> list[dict]:
-        """Cross-session recall: return matching message snippets across past sessions."""
+        """Cross-session recall: ranked message snippets across past sessions (FTS5)."""
+        if getattr(self, "_fts", False):
+            try:
+                match = '"' + query.replace('"', "") + '"'   # phrase match, escape quotes
+                with self._conn() as c:
+                    rows = c.execute(
+                        "SELECT session_id, title, role, ts, "
+                        "snippet(messages_fts, 0, '[', ']', '…', 12) AS snip "
+                        "FROM messages_fts WHERE messages_fts MATCH ? ORDER BY rank LIMIT ?",
+                        (match, limit),
+                    ).fetchall()
+                return [{"session": r["session_id"], "title": r["title"], "when": r["ts"],
+                         "role": r["role"], "snippet": r["snip"].replace("\n", " ")} for r in rows]
+            except sqlite3.OperationalError:
+                pass
+        # LIKE fallback
         out: list[dict] = []
         q = query.lower()
         with self._conn() as c:
-            rows = c.execute(
-                "SELECT * FROM sessions WHERE data LIKE ? ORDER BY updated_at DESC LIMIT ?",
-                (f"%{query}%", limit * 3),
-            ).fetchall()
+            rows = c.execute("SELECT * FROM sessions WHERE data LIKE ? ORDER BY updated_at DESC LIMIT ?",
+                             (f"%{query}%", limit * 3)).fetchall()
         for row in rows:
             sess = Session.from_row(row)
             for m in sess.messages:
                 if m.role in ("user", "assistant") and m.content and q in m.content.lower():
                     idx = m.content.lower().find(q)
-                    start = max(0, idx - 80)
-                    snippet = m.content[start:idx + 160].strip().replace("\n", " ")
+                    snippet = m.content[max(0, idx - 80):idx + 160].strip().replace("\n", " ")
                     out.append({"session": sess.id, "title": sess.title,
                                 "when": sess.updated_at, "role": m.role, "snippet": snippet})
                     break
             if len(out) >= limit:
                 break
         return out
+
+    def summarize(self, sid: str, provider) -> str:
+        """Generate + store a 1-2 sentence summary of a session via the provider."""
+        sess = self.load(sid)
+        if not sess:
+            return ""
+        from .types import Message
+        transcript = "\n".join(f"{m.role}: {m.content}" for m in sess.messages
+                               if m.role in ("user", "assistant") and m.content)[:12_000]
+        if not transcript.strip():
+            return ""
+        try:
+            resp = provider.complete([
+                Message.system("Summarize this conversation in 1-2 sentences: what the user wanted "
+                               "and what was decided/done. Be specific and factual."),
+                Message.user(transcript),
+            ], tools=None, stream=False)
+            summary = resp.text.strip()
+        except Exception as e:  # noqa: BLE001
+            return ""
+        sess.meta["summary"] = summary
+        self.save(sess)
+        return summary

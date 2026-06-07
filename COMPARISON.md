@@ -91,6 +91,11 @@ Originally-missing Hermes features now implemented in AEGIS:
 | Skill-install security scan + trust gating (`--force` to override) | ✅ |
 | Gateway session-isolation modes + group mention gating | ✅ `gateway.session_mode`/`require_mention` |
 | `/status`, `/think` operator commands | ✅ |
+| **Closed learning loop** (review→extract→redact→approve→promote, skill versioning) | ✅ `aegis learn` |
+| **FTS5 session search** + summaries + cross-session recall | ✅ `session_search`, `sessions summarize/search` |
+| **Fail-closed sandboxing** (no silent local fallback) | ✅ `tools.allow_local_fallback` |
+| `/retry`, `/undo`, `/learn` TUI commands | ✅ |
+| CI (multi-OS × py3.10–3.13) + SECURITY/CONTRIBUTING + issue/PR templates + examples | ✅ |
 
 ## Where AEGIS intentionally differs
 

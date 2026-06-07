@@ -393,6 +393,15 @@ def cmd_sessions(args, config: Config) -> int:
     if args.action == "rm":
         _print("removed" if store.delete(args.id) else "not found")
         return 0
+    if args.action == "summarize":
+        from ..providers import build_provider
+        s = store.summarize(args.id, build_provider(config)) if args.id else None
+        _print(s or "usage: aegis sessions summarize <id>")
+        return 0
+    if args.action == "search":
+        for h in store.search_messages(args.id or ""):
+            _print(f"  [{h['when']}] {h['title']} ({h['session'][:14]})\n    {h['role']}: {h['snippet']}")
+        return 0
     for s in store.list(50):
         _print(f"  {s['id']}  {s['title'][:40]:<40}  {s['updated_at']}")
     return 0
@@ -738,6 +747,12 @@ def build_parser() -> argparse.ArgumentParser:
     sec2.add_argument("provider", nargs="?", default="bitwarden")
     sec2.set_defaults(func=_ops.cmd_secrets)
 
+    from .. import learn as _learn
+    ln = sub.add_parser("learn", help="review sessions; promote learned memories/skills")
+    ln.add_argument("action", nargs="?", choices=["review", "list", "apply", "reject"], default="list")
+    ln.add_argument("id", nargs="?")
+    ln.set_defaults(func=_learn.cmd_learn)
+
     sk = sub.add_parser("skills", help="list/view/create/install/search/remove skills")
     sk.add_argument("action", nargs="?",
                     choices=["list", "view", "new", "install", "search", "remove", "hub"], default="list")
@@ -779,7 +794,8 @@ def build_parser() -> argparse.ArgumentParser:
     cf.set_defaults(func=cmd_config)
 
     se = sub.add_parser("sessions", help="list/show/remove sessions")
-    se.add_argument("action", nargs="?", choices=["list", "show", "rm"], default="list")
+    se.add_argument("action", nargs="?", choices=["list", "show", "rm", "summarize", "search"],
+                    default="list")
     se.add_argument("id", nargs="?")
     se.set_defaults(func=cmd_sessions)
 

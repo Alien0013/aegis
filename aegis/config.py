@@ -148,6 +148,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "toolsets": ["core", "mcp"], # enabled toolsets (add "browser","computer" to opt in)
         "terminal_backend": "local", # local | docker | ssh
         "docker_image": "python:3.12-slim",
+        "allow_local_fallback": False,  # if a sandbox backend is down, refuse (fail closed)
     },
     "auxiliary": {                   # small/cheap model for compaction, vision, smart-approval
         "provider": "",              # "" = reuse main provider
@@ -163,6 +164,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "skills": {
         "paths": [],                 # extra skill dirs
         "autogen": True,
+    },
+    "learn": {
+        "auto": False,               # auto-review sessions on exit to propose memory/skill candidates
     },
     "mcp": {
         "enabled": True,

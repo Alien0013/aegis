@@ -1,0 +1,38 @@
+# Example ~/.aegis/config.yaml — copy what you need. Secrets go in ~/.aegis/.env.
+model:
+  provider: anthropic            # or openai, google, openrouter, ollama, …
+  default: claude-sonnet-4-5
+
+agent:
+  max_iterations: 50
+  reasoning_effort: medium       # off | minimal | low | medium | high | xhigh
+  stream: true
+
+tools:
+  exec_mode: smart               # deny | allowlist | ask | smart | auto | full
+  terminal_backend: local        # local | docker | ssh
+  allow_local_fallback: false    # fail closed if a sandbox backend is down
+  toolsets: [core, mcp]          # add: browser, computer, voice, lsp
+
+memory:
+  provider: ""                   # "" | honcho | mem0 | jsonl
+
+learn:
+  auto: true                     # review sessions on exit; propose memory/skill candidates
+
+web:
+  search_backend: auto           # auto | duckduckgo | brave | tavily | serper
+
+routing:                         # per-prompt provider routing
+  - {match: "\\b(deploy|kubernetes|terraform)\\b", provider: anthropic, model: claude-opus-4-6}
+
+gateway:
+  session_mode: per_channel_peer # main | per_channel | per_channel_peer | per_peer
+  require_mention: false
+
+mcp:
+  servers:
+    filesystem: {command: npx, args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]}
+
+fallback_providers:
+  - {provider: openrouter, model: anthropic/claude-sonnet-4.5}

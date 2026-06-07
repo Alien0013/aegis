@@ -34,8 +34,8 @@ except Exception:  # noqa: BLE001
 _approve_lock = threading.Lock()
 
 SLASH = ["/help", "/model", "/status", "/tools", "/skills", "/memory", "/usage", "/compress",
-         "/think", "/background", "/tasks", "/rollback", "/personality", "/save",
-         "/sessions", "/new", "/clear", "/quit", "/exit"]
+         "/think", "/retry", "/undo", "/learn", "/background", "/tasks", "/rollback",
+         "/personality", "/save", "/sessions", "/new", "/clear", "/quit", "/exit"]
 
 
 def _out(text: str = "", style: str | None = None) -> None:
@@ -215,6 +215,32 @@ def handle_slash(cmd: str, agent: Agent) -> str:
         from ..checkpoints import CheckpointStore
         restored = CheckpointStore(agent.cwd).rollback(arg or None)
         _out(f"rolled back {len(restored)} file(s): {', '.join(restored) or '(none)'}", style="yellow")
+    elif name == "/retry":
+        # drop the last assistant turn (+ its tool messages) and re-run the last user msg
+        msgs = agent.session.messages
+        last_user = next((i for i in range(len(msgs) - 1, -1, -1) if msgs[i].role == "user"), None)
+        if last_user is None:
+            _out("nothing to retry")
+        else:
+            prompt = msgs[last_user].content
+            agent.session.messages = msgs[:last_user]
+            agent.run(prompt, Renderer())
+            _out(_status_line(agent), style="bright_black")
+    elif name == "/undo":
+        msgs = agent.session.messages
+        last_user = next((i for i in range(len(msgs) - 1, -1, -1) if msgs[i].role == "user"), None)
+        if last_user is None:
+            _out("nothing to undo")
+        else:
+            agent.session.messages = msgs[:last_user]
+            _out(f"undid last turn ({len(msgs) - last_user} messages removed)", style="yellow")
+    elif name == "/learn":
+        from ..learn import review_session
+        try:
+            found = review_session(agent.config, agent.session.id)
+            _out(f"proposed {len(found)} candidate(s); review with `aegis learn list`", style="green")
+        except Exception as e:  # noqa: BLE001
+            _out(f"learn failed: {e}", style="red")
     elif name == "/save":
         out = Path(arg).expanduser() if arg else (agent.cwd / f"{agent.session.id}.md")
         lines = [f"# {agent.session.title}\n"]
@@ -278,6 +304,15 @@ def interactive(config: Config, *, model=None, provider_name=None,
             user = ps.prompt(">>> ") if ps else input(">>> ")
         except (EOFError, KeyboardInterrupt):
             _out("\nbye.")
+            if config.get("learn.auto") and len(agent.session.messages) > 4:
+                try:
+                    from ..learn import review_session
+                    found = review_session(config, agent.session.id)
+                    if found:
+                        _out(f"💡 learned {len(found)} candidate(s); `aegis learn list` to review.",
+                             style="magenta")
+                except Exception:  # noqa: BLE001
+                    pass
             break
         user = user.strip()
         if not user:
