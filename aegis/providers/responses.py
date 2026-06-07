@@ -109,15 +109,17 @@ class ResponsesTransport(ProviderTransport):
     ) -> LLMResponse:
         url = f"{base_url}/responses"
         headers = {"Content-Type": "application/json", **(extra_headers or {}), **auth.headers()}
-        wire_stream = stream or self._requires_stream(base_url)
+        is_codex_backend = self._requires_stream(base_url)
+        wire_stream = stream or is_codex_backend
         payload: dict[str, Any] = {
             "model": model,
             "instructions": self._instructions(messages),
             "input": self._to_wire_input(messages),
             "stream": wire_stream,
             "store": False,
-            "max_output_tokens": max_tokens,
         }
+        if not is_codex_backend:
+            payload["max_output_tokens"] = max_tokens
         eff = {"minimal": "low", "low": "low", "medium": "medium", "high": "high",
                "xhigh": "high"}.get(reasoning)
         if eff:

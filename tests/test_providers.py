@@ -137,6 +137,7 @@ def test_codex_responses_forces_stream(monkeypatch):
     assert captured["url"] == "https://chatgpt.com/backend-api/codex/responses"
     assert captured["payload"]["stream"] is True
     assert captured["payload"]["store"] is False
+    assert "max_output_tokens" not in captured["payload"]
 
 
 def test_anthropic_coalesces_tool_results():
