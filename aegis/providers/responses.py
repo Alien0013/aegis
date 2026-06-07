@@ -23,6 +23,9 @@ class ResponsesTransport(ProviderTransport):
     api_mode = ApiMode.RESPONSES
 
     # -- wire conversion ----------------------------------------------------
+    def _requires_stream(self, base_url: str) -> bool:
+        return "chatgpt.com/backend-api/codex" in base_url.rstrip("/")
+
     def _instructions(self, messages: list[Message]) -> str:
         instructions = "\n\n".join(m.content for m in messages if m.role == "system" and m.content)
         return instructions or DEFAULT_INSTRUCTIONS
@@ -106,11 +109,12 @@ class ResponsesTransport(ProviderTransport):
     ) -> LLMResponse:
         url = f"{base_url}/responses"
         headers = {"Content-Type": "application/json", **(extra_headers or {}), **auth.headers()}
+        wire_stream = stream or self._requires_stream(base_url)
         payload: dict[str, Any] = {
             "model": model,
             "instructions": self._instructions(messages),
             "input": self._to_wire_input(messages),
-            "stream": stream,
+            "stream": wire_stream,
             "store": False,
             "max_output_tokens": max_tokens,
         }
@@ -122,7 +126,7 @@ class ResponsesTransport(ProviderTransport):
         if wire_tools:
             payload["tools"] = wire_tools
 
-        if stream:
+        if wire_stream:
             return self._stream(url, headers, payload, on_delta, timeout)
         return self._blocking(url, headers, payload, timeout)
 

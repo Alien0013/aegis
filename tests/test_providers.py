@@ -94,7 +94,7 @@ def test_responses_payload_includes_instructions(monkeypatch):
 
     monkeypatch.setattr("aegis.providers.responses.httpx.Client", FakeClient)
     resp = ResponsesTransport().complete(
-        base_url="https://chatgpt.com/backend-api/codex",
+        base_url="https://api.openai.com/v1",
         auth=FakeAuth(),
         model="gpt-5.5",
         messages=[Message.user("Reply with OK.")],
@@ -103,9 +103,40 @@ def test_responses_payload_includes_instructions(monkeypatch):
     )
 
     assert resp.text == "ok"
-    assert captured["url"] == "https://chatgpt.com/backend-api/codex/responses"
+    assert captured["url"] == "https://api.openai.com/v1/responses"
     assert captured["json"]["instructions"] == DEFAULT_INSTRUCTIONS
     assert captured["json"]["store"] is False
+
+
+def test_codex_responses_forces_stream(monkeypatch):
+    from aegis.providers.responses import ResponsesTransport
+    from aegis.types import LLMResponse, Message
+
+    captured: dict = {}
+
+    class FakeAuth:
+        def headers(self):
+            return {}
+
+    def fake_stream(self, url, headers, payload, on_delta, timeout):
+        captured["url"] = url
+        captured["payload"] = payload
+        return LLMResponse(text="ok")
+
+    monkeypatch.setattr("aegis.providers.responses.ResponsesTransport._stream", fake_stream)
+    resp = ResponsesTransport().complete(
+        base_url="https://chatgpt.com/backend-api/codex",
+        auth=FakeAuth(),
+        model="gpt-5.5",
+        messages=[Message.user("Reply OK.")],
+        tools=None,
+        stream=False,
+    )
+
+    assert resp.text == "ok"
+    assert captured["url"] == "https://chatgpt.com/backend-api/codex/responses"
+    assert captured["payload"]["stream"] is True
+    assert captured["payload"]["store"] is False
 
 
 def test_anthropic_coalesces_tool_results():
