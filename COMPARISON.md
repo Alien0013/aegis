@@ -75,6 +75,17 @@ Originally-missing Hermes features now implemented in AEGIS:
 | `@file` references, `/usage`, `/compress`, status bar | ✅ |
 | 26 provider presets (+ custom) | ✅ |
 | Self-update, shell completion, doctor --fix | ✅ |
+| `update --check` / `--branch` | ✅ |
+| `config check` / `config migrate` | ✅ |
+| `uninstall` / `batch` subcommands, `/save` | ✅ |
+| 64K minimum-context enforcement | ✅ |
+| LSP integration (hover/definition/refs/diagnostics) | ✅ `aegis`+`lsp` tool |
+| Per-prompt provider routing rules | ✅ `routing` config |
+| Security audit (deps/MCP/plugins/skills) | ✅ `aegis security audit` |
+| Debug report bundle (redacted) | ✅ `aegis debug share` |
+| Bitwarden secrets sync | ✅ `aegis secrets bitwarden` |
+| Memory backends: honcho, mem0, jsonl + HTTP (openviking/supermemory/byterover/…) | ✅ |
+| Skill hubs: import from HermesHub / ClawHub / Anthropic | ✅ `aegis skills hub <name>` |
 
 ## Where AEGIS intentionally differs
 
