@@ -54,14 +54,14 @@ ANTHROPIC_OAUTH = OAuthConfig(
     api_extra_headers={"anthropic-beta": "oauth-2025-04-20"},
 )
 
-# OpenAI (ChatGPT / Codex) public OAuth client. Login + token storage work; using
-# the resulting bearer for the public API depends on granted scopes (see README).
+# OpenAI (ChatGPT / Codex) public OAuth client. Login + token storage works, but
+# public API inference still depends on whether the token grants model.request.
 OPENAI_OAUTH = OAuthConfig(
     provider="openai",
     client_id="app_EMoamEEZ73f0CkXaXp7hrann",
     authorize_url="https://auth.openai.com/oauth/authorize",
     token_url="https://auth.openai.com/oauth/token",
-    scopes=["openid", "profile", "email", "offline_access", "model.request"],
+    scopes=["openid", "profile", "email", "offline_access"],
     required_api_scopes=["model.request"],
     use_localhost_callback=True,
     localhost_port=1455,

@@ -16,6 +16,46 @@ Input = Callable[[str], str]
 Output = Callable[[str], None]
 
 
+MODEL_PRESETS: dict[str, list[tuple[str, str]]] = {
+    "openai": [
+        ("gpt-5.2", "GPT-5.2 (latest frontier)"),
+        ("gpt-5.1", "GPT-5.1"),
+        ("gpt-5", "GPT-5"),
+        ("gpt-4o", "GPT-4o"),
+        ("gpt-4.1", "GPT-4.1"),
+    ],
+    "anthropic": [
+        ("claude-sonnet-4-5", "Claude Sonnet 4.5"),
+        ("claude-opus-4-1", "Claude Opus 4.1"),
+        ("claude-3-5-sonnet-latest", "Claude 3.5 Sonnet"),
+    ],
+    "google": [
+        ("gemini-2.5-pro", "Gemini 2.5 Pro"),
+        ("gemini-2.5-flash", "Gemini 2.5 Flash"),
+        ("gemini-1.5-pro", "Gemini 1.5 Pro"),
+    ],
+    "ollama": [
+        ("llama3.1", "Llama 3.1"),
+        ("qwen2.5-coder", "Qwen 2.5 Coder"),
+        ("mistral", "Mistral"),
+    ],
+    "openrouter": [
+        ("anthropic/claude-sonnet-4.5", "Claude Sonnet via OpenRouter"),
+        ("openai/gpt-5.2", "GPT-5.2 via OpenRouter"),
+        ("google/gemini-2.5-pro", "Gemini 2.5 Pro via OpenRouter"),
+    ],
+    "deepseek": [
+        ("deepseek-chat", "DeepSeek Chat"),
+        ("deepseek-reasoner", "DeepSeek Reasoner"),
+    ],
+    "groq": [
+        ("llama-3.3-70b-versatile", "Llama 3.3 70B Versatile"),
+        ("openai/gpt-oss-120b", "GPT-OSS 120B"),
+        ("openai/gpt-oss-20b", "GPT-OSS 20B"),
+    ],
+}
+
+
 @dataclass
 class OnboardingState:
     provider: str = ""
@@ -170,6 +210,33 @@ def _multi_choose(
     return [value for value, _ in options if value in selected]
 
 
+def _choose_model(provider: str, default_model: str, input_func: Input, output_func: Output) -> str:
+    options: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def add(value: str, label: str) -> None:
+        if value and value not in seen:
+            options.append((value, label))
+            seen.add(value)
+
+    add(default_model, f"Provider default ({default_model})")
+    for value, label in MODEL_PRESETS.get(provider, []):
+        add(value, label)
+    add("custom", "Custom model id")
+
+    choice = _choose(
+        "Select model:",
+        options,
+        default=0,
+        input_func=input_func,
+        output_func=output_func,
+    )
+    if choice == "custom":
+        custom = _ask("Custom model id", default_model, input_func)
+        return custom or default_model
+    return choice
+
+
 def _dialog_choose(
     prompt: str,
     options: list[tuple[str, str]],
@@ -266,22 +333,21 @@ def _configure_model(
         return
     state.provider = provider
     config.set("model.provider", provider)
-    model = _ask("Model", spec.default_model, input_func)
-    state.model = model
-    config.set("model.default", model)
 
     if spec.env_vars:
         env_name = spec.env_vars[0]
-        auth_options: list[tuple[str, str]] = []
+        auth_options: list[tuple[str, str]]
         if spec.oauth:
             oauth_label = "OAuth browser login"
+            auth_options = [("oauth", oauth_label), ("api_key", f"API key ({env_name})")]
             if provider == "openai":
-                oauth_label = "OAuth browser login (requests model.request scope)"
-            auth_options.append(("oauth", oauth_label))
-        auth_options.extend([
-            ("api_key", f"API key ({env_name})"),
-            ("skip", "Skip credentials for now"),
-        ])
+                auth_options = [
+                    ("oauth", "OAuth browser login (ChatGPT, experimental)"),
+                    ("api_key", f"API key ({env_name}) - reliable OpenAI API path"),
+                ]
+        else:
+            auth_options = [("api_key", f"API key ({env_name})")]
+        auth_options.append(("skip", "Skip credentials for now"))
         auth_method = _choose(
             "Choose authentication method:",
             auth_options,
@@ -305,6 +371,10 @@ def _configure_model(
         base_url = _ask("Base URL", spec.base_url, input_func)
         if base_url and base_url != spec.base_url:
             config.set("model.base_url", base_url)
+
+    model = _choose_model(provider, spec.default_model, input_func, out)
+    state.model = model
+    config.set("model.default", model)
 
     mode_default = "auto" if advanced else "ask"
     mode = _ask("Tool execution mode (ask/auto/allowlist/deny/full)", mode_default, input_func)

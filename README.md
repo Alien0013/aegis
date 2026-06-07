@@ -114,7 +114,7 @@ exist because some OAuth tokens are identity-only. Inspect it with `aegis auth s
 OAuth is implemented generically (PKCE S256, `client_secret` support,
 localhost-callback **and** manual-paste flows, automatic refresh, `auth.json` at
 chmod 0600, token quarantine on failure). **Anthropic, OpenAI (ChatGPT/Codex
-login), and Google (Gemini login)** ship with working OAuth configs:
+login), and Google (Gemini login)** ship with OAuth configs:
 
 ```bash
 aegis auth login anthropic     # browser → paste code

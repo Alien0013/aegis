@@ -12,8 +12,8 @@ def test_onboarding_rejects_key_as_provider(monkeypatch):
         "y",           # security notice
         "sk-proj-oops",# provider prompt: should be rejected as a provider
         "1",           # OpenAI
-        "",            # model default
         "2",           # API key auth
+        "",            # model default
         "",            # exec mode default
         "6",           # skip web setup
         "",            # no messaging integrations
@@ -55,8 +55,8 @@ def test_onboarding_can_select_oauth(monkeypatch):
     answers = iter([
         "y",           # security notice
         "1",           # OpenAI
-        "",            # model default
         "1",           # OAuth auth
+        "",            # model default
         "",            # exec mode default
         "6",           # skip web setup
         "",            # no messaging integrations
@@ -79,7 +79,36 @@ def test_onboarding_can_select_oauth(monkeypatch):
     assert "OAuth browser login" in text
 
 
-def test_openai_oauth_requests_model_scope():
+def test_onboarding_can_select_a_provider_model(monkeypatch):
+    from aegis.config import Config
+    from aegis.onboarding import run_onboarding
+
+    cfg = Config.load()
+    answers = iter([
+        "y",           # security notice
+        "1",           # OpenAI
+        "3",           # skip credentials
+        "2",           # GPT-5.2 model option
+        "",            # exec mode default
+        "6",           # skip web setup
+        "",            # no messaging integrations
+    ])
+
+    rc = run_onboarding(
+        cfg,
+        quick=True,
+        probe=False,
+        services=False,
+        input_func=lambda _prompt: next(answers),
+        output_func=lambda _line: None,
+    )
+
+    assert rc == 0
+    assert Config.load().get("model.default") == "gpt-5.2"
+
+
+def test_openai_oauth_login_scope_avoids_auth_page_rejection():
     from aegis.providers.registry import OPENAI_OAUTH
 
-    assert "model.request" in OPENAI_OAUTH.scopes
+    assert "model.request" not in OPENAI_OAUTH.scopes
+    assert "model.request" in OPENAI_OAUTH.required_api_scopes
