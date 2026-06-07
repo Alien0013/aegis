@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import getpass
 import secrets
+import sys
 from dataclasses import dataclass
 from typing import Callable
 
@@ -19,8 +20,10 @@ Output = Callable[[str], None]
 class OnboardingState:
     provider: str = ""
     model: str = ""
+    auth_method: str = ""
     web_backend: str = "duckduckgo"
     channels: list[str] | None = None
+    workspace_files: list[str] | None = None
     dashboard_url: str = ""
     services: list[str] | None = None
 
@@ -37,7 +40,7 @@ def run_onboarding(
     output_func: Output = print,
 ) -> int:
     secret_func = secret_func or _secret
-    state = OnboardingState(channels=[], services=[])
+    state = OnboardingState(channels=[], services=[], workspace_files=[])
 
     out = output_func
     out("")
@@ -65,6 +68,7 @@ def run_onboarding(
     _configure_model(config, state, advanced, probe, input_func, secret_func, out)
     _configure_web(config, state, advanced, input_func, secret_func, out)
     _configure_channels(config, state, advanced, input_func, secret_func, out)
+    _seed_workspace(state, out)
     _configure_dashboard(config, state, out)
     if services:
         _configure_services(config, state, advanced, input_func, out)
@@ -107,6 +111,10 @@ def _choose(
     input_func: Input,
     output_func: Output,
 ) -> str:
+    picked = _dialog_choose(prompt, options, default, input_func, output_func)
+    if picked is not None:
+        return picked
+
     output_func(f"? {prompt}")
     for i, (_, label) in enumerate(options, 1):
         marker = ">" if i == default + 1 else " "
@@ -126,6 +134,99 @@ def _choose(
                 return value
         output_func("  unknown choice; try the number or provider name.")
     return options[default][0]
+
+
+def _multi_choose(
+    prompt: str,
+    options: list[tuple[str, str]],
+    *,
+    default_values: list[str] | None = None,
+    input_func: Input,
+    output_func: Output,
+) -> list[str]:
+    default_values = default_values or []
+    picked = _dialog_multi_choose(prompt, options, default_values, input_func, output_func)
+    if picked is not None:
+        return picked
+
+    output_func(f"? {prompt}")
+    for i, (value, label) in enumerate(options, 1):
+        marker = "x" if value in default_values else " "
+        output_func(f"  [{marker}] {i}. {label}")
+    output_func("  enter comma-separated selections, or leave blank for none")
+    raw = input_func("selection(s) []: ").strip()
+    if not raw:
+        return list(default_values)
+    selected: list[str] = []
+    by_value = {value.lower(): value for value, _ in options}
+    for part in raw.replace(" ", ",").split(","):
+        item = part.strip().lower()
+        if not item:
+            continue
+        if item.isdigit() and 1 <= int(item) <= len(options):
+            selected.append(options[int(item) - 1][0])
+        elif item in by_value:
+            selected.append(by_value[item])
+    return [value for value, _ in options if value in selected]
+
+
+def _dialog_choose(
+    prompt: str,
+    options: list[tuple[str, str]],
+    default: int,
+    input_func: Input,
+    output_func: Output,
+) -> str | None:
+    if not _can_use_dialogs(input_func, output_func):
+        return None
+    try:
+        from prompt_toolkit.shortcuts import radiolist_dialog
+
+        result = radiolist_dialog(
+            title="AEGIS onboarding",
+            text=prompt,
+            ok_text="Continue",
+            cancel_text="Use default",
+            values=options,
+            default=options[default][0],
+        ).run()
+    except Exception:  # noqa: BLE001
+        return None
+    return result or options[default][0]
+
+
+def _dialog_multi_choose(
+    prompt: str,
+    options: list[tuple[str, str]],
+    default_values: list[str],
+    input_func: Input,
+    output_func: Output,
+) -> list[str] | None:
+    if not _can_use_dialogs(input_func, output_func):
+        return None
+    try:
+        from prompt_toolkit.shortcuts import checkboxlist_dialog
+
+        result = checkboxlist_dialog(
+            title="AEGIS onboarding",
+            text=f"{prompt}\nUse Space to toggle selections.",
+            ok_text="Continue",
+            cancel_text="Skip",
+            values=options,
+            default_values=default_values,
+        ).run()
+    except Exception:  # noqa: BLE001
+        return None
+    return list(result or [])
+
+
+def _can_use_dialogs(input_func: Input, output_func: Output) -> bool:
+    return (
+        input_func is input
+        and output_func is print
+        and sys.stdin.isatty()
+        and sys.stdout.isatty()
+    )
 
 
 def _configure_model(
@@ -171,16 +272,36 @@ def _configure_model(
 
     if spec.env_vars:
         env_name = spec.env_vars[0]
-        if provider == "openai":
-            out("OpenAI OAuth login can be identity-only; API key is recommended for inference.")
-        if _confirm(f"Configure {env_name} now?", True, input_func, out):
+        auth_options: list[tuple[str, str]] = []
+        if spec.oauth:
+            oauth_label = "OAuth browser login"
+            if provider == "openai":
+                oauth_label = "OAuth browser login (requests model.request scope)"
+            auth_options.append(("oauth", oauth_label))
+        auth_options.extend([
+            ("api_key", f"API key ({env_name})"),
+            ("skip", "Skip credentials for now"),
+        ])
+        auth_method = _choose(
+            "Choose authentication method:",
+            auth_options,
+            default=0,
+            input_func=input_func,
+            output_func=out,
+        )
+        state.auth_method = auth_method
+        if auth_method == "api_key":
             key = secret_func(f"🔑 Enter {env_name}: ").strip()
             if key:
                 config.set(env_name, key)
                 out(f"✓ saved {env_name} to {cfg.env_path()}")
-            elif spec.oauth and _confirm("No key entered. Try OAuth login instead?", False, input_func, out):
-                _oauth_login(provider, spec, out)
+            else:
+                out(f"! {env_name} skipped.")
+        elif auth_method == "oauth" and spec.oauth:
+            if not _oauth_login(provider, spec, out):
+                out("  Use an API key if your OAuth client cannot grant model inference scopes.")
     elif spec.auth_scheme == "none":
+        state.auth_method = "local"
         base_url = _ask("Base URL", spec.base_url, input_func)
         if base_url and base_url != spec.base_url:
             config.set("model.base_url", base_url)
@@ -196,7 +317,7 @@ def _configure_model(
         _probe_model(config, out)
 
 
-def _oauth_login(provider: str, spec, out: Output) -> None:
+def _oauth_login(provider: str, spec, out: Output) -> bool:
     from .providers.auth import AuthError, AuthStore, OAuthAuth
 
     try:
@@ -206,8 +327,11 @@ def _oauth_login(provider: str, spec, out: Output) -> None:
         missing = oauth.missing_required_scopes(creds)
         if missing:
             out("! OAuth token lacks API scope(s): " + ", ".join(missing))
+            return False
+        return True
     except AuthError as e:
         out(f"! OAuth failed: {e}")
+        return False
 
 
 def _probe_model(config: Config, out: Output) -> bool:
@@ -270,8 +394,18 @@ def _configure_channels(
     out("")
     out("MESSAGING & CHANNELS")
     out("─────────────────────────────────────────────────────────")
+    channel_options = [("telegram", "Telegram")]
+    if advanced:
+        channel_options.extend([("discord", "Discord"), ("slack", "Slack")])
+    selected = _multi_choose(
+        "Which messaging integrations would you like to configure?",
+        channel_options,
+        default_values=[],
+        input_func=input_func,
+        output_func=out,
+    )
     channels: list[str] = []
-    if _confirm("Configure Telegram integration?", False, input_func, out):
+    if "telegram" in selected:
         token = secret_func("🔑 Enter TELEGRAM_BOT_TOKEN: ").strip()
         if token:
             config.set("TELEGRAM_BOT_TOKEN", token)
@@ -284,7 +418,7 @@ def _configure_channels(
                 out("! No allowlist set; unknown users will use pairing mode.")
     if advanced:
         for channel, env_name in (("discord", "DISCORD_BOT_TOKEN"), ("slack", "SLACK_BOT_TOKEN")):
-            if _confirm(f"Configure {channel.title()} integration?", False, input_func, out):
+            if channel in selected:
                 token = secret_func(f"🔑 Enter {env_name}: ").strip()
                 if token:
                     config.set(env_name, token)
@@ -292,6 +426,36 @@ def _configure_channels(
     state.channels = channels
     config.data.setdefault("gateway", {})["channels"] = channels
     config.save()
+
+
+def _seed_workspace(state: OnboardingState, out: Output) -> None:
+    workspace = cfg.workspace_dir()
+    templates = {
+        "SOUL.md": (
+            "# AEGIS Persona\n\n"
+            "Be concise, careful, and useful. Ask before high-risk actions.\n"
+        ),
+        "AGENTS.md": (
+            "# AEGIS Operating Rules\n\n"
+            "- Prefer small, verifiable changes.\n"
+            "- Explain risky actions before running them.\n"
+            "- Keep secrets out of logs and replies.\n"
+        ),
+        "USER.md": (
+            "# User Profile\n\n"
+            "Add stable preferences, aliases, or project notes here.\n"
+        ),
+    }
+    created: list[str] = []
+    for name, body in templates.items():
+        path = workspace / name
+        if path.exists() and path.read_text(encoding="utf-8").strip():
+            continue
+        path.write_text(body, encoding="utf-8")
+        created.append(name)
+    state.workspace_files = created
+    if created:
+        out(f"✓ workspace initialized: {workspace}")
 
 
 def _configure_dashboard(config: Config, state: OnboardingState, out: Output) -> None:
@@ -315,7 +479,7 @@ def _configure_services(
     out("")
     out("GATEWAY & DAEMON INSTALLATION")
     out("─────────────────────────────────────────────────────────")
-    default = False if advanced else _systemd_likely_available()
+    default = False
     if not _confirm("Install/start user systemd services for dashboard/gateway?", default, input_func, out):
         return
     from .daemon import install_dashboard_service, install_gateway_service
@@ -331,12 +495,6 @@ def _configure_services(
             state.services.append("gateway")
 
 
-def _systemd_likely_available() -> bool:
-    import shutil
-
-    return shutil.which("systemctl") is not None
-
-
 def _summary(config: Config, state: OnboardingState, out: Output) -> None:
     out("")
     out("ONBOARDING COMPLETE")
@@ -344,7 +502,9 @@ def _summary(config: Config, state: OnboardingState, out: Output) -> None:
     out(f"Config:          {cfg.config_path()}")
     out(f"Primary brain:   {config.get('model.provider')} {config.get('model.default')}")
     out(f"Web search:      {config.get('web.search_backend')}")
+    out(f"Auth:            {state.auth_method or 'not configured'}")
     out(f"Integrations:    {', '.join(state.channels or []) or 'none'}")
+    out(f"Workspace:       {cfg.workspace_dir()}")
     out(f"Services:        {', '.join(state.services or []) or 'not installed'}")
     out("")
     out("Control UI:")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 
 def test_onboarding_rejects_key_as_provider(monkeypatch):
     from aegis.config import Config
@@ -11,10 +13,10 @@ def test_onboarding_rejects_key_as_provider(monkeypatch):
         "sk-proj-oops",# provider prompt: should be rejected as a provider
         "1",           # OpenAI
         "",            # model default
-        "y",           # configure OPENAI_API_KEY
+        "2",           # API key auth
         "",            # exec mode default
         "6",           # skip web setup
-        "n",           # no Telegram
+        "",            # no messaging integrations
     ])
     out: list[str] = []
 
@@ -31,4 +33,53 @@ def test_onboarding_rejects_key_as_provider(monkeypatch):
     assert rc == 0
     assert Config.load().get("model.provider") == "openai"
     assert "looks like an API key" in "\n".join(out)
-    assert "sk-test" == __import__("os").environ["OPENAI_API_KEY"]
+    assert "sk-test" == os.environ["OPENAI_API_KEY"]
+    from aegis import config as cfg_paths
+
+    workspace = cfg_paths.workspace_dir()
+    assert (workspace / "SOUL.md").exists()
+    assert (workspace / "AGENTS.md").exists()
+    assert (workspace / "USER.md").exists()
+
+
+def test_onboarding_can_select_oauth(monkeypatch):
+    from aegis.config import Config
+    from aegis.onboarding import run_onboarding
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "aegis.onboarding._oauth_login",
+        lambda provider, _spec, _out: calls.append(provider) or True,
+    )
+    cfg = Config.load()
+    answers = iter([
+        "y",           # security notice
+        "1",           # OpenAI
+        "",            # model default
+        "1",           # OAuth auth
+        "",            # exec mode default
+        "6",           # skip web setup
+        "",            # no messaging integrations
+    ])
+    out: list[str] = []
+
+    rc = run_onboarding(
+        cfg,
+        quick=True,
+        probe=False,
+        services=False,
+        input_func=lambda _prompt: next(answers),
+        output_func=out.append,
+    )
+
+    assert rc == 0
+    assert calls == ["openai"]
+    text = "\n".join(out)
+    assert "Choose authentication method" in text
+    assert "OAuth browser login" in text
+
+
+def test_openai_oauth_requests_model_scope():
+    from aegis.providers.registry import OPENAI_OAUTH
+
+    assert "model.request" in OPENAI_OAUTH.scopes

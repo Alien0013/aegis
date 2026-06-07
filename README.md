@@ -47,8 +47,10 @@ curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | b
 The installer (like Hermes) finds Python 3.10+, builds an isolated venv at
 `~/.aegis/venv`, installs AEGIS, drops a global `aegis` command on your PATH, and
 grabs ripgrep if missing. When a terminal is attached it immediately launches the
-guided onboarding flow (provider, key, web tools, optional channels, dashboard,
-and user services) using `/dev/tty`, so `curl | bash` prompts work correctly.
+guided onboarding flow (provider, API key or OAuth, web tools, optional
+channels, dashboard, and workspace files) using `/dev/tty`, so `curl | bash`
+prompts work correctly. In a real terminal it uses arrow-key menus and
+Space-toggle checkboxes; in scripts it falls back to simple text prompts.
 Skip onboarding with `--skip-onboard` or `AEGIS_ONBOARD=0`.
 Windows: `irm …/install.ps1 | iex`.
 Everything in one go:
@@ -84,7 +86,7 @@ aegis setup
 # or point it at a provider manually
 aegis config set ANTHROPIC_API_KEY  sk-ant-...        # Claude
 aegis config set OPENAI_API_KEY     sk-...            # OpenAI
-aegis auth login anthropic                            # …or OAuth instead of a key
+aegis auth login openai                               # …or OAuth instead of a key
 aegis model set ollama llama3.1                       # …or fully local, no key
 
 # 2. talk to it
@@ -97,7 +99,7 @@ export TELEGRAM_BOT_TOKEN=...
 aegis gateway --channels telegram,cli
 ```
 
-## Providers (all support API key; Anthropic also OAuth out of the box)
+## Providers (all support API key; Anthropic/OpenAI/Google also OAuth)
 
 `anthropic`, `openai`, `google` (Gemini), `openrouter`, `groq`, `deepseek`,
 `xai`, `mistral`, `together`, `ollama`, `lmstudio`, plus any OpenAI-compatible

@@ -8,8 +8,10 @@ curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | b
 
 Finds Python 3.10+, builds an isolated venv at `~/.aegis/venv`, installs from git,
 puts a global `aegis` on your PATH, then starts guided onboarding when a terminal
-is available. Prompts are read from `/dev/tty`, so `curl | bash` works. Skip that
-step with `--skip-onboard` or `AEGIS_ONBOARD=0`. Windows: `irm …/install.ps1 | iex`.
+is available. Prompts are read from `/dev/tty`, so `curl | bash` works. The wizard
+offers API key or OAuth auth, arrow-key menus, Space-toggle channel selection, and
+starter files in `~/.aegis/workspace`. Skip that step with `--skip-onboard` or
+`AEGIS_ONBOARD=0`. Windows: `irm …/install.ps1 | iex`.
 
 Everything in one go (browser, computer-use, Discord, Slack, Matrix, memory backends):
 
