@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import getpass
+import importlib.util
 import os
 import secrets
 import sys
@@ -78,6 +79,14 @@ class OnboardingState:
     web_backend: str = "duckduckgo"
     channels: list[str] | None = None
     workspace_files: list[str] | None = None
+    toolsets: list[str] | None = None
+    enabled_tools: int = 0
+    total_tools: int = 0
+    available_skills: int = 0
+    bundled_skills: int = 0
+    plugin_files: int = 0
+    plugin_tools: int = 0
+    plugin_errors: int = 0
     dashboard_url: str = ""
     services: list[str] | None = None
 
@@ -121,6 +130,7 @@ def run_onboarding(
 
     _configure_model(config, state, advanced, probe, input_func, secret_func, out)
     _configure_web(config, state, advanced, input_func, secret_func, out)
+    _configure_agent_surface(config, state, advanced, input_func, out)
     _configure_channels(config, state, advanced, input_func, secret_func, out)
     _seed_workspace(state, out)
     _configure_dashboard(config, state, out)
@@ -184,10 +194,29 @@ def _choose(
             output_func("  that looks like an API key; choose the provider first.")
             continue
         for value, label in options:
-            if lowered in (value.lower(), label.lower()) or lowered in label.lower():
+            if _choice_matches(raw, value, label):
                 return value
         output_func("  unknown choice; try the number or provider name.")
     return options[default][0]
+
+
+def _choice_matches(raw: str, value: str, label: str) -> bool:
+    needle = _choice_key(raw)
+    value_key = _choice_key(value)
+    label_key = _choice_key(label)
+    if not needle:
+        return False
+    if needle in {value_key, label_key}:
+        return True
+    if needle in label_key or needle in value_key:
+        return True
+    label_words = set(label_key.split()) | set(value_key.split())
+    return all(part in label_words for part in needle.split())
+
+
+def _choice_key(text: str) -> str:
+    cleaned = "".join(ch.lower() if ch.isalnum() else " " for ch in text)
+    return " ".join(cleaned.split())
 
 
 def _multi_choose(
@@ -501,6 +530,73 @@ def _configure_web(
         out(f"✓ web search profile: {backend}")
 
 
+def _recommended_toolsets() -> list[str]:
+    toolsets = ["core"]
+    if importlib.util.find_spec("playwright"):
+        toolsets.append("browser")
+    toolsets.append("lsp")
+    toolsets.append("mcp")
+    return toolsets
+
+
+def _configure_agent_surface(
+    config: Config,
+    state: OnboardingState,
+    advanced: bool,
+    input_func: Input,
+    out: Output,
+) -> None:
+    out("")
+    out("CONFIGURING TOOLS & SKILLS")
+    out("─────────────────────────────────────────────────────────")
+    current = list(config.get("tools.toolsets", []) or ["core", "mcp"])
+    recommended = _recommended_toolsets()
+    if advanced:
+        selected = _multi_choose(
+            "Which optional toolsets should AEGIS expose to the model?",
+            [
+                ("browser", "Browser automation (Playwright)"),
+                ("computer", "Computer control (screen/keyboard/mouse)"),
+                ("voice", "Voice and transcription tools"),
+                ("lsp", "Language-server code intelligence"),
+                ("mcp", "MCP server tools"),
+            ],
+            default_values=[t for t in current if t != "core"] or [t for t in recommended if t != "core"],
+            input_func=input_func,
+            output_func=out,
+        )
+        toolsets = ["core"] + [t for t in ("browser", "computer", "voice", "lsp", "mcp") if t in selected]
+    else:
+        toolsets = recommended
+        if current and current != ["core", "mcp"]:
+            toolsets = current
+    config.set("tools.toolsets", toolsets)
+
+    from .surface import plugin_inventory, skill_inventory, tool_inventory
+
+    tools = tool_inventory(config)
+    skills = skill_inventory(config)
+    plugins = plugin_inventory()
+    state.toolsets = tools.toolsets
+    state.enabled_tools = tools.enabled_count
+    state.total_tools = tools.total_count
+    state.available_skills = skills.available_count
+    state.bundled_skills = skills.bundled_count
+    state.plugin_files = plugins.files_count
+    state.plugin_tools = len(plugins.tools)
+    state.plugin_errors = len(plugins.errors)
+    out(f"✓ enabled toolsets: {', '.join(tools.toolsets)}")
+    out(f"✓ model-visible tools: {tools.enabled_count}/{tools.total_count}")
+    if tools.disabled_sets:
+        disabled = ", ".join(f"{name} ({count})" for name, count in sorted(tools.disabled_sets.items()))
+        out(f"  optional disabled toolsets: {disabled}")
+    out(f"✓ skills available: {skills.available_count} ({skills.bundled_count} bundled)")
+    out(f"✓ plugins loaded: {plugins.files_count} file(s), {len(plugins.tools)} tool(s)")
+    if plugins.errors:
+        out(f"  plugin load errors: {len(plugins.errors)}; run `aegis plugins doctor`")
+    out("  Use `aegis status`, `aegis tools`, `aegis skills`, and `aegis plugins` to inspect them.")
+
+
 def _configure_channels(
     config: Config,
     state: OnboardingState,
@@ -563,6 +659,16 @@ def _seed_workspace(state: OnboardingState, out: Output) -> None:
             "# User Profile\n\n"
             "Add stable preferences, aliases, or project notes here.\n"
         ),
+        "README.md": (
+            "# AEGIS Workspace\n\n"
+            "This directory is persistent context for AEGIS.\n\n"
+            "- SOUL.md: persona and tone.\n"
+            "- AGENTS.md: operating rules.\n"
+            "- USER.md: stable user preferences.\n"
+            "- Skills are available with `aegis skills` and the `skill` tool.\n"
+            "- Tools are visible with `aegis tools`.\n"
+            "- Plugins are visible with `aegis plugins`.\n"
+        ),
     }
     created: list[str] = []
     for name, body in templates.items():
@@ -622,7 +728,14 @@ def _summary(config: Config, state: OnboardingState, out: Output) -> None:
     out(f"Web search:      {config.get('web.search_backend')}")
     out(f"Auth:            {state.auth_method or 'not configured'}")
     out(f"Integrations:    {', '.join(state.channels or []) or 'none'}")
+    out(f"Toolsets:        {', '.join(state.toolsets or config.get('tools.toolsets', []) or [])}")
+    out(f"Tools:           {state.enabled_tools}/{state.total_tools} model-visible")
+    out(f"Skills:          {state.available_skills} available ({state.bundled_skills} bundled)")
+    out(f"Plugins:         {state.plugin_files} file(s), {state.plugin_tools} tool(s), "
+        f"{state.plugin_errors} error(s)")
     out(f"Workspace:       {cfg.workspace_dir()}")
+    if state.workspace_files:
+        out(f"Workspace files: {', '.join(state.workspace_files)}")
     out(f"Services:        {', '.join(state.services or []) or 'not installed'}")
     out("")
     out("Control UI:")

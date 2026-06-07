@@ -112,7 +112,7 @@ class SkillsLoader:
         paths: list[tuple[int, Path]] = [
             (1, self.cwd / ".aegis" / "skills"),
             (1, self.cwd / "skills"),
-            (2, cfg.skills_dir()),
+            (2, cfg.sub("skills")),
         ]
         for p in self.config.get("skills.paths", []) or []:
             paths.append((3, Path(p).expanduser()))

@@ -29,7 +29,7 @@ def test_chat_completions_tools_wire():
 
 
 def test_responses_wire_and_parse():
-    from aegis.providers.responses import ResponsesTransport
+    from aegis.providers.responses import DEFAULT_INSTRUCTIONS, ResponsesTransport
     from aegis.types import Message, ToolCall
 
     t = ResponsesTransport()
@@ -40,14 +40,16 @@ def test_responses_wire_and_parse():
         Message.tool("c1", "read_file", "contents"),
     ]
     wire = t._to_wire_input(msgs)
+    assert t._instructions(msgs) == "sys"
+    assert t._instructions([Message.user("hi")]) == DEFAULT_INSTRUCTIONS
     assert wire[0] == {
         "type": "message",
-        "role": "system",
-        "content": [{"type": "input_text", "text": "sys"}],
+        "role": "user",
+        "content": [{"type": "input_text", "text": "hi"}],
     }
-    assert wire[2]["content"][0]["type"] == "output_text"
-    assert wire[3]["type"] == "function_call"
-    assert wire[4] == {"type": "function_call_output", "call_id": "c1", "output": "contents"}
+    assert wire[1]["content"][0]["type"] == "output_text"
+    assert wire[2]["type"] == "function_call"
+    assert wire[3] == {"type": "function_call_output", "call_id": "c1", "output": "contents"}
 
     parsed = t._parse_response({
         "status": "completed",
@@ -60,6 +62,49 @@ def test_responses_wire_and_parse():
     assert parsed.text == "done"
     assert parsed.tool_calls[0].name == "write_file"
     assert parsed.usage.input_tokens == 3
+
+
+def test_responses_payload_includes_instructions(monkeypatch):
+    from aegis.providers.responses import DEFAULT_INSTRUCTIONS, ResponsesTransport
+    from aegis.types import Message
+
+    captured: dict = {}
+
+    class FakeAuth:
+        def headers(self):
+            return {}
+
+    class FakeResponse:
+        status_code = 200
+        def json(self):
+            return {"output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}]}
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            return None
+        def post(self, url, headers, json):
+            captured["url"] = url
+            captured["headers"] = headers
+            captured["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr("aegis.providers.responses.httpx.Client", FakeClient)
+    resp = ResponsesTransport().complete(
+        base_url="https://chatgpt.com/backend-api/codex",
+        auth=FakeAuth(),
+        model="gpt-5.5",
+        messages=[Message.user("Reply with OK.")],
+        tools=None,
+        stream=False,
+    )
+
+    assert resp.text == "ok"
+    assert captured["url"] == "https://chatgpt.com/backend-api/codex/responses"
+    assert captured["json"]["instructions"] == DEFAULT_INSTRUCTIONS
 
 
 def test_anthropic_coalesces_tool_results():

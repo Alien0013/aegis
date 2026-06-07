@@ -305,13 +305,110 @@ def cmd_cron(args, config: Config) -> int:
 # --------------------------------------------------------------------------- #
 def cmd_tools(args, config: Config) -> int:
     from ..tools.registry import default_registry
+    from ..surface import tool_inventory
 
     if getattr(args, "action", None) == "status":
         from ..tools.cloud import cmd_tools_status
         return cmd_tools_status(args, config)
+    inv = tool_inventory(config)
+    enabled = set(inv.enabled_names)
+    _print(f"enabled toolsets: {', '.join(inv.toolsets)}")
+    _print(f"model-visible tools: {inv.enabled_count}/{inv.total_count}")
+    if inv.disabled_sets:
+        _print("disabled optional toolsets: " + ", ".join(
+            f"{name} ({count})" for name, count in sorted(inv.disabled_sets.items())
+        ))
+    _print("")
     for t in default_registry().all():
         g = f"[{','.join(t.groups)}]" if t.groups else "[safe]"
-        _print(f"  {t.name:<14} {g:<22} {t.description.splitlines()[0]}")
+        mark = "✓" if t.name in enabled else "–"
+        _print(f"  {mark} {t.name:<14} {t.toolset:<8} {g:<22} {t.description.splitlines()[0]}")
+    return 0
+
+
+def cmd_plugins(args, config: Config) -> int:
+    from ..surface import plugin_inventory
+
+    inv = plugin_inventory()
+    action = getattr(args, "action", "list")
+    if action == "path":
+        _print(str(inv.path))
+        return 0
+    _print(f"plugin dir: {inv.path}")
+    _print(f"plugin files: {inv.files_count}")
+    if inv.loaded_files:
+        for path in inv.loaded_files:
+            _print(f"  ✓ {Path(path).name}")
+    elif not inv.errors:
+        _print("  (none installed)")
+    if inv.tools:
+        _print("tools: " + ", ".join(inv.tools))
+    if inv.channels:
+        _print("channels: " + ", ".join(inv.channels))
+    if inv.providers:
+        _print("providers: " + ", ".join(inv.providers))
+    if inv.errors:
+        _print("errors:")
+        for path, msg in inv.errors:
+            _print(f"  ✗ {Path(path).name}: {msg}")
+    else:
+        _print("errors: none")
+    return 1 if action == "doctor" and inv.errors else 0
+
+
+def cmd_status(args, config: Config) -> int:
+    from .. import config as cfg
+    from ..surface import plugin_inventory, skill_inventory, tool_inventory
+
+    _print(f"AEGIS v{__version__}")
+    _print(f"home:      {cfg.get_home()}")
+    _print(f"config:    {cfg.config_path()}")
+    _print(f"workspace: {cfg.sub('workspace')}")
+    _print("")
+    _print("Model")
+    _print(f"  provider: {config.get('model.provider')}")
+    _print(f"  model:    {config.get('model.default')}")
+    try:
+        from ..providers import build_provider
+        p = build_provider(config)
+        _print(f"  auth:     {p.auth.describe()} ({'ready' if p.auth.available() else 'missing'})")
+        _print(f"  api mode: {p.api_mode.value}")
+    except Exception as e:  # noqa: BLE001
+        _print(f"  error:    {e}")
+
+    tools = tool_inventory(config)
+    skills = skill_inventory(config)
+    plugins = plugin_inventory()
+    mcp_servers = config.get("mcp.servers", {}) or {}
+    channels = list(config.get("gateway.channels", []) or [])
+    _print("")
+    _print("Surface")
+    _print(f"  toolsets: {', '.join(tools.toolsets)}")
+    _print(f"  tools:    {tools.enabled_count}/{tools.total_count} model-visible")
+    _print(f"  skills:   {skills.available_count} available ({skills.bundled_count} bundled)")
+    _print(f"  plugins:  {plugins.files_count} file(s), {len(plugins.tools)} tool(s), "
+           f"{len(plugins.channels)} channel(s), {len(plugins.providers)} provider(s)")
+    if plugins.errors:
+        _print(f"            {len(plugins.errors)} error(s); run `aegis plugins doctor`")
+    _print(f"  mcp:      {len(mcp_servers)} server(s)")
+    _print(f"  channels: {', '.join(channels) or 'none'}")
+
+    _print("")
+    _print("Services")
+    try:
+        from ..daemon import status as daemon_status
+        for unit, state in daemon_status().items():
+            _print(f"  {unit}: {state}")
+    except Exception as e:  # noqa: BLE001
+        _print(f"  unavailable: {e}")
+
+    host = config.get("server.dashboard_host", "127.0.0.1")
+    port = int(config.get("server.dashboard_port", 9119))
+    token = config.get("server.dashboard_token")
+    url = f"http://{host}:{port}/" + (f"?token={token}" if token else "")
+    _print("")
+    _print("Dashboard")
+    _print(f"  {url}")
     return 0
 
 
@@ -458,7 +555,20 @@ def cmd_doctor(args, config: Config) -> int:
                 _print(f"  – {mod} (pip install aegis-agent[{extra}])")
     tools = config.get("tools.toolsets", [])
     mcp_servers = config.get("mcp.servers", {}) or {}
-    _print(f"toolsets: {tools} · mcp servers: {len(mcp_servers)}")
+    try:
+        from ..surface import plugin_inventory, skill_inventory, tool_inventory
+        tinv = tool_inventory(config)
+        sinv = skill_inventory(config)
+        pinv = plugin_inventory()
+        _print(f"toolsets: {tools} · mcp servers: {len(mcp_servers)}")
+        _print(f"tools: {tinv.enabled_count}/{tinv.total_count} model-visible")
+        _print(f"skills: {sinv.available_count} available ({sinv.bundled_count} bundled)")
+        _print(f"plugins: {pinv.files_count} file(s), {len(pinv.tools)} tool(s), "
+               f"{len(pinv.errors)} error(s)")
+        if sinv.names:
+            _print("  examples: " + ", ".join(sinv.names[:8]))
+    except Exception as e:  # noqa: BLE001
+        _print(f"surface inventory: ERROR {e}")
     try:
         from ..providers import build_provider
         p = build_provider(config)
@@ -550,7 +660,7 @@ def cmd_batch(args, config: Config) -> int:
     return 0
 
 
-_CMDS = ("chat model auth setup onboard update skills mcp serve cron tools memory "
+_CMDS = ("chat model auth setup onboard status update skills plugins mcp serve cron tools memory "
          "config sessions gateway doctor completion backup import insights webhook "
          "hooks kanban curator dashboard daemon acp pairing checkpoints background")
 
@@ -671,6 +781,9 @@ def build_parser() -> argparse.ArgumentParser:
     un.add_argument("--purge", action="store_true")
     un.set_defaults(func=cmd_uninstall)
 
+    st = sub.add_parser("status", help="show install/auth/tools/skills/plugins/service status")
+    st.set_defaults(func=cmd_status)
+
     ba = sub.add_parser("batch", help="run a prompt per line of a file (or - for stdin)")
     ba.add_argument("file"); ba.add_argument("-m", "--model"); ba.add_argument("--provider")
     ba.set_defaults(func=cmd_batch)
@@ -790,6 +903,10 @@ def build_parser() -> argparse.ArgumentParser:
     sk.add_argument("name", nargs="?", help="skill name, install source, or hub name")
     sk.add_argument("--force", action="store_true", help="install even if the security scan flags it")
     sk.set_defaults(func=cmd_skills)
+
+    pl = sub.add_parser("plugins", help="list loaded drop-in plugins and load errors")
+    pl.add_argument("action", nargs="?", choices=["list", "doctor", "path"], default="list")
+    pl.set_defaults(func=cmd_plugins)
 
     mc = sub.add_parser("mcp", help="manage MCP servers (or `serve` to be one)")
     mc.add_argument("action", nargs="?", choices=["list", "add", "remove", "test", "serve"], default="list")

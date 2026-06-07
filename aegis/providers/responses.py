@@ -16,14 +16,22 @@ from .auth import AuthProvider
 from .base import ApiMode, OnDelta, ProviderTransport
 from .chat_completions import _raise_for_status
 
+DEFAULT_INSTRUCTIONS = "You are AEGIS, a careful coding agent. Follow the user's instructions."
+
 
 class ResponsesTransport(ProviderTransport):
     api_mode = ApiMode.RESPONSES
 
     # -- wire conversion ----------------------------------------------------
+    def _instructions(self, messages: list[Message]) -> str:
+        instructions = "\n\n".join(m.content for m in messages if m.role == "system" and m.content)
+        return instructions or DEFAULT_INSTRUCTIONS
+
     def _to_wire_input(self, messages: list[Message]) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         for m in messages:
+            if m.role == "system":
+                continue
             if m.role == "tool":
                 items.append(
                     {
@@ -100,6 +108,7 @@ class ResponsesTransport(ProviderTransport):
         headers = {"Content-Type": "application/json", **(extra_headers or {}), **auth.headers()}
         payload: dict[str, Any] = {
             "model": model,
+            "instructions": self._instructions(messages),
             "input": self._to_wire_input(messages),
             "stream": stream,
             "max_output_tokens": max_tokens,

@@ -26,6 +26,9 @@ class PluginAPI:
     def __init__(self):
         self.tools: list = []
         self.channels: dict = {}
+        self.providers: list[str] = []
+        self.files: list[Path] = []
+        self.errors: list[tuple[Path, str]] = []
 
     def register_tool(self, tool) -> None:
         self.tools.append(tool)
@@ -36,9 +39,10 @@ class PluginAPI:
     def register_provider(self, spec) -> None:
         from .providers.registry import register_provider
         register_provider(spec)
+        self.providers.append(getattr(spec, "name", str(spec)))
 
 
-def load_plugins() -> PluginAPI:
+def load_plugins(*, quiet: bool = False) -> PluginAPI:
     api = PluginAPI()
     base = cfg.sub("plugins")
     if not base.exists():
@@ -46,6 +50,7 @@ def load_plugins() -> PluginAPI:
     for f in sorted(base.rglob("*.py")):
         if f.name.startswith("_"):
             continue
+        api.files.append(f)
         try:
             spec = importlib.util.spec_from_file_location(f"aegis_plugin_{f.stem}", f)
             module = importlib.util.module_from_spec(spec)
@@ -53,5 +58,7 @@ def load_plugins() -> PluginAPI:
             if hasattr(module, "register"):
                 module.register(api)
         except Exception as e:  # noqa: BLE001
-            print(f"  ! plugin {f.name} failed to load: {e}")
+            api.errors.append((f, str(e)))
+            if not quiet:
+                print(f"  ! plugin {f.name} failed to load: {e}")
     return api

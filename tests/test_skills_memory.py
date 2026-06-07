@@ -59,6 +59,22 @@ def test_index_block_progressive():
     assert "web-research" in block  # descriptions only (progressive disclosure)
 
 
+def test_surface_inventory_counts_tools_and_skills():
+    from aegis.config import Config
+    from aegis.surface import skill_inventory, tool_inventory
+
+    cfg = Config.load()
+    cfg.data["tools"]["toolsets"] = ["core", "browser", "lsp", "mcp"]
+    tools = tool_inventory(cfg)
+    skills = skill_inventory(cfg)
+
+    assert tools.enabled_count >= 20
+    assert tools.total_count >= tools.enabled_count
+    assert "browser" in tools.enabled_names
+    assert skills.bundled_count >= 20
+    assert "web-research" in skills.names
+
+
 # --- memory -----------------------------------------------------------------
 def test_memory_add_replace_remove_dedup():
     from aegis.memory import MemoryStore

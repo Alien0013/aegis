@@ -1,8 +1,9 @@
 """Local web dashboard — a self-contained single-page app (no build step).
 
 `aegis dashboard` serves a control UI at http://127.0.0.1:9119: chat, sessions,
-memory, skills, tools, and status. Binds loopback by default; there is no auth, so
-it must never be exposed publicly.
+memory, skills, tools, and status. Binds loopback by default and can require the
+configured dashboard token; do not expose it publicly without trusted network
+controls.
 """
 
 from __future__ import annotations

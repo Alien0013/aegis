@@ -110,6 +110,59 @@ def test_dashboard_serves(monkeypatch):
     assert "tools" in data and "version" in data
 
 
+def test_cli_status_surfaces_inventory(monkeypatch, capsys):
+    import aegis.daemon as daemon
+    from aegis.cli.main import main
+
+    monkeypatch.setattr(daemon, "status", lambda: {"aegis-dashboard.service": "inactive"})
+    assert main(["status"]) == 0
+    out = capsys.readouterr().out
+    assert "Model" in out
+    assert "Surface" in out
+    assert "tools:" in out
+    assert "skills:" in out
+    assert "plugins:" in out
+    assert "Dashboard" in out
+
+
+def test_cli_plugins_lists_loaded_plugins(capsys):
+    from aegis import config as cfg
+    from aegis.cli.main import main
+
+    pdir = cfg.sub("plugins")
+    pdir.mkdir(parents=True, exist_ok=True)
+    (pdir / "hello.py").write_text(
+        "from aegis.tools.base import Tool, ToolResult\n"
+        "class Hello(Tool):\n"
+        "    name='hello_plugin'\n"
+        "    description='Hello plugin tool.'\n"
+        "    parameters={'type':'object','properties':{}}\n"
+        "    def run(self,args,ctx): return ToolResult.ok('hi')\n"
+        "def register(api): api.register_tool(Hello())\n",
+        encoding="utf-8",
+    )
+
+    assert main(["plugins"]) == 0
+    out = capsys.readouterr().out
+    assert "hello.py" in out
+    assert "hello_plugin" in out
+    assert "errors: none" in out
+
+
+def test_cli_plugins_doctor_fails_on_load_error(capsys):
+    from aegis import config as cfg
+    from aegis.cli.main import main
+
+    pdir = cfg.sub("plugins")
+    pdir.mkdir(parents=True, exist_ok=True)
+    (pdir / "broken.py").write_text("def register(api):\n    raise RuntimeError('boom')\n", encoding="utf-8")
+
+    assert main(["plugins", "doctor"]) == 1
+    out = capsys.readouterr().out
+    assert "broken.py" in out
+    assert "boom" in out
+
+
 def test_github_tool_needs_gh(tmp_path, monkeypatch):
     import aegis.tools.devtools as dt
     monkeypatch.setattr(dt.shutil, "which", lambda *_: None)

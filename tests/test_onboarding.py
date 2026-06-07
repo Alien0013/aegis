@@ -40,6 +40,7 @@ def test_onboarding_rejects_key_as_provider(monkeypatch):
     assert (workspace / "SOUL.md").exists()
     assert (workspace / "AGENTS.md").exists()
     assert (workspace / "USER.md").exists()
+    assert (workspace / "README.md").exists()
 
 
 def test_onboarding_can_select_oauth(monkeypatch):
@@ -183,7 +184,40 @@ def test_onboarding_terminal_menu_uses_selector_markers(monkeypatch):
     text = "\n".join(out)
     assert "  ❯ OpenAI" in text
     assert "  ⬡ Telegram" in text
+    assert "CONFIGURING TOOLS & SKILLS" in text
+    assert "model-visible tools:" in text
+    assert "skills available:" in text
     assert "OpenAI (GPT-4o / GPT-5 API) (1)" not in text
+
+
+def test_onboarding_accepts_partial_provider_label(monkeypatch):
+    from aegis.config import Config
+    from aegis.onboarding import run_onboarding
+
+    cfg = Config.load()
+    answers = iter([
+        "y",                      # security notice
+        "OpenAI (ChatGPT OAuth)", # natural label from the displayed option
+        "3",                      # skip credentials
+        "",                       # model default
+        "",                       # exec mode default
+        "6",                      # skip web setup
+        "",                       # no messaging integrations
+    ])
+    out: list[str] = []
+
+    rc = run_onboarding(
+        cfg,
+        quick=True,
+        probe=False,
+        services=False,
+        input_func=lambda _prompt: next(answers),
+        output_func=out.append,
+    )
+
+    assert rc == 0
+    assert Config.load().get("model.provider") == "openai"
+    assert "unknown choice" not in "\n".join(out)
 
 
 def test_onboarding_can_select_a_provider_model(monkeypatch):

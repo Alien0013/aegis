@@ -62,7 +62,7 @@ def default_registry(*, include_plugins: bool = True) -> ToolRegistry:
     if include_plugins:
         try:
             from ..plugins import load_plugins
-            reg.register_all(load_plugins().tools)
+            reg.register_all(load_plugins(quiet=True).tools)
         except Exception:  # noqa: BLE001
             pass
     return reg

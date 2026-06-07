@@ -97,7 +97,11 @@ print_success() {
   printf '\n\033[1;35mCommands\033[0m\n'
   kv "Start" "aegis"
   kv "Setup" "aegis setup"
+  kv "Status" "aegis status"
   kv "Doctor" "aegis doctor"
+  kv "Tools" "aegis tools"
+  kv "Skills" "aegis skills"
+  kv "Plugins" "aegis plugins"
   kv "Update" "aegis update"
   kv "Uninstall" "aegis uninstall --purge  # or repo ./uninstall.sh --purge"
 }
