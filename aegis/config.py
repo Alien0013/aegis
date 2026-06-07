@@ -181,6 +181,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "fallback_providers": [],         # [{provider, model}]
     "custom_providers": [],           # [{name, base_url, api_mode, context_length, env_var}]
+    "routing": [],                    # [{match: regex, provider, model}] per-prompt routing
 }
 
 

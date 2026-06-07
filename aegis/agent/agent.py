@@ -130,8 +130,23 @@ class Agent:
         self.ensure_system_prompt(force=True)
 
     # -- run ----------------------------------------------------------------
+    def _apply_routing(self, text: str) -> None:
+        """Per-prompt provider routing: swap provider/model when a rule matches."""
+        import re
+        rules = self.config.get("routing", []) or []
+        for rule in rules:
+            try:
+                if re.search(rule.get("match", ""), text, re.I):
+                    from ..providers.fallback import build_with_fallbacks
+                    self.provider = build_with_fallbacks(
+                        self.config, model=rule.get("model"), name=rule.get("provider"))
+                    return
+            except (re.error, Exception):  # noqa: BLE001
+                continue
+
     def run(self, user_input: str | Message, on_event: OnEvent | None = None) -> Message:
         msg = user_input if isinstance(user_input, Message) else Message.user(user_input)
+        self._apply_routing(msg.content)
         self.session.maybe_title_from(msg.content)
         self.session.messages.append(msg)
         self.tool_context.emit = on_event

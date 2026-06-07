@@ -709,6 +709,20 @@ def build_parser() -> argparse.ArgumentParser:
     bg = sub.add_parser("background", help="list background tasks")
     bg.set_defaults(func=cmd_background)
 
+    from .. import ops as _ops
+    secp = sub.add_parser("security", help="security audit of deps/MCP/plugins/skills")
+    secp.add_argument("action", nargs="?", choices=["audit"], default="audit")
+    secp.add_argument("--fail-on", dest="fail_on")
+    secp.set_defaults(func=_ops.cmd_security_audit)
+
+    dbg = sub.add_parser("debug", help="bundle a redacted debug report")
+    dbg.add_argument("action", nargs="?", choices=["share"], default="share")
+    dbg.set_defaults(func=_ops.cmd_debug)
+
+    sec2 = sub.add_parser("secrets", help="sync secrets from a manager (bitwarden)")
+    sec2.add_argument("provider", nargs="?", default="bitwarden")
+    sec2.set_defaults(func=_ops.cmd_secrets)
+
     sk = sub.add_parser("skills", help="list/view/create/install/search/remove skills")
     sk.add_argument("action", nargs="?",
                     choices=["list", "view", "new", "install", "search", "remove"], default="list")

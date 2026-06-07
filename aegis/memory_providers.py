@@ -123,6 +123,59 @@ class HonchoProvider(MemoryProvider):
             pass
 
 
+class HTTPMemoryProvider(MemoryProvider):
+    """Generic HTTP memory backend — wires any REST memory service via config.
+
+    Used for providers without a bundled SDK (openviking, supermemory, byterover,
+    hindsight, holographic, retaindb, …). Configure under ``memory.<name>``:
+      add_url, search_url (POST JSON {messages}/{query}), headers, result_path.
+    """
+
+    def __init__(self, name: str, config):
+        import os
+        self.name = name
+        node = config.get(f"memory.{name}", {}) or {}
+        self.add_url = node.get("add_url")
+        self.search_url = node.get("search_url")
+        self.headers = node.get("headers", {}) or {}
+        # allow an API key from env: <NAME>_API_KEY -> Authorization: Bearer
+        key = os.environ.get(f"{name.upper()}_API_KEY")
+        if key and "Authorization" not in self.headers:
+            self.headers["Authorization"] = f"Bearer {key}"
+        self.result_path = node.get("result_path", "results")
+        self._last_query = ""
+
+    def system_prompt_block(self) -> str:
+        if not self.search_url:
+            return ""
+        try:
+            import httpx
+            r = httpx.post(self.search_url, json={"query": self._last_query or "recent context"},
+                           headers=self.headers, timeout=20)
+            data = r.json()
+            items = data.get(self.result_path, data) if isinstance(data, dict) else data
+            texts = [i.get("memory") or i.get("text") or str(i) for i in (items or [])][:8]
+            return f"# Memory ({self.name})\n" + "\n".join(f"- {t}" for t in texts) if texts else ""
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def sync_turn(self, messages) -> None:
+        if not self.add_url:
+            return
+        try:
+            import httpx
+            self._last_query = next((m.content for m in reversed(messages) if m.role == "user"), "")
+            wire = [{"role": m.role, "content": m.content} for m in messages[-6:]
+                    if m.role in ("user", "assistant") and m.content]
+            httpx.post(self.add_url, json={"messages": wire}, headers=self.headers, timeout=20)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+# Niche providers Hermes lists — wired via the generic HTTP backend (configure endpoints).
+_HTTP_PROVIDERS = {"openviking", "supermemory", "byterover", "hindsight", "holographic", "retaindb"}
+
+
 def build_memory_provider(name: str, config) -> MemoryProvider | None:
     name = (name or "").strip().lower()
     if name == "jsonl":
@@ -134,4 +187,6 @@ def build_memory_provider(name: str, config) -> MemoryProvider | None:
             except RuntimeError as e:
                 print(f"  ! {e}")
                 return None
+    if name in _HTTP_PROVIDERS or name == "http":
+        return HTTPMemoryProvider(name, config)
     return None
