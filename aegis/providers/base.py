@@ -80,17 +80,28 @@ class Provider:
         model: str | None = None,
         max_tokens: int | None = None,
     ) -> LLMResponse:
-        return self.transport.complete(
-            base_url=self.base_url,
-            auth=self.auth,
-            model=model or self.model,
-            messages=messages,
-            tools=tools,
-            stream=stream,
-            on_delta=on_delta,
-            max_tokens=max_tokens or self.max_tokens,
-            extra_headers=self.extra_headers,
-        )
+        attempts = 0
+        while True:
+            try:
+                return self.transport.complete(
+                    base_url=self.base_url,
+                    auth=self.auth,
+                    model=model or self.model,
+                    messages=messages,
+                    tools=tools,
+                    stream=stream,
+                    on_delta=on_delta,
+                    max_tokens=max_tokens or self.max_tokens,
+                    extra_headers=self.extra_headers,
+                )
+            except Exception as e:  # noqa: BLE001
+                # On rate-limit / auth errors, rotate the credential pool and retry.
+                status = getattr(e, "status", None)
+                if (status in (401, 429, 529) and attempts < 5
+                        and hasattr(self.auth, "rotate") and self.auth.rotate()):
+                    attempts += 1
+                    continue
+                raise
 
     def describe(self) -> str:
         return f"{self.name} · {self.model} · {self.api_mode.value} · {self.auth.describe()}"

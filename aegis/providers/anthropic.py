@@ -114,9 +114,13 @@ class AnthropicTransport(ProviderTransport):
             "stream": stream,
         }
         if system:
-            payload["system"] = system
+            # Cache the (stable) system prompt prefix to cut cost/latency across turns.
+            payload["system"] = [{"type": "text", "text": system,
+                                  "cache_control": {"type": "ephemeral"}}]
         wire_tools = self._to_wire_tools(tools)
         if wire_tools:
+            # Cache the tool definitions too (they're stable within a session).
+            wire_tools[-1]["cache_control"] = {"type": "ephemeral"}
             payload["tools"] = wire_tools
 
         if stream:

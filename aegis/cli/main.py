@@ -421,6 +421,23 @@ def cmd_update(args, config: Config) -> int:
     return 0
 
 
+_CMDS = ("chat model auth setup onboard update skills mcp serve cron tools "
+         "memory config sessions gateway doctor completion")
+
+
+def cmd_completion(args, config: Config) -> int:
+    if args.shell == "bash":
+        _print(f"""_aegis_completion() {{
+  COMPREPLY=( $(compgen -W "{_CMDS}" -- "${{COMP_WORDS[COMP_CWORD]}}") )
+}}
+complete -F _aegis_completion aegis""")
+    elif args.shell == "zsh":
+        _print(f"#compdef aegis\n_arguments '1:command:({_CMDS})'")
+    elif args.shell == "fish":
+        _print(f"complete -c aegis -f -n '__fish_use_subcommand' -a '{_CMDS}'")
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 # parser
 # --------------------------------------------------------------------------- #
@@ -486,6 +503,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     up = sub.add_parser("update", help="update AEGIS to the latest version")
     up.set_defaults(func=cmd_update)
+
+    cm = sub.add_parser("completion", help="output shell completion script")
+    cm.add_argument("shell", choices=["bash", "zsh", "fish"])
+    cm.set_defaults(func=cmd_completion)
 
     sk = sub.add_parser("skills", help="list/view/create/install/search/remove skills")
     sk.add_argument("action", nargs="?",

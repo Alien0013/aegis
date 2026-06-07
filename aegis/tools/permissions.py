@@ -12,9 +12,34 @@ always allowed.
 
 from __future__ import annotations
 
+import re
 from enum import Enum
 
 from .base import Tool, ToolContext
+
+# Catastrophic commands that are NEVER allowed — even in full/yolo mode.
+HARDLINE_PATTERNS = [
+    re.compile(r"\brm\s+-[a-z]*r[a-z]*f?\s+(/|~|\$HOME|/\*)(\s|$)"),  # rm -rf / | ~ | /*
+    re.compile(r"\brm\s+-[a-z]*f[a-z]*r\s+(/|~)(\s|$)"),
+    re.compile(r":\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:"),           # fork bomb
+    re.compile(r"\bmkfs\.\w+\s+/dev/"),                                # format a device
+    re.compile(r"\bdd\b.*\bof=/dev/(sd|nvme|disk|hd)"),               # raw disk write
+    re.compile(r">\s*/dev/(sd|nvme|disk|hd)\w*"),                      # redirect to block device
+    re.compile(r"\b(curl|wget)\b[^|]*\|\s*(sudo\s+)?(bash|sh|zsh)\b"),  # pipe-to-shell
+    re.compile(r"\bchmod\s+-R\s+0?00\s+/(\s|$)"),                      # nuke perms on /
+    re.compile(r"\bsudo\s+rm\s+-[a-z]*r"),                            # sudo recursive rm
+]
+
+
+def is_hardline_blocked(args: dict) -> str | None:
+    """Return the offending text if any arg matches a catastrophic pattern."""
+    for key in ("command", "cmd", "code", "combo"):
+        val = args.get(key)
+        if isinstance(val, str):
+            for pat in HARDLINE_PATTERNS:
+                if pat.search(val):
+                    return val[:120]
+    return None
 
 
 class ExecMode(str, Enum):
@@ -61,6 +86,9 @@ class PermissionEngine:
     def check(self, tool: Tool, args: dict, ctx: ToolContext) -> Decision:
         if not tool.groups:
             return Decision.ALLOW
+        # Hardline blocklist: catastrophic commands are never allowed, any mode.
+        if is_hardline_blocked(args):
+            return Decision.DENY
         if self.deny_groups & set(tool.groups):
             return Decision.DENY
         mode = self.mode
@@ -76,6 +104,9 @@ class PermissionEngine:
 
     def authorize(self, tool: Tool, args: dict, ctx: ToolContext) -> tuple[bool, str]:
         """Resolve a decision into allow/deny, prompting the user if needed."""
+        hard = is_hardline_blocked(args)
+        if hard:
+            return False, f"BLOCKED: catastrophic command refused (hardline): {hard}"
         decision = self.check(tool, args, ctx)
         if decision == Decision.ALLOW:
             return True, "allowed"

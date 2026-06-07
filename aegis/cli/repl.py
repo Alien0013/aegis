@@ -6,6 +6,7 @@ back to plain stdin/stdout otherwise so the harness runs anywhere.
 
 from __future__ import annotations
 
+import re
 import sys
 import threading
 from pathlib import Path
@@ -32,7 +33,8 @@ except Exception:  # noqa: BLE001
 
 _approve_lock = threading.Lock()
 
-SLASH = ["/help", "/model", "/tools", "/skills", "/memory", "/sessions", "/new", "/clear", "/quit", "/exit"]
+SLASH = ["/help", "/model", "/tools", "/skills", "/memory", "/usage", "/compress",
+         "/sessions", "/new", "/clear", "/quit", "/exit"]
 
 
 def _out(text: str = "", style: str | None = None) -> None:
@@ -45,6 +47,25 @@ def _out(text: str = "", style: str | None = None) -> None:
 def _raw(text: str) -> None:
     sys.stdout.write(text)
     sys.stdout.flush()
+
+
+_AT_RE = re.compile(r"@([^\s]+)")
+
+
+def expand_references(text: str, cwd: Path) -> str:
+    """Expand `@path` tokens by appending the referenced file's contents."""
+    extras = []
+    for m in _AT_RE.finditer(text):
+        p = Path(m.group(1)).expanduser()
+        if not p.is_absolute():
+            p = cwd / p
+        if p.is_file():
+            try:
+                body = p.read_text(encoding="utf-8", errors="replace")[:20_000]
+                extras.append(f'\n\n<file path="{m.group(1)}">\n{body}\n</file>')
+            except Exception:  # noqa: BLE001
+                pass
+    return text + "".join(extras)
 
 
 def make_approver(auto: bool = False):
@@ -135,6 +156,24 @@ def handle_slash(cmd: str, agent: Agent) -> str:
         if agent.memory:
             _out("# MEMORY\n" + (agent.memory.store.raw("memory") or "(empty)"))
             _out("# USER\n" + (agent.memory.store.raw("user") or "(empty)"))
+    elif name == "/usage":
+        u = agent.budget.usage
+        _out(f"tokens this session — input: {u.input_tokens:,}  output: {u.output_tokens:,}", style="cyan")
+    elif name == "/compress":
+        from ..agent import compaction
+        comp = agent.config.get("agent.compression", {}) or {}
+        agent.session.messages = compaction.compress(
+            agent.session.messages, agent.provider,
+            preserve_first=comp.get("preserve_first", 3), preserve_last=comp.get("preserve_last", 20))
+        agent.refresh_volatile()
+        _out("context compressed.", style="yellow")
+    elif name == "/personality":
+        if arg:
+            agent.config.data.setdefault("agent", {})["personality"] = arg
+            agent.refresh_volatile()
+            _out(f"personality → {arg}", style="green")
+        else:
+            _out("usage: /personality <name>")
     elif name == "/sessions":
         for s in SessionStore().list(20):
             _out(f"  {s['id']}  {s['title']}  ({s['updated_at']})")
@@ -163,7 +202,7 @@ def run_once(config: Config, prompt: str, *, model=None, provider_name=None,
     session = session or Session.create()
     agent = _make_agent(config, session=session, store=store, model=model,
                         provider_name=provider_name, auto=auto)
-    result = agent.run(prompt, Renderer())
+    result = agent.run(expand_references(prompt, agent.cwd), Renderer())
     return result.content
 
 
@@ -195,7 +234,7 @@ def interactive(config: Config, *, model=None, provider_name=None,
                 break
             continue
         try:
-            agent.run(user, Renderer())
+            agent.run(expand_references(user, agent.cwd), Renderer())
         except KeyboardInterrupt:
             _out("\n  (interrupted)", style="yellow")
         store.save(agent.session)

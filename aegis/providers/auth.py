@@ -68,13 +68,27 @@ class ApiKeyAuth(AuthProvider):
         self.env_vars = env_vars
         self.scheme = scheme
         self.extra = extra or {}
+        self._idx = 0  # credential-pool cursor
 
-    def _key(self) -> str | None:
+    def _pool(self) -> list[str]:
+        """A credential pool: the first present env var, split on commas."""
         for var in self.env_vars:
             v = os.environ.get(var)
             if v:
-                return v
-        return None
+                return [k.strip() for k in v.split(",") if k.strip()]
+        return []
+
+    def _key(self) -> str | None:
+        pool = self._pool()
+        return pool[self._idx % len(pool)] if pool else None
+
+    def rotate(self) -> bool:
+        """Advance to the next key in the pool (called on 429/401). True if rotated."""
+        pool = self._pool()
+        if len(pool) <= 1:
+            return False
+        self._idx = (self._idx + 1) % len(pool)
+        return True
 
     def available(self) -> bool:
         return self.scheme == "none" or self._key() is not None

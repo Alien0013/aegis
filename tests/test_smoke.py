@@ -62,7 +62,7 @@ def test_permissions_cascade():
     cfg.data["tools"]["exec_mode"] = "ask"
     cfg.data["tools"]["allowlist"] = ["ls"]
     assert eng.check(BashTool(), {"command": "ls -la"}, ctx) == Decision.ALLOW
-    assert eng.check(BashTool(), {"command": "rm -rf /"}, ctx) == Decision.PROMPT
+    assert eng.check(BashTool(), {"command": "rm -rf build"}, ctx) == Decision.PROMPT
 
 
 def test_memory_store():
@@ -209,6 +209,38 @@ def test_skill_create():
     loader = SkillsLoader(Config.load())
     loader.create("auto-made", "A skill the agent wrote. Use for X.", "## Steps\n1. do it")
     assert "auto-made" in [s.name for s in loader.available()]
+
+
+def test_hardline_blocklist():
+    from aegis.config import Config
+    from aegis.tools.base import ToolContext
+    from aegis.tools.builtin import BashTool
+    from aegis.tools.permissions import PermissionEngine
+
+    cfg = Config.load()
+    cfg.data["tools"]["exec_mode"] = "full"  # even in full mode...
+    eng = PermissionEngine(cfg)
+    ok, reason = eng.authorize(BashTool(), {"command": "rm -rf /"}, ToolContext())
+    assert not ok and "hardline" in reason.lower()
+    ok2, _ = eng.authorize(BashTool(), {"command": "ls -la"}, ToolContext())
+    assert ok2  # normal command still allowed in full mode
+
+
+def test_credential_pool_rotation(monkeypatch):
+    from aegis.providers.auth import ApiKeyAuth
+    monkeypatch.setenv("POOL_KEY", "k1, k2, k3")
+    a = ApiKeyAuth(["POOL_KEY"], "bearer")
+    assert a.headers()["Authorization"] == "Bearer k1"
+    assert a.rotate() and a.headers()["Authorization"] == "Bearer k2"
+    a.rotate(); assert a.headers()["Authorization"] == "Bearer k3"
+    a.rotate(); assert a.headers()["Authorization"] == "Bearer k1"  # wraps
+
+
+def test_at_reference_expansion(tmp_path):
+    from aegis.cli.repl import expand_references
+    (tmp_path / "notes.txt").write_text("the secret is 42")
+    out = expand_references("look at @notes.txt please", tmp_path)
+    assert "the secret is 42" in out and "<file" in out
 
 
 def test_mcp_client_roundtrip(tmp_path):
