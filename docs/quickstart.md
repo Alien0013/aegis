@@ -2,6 +2,7 @@
 
 ```bash
 aegis setup                                   # interactive: provider + key/OAuth + exec mode
+aegis setup --non-interactive --accept-risk --json
 # or pick directly:
 aegis config set ANTHROPIC_API_KEY sk-ant-…   # API key
 aegis config set OPENAI_API_KEY sk-…          # OpenAI API key

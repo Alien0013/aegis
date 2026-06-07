@@ -125,6 +125,48 @@ def test_cli_status_surfaces_inventory(monkeypatch, capsys):
     assert "Dashboard" in out
 
 
+def test_cli_bare_first_run_guard(capsys):
+    from aegis.cli.main import main
+
+    rc = main([])
+
+    assert rc == 2
+    out = capsys.readouterr().out
+    assert "not configured" in out
+    assert "aegis setup" in out
+
+
+def test_cli_bare_existing_config_opens_repl(monkeypatch):
+    from aegis.cli.main import main
+    from aegis.config import Config
+
+    Config.load().save()
+    called = {}
+
+    def fake_interactive(*_args, **_kwargs):
+        called["ok"] = True
+
+    monkeypatch.setattr("aegis.cli.repl.interactive", fake_interactive)
+
+    assert main([]) == 0
+    assert called["ok"]
+
+
+def test_cli_bare_first_run_can_be_bypassed(monkeypatch):
+    from aegis.cli.main import main
+
+    called = {}
+
+    def fake_interactive(*_args, **_kwargs):
+        called["ok"] = True
+
+    monkeypatch.setenv("AEGIS_SKIP_FIRST_RUN", "1")
+    monkeypatch.setattr("aegis.cli.repl.interactive", fake_interactive)
+
+    assert main([]) == 0
+    assert called["ok"]
+
+
 def test_cli_plugins_lists_loaded_plugins(capsys):
     from aegis import config as cfg
     from aegis.cli.main import main
@@ -161,6 +203,64 @@ def test_cli_plugins_doctor_fails_on_load_error(capsys):
     out = capsys.readouterr().out
     assert "broken.py" in out
     assert "boom" in out
+
+
+def test_daemon_install_reports_gateway_failure(monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    import aegis.daemon as daemon
+    from aegis.config import Config
+
+    monkeypatch.setattr(daemon, "install_dashboard_service",
+                        lambda *_args, **_kwargs: daemon.ServiceResult(True, "dashboard ok"))
+    monkeypatch.setattr(daemon, "install_gateway_service",
+                        lambda *_args, **_kwargs: daemon.ServiceResult(False, "gateway failed"))
+
+    cfg = Config.load()
+    rc = daemon.cmd_daemon(
+        SimpleNamespace(action="install", channels="telegram", no_start=True),
+        cfg,
+    )
+
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "dashboard ok" in out
+    assert "gateway failed" in out
+
+
+def test_daemon_status_handles_missing_systemd(monkeypatch):
+    import aegis.daemon as daemon
+
+    monkeypatch.setattr(daemon.shutil, "which", lambda *_args: None)
+
+    st = daemon.status()
+
+    assert st["aegis-dashboard.service"] == "user systemd unavailable"
+    assert st["aegis-gateway.service"] == "user systemd unavailable"
+
+
+def test_daemon_status_includes_failed_unit_hint(monkeypatch):
+    import subprocess
+
+    import aegis.daemon as daemon
+
+    monkeypatch.setattr(daemon, "systemd_available", lambda: True)
+
+    def fake_systemctl(*args):
+        assert args[0] == "show"
+        return subprocess.CompletedProcess(
+            ["systemctl", *args],
+            0,
+            stdout="loaded\nfailed\nfailed\nbad-setting\nexit-code\n1\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(daemon, "_systemctl", fake_systemctl)
+
+    st = daemon.status()
+
+    assert "failed" in st["aegis-dashboard.service"]
+    assert "journalctl --user -u aegis-dashboard.service" in st["aegis-dashboard.service"]
 
 
 def test_github_tool_needs_gh(tmp_path, monkeypatch):

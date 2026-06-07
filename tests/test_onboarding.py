@@ -220,6 +220,177 @@ def test_onboarding_accepts_partial_provider_label(monkeypatch):
     assert "unknown choice" not in "\n".join(out)
 
 
+def test_noninteractive_onboarding_json_configures_defaults(capsys):
+    import json
+
+    from aegis.cli.main import main
+    from aegis.config import Config
+
+    rc = main([
+        "setup",
+        "--non-interactive",
+        "--accept-risk",
+        "--json",
+        "--provider",
+        "ollama",
+        "--auth",
+        "local",
+        "--model",
+        "llama3.1",
+        "--web",
+        "skip",
+        "--toolsets",
+        "core,mcp",
+        "--channels",
+        "telegram",
+        "--exec-mode",
+        "auto",
+        "--no-services",
+    ])
+
+    assert rc == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["ok"] is True
+    assert data["model"]["provider"] == "ollama"
+    assert data["model"]["auth"] == "local"
+    assert data["web_search"] == "skip"
+    assert data["integrations"] == ["telegram"]
+    assert data["surface"]["tools_enabled"] > 0
+    cfg = Config.load()
+    assert cfg.get("model.provider") == "ollama"
+    assert cfg.get("tools.exec_mode") == "auto"
+
+
+def test_noninteractive_onboarding_requires_risk_ack(capsys):
+    from aegis.cli.main import main
+
+    rc = main(["setup", "--non-interactive", "--json"])
+
+    assert rc == 2
+    out = capsys.readouterr().out
+    assert "accept-risk" in out
+
+
+def test_noninteractive_provider_uses_provider_default_model(capsys):
+    import json
+
+    from aegis.cli.main import main
+    from aegis.config import Config
+
+    rc = main([
+        "setup",
+        "--noninteractive",
+        "--accept-risk",
+        "--json",
+        "--provider",
+        "openai",
+        "--auth",
+        "skip",
+        "--no-services",
+    ])
+
+    assert rc == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["model"]["provider"] == "openai"
+    assert data["model"]["model"] == "gpt-4o"
+    assert Config.load().get("model.default") == "gpt-4o"
+
+
+def test_noninteractive_api_key_requires_env(monkeypatch, capsys):
+    from aegis.cli.main import main
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    rc = main([
+        "setup",
+        "--non-interactive",
+        "--accept-risk",
+        "--json",
+        "--provider",
+        "openai",
+        "--auth",
+        "api-key",
+    ])
+
+    assert rc == 2
+    assert "OPENAI_API_KEY" in capsys.readouterr().out
+
+
+def test_noninteractive_rejects_unknown_toolset(capsys):
+    from aegis.cli.main import main
+
+    rc = main([
+        "setup",
+        "--non-interactive",
+        "--accept-risk",
+        "--json",
+        "--toolsets",
+        "core,hovercraft",
+    ])
+
+    assert rc == 2
+    assert "hovercraft" in capsys.readouterr().out
+
+
+def test_setup_json_requires_noninteractive(capsys):
+    from aegis.cli.main import main
+
+    rc = main(["setup", "--json"])
+
+    assert rc == 1
+    assert "--json requires --non-interactive" in capsys.readouterr().err
+
+
+def test_dialogs_default_on_real_tty(monkeypatch):
+    from aegis.onboarding import _can_use_dialogs
+
+    class Tty:
+        def isatty(self):
+            return True
+
+    monkeypatch.delenv("AEGIS_ONBOARD_DIALOGS", raising=False)
+    monkeypatch.setattr("sys.stdin", Tty())
+    monkeypatch.setattr("sys.stdout", Tty())
+
+    assert _can_use_dialogs(input, print)
+
+
+def test_dialogs_can_be_disabled(monkeypatch):
+    from aegis.onboarding import _can_use_dialogs
+
+    class Tty:
+        def isatty(self):
+            return True
+
+    monkeypatch.setenv("AEGIS_ONBOARD_DIALOGS", "0")
+    monkeypatch.setattr("sys.stdin", Tty())
+    monkeypatch.setattr("sys.stdout", Tty())
+
+    assert not _can_use_dialogs(input, print)
+
+
+def test_onboarding_existing_config_can_keep(monkeypatch):
+    from aegis.config import Config
+    from aegis.onboarding import run_onboarding
+
+    cfg = Config.load()
+    cfg.set("model.provider", "ollama")
+    answers = iter([
+        "y",      # security notice
+        "keep",   # existing config review
+    ])
+    out: list[str] = []
+
+    rc = run_onboarding(
+        Config.load(),
+        input_func=lambda _prompt: next(answers),
+        output_func=out.append,
+    )
+
+    assert rc == 0
+    assert Config.load().get("model.provider") == "ollama"
+    assert "keeping existing setup" in "\n".join(out)
+
+
 def test_onboarding_can_select_a_provider_model(monkeypatch):
     from aegis.config import Config
     from aegis.onboarding import run_onboarding

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import copy
 import getpass
 import importlib.util
+import json
 import os
 import secrets
 import sys
@@ -70,13 +72,17 @@ MODEL_PRESETS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
+VALID_WEB_BACKENDS = {"auto", "duckduckgo", "brave", "tavily", "serper", "skip"}
+VALID_TOOLSETS = {"core", "browser", "computer", "voice", "lsp", "mcp", "all"}
+VALID_CHANNELS = {"cli", "telegram", "discord", "slack", "signal", "matrix", "email", "webhook"}
+
 
 @dataclass
 class OnboardingState:
     provider: str = ""
     model: str = ""
     auth_method: str = ""
-    web_backend: str = "duckduckgo"
+    web_backend: str = ""
     channels: list[str] | None = None
     workspace_files: list[str] | None = None
     toolsets: list[str] | None = None
@@ -89,6 +95,8 @@ class OnboardingState:
     plugin_errors: int = 0
     dashboard_url: str = ""
     services: list[str] | None = None
+    service_errors: list[str] | None = None
+    errors: list[str] | None = None
 
 
 def run_onboarding(
@@ -103,7 +111,7 @@ def run_onboarding(
     output_func: Output = print,
 ) -> int:
     secret_func = secret_func or _secret
-    state = OnboardingState(channels=[], services=[], workspace_files=[])
+    state = OnboardingState(channels=[], services=[], workspace_files=[], service_errors=[], errors=[])
 
     out = output_func
     out("")
@@ -115,6 +123,28 @@ def run_onboarding(
     if not _confirm("Acknowledge security notice and proceed?", True, input_func, out):
         out("onboarding cancelled.")
         return 1
+
+    if cfg.config_path().exists() and not quick and not advanced:
+        choice = _choose(
+            "Existing configuration found:",
+            [
+                ("modify", "Review and modify current setup"),
+                ("keep", "Keep current setup and exit"),
+                ("reset", "Reset non-secret config and onboard again"),
+            ],
+            default=0,
+            input_func=input_func,
+            output_func=out,
+        )
+        if choice == "keep":
+            out("keeping existing setup.")
+            return 0
+        if choice == "reset":
+            from .config import DEFAULT_CONFIG
+
+            config.data = copy.deepcopy(DEFAULT_CONFIG)
+            config.save()
+            out("✓ reset config.yaml to defaults. Secrets and OAuth tokens were left untouched.")
 
     if not quick and not advanced:
         path = _choose(
@@ -139,6 +169,105 @@ def run_onboarding(
     config.save()
     _summary(config, state, out)
     return 0
+
+
+def run_onboarding_noninteractive(
+    config: Config,
+    *,
+    accept_risk: bool = False,
+    json_output: bool = False,
+    provider: str | None = None,
+    auth: str = "skip",
+    model: str | None = None,
+    web: str = "auto",
+    toolsets: str | None = None,
+    channels: str | None = None,
+    exec_mode: str = "ask",
+    services: bool = False,
+    output_func: Output = print,
+) -> int:
+    state = OnboardingState(channels=[], services=[], workspace_files=[], service_errors=[], errors=[])
+
+    def fail(message: str, code: int = 2) -> int:
+        state.errors.append(message)
+        if json_output:
+            output_func(json.dumps(_summary_data(config, state, ok=False), indent=2))
+        else:
+            output_func(f"error: {message}")
+        return code
+
+    if not accept_risk:
+        return fail("noninteractive onboarding requires --accept-risk")
+    if auth == "oauth":
+        return fail("OAuth requires an interactive browser login; use --auth skip or --auth api-key")
+    if auth not in {"skip", "api-key", "local"}:
+        return fail(f"unknown auth method: {auth}")
+    if exec_mode not in {"ask", "auto", "allowlist", "deny", "full", "smart"}:
+        return fail(f"unknown exec mode: {exec_mode}")
+    if web not in VALID_WEB_BACKENDS:
+        return fail(f"unknown web backend: {web}")
+
+    provider_name = provider or config.get("model.provider", "anthropic")
+    spec = registry.get_spec(provider_name)
+    if not spec:
+        return fail(f"unknown provider: {provider_name}")
+    if auth == "local" and spec.auth_scheme != "none":
+        return fail(f"provider {provider_name} is not a local/no-auth provider")
+    if auth == "api-key":
+        if not spec.env_vars:
+            return fail(f"provider {provider_name} does not use API-key auth")
+        if not any(os.environ.get(env) for env in spec.env_vars):
+            return fail(
+                "API-key onboarding requires an existing environment variable: "
+                + ", ".join(spec.env_vars)
+            )
+    selected_toolsets = _parse_csv(toolsets) if toolsets else _recommended_toolsets()
+    if "core" not in selected_toolsets:
+        selected_toolsets.insert(0, "core")
+    unknown_toolsets = sorted(set(selected_toolsets) - VALID_TOOLSETS)
+    if unknown_toolsets:
+        return fail("unknown toolset(s): " + ", ".join(unknown_toolsets))
+    selected_channels = _parse_csv(channels)
+    unknown_channels = sorted(set(selected_channels) - VALID_CHANNELS)
+    if unknown_channels:
+        return fail("unknown channel(s): " + ", ".join(unknown_channels))
+
+    config.set("model.provider", provider_name)
+    chosen_model = model or spec.default_model
+    config.set("model.default", chosen_model)
+    config.set("tools.exec_mode", exec_mode)
+    state.provider = provider_name
+    state.model = chosen_model
+    state.auth_method = auth
+
+    if web == "skip":
+        state.web_backend = "skip"
+    else:
+        config.set("web.search_backend", web)
+        state.web_backend = web
+
+    config.set("tools.toolsets", selected_toolsets)
+
+    config.data.setdefault("gateway", {})["channels"] = selected_channels
+    state.channels = selected_channels
+
+    _populate_surface_state(config, state)
+    _seed_workspace(state, lambda _msg: None)
+    _configure_dashboard(config, state, lambda _msg: None)
+
+    if services:
+        _install_services_noninteractive(config, state)
+
+    config.save()
+    data = _summary_data(config, state, ok=not state.errors)
+    if json_output:
+        output_func(json.dumps(data, indent=2))
+    else:
+        output_func("✓ noninteractive onboarding complete.")
+        output_func(f"Config: {data['paths']['config']}")
+        output_func(f"Dashboard: {data['dashboard_url']}")
+        output_func("Next: aegis status && aegis")
+    return 0 if not state.errors else 1
 
 
 def _secret(prompt: str) -> str:
@@ -217,6 +346,12 @@ def _choice_matches(raw: str, value: str, label: str) -> bool:
 def _choice_key(text: str) -> str:
     cleaned = "".join(ch.lower() if ch.isalnum() else " " for ch in text)
     return " ".join(cleaned.split())
+
+
+def _parse_csv(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [part.strip() for part in value.split(",") if part.strip()]
 
 
 def _multi_choose(
@@ -331,9 +466,11 @@ def _dialog_multi_choose(
 
 
 def _can_use_dialogs(input_func: Input, output_func: Output) -> bool:
+    flag = os.environ.get("AEGIS_ONBOARD_DIALOGS", "").strip().lower()
+    if flag in {"0", "false", "no", "off"}:
+        return False
     return (
-        os.environ.get("AEGIS_ONBOARD_DIALOGS") == "1"
-        and input_func is input
+        input_func is input
         and output_func is print
         and sys.stdin.isatty()
         and sys.stdout.isatty()
@@ -572,6 +709,20 @@ def _configure_agent_surface(
             toolsets = current
     config.set("tools.toolsets", toolsets)
 
+    tools, skills, plugins = _populate_surface_state(config, state)
+    out(f"✓ enabled toolsets: {', '.join(tools.toolsets)}")
+    out(f"✓ model-visible tools: {tools.enabled_count}/{tools.total_count}")
+    if tools.disabled_sets:
+        disabled = ", ".join(f"{name} ({count})" for name, count in sorted(tools.disabled_sets.items()))
+        out(f"  optional disabled toolsets: {disabled}")
+    out(f"✓ skills available: {skills.available_count} ({skills.bundled_count} bundled)")
+    out(f"✓ plugins loaded: {plugins.files_count} file(s), {len(plugins.tools)} tool(s)")
+    if plugins.errors:
+        out(f"  plugin load errors: {len(plugins.errors)}; run `aegis plugins doctor`")
+    out("  Use `aegis status`, `aegis tools`, `aegis skills`, and `aegis plugins` to inspect them.")
+
+
+def _populate_surface_state(config: Config, state: OnboardingState):
     from .surface import plugin_inventory, skill_inventory, tool_inventory
 
     tools = tool_inventory(config)
@@ -585,16 +736,7 @@ def _configure_agent_surface(
     state.plugin_files = plugins.files_count
     state.plugin_tools = len(plugins.tools)
     state.plugin_errors = len(plugins.errors)
-    out(f"✓ enabled toolsets: {', '.join(tools.toolsets)}")
-    out(f"✓ model-visible tools: {tools.enabled_count}/{tools.total_count}")
-    if tools.disabled_sets:
-        disabled = ", ".join(f"{name} ({count})" for name, count in sorted(tools.disabled_sets.items()))
-        out(f"  optional disabled toolsets: {disabled}")
-    out(f"✓ skills available: {skills.available_count} ({skills.bundled_count} bundled)")
-    out(f"✓ plugins loaded: {plugins.files_count} file(s), {len(plugins.tools)} tool(s)")
-    if plugins.errors:
-        out(f"  plugin load errors: {len(plugins.errors)}; run `aegis plugins doctor`")
-    out("  Use `aegis status`, `aegis tools`, `aegis skills`, and `aegis plugins` to inspect them.")
+    return tools, skills, plugins
 
 
 def _configure_channels(
@@ -703,6 +845,13 @@ def _configure_services(
     out("")
     out("GATEWAY & DAEMON INSTALLATION")
     out("─────────────────────────────────────────────────────────")
+    from .daemon import systemd_available
+
+    if not systemd_available():
+        msg = "user systemd is not available; skipping service install."
+        out(f"! {msg}")
+        state.service_errors.append(msg)
+        return
     default = False
     if not _confirm("Install/start user systemd services for dashboard/gateway?", default, input_func, out):
         return
@@ -712,11 +861,71 @@ def _configure_services(
     out(("✓ " if dash.ok else "! ") + dash.message)
     if dash.ok:
         state.services.append("dashboard")
+    else:
+        state.service_errors.append(dash.message)
     if state.channels:
         gate = install_gateway_service(config, state.channels)
         out(("✓ " if gate.ok else "! ") + gate.message)
         if gate.ok:
             state.services.append("gateway")
+        else:
+            state.service_errors.append(gate.message)
+
+
+def _install_services_noninteractive(config: Config, state: OnboardingState) -> None:
+    from .daemon import install_dashboard_service, install_gateway_service, systemd_available
+
+    if not systemd_available():
+        state.service_errors.append("user systemd is not available")
+        return
+    dash = install_dashboard_service(config)
+    if dash.ok:
+        state.services.append("dashboard")
+    else:
+        state.service_errors.append(dash.message)
+    if state.channels:
+        gate = install_gateway_service(config, state.channels)
+        if gate.ok:
+            state.services.append("gateway")
+        else:
+            state.service_errors.append(gate.message)
+
+
+def _summary_data(config: Config, state: OnboardingState, *, ok: bool = True) -> dict:
+    return {
+        "ok": ok,
+        "paths": {
+            "home": str(cfg.get_home()),
+            "config": str(cfg.config_path()),
+            "secrets": str(cfg.env_path()),
+            "workspace": str(cfg.sub("workspace")),
+        },
+        "model": {
+            "provider": state.provider or config.get("model.provider"),
+            "model": state.model or config.get("model.default"),
+            "auth": state.auth_method or "not configured",
+        },
+        "web_search": state.web_backend or config.get("web.search_backend"),
+        "surface": {
+            "toolsets": state.toolsets or config.get("tools.toolsets", []),
+            "tools_enabled": state.enabled_tools,
+            "tools_total": state.total_tools,
+            "skills_available": state.available_skills,
+            "skills_bundled": state.bundled_skills,
+            "plugin_files": state.plugin_files,
+            "plugin_tools": state.plugin_tools,
+            "plugin_errors": state.plugin_errors,
+        },
+        "integrations": state.channels or [],
+        "services": {
+            "installed": state.services or [],
+            "errors": state.service_errors or [],
+        },
+        "dashboard_url": state.dashboard_url,
+        "workspace_files": state.workspace_files or [],
+        "errors": state.errors or [],
+        "next_commands": ["aegis status", "aegis", "aegis doctor"],
+    }
 
 
 def _summary(config: Config, state: OnboardingState, out: Output) -> None:
@@ -737,6 +946,8 @@ def _summary(config: Config, state: OnboardingState, out: Output) -> None:
     if state.workspace_files:
         out(f"Workspace files: {', '.join(state.workspace_files)}")
     out(f"Services:        {', '.join(state.services or []) or 'not installed'}")
+    if state.service_errors:
+        out(f"Service issues:  {', '.join(state.service_errors)}")
     out("")
     out("Control UI:")
     out(f"  {state.dashboard_url}")

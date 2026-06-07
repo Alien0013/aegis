@@ -12,8 +12,9 @@ puts a global `aegis` launcher on your PATH, then starts guided onboarding when 
 terminal is available. Prompts are read from `/dev/tty`, so `curl | bash` works.
 The wizard offers OAuth or API-key auth first, then model selection, web tools,
 Space-toggle channel selection, and starter files in `~/.aegis/workspace`. Skip
-onboarding only for headless automation with `--no-prompt`, `--skip-onboard`, or
-`AEGIS_ONBOARD=0`. Use `--core` for a smaller CLI-only install, or
+prompts for headless automation with `--no-prompt` or `--non-interactive`; this
+still runs safe default onboarding and prints JSON. Skip onboarding entirely with
+`--skip-onboard` or `AEGIS_ONBOARD=0`. Use `--core` for a smaller CLI-only install, or
 `--skip-browser` to skip the Chromium download. Windows: `irm …/install.ps1 | iex`.
 
 Everything in one go (browser, computer-use, Discord, Slack, Matrix, memory backends):

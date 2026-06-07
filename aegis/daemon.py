@@ -36,6 +36,38 @@ def _systemctl(*args: str) -> subprocess.CompletedProcess:
     )
 
 
+def _unit_state(unit: str) -> str:
+    if shutil.which("systemctl") is None:
+        return "systemctl not found"
+    res = _systemctl(
+        "show",
+        unit,
+        "--property=LoadState,ActiveState,SubState,UnitFileState,Result,ExecMainStatus",
+        "--value",
+    )
+    if res.returncode != 0:
+        return res.stderr.strip() or "unknown"
+    keys = ("load", "active", "sub", "enabled", "result", "exit")
+    values = dict(zip(keys, [line.strip() for line in res.stdout.splitlines()]))
+    active = values.get("active") or "unknown"
+    enabled = values.get("enabled") or "unknown"
+    sub = values.get("sub") or "unknown"
+    result = values.get("result") or "success"
+    exit_status = values.get("exit") or "0"
+    summary = f"{active} ({sub}, {enabled})"
+    if active == "failed" or result not in ("", "success") or exit_status not in ("", "0"):
+        summary += (
+            f" result={result or 'unknown'} exit={exit_status}; "
+            f"hint: journalctl --user -u {unit} -n 20 --no-pager"
+        )
+    return summary
+
+
+def _failed_after_start(unit: str) -> str:
+    state = _unit_state(unit)
+    return state if state.startswith("failed") or " result=" in state else ""
+
+
 def systemd_available() -> bool:
     return shutil.which("systemctl") is not None and _systemctl("is-system-running").returncode in (
         0,
@@ -72,6 +104,9 @@ WantedBy=default.target
         res = _systemctl("enable", "--now", unit.name)
         if res.returncode != 0:
             return ServiceResult(False, res.stderr.strip() or "systemd enable failed")
+        failed = _failed_after_start(unit.name)
+        if failed:
+            return ServiceResult(False, f"{unit.name} installed but failed: {failed}")
     return ServiceResult(True, f"{unit.name} installed")
 
 
@@ -105,14 +140,21 @@ WantedBy=default.target
         res = _systemctl("enable", "--now", unit.name)
         if res.returncode != 0:
             return ServiceResult(False, res.stderr.strip() or "systemd enable failed")
+        failed = _failed_after_start(unit.name)
+        if failed:
+            return ServiceResult(False, f"{unit.name} installed but failed: {failed}")
     return ServiceResult(True, f"{unit.name} installed")
 
 
 def status() -> dict[str, str]:
     out: dict[str, str] = {}
+    if not systemd_available():
+        return {
+            "aegis-dashboard.service": "user systemd unavailable",
+            "aegis-gateway.service": "user systemd unavailable",
+        }
     for unit in ("aegis-dashboard.service", "aegis-gateway.service"):
-        res = _systemctl("is-active", unit)
-        out[unit] = res.stdout.strip() or "unknown"
+        out[unit] = _unit_state(unit)
     return out
 
 
@@ -122,12 +164,17 @@ def cmd_daemon(args, config: Config) -> int:
         channels = [c.strip() for c in (getattr(args, "channels", None) or "").split(",") if c.strip()]
         if not channels:
             channels = list(config.get("gateway.channels", []) or [])
+        rc = 0
         dash = install_dashboard_service(config, enable_now=not getattr(args, "no_start", False))
         print(("✓ " if dash.ok else "! ") + dash.message)
+        if not dash.ok:
+            rc = 1
         if channels:
             gate = install_gateway_service(config, channels, enable_now=not getattr(args, "no_start", False))
             print(("✓ " if gate.ok else "! ") + gate.message)
-        return 0 if dash.ok else 1
+            if not gate.ok:
+                rc = 1
+        return rc
     if action in ("start", "stop", "restart"):
         rc = 0
         for unit in ("aegis-dashboard.service", "aegis-gateway.service"):

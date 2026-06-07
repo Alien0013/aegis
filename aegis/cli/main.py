@@ -156,7 +156,25 @@ def cmd_auth(args, config: Config) -> int:
 # setup wizard
 # --------------------------------------------------------------------------- #
 def cmd_setup(args, config: Config) -> int:
-    from ..onboarding import run_onboarding
+    from ..onboarding import run_onboarding, run_onboarding_noninteractive
+
+    if getattr(args, "json", False) and not getattr(args, "non_interactive", False):
+        return _die("--json requires --non-interactive")
+    if getattr(args, "non_interactive", False):
+        return run_onboarding_noninteractive(
+            config,
+            accept_risk=getattr(args, "accept_risk", False),
+            json_output=getattr(args, "json", False),
+            provider=getattr(args, "provider", None),
+            auth=getattr(args, "auth", "skip"),
+            model=getattr(args, "model", None),
+            web=getattr(args, "web", "auto"),
+            toolsets=getattr(args, "toolsets", None),
+            channels=getattr(args, "channels", None),
+            exec_mode=getattr(args, "exec_mode", "ask"),
+            services=getattr(args, "install_services", False)
+            and not getattr(args, "no_services", False),
+        )
 
     return run_onboarding(
         config,
@@ -728,6 +746,43 @@ def _die(msg: str) -> int:
     return 1
 
 
+def _add_onboard_automation_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--non-interactive", "--noninteractive", action="store_true",
+                        help="configure without prompts")
+    parser.add_argument("--accept-risk", action="store_true", help="required with --non-interactive")
+    parser.add_argument("--json", action="store_true", help="emit a machine-readable onboarding summary")
+    parser.add_argument("--provider", help="provider for noninteractive onboarding")
+    parser.add_argument("--auth", choices=["skip", "api-key", "local", "oauth"], default="skip",
+                        help="credential mode for noninteractive onboarding")
+    parser.add_argument("--model", help="model id for noninteractive onboarding")
+    parser.add_argument("--web", default="auto", help="web search backend, or skip")
+    parser.add_argument("--toolsets", help="comma list, e.g. core,browser,lsp,mcp")
+    parser.add_argument("--channels", help="comma list, e.g. telegram,discord")
+    parser.add_argument("--exec-mode", default="ask",
+                        choices=["ask", "auto", "allowlist", "deny", "full", "smart"])
+    parser.add_argument("--install-services", action="store_true",
+                        help="install dashboard/gateway services in noninteractive mode")
+
+
+def _needs_first_run() -> bool:
+    if os.environ.get("AEGIS_SKIP_FIRST_RUN", "").strip().lower() in {"1", "true", "yes"}:
+        return False
+    return not cfg.config_path().exists()
+
+
+def _handle_first_run(config: Config) -> int:
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        from ..onboarding import run_onboarding
+
+        return run_onboarding(config)
+    _print("AEGIS is not configured yet.")
+    _print("Run one of these first:")
+    _print("  aegis setup")
+    _print("  aegis setup --non-interactive --accept-risk --json")
+    _print("Set AEGIS_SKIP_FIRST_RUN=1 to bypass this guard.")
+    return 2
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="aegis", description="AEGIS — terminal agent harness.")
     p.add_argument("--version", action="version", version=f"aegis {__version__}")
@@ -763,6 +818,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--advanced", action="store_true", help="show advanced setup choices")
     s.add_argument("--no-probe", action="store_true", help="skip provider connection test")
     s.add_argument("--no-services", action="store_true", help="skip user systemd service setup")
+    _add_onboard_automation_args(s)
     s.set_defaults(func=cmd_setup)
 
     ob = sub.add_parser("onboard", help="interactive setup wizard (alias of setup)")
@@ -770,6 +826,7 @@ def build_parser() -> argparse.ArgumentParser:
     ob.add_argument("--advanced", action="store_true", help="show advanced setup choices")
     ob.add_argument("--no-probe", action="store_true", help="skip provider connection test")
     ob.add_argument("--no-services", action="store_true", help="skip user systemd service setup")
+    _add_onboard_automation_args(ob)
     ob.set_defaults(func=cmd_setup)
 
     up = sub.add_parser("update", help="update AEGIS to the latest version")
@@ -965,6 +1022,8 @@ def main(argv: list[str] | None = None) -> int:
     config = Config.load(profile=args.profile)
 
     if not getattr(args, "command", None):
+        if _needs_first_run():
+            return _handle_first_run(config)
         # default: interactive chat
         from ..session import Session, SessionStore
         from . import repl

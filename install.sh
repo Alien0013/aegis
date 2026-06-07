@@ -12,6 +12,7 @@
 #   AEGIS_REPO         git URL to install (default: local dir if present, else PyPI)
 #   AEGIS_ONBOARD      run onboarding     (default 1; set 0 to skip)
 #   AEGIS_NO_PROMPT    disable interactive prompts/onboarding (default 0)
+#   AEGIS_NONINTERACTIVE_ONBOARD run onboarding with safe defaults (default 0)
 #   AEGIS_VERIFY_INSTALL run `aegis doctor` after install (default 0)
 #   AEGIS_DRY_RUN      print the install plan without making changes (default 0)
 #   AEGIS_BRANCH       branch for the default GitHub source (default main)
@@ -37,6 +38,7 @@ EXTRAS="${AEGIS_EXTRAS-all}"
 REPO="${AEGIS_REPO:-}"
 RUN_ONBOARD="${AEGIS_ONBOARD:-1}"
 NO_PROMPT="${AEGIS_NO_PROMPT:-0}"
+NONINTERACTIVE_ONBOARD="${AEGIS_NONINTERACTIVE_ONBOARD:-0}"
 VERIFY_INSTALL="${AEGIS_VERIFY_INSTALL:-0}"
 DRY_RUN="${AEGIS_DRY_RUN:-0}"
 BRANCH="${AEGIS_BRANCH:-main}"
@@ -77,7 +79,7 @@ print_plan() {
   kv "Data home" "$AEGIS_HOME_DIR"
   kv "Venv" "$INSTALL_DIR"
   kv "Launcher" "$BIN_DIR/$APP"
-  kv "Onboarding" "$([ "$RUN_ONBOARD" = "0" ] && echo skipped || echo enabled)"
+  kv "Onboarding" "$([ "$RUN_ONBOARD" = "0" ] && echo skipped || ([ "$NONINTERACTIVE_ONBOARD" = "1" ] && echo noninteractive || echo enabled))"
   kv "Verify" "$([ "$VERIFY_INSTALL" = "1" ] && echo enabled || echo skipped)"
 }
 
@@ -116,7 +118,8 @@ Options:
   --advanced                    Pass --advanced to onboarding
   --no-probe                    Pass --no-probe to onboarding
   --no-services                 Pass --no-services to onboarding
-  --no-prompt                   Disable interactive prompts/onboarding
+  --no-prompt                   Disable prompts and run safe noninteractive onboarding
+  --non-interactive             Run safe noninteractive onboarding
   --full                        Install the full curated extras set (default)
   --core, --minimal             Install only the core CLI
   --extras <names>              Install explicit extras, e.g. browser,discord
@@ -165,7 +168,9 @@ while [ $# -gt 0 ]; do
     --skip-onboard|--no-onboard)
       RUN_ONBOARD=0; shift ;;
     --no-prompt)
-      NO_PROMPT=1; RUN_ONBOARD=0; shift ;;
+      NO_PROMPT=1; NONINTERACTIVE_ONBOARD=1; shift ;;
+    --non-interactive)
+      NO_PROMPT=1; NONINTERACTIVE_ONBOARD=1; shift ;;
     --full)
       EXTRAS="all"; shift ;;
     --core|--minimal)
@@ -197,6 +202,10 @@ while [ $# -gt 0 ]; do
       die "unknown installer argument: $1" ;;
   esac
 done
+
+if [ "$NO_PROMPT" = "1" ] && [ "$RUN_ONBOARD" != "0" ]; then
+  NONINTERACTIVE_ONBOARD=1
+fi
 
 # Termux (Android): link into $PREFIX/bin (already on PATH) and use pkg for system tools.
 IS_TERMUX=""
@@ -329,9 +338,26 @@ if ! command -v rg >/dev/null 2>&1; then
 fi
 
 stage "Running onboarding"
-if [ "$RUN_ONBOARD" != "0" ] && has_tty; then
+if [ "$RUN_ONBOARD" != "0" ] && { has_tty || [ "$NONINTERACTIVE_ONBOARD" = "1" ]; }; then
   say "Starting first-run onboarding…"
-  if "$BIN_DIR/$APP" onboard $ONBOARD_ARGS < /dev/tty; then
+  RUN_ARGS="$ONBOARD_ARGS"
+  if [ "$NONINTERACTIVE_ONBOARD" = "1" ]; then
+    RUN_ARGS="$RUN_ARGS --non-interactive --accept-risk --json"
+  fi
+  if [ "$NONINTERACTIVE_ONBOARD" = "1" ]; then
+    if "$BIN_DIR/$APP" onboard $RUN_ARGS; then
+      onboard_rc=0
+    else
+      onboard_rc=$?
+    fi
+  else
+    if "$BIN_DIR/$APP" onboard $RUN_ARGS < /dev/tty; then
+      onboard_rc=0
+    else
+      onboard_rc=$?
+    fi
+  fi
+  if [ "$onboard_rc" = "0" ]; then
     ok "Onboarding complete."
   else
     warn "Onboarding did not finish. Run 'aegis setup' when ready."

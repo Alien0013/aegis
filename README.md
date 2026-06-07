@@ -52,9 +52,10 @@ immediately launches the guided onboarding flow (provider, OAuth/API key, model,
 web tools, optional channels, dashboard, and workspace files) using `/dev/tty`,
 so `curl | bash` prompts work correctly. In a real terminal it uses arrow-key
 menus and Space-toggle checkboxes; in scripts it falls back to simple text prompts.
-Onboarding is included by default. Headless automation can opt out with
-`--no-prompt`, `--skip-onboard`, or `AEGIS_ONBOARD=0`. Use `--core` for a smaller
-CLI-only install, or `--skip-browser` to skip the Chromium download.
+Onboarding is included by default. Headless automation can use `--no-prompt` or
+`--non-interactive` for safe default setup with JSON output; opt out completely
+with `--skip-onboard` or `AEGIS_ONBOARD=0`. Use `--core` for a smaller CLI-only
+install, or `--skip-browser` to skip the Chromium download.
 Windows: `irm …/install.ps1 | iex`.
 Everything in one go:
 
@@ -87,6 +88,9 @@ voice) is in the core install.
 ```bash
 # 1. run or re-run guided onboarding
 aegis setup
+
+# or configure safe defaults without prompts
+aegis setup --non-interactive --accept-risk --json
 
 # or point it at a provider manually
 aegis config set ANTHROPIC_API_KEY  sk-ant-...        # Claude
