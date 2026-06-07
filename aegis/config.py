@@ -138,13 +138,27 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "memory": {
         "enabled": True,
         "user_profile_enabled": True,
+        "provider": "",              # "" builtin only; or "mem0" | "jsonl"
     },
     "tools": {
-        "exec_mode": "ask",          # deny | allowlist | ask | auto | full
+        "exec_mode": "ask",          # deny | allowlist | ask | smart | auto | full
         "deny_groups": [],           # e.g. ["runtime", "automation"]
         "allowlist": [],             # shell command prefixes auto-approved
         "toolsets": ["core", "mcp"], # enabled toolsets (add "browser","computer" to opt in)
+        "terminal_backend": "local", # local | docker | ssh
+        "docker_image": "python:3.12-slim",
     },
+    "auxiliary": {                   # small/cheap model for compaction, vision, smart-approval
+        "provider": "",              # "" = reuse main provider
+        "model": "",
+    },
+    "security": {
+        "scan_enabled": True,        # Tirith-style pre-execution command scanning
+    },
+    "checkpoints": {
+        "enabled": False,            # snapshot files before edits for /rollback
+    },
+    "hooks": {},                     # event -> [shell commands]: session_start, pre_tool, ...
     "skills": {
         "paths": [],                 # extra skill dirs
         "autogen": True,

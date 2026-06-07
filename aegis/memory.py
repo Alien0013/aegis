@@ -111,6 +111,12 @@ class MemoryManager:
         self.config = config
         self.store = MemoryStore()
         self.history = History()
+        if external is None and config.get("memory.provider"):
+            try:
+                from .memory_providers import build_memory_provider
+                external = build_memory_provider(config.get("memory.provider"), config)
+            except Exception as e:  # noqa: BLE001
+                print(f"  ! external memory provider failed: {e}")
         self.external = external
         self.enabled = bool(config.get("memory.enabled", True))
         self.user_enabled = bool(config.get("memory.user_profile_enabled", True))

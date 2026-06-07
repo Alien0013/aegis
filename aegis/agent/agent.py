@@ -135,6 +135,11 @@ class Agent:
         self.session.maybe_title_from(msg.content)
         self.session.messages.append(msg)
         self.tool_context.emit = on_event
+        try:
+            from ..hooks import run_hooks
+            run_hooks(self.config, "user_prompt", {"text": msg.content[:300], "session_id": self.session.id})
+        except Exception:  # noqa: BLE001
+            pass
         if self.memory:
             self.memory.history.append("user", msg.content, self.session.id)
 
@@ -142,6 +147,11 @@ class Agent:
 
         if self.memory and result.content:
             self.memory.history.append("assistant", result.content, self.session.id)
+            if self.memory.external:
+                try:
+                    self.memory.external.sync_turn(self.session.messages)
+                except Exception:  # noqa: BLE001
+                    pass
         if self.store:
             self.store.save(self.session)
         return result

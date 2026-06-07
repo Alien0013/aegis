@@ -58,10 +58,15 @@ def cmd_chat(args, config: Config) -> int:
             _print(f"(continuing {session.id})")
     session = session or Session.create()
 
+    images = None
+    if getattr(args, "image", None):
+        from ..util import encode_image
+        images = [encode_image(Path(p).expanduser()) for p in args.image]
+
     prompt = args.query or (" ".join(args.prompt) if args.prompt else None)
     if prompt:
         out = repl.run_once(config, prompt, model=args.model, provider_name=args.provider,
-                            session=session, store=store, auto=args.yolo)
+                            session=session, store=store, auto=args.yolo, images=images)
         if not config.get("agent.stream", True):
             _print(out)
         return 0
@@ -404,6 +409,24 @@ def cmd_doctor(args, config: Config) -> int:
         _print(f"  auth available: {p.auth.available()}")
     except Exception as e:  # noqa: BLE001
         _print(f"provider: ERROR {e}")
+    if getattr(args, "fix", False):
+        from ..util import ensure_dir
+        for d in (cfg.memories_dir(), cfg.skills_dir(), cfg.workspace_dir(), cfg.logs_dir(),
+                  cfg.sub("plugins")):
+            ensure_dir(d)
+        if cfg.auth_path().exists():
+            try:
+                os.chmod(cfg.auth_path(), 0o600)
+            except OSError:
+                pass
+        if cfg.env_path().exists():
+            try:
+                os.chmod(cfg.env_path(), 0o600)
+            except OSError:
+                pass
+        if not cfg.config_path().exists():
+            config.save()
+        _print("✓ fixed: ensured dirs, tightened secret perms (0600), wrote config if missing.")
     return 0
 
 
@@ -421,8 +444,31 @@ def cmd_update(args, config: Config) -> int:
     return 0
 
 
-_CMDS = ("chat model auth setup onboard update skills mcp serve cron tools "
-         "memory config sessions gateway doctor completion")
+_CMDS = ("chat model auth setup onboard update skills mcp serve cron tools memory "
+         "config sessions gateway doctor completion backup import insights webhook "
+         "hooks kanban curator dashboard acp pairing checkpoints background")
+
+
+def cmd_checkpoints(args, config: Config) -> int:
+    from ..checkpoints import CheckpointStore
+    store = CheckpointStore()
+    if args.action == "rollback":
+        restored = store.rollback(args.id)
+        _print(f"rolled back {len(restored)} file(s): {', '.join(restored) or '(none)'}")
+        return 0
+    if args.action == "clear":
+        _print(f"cleared {store.clear()} checkpoint(s)")
+        return 0
+    for cp in store.list():
+        _print(f"  {cp.id}  {cp.created_at}  [{cp.label}]  {len(cp.files)} file(s)")
+    return 0
+
+
+def cmd_background(args, config: Config) -> int:
+    from ..background import get_manager
+    for t in get_manager().list():
+        _print(f"  {t['id']}  [{t['status']}]  {t['prompt']}")
+    return 0
 
 
 def cmd_completion(args, config: Config) -> int:
@@ -481,6 +527,7 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--continue", dest="cont", action="store_true", help="continue the latest session")
     c.add_argument("--yolo", action="store_true", help="auto-approve all tools")
     c.add_argument("--worktree", "-w", action="store_true", help="run in an isolated git worktree")
+    c.add_argument("--image", action="append", help="attach an image for vision (repeatable)")
     c.set_defaults(func=cmd_chat)
 
     m = sub.add_parser("model", help="show/set the model")
@@ -507,6 +554,76 @@ def build_parser() -> argparse.ArgumentParser:
     cm = sub.add_parser("completion", help="output shell completion script")
     cm.add_argument("shell", choices=["bash", "zsh", "fish"])
     cm.set_defaults(func=cmd_completion)
+
+    # --- parity subsystems (modules under aegis/) ---
+    from .. import acp as _acp
+    from .. import backup as _backup
+    from .. import curator as _curator
+    from .. import dashboard as _dash
+    from .. import hooks as _hooks
+    from .. import insights as _insights
+    from .. import kanban as _kanban
+    from .. import webhook as _webhook
+
+    bk = sub.add_parser("backup", help="back up ~/.aegis to a zip")
+    bk.add_argument("--out"); bk.add_argument("--quick", action="store_true")
+    bk.set_defaults(func=_backup.cmd_backup)
+
+    im = sub.add_parser("import", help="restore a backup zip")
+    im.add_argument("path")
+    im.set_defaults(func=_backup.cmd_import)
+
+    ins = sub.add_parser("insights", help="usage analytics over your history")
+    ins.add_argument("--days", type=int, default=30); ins.add_argument("--source")
+    ins.add_argument("--json", action="store_true")
+    ins.set_defaults(func=_insights.cmd_insights)
+
+    wh = sub.add_parser("webhook", help="event webhooks that trigger the agent")
+    wh.add_argument("action", nargs="?", choices=["list", "add", "remove", "serve"], default="list")
+    wh.add_argument("name", nargs="?"); wh.add_argument("prompt", nargs="*")
+    wh.add_argument("--secret"); wh.add_argument("--host"); wh.add_argument("--port", type=int)
+    wh.set_defaults(func=_webhook.cmd_webhook)
+
+    hk = sub.add_parser("hooks", help="lifecycle shell hooks")
+    hk.add_argument("action", nargs="?", choices=["list", "test"], default="list")
+    hk.add_argument("event", nargs="?")
+    hk.set_defaults(func=_hooks.cmd_hooks)
+
+    kb = sub.add_parser("kanban", help="multi-agent task board")
+    kb.add_argument("action", nargs="?",
+                    choices=["create", "list", "show", "claim", "complete", "assign", "dispatch"],
+                    default="list")
+    kb.add_argument("title", nargs="?"); kb.add_argument("--id"); kb.add_argument("--body")
+    kb.add_argument("--priority", type=int); kb.add_argument("--status"); kb.add_argument("--assignee")
+    kb.add_argument("--worker")
+    kb.set_defaults(func=_kanban.cmd_kanban)
+
+    cu = sub.add_parser("curator", help="background skill maintenance")
+    cu.add_argument("action", nargs="?",
+                    choices=["status", "review", "prune", "archive", "restore"], default="status")
+    cu.add_argument("name", nargs="?")
+    cu.set_defaults(func=_curator.cmd_curator)
+
+    db = sub.add_parser("dashboard", help="local web dashboard")
+    db.add_argument("--host"); db.add_argument("--port", type=int)
+    db.set_defaults(func=_dash.cmd_dashboard)
+
+    ac = sub.add_parser("acp", help="run as an ACP stdio server for IDEs")
+    ac.set_defaults(func=_acp.cmd_acp)
+
+    from ..gateway.pairing import cmd_pairing as _cmd_pairing
+    pr = sub.add_parser("pairing", help="approve/revoke gateway users")
+    pr.add_argument("action", nargs="?", choices=["list", "approve", "revoke"], default="list")
+    pr.add_argument("platform", nargs="?"); pr.add_argument("code", nargs="?")
+    pr.set_defaults(func=_cmd_pairing)
+
+    ck = sub.add_parser("checkpoints", help="list/rollback/clear file checkpoints")
+    ck.add_argument("action", nargs="?", choices=["list", "rollback", "clear"], default="list")
+    ck.add_argument("id", nargs="?")
+    ck.set_defaults(func=cmd_checkpoints)
+
+    bg = sub.add_parser("background", help="list background tasks")
+    bg.set_defaults(func=cmd_background)
 
     sk = sub.add_parser("skills", help="list/view/create/install/search/remove skills")
     sk.add_argument("action", nargs="?",
@@ -555,7 +672,8 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--channels", help="comma list: cli,telegram (default cli)")
     g.set_defaults(func=cmd_gateway)
 
-    d = sub.add_parser("doctor", help="diagnose the installation")
+    d = sub.add_parser("doctor", help="diagnose (and optionally repair) the installation")
+    d.add_argument("--fix", action="store_true", help="create missing dirs + tighten secret perms")
     d.set_defaults(func=cmd_doctor)
 
     return p

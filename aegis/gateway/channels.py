@@ -99,4 +99,10 @@ def build_adapter(name: str) -> BasePlatformAdapter:
     if name == "slack":
         from .slack_channel import SlackAdapter
         return SlackAdapter()
-    raise ValueError(f"Unknown channel '{name}'. Available: cli, telegram, discord, slack.")
+    if name == "signal":
+        from .signal_channel import SignalAdapter
+        return SignalAdapter()
+    if name == "matrix":
+        from .matrix_channel import MatrixAdapter
+        return MatrixAdapter()
+    raise ValueError(f"Unknown channel '{name}'. Available: cli, telegram, discord, slack, signal, matrix.")

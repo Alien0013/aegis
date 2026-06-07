@@ -130,6 +130,68 @@ PROVIDERS: dict[str, ProviderSpec] = {
         "together", ApiMode.CHAT_COMPLETIONS, "https://api.together.xyz/v1",
         "meta-llama/Llama-3.3-70B-Instruct-Turbo", 128_000, ["TOGETHER_API_KEY"],
     ),
+    # --- additional OpenAI-compatible cloud providers (Hermes-parity) ---
+    "huggingface": ProviderSpec(
+        "huggingface", ApiMode.CHAT_COMPLETIONS, "https://router.huggingface.co/v1",
+        "Qwen/Qwen2.5-72B-Instruct", 128_000, ["HF_TOKEN", "HUGGINGFACE_API_KEY"],
+    ),
+    "novita": ProviderSpec(
+        "novita", ApiMode.CHAT_COMPLETIONS, "https://api.novita.ai/v3/openai",
+        "deepseek/deepseek-v3", 64_000, ["NOVITA_API_KEY"],
+    ),
+    "zai": ProviderSpec(
+        "zai", ApiMode.CHAT_COMPLETIONS, "https://api.z.ai/api/paas/v4",
+        "glm-4.6", 128_000, ["ZAI_API_KEY", "GLM_API_KEY"],
+    ),
+    "kimi": ProviderSpec(
+        "kimi", ApiMode.CHAT_COMPLETIONS, "https://api.moonshot.ai/v1",
+        "kimi-k2-0905-preview", 128_000, ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
+    ),
+    "minimax": ProviderSpec(
+        "minimax", ApiMode.CHAT_COMPLETIONS, "https://api.minimax.io/v1",
+        "MiniMax-M2", 128_000, ["MINIMAX_API_KEY"],
+    ),
+    "nvidia": ProviderSpec(
+        "nvidia", ApiMode.CHAT_COMPLETIONS, "https://integrate.api.nvidia.com/v1",
+        "nvidia/llama-3.3-nemotron-super-49b-v1", 128_000, ["NVIDIA_API_KEY"],
+    ),
+    "dashscope": ProviderSpec(
+        "dashscope", ApiMode.CHAT_COMPLETIONS,
+        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        "qwen-max", 131_072, ["DASHSCOPE_API_KEY"],
+    ),
+    "stepfun": ProviderSpec(
+        "stepfun", ApiMode.CHAT_COMPLETIONS, "https://api.stepfun.com/v1",
+        "step-2-16k", 64_000, ["STEPFUN_API_KEY"],
+    ),
+    "cerebras": ProviderSpec(
+        "cerebras", ApiMode.CHAT_COMPLETIONS, "https://api.cerebras.ai/v1",
+        "llama-3.3-70b", 128_000, ["CEREBRAS_API_KEY"],
+    ),
+    "perplexity": ProviderSpec(
+        "perplexity", ApiMode.CHAT_COMPLETIONS, "https://api.perplexity.ai",
+        "sonar-pro", 128_000, ["PERPLEXITY_API_KEY"],
+    ),
+    "fireworks": ProviderSpec(
+        "fireworks", ApiMode.CHAT_COMPLETIONS, "https://api.fireworks.ai/inference/v1",
+        "accounts/fireworks/models/deepseek-v3", 128_000, ["FIREWORKS_API_KEY"],
+    ),
+    "hyperbolic": ProviderSpec(
+        "hyperbolic", ApiMode.CHAT_COMPLETIONS, "https://api.hyperbolic.xyz/v1",
+        "deepseek-ai/DeepSeek-V3", 128_000, ["HYPERBOLIC_API_KEY"],
+    ),
+    "sambanova": ProviderSpec(
+        "sambanova", ApiMode.CHAT_COMPLETIONS, "https://api.sambanova.ai/v1",
+        "Meta-Llama-3.3-70B-Instruct", 64_000, ["SAMBANOVA_API_KEY"],
+    ),
+    "nous": ProviderSpec(
+        "nous", ApiMode.CHAT_COMPLETIONS, "https://inference-api.nousresearch.com/v1",
+        "Hermes-4-405B", 128_000, ["NOUS_API_KEY"],
+    ),
+    "vllm": ProviderSpec(
+        "vllm", ApiMode.CHAT_COMPLETIONS, "http://localhost:8000/v1",
+        "local-model", 32_000, [], "none",
+    ),
     "ollama": ProviderSpec(
         "ollama", ApiMode.CHAT_COMPLETIONS, "http://localhost:11434/v1",
         "llama3.1", 128_000, [], "none",
@@ -246,6 +308,21 @@ def build_provider(config: cfg.Config, *, model: str | None = None, name: str | 
         max_tokens=spec.max_tokens,
         extra_headers=dict(spec.extra_headers),
     )
+
+
+def build_aux_provider(config: cfg.Config) -> Provider:
+    """Build the auxiliary (small/cheap) provider for compaction/vision/smart-approval.
+
+    Falls back to the main provider when ``auxiliary.*`` is unset.
+    """
+    aux_provider = config.get("auxiliary.provider") or None
+    aux_model = config.get("auxiliary.model") or None
+    if aux_provider or aux_model:
+        try:
+            return build_provider(config, model=aux_model, name=aux_provider)
+        except Exception:  # noqa: BLE001
+            pass
+    return build_provider(config)
 
 
 def get_spec(name: str) -> ProviderSpec | None:

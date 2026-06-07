@@ -217,23 +217,17 @@ class BashTool(Tool):
     }
 
     def run(self, args, ctx) -> ToolResult:
+        from .backends import run_command
+
         timeout = min(int(args.get("timeout", 120)), 600)
-        try:
-            proc = subprocess.run(
-                args["command"], shell=True, cwd=str(ctx.cwd),
-                capture_output=True, text=True, timeout=timeout,
-            )
-        except subprocess.TimeoutExpired:
-            return ToolResult.error(f"command timed out after {timeout}s")
-        out = proc.stdout
-        if proc.stderr:
-            out += ("\n[stderr]\n" + proc.stderr)
+        backend = ctx.config.get("tools.terminal_backend", "local") if ctx.config else "local"
+        out, code = run_command(args["command"], str(ctx.cwd), timeout, backend, ctx.config)
         out = out.strip() or "(no output)"
-        tail = f"\n[exit {proc.returncode}]"
+        tail = f"\n[exit {code}]"
         return ToolResult(
             content=truncate(out, MAX_OUTPUT) + tail,
-            is_error=proc.returncode != 0,
-            display=f"$ {args['command'][:60]} (exit {proc.returncode})",
+            is_error=code != 0,
+            display=f"$ {args['command'][:60]} (exit {code})",
         )
 
 

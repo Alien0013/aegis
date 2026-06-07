@@ -34,6 +34,7 @@ except Exception:  # noqa: BLE001
 _approve_lock = threading.Lock()
 
 SLASH = ["/help", "/model", "/tools", "/skills", "/memory", "/usage", "/compress",
+         "/background", "/tasks", "/rollback", "/personality",
          "/sessions", "/new", "/clear", "/quit", "/exit"]
 
 
@@ -117,6 +118,14 @@ class Renderer:
                 self._streaming = False
 
 
+def _status_line(agent: Agent) -> str:
+    from ..agent.compaction import estimated_tokens
+    u = agent.budget.usage
+    used = estimated_tokens(agent.session.messages)
+    fill = int(100 * used / max(1, agent.provider.context_length))
+    return f"  [{agent.provider.model} · ctx {fill}% · tokens in {u.input_tokens:,} out {u.output_tokens:,}]"
+
+
 def banner(agent: Agent) -> None:
     text = (f"AEGIS v{__version__}\n"
             f"provider: {agent.provider.describe()}\n"
@@ -174,6 +183,24 @@ def handle_slash(cmd: str, agent: Agent) -> str:
             _out(f"personality → {arg}", style="green")
         else:
             _out("usage: /personality <name>")
+    elif name == "/background":
+        if arg:
+            from ..background import get_manager
+            tid = get_manager().spawn(agent.config, arg)
+            _out(f"started background task {tid}", style="green")
+        else:
+            _out("usage: /background <prompt>")
+    elif name == "/tasks":
+        from ..background import get_manager
+        tasks = get_manager().list()
+        if not tasks:
+            _out("(no background tasks)")
+        for t in tasks:
+            _out(f"  {t['id']}  [{t['status']}]  {t['prompt']}  {t['result_preview']}")
+    elif name == "/rollback":
+        from ..checkpoints import CheckpointStore
+        restored = CheckpointStore(agent.cwd).rollback(arg or None)
+        _out(f"rolled back {len(restored)} file(s): {', '.join(restored) or '(none)'}", style="yellow")
     elif name == "/sessions":
         for s in SessionStore().list(20):
             _out(f"  {s['id']}  {s['title']}  ({s['updated_at']})")
@@ -197,12 +224,16 @@ def _make_agent(config, *, session, store, model, provider_name, auto) -> Agent:
 
 
 def run_once(config: Config, prompt: str, *, model=None, provider_name=None,
-             session: Session | None = None, store: SessionStore | None = None, auto=False) -> str:
+             session: Session | None = None, store: SessionStore | None = None, auto=False,
+             images: list[str] | None = None) -> str:
+    from ..types import Message
     store = store or SessionStore()
     session = session or Session.create()
     agent = _make_agent(config, session=session, store=store, model=model,
                         provider_name=provider_name, auto=auto)
-    result = agent.run(expand_references(prompt, agent.cwd), Renderer())
+    text = expand_references(prompt, agent.cwd)
+    user_input = Message.user(text, images=images) if images else text
+    result = agent.run(user_input, Renderer())
     return result.content
 
 
@@ -238,3 +269,4 @@ def interactive(config: Config, *, model=None, provider_name=None,
         except KeyboardInterrupt:
             _out("\n  (interrupted)", style="yellow")
         store.save(agent.session)
+        _out(_status_line(agent), style="bright_black")

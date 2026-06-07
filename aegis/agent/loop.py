@@ -23,8 +23,35 @@ class ToolExecutor:
         self.ctx = ctx
         self.emit = on_event
 
+    def _run_hooks(self, event: str, context: dict) -> None:
+        cfg = getattr(self.ctx, "config", None)
+        if cfg is None:
+            return
+        try:
+            from ..hooks import run_hooks
+            run_hooks(cfg, event, context)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _maybe_checkpoint(self, call: ToolCall) -> None:
+        cfg = getattr(self.ctx, "config", None)
+        if cfg is None or not cfg.get("checkpoints.enabled", False):
+            return
+        if call.name not in ("write_file", "edit_file"):
+            return
+        path = call.arguments.get("path")
+        if not path:
+            return
+        try:
+            from ..checkpoints import CheckpointStore
+            CheckpointStore(self.ctx.cwd).snapshot([path], label=call.name)
+        except Exception:  # noqa: BLE001
+            pass
+
     def _run_one(self, call: ToolCall) -> Message:
         self.emit({"type": "tool_start", "id": call.id, "name": call.name, "args": call.arguments})
+        self._run_hooks("pre_tool", {"tool": call.name, "args": str(call.arguments)[:300]})
+        self._maybe_checkpoint(call)
         tool = self.registry.get(call.name)
         if tool is None:
             res = ToolResult.error(f"unknown tool '{call.name}'")
@@ -39,6 +66,7 @@ class ToolExecutor:
                     res = ToolResult.error(f"tool raised {type(e).__name__}: {e}")
         self.emit({"type": "tool_result", "id": call.id, "name": call.name,
                    "summary": res.summary, "is_error": res.is_error})
+        self._run_hooks("post_tool", {"tool": call.name, "is_error": str(res.is_error)})
         return Message.tool(call.id, call.name, res.content)
 
     def execute(self, calls: list[ToolCall]) -> list[Message]:

@@ -45,6 +45,37 @@ A feature-by-feature comparison showing AEGIS as a drop-in replacement for both.
 | TUI (streaming, slash commands) | ✅ | ➖ | ✅ |
 | Setup wizard / onboard | ✅ | ✅ | ✅ |
 
+## Power-user parity (added)
+
+Originally-missing Hermes features now implemented in AEGIS:
+
+| Feature | Status |
+|---|---|
+| Smart approval mode (auxiliary-LLM risk assessment) | ✅ `exec_mode: smart` |
+| Hardline blocklist (catastrophic cmds refused even in yolo) | ✅ |
+| Tirith-style pre-execution security scan | ✅ `security_scan` |
+| Anthropic prompt caching | ✅ |
+| Credential pools (rotate keys on 429/401) | ✅ |
+| Auxiliary (small) model for compaction/vision/approval | ✅ `auxiliary.*` |
+| Sandboxed terminal backends (local/docker/ssh) | ✅ `tools.terminal_backend` |
+| ACP / IDE integration | ✅ `aegis acp` |
+| Pluggable external memory (Mem0 / JSONL) | ✅ `memory.provider` |
+| Vision (image input) | ✅ `chat --image` |
+| Shadow-file checkpoints + rollback | ✅ `aegis checkpoints`, `/rollback` |
+| DM pairing / gateway authorization | ✅ `aegis pairing` |
+| Webhooks (event → agent) | ✅ `aegis webhook` |
+| Lifecycle hooks (shell scripts) | ✅ `aegis hooks`, config `hooks.*` |
+| Signal + Matrix channels | ✅ (WhatsApp via plugin) |
+| Kanban multi-agent board | ✅ `aegis kanban` |
+| Skill curator (background maintenance) | ✅ `aegis curator` |
+| Web dashboard | ✅ `aegis dashboard` |
+| Usage insights / analytics | ✅ `aegis insights` |
+| Backup / restore | ✅ `aegis backup` / `import` |
+| Background tasks | ✅ `/background`, `aegis background` |
+| `@file` references, `/usage`, `/compress`, status bar | ✅ |
+| 26 provider presets (+ custom) | ✅ |
+| Self-update, shell completion, doctor --fix | ✅ |
+
 ## Where AEGIS intentionally differs
 
 * **Lean core (~6k LOC, 45 modules).** Like NanoClaw, the whole engine is readable
@@ -63,5 +94,8 @@ third-party clients (and their Codex/Code-Assist backends). API keys are the
 always-reliable path for all providers; Anthropic OAuth is the most complete.
 This is an upstream provider constraint, not an AEGIS limitation.
 
-WhatsApp/Signal/Matrix channels aren't bundled (they need paid business APIs or
-external bridges like `signal-cli`) but slot in via the plugin channel API.
+Signal (via `signal-cli`) and Matrix (via `matrix-nio`) channels are now built in;
+WhatsApp still needs a paid business API or bridge and slots in via the plugin
+channel API. The remaining true gaps vs Hermes are ecosystem/proprietary: Nous
+Portal (Nous-only subscription backend), the desktop GUI app, and the curated
+MCP/skill registries — none of which are core agent capability.

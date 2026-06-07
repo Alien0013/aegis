@@ -46,6 +46,7 @@ class ExecMode(str, Enum):
     DENY = "deny"          # block all grouped tools
     ALLOWLIST = "allowlist"  # only allowlisted commands; else deny
     ASK = "ask"            # prompt for grouped tools
+    SMART = "smart"        # auxiliary LLM assesses risk; safe→allow, dangerous→deny, else prompt
     AUTO = "auto"          # auto-approve grouped tools (still honors deny_groups)
     FULL = "full"          # approve everything (yolo)
 
@@ -102,20 +103,66 @@ class PermissionEngine:
             return Decision.DENY
         return Decision.PROMPT  # ASK
 
+    def _scan(self, args: dict) -> str | None:
+        """Tirith-style pre-execution scan. Returns a reason if suspicious."""
+        if not self.config.get("security.scan_enabled", True):
+            return None
+        try:
+            from ..security_scan import scan_command
+        except Exception:  # noqa: BLE001
+            return None
+        for key in ("command", "cmd", "code"):
+            val = args.get(key)
+            if isinstance(val, str):
+                suspicious, reason = scan_command(val)
+                if suspicious:
+                    return reason
+        return None
+
+    def _smart_classify(self, args: dict) -> str:
+        """Ask the auxiliary model to classify a command. SAFE | DANGEROUS | UNCERTAIN."""
+        target = args.get("command") or args.get("code") or ""
+        if not target:
+            return "UNCERTAIN"
+        try:
+            from ..providers.registry import build_aux_provider
+            from ..types import Message
+            provider = build_aux_provider(self.config)
+            resp = provider.complete([
+                Message.system("Classify the shell command's risk. Reply with exactly one word: "
+                               "SAFE (read-only/benign), DANGEROUS (destructive/exfiltrating), or "
+                               "UNCERTAIN."),
+                Message.user(target[:500]),
+            ], tools=None, stream=False)
+            word = resp.text.strip().upper().split()[0] if resp.text.strip() else "UNCERTAIN"
+            return word if word in ("SAFE", "DANGEROUS", "UNCERTAIN") else "UNCERTAIN"
+        except Exception:  # noqa: BLE001
+            return "UNCERTAIN"
+
     def authorize(self, tool: Tool, args: dict, ctx: ToolContext) -> tuple[bool, str]:
         """Resolve a decision into allow/deny, prompting the user if needed."""
         hard = is_hardline_blocked(args)
         if hard:
             return False, f"BLOCKED: catastrophic command refused (hardline): {hard}"
+        flagged = self._scan(args)
         decision = self.check(tool, args, ctx)
+        # A security-flagged command is escalated even if policy would allow it.
+        if flagged and decision == Decision.ALLOW:
+            decision = Decision.PROMPT
         if decision == Decision.ALLOW:
             return True, "allowed"
         if decision == Decision.DENY:
             return False, f"denied by policy (mode={self.mode.value}, groups={tool.groups})"
-        # PROMPT
+        # PROMPT — try smart classification first.
+        if self.mode == ExecMode.SMART and not flagged:
+            verdict = self._smart_classify(args)
+            if verdict == "SAFE":
+                return True, "smart-approved (auxiliary model)"
+            if verdict == "DANGEROUS":
+                return False, "smart-denied (auxiliary model)"
         if ctx.approver is None:
-            return False, "denied (no approver available in this context)"
-        prompt = self._format_prompt(tool, args)
+            return False, f"denied (no approver{'; ' + flagged if flagged else ''})"
+        prompt = self._format_prompt(tool, args) + (f"  ⚠ {flagged}" if flagged else "")
         approved = ctx.approver(prompt)
         return (approved, "approved by user" if approved else "rejected by user")
 

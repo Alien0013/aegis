@@ -40,6 +40,13 @@ class GatewayRunner:
     def dispatch(self, ev: MessageEvent) -> str:
         text = ev.text.strip()
         key = self._key(ev)
+        # Authorization: unknown users must pair first.
+        from .pairing import PairingStore
+        pairing = PairingStore()
+        if not pairing.is_authorized(ev.platform, ev.user_id):
+            code = pairing.request_code(ev.platform, ev.user_id or "?")
+            return (f"⛔ Not authorized. Ask the operator to run:\n"
+                    f"  aegis pairing approve {ev.platform} {code}")
         # Intercept control commands before the agent.
         if text in ("/stop", "/new", "/reset"):
             with self._lock:

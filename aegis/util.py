@@ -80,6 +80,16 @@ def truncate(text: str, max_chars: int, marker: str = "\n…[truncated]…\n") -
     return text[:head] + marker + text[-tail:]
 
 
+def encode_image(path: Path) -> str:
+    """Read an image file and return a base64 data URL for vision-capable models."""
+    import base64
+    import mimetypes
+
+    mime = mimetypes.guess_type(str(path))[0] or "image/png"
+    data = base64.b64encode(path.read_bytes()).decode()
+    return f"data:{mime};base64,{data}"
+
+
 def human_size(n: int) -> str:
     for unit in ("B", "KB", "MB", "GB"):
         if n < 1024:

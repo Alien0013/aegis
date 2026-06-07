@@ -212,9 +212,11 @@ tests/test_smoke.py
 
 ## Commands
 
-`aegis [chat|model|auth|setup|skills|mcp|serve|cron|tools|memory|config|sessions|gateway|doctor]`
+`aegis [chat|model|auth|setup|onboard|update|completion|skills|mcp|serve|cron|tools|memory|config|sessions|gateway|doctor|backup|import|insights|webhook|hooks|kanban|curator|dashboard|acp|pairing|checkpoints|background]`
 — run any with `-h`. `aegis` alone opens the REPL. `chat` flags: `--resume`,
-`--continue`, `--worktree/-w`, `--yolo`, `--model`, `--provider`.
+`--continue`, `--worktree/-w`, `--yolo`, `--model`, `--provider`, `--image`.
+Slash commands in the REPL: `/usage /compress /background /rollback /personality
+/model /tools /skills /memory /sessions /new`.
 
 ## Rename it
 
