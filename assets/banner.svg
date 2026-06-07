@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="220" viewBox="0 0 900 220" role="img" aria-label="AEGIS — terminal agent harness">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#a06bff"/>
+      <stop offset="1" stop-color="#6be0ff"/>
+    </linearGradient>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#16131f"/>
+      <stop offset="1" stop-color="#0d0b14"/>
+    </linearGradient>
+  </defs>
+  <rect width="900" height="220" fill="url(#bg)"/>
+  <!-- shield mark -->
+  <g transform="translate(60,38)">
+    <path d="M72 4 L132 26 V84 C132 118 105 140 72 152 C39 140 12 118 12 84 V26 Z"
+          fill="none" stroke="url(#g)" stroke-width="6" stroke-linejoin="round"/>
+    <path d="M72 48 L96 78 L72 108 L48 78 Z" fill="url(#g)"/>
+    <path d="M72 64 L82 78 L72 92 L62 78 Z" fill="#0d0b14"/>
+  </g>
+  <!-- wordmark -->
+  <text x="240" y="108" font-family="ui-sans-serif,Segoe UI,Roboto,Arial" font-size="72"
+        font-weight="800" letter-spacing="14" fill="url(#g)">AEGIS</text>
+  <text x="244" y="146" font-family="ui-monospace,Menlo,monospace" font-size="19"
+        fill="#9a93b8">a self-improving, multi-provider terminal agent harness</text>
+  <text x="244" y="176" font-family="ui-monospace,Menlo,monospace" font-size="15"
+        fill="#6be0ff">curl -fsSL .../install.sh | bash</text>
+</svg>

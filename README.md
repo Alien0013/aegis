@@ -1,19 +1,22 @@
+<p align="center"><img src="assets/banner.svg" alt="AEGIS" width="760"></p>
+
+<p align="center">
+  <a href="https://github.com/Alien0013/aegis/actions"><img src="https://github.com/Alien0013/aegis/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="python">
+  <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
+  <img src="https://img.shields.io/badge/tests-87%20passing-brightgreen" alt="tests">
+</p>
+
 # AEGIS — a terminal agent harness
 
 A self-improving, multi-provider, multi-channel agent harness in Python, built to
 **replace and improve on Hermes Agent (Nous) and OpenClaw**. One bounded agent
 loop, pluggable providers with **API-key *and* OAuth** auth, a capability-gated
-tool system, persistent memory, a `SKILL.md` skills engine, and a multi-channel
-gateway — distilled through NanoClaw-style minimalism so the whole core is
-readable in an afternoon.
+tool system, persistent memory + a closed **learning loop**, a `SKILL.md` skills
+engine, and a multi-channel gateway — distilled through NanoClaw-style minimalism
+so the whole core is readable in an afternoon.
 
-```
-              ┌────────────────────────────────────────────┐
-  channels →  │  gateway  →  Agent loop  →  providers (API/OAuth)
-  (cli/tg)    │                 │                            │
-              │     tools ⟵ permissions     memory   skills  │
-              └────────────────────────────────────────────┘
-```
+<p align="center"><img src="assets/screenshot.svg" alt="AEGIS session" width="700"></p>
 
 ## Install (one line)
 

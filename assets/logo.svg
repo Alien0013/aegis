@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 160 160" role="img" aria-label="AEGIS">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a06bff"/>
+      <stop offset="1" stop-color="#6be0ff"/>
+    </linearGradient>
+  </defs>
+  <rect width="160" height="160" rx="32" fill="#0d0b14"/>
+  <!-- shield -->
+  <path d="M80 26 L124 42 V86 C124 112 104 128 80 138 C56 128 36 112 36 86 V42 Z"
+        fill="none" stroke="url(#g)" stroke-width="6" stroke-linejoin="round"/>
+  <!-- diamond core -->
+  <path d="M80 60 L98 82 L80 104 L62 82 Z" fill="url(#g)"/>
+  <path d="M80 72 L88 82 L80 92 L72 82 Z" fill="#0d0b14"/>
+</svg>

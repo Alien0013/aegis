@@ -1,247 +1,147 @@
-"""Local web dashboard: a single self-contained HTML page over the stdlib
-``http.server``.
+"""Local web dashboard — a self-contained single-page app (no build step).
 
-Serves an overview of the running AEGIS install — provider/model, recent
-sessions, and persistent memory — plus a chat box wired to the agent. Bound to
-``127.0.0.1`` only; there is no auth, so it must never be exposed publicly.
-
-Routes::
-
-    GET  /              the dashboard page (inline CSS/JS, no external assets)
-    GET  /api/sessions  JSON: {provider, model, sessions[], memory, user}
-    POST /api/chat      JSON in {message} -> {reply}
+`aegis dashboard` serves a control UI at http://127.0.0.1:9119: chat, sessions,
+memory, skills, tools, and status. Binds loopback by default; there is no auth, so
+it must never be exposed publicly.
 """
 
 from __future__ import annotations
 
-import html
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
-from .agent.agent import Agent
+from . import __version__
 from .config import Config
-from .memory import MemoryStore
-from .session import SessionStore
 
-
-def _overview(config: Config) -> dict:
-    """Snapshot of provider/model, recent sessions, and memory for the UI."""
-    store = MemoryStore()
-    return {
-        "provider": config.get("model.provider", "?"),
-        "model": config.get("model.default", "?"),
-        "sessions": SessionStore().list(limit=25),
-        "memory": store.raw("memory"),
-        "user": store.raw("user"),
-    }
-
-
-def _chat(config: Config, message: str) -> str:
-    """Run a one-shot turn through a fresh agent and return the reply text."""
-    agent = Agent.create(config)
-    return agent.run(message).content
-
-
-PAGE = """\
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AEGIS dashboard</title>
+PAGE = """<!doctype html><html lang=en><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1"><title>AEGIS</title>
 <style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
-  body { margin: 0; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
-         background: #0d1117; color: #c9d1d9; }
-  header { padding: 14px 20px; border-bottom: 1px solid #21262d;
-           display: flex; align-items: baseline; gap: 14px; }
-  header h1 { font-size: 15px; margin: 0; letter-spacing: 2px; color: #58a6ff; }
-  header .model { color: #8b949e; }
-  main { display: grid; grid-template-columns: 320px 1fr; gap: 0; height: calc(100vh - 51px); }
-  aside { border-right: 1px solid #21262d; overflow-y: auto; padding: 16px 18px; }
-  aside h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
-             color: #8b949e; margin: 22px 0 8px; }
-  aside h2:first-child { margin-top: 0; }
-  .sess { padding: 6px 8px; border-radius: 6px; border: 1px solid transparent; }
-  .sess:hover { border-color: #21262d; background: #161b22; }
-  .sess .t { color: #c9d1d9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .sess .d { color: #6e7681; font-size: 12px; }
-  pre.mem { white-space: pre-wrap; word-break: break-word; color: #adbac7;
-            background: #161b22; border: 1px solid #21262d; border-radius: 6px;
-            padding: 10px; font-size: 12.5px; margin: 0; }
-  .empty { color: #6e7681; }
-  section.chat { display: flex; flex-direction: column; height: 100%; }
-  #log { flex: 1; overflow-y: auto; padding: 18px 22px; }
-  .msg { margin: 0 0 14px; max-width: 80%; }
-  .msg.user { margin-left: auto; }
-  .msg .who { font-size: 11px; color: #6e7681; margin-bottom: 3px; }
-  .msg .body { white-space: pre-wrap; word-break: break-word; padding: 9px 12px;
-               border-radius: 8px; background: #161b22; border: 1px solid #21262d; }
-  .msg.user .body { background: #1f2d3d; border-color: #2a3f55; }
-  form { display: flex; gap: 8px; padding: 14px 22px; border-top: 1px solid #21262d; }
-  textarea { flex: 1; resize: none; height: 44px; padding: 11px; border-radius: 8px;
-             background: #0d1117; color: #c9d1d9; border: 1px solid #30363d;
-             font: inherit; }
-  textarea:focus { outline: none; border-color: #58a6ff; }
-  button { padding: 0 18px; border-radius: 8px; border: 1px solid #238636;
-           background: #238636; color: #fff; font: inherit; cursor: pointer; }
-  button:disabled { opacity: .5; cursor: default; }
-</style>
-</head>
-<body>
-<header>
-  <h1>AEGIS</h1>
-  <span class="model" id="model">connecting…</span>
-</header>
-<main>
-  <aside>
-    <h2>Recent sessions</h2>
-    <div id="sessions"><span class="empty">loading…</span></div>
-    <h2>Memory</h2>
-    <pre class="mem" id="memory">…</pre>
-    <h2>User profile</h2>
-    <pre class="mem" id="user">…</pre>
-  </aside>
-  <section class="chat">
-    <div id="log"></div>
-    <form id="form">
-      <textarea id="input" placeholder="Message the agent…" autofocus></textarea>
-      <button id="send" type="submit">Send</button>
-    </form>
-  </section>
-</main>
+:root{--bg:#0d0b14;--panel:#16131f;--line:#2a2540;--fg:#e7e3f4;--mut:#9a93b8;--acc:#a06bff;--acc2:#6be0ff}
+*{box-sizing:border-box}body{margin:0;font:14px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto;background:var(--bg);color:var(--fg)}
+header{display:flex;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid var(--line);background:var(--panel)}
+.logo{font-weight:800;letter-spacing:.18em;background:linear-gradient(90deg,var(--acc),var(--acc2));-webkit-background-clip:text;background-clip:text;color:transparent}
+.meta{color:var(--mut);font-size:12px;margin-left:auto}
+.wrap{display:flex;height:calc(100vh - 53px)}
+nav{width:148px;border-right:1px solid var(--line);background:var(--panel);padding:10px 8px;display:flex;flex-direction:column;gap:4px}
+nav button{all:unset;cursor:pointer;padding:9px 12px;border-radius:8px;color:var(--mut);font-weight:600}
+nav button.on,nav button:hover{background:#221c33;color:var(--fg)}
+main{flex:1;overflow:auto;padding:18px}
+.card{border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:10px;background:var(--panel)}
+.card b{color:var(--acc2)}.mut{color:var(--mut)}
+#log{display:flex;flex-direction:column;gap:10px;max-width:820px}
+.msg{padding:10px 14px;border-radius:12px;max-width:80%;white-space:pre-wrap;word-wrap:break-word}
+.user{align-self:flex-end;background:#2a2140;border:1px solid var(--acc)}
+.assistant{align-self:flex-start;background:var(--panel);border:1px solid var(--line)}
+.bar{display:flex;gap:8px;max-width:820px;margin-top:12px}
+input,textarea{flex:1;background:var(--panel);border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:10px 12px;font:inherit}
+button.send{background:var(--acc);color:#0d0b14;border:0;border-radius:8px;padding:0 18px;font-weight:700;cursor:pointer}
+.row{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);cursor:pointer}
+.row:hover{color:var(--acc2)}.pill{font-size:11px;color:var(--mut);border:1px solid var(--line);border-radius:20px;padding:1px 8px}
+h2{margin:.2em 0 .6em;font-size:16px}pre{white-space:pre-wrap;word-wrap:break-word;margin:.4em 0 0}
+</style></head><body>
+<header><span class=logo>&#9670; AEGIS</span><span id=sub class=mut></span><span class=meta id=stat></span></header>
+<div class=wrap><nav id=nav></nav><main id=view></main></div>
 <script>
-const $ = (id) => document.getElementById(id);
-const esc = (s) => { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; };
-
-function addMsg(who, text) {
-  const el = document.createElement('div');
-  el.className = 'msg ' + (who === 'you' ? 'user' : 'agent');
-  el.innerHTML = '<div class="who">' + esc(who) + '</div><div class="body">' + esc(text) + '</div>';
-  $('log').appendChild(el);
-  $('log').scrollTop = $('log').scrollHeight;
-  return el;
-}
-
-async function refresh() {
-  try {
-    const r = await fetch('/api/sessions');
-    const d = await r.json();
-    $('model').textContent = d.provider + ' · ' + d.model;
-    $('memory').textContent = d.memory || '(empty)';
-    $('user').textContent = d.user || '(empty)';
-    if (!d.memory) $('memory').classList.add('empty');
-    if (!d.user) $('user').classList.add('empty');
-    const box = $('sessions');
-    box.innerHTML = '';
-    if (!d.sessions.length) { box.innerHTML = '<span class="empty">none yet</span>'; return; }
-    for (const s of d.sessions) {
-      const el = document.createElement('div');
-      el.className = 'sess';
-      el.innerHTML = '<div class="t">' + esc(s.title || s.id) + '</div>' +
-                     '<div class="d">' + esc((s.updated_at || '').replace('T', ' ')) + '</div>';
-      box.appendChild(el);
-    }
-  } catch (e) { $('model').textContent = 'offline'; }
-}
-
-$('form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const text = $('input').value.trim();
-  if (!text) return;
-  $('input').value = '';
-  $('send').disabled = true;
-  addMsg('you', text);
-  const pending = addMsg('agent', '…');
-  try {
-    const r = await fetch('/api/chat', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({message: text}),
-    });
-    const d = await r.json();
-    pending.querySelector('.body').textContent = d.reply || d.error || '(no reply)';
-  } catch (err) {
-    pending.querySelector('.body').textContent = 'error: ' + err;
-  }
-  $('send').disabled = false;
-  $('input').focus();
-  refresh();
-});
-
-$('input').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('form').requestSubmit(); }
-});
-
-refresh();
-setInterval(refresh, 15000);
-</script>
-</body>
-</html>
-"""
+const V=document.getElementById('view'),NAV=document.getElementById('nav');let sid=null;
+const TABS=['Chat','Sessions','Memory','Skills','Tools','Status'];
+async function api(p){const r=await fetch('/api/'+p);return r.json()}
+async function post(p,b){const r=await fetch('/api/'+p,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)});return r.json()}
+function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+TABS.forEach(t=>{const b=document.createElement('button');b.textContent=t;b.onclick=()=>show(t,b);NAV.appendChild(b)});
+async function boot(){const s=await api('status');document.getElementById('sub').textContent='v'+s.version+' \\u00b7 '+s.provider+'/'+s.model;
+document.getElementById('stat').textContent=s.sessions+' sessions \\u00b7 '+s.skills+' skills \\u00b7 '+s.tools+' tools';show('Chat',NAV.children[0])}
+function show(t,btn){[...NAV.children].forEach(b=>b.classList.toggle('on',b===btn));({Chat:chat,Sessions:sessions,Memory:memory,Skills:skills,Tools:tools,Status:status}[t])()}
+function chat(){V.innerHTML='<h2>Chat</h2><div id=log></div><div class=bar><input id=inp placeholder="Message AEGIS\\u2026" autofocus><button class=send id=go>Send</button></div>';
+const log=document.getElementById('log'),inp=document.getElementById('inp');
+function add(role,txt){const d=document.createElement('div');d.className='msg '+role;d.textContent=txt;log.appendChild(d);d.scrollIntoView()}
+async function send(){const m=inp.value.trim();if(!m)return;add('user',m);inp.value='';const w=document.createElement('div');w.className='msg assistant';w.textContent='\\u2026';log.appendChild(w);
+const r=await post('chat',{message:m,session_id:sid});sid=r.session_id;w.textContent=r.reply}
+document.getElementById('go').onclick=send;inp.onkeydown=e=>{if(e.key==='Enter')send()}}
+async function sessions(){const s=await api('sessions');V.innerHTML='<h2>Sessions</h2>'+(s.map(x=>`<div class=row onclick="openS('${x.id}')"><span>${esc(x.title)}</span><span class=pill>${x.updated_at}</span></div>`).join('')||'<p class=mut>none</p>')}
+window.openS=async id=>{const s=await api('session?id='+id);V.innerHTML='<h2>'+esc(id)+'</h2>'+s.messages.map(m=>`<div class=card><b>${m.role}</b><pre>${esc(m.content)}</pre></div>`).join('')}
+async function memory(){const m=await api('memory');V.innerHTML='<h2>Memory</h2><div class=card><b>MEMORY.md</b><pre>'+esc(m.memory||'(empty)')+'</pre></div><div class=card><b>USER.md</b><pre>'+esc(m.user||'(empty)')+'</pre></div>'}
+async function skills(){const s=await api('skills');V.innerHTML='<h2>Skills ('+s.length+')</h2>'+s.map(x=>`<div class=card><b>${esc(x.name)}</b> \\u2014 ${esc(x.description)}</div>`).join('')}
+async function tools(){const s=await api('tools');V.innerHTML='<h2>Tools ('+s.length+')</h2>'+s.map(x=>`<div class=row><span>${esc(x.name)}</span><span class=pill>${(x.groups||[]).join(',')||'safe'}</span></div>`).join('')}
+async function status(){const s=await api('status');V.innerHTML='<h2>Status</h2>'+Object.entries(s).map(([k,v])=>`<div class=row><span class=mut>${k}</span><span>${esc(''+v)}</span></div>`).join('')}
+boot();
+</script></body></html>"""
 
 
 def make_handler(config: Config):
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, *a):  # quiet
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
             pass
 
-        def _json(self, code: int, obj: dict) -> None:
-            body = json.dumps(obj).encode()
-            self.send_response(code)
+        def _json(self, obj):
+            self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            self.wfile.write(json.dumps(obj).encode())
 
         def do_GET(self):  # noqa: N802
-            path = self.path.split("?", 1)[0].rstrip("/") or "/"
+            from .session import SessionStore
+            u = urlparse(self.path)
+            path, q = u.path, parse_qs(u.query)
             if path == "/":
-                body = PAGE.encode()
                 self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Content-Type", "text/html")
                 self.end_headers()
-                self.wfile.write(body)
-                return
-            if path == "/api/sessions":
-                return self._json(200, _overview(config))
-            return self._json(404, {"error": "not found"})
+                self.wfile.write(PAGE.encode())
+            elif path == "/api/status":
+                from .skills import SkillsLoader
+                from .tools.registry import default_registry
+                self._json({"version": __version__, "provider": config.get("model.provider"),
+                            "model": config.get("model.default"),
+                            "sessions": len(SessionStore().list(9999)),
+                            "skills": len(SkillsLoader(config).available()),
+                            "tools": len(default_registry().all()),
+                            "exec_mode": config.get("tools.exec_mode")})
+            elif path == "/api/sessions":
+                self._json(SessionStore().list(100))
+            elif path == "/api/session":
+                s = SessionStore().load(q.get("id", [""])[0])
+                self._json({"messages": [{"role": m.role, "content": m.content}
+                                         for m in (s.messages if s else []) if m.content]})
+            elif path == "/api/memory":
+                from .memory import MemoryStore
+                ms = MemoryStore()
+                self._json({"memory": ms.raw("memory"), "user": ms.raw("user")})
+            elif path == "/api/skills":
+                from .skills import SkillsLoader
+                self._json([{"name": s.name, "description": s.description}
+                            for s in sorted(SkillsLoader(config).available(), key=lambda s: s.name)])
+            elif path == "/api/tools":
+                from .tools.registry import default_registry
+                self._json([{"name": t.name, "description": t.description.splitlines()[0],
+                             "groups": t.groups} for t in default_registry().all()])
+            else:
+                self._json({"error": "not found"})
 
         def do_POST(self):  # noqa: N802
-            if self.path.split("?", 1)[0].rstrip("/") != "/api/chat":
-                return self._json(404, {"error": "not found"})
+            from .agent.agent import Agent
+            from .session import Session, SessionStore
             n = int(self.headers.get("content-length", 0))
+            body = json.loads(self.rfile.read(n) or b"{}")
+            store = SessionStore()
+            session = store.load(body.get("session_id") or "") or Session.create()
+            agent = Agent.create(config, session=session, store=store)
             try:
-                body = json.loads(self.rfile.read(n) or b"{}")
-            except json.JSONDecodeError:
-                return self._json(400, {"error": "invalid json"})
-            message = (body.get("message") or "").strip()
-            if not message:
-                return self._json(400, {"error": "message is required"})
-            try:
-                reply = _chat(config, message)
-            except Exception as e:  # noqa: BLE001 - surface any agent failure to the UI
-                return self._json(200, {"error": f"{type(e).__name__}: {e}"})
-            return self._json(200, {"reply": reply})
+                reply = agent.run(body.get("message", "")).content
+            except Exception as e:  # noqa: BLE001
+                reply = f"error: {e}"
+            self._json({"reply": reply or "(no response)", "session_id": session.id})
 
-    return Handler
+    return H
 
 
 def serve_dashboard(config: Config, host: str = "127.0.0.1", port: int = 9119) -> None:
-    """Run the dashboard server (blocking). Always binds loopback."""
-    if host not in ("127.0.0.1", "localhost", "::1"):
-        # The dashboard is unauthenticated; refuse to listen on a public address.
-        print(f"refusing non-loopback bind '{host}'; using 127.0.0.1 instead.")
-        host = "127.0.0.1"
     httpd = ThreadingHTTPServer((host, port), make_handler(config))
-    print(f"AEGIS dashboard on http://{host}:{port}  (Ctrl+C to stop)")
+    print(f"AEGIS dashboard → http://{host}:{port}  (Ctrl+C to stop)")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         print("\ndashboard stopped.")
-    finally:
-        httpd.server_close()
 
 
 def cmd_dashboard(args, config: Config) -> int:
