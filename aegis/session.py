@@ -132,3 +132,26 @@ class SessionStore:
                 (f"%{query}%", limit),
             ).fetchall()
             return [dict(r) for r in rows]
+
+    def search_messages(self, query: str, limit: int = 8) -> list[dict]:
+        """Cross-session recall: return matching message snippets across past sessions."""
+        out: list[dict] = []
+        q = query.lower()
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT * FROM sessions WHERE data LIKE ? ORDER BY updated_at DESC LIMIT ?",
+                (f"%{query}%", limit * 3),
+            ).fetchall()
+        for row in rows:
+            sess = Session.from_row(row)
+            for m in sess.messages:
+                if m.role in ("user", "assistant") and m.content and q in m.content.lower():
+                    idx = m.content.lower().find(q)
+                    start = max(0, idx - 80)
+                    snippet = m.content[start:idx + 160].strip().replace("\n", " ")
+                    out.append({"session": sess.id, "title": sess.title,
+                                "when": sess.updated_at, "role": m.role, "snippet": snippet})
+                    break
+            if len(out) >= limit:
+                break
+        return out

@@ -119,6 +119,12 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
               "tool_calls": [tc.to_dict() for tc in resp.tool_calls]})
 
         if not resp.tool_calls:
+            from ..constants import SKILL_AUTOGEN_THRESHOLD
+            if (agent.tools_used >= SKILL_AUTOGEN_THRESHOLD
+                    and agent.config.get("skills.autogen", True)
+                    and not agent.session.meta.get("nudged")):
+                agent.session.meta["nudged"] = True
+                emit({"type": "skill_nudge"})
             emit({"type": "final", "text": resp.text})
             return assistant_msg
 

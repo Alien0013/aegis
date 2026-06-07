@@ -424,17 +424,18 @@ class MemoryTool(Tool):
 class SkillTool(Tool):
     name = "skill"
     description = (
-        "Work with skills. action: list (show all) | view (load a skill's full body) | "
-        "create (SAVE a reusable skill after you solve a non-trivial, repeatable task — "
-        "this is how you improve over time). create needs name, description, body."
+        "Work with skills (your procedural memory). action: list | view (load full body) | "
+        "create (SAVE a reusable skill after solving a non-trivial, repeatable task) | "
+        "improve (append a learned note to an existing skill) | stats (usage counts). "
+        "Creating and improving skills is how you get better over time."
     )
     parameters = {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["list", "view", "create"]},
+            "action": {"type": "string", "enum": ["list", "view", "create", "improve", "stats"]},
             "name": {"type": "string", "description": "skill name (lowercase-with-hyphens)"},
             "description": {"type": "string", "description": "what it does and WHEN to use it (for create)"},
-            "body": {"type": "string", "description": "the SKILL.md markdown body (for create)"},
+            "body": {"type": "string", "description": "SKILL.md body (create) or a learned note (improve)"},
         },
         "required": ["action"],
     }
@@ -453,6 +454,20 @@ class SkillTool(Tool):
             except Exception as e:  # noqa: BLE001
                 return ToolResult.error(f"could not create skill: {e}")
             return ToolResult.ok(f"saved skill '{args['name']}' to {path}", display=f"created skill {args['name']}")
+        if action == "improve":
+            if not args.get("name") or not args.get("body"):
+                return ToolResult.error("improve needs name and body (the learned note).")
+            path = ctx.skills.improve(args["name"], args["body"])
+            if path is None:
+                return ToolResult.error(f"skill '{args['name']}' not found.")
+            return ToolResult.ok(f"recorded a learned note on '{args['name']}'", display=f"improved {args['name']}")
+        if action == "stats":
+            usage = ctx.skills.usage()
+            if not usage:
+                return ToolResult.ok("(no skill usage recorded yet)", display="skill stats")
+            rows = sorted(usage.items(), key=lambda kv: -kv[1].get("count", 0))
+            return ToolResult.ok("\n".join(f"{n}: used {u['count']}x (last {u.get('last_used','?')})"
+                                           for n, u in rows), display="skill stats")
         name = args.get("name")
         if not name:
             return ToolResult.error("name is required for view.")

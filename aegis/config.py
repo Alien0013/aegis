@@ -193,7 +193,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
-    out = dict(base)
+    import copy
+    out = copy.deepcopy(base)   # never share nested refs with DEFAULT_CONFIG
     for k, v in (override or {}).items():
         if isinstance(v, dict) and isinstance(out.get(k), dict):
             out[k] = _deep_merge(out[k], v)

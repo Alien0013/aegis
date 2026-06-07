@@ -110,6 +110,8 @@ class Renderer:
             _out("  … compacting context …", style="yellow")
         elif t == "budget_exhausted":
             _out("  … step limit reached; summarizing …", style="yellow")
+        elif t == "skill_nudge":
+            _out("  💡 tip: save this workflow as a skill (`skill` create) so you can reuse it.", style="magenta")
         elif t == "error":
             _out(f"  ✖ {e['message']}", style="red")
         elif t == "final":

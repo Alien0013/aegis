@@ -82,9 +82,20 @@ def _parse_frontmatter(raw: str) -> dict:
     block = raw[3:end].strip()
     try:
         data = yaml.safe_load(block)
-        return data if isinstance(data, dict) else {}
+        if isinstance(data, dict) and data.get("name") and data.get("description"):
+            return data
     except yaml.YAMLError:
-        return {}
+        data = None
+    # Robust fallback: pull name/description by line even if YAML is malformed
+    # (e.g. an unquoted description containing a colon — common in hub skills).
+    import re as _re
+    fm = data if isinstance(data, dict) else {}
+    for key in ("name", "description", "version"):
+        if not fm.get(key):
+            m = _re.search(rf"^{key}:\s*(.+)$", block, _re.M)
+            if m:
+                fm[key] = m.group(1).strip().strip('"').strip("'")
+    return fm
 
 
 def _bundled_dir() -> Path:
@@ -150,10 +161,49 @@ class SkillsLoader:
         return ("# Available skills (call the `skill` tool with action=view to load one)\n"
                 + "\n".join(lines))
 
+    # -- usage tracking (the self-improvement loop) -------------------------
+    def _usage_path(self):
+        return cfg.skills_dir() / "usage.json"
+
+    def usage(self) -> dict:
+        import json
+        raw = read_text(self._usage_path())
+        try:
+            return json.loads(raw) if raw.strip() else {}
+        except Exception:  # noqa: BLE001
+            return {}
+
+    def record_use(self, name: str) -> None:
+        import json
+        from .util import atomic_write, now_iso
+        data = self.usage()
+        entry = data.setdefault(name, {"count": 0, "last_used": ""})
+        entry["count"] += 1
+        entry["last_used"] = now_iso()
+        atomic_write(self._usage_path(), json.dumps(data, indent=2))
+
+    def improve(self, name: str, note: str) -> Path | None:
+        """Append a learned note to a skill's body (closing the create→use→improve loop)."""
+        from .util import atomic_write
+        skill = self.discover().get(name)
+        if not skill:
+            return None
+        body = read_text(skill.path)
+        marker = "\n## Learned Notes\n"
+        addition = f"- {note.strip()}\n"
+        if marker in body:
+            body = body.replace(marker, marker + addition, 1)
+        else:
+            body = body.rstrip() + "\n" + marker + addition
+        atomic_write(skill.path, body)
+        self.invalidate()
+        return skill.path
+
     def activate(self, name: str) -> str | None:
         skill = self.discover().get(name)
         if not skill:
             return None
+        self.record_use(name)
         ok, why = skill.satisfied()
         header = f"# Skill: {skill.name}\n"
         if not ok:

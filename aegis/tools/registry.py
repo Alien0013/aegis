@@ -41,6 +41,7 @@ def default_registry(*, include_plugins: bool = True) -> ToolRegistry:
     from .code_exec import code_tools
     from .extra_builtin import extra_tools
     from .lsp import lsp_tools
+    from .recall import recall_tools
     from .voice import voice_tools
 
     reg = ToolRegistry()
@@ -51,6 +52,7 @@ def default_registry(*, include_plugins: bool = True) -> ToolRegistry:
     reg.register_all(browser_tools())
     reg.register_all(voice_tools())
     reg.register_all(lsp_tools())
+    reg.register_all(recall_tools())
     if include_plugins:
         try:
             from ..plugins import load_plugins
