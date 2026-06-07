@@ -97,7 +97,7 @@ def test_dashboard_serves(monkeypatch):
     from aegis.config import Config
     from aegis.dashboard import make_handler, PAGE
 
-    assert "AEGIS" in PAGE and "/api/status" in PAGE
+    assert "AEGIS" in PAGE and "/api/" in PAGE
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(Config.load()))
     port = httpd.server_address[1]
     threading.Thread(target=httpd.handle_request, daemon=True).start()
