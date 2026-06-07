@@ -12,17 +12,16 @@ puts a global `aegis` launcher on your PATH, then starts guided onboarding when 
 terminal is available. Prompts are read from `/dev/tty`, so `curl | bash` works.
 The wizard offers OAuth or API-key auth first, then model selection, web tools,
 Space-toggle channel selection, and starter files in `~/.aegis/workspace`. Skip
-onboarding with `--skip-onboard` or `AEGIS_ONBOARD=0`; automation can use
-`--no-prompt`, `--dry-run`, and `--verify`. Use `--core` for a smaller CLI-only
-install, or `--skip-browser` to skip the Chromium download. Windows:
-`irm …/install.ps1 | iex`.
+onboarding only for headless automation with `--no-prompt`, `--skip-onboard`, or
+`AEGIS_ONBOARD=0`. Use `--core` for a smaller CLI-only install, or
+`--skip-browser` to skip the Chromium download. Windows: `irm …/install.ps1 | iex`.
 
 Everything in one go (browser, computer-use, Discord, Slack, Matrix, memory backends):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- --advanced
-curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- --no-prompt --verify
+curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- --verify
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- --core
 ```
 

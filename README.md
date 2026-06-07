@@ -52,16 +52,16 @@ immediately launches the guided onboarding flow (provider, OAuth/API key, model,
 web tools, optional channels, dashboard, and workspace files) using `/dev/tty`,
 so `curl | bash` prompts work correctly. In a real terminal it uses arrow-key
 menus and Space-toggle checkboxes; in scripts it falls back to simple text prompts.
-Skip onboarding with `--skip-onboard` or `AEGIS_ONBOARD=0`; automation can use
-`--no-prompt`, `--dry-run`, and `--verify`. Use `--core` for a smaller CLI-only
-install, or `--skip-browser` to skip the Chromium download.
+Onboarding is included by default. Headless automation can opt out with
+`--no-prompt`, `--skip-onboard`, or `AEGIS_ONBOARD=0`. Use `--core` for a smaller
+CLI-only install, or `--skip-browser` to skip the Chromium download.
 Windows: `irm …/install.ps1 | iex`.
 Everything in one go:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- --advanced
-curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- --no-prompt --verify
+curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- --verify
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- --core
 ```
 
