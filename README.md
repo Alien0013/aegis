@@ -51,13 +51,15 @@ guided onboarding flow (provider, API key or OAuth, web tools, optional
 channels, dashboard, and workspace files) using `/dev/tty`, so `curl | bash`
 prompts work correctly. In a real terminal it uses arrow-key menus and
 Space-toggle checkboxes; in scripts it falls back to simple text prompts.
-Skip onboarding with `--skip-onboard` or `AEGIS_ONBOARD=0`.
+Skip onboarding with `--skip-onboard` or `AEGIS_ONBOARD=0`; automation can use
+`--no-prompt`, `--dry-run`, and `--verify`.
 Windows: `irm …/install.ps1 | iex`.
 Everything in one go:
 
 ```bash
 AEGIS_EXTRAS=all curl -fsSL …/install.sh | bash   # + browser, computer, Discord, Slack
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- --advanced
+curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- --no-prompt --verify
 ```
 
 From a clone, or for development:
