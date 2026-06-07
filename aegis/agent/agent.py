@@ -65,6 +65,7 @@ class Agent:
         self.context_builder = ContextBuilder(config, self.workspace, self.cwd)
         self.store = store
         self.stream = bool(config.get("agent.stream", True))
+        self.reasoning = config.get("agent.reasoning_effort", "off")
         self.budget = IterationBudget(int(config.get("agent.max_iterations", DEFAULT_MAX_ITERATIONS)))
         self.tools_used = 0
 

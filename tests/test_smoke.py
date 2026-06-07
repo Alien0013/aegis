@@ -111,7 +111,8 @@ class _FakeProvider:
     def __init__(self):
         self.calls = 0
 
-    def complete(self, messages, tools=None, stream=False, on_delta=None, model=None, max_tokens=None):
+    def complete(self, messages, tools=None, stream=False, on_delta=None, model=None,
+                 max_tokens=None, reasoning="off"):
         from aegis.types import LLMResponse, ToolCall
         self.calls += 1
         if self.calls == 1:

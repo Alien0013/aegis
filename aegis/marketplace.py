@@ -88,8 +88,21 @@ def _git_clone(repo: str, ref: str | None, subdir: str | None) -> list[Path]:
     return found[:500]
 
 
-def install(source: str) -> list[str]:
-    """Install one or more skills from a source spec. Returns installed names."""
+def _scan_skill(skill_dir: Path) -> str | None:
+    """Security-scan a SKILL.md for prompt-injection/exfiltration. Returns a reason if flagged."""
+    try:
+        from .security_scan import scan_text
+        flagged, reason = scan_text(read_text(skill_dir / "SKILL.md"))
+        return reason if flagged else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def install(source: str, force: bool = False) -> list[str]:
+    """Install one or more skills from a source spec. Returns installed names.
+
+    Each SKILL.md is security-scanned; flagged skills are skipped unless ``force``.
+    """
     dest_root = cfg.skills_dir()
     installed: list[str] = []
 
@@ -102,6 +115,10 @@ def install(source: str) -> list[str]:
             raise ValueError(f"no SKILL.md packages under {local}")
         for d in dirs:
             name = _validate_skill_dir(d)
+            flagged = _scan_skill(d)
+            if flagged and not force:
+                print(f"  ⚠ skipped '{name}': security scan flagged ({flagged}); use --force")
+                continue
             target = dest_root / name
             if target.exists():
                 shutil.rmtree(target)
@@ -131,6 +148,10 @@ def install(source: str) -> list[str]:
 
     for skill_dir in _git_clone(repo, ref, subdir):
         name = _validate_skill_dir(skill_dir)
+        flagged = _scan_skill(skill_dir)
+        if flagged and not force:
+            print(f"  ⚠ skipped '{name}': security scan flagged ({flagged}); use --force to install")
+            continue
         target = dest_root / name
         if target.exists():
             shutil.rmtree(target)
@@ -172,12 +193,12 @@ def list_taps(config) -> dict:
     return taps
 
 
-def install_hub(name: str, config) -> list[str]:
+def install_hub(name: str, config, force: bool = False) -> list[str]:
     """Install every SKILL.md package from a known/configured hub (tap)."""
     taps = list_taps(config)
     if name not in taps:
         raise ValueError(f"unknown hub '{name}'. Known: {', '.join(taps)}")
-    return install(f"git:{taps[name]}")
+    return install(f"git:{taps[name]}", force=force)
 
 
 def search(query: str, registries: list[str] | None = None) -> list[dict]:

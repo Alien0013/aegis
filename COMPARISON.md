@@ -86,6 +86,11 @@ Originally-missing Hermes features now implemented in AEGIS:
 | Bitwarden secrets sync | ✅ `aegis secrets bitwarden` |
 | Memory backends: honcho, mem0, jsonl + HTTP (openviking/supermemory/byterover/…) | ✅ |
 | Skill hubs: import from HermesHub / ClawHub / Anthropic | ✅ `aegis skills hub <name>` |
+| Reasoning/thinking levels (Claude extended-thinking + OpenAI reasoning_effort) | ✅ `agent.reasoning_effort`, `/think` |
+| Pluggable web-search backends (Brave/Tavily/Serper + DuckDuckGo) | ✅ `web.search_backend` |
+| Skill-install security scan + trust gating (`--force` to override) | ✅ |
+| Gateway session-isolation modes + group mention gating | ✅ `gateway.session_mode`/`require_mention` |
+| `/status`, `/think` operator commands | ✅ |
 
 ## Where AEGIS intentionally differs
 

@@ -80,6 +80,7 @@ class ChatCompletionsTransport(ProviderTransport):
         max_tokens: int = 8192,
         extra_headers: dict[str, str] | None = None,
         timeout: float = 600.0,
+        reasoning: str = "off",
     ) -> LLMResponse:
         url = f"{base_url}/chat/completions"
         headers = {"Content-Type": "application/json", **(extra_headers or {}), **auth.headers()}
@@ -88,6 +89,11 @@ class ChatCompletionsTransport(ProviderTransport):
             "messages": self._to_wire_messages(messages),
             "stream": stream,
         }
+        # Reasoning effort (OpenAI o-series + compatible): low | medium | high.
+        eff = {"minimal": "low", "low": "low", "medium": "medium", "high": "high",
+               "xhigh": "high"}.get(reasoning)
+        if eff:
+            payload["reasoning_effort"] = eff
         wire_tools = self._to_wire_tools(tools)
         if wire_tools:
             payload["tools"] = wire_tools

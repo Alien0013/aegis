@@ -23,7 +23,8 @@ class CLIChannel(BasePlatformAdapter):
                 continue
             ev = MessageEvent(platform="cli", chat_id="local", text=text, user_id="local")
             reply = dispatch(ev)
-            self.send("local", reply)
+            if reply:
+                self.send("local", reply)
 
     def send(self, chat_id: str, text: str) -> None:
         print(f"\naegis> {text}\n")
@@ -75,7 +76,8 @@ class TelegramAdapter(BasePlatformAdapter):
                     user_name=msg["from"].get("username"),
                 )
                 reply = dispatch(ev)
-                self.send(ev.chat_id, reply)
+                if reply:
+                    self.send(ev.chat_id, reply)
 
     def send(self, chat_id: str, text: str) -> None:
         # Telegram caps messages at 4096 chars.

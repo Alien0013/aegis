@@ -102,7 +102,8 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
 
         try:
             resp = agent.provider.complete(
-                session.messages, tools=schemas, stream=agent.stream, on_delta=delta_cb
+                session.messages, tools=schemas, stream=agent.stream, on_delta=delta_cb,
+                reasoning=getattr(agent, "reasoning", "off"),
             )
         except Exception as e:  # noqa: BLE001
             emit({"type": "error", "message": f"{type(e).__name__}: {e}"})

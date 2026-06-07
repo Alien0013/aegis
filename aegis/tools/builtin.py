@@ -276,7 +276,7 @@ class WebFetchTool(Tool):
 
 class WebSearchTool(Tool):
     name = "web_search"
-    description = "Search the web (DuckDuckGo). Returns titles, URLs, and snippets."
+    description = "Search the web. Returns titles, URLs, and snippets. Backend configurable (web.search_backend)."
     groups = ["network"]
     parameters = {
         "type": "object",
@@ -291,22 +291,71 @@ class WebSearchTool(Tool):
     )
 
     def run(self, args, ctx) -> ToolResult:
+        import os
+        query = args["query"]
+        backend = (ctx.config.get("web.search_backend", "auto") if ctx.config else "auto")
+        # auto: pick a keyed backend if available, else DuckDuckGo (no key)
+        if backend == "auto":
+            if os.environ.get("BRAVE_API_KEY"):
+                backend = "brave"
+            elif os.environ.get("TAVILY_API_KEY"):
+                backend = "tavily"
+            elif os.environ.get("SERPER_API_KEY"):
+                backend = "serper"
+            else:
+                backend = "duckduckgo"
         try:
-            with httpx.Client(timeout=30, follow_redirects=True,
-                              headers={"User-Agent": "Mozilla/5.0 (AEGIS)"}) as c:
-                r = c.get("https://html.duckduckgo.com/html/", params={"q": args["query"]})
-                r.raise_for_status()
+            if backend == "brave":
+                return self._brave(query, os.environ["BRAVE_API_KEY"])
+            if backend == "tavily":
+                return self._tavily(query, os.environ["TAVILY_API_KEY"])
+            if backend == "serper":
+                return self._serper(query, os.environ["SERPER_API_KEY"])
+            return self._ddg(query)
         except Exception as e:  # noqa: BLE001
-            return ToolResult.error(f"search failed: {e}")
-        out: list[str] = []
-        for m in self._RESULT.finditer(r.text):
-            url = html.unescape(m.group(1))
-            title = _html_to_text(m.group(2) or "")
-            snippet = _html_to_text(m.group(3) or "")
-            out.append(f"• {title}\n  {url}\n  {snippet}".rstrip())
-            if len(out) >= 8:
-                break
-        return ToolResult.ok("\n\n".join(out) or "(no results)", display=f"search: {args['query'][:50]}")
+            return ToolResult.error(f"search ({backend}) failed: {e}")
+
+    @staticmethod
+    def _fmt(items: list[tuple[str, str, str]], query: str) -> ToolResult:
+        out = [f"• {t}\n  {u}\n  {s}".rstrip() for t, u, s in items[:8]]
+        return ToolResult.ok("\n\n".join(out) or "(no results)", display=f"search: {query[:50]}")
+
+    def _ddg(self, query: str) -> ToolResult:
+        with httpx.Client(timeout=30, follow_redirects=True,
+                          headers={"User-Agent": "Mozilla/5.0 (AEGIS)"}) as c:
+            r = c.get("https://html.duckduckgo.com/html/", params={"q": query})
+            r.raise_for_status()
+        items = [(_html_to_text(m.group(2) or ""), html.unescape(m.group(1)), _html_to_text(m.group(3) or ""))
+                 for m in self._RESULT.finditer(r.text)]
+        return self._fmt(items, query)
+
+    def _brave(self, query: str, key: str) -> ToolResult:
+        with httpx.Client(timeout=30) as c:
+            r = c.get("https://api.search.brave.com/res/v1/web/search",
+                      params={"q": query, "count": 8},
+                      headers={"X-Subscription-Token": key, "Accept": "application/json"})
+            r.raise_for_status()
+        items = [(w.get("title", ""), w.get("url", ""), w.get("description", ""))
+                 for w in r.json().get("web", {}).get("results", [])]
+        return self._fmt(items, query)
+
+    def _tavily(self, query: str, key: str) -> ToolResult:
+        with httpx.Client(timeout=30) as c:
+            r = c.post("https://api.tavily.com/search",
+                       json={"api_key": key, "query": query, "max_results": 8})
+            r.raise_for_status()
+        items = [(w.get("title", ""), w.get("url", ""), w.get("content", ""))
+                 for w in r.json().get("results", [])]
+        return self._fmt(items, query)
+
+    def _serper(self, query: str, key: str) -> ToolResult:
+        with httpx.Client(timeout=30) as c:
+            r = c.post("https://google.serper.dev/search", json={"q": query},
+                       headers={"X-API-KEY": key, "Content-Type": "application/json"})
+            r.raise_for_status()
+        items = [(w.get("title", ""), w.get("link", ""), w.get("snippet", ""))
+                 for w in r.json().get("organic", [])]
+        return self._fmt(items, query)
 
 
 # --------------------------------------------------------------------------- #

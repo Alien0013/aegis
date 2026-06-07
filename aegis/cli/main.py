@@ -198,7 +198,7 @@ def cmd_skills(args, config: Config) -> int:
         if not args.name:
             return _die("usage: aegis skills install <git:owner/repo[@ref][/dir] | url>")
         try:
-            names = marketplace.install(args.name)
+            names = marketplace.install(args.name, force=getattr(args, "force", False))
             _print(f"✓ installed: {', '.join(names)}")
         except Exception as e:  # noqa: BLE001
             return _die(str(e))
@@ -224,7 +224,7 @@ def cmd_skills(args, config: Config) -> int:
                 _print(f"  {k:<12} {v}")
             return 0
         try:
-            names = marketplace.install_hub(args.name, config)
+            names = marketplace.install_hub(args.name, config, force=getattr(args, "force", False))
             _print(f"✓ imported {len(names)} skill(s) from {args.name}: {', '.join(names[:20])}"
                    + (" …" if len(names) > 20 else ""))
         except Exception as e:  # noqa: BLE001
@@ -742,6 +742,7 @@ def build_parser() -> argparse.ArgumentParser:
     sk.add_argument("action", nargs="?",
                     choices=["list", "view", "new", "install", "search", "remove", "hub"], default="list")
     sk.add_argument("name", nargs="?", help="skill name, install source, or hub name")
+    sk.add_argument("--force", action="store_true", help="install even if the security scan flags it")
     sk.set_defaults(func=cmd_skills)
 
     mc = sub.add_parser("mcp", help="manage MCP servers")

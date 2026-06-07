@@ -98,6 +98,7 @@ class AnthropicTransport(ProviderTransport):
         max_tokens: int = 8192,
         extra_headers: dict[str, str] | None = None,
         timeout: float = 600.0,
+        reasoning: str = "off",
     ) -> LLMResponse:
         url = f"{base_url}/v1/messages"
         system, wire_messages = self._to_wire(messages)
@@ -113,6 +114,13 @@ class AnthropicTransport(ProviderTransport):
             "messages": wire_messages,
             "stream": stream,
         }
+        # Extended thinking: map effort -> token budget (must be < max_tokens).
+        budget = {"minimal": 1024, "low": 2048, "medium": 8192, "high": 16384,
+                  "xhigh": 32768}.get(reasoning)
+        if budget:
+            if max_tokens <= budget:
+                payload["max_tokens"] = budget + 4096
+            payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
         if system:
             # Cache the (stable) system prompt prefix to cut cost/latency across turns.
             payload["system"] = [{"type": "text", "text": system,

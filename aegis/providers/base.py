@@ -39,6 +39,7 @@ class ProviderTransport(ABC):
         max_tokens: int = 8192,
         extra_headers: dict[str, str] | None = None,
         timeout: float = 600.0,
+        reasoning: str = "off",
     ) -> LLMResponse:
         """Make one completion call and return a normalized response."""
         raise NotImplementedError
@@ -79,6 +80,7 @@ class Provider:
         on_delta: OnDelta | None = None,
         model: str | None = None,
         max_tokens: int | None = None,
+        reasoning: str = "off",
     ) -> LLMResponse:
         attempts = 0
         while True:
@@ -93,6 +95,7 @@ class Provider:
                     on_delta=on_delta,
                     max_tokens=max_tokens or self.max_tokens,
                     extra_headers=self.extra_headers,
+                    reasoning=reasoning,
                 )
             except Exception as e:  # noqa: BLE001
                 # On rate-limit / auth errors, rotate the credential pool and retry.

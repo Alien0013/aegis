@@ -133,6 +133,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "agent": {
         "max_iterations": 50,
         "stream": True,
+        "reasoning_effort": "off",   # off|minimal|low|medium|high|xhigh
         "compression": {"preserve_first": 3, "preserve_last": 20},
     },
     "memory": {
@@ -170,6 +171,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "browser": {
         "headless": True,
     },
+    "web": {
+        "search_backend": "auto",    # auto | duckduckgo | brave | tavily | serper
+    },
     "server": {
         "host": "127.0.0.1",
         "port": 8790,
@@ -177,6 +181,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "gateway": {
         "group_sessions_per_user": True,
+        "session_mode": "per_channel_peer",  # main | per_channel | per_channel_peer | per_peer
+        "require_mention": False,             # in group chats, only respond when mentioned
+        "mention_triggers": ["@aegis"],
         "cron_interval": 60,
     },
     "fallback_providers": [],         # [{provider, model}]

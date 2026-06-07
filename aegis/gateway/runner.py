@@ -21,16 +21,23 @@ class GatewayRunner:
         self.adapters: list[BasePlatformAdapter] = []
         self._sessions: dict[str, Session] = {}
         self._lock = threading.Lock()
-        self.group_per_user = bool(config.get("gateway.group_sessions_per_user", True))
+        self.session_mode = config.get("gateway.session_mode", "per_channel_peer")
+        self.require_mention = bool(config.get("gateway.require_mention", False))
+        self.mention_triggers = [t.lower() for t in config.get("gateway.mention_triggers", []) or []]
 
     def add(self, adapter: BasePlatformAdapter) -> None:
         self.adapters.append(adapter)
 
     def _key(self, ev: MessageEvent) -> str:
-        key = f"{ev.platform}:{ev.chat_id}"
-        if self.group_per_user and ev.user_id:
-            key += f":{ev.user_id}"
-        return key
+        uid = ev.user_id or "anon"
+        mode = self.session_mode
+        if mode == "main":
+            return f"{ev.platform}:main"
+        if mode == "per_channel":
+            return f"{ev.platform}:{ev.chat_id}"
+        if mode == "per_peer":
+            return f"{ev.platform}:peer:{uid}"
+        return f"{ev.platform}:{ev.chat_id}:{uid}"  # per_channel_peer (default)
 
     def _session(self, key: str) -> Session:
         if key not in self._sessions:
@@ -58,12 +65,19 @@ class GatewayRunner:
                     f"model={self.config.get('model.default')} · session={key}\n"
                     f"Commands: /new (reset), /status")
 
+        # Mention gating: in shared channels only respond when a trigger is present.
+        if self.require_mention and self.mention_triggers and not text.startswith("/"):
+            if not any(trig in text.lower() for trig in self.mention_triggers):
+                return ""  # ignored — not addressed to the bot
+            for trig in self.mention_triggers:
+                text = text.replace(trig, "").replace(trig.title(), "").strip() or text
+
         # Serialize per session so an agent isn't re-entered concurrently.
         with self._lock:
             session = self._session(key)
         agent = Agent.create(self.config, session=session, cwd=self.cwd, store=self.store)
         try:
-            final = agent.run(ev.text)
+            final = agent.run(text)
             return final.content or "(no response)"
         except Exception as e:  # noqa: BLE001
             return f"⚠ error: {type(e).__name__}: {e}"

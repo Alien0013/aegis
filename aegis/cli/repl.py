@@ -33,8 +33,8 @@ except Exception:  # noqa: BLE001
 
 _approve_lock = threading.Lock()
 
-SLASH = ["/help", "/model", "/tools", "/skills", "/memory", "/usage", "/compress",
-         "/background", "/tasks", "/rollback", "/personality", "/save",
+SLASH = ["/help", "/model", "/status", "/tools", "/skills", "/memory", "/usage", "/compress",
+         "/think", "/background", "/tasks", "/rollback", "/personality", "/save",
          "/sessions", "/new", "/clear", "/quit", "/exit"]
 
 
@@ -154,6 +154,18 @@ def handle_slash(cmd: str, agent: Agent) -> str:
         _out("Anything else is sent to the agent.")
     elif name == "/model":
         _out(f"current: {agent.provider.describe()}")
+    elif name == "/status":
+        _out(f"provider: {agent.provider.describe()}")
+        _out(f"session: {agent.session.id} ({len(agent.session.messages)} msgs)")
+        _out(f"reasoning: {getattr(agent, 'reasoning', 'off')} · exec_mode: {agent.config.get('tools.exec_mode')}")
+        _out(_status_line(agent))
+    elif name == "/think":
+        level = arg or "medium"
+        if level not in ("off", "minimal", "low", "medium", "high", "xhigh"):
+            _out("usage: /think off|minimal|low|medium|high|xhigh")
+        else:
+            agent.reasoning = level
+            _out(f"reasoning effort → {level}", style="green")
     elif name == "/tools":
         for t in agent.registry.all():
             g = f" [{','.join(t.groups)}]" if t.groups else ""
