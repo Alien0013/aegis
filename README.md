@@ -1,0 +1,234 @@
+# AEGIS — a terminal agent harness
+
+A self-improving, multi-provider, multi-channel agent harness in Python, built to
+**replace and improve on Hermes Agent (Nous) and OpenClaw**. One bounded agent
+loop, pluggable providers with **API-key *and* OAuth** auth, a capability-gated
+tool system, persistent memory, a `SKILL.md` skills engine, and a multi-channel
+gateway — distilled through NanoClaw-style minimalism so the whole core is
+readable in an afternoon.
+
+```
+              ┌────────────────────────────────────────────┐
+  channels →  │  gateway  →  Agent loop  →  providers (API/OAuth)
+  (cli/tg)    │                 │                            │
+              │     tools ⟵ permissions     memory   skills  │
+              └────────────────────────────────────────────┘
+```
+
+## Install (one line)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash
+```
+
+The installer (like Hermes) finds Python 3.10+, builds an isolated venv at
+`~/.aegis/venv`, installs AEGIS, drops a global `aegis` command on your PATH, and
+grabs ripgrep if missing — no venv juggling. Windows: `irm …/install.ps1 | iex`.
+Everything in one go:
+
+```bash
+AEGIS_EXTRAS=all curl -fsSL …/install.sh | bash   # + browser, computer, Discord, Slack
+```
+
+From a clone, or for development:
+
+```bash
+git clone <repo> aegis && cd aegis
+./install.sh                       # one-line, isolated, global command
+# — or the manual/editable route —
+python3 -m venv .venv && . .venv/bin/activate
+pip install -e ".[all]"            # core + every extra
+playwright install chromium        # if you took the browser extra
+aegis doctor
+```
+
+Keep it current with `aegis update`. Remove with `./uninstall.sh` (`--purge` to also
+delete `~/.aegis`). Optional extras: `.[browser]`, `.[computer]`, `.[discord]`,
+`.[slack]` — everything else (providers, OAuth, MCP, marketplace, gateway, serve,
+voice) is in the core install.
+
+## Quick start
+
+```bash
+# 1. point it at a provider (any of these)
+aegis config set ANTHROPIC_API_KEY  sk-ant-...        # Claude
+aegis config set OPENAI_API_KEY     sk-...            # OpenAI
+aegis auth login anthropic                            # …or OAuth instead of a key
+aegis model set ollama llama3.1                       # …or fully local, no key
+
+# 2. talk to it
+aegis                       # interactive REPL (streaming, slash commands)
+aegis chat -q "summarize the files in this folder"
+aegis chat --continue      # resume your last session
+
+# 3. run it as a service on chat platforms
+export TELEGRAM_BOT_TOKEN=...
+aegis gateway --channels telegram,cli
+```
+
+## Providers (all support API key; Anthropic also OAuth out of the box)
+
+`anthropic`, `openai`, `google` (Gemini), `openrouter`, `groq`, `deepseek`,
+`xai`, `mistral`, `together`, `ollama`, `lmstudio`, plus any OpenAI-compatible
+endpoint via `model.base_url` and `custom_providers` in config.
+
+Auth resolution per provider: explicit `base_url` → OAuth login (if present) →
+API key from the environment. Inspect it with `aegis auth status`.
+
+OAuth is implemented generically (PKCE S256, `client_secret` support,
+localhost-callback **and** manual-paste flows, automatic refresh, `auth.json` at
+chmod 0600, token quarantine on failure). **Anthropic, OpenAI (ChatGPT/Codex
+login), and Google (Gemini login)** ship with working OAuth configs:
+
+```bash
+aegis auth login anthropic     # browser → paste code
+aegis auth login openai        # ChatGPT login, localhost:1455 callback
+aegis auth login google        # Google sign-in, loopback callback
+```
+
+(OpenAI/Google login + token storage/refresh work today; using those bearer
+tokens for *inference* depends on the granted scopes / the provider's own backend
+endpoint — API keys remain the always-reliable path. Any other IdP wires up by
+overriding `OAuthConfig`.)
+
+## Tools & permissions
+
+Built-ins: `read_file`, `write_file`, `edit_file`, `list_dir`, `glob`, `search`,
+`bash`, `web_fetch`, `web_search`, `todo_write`, `memory`, `skill`,
+`spawn_subagent`, `generate_image`, `execute_code` (RPC sandbox), `browser`
+(Playwright), `computer` (pyautogui), plus every connected **MCP** tool
+(`mcp__<server>__<tool>`) and any plugin tools.
+
+Every tool with a danger group (`fs`, `runtime`, `network`) flows through a
+permission cascade: `deny_groups` → exec mode (`deny | allowlist | ask | auto |
+full`) → allowlist prefixes → interactive approval. Read-only tools are always
+allowed. Set the policy with `aegis config set tools.exec_mode ask` (or pass
+`--yolo` to auto-approve a session).
+
+## Memory & skills
+
+* **Memory** — `~/.aegis/memories/{MEMORY.md,USER.md}` (`§`-delimited, char-capped,
+  atomic writes) plus an append-only `history.jsonl`. The agent persists facts via
+  the `memory` tool; a frozen snapshot keeps the system prompt cache-stable.
+* **Skills** — `SKILL.md` packages (agentskills.io-compatible frontmatter) loaded
+  with progressive disclosure and tiered precedence (workspace > personal >
+  configured > bundled). `aegis skills new <name>` scaffolds one;
+  `requires.{env,bins,os}` gates availability.
+
+## Identity & rules
+
+Drop these into `~/.aegis/workspace/` (global) or your project root (local, wins):
+
+* `SOUL.md` — persona / tone
+* `AGENTS.md` (or `.aegis.md` / `CLAUDE.md`) — operational rules
+* `USER.md` — facts about you
+
+## MCP (Model Context Protocol)
+
+Connect any MCP server (stdio or Streamable HTTP); their tools appear to the agent
+as `mcp__<server>__<tool>` and flow through the same permission cascade.
+
+```bash
+aegis mcp add filesystem "npx -y @modelcontextprotocol/server-filesystem /tmp"
+aegis mcp test            # connect + list tools for each server
+aegis mcp list
+```
+
+Also reads a Claude-Desktop-format `~/.aegis/mcp.json` (`{"mcpServers": {...}}`).
+
+## Channels (gateway)
+
+One agent, many surfaces: `cli`, `telegram` (core), `discord`, `slack` (extras).
+
+```bash
+export TELEGRAM_BOT_TOKEN=...                 # or DISCORD_BOT_TOKEN / SLACK_*_TOKEN
+aegis gateway --channels telegram,discord,slack
+```
+
+Per-conversation sessions, control commands (`/new`, `/status`), and an optional
+cron ticker.
+
+## Skill & tool marketplace
+
+```bash
+aegis skills search pdf                        # query the agentskills.io registry
+aegis skills install git:owner/repo            # clone a repo of SKILL.md packages
+aegis skills install git:owner/repo@main/skills/foo   # a subdir at a ref
+aegis skills install ./local/skill-dir         # a local package
+aegis skills remove foo
+```
+
+Installs are tracked in `~/.aegis/skills/.lock.json` (source + SHA-256 digest).
+
+## execute_code (zero-context-cost turns)
+
+The agent can write a Python script that orchestrates many tool calls; the child
+process reaches tools over a Unix socket and **only its stdout returns** to the
+model — collapsing multi-step pipelines into one cheap turn. Secrets are stripped
+from the child env.
+
+## Serve as an OpenAI-compatible API
+
+```bash
+aegis serve --port 8790      # POST /v1/chat/completions, GET /v1/models
+```
+
+Point any OpenAI client at it; AEGIS (tools, memory, skills) runs behind the API.
+
+## Cron / scheduled tasks
+
+```bash
+aegis cron add "@daily" "summarize today's git commits and email me"
+aegis cron add "30m" "check CI and report failures"
+aegis cron run               # start the scheduler (or it ticks inside the gateway)
+```
+
+## Plugins
+
+Drop a `*.py` into `~/.aegis/plugins/` exporting `register(api)` to add tools,
+channels, or providers with no core edits.
+
+## The agent loop
+
+Bounded synchronous loop (`max_iterations`, default 50) with a final grace call
+for a summary; three-tier system prompt (stable / context / volatile) rebuilt only
+on compaction; message governance (orphan-drop + backfill) before every call;
+concurrent tool execution (≤8 workers); LLM compaction preserving the first 3 and
+last 20 turns.
+
+## Layout
+
+```
+aegis/
+  providers/   transports (chat_completions, anthropic) + auth (key, OAuth)
+  tools/       base, permissions, registry, builtin
+  agent/       context, governance, compaction, loop, agent
+  memory.py    skills.py    session.py (SQLite)
+  gateway/     runner + channels (cli, telegram)
+  cli/         main (subcommands) + repl (TUI)
+  builtin_skills/web-research/SKILL.md
+tests/test_smoke.py
+```
+
+## Commands
+
+`aegis [chat|model|auth|setup|skills|mcp|serve|cron|tools|memory|config|sessions|gateway|doctor]`
+— run any with `-h`. `aegis` alone opens the REPL. `chat` flags: `--resume`,
+`--continue`, `--worktree/-w`, `--yolo`, `--model`, `--provider`.
+
+## Rename it
+
+Everything keys off `APP_NAME`/the package name. To rebrand: rename the `aegis/`
+package dir, update `pyproject.toml` (`name`, `[project.scripts]`), and the
+`APP_NAME` constants. The runtime home is `$AEGIS_HOME` or `~/.aegis`.
+
+## Test
+
+```bash
+pip install -e ".[dev]"
+pytest -q        # runs fully offline against a fake provider
+```
+
+## License
+
+MIT.
