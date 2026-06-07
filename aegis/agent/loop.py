@@ -67,7 +67,14 @@ class ToolExecutor:
         self.emit({"type": "tool_result", "id": call.id, "name": call.name,
                    "summary": res.summary, "is_error": res.is_error})
         self._run_hooks("post_tool", {"tool": call.name, "is_error": str(res.is_error)})
-        return Message.tool(call.id, call.name, res.content)
+        content = res.content
+        # Wrap results from external/untrusted sources so the model treats them as DATA,
+        # not instructions (prompt-injection defense).
+        is_untrusted = call.name.startswith("mcp__") or (tool and "network" in tool.groups)
+        if content and not res.is_error and is_untrusted:
+            content = (f'<untrusted_tool_result source="{call.name}">\n{content}\n'
+                       f"</untrusted_tool_result>")
+        return Message.tool(call.id, call.name, content)
 
     def execute(self, calls: list[ToolCall]) -> list[Message]:
         if len(calls) == 1:
@@ -92,6 +99,9 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
     available = agent.registry.available(agent.config.get("tools.toolsets", ["core"]))
     schemas = agent.registry.schemas(available)
     executor = ToolExecutor(agent.registry, agent.permissions, agent.tool_context, emit)
+    continuations = 0
+    from ..util import estimate_tokens
+    schema_tokens = estimate_tokens(json.dumps(schemas))   # tools count toward the window
 
     while budget.should_continue():
         emit({"type": "iteration", "n": budget.api_call_count + 1, "max": budget.max_iterations})
@@ -106,6 +116,8 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                 reasoning=getattr(agent, "reasoning", "off"),
             )
         except Exception as e:  # noqa: BLE001
+            from .._log import log_exc
+            log_exc("provider.complete failed")
             emit({"type": "error", "message": f"{type(e).__name__}: {e}"})
             err = Message.assistant(f"[provider error] {e}")
             session.messages.append(err)
@@ -119,6 +131,13 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
               "tool_calls": [tc.to_dict() for tc in resp.tool_calls]})
 
         if not resp.tool_calls:
+            # Auto-continue a response truncated by the output token limit (up to 3x).
+            if resp.finish_reason in ("length", "max_tokens") and continuations < 3:
+                continuations += 1
+                emit({"type": "continuation", "n": continuations})
+                session.messages.append(
+                    Message.user("Continue exactly where you left off. Do not repeat or re-introduce."))
+                continue
             from ..constants import SKILL_AUTOGEN_THRESHOLD
             if (agent.tools_used >= SKILL_AUTOGEN_THRESHOLD
                     and agent.config.get("skills.autogen", True)
@@ -139,7 +158,7 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
             except Exception:  # noqa: BLE001
                 pass
 
-        if compaction.should_compress(session.messages, agent.provider.context_length):
+        if compaction.should_compress(session.messages, agent.provider.context_length, schema_tokens):
             emit({"type": "compacting"})
             comp = agent.config.get("agent.compression", {}) or {}
             session.messages = compaction.compress(

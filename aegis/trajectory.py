@@ -44,17 +44,47 @@ def export(out_path: str, session_ids: list[str] | None = None) -> int:
     return n
 
 
-def compress(traj: dict, provider, max_tool_chars: int = 400) -> dict:
-    """Shrink a trajectory: truncate long tool outputs, keep the shape."""
+def _boundary_truncate(text: str, max_tokens: int) -> str:
+    """Truncate near a token budget but on a line/sentence boundary (boundary-aware)."""
+    limit = max_tokens * 4
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    cut = max(head.rfind("\n"), head.rfind(". "))
+    if cut > limit // 2:
+        head = head[:cut + 1]
+    return head.rstrip() + " …[truncated]"
+
+
+def compress(traj: dict, provider=None, max_tool_tokens: int = 120) -> dict:
+    """Shrink a trajectory token-aware: summarize long tool outputs (LLM) or
+    boundary-truncate them. Returns the trajectory with a ``metrics`` block."""
     out = dict(traj)
-    new_steps = []
+    steps, before, after, summarized = [], 0, 0, 0
     for step in traj.get("messages", []):
         s = dict(step)
-        if s.get("role") == "tool" and len(s.get("content", "")) > max_tool_chars:
-            s["content"] = s["content"][:max_tool_chars] + " …[truncated]"
-        new_steps.append(s)
-    out["messages"] = new_steps
-    out["approx_tokens"] = sum(estimate_tokens(s.get("content", "")) for s in new_steps)
+        content = s.get("content", "") or ""
+        before += estimate_tokens(content)
+        if s.get("role") == "tool" and estimate_tokens(content) > max_tool_tokens:
+            if provider is not None:
+                try:
+                    from .types import Message
+                    r = provider.complete([
+                        Message.system("Summarize this tool output in ONE terse sentence, "
+                                       "preserving key facts, paths, numbers, and errors."),
+                        Message.user(content[:8000])], tools=None, stream=False)
+                    s["content"] = "[summarized] " + r.text.strip()
+                    summarized += 1
+                except Exception:  # noqa: BLE001
+                    s["content"] = _boundary_truncate(content, max_tool_tokens)
+            else:
+                s["content"] = _boundary_truncate(content, max_tool_tokens)
+        after += estimate_tokens(s["content"])
+        steps.append(s)
+    out["messages"] = steps
+    out["approx_tokens"] = after
+    out["metrics"] = {"tokens_before": before, "tokens_after": after,
+                      "ratio": round(after / max(1, before), 3), "summarized": summarized}
     return out
 
 
@@ -79,15 +109,25 @@ def cmd_trajectory(args, config) -> int:
     if action == "compress":
         out = getattr(args, "out", None) or "trajectories.compressed.jsonl"
         from .session import SessionStore
+        provider = None
+        if getattr(args, "summarize", False):
+            try:
+                from .providers.registry import build_aux_provider
+                provider = build_aux_provider(config)
+            except Exception:  # noqa: BLE001
+                provider = None
         ids = [s["id"] for s in SessionStore().list(limit=1000)]
-        n = 0
+        n, saved = 0, 0
         with open(out, "w", encoding="utf-8") as f:
             for sid in ids:
                 t = record(sid)
                 if t:
-                    f.write(json.dumps(compress(t, None)) + "\n")
+                    c = compress(t, provider)
+                    saved += c["metrics"]["tokens_before"] - c["metrics"]["tokens_after"]
+                    f.write(json.dumps(c) + "\n")
                     n += 1
-        print(f"compressed {n} trajectory(ies) -> {out}")
+        print(f"compressed {n} trajectory(ies) -> {out}  (~{saved:,} tokens saved"
+              f"{', LLM-summarized' if provider else ', truncated'})")
         return 0
     # stats
     s = stats()

@@ -29,9 +29,10 @@ matrix = ["matrix-nio>=0.24"]
 honcho = ["honcho-ai>=1.0"]
 mem0 = ["mem0ai>=0.1"]
 memory = ["honcho-ai>=1.0", "mem0ai>=0.1"]
+tokenizer = ["tiktoken>=0.7"]
 all = [
     "playwright>=1.46", "pyautogui>=0.9.54", "Pillow>=10", "discord.py>=2.4",
-    "slack_bolt>=1.21", "matrix-nio>=0.24", "honcho-ai>=1.0", "mem0ai>=0.1",
+    "slack_bolt>=1.21", "matrix-nio>=0.24", "honcho-ai>=1.0", "mem0ai>=0.1", "tiktoken>=0.7",
 ]
 
 [project.scripts]

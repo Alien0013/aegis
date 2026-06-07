@@ -10,13 +10,13 @@ A feature-by-feature comparison showing AEGIS as a drop-in replacement for both.
 | Bounded agent loop + grace call | ✅ | ✅ | ✅ |
 | 3-tier cache-stable prompt | ✅ | ➖ | ✅ |
 | Context compaction | ✅ | ✅ | ✅ |
-| **Providers** (any LLM) | ✅ | ✅ | ✅ (12 + custom) |
+| **Providers** (any LLM) | ✅ | ✅ | ✅ (26 + custom) |
 | API-key auth | ✅ | ✅ | ✅ |
 | **OAuth login** (Claude/ChatGPT/Gemini) | ✅ | ➖ | ✅ (anthropic/openai/google) |
 | Local models (Ollama/LM Studio/vLLM) | ✅ | ✅ | ✅ |
 | Fallback provider chains | ✅ | ➖ | ✅ |
 | **Tools** (fs/shell/web) | ✅ | ✅ | ✅ |
-| Permission modes / approval | ✅ | ✅ | ✅ (deny/allowlist/ask/auto/full) |
+| Permission modes / approval | ✅ | ✅ | ✅ (deny/allowlist/ask/smart/auto/full) |
 | `execute_code` RPC (zero-context-cost) | ✅ | ➖ | ✅ |
 | Subagents | ✅ | ✅ | ✅ |
 | Image generation | ✅ | ➖ | ✅ |
@@ -29,7 +29,7 @@ A feature-by-feature comparison showing AEGIS as a drop-in replacement for both.
 | **Multi-channel gateway** | ✅ | ✅ | ✅ |
 | Channels: CLI / Telegram | ✅ | ✅ | ✅ |
 | Channels: Discord / Slack | ✅ | ✅ | ✅ |
-| Channels: WhatsApp / Signal / Matrix | ✅ | ✅ | ➖ (plugin-able) |
+| Channels: Signal / Matrix / Email / webhook | ✅ | ➖ | ✅ (WhatsApp via bridge) |
 | **Voice** (STT / TTS) | ✅ | ➖ | ✅ (provider audio API) |
 | **Cron / scheduled tasks** | ✅ | ✅ | ✅ |
 | **Serve** (OpenAI-compatible API) | ✅ | ➖ | ✅ |
@@ -103,12 +103,12 @@ Originally-missing Hermes features now implemented in AEGIS:
 | **Process management**, GitHub tool, tool-search (self-discovery) | ✅ |
 | **MCP server mode** (expose AEGIS tools to other clients) | ✅ `aegis mcp serve` |
 | Docs site (mkdocs-material) + PyPI/TestPyPI release workflow + Termux installer | ✅ |
-| 8 channels · 30 tools · 36 commands · 87 tests | ✅ |
+| 8 channels · 30 tools · 36 commands · 97 tests | ✅ |
 
 ## Where AEGIS intentionally differs
 
-* **Lean core (~6k LOC, 45 modules).** Like NanoClaw, the whole engine is readable
-  in an afternoon. OpenClaw is ~434k LOC; Hermes ships 64 tools — AEGIS keeps a
+* **Lean core (~11k LOC).** Like NanoClaw, the whole engine is readable
+  in an afternoon. OpenClaw is ~434k LOC; Hermes ships ~40 tools — AEGIS keeps a
   tight built-in set and pushes breadth to MCP, the marketplace, and plugins.
 * **Heavy features are opt-in extras**, not core weight: `[browser]`, `[computer]`,
   `[discord]`, `[slack]`. The core install stays small and fast.

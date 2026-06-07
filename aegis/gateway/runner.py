@@ -22,6 +22,8 @@ class GatewayRunner:
         self._sessions: dict[str, Session] = {}
         self._lock = threading.Lock()
         self._key_locks: dict[str, threading.Lock] = {}   # per-session serialization
+        self._agents: dict[str, object] = {}              # LRU agent cache (prefix-cache reuse)
+        self._agent_cap = 32
         self.session_mode = config.get("gateway.session_mode", "per_channel_peer")
         self.require_mention = bool(config.get("gateway.require_mention", False))
         self.mention_triggers = [t.lower() for t in config.get("gateway.mention_triggers", []) or []]
@@ -82,7 +84,14 @@ class GatewayRunner:
         with lock:
             with self._lock:
                 session = self._session(key)
-            agent = Agent.create(self.config, session=session, cwd=self.cwd, store=self.store)
+            # Reuse a cached agent for this session (keeps the provider object warm so the
+            # model's prompt prefix stays cached); rebuild if the session was reset.
+            agent = self._agents.get(key)
+            if agent is None or agent.session is not session:
+                agent = Agent.create(self.config, session=session, cwd=self.cwd, store=self.store)
+                self._agents[key] = agent
+                if len(self._agents) > self._agent_cap:
+                    del self._agents[next(iter(self._agents))]
             try:
                 final = agent.run(text)
                 return final.content or "(no response)"

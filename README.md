@@ -4,19 +4,39 @@
   <a href="https://github.com/Alien0013/aegis/actions"><img src="https://github.com/Alien0013/aegis/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="python">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
-  <img src="https://img.shields.io/badge/tests-87%20passing-brightgreen" alt="tests">
+  <img src="https://img.shields.io/badge/tests-97%20passing-brightgreen" alt="tests">
+  <img src="https://img.shields.io/badge/providers-26-blueviolet" alt="providers">
+  <img src="https://img.shields.io/badge/tools-30-blueviolet" alt="tools">
 </p>
 
-# AEGIS — a terminal agent harness
+# AEGIS — the terminal agent you actually own
 
-A self-improving, multi-provider, multi-channel agent harness in Python, built to
-**replace and improve on Hermes Agent (Nous) and OpenClaw**. One bounded agent
-loop, pluggable providers with **API-key *and* OAuth** auth, a capability-gated
-tool system, persistent memory + a closed **learning loop**, a `SKILL.md` skills
-engine, and a multi-channel gateway — distilled through NanoClaw-style minimalism
-so the whole core is readable in an afternoon.
+**One command installs a complete AI agent that lives in your terminal, talks to any
+model, runs on your machine, and learns as it goes.** AEGIS is an open, self-hostable
+alternative to Hermes Agent and OpenClaw — with their capabilities in **~11k auditable
+lines** instead of hundreds of thousands.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash
+aegis setup && aegis
+```
 
 <p align="center"><img src="assets/screenshot.svg" alt="AEGIS session" width="700"></p>
+
+## Why AEGIS is different
+
+|  | What it means |
+|---|---|
+| 🪶 **Tiny, auditable core** | ~11k lines you can actually read and trust. OpenClaw is ~434k; Hermes is huge. Same capability, none of the sprawl. |
+| 🔌 **Truly model-agnostic** | 26 providers (Claude, GPT, Gemini, Llama, DeepSeek, Qwen, local Ollama…) behind one interface, with **API-key *and* OAuth** login, fallback chains, credential pools, and per-prompt routing. |
+| 🧠 **It actually learns** | A real closed loop — reviews finished sessions, extracts memory + skills (redacted), and promotes them on your approval. Plus FTS5 cross-session recall. |
+| 🛡️ **Safe by default** | A permission cascade with a hardline blocklist (refuses `rm -rf /` even in yolo), pre-exec scanning, **fail-closed** docker/ssh/singularity/modal sandboxes, and untrusted-tool-result wrapping against prompt injection. |
+| 📡 **Everywhere you are** | One agent serving CLI, Telegram, Discord, Slack, Signal, Matrix, Email, and webhooks — with voice-memo transcription and a durable, retrying delivery queue. |
+| 🧰 **Batteries included** | 30 tools, 24 skills + hub import, MCP (client **and** server), an OpenAI-compatible API, a web dashboard, cron, and a one-line installer. |
+| 🔓 **Yours** | MIT, self-hosted, no subscription, no lock-in. Your keys, your data, your machine. |
+
+> Built in the spirit of **NanoClaw**: do what Hermes and OpenClaw do, but keep the
+> whole thing small enough to understand in an afternoon.
 
 ## Install (one line)
 

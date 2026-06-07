@@ -764,6 +764,7 @@ def build_parser() -> argparse.ArgumentParser:
     tj = sub.add_parser("trajectory", help="record/export/compress session trajectories")
     tj.add_argument("action", nargs="?", choices=["stats", "export", "compress"], default="stats")
     tj.add_argument("--out")
+    tj.add_argument("--summarize", action="store_true", help="LLM-summarize long tool outputs when compressing")
     tj.set_defaults(func=_traj.cmd_trajectory)
 
     sk = sub.add_parser("skills", help="list/view/create/install/search/remove skills")

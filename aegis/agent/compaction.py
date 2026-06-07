@@ -13,8 +13,8 @@ def estimated_tokens(messages: list[Message]) -> int:
                for m in messages)
 
 
-def should_compress(messages: list[Message], context_length: int) -> bool:
-    return estimated_tokens(messages) > context_length * COMPACT_THRESHOLD
+def should_compress(messages: list[Message], context_length: int, overhead_tokens: int = 0) -> bool:
+    return estimated_tokens(messages) + overhead_tokens > context_length * COMPACT_THRESHOLD
 
 
 def _split_at_user_boundary(convo: list[Message], preserve_last: int) -> int:

@@ -167,7 +167,8 @@ class Agent:
                 try:
                     self.memory.external.sync_turn(self.session.messages)
                 except Exception:  # noqa: BLE001
-                    pass
+                    from .._log import log_exc
+                    log_exc("external memory sync_turn failed")
         if self.store:
             self.store.save(self.session)
         return result

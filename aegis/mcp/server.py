@@ -39,7 +39,7 @@ def run_mcp_server(config) -> None:
         if method == "initialize":
             _send({"jsonrpc": "2.0", "id": mid, "result": {
                 "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {"tools": {}},
+                "capabilities": {"tools": {}, "resources": {}, "prompts": {}},
                 "serverInfo": {"name": "aegis", "version": "0.1.0"}}})
         elif method == "notifications/initialized":
             continue
@@ -47,6 +47,34 @@ def run_mcp_server(config) -> None:
             tools = [{"name": t.name, "description": t.description.strip(),
                       "inputSchema": t.parameters} for t in registry.all()]
             _send({"jsonrpc": "2.0", "id": mid, "result": {"tools": tools}})
+        elif method == "resources/list":
+            # expose skills + memory as readable resources
+            from ..skills import SkillsLoader
+            res = [{"uri": f"skill://{s.name}", "name": s.name, "description": s.description,
+                    "mimeType": "text/markdown"} for s in SkillsLoader(config).available()]
+            res.append({"uri": "memory://main", "name": "memory", "mimeType": "text/markdown"})
+            _send({"jsonrpc": "2.0", "id": mid, "result": {"resources": res}})
+        elif method == "resources/read":
+            uri = msg.get("params", {}).get("uri", "")
+            text = ""
+            if uri.startswith("skill://"):
+                from ..skills import SkillsLoader
+                text = SkillsLoader(config).activate(uri[len("skill://"):]) or ""
+            elif uri.startswith("memory://"):
+                from ..memory import MemoryStore
+                text = MemoryStore().raw("memory")
+            _send({"jsonrpc": "2.0", "id": mid, "result": {
+                "contents": [{"uri": uri, "mimeType": "text/markdown", "text": text}]}})
+        elif method == "prompts/list":
+            _send({"jsonrpc": "2.0", "id": mid, "result": {"prompts": [
+                {"name": "review", "description": "Review the current diff for bugs and cleanups."},
+                {"name": "summarize", "description": "Summarize the given text faithfully."}]}})
+        elif method == "prompts/get":
+            name = msg.get("params", {}).get("name", "")
+            body = {"review": "Review the current git diff for correctness bugs and simplifications.",
+                    "summarize": "Summarize the following faithfully and concisely:"}.get(name, "")
+            _send({"jsonrpc": "2.0", "id": mid, "result": {"messages": [
+                {"role": "user", "content": {"type": "text", "text": body}}]}})
         elif method == "tools/call":
             params = msg.get("params", {})
             tool = registry.get(params.get("name", ""))

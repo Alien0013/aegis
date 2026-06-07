@@ -164,7 +164,8 @@ class AnthropicTransport(ProviderTransport):
         tool_args: dict[int, str] = {}
         stop_reason = None
         usage = Usage()
-        with httpx.Client(timeout=timeout) as client:
+        stream_timeout = httpx.Timeout(connect=15.0, read=90.0, write=30.0, pool=15.0)
+        with httpx.Client(timeout=stream_timeout) as client:
             with client.stream("POST", url, headers=headers, json=payload) as r:
                 _raise_for_status(r)
                 for line in r.iter_lines():

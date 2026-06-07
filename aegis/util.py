@@ -66,7 +66,27 @@ def slugify(text: str, max_len: int = 48) -> str:
     return (s[:max_len].rstrip("-")) or "untitled"
 
 
+_ENC = None
+_ENC_TRIED = False
+
+
 def estimate_tokens(text: str) -> int:
+    """Token estimate — uses tiktoken when installed, else ~4 chars/token."""
+    global _ENC, _ENC_TRIED
+    if not text:
+        return 0
+    if not _ENC_TRIED:
+        _ENC_TRIED = True
+        try:
+            import tiktoken
+            _ENC = tiktoken.get_encoding("cl100k_base")
+        except Exception:  # noqa: BLE001
+            _ENC = None
+    if _ENC is not None:
+        try:
+            return len(_ENC.encode(text, disallowed_special=()))
+        except Exception:  # noqa: BLE001
+            pass
     return max(1, len(text) // CHARS_PER_TOKEN)
 
 
