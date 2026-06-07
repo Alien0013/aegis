@@ -94,4 +94,7 @@ echo "  Next:"
 echo "    aegis setup                 # pick a provider + key (or 'aegis auth login anthropic')"
 echo "    aegis                       # start chatting"
 echo "    aegis doctor                # verify the install"
-[ -n "$EXTRAS" ] && echo "    playwright install chromium # if you installed the 'browser'/'all' extra"
+if [ -n "$EXTRAS" ]; then
+  echo "    playwright install chromium # if you installed the 'browser'/'all' extra"
+fi
+exit 0
