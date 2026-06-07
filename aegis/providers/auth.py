@@ -207,6 +207,10 @@ class OAuthAuth(AuthProvider):
         if self._expired(creds, skew=300):
             creds = self._refresh(creds)
         h = {"Authorization": f"{creds.get('token_type', 'Bearer')} {creds['access_token']}"}
+        if self.oauth.provider == "openai-codex":
+            account_id = _jwt_account_id(creds["access_token"])
+            if account_id:
+                h["chatgpt-account-id"] = account_id
         h.update(self.oauth.api_extra_headers)
         return h
 
@@ -422,18 +426,39 @@ class AuthError(RuntimeError):
 
 def _jwt_scopes(token: str) -> set[str]:
     """Best-effort, non-validating JWT payload decode for OAuth scope diagnostics."""
-    parts = token.split(".")
-    if len(parts) < 2:
-        return set()
-    payload = parts[1]
-    payload += "=" * (-len(payload) % 4)
-    try:
-        data = json.loads(base64.urlsafe_b64decode(payload.encode()).decode("utf-8"))
-    except Exception:  # noqa: BLE001
-        return set()
+    data = _jwt_payload(token)
     raw = data.get("scp") or data.get("scope") or []
     if isinstance(raw, str):
         return {s for s in raw.replace(",", " ").split() if s}
     if isinstance(raw, list):
         return {str(s) for s in raw if s}
     return set()
+
+
+def _jwt_account_id(token: str) -> str | None:
+    """Best-effort ChatGPT account id extraction for Codex backend auth."""
+    data = _jwt_payload(token)
+    direct = data.get("chatgpt_account_id") or data.get("account_id")
+    if isinstance(direct, str) and direct:
+        return direct
+    nested = data.get("https://api.openai.com/auth")
+    if isinstance(nested, dict):
+        for key in ("chatgpt_account_id", "account_id"):
+            value = nested.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return None
+
+
+def _jwt_payload(token: str) -> dict:
+    """Best-effort, non-validating JWT payload decode."""
+    parts = token.split(".")
+    if len(parts) < 2:
+        return {}
+    payload = parts[1]
+    payload += "=" * (-len(payload) % 4)
+    try:
+        data = json.loads(base64.urlsafe_b64decode(payload.encode()).decode("utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
+    return data if isinstance(data, dict) else {}

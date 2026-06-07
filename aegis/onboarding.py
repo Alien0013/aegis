@@ -18,6 +18,14 @@ Output = Callable[[str], None]
 
 
 MODEL_PRESETS: dict[str, list[tuple[str, str]]] = {
+    "openai-codex": [
+        ("gpt-5.5", "GPT-5.5 Codex"),
+        ("gpt-5.4", "GPT-5.4 Codex"),
+        ("gpt-5.4-mini", "GPT-5.4 mini Codex"),
+        ("gpt-5.3-codex", "GPT-5.3 Codex"),
+        ("gpt-5.2", "GPT-5.2"),
+        ("codex-auto-review", "Codex auto review"),
+    ],
     "openai": [
         ("gpt-5.2", "GPT-5.2 (latest frontier)"),
         ("gpt-5.2-chat-latest", "GPT-5.2 Chat"),
@@ -316,7 +324,7 @@ def _configure_model(
     out("CONFIGURING MODEL INFERENCE")
     out("─────────────────────────────────────────────────────────")
     common = [
-        ("openai", "OpenAI (GPT-4o / GPT-5 API)"),
+        ("openai", "OpenAI (ChatGPT OAuth / API key)"),
         ("anthropic", "Anthropic (Claude)"),
         ("google", "Google Gemini"),
         ("ollama", "Ollama (local / offline)"),
@@ -342,15 +350,17 @@ def _configure_model(
     config.set("model.provider", provider)
     auth_ready = spec.auth_scheme == "none"
 
-    if spec.env_vars:
-        env_name = spec.env_vars[0]
+    if spec.env_vars or spec.oauth:
+        env_name = spec.env_vars[0] if spec.env_vars else ""
         auth_options: list[tuple[str, str]]
         if spec.oauth:
             oauth_label = "OAuth browser login"
-            auth_options = [("oauth", oauth_label), ("api_key", f"API key ({env_name})")]
+            auth_options = [("oauth", oauth_label)]
+            if env_name:
+                auth_options.append(("api_key", f"API key ({env_name})"))
             if provider == "openai":
                 auth_options = [
-                    ("oauth", "OAuth browser login (ChatGPT, experimental)"),
+                    ("oauth", "ChatGPT / Codex OAuth"),
                     ("api_key", f"API key ({env_name}) - reliable OpenAI API path"),
                 ]
         else:
@@ -369,10 +379,25 @@ def _configure_model(
             if not auth_ready:
                 state.auth_method = "skipped"
         elif auth_method == "oauth" and spec.oauth:
+            if provider == "openai":
+                codex_spec = registry.get_spec("openai-codex")
+                if codex_spec:
+                    provider = "openai-codex"
+                    spec = codex_spec
+                    state.provider = provider
+                    config.set("model.provider", provider)
+                    out("✓ using OpenAI Codex backend for ChatGPT OAuth.")
             auth_ready = _oauth_login(provider, spec, out)
             if not auth_ready:
-                out("  Use an API key if your OAuth client cannot grant model inference scopes.")
-                if _confirm(f"Configure {env_name} instead?", True, input_func, out):
+                out("  Use an API key if OAuth is unavailable for this provider.")
+                fallback_env = "OPENAI_API_KEY" if provider == "openai-codex" else env_name
+                if fallback_env and _confirm(f"Configure {fallback_env} instead?", True, input_func, out):
+                    if provider == "openai-codex":
+                        provider = "openai"
+                        spec = registry.get_spec("openai") or spec
+                        state.provider = provider
+                        config.set("model.provider", provider)
+                    env_name = fallback_env
                     auth_ready = _configure_api_key(config, env_name, secret_func, out)
                     state.auth_method = "api_key" if auth_ready else "skipped"
                 else:

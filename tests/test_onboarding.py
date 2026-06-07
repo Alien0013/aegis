@@ -73,10 +73,11 @@ def test_onboarding_can_select_oauth(monkeypatch):
     )
 
     assert rc == 0
-    assert calls == ["openai"]
+    assert calls == ["openai-codex"]
+    assert Config.load().get("model.provider") == "openai-codex"
     text = "\n".join(out)
     assert "Choose authentication method" in text
-    assert "OAuth browser login" in text
+    assert "ChatGPT / Codex OAuth" in text
 
 
 def test_onboarding_oauth_missing_scope_falls_back_to_api_key(monkeypatch):
@@ -110,8 +111,9 @@ def test_onboarding_oauth_missing_scope_falls_back_to_api_key(monkeypatch):
     assert rc == 0
     assert os.environ["OPENAI_API_KEY"] == "sk-fallback"
     text = "\n".join(out)
-    assert "Use an API key if your OAuth client cannot grant model inference scopes." in text
+    assert "Use an API key if OAuth is unavailable for this provider." in text
     assert "Auth:            api_key" in text
+    assert Config.load().get("model.provider") == "openai"
 
 
 def test_onboarding_oauth_missing_scope_can_skip_without_probe(monkeypatch):
@@ -213,7 +215,8 @@ def test_onboarding_can_select_a_provider_model(monkeypatch):
 
 
 def test_openai_oauth_login_scope_avoids_auth_page_rejection():
-    from aegis.providers.registry import OPENAI_OAUTH
+    from aegis.providers.registry import OPENAI_CODEX_OAUTH, OPENAI_OAUTH
 
     assert "model.request" not in OPENAI_OAUTH.scopes
     assert "model.request" in OPENAI_OAUTH.required_api_scopes
+    assert OPENAI_CODEX_OAUTH.required_api_scopes == []

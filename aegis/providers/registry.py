@@ -20,6 +20,7 @@ from .anthropic import AnthropicTransport
 from .auth import ApiKeyAuth, AuthProvider, AuthStore, OAuthAuth, OAuthConfig
 from .base import ApiMode, Provider, ProviderTransport
 from .chat_completions import ChatCompletionsTransport
+from .responses import ResponsesTransport
 
 
 @dataclass
@@ -69,6 +70,18 @@ OPENAI_OAUTH = OAuthConfig(
     callback_path="/auth/callback",
 )
 
+OPENAI_CODEX_OAUTH = OAuthConfig(
+    provider="openai-codex",
+    client_id="app_EMoamEEZ73f0CkXaXp7hrann",
+    authorize_url="https://auth.openai.com/oauth/authorize",
+    token_url="https://auth.openai.com/oauth/token",
+    scopes=["openid", "profile", "email", "offline_access"],
+    use_localhost_callback=True,
+    localhost_port=1455,
+    callback_host="localhost",
+    callback_path="/auth/callback",
+)
+
 # Google (Gemini CLI) installed-app OAuth client. The bearer authorizes the Code
 # Assist API (cloudcode-pa.googleapis.com); set that base_url to use it for inference.
 GOOGLE_OAUTH = OAuthConfig(
@@ -102,6 +115,10 @@ PROVIDERS: dict[str, ProviderSpec] = {
     "openai": ProviderSpec(
         "openai", ApiMode.CHAT_COMPLETIONS, "https://api.openai.com/v1",
         "gpt-4o", 128_000, ["OPENAI_API_KEY"], oauth=OPENAI_OAUTH,
+    ),
+    "openai-codex": ProviderSpec(
+        "openai-codex", ApiMode.RESPONSES, "https://chatgpt.com/backend-api/codex",
+        "gpt-5.5", 272_000, [], oauth=OPENAI_CODEX_OAUTH,
     ),
     "google": ProviderSpec(
         "google", ApiMode.CHAT_COMPLETIONS,
@@ -224,6 +241,8 @@ def list_providers() -> list[str]:
 def _transport_for(api_mode: ApiMode) -> ProviderTransport:
     if api_mode == ApiMode.ANTHROPIC_MESSAGES:
         return AnthropicTransport()
+    if api_mode == ApiMode.RESPONSES:
+        return ResponsesTransport()
     return ChatCompletionsTransport()
 
 
@@ -249,6 +268,8 @@ def _resolve_auth(spec: ProviderSpec, prefer: str | None = None) -> AuthProvider
     """Pick OAuth or API key. ``prefer`` can force 'oauth' or 'apikey'."""
     store = AuthStore()
     oauth = OAuthAuth(spec.oauth, store) if spec.oauth else None
+    if oauth and not spec.env_vars and spec.auth_scheme != "none":
+        return oauth
     api = ApiKeyAuth(spec.env_vars, spec.auth_scheme, dict(spec.extra_headers))
 
     if prefer == "oauth" and oauth:

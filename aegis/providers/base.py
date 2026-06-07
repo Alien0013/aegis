@@ -17,7 +17,7 @@ class ApiMode(str, Enum):
 
     CHAT_COMPLETIONS = "chat_completions"   # OpenAI-compatible
     ANTHROPIC_MESSAGES = "anthropic_messages"
-    RESPONSES = "responses"                 # OpenAI Responses API (future)
+    RESPONSES = "responses"                 # OpenAI Responses API / Codex backend
 
 
 class ProviderTransport(ABC):
