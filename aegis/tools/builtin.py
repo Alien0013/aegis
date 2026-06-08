@@ -232,6 +232,112 @@ class BashTool(Tool):
 
 
 # --------------------------------------------------------------------------- #
+# System status
+# --------------------------------------------------------------------------- #
+class SystemStatusTool(Tool):
+    name = "system_status"
+    description = (
+        "Inspect AEGIS runtime status: provider/auth, tools, skills, plugins, workspace, "
+        "dashboard, and user services. Does not reveal tokens or secret values."
+    )
+    parameters = {"type": "object", "properties": {}}
+
+    def run(self, args, ctx) -> ToolResult:
+        from .. import __version__, config as cfg
+
+        config = ctx.config
+        agent = ctx.agent
+        lines = [f"AEGIS v{__version__} system status"]
+        lines.append(f"home: {cfg.get_home()}")
+        lines.append(f"cwd: {ctx.cwd}")
+
+        provider = getattr(agent, "provider", None)
+        if provider is not None:
+            lines.append("")
+            lines.append("Model")
+            lines.append(f"provider: {getattr(provider, 'name', 'unknown')}")
+            lines.append(f"model: {getattr(provider, 'model', 'unknown')}")
+            api_mode = getattr(getattr(provider, "api_mode", None), "value", "unknown")
+            lines.append(f"transport: {api_mode}")
+            auth = getattr(provider, "auth", None)
+            if auth is None:
+                lines.append("auth: unknown")
+            else:
+                try:
+                    auth_desc = auth.describe()
+                except Exception:  # noqa: BLE001
+                    auth_desc = "unknown"
+                try:
+                    auth_ready = "ready" if auth.available() else "missing"
+                except Exception:  # noqa: BLE001
+                    auth_ready = "unknown"
+                lines.append(f"auth: {auth_desc} ({auth_ready})")
+        elif config is not None:
+            lines.append("")
+            lines.append("Model")
+            lines.append(f"provider: {config.get('model.provider')}")
+            lines.append(f"model: {config.get('model.default')}")
+
+        if config is not None:
+            try:
+                from ..surface import plugin_inventory, skill_inventory, tool_inventory
+
+                tools = tool_inventory(config)
+                skills = skill_inventory(config, ctx.cwd)
+                plugins = plugin_inventory()
+                lines.append("")
+                lines.append("Surface")
+                lines.append(f"toolsets: {', '.join(tools.toolsets)}")
+                lines.append(f"tools: {tools.enabled_count}/{tools.total_count} model-visible")
+                lines.append(
+                    f"skills: {skills.available_count} available "
+                    f"({skills.bundled_count} bundled, {skills.personal_count} personal)"
+                )
+                lines.append(
+                    f"plugins: {plugins.files_count} file(s), {len(plugins.tools)} tool(s), "
+                    f"{len(plugins.errors)} error(s)"
+                )
+            except Exception as e:  # noqa: BLE001
+                lines.append(f"surface: error: {type(e).__name__}: {e}")
+
+            workspace = cfg.workspace_dir()
+            workspace_files = []
+            if workspace.exists():
+                workspace_files = sorted(p.name for p in workspace.iterdir() if p.is_file())
+            lines.append("")
+            lines.append("Workspace")
+            lines.append(f"path: {workspace}")
+            lines.append("files: " + (", ".join(workspace_files) if workspace_files else "(empty)"))
+
+            host = config.get("server.dashboard_host", "127.0.0.1")
+            port = config.get("server.dashboard_port", 9119)
+            dashboard_state = "configured" if config.get("server.dashboard_token") else "no token configured"
+            lines.append("")
+            lines.append("Dashboard")
+            lines.append(f"url: http://{host}:{port}/")
+            lines.append(f"access: {dashboard_state}")
+
+            try:
+                from ..daemon import status as daemon_status
+
+                lines.append("")
+                lines.append("Services")
+                for unit, state in daemon_status().items():
+                    lines.append(f"{unit}: {state}")
+            except Exception as e:  # noqa: BLE001
+                lines.append(f"services: unavailable: {type(e).__name__}: {e}")
+
+            channels = config.get("gateway.channels", []) or []
+            mcp_servers = config.get("mcp.servers", {}) or {}
+            lines.append("")
+            lines.append("Integrations")
+            lines.append(f"gateway channels: {', '.join(channels) or 'none'}")
+            lines.append(f"mcp servers: {len(mcp_servers)}")
+
+        return ToolResult.ok("\n".join(lines), display="system status")
+
+
+# --------------------------------------------------------------------------- #
 # Web
 # --------------------------------------------------------------------------- #
 _TAG_RE = re.compile(r"<(script|style)[^>]*>.*?</\1>", re.S | re.I)
@@ -481,6 +587,7 @@ def all_builtin_tools() -> list[Tool]:
     return [
         ReadFileTool(), WriteFileTool(), EditFileTool(), ListDirTool(), GlobTool(), SearchTool(),
         BashTool(),
+        SystemStatusTool(),
         WebFetchTool(), WebSearchTool(),
         TodoWriteTool(),
         MemoryTool(),

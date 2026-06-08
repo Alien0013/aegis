@@ -111,10 +111,48 @@ class Agent:
             print(f"  ! MCP load failed: {e}")
 
     # -- system prompt ------------------------------------------------------
+    def _build_runtime_block(self) -> str:
+        api_mode = getattr(self.provider, "api_mode", "")
+        api_mode_value = getattr(api_mode, "value", str(api_mode) if api_mode else "unknown")
+        auth = getattr(self.provider, "auth", None)
+        if auth is None:
+            auth_desc = "unknown"
+            auth_state = "unknown"
+        else:
+            try:
+                auth_desc = auth.describe()
+            except Exception:  # noqa: BLE001
+                auth_desc = "unknown"
+            try:
+                auth_state = "ready" if auth.available() else "missing"
+            except Exception:  # noqa: BLE001
+                auth_state = "unknown"
+
+        toolsets = list(self.config.get("tools.toolsets", ["core"]) or ["core"])
+        enabled_tools = self.registry.available(toolsets)
+        return (
+            "# AEGIS runtime\n"
+            f"- provider: {getattr(self.provider, 'name', 'unknown')}\n"
+            f"- model: {getattr(self.provider, 'model', 'unknown')}\n"
+            f"- transport: {api_mode_value}\n"
+            f"- auth: {auth_desc} ({auth_state})\n"
+            f"- cwd: {self.cwd}\n"
+            f"- toolsets: {', '.join(toolsets)}\n"
+            f"- model-visible tools: {len(enabled_tools)}/{len(self.registry.all())}\n"
+            "- For questions about whether you are using OAuth, API-key auth, or local auth, "
+            "use the auth line above as ground truth.\n"
+            "- For install, auth, tools, workspace, dashboard, daemon, or system-health checks, "
+            "call the `system_status` tool first, then inspect with focused tools if needed."
+        )
+
     def _build_system_prompt(self) -> str:
         skills_index = self.skills.index_block() if self.skills else ""
         memory_block = self.memory.build_context_block() if self.memory else ""
-        return self.context_builder.build(skills_index=skills_index, memory_block=memory_block)
+        return self.context_builder.build(
+            skills_index=skills_index,
+            memory_block=memory_block,
+            runtime_block=self._build_runtime_block(),
+        )
 
     def ensure_system_prompt(self, force: bool = False) -> None:
         prompt = self._build_system_prompt()

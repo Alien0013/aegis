@@ -120,6 +120,27 @@ class _FakeProvider:
         return LLMResponse(text="done.")
 
 
+class _RuntimeAuth:
+    def describe(self):
+        return "oauth (openai-codex: logged in)"
+
+    def available(self):
+        return True
+
+
+class _RuntimeProvider:
+    name = "openai-codex"
+    model = "gpt-5.5"
+    context_length = 272_000
+    api_mode = type("Mode", (), {"value": "responses"})()
+    auth = _RuntimeAuth()
+
+    def complete(self, messages, tools=None, stream=False, on_delta=None, model=None,
+                 max_tokens=None, reasoning="off"):
+        from aegis.types import LLMResponse
+        return LLMResponse(text="done.")
+
+
 def test_agent_loop_runs(tmp_path, monkeypatch):
     from aegis.agent.agent import Agent
     from aegis.config import Config
@@ -132,6 +153,44 @@ def test_agent_loop_runs(tmp_path, monkeypatch):
     assert result.content == "done."
     assert any(e["type"] == "tool_result" for e in events)
     assert any(e["type"] == "final" for e in events)
+
+
+def test_agent_system_prompt_includes_runtime_auth(tmp_path):
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.session import Session
+
+    cfg = Config.load()
+    agent = Agent(config=cfg, provider=_RuntimeProvider(), session=Session.create(), cwd=tmp_path)
+    prompt = agent._build_system_prompt()
+
+    assert "# AEGIS runtime" in prompt
+    assert "provider: openai-codex" in prompt
+    assert "model: gpt-5.5" in prompt
+    assert "transport: responses" in prompt
+    assert "auth: oauth (openai-codex: logged in) (ready)" in prompt
+    assert "system_status" in prompt
+
+
+def test_system_status_tool_reports_runtime_without_tokens(tmp_path, monkeypatch):
+    from aegis.config import Config
+    from aegis.tools.base import ToolContext
+    from aegis.tools.builtin import SystemStatusTool
+
+    cfg = Config.load()
+    cfg.data["server"]["dashboard_token"] = "aegis_tok_secret"
+    monkeypatch.setattr(
+        "aegis.daemon.status",
+        lambda: {"aegis-dashboard.service": "active (running, enabled)"},
+    )
+
+    agent = type("AgentStub", (), {"provider": _RuntimeProvider()})()
+    result = SystemStatusTool().run({}, ToolContext(cwd=tmp_path, config=cfg, agent=agent))
+
+    assert not result.is_error
+    assert "auth: oauth (openai-codex: logged in) (ready)" in result.content
+    assert "url: http://127.0.0.1:9119/" in result.content
+    assert "aegis_tok_secret" not in result.content
 
 
 def test_oauth_configs_present():

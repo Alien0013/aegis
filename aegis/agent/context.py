@@ -69,11 +69,20 @@ class ContextBuilder:
             f"- python: {platform.python_version()}"
         )
 
-    def build(self, *, skills_index: str = "", memory_block: str = "", identity: str | None = None) -> str:
+    def build(
+        self,
+        *,
+        skills_index: str = "",
+        memory_block: str = "",
+        runtime_block: str = "",
+        identity: str | None = None,
+    ) -> str:
         # --- stable tier ---
         stable = [identity or DEFAULT_IDENTITY, TOOL_GUIDANCE]
         if skills_index:
             stable.append(skills_index)
+        if runtime_block:
+            stable.append(runtime_block)
 
         # --- context tier ---
         context: list[str] = []
