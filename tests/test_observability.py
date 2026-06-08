@@ -152,6 +152,49 @@ def test_tool_output_spill_to_disk(tmp_path):
     assert ex._maybe_spill(ToolCall("c3", "bash", {}), "short", is_error=False) == "short"
 
 
+def test_anthropic_oauth_injects_claude_code_prefix():
+    """claude.ai OAuth tokens require the system prompt to start with the Claude Code
+    identity block, or the Messages API rejects the request. API-key auth must not."""
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from aegis.providers.anthropic import AnthropicTransport
+    from aegis.types import Message
+
+    cap = {}
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+        def do_POST(self):
+            cap["payload"] = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers()
+            self.wfile.write(json.dumps({"content": [{"type": "text", "text": "ok"}],
+                                         "stop_reason": "end_turn", "usage": {}}).encode())
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}"
+    msgs = [Message.system("You are AEGIS."), Message.user("hi")]
+
+    class OAuth:
+        def headers(self): return {"Authorization": "Bearer X", "anthropic-beta": "oauth-2025-04-20"}
+    class ApiKey:
+        def headers(self): return {"x-api-key": "sk-ant-X"}
+
+    t = AnthropicTransport()
+    try:
+        t.complete(base_url=url, auth=OAuth(), model="claude-sonnet-4-5", messages=msgs,
+                   tools=None, stream=False)
+        oauth_sys = cap["payload"]["system"]
+        assert oauth_sys[0]["text"].startswith("You are Claude Code")
+        assert any("AEGIS" in b["text"] for b in oauth_sys)        # real prompt kept
+        t.complete(base_url=url, auth=ApiKey(), model="claude-sonnet-4-5", messages=msgs,
+                   tools=None, stream=False)
+        assert not cap["payload"]["system"][0]["text"].startswith("You are Claude Code")
+    finally:
+        srv.shutdown()
+
+
 def test_status_shows_state_section(capsys):
     from aegis.cli.main import cmd_status
     from aegis.config import Config

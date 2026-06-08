@@ -124,10 +124,20 @@ class AnthropicTransport(ProviderTransport):
             if max_tokens <= budget:
                 payload["max_tokens"] = budget + 4096
             payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
+        # claude.ai/Claude-Code OAuth tokens require the system prompt to begin with the
+        # Claude Code identity block, or the Messages API rejects the request. Detect OAuth
+        # by the bearer beta header and prepend it.
+        is_oauth = "oauth" in headers.get("anthropic-beta", "")
+        sys_blocks: list[dict[str, Any]] = []
+        if is_oauth:
+            sys_blocks.append({"type": "text",
+                               "text": "You are Claude Code, Anthropic's official CLI for Claude."})
         if system:
             # Cache the (stable) system prompt prefix to cut cost/latency across turns.
-            payload["system"] = [{"type": "text", "text": system,
-                                  "cache_control": {"type": "ephemeral"}}]
+            sys_blocks.append({"type": "text", "text": system,
+                               "cache_control": {"type": "ephemeral"}})
+        if sys_blocks:
+            payload["system"] = sys_blocks
         wire_tools = self._to_wire_tools(tools)
         if wire_tools:
             # Cache the tool definitions too (they're stable within a session).
