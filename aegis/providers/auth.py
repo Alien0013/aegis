@@ -271,7 +271,10 @@ class OAuthAuth(AuthProvider):
         return verifier, challenge
 
     def _authorize_url(self, challenge: str, state: str, redirect_uri: str) -> str:
+        # extra params lead (claude.ai expects `code=true` first), then the standard set —
+        # matching the Claude CLI / Hermes authorize URL exactly.
         params = {
+            **self.oauth.extra_authorize_params,
             "client_id": self.oauth.client_id,
             "response_type": "code",
             "redirect_uri": redirect_uri,
@@ -279,7 +282,6 @@ class OAuthAuth(AuthProvider):
             "code_challenge": challenge,
             "code_challenge_method": "S256",
             "state": state,
-            **self.oauth.extra_authorize_params,
         }
         return f"{self.oauth.authorize_url}?{urllib.parse.urlencode(params)}"
 

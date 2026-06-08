@@ -286,7 +286,9 @@ mkdir -p "$INSTALL_DIR"
 
 stage "Installing AEGIS package"
 say "Installing AEGIS (this can take a minute)…"
-"$INSTALL_DIR/bin/pip" install -q --upgrade "$SOURCE"
+# --no-cache-dir + --force-reinstall so a reinstall always builds the CURRENT commit:
+# the package version stays 0.1.0, so pip would otherwise reuse a stale cached wheel.
+"$INSTALL_DIR/bin/pip" install -q --upgrade --force-reinstall --no-cache-dir "$SOURCE"
 ok "Installed."
 
 stage "Installing browser engine"
