@@ -189,6 +189,7 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                 session.messages, agent.provider,
                 preserve_first=comp.get("preserve_first", 3),
                 preserve_last=comp.get("preserve_last", 20),
+                max_tool_tokens=comp.get("max_tool_tokens", 600),
             )
             agent.refresh_volatile()
 

@@ -109,6 +109,38 @@ def list_candidates(status: str = "pending") -> list[dict]:
     return [c for c in _load() if c.get("status") == status]
 
 
+def background_tick(config, session) -> bool:
+    """Background learning: every N assistant turns, review the session off-thread.
+
+    Off by default. Enable with `learn.background: true` + `learn.background_every: <N>`.
+    Memory candidates can auto-apply (low risk) via `learn.auto_apply`; skills always
+    stay pending for human review. Returns True if a review was kicked off."""
+    every = int(config.get("learn.background_every", 0) or 0)
+    if every <= 0 or not config.get("learn.background", False) or session is None:
+        return False
+    turns = sum(1 for m in session.messages if m.role == "assistant" and m.content)
+    last = session.meta.get("_last_bg_review", 0)
+    if turns - last < every:
+        return False
+    session.meta["_last_bg_review"] = turns
+    auto = bool(config.get("learn.auto_apply", False))
+
+    def _run():
+        try:
+            found = review_session(config, session.id)
+            if auto:
+                for c in found:
+                    if c.get("type") == "memory":      # skills need a human gate
+                        apply_candidate(c["id"], config)
+        except Exception:  # noqa: BLE001
+            from ._log import log_exc
+            log_exc("background learn review failed")
+
+    import threading
+    threading.Thread(target=_run, daemon=True).start()
+    return True
+
+
 def apply_candidate(cand_id: str, config) -> str:
     from .memory import MemoryStore
     from .skills import SkillsLoader

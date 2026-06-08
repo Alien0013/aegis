@@ -221,4 +221,9 @@ class Agent:
                     log_exc("external memory sync_turn failed")
         if self.store:
             self.store.save(self.session)
+        try:
+            from .. import learn
+            learn.background_tick(self.config, self.session)
+        except Exception:  # noqa: BLE001
+            pass
         return result

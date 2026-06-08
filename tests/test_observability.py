@@ -66,6 +66,38 @@ def test_trajectory_export_formats():
         pass
 
 
+def test_compaction_prunes_tool_output_and_images():
+    from aegis.agent import compaction
+    from aegis.types import Message
+    big = "x" * 40_000
+    img = "before data:image/png;base64," + ("A" * 5000) + " after"
+    msgs = [Message.system("s"), Message.user("go"),
+            Message.tool("c1", "bash", big), Message.tool("c2", "screenshot", img)]
+    out = compaction.compress(msgs, provider=None, preserve_first=1, preserve_last=10)
+    joined = "".join(m.content or "" for m in out)
+    assert "…[truncated]" in joined                      # oversized tool dump pruned
+    assert "data:image/png;base64" not in joined          # image stripped
+    assert "[image omitted]" in joined
+
+
+def test_background_learn_is_opt_in_and_gated(monkeypatch):
+    from aegis import learn
+    from aegis.config import Config
+    from aegis.session import Session
+    from aegis.types import Message
+    calls = {"n": 0}
+    monkeypatch.setattr(learn, "review_session", lambda *a, **k: calls.__setitem__("n", calls["n"] + 1) or [])
+    s = Session.create()
+    s.messages = [Message.assistant("a1"), Message.assistant("a2")]
+    cfg = Config.load()
+    assert learn.background_tick(cfg, s) is False         # off by default
+    cfg.data["learn"].update({"background": True, "background_every": 2})
+    assert learn.background_tick(cfg, s) is True          # 2 turns >= every=2
+    import time; time.sleep(0.2)
+    assert calls["n"] == 1
+    assert learn.background_tick(cfg, s) is False          # no new turns -> no re-review
+
+
 def test_mcp_skips_malformed_servers():
     from aegis.config import Config
     from aegis.mcp.client import build_manager
