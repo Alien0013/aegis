@@ -7,10 +7,22 @@ import tempfile
 import pytest
 
 
+# Provider/auth env that must never leak into a test run (hermetic parity with CI).
+_LEAKY_ENV = (
+    "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY",
+    "OPENROUTER_API_KEY", "GROQ_API_KEY", "DEEPSEEK_API_KEY", "XAI_API_KEY",
+    "MISTRAL_API_KEY", "TOGETHER_API_KEY", "GOOGLE_OAUTH_CLIENT_SECRET",
+    "AEGIS_ONBOARD_DIALOGS", "AEGIS_PROFILE",
+)
+
+
 @pytest.fixture(autouse=True)
 def isolated_home(monkeypatch):
     d = tempfile.mkdtemp(prefix="aegis-test-")
     monkeypatch.setenv("AEGIS_HOME", d)
+    monkeypatch.setenv("TZ", "UTC")          # deterministic timestamps
+    for name in _LEAKY_ENV:                  # never read a real credential in tests
+        monkeypatch.delenv(name, raising=False)
     from aegis import config as cfg
     cfg.set_profile(None)
     yield d
