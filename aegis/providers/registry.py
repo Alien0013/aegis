@@ -54,6 +54,9 @@ ANTHROPIC_OAUTH = OAuthConfig(
     use_localhost_callback=False,          # public client redirects to console page
     token_request_json=True,
     code_contains_state=True,
+    # claude.ai requires `code=true` on the authorize URL or it returns "Invalid request
+    # format" (this is the manual code-display flow the Claude CLI uses).
+    extra_authorize_params={"code": "true"},
     api_extra_headers={"anthropic-beta": "oauth-2025-04-20"},
 )
 
