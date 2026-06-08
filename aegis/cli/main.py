@@ -947,9 +947,11 @@ def build_parser() -> argparse.ArgumentParser:
     cu.add_argument("name", nargs="?")
     cu.set_defaults(func=_curator.cmd_curator)
 
-    db = sub.add_parser("dashboard", help="local web dashboard")
-    db.add_argument("--host"); db.add_argument("--port", type=int)
-    db.set_defaults(func=_dash.cmd_dashboard)
+    for _name in ("dashboard", "ui"):       # `aegis ui` is the friendly alias
+        db = sub.add_parser(_name, help="open the AEGIS control panel in your browser")
+        db.add_argument("--host"); db.add_argument("--port", type=int)
+        db.add_argument("--no-open", action="store_true", help="don't auto-open the browser")
+        db.set_defaults(func=_dash.cmd_dashboard)
 
     from ..daemon import cmd_daemon as _cmd_daemon
     dm = sub.add_parser("daemon", help="install/control user services")

@@ -376,6 +376,8 @@ if [ "$RUN_ONBOARD" != "0" ] && { has_tty || [ "$NONINTERACTIVE_ONBOARD" = "1" ]
   fi
   if [ "$onboard_rc" = "0" ]; then
     ok "Onboarding complete."
+    echo "  New here? For a clickable interface instead of the terminal, run:"
+    echo "    aegis ui                    # opens the AEGIS control panel in your browser"
   else
     ONBOARD_FAILED=1
     ONBOARD_RC="$onboard_rc"
@@ -385,6 +387,7 @@ else
   warn "Onboarding skipped. Run 'aegis setup' when ready."
   echo "  Next:"
   echo "    aegis setup                 # first-run onboarding"
+  echo "    aegis ui                    # clickable control panel in your browser"
   echo "    aegis                       # start chatting"
   echo "    aegis doctor                # verify the install"
   if wants_browser && [ "$BROWSER_STATUS" != "installed" ]; then

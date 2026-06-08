@@ -1074,7 +1074,7 @@ def _summary_data(config: Config, state: OnboardingState, *, ok: bool = True) ->
         "dashboard_url": state.dashboard_url,
         "workspace_files": state.workspace_files or [],
         "errors": state.errors or [],
-        "next_commands": ["aegis status", "aegis", "aegis doctor"],
+        "next_commands": ["aegis ui", "aegis", "aegis status", "aegis doctor"],
     }
 
 
@@ -1099,8 +1099,9 @@ def _summary(config: Config, state: OnboardingState, out: Output) -> None:
     if state.service_errors:
         out(f"Service issues:  {', '.join(state.service_errors)}")
     out("")
-    out("Control UI:")
-    out(f"  {state.dashboard_url}")
+    out("Graphical control panel (easiest — opens in your browser):")
+    out("  aegis ui")
+    out(f"  or open: {state.dashboard_url}")
     out("")
-    out("Start chatting:")
+    out("Start chatting in the terminal:")
     out("  aegis")

@@ -159,9 +159,22 @@ def make_handler(config: Config):
     return H
 
 
-def serve_dashboard(config: Config, host: str = "127.0.0.1", port: int = 9119) -> None:
+def _dashboard_url(config: Config, host: str, port: int) -> str:
+    token = config.get("server.dashboard_token")
+    base = f"http://{host}:{port}"
+    return f"{base}/?token={token}" if token else base
+
+
+def serve_dashboard(config: Config, host: str = "127.0.0.1", port: int = 9119,
+                    open_browser: bool = False) -> None:
     httpd = ThreadingHTTPServer((host, port), make_handler(config))
-    print(f"AEGIS dashboard → http://{host}:{port}  (Ctrl+C to stop)")
+    url = _dashboard_url(config, host, port)
+    print(f"AEGIS control panel → {url}")
+    print("  (leave this running; press Ctrl+C to stop)")
+    if open_browser:
+        import threading
+        import webbrowser
+        threading.Timer(0.6, lambda: webbrowser.open(url)).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -171,5 +184,7 @@ def serve_dashboard(config: Config, host: str = "127.0.0.1", port: int = 9119) -
 def cmd_dashboard(args, config: Config) -> int:
     host = getattr(args, "host", None) or config.get("server.dashboard_host", "127.0.0.1")
     port = getattr(args, "port", None) or config.get("server.dashboard_port", 9119)
-    serve_dashboard(config, host=host, port=int(port))
+    # Beginner-friendly default: open the browser unless asked not to.
+    open_browser = not getattr(args, "no_open", False)
+    serve_dashboard(config, host=host, port=int(port), open_browser=open_browser)
     return 0
