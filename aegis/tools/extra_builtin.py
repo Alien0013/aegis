@@ -126,5 +126,84 @@ class ScheduleTaskTool(Tool):
                              display=f"scheduled {job.id}")
 
 
+def _collect_packages(path: str | None, cwd) -> list[tuple[str, str]]:
+    """(name, version) pairs from a requirements file, or the installed environment."""
+    if path:
+        p = Path(path)
+        if not p.is_absolute():
+            p = Path(cwd) / path
+        out: list[tuple[str, str]] = []
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.split("#")[0].strip()
+            if "==" in line:
+                name, ver = line.split("==", 1)
+                out.append((name.strip(), ver.strip().split()[0]))
+        return out
+    import importlib.metadata as md
+    seen: dict[str, str] = {}
+    for dist in md.distributions():
+        name = (dist.metadata["Name"] if dist.metadata else None) or ""
+        if name and dist.version:
+            seen[name] = dist.version
+    return sorted(seen.items())
+
+
+def _osv_querybatch(pkgs: list[tuple[str, str]]) -> list[dict]:
+    """Query the OSV.dev batch API for PyPI advisories. Split into chunks of 250."""
+    results: list[dict] = []
+    for i in range(0, len(pkgs), 250):
+        chunk = pkgs[i:i + 250]
+        body = {"queries": [{"package": {"name": n, "ecosystem": "PyPI"}, "version": v}
+                            for n, v in chunk]}
+        r = httpx.post("https://api.osv.dev/v1/querybatch", json=body, timeout=30)
+        r.raise_for_status()
+        results.extend(r.json().get("results", []))
+    return results
+
+
+class DependencyAuditTool(Tool):
+    name = "dependency_audit"
+    description = ("Scan installed Python packages (or a requirements.txt) for known "
+                   "vulnerabilities via the OSV.dev database. Reports each affected package "
+                   "with its advisory IDs (CVE/GHSA). Use before shipping or when asked about "
+                   "supply-chain risk.")
+    groups = ["network"]
+    parameters = {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string",
+                     "description": "optional requirements.txt to scan instead of the installed env"},
+            "max": {"type": "integer", "description": "cap on packages to query (default 300)"},
+        },
+    }
+
+    def run(self, args, ctx: ToolContext) -> ToolResult:
+        try:
+            pkgs = _collect_packages(args.get("path"), ctx.cwd)
+        except Exception as e:  # noqa: BLE001
+            return ToolResult.error(f"could not read packages: {e}")
+        if not pkgs:
+            return ToolResult.error("no packages found to audit")
+        pkgs = pkgs[: int(args.get("max", 300) or 300)]
+        try:
+            results = _osv_querybatch(pkgs)
+        except Exception as e:  # noqa: BLE001
+            return ToolResult.error(f"OSV query failed: {e}")
+        vulnerable = []
+        for (name, ver), res in zip(pkgs, results):
+            ids = [v.get("id") for v in (res or {}).get("vulns", []) if v.get("id")]
+            if ids:
+                vulnerable.append((name, ver, ids))
+        if not vulnerable:
+            return ToolResult.ok(f"✓ no known vulnerabilities across {len(pkgs)} package(s)",
+                                 display="0 vulnerabilities")
+        lines = [f"⚠ {len(vulnerable)} vulnerable package(s) of {len(pkgs)} scanned:"]
+        for name, ver, ids in vulnerable:
+            lines.append(f"  {name} {ver} — {', '.join(ids[:6])}")
+        return ToolResult(truncate("\n".join(lines), 4000), data={"vulnerable": vulnerable},
+                          display=f"{len(vulnerable)} vulnerable package(s)")
+
+
 def extra_tools() -> list[Tool]:
-    return [ApplyPatchTool(), DownloadTool(), HttpRequestTool(), ScheduleTaskTool()]
+    return [ApplyPatchTool(), DownloadTool(), HttpRequestTool(), ScheduleTaskTool(),
+            DependencyAuditTool()]

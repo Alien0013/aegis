@@ -98,6 +98,27 @@ def test_background_learn_is_opt_in_and_gated(monkeypatch):
     assert learn.background_tick(cfg, s) is False          # no new turns -> no re-review
 
 
+def test_dependency_audit_tool(monkeypatch, tmp_path):
+    from aegis.tools import extra_builtin as eb
+    from aegis.tools.base import ToolContext
+    # offline: stub OSV + package collection
+    monkeypatch.setattr(eb, "_collect_packages", lambda path, cwd: [("badpkg", "1.0"), ("ok", "2.0")])
+    monkeypatch.setattr(eb, "_osv_querybatch",
+                        lambda pkgs: [{"vulns": [{"id": "GHSA-x"}]} if n == "badpkg" else {} for n, v in pkgs])
+    r = eb.DependencyAuditTool().run({}, ToolContext(cwd=tmp_path))
+    assert "1 vulnerable" in r.display and "badpkg" in r.content and "GHSA-x" in r.content
+    monkeypatch.setattr(eb, "_osv_querybatch", lambda pkgs: [{} for _ in pkgs])
+    assert eb.DependencyAuditTool().run({}, ToolContext(cwd=tmp_path)).display == "0 vulnerabilities"
+
+
+def test_dependency_audit_parses_requirements(tmp_path):
+    from aegis.tools.extra_builtin import _collect_packages
+    req = tmp_path / "requirements.txt"
+    req.write_text("requests==2.31.0  # http\nflask==3.0.0\nunpinned\n")
+    pkgs = _collect_packages("requirements.txt", str(tmp_path))
+    assert ("requests", "2.31.0") in pkgs and ("flask", "3.0.0") in pkgs and len(pkgs) == 2
+
+
 def test_status_shows_state_section(capsys):
     from aegis.cli.main import cmd_status
     from aegis.config import Config
