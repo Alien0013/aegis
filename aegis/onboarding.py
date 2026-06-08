@@ -168,7 +168,8 @@ def run_onboarding(
     elif quick:
         advanced = False
 
-    _configure_model(config, state, advanced, probe, input_func, secret_func, out)
+    if not _configure_model(config, state, advanced, probe, input_func, secret_func, out):
+        return 1
     _configure_web(config, state, advanced, input_func, secret_func, out)
     _configure_agent_surface(config, state, advanced, input_func, out)
     _configure_channels(config, state, advanced, input_func, secret_func, out)
@@ -462,7 +463,18 @@ def _ensure_codex_cli_login(input_func: Input, out: Output) -> bool:
         return True
     out(f"! Codex CLI auth is not ready: {detail}")
     if shutil.which("codex") is None:
-        out("  Install Codex CLI, then run `codex login` and re-run `aegis setup`.")
+        if _confirm("Install Codex CLI now with `npm install -g @openai/codex`?", True, input_func, out):
+            if not _install_codex_cli(out):
+                return False
+        else:
+            out("  Install Codex CLI, then run `codex login` and re-run `aegis setup`.")
+            return False
+    ok, detail = _codex_login_status()
+    if ok:
+        out(f"✓ Codex CLI auth ready: {detail.splitlines()[0]}")
+        return True
+    if shutil.which("codex") is None:
+        out("! Codex CLI is still not on PATH after install.")
         return False
     if not _confirm("Sign in with ChatGPT using `codex login` now?", True, input_func, out):
         out("  Run `codex login` later, then re-run `aegis setup` or start AEGIS.")
@@ -481,6 +493,30 @@ def _ensure_codex_cli_login(input_func: Input, out: Output) -> bool:
         return True
     out(f"! Codex CLI auth still not ready: {detail}")
     return False
+
+
+def _install_codex_cli(out: Output) -> bool:
+    npm = shutil.which("npm")
+    if npm is None:
+        out("! npm is not installed, so AEGIS cannot install the Codex CLI automatically.")
+        out("  Install Node.js/npm, then run `npm install -g @openai/codex`.")
+        return False
+    out("Installing Codex CLI with npm...")
+    try:
+        proc = subprocess.run([npm, "install", "-g", "@openai/codex"], check=False)
+    except Exception as exc:  # noqa: BLE001
+        out(f"! Codex CLI install failed to start: {exc}")
+        return False
+    if proc.returncode != 0:
+        out(f"! Codex CLI install exited with status {proc.returncode}.")
+        out("  Try manually: npm install -g @openai/codex")
+        return False
+    if shutil.which("codex") is None:
+        out("! Codex CLI installed, but `codex` is not on PATH in this shell.")
+        out("  Restart your shell or add npm's global bin directory to PATH, then run `codex login`.")
+        return False
+    out("✓ Codex CLI installed.")
+    return True
 
 
 def _dialog_choose(
@@ -553,10 +589,20 @@ def _configure_model(
     input_func: Input,
     secret_func: Input,
     out: Output,
-) -> None:
+) -> bool:
     out("")
     out("CONFIGURING MODEL INFERENCE")
     out("─────────────────────────────────────────────────────────")
+    previous_provider = config.get("model.provider", "anthropic")
+    previous_model = config.get("model.default", "claude-sonnet-4-5")
+
+    def abort_required_auth(message: str) -> bool:
+        out(message)
+        out("  Re-run `aegis setup` after fixing Codex CLI, or choose OpenAI API key / Skip credentials.")
+        config.set("model.provider", previous_provider)
+        config.set("model.default", previous_model)
+        return False
+
     common = [
         ("openai", "OpenAI / Codex"),
         ("anthropic", "Anthropic (Claude)"),
@@ -579,7 +625,7 @@ def _configure_model(
     spec = registry.get_spec(provider)
     if not spec:
         out(f"! unknown provider {provider}; keeping current config.")
-        return
+        return True
     state.provider = provider
     config.set("model.provider", provider)
     auth_ready = spec.auth_scheme == "none"
@@ -601,8 +647,8 @@ def _configure_model(
         if auth_method == "codex":
             codex_spec = registry.get_spec("codex")
             if codex_spec is None:
-                out("! Codex provider is unavailable in this build.")
                 state.auth_method = "skipped"
+                return abort_required_auth("! Codex provider is unavailable in this build.")
             else:
                 provider = "codex"
                 spec = codex_spec
@@ -611,6 +657,7 @@ def _configure_model(
                 auth_ready = _ensure_codex_cli_login(input_func, out)
                 if not auth_ready:
                     state.auth_method = "skipped"
+                    return abort_required_auth("! ChatGPT subscription setup did not finish.")
         elif auth_method == "api_key":
             auth_ready = _configure_api_key(config, env_name, secret_func, out)
             if not auth_ready:
@@ -622,6 +669,7 @@ def _configure_model(
         auth_ready = _ensure_codex_cli_login(input_func, out)
         if not auth_ready:
             state.auth_method = "skipped"
+            return abort_required_auth("! ChatGPT subscription setup did not finish.")
     elif spec.env_vars or spec.oauth:
         env_name = spec.env_vars[0] if spec.env_vars else ""
         auth_options: list[tuple[str, str]]
@@ -677,6 +725,7 @@ def _configure_model(
         _probe_model(config, out)
     elif probe:
         out("Skipping model connection test until usable credentials are configured.")
+    return True
 
 
 def _configure_api_key(config: Config, env_name: str, secret_func: Input, out: Output) -> bool:

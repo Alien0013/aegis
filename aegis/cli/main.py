@@ -651,14 +651,56 @@ def cmd_update(args, config: Config) -> int:
 def cmd_uninstall(args, config: Config) -> int:
     import shutil
     home = cfg.get_home()
+    bin_dir = Path(os.environ.get("AEGIS_BIN_DIR", str(Path.home() / ".local" / "bin"))).expanduser()
+    launcher_candidates = {bin_dir / "aegis"}
+    found_launcher = shutil.which("aegis")
+    if found_launcher:
+        launcher_candidates.add(Path(found_launcher).expanduser())
+    venv = home / "venv"
+
+    for unit in ("aegis-dashboard.service", "aegis-gateway.service"):
+        if shutil.which("systemctl"):
+            subprocess.run(
+                ["systemctl", "--user", "disable", "--now", unit],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        for unit_path in (
+            Path.home() / ".config" / "systemd" / "user" / unit,
+            Path.home() / ".config" / "systemd" / "user" / "default.target.wants" / unit,
+        ):
+            try:
+                unit_path.unlink()
+                _print(f"removed {unit_path}")
+            except FileNotFoundError:
+                pass
+
+    if shutil.which("systemctl"):
+        subprocess.run(
+            ["systemctl", "--user", "daemon-reload"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+
+    for launcher in sorted(launcher_candidates):
+        try:
+            launcher.unlink()
+            _print(f"removed launcher {launcher}")
+        except FileNotFoundError:
+            pass
+
+    if venv.exists():
+        shutil.rmtree(venv)
+        _print(f"removed venv {venv}")
+
     if getattr(args, "purge", False):
         if home.exists():
             shutil.rmtree(home)
         _print(f"purged {home}")
     else:
         _print(f"kept your data at {home} (pass --purge to delete config/sessions/memory/skills).")
-    _print("To remove the program: delete the venv and the `aegis` launcher on your PATH, e.g.\n"
-           "  rm -rf ~/.aegis/venv ~/.local/bin/aegis   (or run the repo's ./uninstall.sh)")
     return 0
 
 

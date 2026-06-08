@@ -48,6 +48,8 @@ ONBOARD_ARGS="${AEGIS_ONBOARD_ARGS:-}"
 STAGE=0
 TOTAL_STAGES=8
 BROWSER_STATUS="not selected"
+ONBOARD_FAILED=0
+ONBOARD_RC=0
 
 say()  { printf '\033[1;35m▸\033[0m %s\n' "$*"; }
 ok()   { printf '\033[1;32m✓\033[0m %s\n' "$*"; }
@@ -106,6 +108,21 @@ print_success() {
   kv "Plugins" "aegis plugins"
   kv "Update" "aegis update"
   kv "Uninstall" "aegis uninstall --purge  # or repo ./uninstall.sh --purge"
+}
+
+print_incomplete() {
+  printf '\n\033[1;33m'
+  printf '┌─────────────────────────────────────────────────────────┐\n'
+  printf '│        AEGIS installed, but onboarding is incomplete     │\n'
+  printf '└─────────────────────────────────────────────────────────┘\n'
+  printf '\033[0m\n'
+  printf 'The launcher was installed, but first-run setup did not finish.\n'
+  printf 'Run one of these after fixing the reported issue:\n'
+  printf '  aegis setup\n'
+  printf '  aegis doctor\n'
+  printf '\n'
+  printf 'To remove this partial install:\n'
+  printf '  aegis uninstall --purge\n'
 }
 
 usage() {
@@ -360,6 +377,8 @@ if [ "$RUN_ONBOARD" != "0" ] && { has_tty || [ "$NONINTERACTIVE_ONBOARD" = "1" ]
   if [ "$onboard_rc" = "0" ]; then
     ok "Onboarding complete."
   else
+    ONBOARD_FAILED=1
+    ONBOARD_RC="$onboard_rc"
     warn "Onboarding did not finish. Run 'aegis setup' when ready."
   fi
 else
@@ -380,6 +399,11 @@ if [ "$VERIFY_INSTALL" = "1" ]; then
   ok "Install verify complete."
 else
   warn "Verify skipped. Run 'aegis doctor' to check the install."
+fi
+
+if [ "$ONBOARD_FAILED" = "1" ]; then
+  print_incomplete
+  exit "$ONBOARD_RC"
 fi
 
 print_success

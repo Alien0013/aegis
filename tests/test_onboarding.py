@@ -80,7 +80,7 @@ def test_onboarding_can_select_oauth(monkeypatch):
     assert "Auth:            codex" in text
 
 
-def test_onboarding_codex_login_failure_does_not_fall_back_to_api_key(monkeypatch):
+def test_onboarding_codex_login_failure_aborts_setup(monkeypatch):
     from aegis.config import Config
     from aegis.onboarding import run_onboarding
 
@@ -108,14 +108,15 @@ def test_onboarding_codex_login_failure_does_not_fall_back_to_api_key(monkeypatc
         output_func=out.append,
     )
 
-    assert rc == 0
+    assert rc == 1
     assert "OPENAI_API_KEY" not in os.environ
     text = "\n".join(out)
-    assert "Auth:            skipped" in text
-    assert Config.load().get("model.provider") == "codex"
+    assert "ChatGPT subscription setup did not finish" in text
+    assert "Select model" not in text
+    assert Config.load().get("model.provider") == "anthropic"
 
 
-def test_onboarding_oauth_missing_scope_can_skip_without_probe(monkeypatch):
+def test_onboarding_codex_login_failure_does_not_probe(monkeypatch):
     from aegis.config import Config
     from aegis.onboarding import run_onboarding
 
@@ -146,10 +147,40 @@ def test_onboarding_oauth_missing_scope_can_skip_without_probe(monkeypatch):
         output_func=out.append,
     )
 
-    assert rc == 0
+    assert rc == 1
     text = "\n".join(out)
-    assert "Skipping model connection test until usable credentials are configured." in text
-    assert "Auth:            skipped" in text
+    assert "ChatGPT subscription setup did not finish" in text
+
+
+def test_ensure_codex_cli_login_can_install_missing_cli(monkeypatch):
+    from aegis.onboarding import _ensure_codex_cli_login
+
+    installed = {"done": False}
+
+    def fake_which(name: str):
+        if name == "npm":
+            return "/bin/npm"
+        if name == "codex" and installed["done"]:
+            return "/bin/codex"
+        return None
+
+    def fake_run(cmd, **_kwargs):
+        class Result:
+            returncode = 0
+            stdout = "Logged in using ChatGPT"
+            stderr = ""
+
+        if cmd[:3] == ["/bin/npm", "install", "-g"]:
+            installed["done"] = True
+        return Result()
+
+    monkeypatch.setattr("aegis.onboarding.shutil.which", fake_which)
+    monkeypatch.setattr("aegis.onboarding.subprocess.run", fake_run)
+    answers = iter(["y"])
+    out: list[str] = []
+
+    assert _ensure_codex_cli_login(lambda _prompt: next(answers), out.append)
+    assert "Codex CLI installed" in "\n".join(out)
 
 
 def test_onboarding_terminal_menu_uses_selector_markers(monkeypatch):
