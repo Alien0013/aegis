@@ -98,6 +98,15 @@ def test_background_learn_is_opt_in_and_gated(monkeypatch):
     assert learn.background_tick(cfg, s) is False          # no new turns -> no re-review
 
 
+def test_status_shows_state_section(capsys):
+    from aegis.cli.main import cmd_status
+    from aegis.config import Config
+    cmd_status(object(), Config.load())
+    out = capsys.readouterr().out
+    for label in ("State", "sessions:", "trajectory:", "cost (30d):", "disk:", "home:"):
+        assert label in out
+
+
 def test_trajectory_auto_capture_wired(tmp_path):
     """trajectory.enabled must actually write a line per turn (was dead config)."""
     import os

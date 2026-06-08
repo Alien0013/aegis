@@ -412,6 +412,38 @@ def cmd_status(args, config: Config) -> int:
     _print(f"  mcp:      {len(mcp_servers)} server(s)")
     _print(f"  channels: {', '.join(channels) or 'none'}")
 
+    # --- State: where the data lives and how much there is ---
+    import os
+    _print("")
+    _print("State")
+    try:
+        from ..session import SessionStore
+        _print(f"  sessions:   {len(SessionStore().list(limit=100000))}")
+    except Exception:  # noqa: BLE001
+        pass
+    mem = cfg.sub("memories", "MEMORY.md")
+    if os.path.exists(mem):
+        _print(f"  memory:     {os.path.getsize(mem):,} bytes")
+    tp = config.get("trajectory.path", "trajectories.jsonl")
+    tp = tp if os.path.isabs(tp) else cfg.sub(tp)
+    n_traj = sum(1 for _ in open(tp, encoding="utf-8")) if os.path.exists(tp) else 0
+    _print(f"  trajectory: {'on' if config.get('trajectory.enabled', False) else 'off'} "
+           f"({n_traj} captured)")
+    try:
+        from .. import usage_log
+        r = usage_log.cost_report(30, config)
+        _print(f"  cost (30d): ~${r['total_cost_usd']:.4f} over {r['calls']} call(s)")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        home = cfg.get_home()
+        total = sum(os.path.getsize(os.path.join(dp, f))
+                    for dp, _, fs in os.walk(home) for f in fs
+                    if os.path.exists(os.path.join(dp, f)))
+        _print(f"  disk:       {total / 1024:.0f} KB in {home}")
+    except Exception:  # noqa: BLE001
+        pass
+
     _print("")
     _print("Services")
     try:
