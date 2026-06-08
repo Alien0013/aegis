@@ -150,7 +150,14 @@ def cmd_auth(args, config: Config) -> int:
         store.delete(args.provider)
         _print(f"logged out of {args.provider}.")
         return 0
-    return _die("usage: aegis auth [status|login|logout]")
+    if args.action == "import-claude":
+        from ..providers.auth import import_claude_cli_login
+        ok, detail = import_claude_cli_login(store)
+        _print(("✓ " if ok else "! ") + detail)
+        if ok:
+            _print("  set `aegis model set anthropic claude-sonnet-4-5` and you're ready.")
+        return 0 if ok else 1
+    return _die("usage: aegis auth [status|login|logout|import-claude]")
 
 
 # --------------------------------------------------------------------------- #
@@ -883,7 +890,7 @@ def build_parser() -> argparse.ArgumentParser:
     m.set_defaults(func=cmd_model)
 
     a = sub.add_parser("auth", help="API-key / OAuth authentication")
-    a.add_argument("action", choices=["status", "login", "logout"])
+    a.add_argument("action", choices=["status", "login", "logout", "import-claude"])
     a.add_argument("provider", nargs="?")
     a.add_argument("--manual", action="store_true", help="manual code-paste OAuth flow")
     a.set_defaults(func=cmd_auth)

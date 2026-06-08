@@ -462,6 +462,39 @@ class AuthStore:
         return [p for p, c in self._all().items() if not c.get("quarantined")]
 
 
+def import_claude_cli_login(store: "AuthStore | None" = None) -> tuple[bool, str]:
+    """Reuse an existing Claude Code / Claude CLI login on this host (OpenClaw's approach)
+    instead of running our own claude.ai OAuth. Reads the Claude CLI credential file and
+    stores the token for the `anthropic` provider; refresh then works via the normal flow."""
+    import pathlib
+    store = store or AuthStore()
+    candidates = [
+        pathlib.Path.home() / ".claude" / ".credentials.json",
+        pathlib.Path.home() / ".config" / "claude" / ".credentials.json",
+    ]
+    src = next((p for p in candidates if p.exists()), None)
+    if src is None:
+        return False, "no Claude CLI login found — run Claude Code (`claude`) and log in first"
+    try:
+        data = json.loads(src.read_text(encoding="utf-8"))
+    except Exception as e:  # noqa: BLE001
+        return False, f"could not read {src}: {e}"
+    oauth = data.get("claudeAiOauth") or {}
+    token = oauth.get("accessToken")
+    if not token:
+        return False, f"{src} has no Claude OAuth token"
+    exp = oauth.get("expiresAt", 0)
+    store.save("anthropic", {
+        "access_token": token,
+        "refresh_token": oauth.get("refreshToken"),
+        "expires_at": exp / 1000 if exp and exp > 1e12 else (exp or None),  # ms -> s
+        "scopes": oauth.get("scopes", []),
+        "token_type": "Bearer",
+    })
+    sub = oauth.get("subscriptionType")
+    return True, f"reused Claude CLI login{f' ({sub})' if sub else ''} for the anthropic provider"
+
+
 class AuthError(RuntimeError):
     pass
 

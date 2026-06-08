@@ -208,6 +208,30 @@ def test_onboarding_offers_detected_key_user_decides(monkeypatch):
                                  lambda p: "", lambda m: None, input_func=lambda p: "n") is False
 
 
+def test_import_claude_cli_login(monkeypatch, tmp_path):
+    """Reuse an existing Claude Code login (OpenClaw's approach) for the anthropic provider."""
+    import json
+    import time
+    from aegis.providers.auth import AuthStore, import_claude_cli_login
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cdir = tmp_path / ".claude"
+    cdir.mkdir()
+    (cdir / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {
+        "accessToken": "tok-abc", "refreshToken": "ref-xyz",
+        "expiresAt": int((time.time() + 3600) * 1000),
+        "scopes": ["user:inference"], "subscriptionType": "max"}}))
+    store = AuthStore(tmp_path / "auth.json")
+    ok, detail = import_claude_cli_login(store)
+    assert ok and "max" in detail
+    creds = store.load("anthropic")
+    assert creds["access_token"] == "tok-abc" and creds["token_type"] == "Bearer"
+    assert creds["refresh_token"] == "ref-xyz" and creds["expires_at"] < 1e11   # ms -> s
+    # missing credential -> clean failure, no crash
+    (cdir / ".credentials.json").unlink()
+    ok2, _ = import_claude_cli_login(store)
+    assert ok2 is False
+
+
 def test_status_shows_state_section(capsys):
     from aegis.cli.main import cmd_status
     from aegis.config import Config

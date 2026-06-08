@@ -701,14 +701,19 @@ def _configure_model(
             return abort_required_auth("! ChatGPT subscription setup did not finish.")
     elif spec.env_vars or spec.oauth:
         env_name = spec.env_vars[0] if spec.env_vars else ""
-        auth_options: list[tuple[str, str]]
+        auth_options: list[tuple[str, str]] = []
+        # For Anthropic, reusing an existing Claude Code / Claude CLI login is the most
+        # reliable subscription path (no fragile OAuth flow) — offer it first.
+        if provider == "anthropic":
+            import pathlib
+            has_claude = (pathlib.Path.home() / ".claude" / ".credentials.json").exists()
+            label = "Reuse Claude Code login (Claude subscription"
+            label += ", detected ✓)" if has_claude else " — run `claude` login first)"
+            auth_options.append(("claude_cli", label))
         if spec.oauth:
-            oauth_label = "OAuth browser login"
-            auth_options = [("oauth", oauth_label)]
-            if env_name:
-                auth_options.append(("api_key", f"API key ({env_name})"))
-        else:
-            auth_options = [("api_key", f"API key ({env_name})")]
+            auth_options.append(("oauth", "OAuth browser login"))
+        if env_name:
+            auth_options.append(("api_key", f"API key ({env_name})"))
         auth_options.append(("skip", "Skip credentials for now"))
         auth_method = _choose(
             "Choose authentication method:",
@@ -718,7 +723,15 @@ def _configure_model(
             output_func=out,
         )
         state.auth_method = auth_method
-        if auth_method == "api_key":
+        if auth_method == "claude_cli":
+            from .providers.auth import AuthStore, import_claude_cli_login
+            auth_ready, detail = import_claude_cli_login(AuthStore())
+            out(("✓ " if auth_ready else "! ") + detail)
+            if not auth_ready:
+                out("  Run Claude Code (`claude`) and log in, then re-run `aegis setup`,"
+                    " or choose API key.")
+                state.auth_method = "skipped"
+        elif auth_method == "api_key":
             auth_ready = _configure_api_key(config, env_name, secret_func, out, input_func)
             if not auth_ready:
                 state.auth_method = "skipped"
