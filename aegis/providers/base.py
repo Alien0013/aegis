@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any, Callable
+from pathlib import Path
+from typing import Callable
 
-from ..types import LLMResponse, Message, ToolSchema
+from ..tools.base import ToolResult
+from ..types import LLMResponse, Message, ToolCall, ToolSchema
 from .auth import AuthProvider
 
 OnDelta = Callable[[str], None]
+ToolRunner = Callable[[ToolCall], ToolResult]
+ApprovalHandler = Callable[[str], bool]
 
 
 class ApiMode(str, Enum):
@@ -18,6 +22,7 @@ class ApiMode(str, Enum):
     CHAT_COMPLETIONS = "chat_completions"   # OpenAI-compatible
     ANTHROPIC_MESSAGES = "anthropic_messages"
     RESPONSES = "responses"                 # OpenAI Responses API / Codex backend
+    CODEX_APP_SERVER = "codex_app_server"   # Local Codex CLI app-server runtime
 
 
 class ProviderTransport(ABC):
@@ -40,6 +45,9 @@ class ProviderTransport(ABC):
         extra_headers: dict[str, str] | None = None,
         timeout: float = 600.0,
         reasoning: str = "off",
+        tool_runner: ToolRunner | None = None,
+        approver: ApprovalHandler | None = None,
+        cwd: Path | None = None,
     ) -> LLMResponse:
         """Make one completion call and return a normalized response."""
         raise NotImplementedError
@@ -81,6 +89,9 @@ class Provider:
         model: str | None = None,
         max_tokens: int | None = None,
         reasoning: str = "off",
+        tool_runner: ToolRunner | None = None,
+        approver: ApprovalHandler | None = None,
+        cwd: Path | None = None,
     ) -> LLMResponse:
         attempts = 0
         while True:
@@ -96,6 +107,9 @@ class Provider:
                     max_tokens=max_tokens or self.max_tokens,
                     extra_headers=self.extra_headers,
                     reasoning=reasoning,
+                    tool_runner=tool_runner,
+                    approver=approver,
+                    cwd=cwd,
                 )
             except Exception as e:  # noqa: BLE001
                 # Classify: retry transient errors (rate-limit, 5xx, timeouts, dropped

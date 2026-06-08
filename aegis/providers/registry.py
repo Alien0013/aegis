@@ -4,6 +4,7 @@ Auth precedence (per provider):
   1. explicit ``base_url`` override in config -> treat as custom/local (api-key or none)
   2. an API key in the environment            -> API key
   3. a valid OAuth login in auth.json         -> OAuth
+  4. Codex subscription auth                  -> the separate ``codex`` provider
 API keys win when both are configured because OAuth scopes can be identity-only.
 ``aegis auth status`` prints the resolution.
 """
@@ -17,9 +18,10 @@ from dataclasses import dataclass, field
 from .. import config as cfg
 from ..constants import MIN_CONTEXT_LENGTH
 from .anthropic import AnthropicTransport
-from .auth import ApiKeyAuth, AuthProvider, AuthStore, OAuthAuth, OAuthConfig
+from .auth import ApiKeyAuth, AuthProvider, AuthStore, CodexCliAuth, OAuthAuth, OAuthConfig
 from .base import ApiMode, Provider, ProviderTransport
 from .chat_completions import ChatCompletionsTransport
+from .codex_app_server import CodexAppServerTransport
 from .responses import ResponsesTransport
 
 
@@ -31,7 +33,7 @@ class ProviderSpec:
     default_model: str
     context_length: int
     env_vars: list[str] = field(default_factory=list)
-    auth_scheme: str = "bearer"            # bearer | anthropic | none
+    auth_scheme: str = "bearer"            # bearer | anthropic | codex-cli | none
     oauth: OAuthConfig | None = None
     max_tokens: int = 8192
     extra_headers: dict[str, str] = field(default_factory=dict)
@@ -115,6 +117,10 @@ PROVIDERS: dict[str, ProviderSpec] = {
     "openai": ProviderSpec(
         "openai", ApiMode.CHAT_COMPLETIONS, "https://api.openai.com/v1",
         "gpt-4o", 128_000, ["OPENAI_API_KEY"], oauth=OPENAI_OAUTH,
+    ),
+    "codex": ProviderSpec(
+        "codex", ApiMode.CODEX_APP_SERVER, "codex://app-server",
+        "gpt-5.5", 272_000, [], "codex-cli",
     ),
     "openai-codex": ProviderSpec(
         "openai-codex", ApiMode.RESPONSES, "https://chatgpt.com/backend-api/codex",
@@ -243,6 +249,8 @@ def _transport_for(api_mode: ApiMode) -> ProviderTransport:
         return AnthropicTransport()
     if api_mode == ApiMode.RESPONSES:
         return ResponsesTransport()
+    if api_mode == ApiMode.CODEX_APP_SERVER:
+        return CodexAppServerTransport()
     return ChatCompletionsTransport()
 
 
@@ -266,6 +274,8 @@ def _custom_specs(config: cfg.Config) -> dict[str, ProviderSpec]:
 
 def _resolve_auth(spec: ProviderSpec, prefer: str | None = None) -> AuthProvider:
     """Pick OAuth or API key. ``prefer`` can force 'oauth' or 'apikey'."""
+    if spec.api_mode == ApiMode.CODEX_APP_SERVER or spec.auth_scheme == "codex-cli":
+        return CodexCliAuth()
     store = AuthStore()
     oauth = OAuthAuth(spec.oauth, store) if spec.oauth else None
     if oauth and not spec.env_vars and spec.auth_scheme != "none":

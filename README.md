@@ -96,7 +96,8 @@ aegis setup --non-interactive --accept-risk --json
 # or point it at a provider manually
 aegis config set ANTHROPIC_API_KEY  sk-ant-...        # Claude
 aegis config set OPENAI_API_KEY     sk-...            # OpenAI
-aegis auth login openai                               # …or OAuth instead of a key
+codex login                                           # ChatGPT subscription auth
+aegis model set codex gpt-5.5                         # use Codex app-server runtime
 aegis model set ollama llama3.1                       # …or fully local, no key
 
 # 2. talk to it
@@ -109,31 +110,38 @@ export TELEGRAM_BOT_TOKEN=...
 aegis gateway --channels telegram,cli
 ```
 
-## Providers (all support API key; Anthropic/OpenAI/Google also OAuth)
+## Providers
 
-`anthropic`, `openai`, `google` (Gemini), `openrouter`, `groq`, `deepseek`,
+`codex` (ChatGPT subscription via Codex CLI), `anthropic`, `openai`, `google` (Gemini),
+`openrouter`, `groq`, `deepseek`,
 `xai`, `mistral`, `together`, `ollama`, `lmstudio`, plus any OpenAI-compatible
 endpoint via `model.base_url` and `custom_providers` in config.
 
-Auth resolution per provider: explicit `base_url` → API key from the environment →
-OAuth login (if usable for model requests). API keys intentionally win when both
-exist because some OAuth tokens are identity-only. Inspect it with `aegis auth status`.
+For OpenAI there are two separate paths:
+
+- `codex`: ChatGPT/Codex subscription auth through the local `codex app-server`.
+  Run `codex login`, then select ChatGPT subscription auth during `aegis setup`.
+- `openai`: OpenAI Platform API-key auth through `OPENAI_API_KEY`.
+
+Auth resolution per API provider: explicit `base_url` → API key from the environment →
+OAuth login when that provider supports API inference scopes. API keys intentionally
+win when both exist because some OAuth tokens are identity-only. Inspect it with
+`aegis auth status`.
 
 OAuth is implemented generically (PKCE S256, `client_secret` support,
 localhost-callback **and** manual-paste flows, automatic refresh, `auth.json` at
-chmod 0600, token quarantine on failure). **Anthropic, OpenAI (ChatGPT/Codex
-login), and Google (Gemini login)** ship with OAuth configs:
+chmod 0600, token quarantine on failure). **Anthropic, OpenAI API OAuth, and
+Google (Gemini login)** ship with OAuth configs:
 
 ```bash
 aegis auth login anthropic     # browser → paste code
-aegis auth login openai        # ChatGPT login, localhost:1455 callback
+aegis auth login openai        # OpenAI API OAuth, localhost:1455 callback
 aegis auth login google        # Google sign-in, loopback callback
 ```
 
-OpenAI login + token storage/refresh can succeed while the token lacks the
-`model.request` scope needed for inference; AEGIS detects that and falls back to
-API-key auth when available. API keys remain the reliable OpenAI path. Any other
-IdP wires up by overriding `OAuthConfig`.
+OpenAI API OAuth can succeed while the token lacks the `model.request` scope needed
+for API inference. For ChatGPT subscription-backed inference, use the `codex`
+provider and `codex login` instead of `aegis auth login openai`.
 
 ## Tools & permissions
 

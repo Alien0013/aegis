@@ -81,6 +81,9 @@ class ChatCompletionsTransport(ProviderTransport):
         extra_headers: dict[str, str] | None = None,
         timeout: float = 600.0,
         reasoning: str = "off",
+        tool_runner=None,
+        approver=None,
+        cwd=None,
     ) -> LLMResponse:
         url = f"{base_url}/chat/completions"
         headers = {"Content-Type": "application/json", **(extra_headers or {}), **auth.headers()}

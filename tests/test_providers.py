@@ -220,6 +220,129 @@ def test_openai_codex_builds_oauth_responses_provider():
     assert provider.base_url == "https://chatgpt.com/backend-api/codex"
 
 
+def test_codex_builds_app_server_provider(monkeypatch):
+    from aegis.config import Config
+    from aegis.providers import build_provider
+    from aegis.providers.base import ApiMode
+    from aegis.providers.codex_app_server import CodexAppServerTransport
+
+    class Status:
+        returncode = 0
+        stdout = "Logged in using ChatGPT"
+        stderr = ""
+
+    monkeypatch.setattr("aegis.providers.auth.shutil.which", lambda _cmd: "/bin/codex")
+    monkeypatch.setattr("aegis.providers.auth.subprocess.run", lambda *_args, **_kwargs: Status())
+
+    cfg = Config.load()
+    cfg.data["model"]["provider"] = "codex"
+    cfg.data["model"]["default"] = "gpt-5.5"
+    provider = build_provider(cfg)
+
+    assert provider.api_mode == ApiMode.CODEX_APP_SERVER
+    assert isinstance(provider.transport, CodexAppServerTransport)
+    assert provider.auth.describe() == "codex-cli (ChatGPT login ready)"
+    assert provider.base_url == "codex://app-server"
+
+
+def test_codex_app_server_projects_dynamic_tools():
+    from aegis.providers.codex_app_server import CodexAppServerTransport
+
+    tools = CodexAppServerTransport()._to_dynamic_tools([
+        {
+            "name": "system_status",
+            "description": "Inspect install state",
+            "parameters": {"type": "object", "properties": {"verbose": {"type": "boolean"}}},
+        }
+    ])
+
+    assert tools == [
+        {
+            "name": "system_status",
+            "namespace": "aegis",
+            "description": "Inspect install state",
+            "inputSchema": {"type": "object", "properties": {"verbose": {"type": "boolean"}}},
+        }
+    ]
+
+
+def test_codex_app_server_handles_dynamic_tool_request():
+    from aegis.providers.codex_app_server import CodexAppServerTransport
+    from aegis.tools.base import ToolResult
+
+    class Client:
+        def __init__(self):
+            self.result = None
+            self.error = None
+
+        def respond(self, _request_id, result=None):
+            self.result = result
+
+        def respond_error(self, _request_id, message, code=-32603):
+            self.error = (code, message)
+
+    client = Client()
+    transport = CodexAppServerTransport()
+    transport._client = client
+
+    seen = []
+
+    def run(call):
+        seen.append(call)
+        return ToolResult.ok("tool output")
+
+    transport._handle_server_request(
+        {
+            "id": 7,
+            "method": "item/tool/call",
+            "params": {
+                "callId": "call_1",
+                "tool": "system_status",
+                "arguments": {"verbose": True},
+                "threadId": "thr",
+                "turnId": "turn",
+            },
+        },
+        tool_runner=run,
+        approver=None,
+    )
+
+    assert seen[0].name == "system_status"
+    assert seen[0].arguments == {"verbose": True}
+    assert client.result == {
+        "contentItems": [{"type": "inputText", "text": "tool output"}],
+        "success": True,
+    }
+    assert client.error is None
+
+
+def test_codex_app_server_request_does_not_replay_notifications():
+    from collections import deque
+    import queue
+
+    from aegis.providers.codex_app_server import _CodexAppServerClient
+
+    client = _CodexAppServerClient.__new__(_CodexAppServerClient)
+    client._next_id = 1
+    client._incoming = queue.Queue()
+    client._backlog = deque([
+        {"method": "remoteControl/status/changed", "params": {"status": "disabled"}},
+        {"id": 1, "result": {"ok": True}},
+    ])
+    sent = []
+    client._send = lambda msg: sent.append(msg)
+    client.is_alive = lambda: True
+    client.stderr_tail = lambda: ""
+
+    result = _CodexAppServerClient.request(client, "thread/start", {}, timeout=1)
+
+    assert result == {"ok": True}
+    assert sent[0]["method"] == "thread/start"
+    assert list(client._backlog) == [
+        {"method": "remoteControl/status/changed", "params": {"status": "disabled"}}
+    ]
+
+
 def test_openai_codex_oauth_adds_account_header():
     import base64
     import json

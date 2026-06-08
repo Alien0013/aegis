@@ -22,6 +22,8 @@ import http.server
 import json
 import os
 import secrets
+import shutil
+import subprocess
 import threading
 import time
 import urllib.parse
@@ -113,6 +115,44 @@ class ApiKeyAuth(AuthProvider):
         if self.scheme == "none":
             return "no-auth (local)"
         return f"api-key ({'set' if self._key() else 'MISSING'}: {self.env_vars[0]})"
+
+
+class CodexCliAuth(AuthProvider):
+    """Authentication owned by the local Codex CLI.
+
+    Codex app-server reads the same cached login as the Codex CLI/IDE
+    extension, usually ``~/.codex/auth.json`` or the OS credential store. AEGIS
+    therefore does not inject bearer headers here.
+    """
+
+    def __init__(self, command: str = "codex"):
+        self.command = command
+
+    def headers(self) -> dict[str, str]:
+        return {}
+
+    def available(self) -> bool:
+        if shutil.which(self.command) is None:
+            return False
+        try:
+            proc = subprocess.run(
+                [self.command, "login", "status"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except Exception:
+            return False
+        status = (proc.stdout + "\n" + proc.stderr).lower()
+        return proc.returncode == 0 and "logged in" in status
+
+    def describe(self) -> str:
+        if shutil.which(self.command) is None:
+            return "codex-cli (missing; install @openai/codex)"
+        if self.available():
+            return "codex-cli (ChatGPT login ready)"
+        return "codex-cli (not logged in; run `codex login`)"
 
 
 # --------------------------------------------------------------------------- #

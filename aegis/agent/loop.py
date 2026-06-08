@@ -14,6 +14,21 @@ from . import compaction, governance
 OnEvent = Callable[[dict], None]
 
 
+def _provider_complete(provider, messages, *, tools=None, **kwargs):
+    """Call provider.complete without breaking older Provider-compatible fakes/plugins."""
+    import inspect
+
+    try:
+        params = inspect.signature(provider.complete).parameters
+    except (TypeError, ValueError):
+        return provider.complete(messages, tools=tools, **kwargs)
+    accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+    if accepts_kwargs:
+        return provider.complete(messages, tools=tools, **kwargs)
+    filtered = {k: v for k, v in kwargs.items() if k in params}
+    return provider.complete(messages, tools=tools, **filtered)
+
+
 class ToolExecutor:
     """Runs requested tool calls (concurrently), enforcing permissions per call."""
 
@@ -48,7 +63,7 @@ class ToolExecutor:
         except Exception:  # noqa: BLE001
             pass
 
-    def _run_one(self, call: ToolCall) -> Message:
+    def execute_one_raw(self, call: ToolCall) -> ToolResult:
         self.emit({"type": "tool_start", "id": call.id, "name": call.name, "args": call.arguments})
         self._run_hooks("pre_tool", {"tool": call.name, "args": str(call.arguments)[:300]})
         self._maybe_checkpoint(call)
@@ -67,9 +82,14 @@ class ToolExecutor:
         self.emit({"type": "tool_result", "id": call.id, "name": call.name,
                    "summary": res.summary, "is_error": res.is_error})
         self._run_hooks("post_tool", {"tool": call.name, "is_error": str(res.is_error)})
+        return res
+
+    def _run_one(self, call: ToolCall) -> Message:
+        res = self.execute_one_raw(call)
         content = res.content
         # Wrap results from external/untrusted sources so the model treats them as DATA,
         # not instructions (prompt-injection defense).
+        tool = self.registry.get(call.name)
         is_untrusted = call.name.startswith("mcp__") or (tool and "network" in tool.groups)
         if content and not res.is_error and is_untrusted:
             content = (f'<untrusted_tool_result source="{call.name}">\n{content}\n'
@@ -111,9 +131,12 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
             emit({"type": "assistant_delta", "text": text})
 
         try:
-            resp = agent.provider.complete(
-                session.messages, tools=schemas, stream=agent.stream, on_delta=delta_cb,
+            resp = _provider_complete(
+                agent.provider, session.messages, tools=schemas, stream=agent.stream, on_delta=delta_cb,
                 reasoning=getattr(agent, "reasoning", "off"),
+                tool_runner=executor.execute_one_raw,
+                approver=getattr(agent.tool_context, "approver", None),
+                cwd=agent.cwd,
             )
         except Exception as e:  # noqa: BLE001
             from .._log import log_exc
@@ -175,8 +198,13 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                      "and what remains.")
     )
     try:
-        grace = agent.provider.complete(session.messages, tools=None, stream=agent.stream,
-                                        on_delta=lambda t: emit({"type": "assistant_delta", "text": t}))
+        grace = _provider_complete(
+            agent.provider,
+            session.messages,
+            tools=None,
+            stream=agent.stream,
+            on_delta=lambda t: emit({"type": "assistant_delta", "text": t}),
+        )
         gm = grace.to_message()
     except Exception as e:  # noqa: BLE001
         gm = Message.assistant(f"[step limit reached; summary failed: {e}]")

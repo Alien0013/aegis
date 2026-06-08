@@ -99,6 +99,9 @@ class AnthropicTransport(ProviderTransport):
         extra_headers: dict[str, str] | None = None,
         timeout: float = 600.0,
         reasoning: str = "off",
+        tool_runner=None,
+        approver=None,
+        cwd=None,
     ) -> LLMResponse:
         url = f"{base_url}/v1/messages"
         system, wire_messages = self._to_wire(messages)

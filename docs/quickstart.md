@@ -6,7 +6,8 @@ aegis setup --non-interactive --accept-risk --json
 # or pick directly:
 aegis config set ANTHROPIC_API_KEY sk-ant-…   # API key
 aegis config set OPENAI_API_KEY sk-…          # OpenAI API key
-aegis auth login openai                        # …or OAuth
+codex login                                    # ChatGPT subscription auth
+aegis model set codex gpt-5.5                  # Codex app-server runtime
 aegis model set ollama llama3.1                # …or fully local
 ```
 

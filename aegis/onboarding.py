@@ -8,6 +8,8 @@ import importlib.util
 import json
 import os
 import secrets
+import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from typing import Callable
@@ -21,6 +23,14 @@ Output = Callable[[str], None]
 
 
 MODEL_PRESETS: dict[str, list[tuple[str, str]]] = {
+    "codex": [
+        ("gpt-5.5", "GPT-5.5 Codex"),
+        ("gpt-5.4", "GPT-5.4 Codex"),
+        ("gpt-5.4-mini", "GPT-5.4 mini Codex"),
+        ("gpt-5.3-codex", "GPT-5.3 Codex"),
+        ("gpt-5.2", "GPT-5.2"),
+        ("codex-auto-review", "Codex auto review"),
+    ],
     "openai-codex": [
         ("gpt-5.5", "GPT-5.5 Codex"),
         ("gpt-5.4", "GPT-5.4 Codex"),
@@ -199,8 +209,11 @@ def run_onboarding_noninteractive(
     if not accept_risk:
         return fail("noninteractive onboarding requires --accept-risk")
     if auth == "oauth":
-        return fail("OAuth requires an interactive browser login; use --auth skip or --auth api-key")
-    if auth not in {"skip", "api-key", "local"}:
+        return fail(
+            "OAuth requires an interactive browser login; use --auth codex, "
+            "--auth api-key, or --auth skip"
+        )
+    if auth not in {"skip", "api-key", "local", "codex"}:
         return fail(f"unknown auth method: {auth}")
     if exec_mode not in {"ask", "auto", "allowlist", "deny", "full", "smart"}:
         return fail(f"unknown exec mode: {exec_mode}")
@@ -208,11 +221,19 @@ def run_onboarding_noninteractive(
         return fail(f"unknown web backend: {web}")
 
     provider_name = provider or config.get("model.provider", "anthropic")
+    if provider_name == "openai" and auth == "codex":
+        provider_name = "codex"
     spec = registry.get_spec(provider_name)
     if not spec:
         return fail(f"unknown provider: {provider_name}")
     if auth == "local" and spec.auth_scheme != "none":
         return fail(f"provider {provider_name} is not a local/no-auth provider")
+    if auth == "codex":
+        if spec.auth_scheme != "codex-cli":
+            return fail(f"provider {provider_name} does not use Codex CLI auth")
+        ok, detail = _codex_login_status()
+        if not ok:
+            return fail(f"Codex CLI auth is not ready: {detail}")
     if auth == "api-key":
         if not spec.env_vars:
             return fail(f"provider {provider_name} does not use API-key auth")
@@ -415,6 +436,53 @@ def _choose_model(provider: str, default_model: str, input_func: Input, output_f
     return choice
 
 
+def _codex_login_status() -> tuple[bool, str]:
+    if shutil.which("codex") is None:
+        return False, "codex CLI not found; install with `npm i -g @openai/codex`"
+    try:
+        proc = subprocess.run(
+            ["codex", "login", "status"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return False, f"codex login status failed: {exc}"
+    text = "\n".join(p.strip() for p in (proc.stdout, proc.stderr) if p.strip())
+    if proc.returncode == 0 and "logged in" in text.lower():
+        return True, text or "logged in"
+    return False, text or "not logged in"
+
+
+def _ensure_codex_cli_login(input_func: Input, out: Output) -> bool:
+    ok, detail = _codex_login_status()
+    if ok:
+        out(f"✓ Codex CLI auth ready: {detail.splitlines()[0]}")
+        return True
+    out(f"! Codex CLI auth is not ready: {detail}")
+    if shutil.which("codex") is None:
+        out("  Install Codex CLI, then run `codex login` and re-run `aegis setup`.")
+        return False
+    if not _confirm("Sign in with ChatGPT using `codex login` now?", True, input_func, out):
+        out("  Run `codex login` later, then re-run `aegis setup` or start AEGIS.")
+        return False
+    try:
+        proc = subprocess.run(["codex", "login"], check=False)
+    except Exception as exc:  # noqa: BLE001
+        out(f"! codex login failed to start: {exc}")
+        return False
+    if proc.returncode != 0:
+        out(f"! codex login exited with status {proc.returncode}.")
+        return False
+    ok, detail = _codex_login_status()
+    if ok:
+        out(f"✓ Codex CLI auth ready: {detail.splitlines()[0]}")
+        return True
+    out(f"! Codex CLI auth still not ready: {detail}")
+    return False
+
+
 def _dialog_choose(
     prompt: str,
     options: list[tuple[str, str]],
@@ -490,7 +558,7 @@ def _configure_model(
     out("CONFIGURING MODEL INFERENCE")
     out("─────────────────────────────────────────────────────────")
     common = [
-        ("openai", "OpenAI (ChatGPT OAuth / API key)"),
+        ("openai", "OpenAI / Codex"),
         ("anthropic", "Anthropic (Claude)"),
         ("google", "Google Gemini"),
         ("ollama", "Ollama (local / offline)"),
@@ -516,7 +584,45 @@ def _configure_model(
     config.set("model.provider", provider)
     auth_ready = spec.auth_scheme == "none"
 
-    if spec.env_vars or spec.oauth:
+    if provider == "openai":
+        env_name = spec.env_vars[0] if spec.env_vars else "OPENAI_API_KEY"
+        auth_method = _choose(
+            "Choose authentication method:",
+            [
+                ("codex", "ChatGPT subscription via Codex CLI"),
+                ("api_key", f"OpenAI API key ({env_name})"),
+                ("skip", "Skip credentials for now"),
+            ],
+            default=0,
+            input_func=input_func,
+            output_func=out,
+        )
+        state.auth_method = auth_method
+        if auth_method == "codex":
+            codex_spec = registry.get_spec("codex")
+            if codex_spec is None:
+                out("! Codex provider is unavailable in this build.")
+                state.auth_method = "skipped"
+            else:
+                provider = "codex"
+                spec = codex_spec
+                state.provider = provider
+                config.set("model.provider", provider)
+                auth_ready = _ensure_codex_cli_login(input_func, out)
+                if not auth_ready:
+                    state.auth_method = "skipped"
+        elif auth_method == "api_key":
+            auth_ready = _configure_api_key(config, env_name, secret_func, out)
+            if not auth_ready:
+                state.auth_method = "skipped"
+        else:
+            state.auth_method = "skipped"
+    elif spec.auth_scheme == "codex-cli":
+        state.auth_method = "codex"
+        auth_ready = _ensure_codex_cli_login(input_func, out)
+        if not auth_ready:
+            state.auth_method = "skipped"
+    elif spec.env_vars or spec.oauth:
         env_name = spec.env_vars[0] if spec.env_vars else ""
         auth_options: list[tuple[str, str]]
         if spec.oauth:
@@ -524,11 +630,6 @@ def _configure_model(
             auth_options = [("oauth", oauth_label)]
             if env_name:
                 auth_options.append(("api_key", f"API key ({env_name})"))
-            if provider == "openai":
-                auth_options = [
-                    ("oauth", "ChatGPT / Codex OAuth"),
-                    ("api_key", f"API key ({env_name}) - reliable OpenAI API path"),
-                ]
         else:
             auth_options = [("api_key", f"API key ({env_name})")]
         auth_options.append(("skip", "Skip credentials for now"))
@@ -545,24 +646,11 @@ def _configure_model(
             if not auth_ready:
                 state.auth_method = "skipped"
         elif auth_method == "oauth" and spec.oauth:
-            if provider == "openai":
-                codex_spec = registry.get_spec("openai-codex")
-                if codex_spec:
-                    provider = "openai-codex"
-                    spec = codex_spec
-                    state.provider = provider
-                    config.set("model.provider", provider)
-                    out("✓ using OpenAI Codex backend for ChatGPT OAuth.")
             auth_ready = _oauth_login(provider, spec, out)
             if not auth_ready:
                 out("  Use an API key if OAuth is unavailable for this provider.")
-                fallback_env = "OPENAI_API_KEY" if provider == "openai-codex" else env_name
+                fallback_env = env_name
                 if fallback_env and _confirm(f"Configure {fallback_env} instead?", True, input_func, out):
-                    if provider == "openai-codex":
-                        provider = "openai"
-                        spec = registry.get_spec("openai") or spec
-                        state.provider = provider
-                        config.set("model.provider", provider)
                     env_name = fallback_env
                     auth_ready = _configure_api_key(config, env_name, secret_func, out)
                     state.auth_method = "api_key" if auth_ready else "skipped"

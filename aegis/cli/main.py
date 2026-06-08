@@ -108,7 +108,7 @@ def cmd_model(args, config: Config) -> int:
 # --------------------------------------------------------------------------- #
 def cmd_auth(args, config: Config) -> int:
     from ..providers import registry
-    from ..providers.auth import AuthError, AuthStore, OAuthAuth
+    from ..providers.auth import AuthError, AuthStore, CodexCliAuth, OAuthAuth
 
     store = AuthStore()
     if args.action == "status":
@@ -121,7 +121,8 @@ def cmd_auth(args, config: Config) -> int:
                 oauth = oauth_auth.describe().removeprefix(f"oauth ({name}: ").removesuffix(")")
             else:
                 oauth = "—"
-            _print(f"  {name:<12} api-key: {api:<5} oauth: {oauth}")
+            codex = CodexCliAuth().describe() if spec.auth_scheme == "codex-cli" else "—"
+            _print(f"  {name:<12} api-key: {api:<5} oauth: {oauth:<30} codex: {codex}")
         return 0
     if args.action == "login":
         if not args.provider:
@@ -752,7 +753,7 @@ def _add_onboard_automation_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--accept-risk", action="store_true", help="required with --non-interactive")
     parser.add_argument("--json", action="store_true", help="emit a machine-readable onboarding summary")
     parser.add_argument("--provider", help="provider for noninteractive onboarding")
-    parser.add_argument("--auth", choices=["skip", "api-key", "local", "oauth"], default="skip",
+    parser.add_argument("--auth", choices=["skip", "api-key", "local", "oauth", "codex"], default="skip",
                         help="credential mode for noninteractive onboarding")
     parser.add_argument("--model", help="model id for noninteractive onboarding")
     parser.add_argument("--web", default="auto", help="web search backend, or skip")

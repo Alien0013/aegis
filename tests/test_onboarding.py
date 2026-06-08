@@ -47,16 +47,15 @@ def test_onboarding_can_select_oauth(monkeypatch):
     from aegis.config import Config
     from aegis.onboarding import run_onboarding
 
-    calls: list[str] = []
     monkeypatch.setattr(
-        "aegis.onboarding._oauth_login",
-        lambda provider, _spec, _out: calls.append(provider) or True,
+        "aegis.onboarding._ensure_codex_cli_login",
+        lambda _input_func, _out: True,
     )
     cfg = Config.load()
     answers = iter([
         "y",           # security notice
         "1",           # OpenAI
-        "1",           # OAuth auth
+        "1",           # ChatGPT/Codex auth
         "",            # model default
         "",            # exec mode default
         "6",           # skip web setup
@@ -74,24 +73,24 @@ def test_onboarding_can_select_oauth(monkeypatch):
     )
 
     assert rc == 0
-    assert calls == ["openai-codex"]
-    assert Config.load().get("model.provider") == "openai-codex"
+    assert Config.load().get("model.provider") == "codex"
     text = "\n".join(out)
     assert "Choose authentication method" in text
-    assert "ChatGPT / Codex OAuth" in text
+    assert "ChatGPT subscription via Codex CLI" in text
+    assert "Auth:            codex" in text
 
 
-def test_onboarding_oauth_missing_scope_falls_back_to_api_key(monkeypatch):
+def test_onboarding_codex_login_failure_does_not_fall_back_to_api_key(monkeypatch):
     from aegis.config import Config
     from aegis.onboarding import run_onboarding
 
-    monkeypatch.setattr("aegis.onboarding._oauth_login", lambda *_args: False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr("aegis.onboarding._ensure_codex_cli_login", lambda *_args: False)
     cfg = Config.load()
     answers = iter([
         "y",           # security notice
         "1",           # OpenAI
-        "1",           # OAuth auth
-        "y",           # configure API key fallback
+        "1",           # ChatGPT/Codex auth
         "",            # model default
         "",            # exec mode default
         "6",           # skip web setup
@@ -110,18 +109,17 @@ def test_onboarding_oauth_missing_scope_falls_back_to_api_key(monkeypatch):
     )
 
     assert rc == 0
-    assert os.environ["OPENAI_API_KEY"] == "sk-fallback"
+    assert "OPENAI_API_KEY" not in os.environ
     text = "\n".join(out)
-    assert "Use an API key if OAuth is unavailable for this provider." in text
-    assert "Auth:            api_key" in text
-    assert Config.load().get("model.provider") == "openai"
+    assert "Auth:            skipped" in text
+    assert Config.load().get("model.provider") == "codex"
 
 
 def test_onboarding_oauth_missing_scope_can_skip_without_probe(monkeypatch):
     from aegis.config import Config
     from aegis.onboarding import run_onboarding
 
-    monkeypatch.setattr("aegis.onboarding._oauth_login", lambda *_args: False)
+    monkeypatch.setattr("aegis.onboarding._ensure_codex_cli_login", lambda *_args: False)
 
     def fail_probe(*_args):
         raise AssertionError("probe should not run without usable credentials")
@@ -131,8 +129,7 @@ def test_onboarding_oauth_missing_scope_can_skip_without_probe(monkeypatch):
     answers = iter([
         "y",           # security notice
         "1",           # OpenAI
-        "1",           # OAuth auth
-        "n",           # do not configure API key fallback
+        "1",           # ChatGPT/Codex auth
         "",            # model default
         "",            # exec mode default
         "6",           # skip web setup
@@ -197,7 +194,7 @@ def test_onboarding_accepts_partial_provider_label(monkeypatch):
     cfg = Config.load()
     answers = iter([
         "y",                      # security notice
-        "OpenAI (ChatGPT OAuth)", # natural label from the displayed option
+        "OpenAI / Codex",         # natural label from the displayed option
         "3",                      # skip credentials
         "",                       # model default
         "",                       # exec mode default

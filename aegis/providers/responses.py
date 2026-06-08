@@ -1,7 +1,8 @@
 """OpenAI Responses API transport.
 
-This covers both the public OpenAI Responses endpoint and the Codex/ChatGPT
-backend used by ChatGPT OAuth installs.
+This covers both the public OpenAI Responses endpoint and the advanced direct
+Codex/ChatGPT backend. Normal ChatGPT subscription auth uses the Codex
+app-server transport instead.
 """
 
 from __future__ import annotations
@@ -106,6 +107,9 @@ class ResponsesTransport(ProviderTransport):
         extra_headers: dict[str, str] | None = None,
         timeout: float = 600.0,
         reasoning: str = "off",
+        tool_runner=None,
+        approver=None,
+        cwd=None,
     ) -> LLMResponse:
         url = f"{base_url}/responses"
         headers = {"Content-Type": "application/json", **(extra_headers or {}), **auth.headers()}
