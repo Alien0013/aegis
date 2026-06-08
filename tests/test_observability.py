@@ -195,6 +195,19 @@ def test_anthropic_oauth_injects_claude_code_prefix():
         srv.shutdown()
 
 
+def test_onboarding_offers_detected_key_user_decides(monkeypatch):
+    """A key already in the environment is OFFERED, never used without consent."""
+    from aegis import onboarding as ob
+    from aegis.config import Config
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-EXISTING")
+    # user accepts -> detected key used (True), no paste needed
+    assert ob._configure_api_key(Config.load(), "ANTHROPIC_API_KEY",
+                                 lambda p: "", lambda m: None, input_func=lambda p: "y") is True
+    # user declines -> falls through to paste; empty paste -> skipped (False)
+    assert ob._configure_api_key(Config.load(), "ANTHROPIC_API_KEY",
+                                 lambda p: "", lambda m: None, input_func=lambda p: "n") is False
+
+
 def test_status_shows_state_section(capsys):
     from aegis.cli.main import cmd_status
     from aegis.config import Config

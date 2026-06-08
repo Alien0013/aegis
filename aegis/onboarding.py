@@ -593,6 +593,13 @@ def _configure_model(
     out("")
     out("CONFIGURING MODEL INFERENCE")
     out("─────────────────────────────────────────────────────────")
+    _detected = [e for e in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY",
+                             "GEMINI_API_KEY", "OPENROUTER_API_KEY", "GROQ_API_KEY",
+                             "DEEPSEEK_API_KEY", "XAI_API_KEY", "MISTRAL_API_KEY")
+                 if os.environ.get(e)]
+    if _detected:
+        out(f"✓ detected credentials in your environment: {', '.join(_detected)}")
+        out("  Pick the matching provider and AEGIS will use the detected key automatically.")
     previous_provider = config.get("model.provider", "anthropic")
     previous_model = config.get("model.default", "claude-sonnet-4-5")
 
@@ -659,7 +666,7 @@ def _configure_model(
                     state.auth_method = "skipped"
                     return abort_required_auth("! ChatGPT subscription setup did not finish.")
         elif auth_method == "api_key":
-            auth_ready = _configure_api_key(config, env_name, secret_func, out)
+            auth_ready = _configure_api_key(config, env_name, secret_func, out, input_func)
             if not auth_ready:
                 state.auth_method = "skipped"
         else:
@@ -690,7 +697,7 @@ def _configure_model(
         )
         state.auth_method = auth_method
         if auth_method == "api_key":
-            auth_ready = _configure_api_key(config, env_name, secret_func, out)
+            auth_ready = _configure_api_key(config, env_name, secret_func, out, input_func)
             if not auth_ready:
                 state.auth_method = "skipped"
         elif auth_method == "oauth" and spec.oauth:
@@ -700,7 +707,7 @@ def _configure_model(
                 fallback_env = env_name
                 if fallback_env and _confirm(f"Configure {fallback_env} instead?", True, input_func, out):
                     env_name = fallback_env
-                    auth_ready = _configure_api_key(config, env_name, secret_func, out)
+                    auth_ready = _configure_api_key(config, env_name, secret_func, out, input_func)
                     state.auth_method = "api_key" if auth_ready else "skipped"
                 else:
                     state.auth_method = "skipped"
@@ -728,13 +735,22 @@ def _configure_model(
     return True
 
 
-def _configure_api_key(config: Config, env_name: str, secret_func: Input, out: Output) -> bool:
-    key = secret_func(f"🔑 Enter {env_name}: ").strip()
+def _configure_api_key(config: Config, env_name: str, secret_func: Input, out: Output,
+                       input_func: Input | None = None) -> bool:
+    # If the key is already in the environment, OFFER it — the user decides whether to use it.
+    existing = os.environ.get(env_name, "").strip()
+    if existing and input_func is not None and _confirm(
+            f"Found {env_name} in your environment — use it?", True, input_func, out):
+        config.set(env_name, existing)
+        out(f"✓ using your existing {env_name}.")
+        return True
+    out(f"  Paste your {env_name} (input hidden); press Enter to skip.")
+    key = secret_func(f"🔑 {env_name}: ").strip()
     if key:
         config.set(env_name, key)
         out(f"✓ saved {env_name} to {cfg.env_path()}")
         return True
-    out(f"! {env_name} skipped.")
+    out(f"! {env_name} skipped — set it later with `aegis config set {env_name} <key>`.")
     return False
 
 
