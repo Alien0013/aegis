@@ -44,6 +44,28 @@ def test_cost_pricing_prefix_match():
     assert _price("totally-unknown-model") == (0.0, 0.0)
 
 
+def test_trajectory_export_formats():
+    from aegis.session import Session, SessionStore
+    from aegis.types import Message, ToolCall
+    from aegis import trajectory as t
+    s = Session.create()
+    s.messages = [Message.system("sys"), Message.user("hi"),
+                  Message.assistant("go", [ToolCall("c1", "list_dir", {"path": "."})]),
+                  Message.tool("c1", "list_dir", "a\nb")]
+    SessionStore().save(s)
+    assert t.export("/tmp/_t_aegis.jsonl", [s.id], fmt="aegis") == 1
+    oa = t._openai_finetune(t.record(s.id))
+    assert any("tool_calls" in m for m in oa["messages"])
+    assert any(m["role"] == "tool" for m in oa["messages"])
+    hf = t._sharegpt(t.record(s.id))
+    assert [c["from"] for c in hf["conversations"]] == ["system", "human", "gpt", "tool"]
+    try:
+        t.export("/tmp/_t_bad.jsonl", [s.id], fmt="nope")
+        assert False, "should reject unknown format"
+    except ValueError:
+        pass
+
+
 def test_mcp_skips_malformed_servers():
     from aegis.config import Config
     from aegis.mcp.client import build_manager

@@ -30,8 +30,45 @@ def record(session_id: str) -> dict | None:
             "approx_tokens": tokens, "messages": steps}
 
 
-def export(out_path: str, session_ids: list[str] | None = None) -> int:
-    """Write one trajectory per line to a JSONL file. Returns count."""
+def _openai_finetune(traj: dict) -> dict:
+    """OpenAI chat fine-tune line: {"messages": [...]} with tool_calls/tool roles."""
+    msgs = []
+    for s in traj.get("messages", []):
+        m: dict = {"role": s["role"], "content": s.get("content") or ""}
+        if s.get("tool_calls"):
+            m["content"] = s.get("content") or None
+            m["tool_calls"] = [
+                {"id": f"call_{i}", "type": "function",
+                 "function": {"name": tc.get("name", ""),
+                              "arguments": json.dumps(tc.get("arguments", {}))}}
+                for i, tc in enumerate(s["tool_calls"])]
+        if s.get("tool_call_id"):
+            m["tool_call_id"] = s["tool_call_id"]
+        msgs.append(m)
+    return {"messages": msgs}
+
+
+def _sharegpt(traj: dict) -> dict:
+    """HuggingFace/ShareGPT conversational line: {"conversations": [{from, value}]}."""
+    role_map = {"system": "system", "user": "human", "assistant": "gpt", "tool": "tool"}
+    convs = [{"from": role_map.get(s["role"], s["role"]), "value": s.get("content") or ""}
+             for s in traj.get("messages", [])]
+    return {"conversations": convs}
+
+
+_FORMATTERS = {
+    "aegis": lambda t: t,            # native (full fidelity + metrics)
+    "openai": _openai_finetune,      # OpenAI fine-tune JSONL
+    "hf": _sharegpt,                 # HuggingFace / ShareGPT
+    "sharegpt": _sharegpt,
+}
+
+
+def export(out_path: str, session_ids: list[str] | None = None, fmt: str = "aegis") -> int:
+    """Write one trajectory per line to a JSONL file, in the requested format. Returns count."""
+    formatter = _FORMATTERS.get(fmt)
+    if formatter is None:
+        raise ValueError(f"unknown export format '{fmt}' (choose: {', '.join(_FORMATTERS)})")
     store = SessionStore()
     ids = session_ids or [s["id"] for s in store.list(limit=1000)]
     n = 0
@@ -39,7 +76,7 @@ def export(out_path: str, session_ids: list[str] | None = None) -> int:
         for sid in ids:
             traj = record(sid)
             if traj:
-                f.write(json.dumps(traj) + "\n")
+                f.write(json.dumps(formatter(traj)) + "\n")
                 n += 1
     return n
 
@@ -103,8 +140,13 @@ def cmd_trajectory(args, config) -> int:
     action = getattr(args, "action", None) or "stats"
     if action == "export":
         out = getattr(args, "out", None) or "trajectories.jsonl"
-        n = export(out)
-        print(f"exported {n} trajectory(ies) -> {out}")
+        fmt = getattr(args, "format", None) or "aegis"
+        try:
+            n = export(out, fmt=fmt)
+        except ValueError as e:
+            print(e)
+            return 2
+        print(f"exported {n} trajectory(ies) [{fmt}] -> {out}")
         return 0
     if action == "compress":
         out = getattr(args, "out", None) or "trajectories.compressed.jsonl"
