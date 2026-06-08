@@ -126,7 +126,8 @@ class ChatCompletionsTransport(ProviderTransport):
             text=msg.get("content") or "",
             tool_calls=tool_calls,
             finish_reason=choice.get("finish_reason"),
-            usage=Usage(usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)),
+            usage=Usage(usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0),
+                        (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)),
             raw=data,
         )
 
@@ -153,7 +154,8 @@ class ChatCompletionsTransport(ProviderTransport):
                         continue
                     if chunk.get("usage"):
                         u = chunk["usage"]
-                        usage = Usage(u.get("prompt_tokens", 0), u.get("completion_tokens", 0))
+                        usage = Usage(u.get("prompt_tokens", 0), u.get("completion_tokens", 0),
+                                      (u.get("prompt_tokens_details") or {}).get("cached_tokens", 0))
                     for choice in chunk.get("choices", []):
                         if choice.get("finish_reason"):
                             finish_reason = choice["finish_reason"]

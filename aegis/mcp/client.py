@@ -259,6 +259,9 @@ def _normalize_external_mcp_config(data: object) -> dict:
 def build_manager(config) -> MCPManager:
     mgr = MCPManager()
     for name, spec in _server_configs(config).items():
+        if not isinstance(spec, dict) or not (spec.get("command") or spec.get("url")):
+            # skip malformed entries instead of spamming "no command or url configured"
+            continue
         mgr.add(MCPClient(
             name, command=spec.get("command"), args=spec.get("args"),
             env=spec.get("env"), url=spec.get("url"), headers=spec.get("headers"),

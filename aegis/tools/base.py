@@ -24,6 +24,21 @@ class ToolResult:
         first = self.content.strip().splitlines()[0] if self.content.strip() else ""
         return first[:120]
 
+    @property
+    def classification(self) -> str:
+        """success | error | refused | truncated | partial — a learning signal."""
+        c = (self.content or "").lower()
+        if self.is_error:
+            if any(w in c for w in ("permission denied", "rejected", "blocked", "not authorized",
+                                    "refused")):
+                return "refused"
+            return "error"
+        if "[truncated]" in c or "…[truncated]" in c or "…[truncated]…" in self.content:
+            return "truncated"
+        if not self.content.strip() or "(no output)" in c:
+            return "partial"
+        return "success"
+
     @classmethod
     def ok(cls, content: str, display: str | None = None, data: Any = None) -> "ToolResult":
         return cls(content=content, display=display, data=data)

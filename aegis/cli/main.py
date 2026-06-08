@@ -915,6 +915,12 @@ def build_parser() -> argparse.ArgumentParser:
     ins.add_argument("--json", action="store_true")
     ins.set_defaults(func=_insights.cmd_insights)
 
+    from .. import usage_log as _usage_log
+    co = sub.add_parser("cost", help="estimated spend by model (token-aware, cache-discounted)")
+    co.add_argument("--days", type=int, default=30)
+    co.add_argument("--json", action="store_true")
+    co.set_defaults(func=_usage_log.cmd_cost)
+
     wh = sub.add_parser("webhook", help="event webhooks that trigger the agent")
     wh.add_argument("action", nargs="?", choices=["list", "add", "remove", "serve"], default="list")
     wh.add_argument("name", nargs="?"); wh.add_argument("prompt", nargs="*")

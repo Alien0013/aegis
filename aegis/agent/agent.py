@@ -197,7 +197,19 @@ class Agent:
         if self.memory:
             self.memory.history.append("user", msg.content, self.session.id)
 
+        before = (self.budget.usage.input_tokens, self.budget.usage.output_tokens)
         result = run_conversation(self, on_event)
+
+        # Log this turn's token usage (for `aegis cost` / insights).
+        try:
+            from ..types import Usage
+            from .. import usage_log
+            turn = Usage(self.budget.usage.input_tokens - before[0],
+                         self.budget.usage.output_tokens - before[1],
+                         self.budget.usage.cache_read, self.budget.usage.cache_write)
+            usage_log.log(self.provider.name, self.provider.model, turn)
+        except Exception:  # noqa: BLE001
+            pass
 
         if self.memory and result.content:
             self.memory.history.append("assistant", result.content, self.session.id)

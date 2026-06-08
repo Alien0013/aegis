@@ -157,7 +157,8 @@ class AnthropicTransport(ProviderTransport):
             text="".join(text_parts),
             tool_calls=tool_calls,
             finish_reason=data.get("stop_reason"),
-            usage=Usage(u.get("input_tokens", 0), u.get("output_tokens", 0)),
+            usage=Usage(u.get("input_tokens", 0), u.get("output_tokens", 0),
+                        u.get("cache_read_input_tokens", 0), u.get("cache_creation_input_tokens", 0)),
             raw=data,
         )
 
@@ -205,6 +206,8 @@ class AnthropicTransport(ProviderTransport):
                     elif etype == "message_start":
                         u = ev.get("message", {}).get("usage", {})
                         usage.input_tokens = u.get("input_tokens", 0)
+                        usage.cache_read = u.get("cache_read_input_tokens", 0)
+                        usage.cache_write = u.get("cache_creation_input_tokens", 0)
                     elif etype == "message_stop":
                         break
         tool_calls: list[ToolCall] = []

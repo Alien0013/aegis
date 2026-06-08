@@ -167,6 +167,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "paths": [],                 # extra skill dirs
         "autogen": True,
     },
+    "trajectory": {
+        "enabled": False,            # record trajectories during agent runs
+        "path": "trajectories.jsonl", # output file (relative to AEGIS_HOME)
+        "format": "jsonl",           # jsonl | hf_dataset | openai_finetune
+        "realtime": True,            # record each turn as it happens
+        "include_tool_results": True,
+        "include_reasoning": False,  # include model reasoning/thinking
+        "compress": False,           # auto-compress on export
+    },
     "learn": {
         "auto": False,               # auto-review sessions on exit to propose memory/skill candidates
     },

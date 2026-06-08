@@ -80,7 +80,8 @@ class ToolExecutor:
                 except Exception as e:  # noqa: BLE001
                     res = ToolResult.error(f"tool raised {type(e).__name__}: {e}")
         self.emit({"type": "tool_result", "id": call.id, "name": call.name,
-                   "summary": res.summary, "is_error": res.is_error})
+                   "summary": res.summary, "is_error": res.is_error,
+                   "classification": res.classification})
         self._run_hooks("post_tool", {"tool": call.name, "is_error": str(res.is_error)})
         return res
 
