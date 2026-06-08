@@ -222,8 +222,9 @@ class Agent:
         if self.store:
             self.store.save(self.session)
         try:
-            from .. import learn
+            from .. import learn, trajectory
             learn.background_tick(self.config, self.session)
+            trajectory.capture_turn(self.config, self.session)
         except Exception:  # noqa: BLE001
             pass
         return result

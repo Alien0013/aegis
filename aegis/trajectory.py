@@ -11,11 +11,8 @@ from .session import SessionStore
 from .util import estimate_tokens
 
 
-def record(session_id: str) -> dict | None:
-    """Convert a stored session into a trajectory dict (messages + token metrics)."""
-    sess = SessionStore().load(session_id)
-    if not sess:
-        return None
+def traj_from_session(sess) -> dict:
+    """Convert a Session object into a trajectory dict (messages + token metrics)."""
     steps = []
     for m in sess.messages:
         step = {"role": m.role, "content": m.content}
@@ -23,11 +20,19 @@ def record(session_id: str) -> dict | None:
             step["tool_calls"] = [{"name": tc.name, "arguments": tc.arguments} for tc in m.tool_calls]
         if m.tool_call_id:
             step["tool_call_id"] = m.tool_call_id
+        if getattr(m, "reasoning", ""):
+            step["reasoning"] = m.reasoning
         steps.append(step)
     tokens = sum(estimate_tokens(m.content or "") for m in sess.messages)
     return {"id": sess.id, "title": sess.title, "created_at": sess.created_at,
             "summary": sess.meta.get("summary", ""), "n_steps": len(steps),
             "approx_tokens": tokens, "messages": steps}
+
+
+def record(session_id: str) -> dict | None:
+    """Load a stored session by id and convert it to a trajectory dict."""
+    sess = SessionStore().load(session_id)
+    return traj_from_session(sess) if sess else None
 
 
 def _openai_finetune(traj: dict) -> dict:
@@ -79,6 +84,42 @@ def export(out_path: str, session_ids: list[str] | None = None, fmt: str = "aegi
                 f.write(json.dumps(formatter(traj)) + "\n")
                 n += 1
     return n
+
+
+def capture_turn(config, session) -> bool:
+    """Auto-append the current session as a trajectory when `trajectory.enabled`.
+
+    Honors trajectory.path / trajectory.format / trajectory.include_reasoning /
+    trajectory.include_tool_results. Off by default. Returns True if it wrote a line."""
+    if not config.get("trajectory.enabled", False) or session is None:
+        return False
+    from . import config as cfg
+    fmt = config.get("trajectory.format", "jsonl")
+    # accept friendly aliases; 'jsonl' is the native shape
+    fmt = {"jsonl": "aegis", "hf_dataset": "hf", "openai_finetune": "openai"}.get(fmt, fmt)
+    formatter = _FORMATTERS.get(fmt, _FORMATTERS["aegis"])
+    traj = traj_from_session(session)      # use the live session, no disk reload
+    if not traj or not traj["messages"]:
+        return False
+    if not config.get("trajectory.include_tool_results", True):
+        traj["messages"] = [m for m in traj["messages"] if m.get("role") != "tool"]
+    if not config.get("trajectory.include_reasoning", False):
+        for m in traj["messages"]:
+            m.pop("reasoning", None)
+    if config.get("trajectory.compress", False):
+        traj = compress(traj)
+    path = config.get("trajectory.path", "trajectories.jsonl")
+    p = Path(path)
+    if not p.is_absolute():
+        p = Path(cfg.sub(path))                      # default under the AEGIS home
+    try:
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(json.dumps(formatter(traj)) + "\n")
+        return True
+    except Exception:  # noqa: BLE001
+        from ._log import log_exc
+        log_exc("trajectory capture failed")
+        return False
 
 
 def _boundary_truncate(text: str, max_tokens: int) -> str:

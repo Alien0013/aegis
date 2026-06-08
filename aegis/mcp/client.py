@@ -271,5 +271,7 @@ def build_manager(config) -> MCPManager:
 
 
 def mcp_tools_from_config(config) -> tuple[list[Tool], MCPManager]:
+    if not config.get("mcp.enabled", True):
+        return [], MCPManager()       # respect the disable flag
     mgr = build_manager(config)
     return mgr.connect_all(), mgr

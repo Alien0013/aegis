@@ -98,6 +98,33 @@ def test_background_learn_is_opt_in_and_gated(monkeypatch):
     assert learn.background_tick(cfg, s) is False          # no new turns -> no re-review
 
 
+def test_trajectory_auto_capture_wired(tmp_path):
+    """trajectory.enabled must actually write a line per turn (was dead config)."""
+    import os
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.session import Session
+    from aegis import config as c
+    from conftest import FakeProvider
+    cfg = Config.load()
+    cfg.data["trajectory"]["enabled"] = True
+    cfg.data["tools"]["exec_mode"] = "full"
+    Agent(config=cfg, provider=FakeProvider(), session=Session.create()).run("hi there")
+    assert os.path.exists(c.sub("trajectories.jsonl"))
+    # disabled by default -> nothing written for a fresh home
+    cfg2 = Config.load()
+    assert cfg2.get("trajectory.enabled") is False
+
+
+def test_mcp_enabled_flag_respected():
+    from aegis.config import Config
+    from aegis.mcp.client import mcp_tools_from_config
+    cfg = Config.load()
+    cfg.data["mcp"]["enabled"] = False
+    tools, mgr = mcp_tools_from_config(cfg)
+    assert tools == [] and not mgr.clients      # disable flag now actually disables MCP
+
+
 def test_mcp_skips_malformed_servers():
     from aegis.config import Config
     from aegis.mcp.client import build_manager
