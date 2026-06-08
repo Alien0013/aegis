@@ -7,10 +7,10 @@ Any model · any channel · runs on your machine · learns as it goes — in ~11
   <a href="https://github.com/Alien0013/aegis/actions"><img src="https://github.com/Alien0013/aegis/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="python">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
-  <img src="https://img.shields.io/badge/tests-158%20passing-brightgreen" alt="tests">
+  <img src="https://img.shields.io/badge/tests-166%20passing-brightgreen" alt="tests">
   <img src="https://img.shields.io/badge/providers-28-blueviolet" alt="providers">
-  <img src="https://img.shields.io/badge/tools-31-blueviolet" alt="tools">
-  <img src="https://img.shields.io/badge/skills-24-orange" alt="skills">
+  <img src="https://img.shields.io/badge/tools-33-blueviolet" alt="tools">
+  <img src="https://img.shields.io/badge/skills-26-orange" alt="skills">
 </p>
 
 <p align="center">
@@ -45,7 +45,7 @@ aegis            # start chatting   ·   aegis ui   # …or a clickable browser 
 | 🧠 **It actually learns** | A real closed loop: reviews finished sessions, extracts memory + skills (secret-redacted), promotes them on approval. Optional background review + FTS5 cross-session recall. |
 | 🛡️ **Safe by default** | Permission cascade with a **hardline blocklist** (refuses `rm -rf /` even in yolo), pre-exec scanning, **fail-closed** docker/ssh/singularity/modal sandboxes, and untrusted-tool-result wrapping against prompt injection. |
 | 📡 **Everywhere you are** | One agent serving CLI, Telegram, Discord, Slack, Signal, Matrix, Email, and webhooks — with voice-memo transcription and a durable, retrying delivery queue. |
-| 🧰 **Batteries included** | **31 tools, 24 skills** + hub import, MCP (client **and** server), an OpenAI-compatible API, a web dashboard, cron, trajectory export, and cost analytics. |
+| 🧰 **Batteries included** | **33 tools, 26 skills** + hub import, MCP (client **and** server), an OpenAI-compatible API, a web dashboard, cron, trajectory export, cost analytics, and OSV vulnerability auditing. |
 | 🔓 **Yours** | MIT, self-hosted, no subscription, no lock-in. Your keys, your data, your machine. |
 
 > Built in the spirit of **NanoClaw**: do what Hermes and OpenClaw do, but keep the whole
@@ -65,7 +65,7 @@ flowchart TB
     subgraph Core["Agent core"]
         LOOP["Bounded agent loop<br/>governance · compaction · budget"]
         PERM["Permission cascade<br/>hardline · groups · exec-mode · scan"]
-        REG["Tool registry<br/>31 tools + MCP + plugins"]
+        REG["Tool registry<br/>33 tools + MCP + plugins"]
     end
 
     subgraph Providers["Provider layer"]
@@ -173,19 +173,21 @@ OAuth** (API keys win because some OAuth tokens are identity-only). OAuth is ful
 with localhost-callback **and** manual-paste, auto-refresh, and `auth.json` at `0600`.
 → [docs/providers.md](docs/providers.md)
 
-### Tools & permissions (31 tools)
-`read_file` · `write_file` · `edit_file` · `list_dir` · `glob` · `search` · `bash` ·
-`process` · `web_fetch` · `web_search` · `todo_write` · `memory` · `skill` ·
-`spawn_subagent` · `generate_image` · `execute_code` (RPC sandbox) · `browser`
-(Playwright) · `computer` (pyautogui) · `lsp` · `github` · every MCP tool
-(`mcp__server__tool`) and plugin tools. Each result is **classified**
-(success/error/refused/truncated/partial). Every dangerous tool flows through:
+### Tools & permissions (33 tools)
+`read_file` · `write_file` · `edit_file` · `apply_patch` · `list_dir` · `glob` · `search` ·
+`bash` · `process` · `web_fetch` · `web_search` · `http_request` · `download` · `todo_write` ·
+`memory` · `skill` · `clarify` (ask the user) · `spawn_subagent` · `generate_image` ·
+`execute_code` (RPC sandbox) · `browser` (Playwright) · `computer` (pyautogui) · `lsp` ·
+`github` · `dependency_audit` (OSV CVE scan) · every MCP tool (`mcp__server__tool`) and
+plugin tools. Results are **classified** (success/error/refused/truncated/partial) and
+oversized outputs **spill to disk** to protect the context window. Every dangerous tool
+flows through:
 
 ```
 hardline blocklist  →  deny_groups  →  exec_mode (deny|allowlist|ask|smart|auto|full)  →  allowlist  →  approval
 ```
 
-### Skills (24 bundled) & the learning loop
+### Skills (26 bundled) & the learning loop
 `SKILL.md` packages (agentskills.io-compatible) with progressive disclosure and tiered
 precedence (workspace > personal > configured > bundled). Bundled set includes
 `code-review`, `debugging`, `write-tests`, `refactor`, `commit`, `dockerize`, `kubernetes`,
@@ -248,12 +250,12 @@ aegis/
 ├─ gateway/          runner · 7 channel adapters · pairing · delivery queue
 ├─ mcp/              client (stdio+HTTP) · server
 ├─ cli/              main (40 subcommands) · repl (TUI)
-├─ builtin_skills/   24 SKILL.md packages
+├─ builtin_skills/   26 SKILL.md packages
 ├─ memory.py  skills.py  session.py  learn.py  curator.py  trajectory.py
 ├─ usage_log.py  insights.py  dashboard.py  serve.py  cron.py  onboarding.py …
 docs/                architecture · providers · gateway · mcp · memory-skills · security …
 scripts/run_tests.sh install.sh install.ps1 uninstall.sh
-tests/               158 offline tests (fake provider, isolated home)
+tests/               166 offline tests (fake provider, isolated home)
 ```
 
 ## 🧷 Identity & rules

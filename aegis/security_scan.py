@@ -355,7 +355,6 @@ def cmd_scan(args, config) -> int:
     if payload is None:
         payload = sys.stdin.read()
 
-    scanner = scan_text if kind == "text" else scan_command
     findings = scan_text_findings(payload) if kind == "text" else scan_findings(payload)
     suspicious = bool(findings)
 

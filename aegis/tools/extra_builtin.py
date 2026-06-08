@@ -190,7 +190,7 @@ class DependencyAuditTool(Tool):
         except Exception as e:  # noqa: BLE001
             return ToolResult.error(f"OSV query failed: {e}")
         vulnerable = []
-        for (name, ver), res in zip(pkgs, results):
+        for (name, ver), res in zip(pkgs, results, strict=False):
             ids = [v.get("id") for v in (res or {}).get("vulns", []) if v.get("id")]
             if ids:
                 vulnerable.append((name, ver, ids))
@@ -204,6 +204,44 @@ class DependencyAuditTool(Tool):
                           display=f"{len(vulnerable)} vulnerable package(s)")
 
 
+class ClarifyTool(Tool):
+    name = "clarify"
+    description = ("Ask the user a clarifying question instead of guessing when the request is "
+                   "ambiguous or you need a decision. Provide up to 4 concise choices, or omit "
+                   "them for a free-text question. Prefer this over assuming on consequential "
+                   "or irreversible actions.")
+    groups = []   # safe: it only asks
+    parameters = {
+        "type": "object",
+        "properties": {
+            "question": {"type": "string", "description": "the question to ask"},
+            "choices": {"type": "array", "items": {"type": "string"},
+                        "description": "optional answer options (max 4)"},
+        },
+        "required": ["question"],
+    }
+
+    def run(self, args, ctx: ToolContext) -> ToolResult:
+        question = (args.get("question") or "").strip()
+        if not question:
+            return ToolResult.error("clarify needs a 'question'")
+        choices = [str(c) for c in (args.get("choices") or [])][:4]
+        asker = getattr(ctx, "asker", None)
+        if callable(asker):
+            try:
+                answer = asker(question, choices)
+                if answer:
+                    return ToolResult.ok(f"User answered: {answer}", display="got answer")
+            except Exception:  # noqa: BLE001
+                pass
+        # No interactive surface (gateway/API/headless): surface the question and wait.
+        rendered = question + ("".join(f"\n  {i}. {c}" for i, c in enumerate(choices, 1)) if choices else "")
+        return ToolResult.ok(
+            f"Asked the user and am waiting for their reply:\n{rendered}\n"
+            "Stop here and let the user respond; their next message is the answer.",
+            display="awaiting user reply")
+
+
 def extra_tools() -> list[Tool]:
     return [ApplyPatchTool(), DownloadTool(), HttpRequestTool(), ScheduleTaskTool(),
-            DependencyAuditTool()]
+            DependencyAuditTool(), ClarifyTool()]

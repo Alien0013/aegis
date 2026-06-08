@@ -9,7 +9,7 @@ from typing import Callable
 from ..config import Config, Workspace
 from ..constants import DEFAULT_MAX_ITERATIONS
 from ..memory import MemoryManager
-from ..providers import Provider, build_provider
+from ..providers import Provider
 from ..session import Session, SessionStore
 from ..skills import SkillsLoader
 from ..tools.base import ToolContext

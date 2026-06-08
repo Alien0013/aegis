@@ -397,7 +397,6 @@ class WebSearchTool(Tool):
     )
 
     def run(self, args, ctx) -> ToolResult:
-        import os
         query = args["query"]
         backend = (ctx.config.get("web.search_backend", "auto") if ctx.config else "auto")
         # auto: pick a keyed backend if available, else DuckDuckGo (no key)

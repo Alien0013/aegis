@@ -119,6 +119,39 @@ def test_dependency_audit_parses_requirements(tmp_path):
     assert ("requests", "2.31.0") in pkgs and ("flask", "3.0.0") in pkgs and len(pkgs) == 2
 
 
+def test_clarify_tool_both_surfaces(tmp_path):
+    from aegis.tools.base import ToolContext
+    from aegis.tools.extra_builtin import ClarifyTool
+    # interactive surface: asker callback returns the chosen value
+    ctx = ToolContext(cwd=tmp_path, asker=lambda q, ch: ch[0] if ch else "x")
+    r = ClarifyTool().run({"question": "DB?", "choices": ["postgres", "sqlite"]}, ctx)
+    assert "postgres" in r.content
+    # headless surface: no asker -> surfaces the question and waits
+    r2 = ClarifyTool().run({"question": "Proceed?", "choices": ["yes", "no"]}, ToolContext(cwd=tmp_path))
+    assert "waiting" in r2.content.lower() and "1. yes" in r2.content
+    assert ClarifyTool().run({"question": ""}, ToolContext(cwd=tmp_path)).is_error
+
+
+def test_tool_output_spill_to_disk(tmp_path):
+    import os
+    from aegis.agent.loop import ToolExecutor
+    from aegis.config import Config
+    from aegis.tools.base import ToolContext
+    from aegis.tools.registry import default_registry
+    from aegis.types import ToolCall
+    cfg = Config.load()
+    cfg.data["tools"]["max_result_tokens"] = 50
+    ex = ToolExecutor(default_registry(), None, ToolContext(cwd=tmp_path, config=cfg), lambda e: None)
+    big = "LINE\n" * 2000
+    out = ex._maybe_spill(ToolCall("c1", "bash", {}), big, is_error=False)
+    assert "truncated to protect context" in out and len(out) < len(big)
+    from aegis import config as c
+    assert os.path.exists(os.path.join(c.sub("tool_outputs"), "bash_c1.txt"))
+    # errors and small outputs are never spilled
+    assert ex._maybe_spill(ToolCall("c2", "bash", {}), big, is_error=True) == big
+    assert ex._maybe_spill(ToolCall("c3", "bash", {}), "short", is_error=False) == "short"
+
+
 def test_status_shows_state_section(capsys):
     from aegis.cli.main import cmd_status
     from aegis.config import Config

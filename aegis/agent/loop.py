@@ -85,9 +85,33 @@ class ToolExecutor:
         self._run_hooks("post_tool", {"tool": call.name, "is_error": str(res.is_error)})
         return res
 
+    def _maybe_spill(self, call: ToolCall, content: str, is_error: bool) -> str:
+        """Spill an oversized tool output to disk; return a preview + reference path so
+        a single huge result can't blow the context window (the agent can read_file it)."""
+        cfg_obj = getattr(self.ctx, "config", None)
+        if is_error or not content or cfg_obj is None:
+            return content
+        from ..util import estimate_tokens
+        limit = int(cfg_obj.get("tools.max_result_tokens", 4000) or 0)
+        if limit <= 0 or estimate_tokens(content) <= limit:
+            return content
+        import os
+        from .. import config as cfg
+        d = cfg.sub("tool_outputs")
+        try:
+            os.makedirs(d, exist_ok=True)
+            path = os.path.join(d, f"{call.name}_{call.id}.txt")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+        except Exception:  # noqa: BLE001
+            return content
+        head = content[: limit * 4].rstrip()
+        return (f"{head}\n\n…[output truncated to protect context; full {len(content):,} "
+                f"chars saved to {path} — use read_file to inspect specific parts]")
+
     def _run_one(self, call: ToolCall) -> Message:
         res = self.execute_one_raw(call)
-        content = res.content
+        content = self._maybe_spill(call, res.content, res.is_error)
         # Wrap results from external/untrusted sources so the model treats them as DATA,
         # not instructions (prompt-injection defense).
         tool = self.registry.get(call.name)

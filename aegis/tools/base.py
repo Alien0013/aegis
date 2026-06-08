@@ -60,6 +60,9 @@ class ToolContext:
     agent: Any = None           # Agent (for subagent spawn)
     # callback(prompt:str)->bool used when a permission decision needs the user
     approver: Callable[[str], bool] | None = None
+    # callback(question:str, choices:list[str])->str for the clarify tool (CLI prompts inline,
+    # other surfaces may leave it None — clarify then returns the question for the next turn)
+    asker: Callable[[str, list[str]], str] | None = None
     # callback(event:dict) for streaming tool events to the UI
     emit: Callable[[dict], None] | None = None
 

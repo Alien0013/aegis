@@ -6,7 +6,6 @@ import json
 import shutil
 import subprocess
 import zipfile
-from pathlib import Path
 
 from . import config as cfg
 from .util import read_text

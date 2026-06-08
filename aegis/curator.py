@@ -18,7 +18,7 @@ activated; staleness falls back to directory mtime when no usage is recorded.
 from __future__ import annotations
 
 import shutil
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path

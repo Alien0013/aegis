@@ -82,6 +82,24 @@ def make_approver(auto: bool = False):
     return approver
 
 
+def make_asker():
+    """Interactive answerer for the clarify tool: prints the question + numbered
+    choices and reads the user's reply inline."""
+    def asker(question: str, choices: list[str]) -> str:
+        with _approve_lock:
+            print(f"\n  ❓ {question}")
+            for i, c in enumerate(choices, 1):
+                print(f"     {i}. {c}")
+            try:
+                ans = input("  your answer: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                return ""
+        if choices and ans.isdigit() and 1 <= int(ans) <= len(choices):
+            return choices[int(ans) - 1]
+        return ans
+    return asker
+
+
 class Renderer:
     """Turns agent events into terminal output."""
 
@@ -265,10 +283,12 @@ def handle_slash(cmd: str, agent: Agent) -> str:
 # Entry points
 # --------------------------------------------------------------------------- #
 def _make_agent(config, *, session, store, model, provider_name, auto) -> Agent:
-    return Agent.create(
+    agent = Agent.create(
         config, session=session, model=model, provider_name=provider_name,
         store=store, approver=make_approver(auto), include_mcp=True,
     )
+    agent.tool_context.asker = make_asker()   # let the clarify tool prompt inline
+    return agent
 
 
 def run_once(config: Config, prompt: str, *, model=None, provider_name=None,

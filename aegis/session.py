@@ -215,7 +215,7 @@ class SessionStore:
                 Message.user(transcript),
             ], tools=None, stream=False)
             summary = resp.text.strip()
-        except Exception as e:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             return ""
         sess.meta["summary"] = summary
         self.save(sess)

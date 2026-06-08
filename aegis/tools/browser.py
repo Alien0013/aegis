@@ -120,7 +120,7 @@ class ComputerTool(Tool):
     def run(self, args, ctx: ToolContext) -> ToolResult:
         try:
             import pyautogui
-        except ImportError as e:  # noqa: BLE001
+        except ImportError:  # noqa: BLE001
             return ToolResult.error("computer tool needs `pip install pyautogui`")
         action = args["action"]
         try:

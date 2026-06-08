@@ -18,7 +18,6 @@ import json
 import os
 import select
 import subprocess
-from pathlib import Path
 
 import httpx
 

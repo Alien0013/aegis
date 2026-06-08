@@ -151,6 +151,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "singularity_image": "docker://python:3.12-slim",
         "modal_pip": [],             # extra pip packages for the modal sandbox image
         "allow_local_fallback": False,  # if a sandbox backend is down, refuse (fail closed)
+        "max_result_tokens": 4000,   # spill tool outputs larger than this to disk (0 = never)
     },
     "auxiliary": {                   # small/cheap model for compaction, vision, smart-approval
         "provider": "",              # "" = reuse main provider
