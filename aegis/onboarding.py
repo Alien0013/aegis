@@ -329,6 +329,17 @@ def _choose(
     picked = _dialog_choose(prompt, options, default, input_func, output_func)
     if picked is not None:
         return picked
+    # Inline arrow-key menu when this is a real interactive terminal.
+    if input_func is input and output_func is print:
+        try:
+            from .cli.menu import select_one
+            chosen = select_one(prompt, options, default)
+            if chosen is not None:
+                return chosen
+        except KeyboardInterrupt:
+            raise
+        except Exception:  # noqa: BLE001  (any terminal issue -> typed fallback)
+            pass
 
     output_func(f"? {prompt}")
     for i, (_, label) in enumerate(options, 1):
@@ -388,6 +399,17 @@ def _multi_choose(
     picked = _dialog_multi_choose(prompt, options, default_values, input_func, output_func)
     if picked is not None:
         return picked
+    # Inline checkbox menu (Space toggles) when this is a real interactive terminal.
+    if input_func is input and output_func is print:
+        try:
+            from .cli.menu import select_many
+            chosen = select_many(prompt, options, default_values)
+            if chosen is not None:
+                return chosen
+        except KeyboardInterrupt:
+            raise
+        except Exception:  # noqa: BLE001
+            pass
 
     output_func(f"? {prompt}")
     for _i, (value, label) in enumerate(options, 1):
