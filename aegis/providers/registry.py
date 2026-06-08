@@ -119,7 +119,7 @@ PROVIDERS: dict[str, ProviderSpec] = {
     ),
     "openai": ProviderSpec(
         "openai", ApiMode.CHAT_COMPLETIONS, "https://api.openai.com/v1",
-        "gpt-4o", 128_000, ["OPENAI_API_KEY"], oauth=OPENAI_OAUTH,
+        "gpt-5.2-chat-latest", 400_000, ["OPENAI_API_KEY"], oauth=OPENAI_OAUTH,
     ),
     "codex": ProviderSpec(
         "codex", ApiMode.CODEX_APP_SERVER, "codex://app-server",

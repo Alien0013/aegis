@@ -252,9 +252,9 @@ def test_onboarding_memory_step(monkeypatch):
     cfg = Config.load()
     ob._configure_memory(cfg, ob.OnboardingState(), True, lambda p: "2", lambda m: None)
     assert cfg.get("memory.provider") == "jsonl"          # advanced pick applied
-    cfg2 = Config.load()
-    ob._configure_memory(cfg2, ob.OnboardingState(), False, lambda p: "", lambda m: None)
-    assert cfg2.get("memory.provider") == ""              # quick path leaves it alone
+    # quick mode is a no-op (leaves the existing value untouched)
+    ob._configure_memory(cfg, ob.OnboardingState(), False, lambda p: "1", lambda m: None)
+    assert cfg.get("memory.provider") == "jsonl"
 
 
 def test_status_shows_state_section(capsys):
