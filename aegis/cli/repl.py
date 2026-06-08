@@ -33,8 +33,8 @@ except Exception:  # noqa: BLE001
 
 _approve_lock = threading.Lock()
 
-SLASH = ["/help", "/model", "/status", "/tools", "/skills", "/memory", "/usage", "/compress",
-         "/think", "/retry", "/undo", "/learn", "/background", "/tasks", "/rollback",
+SLASH = ["/help", "/model", "/status", "/tools", "/skills", "/skill", "/memory", "/usage",
+         "/compress", "/think", "/retry", "/undo", "/learn", "/background", "/tasks", "/rollback",
          "/personality", "/save", "/sessions", "/new", "/clear", "/quit", "/exit"]
 
 
@@ -193,6 +193,32 @@ def handle_slash(cmd: str, agent: Agent) -> str:
     elif name == "/skills":
         if agent.skills:
             _out(agent.skills.index_block() or "(no skills installed)")
+    elif name == "/skill":
+        sub = parts[1].lower() if len(parts) > 1 else "save"
+        if sub == "new":
+            if len(parts) < 3:
+                _out("usage: /skill new <name> [description]")
+            else:
+                sname = parts[2]
+                desc = " ".join(parts[3:]) or f"{sname} skill"
+                path = agent.skills.create(
+                    sname, desc, "## When to Use\n\n## Procedure\n1. \n")
+                agent.refresh_volatile()
+                _out(f"✓ created scaffold → {path}\n  edit it to add the procedure.", style="green")
+        else:  # /skill (save): auto-write a skill from what we just did
+            from .. import learn
+            _out("extracting a reusable skill from this session…", style="cyan")
+            try:
+                found = learn.review_session(agent.config, agent.session.id)
+                made = [learn.apply_candidate(c["id"], agent.config)
+                        for c in found if c.get("type") == "skill"]
+                if made:
+                    agent.refresh_volatile()
+                    _out("\n".join("✓ " + m for m in made), style="green")
+                else:
+                    _out("nothing reusable to save yet — try after solving a concrete task.")
+            except Exception as e:  # noqa: BLE001
+                _out(f"skill extraction needs a working provider/key: {e}", style="yellow")
     elif name == "/memory":
         if agent.memory:
             _out("# MEMORY\n" + (agent.memory.store.raw("memory") or "(empty)"))

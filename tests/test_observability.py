@@ -232,6 +232,31 @@ def test_import_claude_cli_login(monkeypatch, tmp_path):
     assert ok2 is False
 
 
+def test_skill_slash_new_scaffolds(tmp_path):
+    import contextlib
+    import io
+    from aegis.agent.agent import Agent
+    from aegis.cli import repl
+    from aegis.config import Config
+    from aegis.session import Session
+    from conftest import FakeProvider
+    a = Agent(config=Config.load(), provider=FakeProvider(), session=Session.create(), cwd=tmp_path)
+    with contextlib.redirect_stdout(io.StringIO()):
+        repl.handle_slash("/skill new my-skill does a thing", a)
+    assert "my-skill" in (a.skills.discover() or {})
+
+
+def test_onboarding_memory_step(monkeypatch):
+    from aegis import onboarding as ob
+    from aegis.config import Config
+    cfg = Config.load()
+    ob._configure_memory(cfg, ob.OnboardingState(), True, lambda p: "2", lambda m: None)
+    assert cfg.get("memory.provider") == "jsonl"          # advanced pick applied
+    cfg2 = Config.load()
+    ob._configure_memory(cfg2, ob.OnboardingState(), False, lambda p: "", lambda m: None)
+    assert cfg2.get("memory.provider") == ""              # quick path leaves it alone
+
+
 def test_status_shows_state_section(capsys):
     from aegis.cli.main import cmd_status
     from aegis.config import Config

@@ -52,9 +52,10 @@ MODEL_PRESETS: dict[str, list[tuple[str, str]]] = {
         ("gpt-4o-mini", "GPT-4o mini"),
     ],
     "anthropic": [
+        ("claude-sonnet-4-6", "Claude Sonnet 4.6 (balanced, recommended)"),
+        ("claude-opus-4-8", "Claude Opus 4.8 (most capable)"),
+        ("claude-haiku-4-5", "Claude Haiku 4.5 (fast, cheap)"),
         ("claude-sonnet-4-5", "Claude Sonnet 4.5"),
-        ("claude-opus-4-1", "Claude Opus 4.1"),
-        ("claude-3-5-sonnet-latest", "Claude 3.5 Sonnet"),
     ],
     "google": [
         ("gemini-2.5-pro", "Gemini 2.5 Pro"),
@@ -171,6 +172,7 @@ def run_onboarding(
     if not _configure_model(config, state, advanced, probe, input_func, secret_func, out):
         return 1
     _configure_web(config, state, advanced, input_func, secret_func, out)
+    _configure_memory(config, state, advanced, input_func, out)
     _configure_agent_surface(config, state, advanced, input_func, out)
     _configure_channels(config, state, advanced, input_func, secret_func, out)
     _seed_workspace(state, out)
@@ -862,6 +864,31 @@ def _recommended_toolsets() -> list[str]:
     toolsets.append("lsp")
     toolsets.append("mcp")
     return toolsets
+
+
+def _configure_memory(config: Config, state: OnboardingState, advanced: bool,
+                      input_func: Input, out: Output) -> None:
+    """Long-term memory backend. File memory (MEMORY.md/USER.md) is always on; this layers
+    an optional external provider on top. Advanced-only so the quick path stays fast."""
+    if not advanced:
+        return
+    out("")
+    out("MEMORY")
+    out("─────────────────────────────────────────────────────────")
+    out("File memory (MEMORY.md / USER.md) is always on. Optionally add a backend:")
+    choice = _choose(
+        "Long-term memory backend:",
+        [("", "Built-in files only (recommended)"),
+         ("jsonl", "JSONL event log — zero-dependency, local"),
+         ("mem0", "mem0 — semantic memory (pip install mem0ai)"),
+         ("honcho", "Honcho — hosted memory (pip install honcho-ai)")],
+        default=0,
+        input_func=input_func,
+        output_func=out,
+    )
+    config.set("memory.provider", choice)
+    if choice:
+        out(f"✓ memory provider → {choice}")
 
 
 def _configure_agent_surface(

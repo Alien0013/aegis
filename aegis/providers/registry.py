@@ -115,7 +115,7 @@ GOOGLE_OAUTH = OAuthConfig(
 PROVIDERS: dict[str, ProviderSpec] = {
     "anthropic": ProviderSpec(
         "anthropic", ApiMode.ANTHROPIC_MESSAGES, "https://api.anthropic.com",
-        "claude-sonnet-4-5", 200_000, ["ANTHROPIC_API_KEY"], "anthropic", ANTHROPIC_OAUTH,
+        "claude-sonnet-4-6", 200_000, ["ANTHROPIC_API_KEY"], "anthropic", ANTHROPIC_OAUTH,
     ),
     "openai": ProviderSpec(
         "openai", ApiMode.CHAT_COMPLETIONS, "https://api.openai.com/v1",
