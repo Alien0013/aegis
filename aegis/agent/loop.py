@@ -148,7 +148,17 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
     from ..util import estimate_tokens
     schema_tokens = estimate_tokens(json.dumps(schemas))   # tools count toward the window
 
+    cancel = getattr(agent, "cancel_event", None)
+
+    def _cancelled() -> bool:
+        return cancel is not None and cancel.is_set()
+
     while budget.should_continue():
+        if _cancelled():
+            emit({"type": "cancelled"})
+            stop = Message.assistant("[interrupted by user]")
+            session.messages.append(stop)
+            return stop
         emit({"type": "iteration", "n": budget.api_call_count + 1, "max": budget.max_iterations})
         session.messages = governance.normalize(session.messages)
 
@@ -209,12 +219,30 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
         if compaction.should_compress(session.messages, agent.provider.context_length, schema_tokens):
             emit({"type": "compacting"})
             comp = agent.config.get("agent.compression", {}) or {}
+            # Flush memory before compacting so the summary reflects the latest facts.
+            if agent.memory:
+                try:
+                    agent.memory.refresh_snapshot()
+                except Exception:  # noqa: BLE001
+                    pass
+            before_n = len(session.messages)
+            before_tok = compaction.estimated_tokens(session.messages)
             session.messages = compaction.compress(
                 session.messages, agent.provider,
                 preserve_first=comp.get("preserve_first", 3),
                 preserve_last=comp.get("preserve_last", 20),
                 max_tool_tokens=comp.get("max_tool_tokens", 600),
             )
+            after_tok = compaction.estimated_tokens(session.messages)
+            # Record what was compacted and why, so the user can inspect it later.
+            from ..constants import COMPACT_THRESHOLD
+            from ..util import now_iso
+            rec = {"at": now_iso(), "iteration": budget.api_call_count,
+                   "messages_before": before_n, "messages_after": len(session.messages),
+                   "tokens_before": before_tok, "tokens_after": after_tok,
+                   "reason": f"context exceeded {int(COMPACT_THRESHOLD * 100)}% of the window"}
+            session.meta.setdefault("compactions", []).append(rec)
+            emit({"type": "compacted", **rec})
             agent.refresh_volatile()
 
     # Budget exhausted -> one grace call without tools for a final summary.

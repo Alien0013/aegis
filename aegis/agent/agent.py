@@ -68,6 +68,8 @@ class Agent:
         self.reasoning = config.get("agent.reasoning_effort", "off")
         self.budget = IterationBudget(int(config.get("agent.max_iterations", DEFAULT_MAX_ITERATIONS)))
         self.tools_used = 0
+        import threading
+        self.cancel_event = threading.Event()   # set by .cancel() to interrupt a run
 
         self.tool_context = ToolContext(
             cwd=self.cwd, config=config, memory=self.memory, skills=self.skills,
@@ -183,7 +185,12 @@ class Agent:
             except (re.error, Exception):  # noqa: BLE001
                 continue
 
+    def cancel(self) -> None:
+        """Request the current run to stop at the next safe point (interrupt-aware loop)."""
+        self.cancel_event.set()
+
     def run(self, user_input: str | Message, on_event: OnEvent | None = None) -> Message:
+        self.cancel_event.clear()
         msg = user_input if isinstance(user_input, Message) else Message.user(user_input)
         self._apply_routing(msg.content)
         self.session.maybe_title_from(msg.content)
@@ -220,7 +227,11 @@ class Agent:
                     from .._log import log_exc
                     log_exc("external memory sync_turn failed")
         if self.store:
-            self.store.save(self.session)
+            try:
+                self.store.save(self.session)
+            except Exception:  # noqa: BLE001  (a save failure must not lose the turn's reply)
+                from .._log import log_exc
+                log_exc("final session save failed")
         try:
             from .. import learn, trajectory
             learn.background_tick(self.config, self.session)

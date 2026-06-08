@@ -85,6 +85,11 @@ class Tool:
     def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:  # pragma: no cover
         raise NotImplementedError
 
+    def available(self) -> tuple[bool, str]:
+        """Whether the tool is usable in this environment. Override for dep-gated tools so
+        the model is never offered a tool it can't run. Returns (ok, reason-if-not)."""
+        return True, ""
+
     def schema(self) -> ToolSchema:
         return {
             "name": self.name,

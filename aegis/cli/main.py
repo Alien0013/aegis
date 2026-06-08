@@ -336,6 +336,19 @@ def cmd_tools(args, config: Config) -> int:
     if getattr(args, "action", None) == "status":
         from ..tools.cloud import cmd_tools_status
         return cmd_tools_status(args, config)
+    reg = default_registry()
+    if getattr(args, "action", None) == "doctor":
+        _print("Tool availability:")
+        unusable = 0
+        for t in reg.all():
+            ok, reason = t.available()
+            if ok:
+                _print(f"  ✓ {t.name:<16} {t.toolset}")
+            else:
+                unusable += 1
+                _print(f"  ✗ {t.name:<16} {t.toolset:<9} {reason}")
+        _print(f"\n{len(reg.all()) - unusable}/{len(reg.all())} tools usable in this environment.")
+        return 1 if unusable else 0
     inv = tool_inventory(config)
     enabled = set(inv.enabled_names)
     _print(f"enabled toolsets: {', '.join(inv.toolsets)}")
@@ -345,10 +358,16 @@ def cmd_tools(args, config: Config) -> int:
             f"{name} ({count})" for name, count in sorted(inv.disabled_sets.items())
         ))
     _print("")
-    for t in default_registry().all():
+    for t in reg.all():
         g = f"[{','.join(t.groups)}]" if t.groups else "[safe]"
-        mark = "✓" if t.name in enabled else "–"
-        _print(f"  {mark} {t.name:<14} {t.toolset:<8} {g:<22} {t.description.splitlines()[0]}")
+        ok, reason = t.available()
+        if not ok:
+            mark, tail = "✗", f"  ← unavailable: {reason}"
+        elif t.name in enabled:
+            mark, tail = "✓", ""
+        else:
+            mark, tail = "–", ""
+        _print(f"  {mark} {t.name:<14} {t.toolset:<8} {g:<22} {t.description.splitlines()[0]}{tail}")
     return 0
 
 
@@ -1074,8 +1093,8 @@ def build_parser() -> argparse.ArgumentParser:
     cr.add_argument("prompt", nargs="*")
     cr.set_defaults(func=cmd_cron)
 
-    t = sub.add_parser("tools", help="list built-in tools, or `status` for tool-gateway backends")
-    t.add_argument("action", nargs="?", choices=["list", "status"], default="list")
+    t = sub.add_parser("tools", help="list tools; `doctor` for availability; `status` for backends")
+    t.add_argument("action", nargs="?", choices=["list", "status", "doctor"], default="list")
     t.set_defaults(func=cmd_tools)
 
     mem = sub.add_parser("memory", help="show/add long-term memory")

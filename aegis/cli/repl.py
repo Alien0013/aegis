@@ -178,6 +178,10 @@ def handle_slash(cmd: str, agent: Agent) -> str:
         _out(f"provider: {agent.provider.describe()}")
         _out(f"session: {agent.session.id} ({len(agent.session.messages)} msgs)")
         _out(f"reasoning: {getattr(agent, 'reasoning', 'off')} · exec_mode: {agent.config.get('tools.exec_mode')}")
+        comps = agent.session.meta.get("compactions") or []
+        if comps:
+            saved = sum(c["tokens_before"] - c["tokens_after"] for c in comps)
+            _out(f"compactions: {len(comps)} (~{saved:,} tokens reclaimed; {comps[-1]['reason']})")
         _out(_status_line(agent))
     elif name == "/think":
         level = arg or "medium"
@@ -370,6 +374,7 @@ def interactive(config: Config, *, model=None, provider_name=None,
         try:
             agent.run(expand_references(user, agent.cwd), Renderer())
         except KeyboardInterrupt:
-            _out("\n  (interrupted)", style="yellow")
+            agent.cancel()   # stop the loop at the next safe point; discard partial work
+            _out("\n  ⏹ interrupted — stopped this turn (your session is intact)", style="yellow")
         store.save(agent.session)
         _out(_status_line(agent), style="bright_black")

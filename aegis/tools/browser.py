@@ -30,6 +30,13 @@ class BrowserTool(Tool):
     )
     groups = ["network", "automation"]
     toolset = "browser"
+
+    def available(self):
+        import importlib.util
+        if importlib.util.find_spec("playwright") is None:
+            return False, "needs `pip install 'aegis-agent-harness[browser]'` + `playwright install chromium`"
+        return True, ""
+
     parameters = {
         "type": "object",
         "properties": {
@@ -105,6 +112,12 @@ class ComputerTool(Tool):
     )
     groups = ["runtime", "automation"]
     toolset = "computer"
+
+    def available(self):
+        import importlib.util
+        if importlib.util.find_spec("pyautogui") is None:
+            return False, "needs `pip install 'aegis-agent-harness[computer]'`"
+        return True, ""
     parameters = {
         "type": "object",
         "properties": {
