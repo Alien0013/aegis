@@ -320,8 +320,11 @@ def test_noninteractive_provider_uses_provider_default_model(capsys):
     assert rc == 0
     data = json.loads(capsys.readouterr().out)
     assert data["model"]["provider"] == "openai"
-    assert data["model"]["model"] == "gpt-4o"
-    assert Config.load().get("model.default") == "gpt-4o"
+    # uses the provider's registry default (kept current)
+    from aegis.providers.registry import get_spec
+    default = get_spec("openai").default_model
+    assert data["model"]["model"] == default
+    assert Config.load().get("model.default") == default
 
 
 def test_noninteractive_api_key_requires_env(monkeypatch, capsys):
@@ -448,7 +451,7 @@ def test_onboarding_can_select_a_provider_model(monkeypatch):
         "y",           # security notice
         "1",           # OpenAI
         "3",           # skip credentials
-        "2",           # GPT-5.2 model option
+        "1",           # provider-default model option
         "",            # exec mode default
         "6",           # skip web setup
         "",            # no messaging integrations
@@ -463,8 +466,9 @@ def test_onboarding_can_select_a_provider_model(monkeypatch):
         output_func=lambda _line: None,
     )
 
+    from aegis.providers.registry import get_spec
     assert rc == 0
-    assert Config.load().get("model.default") == "gpt-5.2"
+    assert Config.load().get("model.default") == get_spec("openai").default_model
 
 
 def test_openai_oauth_login_scope_avoids_auth_page_rejection():
