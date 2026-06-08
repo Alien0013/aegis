@@ -571,7 +571,7 @@ def cmd_doctor(args, config: Config) -> int:
                 importlib_metadata.version(package)
                 _print(f"  ✓ {mod} installed (import blocked: {type(e).__name__})")
             except importlib_metadata.PackageNotFoundError:
-                _print(f"  – {mod} (pip install aegis-agent[{extra}])")
+                _print(f"  – {mod} (pip install 'aegis-agent-harness[{extra}]')")
     tools = config.get("tools.toolsets", [])
     mcp_servers = config.get("mcp.servers", {}) or {}
     try:

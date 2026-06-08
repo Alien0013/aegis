@@ -1,7 +1,7 @@
 """Browser automation (Playwright) and OS-level computer-use (pyautogui).
 
-Both deps are optional: `pip install aegis-agent[browser]` then `playwright install
-chromium`, and `pip install aegis-agent[computer]`. Tools fail with a clear message
+Both deps are optional: `pip install 'aegis-agent-harness[browser]'` then `playwright
+install chromium`, and `pip install 'aegis-agent-harness[computer]'`. Tools fail with a clear message
 if the dep is missing rather than at import time.
 """
 
