@@ -378,5 +378,24 @@ def cmd_kanban(args, config) -> int:
         _print(f"dispatched {task.id} -> {task.status}")
         return 0
 
-    _print("usage: aegis kanban [create|list|show|claim|complete|assign|dispatch]")
+    if action == "decompose":
+        goal = _arg("title") or _arg("goal")
+        if not goal:
+            _print('usage: aegis kanban decompose "<goal>"')
+            return 1
+        from .kanban_auto import decompose
+        cards = decompose(goal, config, store=store)
+        _print(f"created {len(cards)} task(s):")
+        for c in cards:
+            _print(_fmt_task(c))
+        return 0
+
+    if action == "run":
+        from .kanban_auto import run_board
+        worker = _arg("worker") or "auto"
+        done = run_board(config, worker=worker, on_event=_print)
+        _print(f"completed {len(done)} task(s)")
+        return 0
+
+    _print("usage: aegis kanban [create|list|show|claim|complete|assign|dispatch|decompose|run]")
     return 1

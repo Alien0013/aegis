@@ -765,3 +765,39 @@ def test_dashboard_mcp_and_webhooks(tmp_path, monkeypatch):
         assert req("POST", "/api/webhooks", {"action": "remove", "name": "ci"})["ok"]
     finally:
         srv.shutdown()
+
+
+# --- kanban automation: decompose a goal + autonomously work the board ------
+def test_kanban_automation(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.agent.agent as agentmod
+    from aegis import kanban_auto
+    from aegis.kanban import KanbanStore
+
+    class FakeResp:
+        def __init__(self, c): self.content = c
+
+    class FakeAgent:
+        def run(self, prompt):
+            if "GOAL:" in prompt:
+                return FakeResp('[{"title":"Set up repo","body":"git init"},'
+                                '{"title":"Write tests","body":"add pytest"}]')
+            return FakeResp("did: " + prompt.splitlines()[0])
+    monkeypatch.setattr(agentmod.Agent, "create", staticmethod(lambda cfg, session=None: FakeAgent()))
+
+    store = KanbanStore()
+    cards = kanban_auto.decompose("ship the launch", None, store=store)
+    assert [c.title for c in cards] == ["Set up repo", "Write tests"]
+    assert len(store.list(status="ready")) == 2
+
+    done = kanban_auto.run_board(None, store=store)
+    assert len(done) == 2
+    assert not store.list(status="ready") and len(store.list(status="done")) == 2
+    assert store.comments(done[0])           # agent result recorded on each card
+
+
+def test_kanban_extract_json_array():
+    from aegis.kanban_auto import _extract_json_array
+    assert _extract_json_array('prefix [{"title":"a"}] suffix') == [{"title": "a"}]
+    assert _extract_json_array("no json here") == []
+    assert _extract_json_array("[broken json") == []

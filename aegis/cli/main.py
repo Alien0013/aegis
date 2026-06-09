@@ -997,7 +997,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     kb = sub.add_parser("kanban", help="multi-agent task board")
     kb.add_argument("action", nargs="?",
-                    choices=["create", "list", "show", "claim", "complete", "assign", "dispatch"],
+                    choices=["create", "list", "show", "claim", "complete", "assign", "dispatch",
+                             "decompose", "run"],
                     default="list")
     kb.add_argument("title", nargs="?"); kb.add_argument("--id"); kb.add_argument("--body")
     kb.add_argument("--priority", type=int); kb.add_argument("--status"); kb.add_argument("--assignee")
