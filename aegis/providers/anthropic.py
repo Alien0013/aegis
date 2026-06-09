@@ -15,6 +15,7 @@ from ..types import LLMResponse, Message, ToolCall, ToolSchema, Usage
 from .auth import AuthProvider
 from .base import ApiMode, OnDelta, ProviderTransport
 from .chat_completions import ProviderHTTPError, _raise_for_status
+from .schema import sanitize as _sanitize_schema
 
 ANTHROPIC_VERSION = "2023-06-01"
 
@@ -79,7 +80,8 @@ class AnthropicTransport(ProviderTransport):
             {
                 "name": t["name"],
                 "description": t.get("description", ""),
-                "input_schema": t.get("parameters", {"type": "object", "properties": {}}),
+                "input_schema": _sanitize_schema(
+                    t.get("parameters", {"type": "object", "properties": {}})),
             }
             for t in tools
         ]

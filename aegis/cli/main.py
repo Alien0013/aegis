@@ -979,6 +979,11 @@ def build_parser() -> argparse.ArgumentParser:
     co.add_argument("--json", action="store_true")
     co.set_defaults(func=_usage_log.cmd_cost)
 
+    from .. import model_meta as _model_meta
+    mo = sub.add_parser("models", help="show/refresh model metadata (context window from models.dev)")
+    mo.add_argument("action", nargs="?", choices=["show", "refresh"], default="show")
+    mo.set_defaults(func=_model_meta.cmd_models)
+
     wh = sub.add_parser("webhook", help="event webhooks that trigger the agent")
     wh.add_argument("action", nargs="?", choices=["list", "add", "remove", "serve"], default="list")
     wh.add_argument("name", nargs="?"); wh.add_argument("prompt", nargs="*")

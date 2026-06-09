@@ -56,3 +56,33 @@ def test_nearest_agents_md_walks_up(tmp_path):
     # a closer rule file wins
     (sub / "AGENTS.md").write_text("SUBPKG RULES")
     assert "SUBPKG RULES" in Workspace(cwd=sub).rules()
+
+
+# --- model metadata ---------------------------------------------------------
+def test_model_metadata_resolves_current_models():
+    from aegis.model_meta import context_window
+    assert context_window("claude-sonnet-4-6") == 1_000_000
+    assert context_window("gpt-5.5") == 400_000
+    assert context_window("gpt-4o") == 128_000
+    assert context_window("gemini-2.5-pro") == 1_048_576
+    assert context_window("totally-unknown-model") is None     # falls back to preset
+
+
+def test_provider_uses_model_metadata_for_context():
+    from aegis.config import Config
+    from aegis.providers import build_provider
+    c = Config.load()
+    c.set("model.provider", "openai")
+    c.set("model.default", "gpt-4o")        # smaller than the openai preset default
+    assert build_provider(c).context_length == 128_000   # the real gpt-4o window, not the preset
+
+
+# --- schema sanitizer -------------------------------------------------------
+def test_schema_sanitizer_strips_annotations_keeps_structure():
+    from aegis.providers.schema import sanitize
+    out = sanitize({"type": ["string", "null"], "$schema": "x", "examples": [1],
+                    "properties": {"a": {"type": "integer", "readOnly": True}}, "required": ["a"]})
+    assert out["type"] == "string"                    # union normalized
+    assert "$schema" not in out and "examples" not in out
+    assert "readOnly" not in out["properties"]["a"]   # nested annotation dropped
+    assert out["required"] == ["a"]                   # structure preserved

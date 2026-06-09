@@ -327,7 +327,11 @@ def build_provider(config: cfg.Config, *, model: str | None = None, name: str | 
 
     api_mode = ApiMode(api_mode_override) if api_mode_override else spec.api_mode
     base_url = base_url_override or spec.base_url
-    context_length = int(ctx_override or spec.context_length)
+    # explicit config > model metadata (the actual model's window) > the preset default
+    from .. import model_meta
+    resolved_model = model or config.get("model.default") or spec.default_model
+    context_length = int(ctx_override or model_meta.context_window(resolved_model, config)
+                         or spec.context_length)
     if context_length < MIN_CONTEXT_LENGTH:
         raise ValueError(
             f"Provider '{name}' context_length={context_length} < minimum {MIN_CONTEXT_LENGTH}. "

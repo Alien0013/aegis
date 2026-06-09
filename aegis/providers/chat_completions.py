@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 
 from ..types import LLMResponse, Message, ToolCall, ToolSchema, Usage
+from .schema import sanitize as _sanitize_schema
 from .base import ApiMode, OnDelta, ProviderTransport
 from .auth import AuthProvider
 
@@ -60,7 +61,8 @@ class ChatCompletionsTransport(ProviderTransport):
                 "function": {
                     "name": t["name"],
                     "description": t.get("description", ""),
-                    "parameters": t.get("parameters", {"type": "object", "properties": {}}),
+                    "parameters": _sanitize_schema(
+                        t.get("parameters", {"type": "object", "properties": {}})),
                 },
             }
             for t in tools
