@@ -139,27 +139,40 @@ class CronStore:
         self._save(jobs)
 
 
-def run_scheduler(config, sink=None, poll: int = 30) -> None:
-    """Blocking loop that runs due jobs. ``sink(channel, text)`` delivers output."""
+def tick(config, sink=None, store: "CronStore | None" = None, verbose: bool = True) -> int:
+    """Run every due job once. ``sink(channel, text)`` delivers output. Returns jobs run.
+
+    Shared by the standalone scheduler and the in-gateway ticker so cron fires whether or not
+    a separate daemon is running (reverse-engineered from Hermes' _start_cron_ticker)."""
     from .agent.agent import Agent
     from .session import Session
 
+    store = store or CronStore()
+    now = time.time()
+    ran = 0
+    for job in store.list():
+        if is_due(job, now):
+            if verbose:
+                print(f"  ▸ running cron {job.id}: {job.prompt[:60]}")
+            agent = Agent.create(config, session=Session.create())
+            try:
+                result = agent.run(job.prompt)
+                if sink and job.channel:
+                    sink(job.channel, result.content)
+            except Exception as e:  # noqa: BLE001
+                print(f"    cron error: {e}")
+            store.mark_run(job.id, now)
+            ran += 1
+    return ran
+
+
+def run_scheduler(config, sink=None, poll: int = 30) -> None:
+    """Blocking loop that runs due jobs. ``sink(channel, text)`` delivers output."""
     store = CronStore()
     print(f"AEGIS cron scheduler running (poll {poll}s, {len(store.list())} jobs). Ctrl+C to stop.")
     try:
         while True:
-            now = time.time()
-            for job in store.list():
-                if is_due(job, now):
-                    print(f"  ▸ running cron {job.id}: {job.prompt[:60]}")
-                    agent = Agent.create(config, session=Session.create())
-                    try:
-                        result = agent.run(job.prompt)
-                        if sink and job.channel:
-                            sink(job.channel, result.content)
-                    except Exception as e:  # noqa: BLE001
-                        print(f"    cron error: {e}")
-                    store.mark_run(job.id, now)
+            tick(config, sink=sink, store=store)
             time.sleep(poll)
     except KeyboardInterrupt:
         print("\nscheduler stopped.")

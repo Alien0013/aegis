@@ -109,7 +109,10 @@ class GatewayRunner:
 
                 final = agent.run(text, _collect)
                 from ..redact import redact_secrets
-                reply = redact_secrets(final.content or "(no response)")   # never leak a key to a chat
+                from .replies import shape_reply
+                api_calls = getattr(getattr(agent, "budget", None), "api_call_count", 0)
+                # secrets out, raw provider errors -> friendly one-liner, empty -> clear message
+                reply = shape_reply(redact_secrets(final.content or ""), api_calls=api_calls)
                 if learned and self.config.get("gateway.show_learning", True):
                     reply += "\n\n— " + " · ".join(dict.fromkeys(learned))   # dedup, keep order
                 return reply
@@ -148,6 +151,23 @@ class GatewayRunner:
         except Exception:  # noqa: BLE001
             return False
 
+    def _cron_sink(self, channel: str, text: str) -> None:
+        """Deliver cron output. ``channel`` is 'platform:chat_id' -> queue to the outbox."""
+        platform, _, chat_id = (channel or "").partition(":")
+        if platform and chat_id:
+            self.enqueue(platform, chat_id, text or "")
+
+    def _cron_ticker(self, interval: int = 60) -> None:
+        import time as _time
+
+        from .. import cron
+        while True:
+            try:
+                cron.tick(self.config, sink=self._cron_sink, verbose=False)
+            except Exception:  # noqa: BLE001 - a bad job must not kill the ticker
+                pass
+            _time.sleep(interval)
+
     def run(self) -> None:
         if not self.adapters:
             raise RuntimeError("No channels configured for the gateway.")
@@ -163,6 +183,9 @@ class GatewayRunner:
         threading.Thread(target=q.run, args=(self._send_via_adapter,), daemon=True).start()
         if q.pending_count():
             print(f"  ▸ delivery queue: {q.pending_count()} pending (will retry)")
+        # in-process cron ticker so scheduled/one-shot jobs fire without a separate daemon
+        threading.Thread(target=self._cron_ticker, daemon=True).start()
+        print("  ▸ cron ticker up")
         print("Gateway running. Ctrl+C to stop.")
         try:
             for t in threads:

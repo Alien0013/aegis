@@ -269,3 +269,43 @@ def test_telegram_typing_indicator(monkeypatch):
         raise RuntimeError("net")
     a._api = boom
     a._typing("42")                  # best-effort: never blocks the reply
+
+
+# --- run.py reverse-engineered: friendly errors + in-gateway cron -----------
+def test_gateway_shape_reply():
+    from aegis.gateway.replies import shape_reply, looks_like_provider_error
+    assert looks_like_provider_error("[provider error] HTTP 404: not a chat model")
+    assert "model provider" in shape_reply("[provider error] HTTP 500: upstream").lower()
+    assert "rate-limit" in shape_reply("Error code: 429 too many requests").lower()
+    assert "authentication" in shape_reply("HTTP 401 invalid api key").lower()
+    prose = "HTTP 404 means not-found; here's how to debug: " + "x" * 400   # long prose passes through
+    assert shape_reply(prose) == prose
+    assert shape_reply("", api_calls=3).startswith("⚠️")     # worked but empty
+    assert shape_reply("", api_calls=0) == "(no response)"
+
+
+def test_cron_tick_and_gateway_sink(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.agent.agent as agentmod
+
+    class _A:
+        def run(self, p):
+            class R:
+                content = "done"
+            return R()
+    monkeypatch.setattr(agentmod.Agent, "create", staticmethod(lambda cfg, session=None: _A()))
+
+    from aegis.cron import CronStore, tick
+    s = CronStore()
+    s.add("every 1s", "noop", "telegram:99")
+    sent = []
+    assert tick(None, sink=lambda ch, txt: sent.append((ch, txt)), store=s, verbose=False) == 1
+    assert sent == [("telegram:99", "done")]
+
+    from aegis.gateway.runner import GatewayRunner
+    gr = GatewayRunner.__new__(GatewayRunner)
+    cap = []
+    gr.enqueue = lambda p, c, t: cap.append((p, c, t))
+    gr._cron_sink("telegram:42", "hi")
+    gr._cron_sink("no_colon", "ignored")            # malformed -> dropped
+    assert cap == [("telegram", "42", "hi")]
