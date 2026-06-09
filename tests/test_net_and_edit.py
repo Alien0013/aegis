@@ -309,3 +309,32 @@ def test_cron_tick_and_gateway_sink(monkeypatch, tmp_path):
     gr._cron_sink("telegram:42", "hi")
     gr._cron_sink("no_colon", "ignored")            # malformed -> dropped
     assert cap == [("telegram", "42", "hi")]
+
+
+# --- in-place status editing (run.py send_or_update_status) -----------------
+def test_telegram_inplace_status(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "x")
+    from aegis.gateway.channels import TelegramAdapter
+    a = TelegramAdapter(token="123:abc")
+    calls = []
+
+    def fake_api(method, **kw):
+        calls.append((method, kw))
+        return {"result": {"message_id": 555}} if method == "sendMessage" else {}
+    a._api = fake_api
+
+    a._finish("42", 555, "short answer")                       # edited in place
+    assert [m for m, _ in calls] == ["editMessageText"] and calls[0][1]["message_id"] == 555
+
+    calls.clear(); a._finish("42", 555, "see\nMEDIA:/tmp/x.png")   # media -> drop bubble + deliver
+    assert "deleteMessage" in [m for m, _ in calls] and "editMessageText" not in [m for m, _ in calls]
+
+    calls.clear(); a._finish("42", 555, "L" * 5000)            # long -> drop + chunk
+    ms = [m for m, _ in calls]
+    assert ms[0] == "deleteMessage" and ms.count("sendMessage") >= 2
+
+    calls.clear(); a._finish("42", 555, "")                    # empty -> just drop bubble
+    assert [m for m, _ in calls] == ["deleteMessage"]
+
+    calls.clear(); a._finish("42", 555, "| A | B |\n|---|---|\n| 1 | 2 |")   # table tableified on edit
+    assert calls[0][0] == "editMessageText" and "•" in calls[0][1]["text"] and "|" not in calls[0][1]["text"]

@@ -80,16 +80,52 @@ class TelegramAdapter(BasePlatformAdapter):
                     user_id=user_id,
                     user_name=username,
                 )
-                self._typing(ev.chat_id)        # show "typing…" while the agent works
+                self._typing(ev.chat_id)        # instant feedback…
+                status_id = self._send_status(ev.chat_id, "🤔 working…")   # …then a live status bubble
                 reply = dispatch(ev)
-                if reply:
-                    self.deliver(ev.chat_id, reply)
+                self._finish(ev.chat_id, status_id, reply)
 
     def _typing(self, chat_id: str) -> None:
         try:
             self._api("sendChatAction", chat_id=chat_id, action="typing")
         except Exception:  # noqa: BLE001 — a missing indicator must never block the reply
             pass
+
+    def _send_status(self, chat_id: str, text: str) -> int | None:
+        try:
+            return self._api("sendMessage", chat_id=chat_id, text=text).get("result", {}).get("message_id")
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _edit(self, chat_id: str, message_id: int, text: str) -> bool:
+        try:
+            self._api("editMessageText", chat_id=chat_id, message_id=message_id, text=text)
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _delete(self, chat_id: str, message_id: int) -> None:
+        try:
+            self._api("deleteMessage", chat_id=chat_id, message_id=message_id)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _finish(self, chat_id: str, status_id: int | None, reply: str) -> None:
+        """Turn the status bubble into the answer: edit it in place for a short single-message
+        text reply; otherwise drop the bubble and deliver normally (chunking/media/tables)."""
+        from .base import split_media, tableify
+        if not reply:
+            if status_id:
+                self._delete(chat_id, status_id)
+            return
+        clean, media = split_media(reply)
+        clean = tableify(clean)                       # Telegram can't render pipe tables
+        if status_id and clean and not media and len(clean) <= 4000:
+            if self._edit(chat_id, status_id, clean):
+                return                                # edited in place — no extra bubble
+        if status_id:
+            self._delete(chat_id, status_id)
+        self.deliver(chat_id, reply)
 
     def send_media(self, chat_id: str, path: str, caption: str = "") -> None:
         import os
