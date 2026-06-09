@@ -22,7 +22,7 @@ def test_session_list_and_delete():
     from aegis.session import Session, SessionStore
     st = SessionStore()
     ids = []
-    for i in range(3):
+    for _i in range(3):
         s = Session.create()
         st.save(s)
         ids.append(s.id)

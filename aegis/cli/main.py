@@ -537,7 +537,7 @@ def cmd_config(args, config: Config) -> int:
 
         defaults, current = flat(DEFAULT_CONFIG), flat(config.data)
         missing = [k for k in defaults if k not in current]
-        unknown = [k for k in current if k not in defaults and not k.split(".")[0] in
+        unknown = [k for k in current if k not in defaults and k.split(".")[0] not in
                    ("custom_providers", "fallback_providers", "hooks", "mcp", "routing")]
         if args.action == "check":
             _print(f"missing default keys: {', '.join(missing) or '(none)'}")

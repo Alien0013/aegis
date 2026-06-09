@@ -23,7 +23,7 @@ would escape it (zip-slip guard).
 from __future__ import annotations
 
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from . import config as cfg
@@ -61,7 +61,7 @@ def create_backup(out_path: Path | None = None, quick: bool = False) -> Path:
     """
     home = cfg.get_home()
     if out_path is None:
-        stamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         suffix = "-quick" if quick else ""
         out_path = ensure_dir(home / "backups") / f"aegis-backup-{stamp}{suffix}.zip"
     out_path = Path(out_path).expanduser()

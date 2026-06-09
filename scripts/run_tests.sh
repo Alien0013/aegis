@@ -22,4 +22,9 @@ PYTHON="${PYTHON:-}"
 if [ -z "$PYTHON" ]; then
   if [ -x ".venv/bin/python" ]; then PYTHON=".venv/bin/python"; else PYTHON="python3"; fi
 fi
+# Lint gate (F = real errors, B = likely bugs) before tests. Skips if ruff isn't installed.
+RUFF="$(dirname "$PYTHON")/ruff"
+[ -x "$RUFF" ] || RUFF="$(command -v ruff 2>/dev/null || true)"
+if [ -n "$RUFF" ]; then "$RUFF" check aegis/ tests/ --select F,B; fi
+
 exec "$PYTHON" -m pytest -q "$@"
