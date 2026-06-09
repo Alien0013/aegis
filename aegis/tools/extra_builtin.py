@@ -62,6 +62,10 @@ class DownloadTool(Tool):
 
     def run(self, args, ctx: ToolContext) -> ToolResult:
         url = args["url"]
+        from ..net_safety import guard
+        blocked = guard(url, getattr(ctx, "config", None))
+        if blocked:
+            return ToolResult.error(blocked)
         dest = Path(args["path"]) if args.get("path") else \
             ctx.cwd / (Path(urlparse(url).path).name or "download.bin")
         if not dest.is_absolute():
@@ -93,6 +97,10 @@ class HttpRequestTool(Tool):
     }
 
     def run(self, args, ctx: ToolContext) -> ToolResult:
+        from ..net_safety import guard
+        blocked = guard(args["url"], getattr(ctx, "config", None))
+        if blocked:
+            return ToolResult.error(blocked)
         try:
             with httpx.Client(timeout=60, follow_redirects=True) as c:
                 r = c.request(args.get("method", "GET"), args["url"],

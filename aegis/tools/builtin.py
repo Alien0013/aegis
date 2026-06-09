@@ -102,13 +102,34 @@ class EditFileTool(Tool):
         old, new = args["old_string"], args["new_string"]
         count = text.count(old)
         if count == 0:
-            return ToolResult.error("old_string not found in file.")
+            return ToolResult.error("old_string not found in file." + _closest_hint(text, old))
         if count > 1 and not args.get("replace_all"):
             return ToolResult.error(f"old_string appears {count}× — pass replace_all=true or add context.")
         text = text.replace(old, new) if args.get("replace_all") else text.replace(old, new, 1)
         path.write_text(text, encoding="utf-8")
         return ToolResult.ok(f"Edited {path} ({count if args.get('replace_all') else 1} replacement(s)).",
                              display=f"edited {path.name}")
+
+
+def _closest_hint(text: str, old: str) -> str:
+    """When old_string isn't found exactly, surface the closest block in the file so the model
+    can self-correct in one step instead of guessing (whitespace/indent drift is the usual cause)."""
+    import difflib
+    old = old.strip("\n")
+    if not old:
+        return ""
+    lines = text.splitlines()
+    n = max(1, len(old.splitlines()))
+    best, best_ratio = "", 0.0
+    for i in range(max(1, len(lines) - n + 1)):
+        window = "\n".join(lines[i:i + n])
+        r = difflib.SequenceMatcher(None, old, window).ratio()
+        if r > best_ratio:
+            best, best_ratio = window, r
+    if best_ratio < 0.6:
+        return " (no close match — re-read the file and copy the exact text.)"
+    return (f"\nClosest match in the file ({best_ratio:.0%} similar) — copy it EXACTLY "
+            f"(whitespace matters):\n----\n{best[:600]}\n----")
 
 
 class ListDirTool(Tool):
@@ -367,6 +388,10 @@ class WebFetchTool(Tool):
         url = args["url"]
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
+        from ..net_safety import guard
+        blocked = guard(url, getattr(ctx, "config", None))
+        if blocked:
+            return ToolResult.error(blocked)
         try:
             with httpx.Client(timeout=30, follow_redirects=True,
                               headers={"User-Agent": "Mozilla/5.0 (AEGIS)"}) as c:

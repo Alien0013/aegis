@@ -162,6 +162,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "security": {
         "scan_enabled": True,        # Tirith-style pre-execution command scanning
+        "allow_private_urls": False, # SSRF: allow fetches to private/internal IPs (metadata still blocked)
     },
     "checkpoints": {
         "enabled": False,            # snapshot files before edits for /rollback
@@ -329,9 +330,19 @@ class Workspace:
             if g:
                 blocks.append(f"<!-- global:{name} -->\n{g}")
                 break
-        for name in self.RULE_FILES:
-            p = read_text(self.cwd / name).strip()
-            if p:
-                blocks.append(f"<!-- project:{name} ({self.cwd}) -->\n{p}")
+        # Project rules: the NEAREST rule file walking up from cwd (so a subdir of a monorepo
+        # picks up the repo-root AGENTS.md when it has none of its own). Stops at $HOME / root.
+        d = self.cwd.resolve()
+        home = Path.home().resolve()
+        for _ in range(40):
+            found = False
+            for name in self.RULE_FILES:
+                p = read_text(d / name).strip()
+                if p:
+                    blocks.append(f"<!-- project:{name} ({d}) -->\n{p}")
+                    found = True
+                    break
+            if found or d == d.parent or d == home:
                 break
+            d = d.parent
         return "\n\n".join(blocks).strip()
