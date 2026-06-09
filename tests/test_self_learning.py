@@ -141,15 +141,11 @@ def test_compaction_splits_into_child_session(tmp_path):
 
     class Dual:
         context_length = 1; name = "f"; model = "m"; api_mode = None; auth = None
-        def __init__(self): self.n = 0
         def describe(self): return "f"
         def complete(self, messages, tools=None, **k):
             if tools is None:                       # compaction asking for a summary
                 return LLMResponse(text="SUMMARY of earlier turns")
-            self.n += 1
-            if self.n == 1:
-                return LLMResponse(text="", tool_calls=[ToolCall("c1", "list_dir", {"path": "."})])
-            return LLMResponse(text="final")
+            return LLMResponse(text="final")        # proactive compaction already split before this
 
     cfg = Config.load()
     cfg.data["tools"]["exec_mode"] = "full"

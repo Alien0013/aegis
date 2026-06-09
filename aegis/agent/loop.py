@@ -142,6 +142,57 @@ def _next_in_lineage(title: str) -> str:
     return f"{(title or 'session').strip()} (2)"
 
 
+def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
+    """Proactively compact BEFORE the next model call if the window is near full. Returns the
+    (possibly new child) session. Splits into a child session when a store + split are enabled."""
+    if not compaction.should_compress(session.messages, agent.provider.context_length, schema_tokens):
+        return session
+    emit({"type": "compacting"})
+    comp = agent.config.get("agent.compression", {}) or {}
+    if agent.memory:                       # flush memory so the summary reflects latest facts
+        try:
+            agent.memory.refresh_snapshot()
+        except Exception:  # noqa: BLE001
+            pass
+    before_n = len(session.messages)
+    before_tok = compaction.estimated_tokens(session.messages)
+    compressed = compaction.compress(
+        session.messages, agent.provider,
+        preserve_first=comp.get("preserve_first", 3),
+        preserve_last=comp.get("preserve_last", 20),
+        max_tool_tokens=comp.get("max_tool_tokens", 600),
+    )
+    from ..constants import COMPACT_THRESHOLD
+    from ..util import now_iso
+    rec = {"at": now_iso(), "iteration": budget.api_call_count,
+           "messages_before": before_n, "messages_after": len(compressed),
+           "tokens_before": before_tok, "tokens_after": compaction.estimated_tokens(compressed),
+           "reason": f"context exceeded {int(COMPACT_THRESHOLD * 100)}% of the window"}
+
+    if comp.get("split_sessions", True) and agent.store is not None and len(compressed) < before_n:
+        from ..session import Session
+        parent = session
+        try:
+            agent.store.save(parent)                    # preserve full parent history
+        except Exception:  # noqa: BLE001
+            pass
+        child = Session.create(title=_next_in_lineage(parent.title), parent_id=parent.id)
+        child.messages = compressed
+        child.meta["forked_from"] = parent.id
+        child.meta["summary"] = parent.meta.get("summary", "")
+        child.meta.setdefault("compactions", []).append(rec)
+        agent.session = child
+        agent.tool_context.session = child
+        session = child
+        rec = {**rec, "split": True, "child_session": child.id, "parent_session": parent.id}
+    else:
+        session.messages = compressed
+        session.meta.setdefault("compactions", []).append(rec)
+    emit({"type": "compacted", **rec})
+    agent.refresh_volatile()
+    return session
+
+
 def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
     """Drive one user turn to completion. Returns the final assistant message."""
     emit = on_event or (lambda e: None)
@@ -170,6 +221,8 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
             return stop
         emit({"type": "iteration", "n": budget.api_call_count + 1, "max": budget.max_iterations})
         session.messages = governance.normalize(session.messages)
+        # Compact BEFORE the model call so an over-full window never reaches the provider.
+        session = _maybe_compact(agent, session, schema_tokens, budget, emit)
 
         def delta_cb(text: str) -> None:
             emit({"type": "assistant_delta", "text": text})
@@ -226,56 +279,6 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                 agent.store.save(session)
             except Exception:  # noqa: BLE001
                 pass
-
-        if compaction.should_compress(session.messages, agent.provider.context_length, schema_tokens):
-            emit({"type": "compacting"})
-            comp = agent.config.get("agent.compression", {}) or {}
-            # Flush memory before compacting so the summary reflects the latest facts.
-            if agent.memory:
-                try:
-                    agent.memory.refresh_snapshot()
-                except Exception:  # noqa: BLE001
-                    pass
-            before_n = len(session.messages)
-            before_tok = compaction.estimated_tokens(session.messages)
-            compressed = compaction.compress(
-                session.messages, agent.provider,
-                preserve_first=comp.get("preserve_first", 3),
-                preserve_last=comp.get("preserve_last", 20),
-                max_tool_tokens=comp.get("max_tool_tokens", 600),
-            )
-            after_tok = compaction.estimated_tokens(compressed)
-            from ..constants import COMPACT_THRESHOLD
-            from ..util import now_iso
-            rec = {"at": now_iso(), "iteration": budget.api_call_count,
-                   "messages_before": before_n, "messages_after": len(compressed),
-                   "tokens_before": before_tok, "tokens_after": after_tok,
-                   "reason": f"context exceeded {int(COMPACT_THRESHOLD * 100)}% of the window"}
-
-            split = comp.get("split_sessions", True) and agent.store is not None
-            if split and len(compressed) < before_n:
-                # Roll into a fresh child session (Hermes-style): keep the full parent in the
-                # store, continue in a child holding [summary + recent tail], lineage chained.
-                from ..session import Session
-                parent = session
-                try:
-                    agent.store.save(parent)                  # preserve full parent history
-                except Exception:  # noqa: BLE001
-                    pass
-                child = Session.create(title=_next_in_lineage(parent.title), parent_id=parent.id)
-                child.messages = compressed
-                child.meta["forked_from"] = parent.id
-                child.meta["summary"] = parent.meta.get("summary", "")
-                child.meta.setdefault("compactions", []).append(rec)
-                agent.session = child
-                agent.tool_context.session = child
-                session = child
-                rec = {**rec, "split": True, "child_session": child.id, "parent_session": parent.id}
-            else:
-                session.messages = compressed
-                session.meta.setdefault("compactions", []).append(rec)
-            emit({"type": "compacted", **rec})
-            agent.refresh_volatile()
 
     # Budget exhausted -> one grace call without tools for a final summary.
     emit({"type": "budget_exhausted"})
