@@ -62,6 +62,7 @@ class AcpServer:
 
     sessions: dict[str, _SessionEntry] = field(default_factory=dict)
     _write_lock: threading.Lock = field(default_factory=threading.Lock)
+    _req_id: int = 0
 
     # -- low-level framing --------------------------------------------------
     def _write(self, obj: dict[str, Any]) -> None:
@@ -159,6 +160,7 @@ class AcpServer:
             session=entry.session,
             cwd=entry.cwd,
             store=self.store,
+            approver=lambda desc: self._request_permission(sid, desc),
         )
 
         def on_event(event: dict[str, Any]) -> None:
@@ -214,6 +216,37 @@ class AcpServer:
                 },
             },
         )
+
+    def _request_permission(self, sid: str, description: str) -> bool:
+        """Ask the editor to approve a tool action (ACP session/request_permission). Blocks
+        reading stdin for the matching response — safe because the serve loop is suspended
+        up-stack inside agent.run() while this fires."""
+        self._req_id += 1
+        rid = f"perm-{self._req_id}"
+        self._write({
+            "jsonrpc": "2.0", "id": rid, "method": "session/request_permission",
+            "params": {
+                "sessionId": sid,
+                "toolCall": {"toolCallId": rid, "title": description or "tool action",
+                             "kind": "other", "status": "pending"},
+                "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+                            {"optionId": "reject", "name": "Reject", "kind": "reject_once"}],
+            },
+        })
+        for raw in self.stdin:
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if msg.get("id") == rid:
+                outcome = (msg.get("result") or {}).get("outcome") or {}
+                return outcome.get("outcome") == "selected" and outcome.get("optionId") == "allow"
+            if msg.get("method") in ("session/cancel", "$/cancelRequest"):
+                return False          # client cancelled while we waited -> treat as deny
+        return False                  # stdin closed -> deny
 
     def _send_tool_call(self, sid: str, event: dict[str, Any], *, status: str) -> None:
         name = event.get("name") or "tool"

@@ -392,3 +392,33 @@ def test_telegram_per_chat_queue_orders_turns(monkeypatch):
         a._enqueue(MessageEvent(platform="telegram", chat_id="7", text=n))
     time.sleep(0.3)
     assert seen == ["reply:a", "reply:b", "reply:c"]      # single worker, ordered
+
+
+# --- ACP request_permission (editor approves tool actions) ------------------
+def test_acp_request_permission():
+    import io
+    import json
+    import threading
+    from aegis.acp import AcpServer
+
+    def run(response_line):
+        srv = AcpServer.__new__(AcpServer)
+        srv._req_id = 0
+        srv._write_lock = threading.Lock()
+        srv.stdout = io.StringIO()
+        srv.stdin = io.StringIO(response_line + "\n")
+        allowed = srv._request_permission("s1", "run bash: rm -rf build")
+        return allowed, json.loads(srv.stdout.getvalue().strip())
+
+    allow_resp = json.dumps({"jsonrpc": "2.0", "id": "perm-1",
+                             "result": {"outcome": {"outcome": "selected", "optionId": "allow"}}})
+    ok, req = run(allow_resp)
+    assert ok is True
+    assert req["method"] == "session/request_permission"
+    assert [o["optionId"] for o in req["params"]["options"]] == ["allow", "reject"]
+
+    reject = json.dumps({"jsonrpc": "2.0", "id": "perm-1",
+                         "result": {"outcome": {"outcome": "selected", "optionId": "reject"}}})
+    assert run(reject)[0] is False
+    assert run(json.dumps({"jsonrpc": "2.0", "method": "session/cancel", "params": {}}))[0] is False
+    assert run("")[0] is False              # closed stdin -> deny
