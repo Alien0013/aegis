@@ -162,8 +162,13 @@ class AcpServer:
         )
 
         def on_event(event: dict[str, Any]) -> None:
-            if event.get("type") == "assistant_delta":
+            etype = event.get("type")
+            if etype == "assistant_delta":
                 self._send_chunk(sid, event.get("text", ""))
+            elif etype == "tool_start":            # surface tool activity in the editor (Zed etc.)
+                self._send_tool_call(sid, event, status="in_progress")
+            elif etype == "tool_result":
+                self._send_tool_call(sid, event, status="completed")
 
         try:
             result = agent.run(text, on_event)
@@ -209,6 +214,17 @@ class AcpServer:
                 },
             },
         )
+
+    def _send_tool_call(self, sid: str, event: dict[str, Any], *, status: str) -> None:
+        name = event.get("name") or "tool"
+        update: dict[str, Any] = {
+            "sessionUpdate": "tool_call",
+            "toolCallId": str(event.get("id") or name),
+            "title": event.get("summary") or name,
+            "status": "failed" if event.get("is_error") else status,
+            "kind": "other",
+        }
+        self._notify("session/update", {"sessionId": sid, "update": update})
 
     _METHODS = {
         "initialize": _initialize,

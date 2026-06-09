@@ -238,3 +238,18 @@ def test_cron_oneshot_lifecycle(monkeypatch, tmp_path):
 
     r = CronStore().add("every 10m", "poll")
     assert r.run_at == 0.0 and is_due(r, now)               # recurring unaffected
+
+
+# --- ACP tool-call streaming (Hermes parity: acp_adapter subsystem) ---------
+def test_acp_streams_tool_calls():
+    from aegis.acp import AcpServer
+    srv = AcpServer.__new__(AcpServer)
+    sent = []
+    srv._notify = lambda method, params: sent.append(params["update"])
+    srv._send_tool_call("s1", {"id": "c1", "name": "bash"}, status="in_progress")
+    srv._send_tool_call("s1", {"id": "c1", "name": "bash", "summary": "ran ls"}, status="completed")
+    srv._send_tool_call("s1", {"id": "c2", "name": "edit_file", "is_error": True}, status="completed")
+    assert [u["sessionUpdate"] for u in sent] == ["tool_call"] * 3
+    assert sent[0]["status"] == "in_progress"
+    assert sent[1]["status"] == "completed" and sent[1]["title"] == "ran ls"
+    assert sent[2]["status"] == "failed"          # tool error surfaces as failed
