@@ -29,6 +29,7 @@ class DiscordAdapter(BasePlatformAdapter):
         intents.message_content = True
         client = discord.Client(intents=intents)
         self._client = client
+        self._busy: set[str] = set()   # channels with a turn in progress (for interrupt)
 
         @client.event
         async def on_message(message):  # noqa: ANN001
@@ -41,9 +42,20 @@ class DiscordAdapter(BasePlatformAdapter):
                 text=message.content, user_id=str(message.author.id),
                 user_name=str(message.author),
             )
+            # 'stop'/'cancel' while a turn is actually running in this channel cancels it
+            from .base import is_control_interrupt
+            cb = getattr(self, "_interrupt_cb", None)
+            if is_control_interrupt(message.content):
+                if ev.chat_id in self._busy and cb and cb(ev):
+                    await message.channel.send("🛑 stopped.")
+                    return
             loop = asyncio.get_event_loop()
-            async with message.channel.typing():       # show "typing…" while the agent works
-                reply = await loop.run_in_executor(None, dispatch, ev)
+            self._busy.add(ev.chat_id)
+            try:
+                async with message.channel.typing():   # show "typing…" while the agent works
+                    reply = await loop.run_in_executor(None, dispatch, ev)
+            finally:
+                self._busy.discard(ev.chat_id)
             if reply:
                 import os
 
