@@ -10,6 +10,7 @@ from .base import BasePlatformAdapter, Dispatch, MessageEvent
 
 class DiscordAdapter(BasePlatformAdapter):
     name = "discord"
+    renders_tables = False
 
     def __init__(self, token: str | None = None):
         self.token = token or os.environ.get("DISCORD_BOT_TOKEN")
@@ -47,8 +48,9 @@ class DiscordAdapter(BasePlatformAdapter):
 
                 import discord
 
-                from .base import split_media
+                from .base import split_media, tableify
                 clean, media = split_media(reply)
+                clean = tableify(clean)               # Discord doesn't render pipe tables
                 for i in range(0, len(clean), 1900):
                     chunk = clean[i:i + 1900]
                     if chunk:

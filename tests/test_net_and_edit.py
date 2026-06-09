@@ -129,3 +129,27 @@ def test_media_hint_only_on_supporting_channels():
     assert "MEDIA:/absolute/path" in PLATFORM_HINTS["telegram"]
     assert "MEDIA:/absolute/path" in PLATFORM_HINTS["discord"]
     assert "MEDIA:" not in PLATFORM_HINTS["signal"]      # not wired there -> don't promise it
+
+
+# --- reasoning scrub + table rewrite (Hermes parity) ------------------------
+def test_strip_reasoning_blocks():
+    from aegis.agent.governance import strip_reasoning
+    assert strip_reasoning("<think>plan\nmore</think>\n\nFinal: 42.") == "Final: 42."
+    assert strip_reasoning("<Thinking>x</Thinking>done") == "done"
+    assert strip_reasoning("no tags here") == "no tags here"          # untouched
+    assert strip_reasoning("a <think>b</think> c") == "a  c"          # inline removed
+
+
+def test_tableify_rewrites_pipe_tables():
+    from aegis.gateway.base import tableify
+    out = tableify("| Name | Role |\n|---|---|\n| Ann | dev |\n| Bob | ops |")
+    assert "|" not in out
+    assert "• Name: Ann — Role: dev" in out and "• Name: Bob — Role: ops" in out
+    assert tableify("just prose, no pipes") == "just prose, no pipes"  # untouched
+
+
+def test_chat_adapters_dont_render_tables():
+    from aegis.gateway.channels import TelegramAdapter
+    from aegis.gateway.discord_channel import DiscordAdapter
+    assert TelegramAdapter.renders_tables is False
+    assert DiscordAdapter.renders_tables is False

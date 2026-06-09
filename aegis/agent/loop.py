@@ -265,6 +265,8 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
 
         budget.api_call_count += 1
         budget.usage.add(resp.usage)
+        from .governance import strip_reasoning
+        resp.text = strip_reasoning(resp.text)   # drop any inlined <think>…</think> blocks
         assistant_msg = resp.to_message()
         session.messages.append(assistant_msg)
         if resp.reasoning:

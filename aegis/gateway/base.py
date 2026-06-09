@@ -25,6 +25,7 @@ class BasePlatformAdapter:
     """Subclasses implement a blocking ``start`` loop and ``send``."""
 
     name: str = "base"
+    renders_tables: bool = True   # chat surfaces (Telegram/Discord/…) set False -> tables rewritten
 
     def start(self, dispatch: Dispatch) -> None:  # pragma: no cover - interface
         """Block, receiving messages and calling ``dispatch(event)``; send replies."""
@@ -46,6 +47,8 @@ class BasePlatformAdapter:
         """Send a reply, extracting any ``MEDIA:/abs/path`` lines and sending each as a native
         attachment. Adapters should call this (not ``send``) to deliver agent replies."""
         clean, media = split_media(text)
+        if clean and not self.renders_tables:
+            clean = tableify(clean)             # pipe tables don't render on chat surfaces
         if clean:
             self.send(chat_id, clean)
         for path in media:
@@ -56,6 +59,34 @@ class BasePlatformAdapter:
 
 
 _MEDIA_RE = re.compile(r"^[ \t]*MEDIA:[ \t]*(\S.*?)[ \t]*$", re.MULTILINE)
+
+
+_TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$")
+_TABLE_SEP = re.compile(r"^\s*\|?[\s:|-]+\|?\s*$")
+
+
+def tableify(text: str) -> str:
+    """Rewrite markdown pipe-tables into bullet groups for surfaces that can't render them
+    (Telegram, WhatsApp, Signal, Slack, Discord). Each data row becomes a '• col: val — …' line."""
+    if "|" not in text:
+        return text
+    lines = text.split("\n")
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        if (_TABLE_ROW.match(lines[i]) and i + 1 < len(lines) and _TABLE_SEP.match(lines[i + 1])
+                and "-" in lines[i + 1]):
+            header = [c.strip() for c in lines[i].strip().strip("|").split("|")]
+            i += 2
+            while i < len(lines) and _TABLE_ROW.match(lines[i]):
+                cells = [c.strip() for c in lines[i].strip().strip("|").split("|")]
+                pairs = [f"{h}: {c}" for h, c in zip(header, cells) if c]
+                out.append("• " + " — ".join(pairs))
+                i += 1
+        else:
+            out.append(lines[i])
+            i += 1
+    return "\n".join(out)
 
 
 def split_media(text: str) -> tuple[str, list[str]]:

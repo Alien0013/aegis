@@ -37,6 +37,7 @@ class TelegramAdapter(BasePlatformAdapter):
     """
 
     name = "telegram"
+    renders_tables = False
 
     def __init__(self, token: str | None = None):
         self.token = token or os.environ.get("TELEGRAM_BOT_TOKEN")
