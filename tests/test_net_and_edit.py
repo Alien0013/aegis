@@ -521,3 +521,36 @@ def test_acp_enables_fs_only_when_client_supports_it():
     assert srv._client_fs is True
     srv._initialize({"clientCapabilities": {}})       # no fs caps -> stays on real disk
     assert srv._client_fs is False
+
+
+# --- kanban board in the web dashboard (do-everything-in-UI) ----------------
+def test_dashboard_kanban_board(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import http.client
+    import json
+    import threading
+    from http.server import ThreadingHTTPServer
+    from aegis.config import Config
+    from aegis.dashboard import make_handler
+
+    cfg = Config.load()
+    cfg.set("dashboard.token", "")
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(cfg))
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    def req(method, path, body=None):
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        c.request(method, path, json.dumps(body) if body else None,
+                  {"content-type": "application/json"} if body else {})
+        return json.loads(c.getresponse().read())
+
+    try:
+        cid = req("POST", "/api/kanban", {"action": "create", "title": "launch task"})["id"]
+        assert any(t["title"] == "launch task" for t in req("GET", "/api/kanban")["ready"])
+        req("POST", "/api/kanban", {"action": "move", "id": cid, "status": "done"})
+        board = req("GET", "/api/kanban")
+        assert any(t["id"] == cid for t in board["done"])
+        assert not any(t["id"] == cid for t in board["ready"])
+    finally:
+        srv.shutdown()

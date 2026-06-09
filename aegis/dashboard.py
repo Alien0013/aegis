@@ -45,7 +45,7 @@ h2{margin:.2em 0 .6em;font-size:16px}pre{white-space:pre-wrap;word-wrap:break-wo
 <div class=wrap><nav id=nav></nav><main id=view></main></div>
 <script>
 const V=document.getElementById('view'),NAV=document.getElementById('nav');let sid=null,_es=null;
-const TABS=['Chat','Live','Sessions','Memory','Skills','Tools','Status'];
+const TABS=['Chat','Live','Kanban','Sessions','Memory','Skills','Tools','Status'];
 const qs=new URLSearchParams(location.search),tok=qs.get('token')||localStorage.aegisToken||'';if(tok)localStorage.aegisToken=tok;
 function withTok(p){return '/api/'+p+(tok?(p.includes('?')?'&':'?')+'token='+encodeURIComponent(tok):'')}
 async function api(p){const r=await fetch(withTok(p));return r.json()}
@@ -54,7 +54,14 @@ function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':
 TABS.forEach(t=>{const b=document.createElement('button');b.textContent=t;b.onclick=()=>show(t,b);NAV.appendChild(b)});
 async function boot(){const s=await api('status');document.getElementById('sub').textContent='v'+s.version+' \\u00b7 '+s.provider+'/'+s.model;
 document.getElementById('stat').textContent=s.sessions+' sessions \\u00b7 '+s.skills+' skills \\u00b7 '+s.tools+' tools';show('Chat',NAV.children[0])}
-function show(t,btn){if(_es){_es.close();_es=null}[...NAV.children].forEach(b=>b.classList.toggle('on',b===btn));({Chat:chat,Live:live,Sessions:sessions,Memory:memory,Skills:skills,Tools:tools,Status:status}[t])()}
+function show(t,btn){if(_es){_es.close();_es=null}[...NAV.children].forEach(b=>b.classList.toggle('on',b===btn));({Chat:chat,Live:live,Kanban:kanban,Sessions:sessions,Memory:memory,Skills:skills,Tools:tools,Status:status}[t])()}
+async function kanban(){const cols=['ready','in_progress','done','blocked'];const d=await api('kanban');
+V.innerHTML='<h2>Kanban</h2><div class=bar><input id=kt placeholder="New task title\\u2026"><button class=send id=kadd>Add</button></div><div id=board style="display:flex;gap:12px;align-items:flex-start"></div>';
+const board=document.getElementById('board');
+cols.forEach(c=>{const col=document.createElement('div');col.style='flex:1;min-width:0';col.innerHTML='<h3 style="text-transform:capitalize">'+c.replace('_',' ')+' ('+(d[c]||[]).length+')</h3>';
+(d[c]||[]).forEach(t=>{const card=document.createElement('div');card.className='card';card.innerHTML='<b>'+esc(t.title)+'</b>'+(t.body?'<pre>'+esc(t.body)+'</pre>':'')+'<div class=mut style="font-size:11px">'+cols.filter(s=>s!==c).map(s=>'<a href=# data-id="'+t.id+'" data-s="'+s+'">\\u2192 '+s.replace('_',' ')+'</a>').join(' \\u00b7 ')+'</div>';col.appendChild(card)});board.appendChild(col)});
+board.querySelectorAll('a[data-s]').forEach(a=>a.onclick=async e=>{e.preventDefault();await post('kanban',{action:'move',id:a.dataset.id,status:a.dataset.s});kanban()});
+document.getElementById('kadd').onclick=async()=>{const t=document.getElementById('kt').value.trim();if(!t)return;await post('kanban',{action:'create',title:t});kanban()}}
 function live(){V.innerHTML='<h2>Live activity</h2><div id=feed><p class=mut>waiting for gateway activity\\u2026</p></div>';const feed=document.getElementById('feed');
 _es=new EventSource('/events'+(tok?'?token='+encodeURIComponent(tok):''));
 _es.onmessage=e=>{try{const d=JSON.parse(e.data);const r=document.createElement('div');r.className='row';r.innerHTML='<span>'+esc(d.platform||'')+' \\u00b7 '+esc(d.type)+'</span><span class=pill>'+esc((d.text||d.name||'').slice(0,80))+'</span>';if(feed.firstChild&&feed.firstChild.tagName==='P')feed.innerHTML='';feed.prepend(r)}catch(_){}}}
@@ -123,6 +130,13 @@ def make_handler(config: Config):
                             "exec_mode": config.get("tools.exec_mode")})
             elif path == "/events":
                 self._stream_events()
+            elif path == "/api/kanban":
+                from .kanban import KanbanStore
+                ks = KanbanStore()
+                self._json({s: [{"id": t.id, "title": t.title, "body": t.body,
+                                 "assignee": t.assignee, "priority": t.priority}
+                                for t in ks.list(status=s)]
+                            for s in ("ready", "in_progress", "done", "blocked")})
             elif path == "/api/sessions":
                 self._json(SessionStore().list(100))
             elif path == "/api/session":
@@ -175,6 +189,18 @@ def make_handler(config: Config):
             from .session import Session, SessionStore
             n = int(self.headers.get("content-length", 0))
             body = json.loads(self.rfile.read(n) or b"{}")
+            if urlparse(self.path).path == "/api/kanban":
+                from .kanban import KanbanStore
+                ks = KanbanStore()
+                act = body.get("action")
+                if act == "create":
+                    t = ks.create((body.get("title") or "untitled").strip(), body.get("body", ""))
+                    return self._json({"id": t.id})
+                if act == "move" and body.get("id") and \
+                        body.get("status") in ("ready", "in_progress", "done", "blocked"):
+                    ks._set_status(body["id"], body["status"])
+                    return self._json({"ok": True})
+                return self._json({"error": "bad kanban request"})
             store = SessionStore()
             session = store.load(body.get("session_id") or "") or Session.create()
             agent = Agent.create(config, session=session, store=store)
