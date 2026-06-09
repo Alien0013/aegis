@@ -250,6 +250,43 @@ class ClarifyTool(Tool):
             display="awaiting user reply")
 
 
+class SendMessageTool(Tool):
+    name = "send_message"
+    description = (
+        "Proactively send a message to the user (or another conversation) on a messaging "
+        "channel like Telegram or Discord. Use it to follow up, notify, or deliver a result "
+        "out-of-band — e.g. from a scheduled/cron task ('remind me at 5pm'). Defaults to the "
+        "current conversation; only works while the gateway is running."
+    )
+    groups = ["network"]
+    parameters = {
+        "type": "object",
+        "properties": {
+            "text": {"type": "string", "description": "the message to send"},
+            "chat_id": {"type": "string", "description": "target conversation id (default: current)"},
+            "platform": {"type": "string",
+                         "description": "channel name, e.g. telegram, discord (default: current)"},
+        },
+        "required": ["text"],
+    }
+
+    def run(self, args, ctx: ToolContext) -> ToolResult:
+        text = (args.get("text") or "").strip()
+        if not text:
+            return ToolResult.error("send_message: 'text' is required.")
+        agent = ctx.agent
+        platform = args.get("platform") or getattr(agent, "platform", None)
+        chat_id = args.get("chat_id") or getattr(agent, "chat_id", None)
+        if not platform or not chat_id:
+            return ToolResult.error(
+                "send_message needs an active channel + conversation. It works inside the "
+                "gateway (`aegis gateway`); otherwise pass both platform and chat_id.")
+        from ..gateway.queue import DeliveryQueue
+        from ..redact import redact_secrets
+        DeliveryQueue().enqueue(str(platform), str(chat_id), redact_secrets(text))
+        return ToolResult.ok(f"queued message to {platform}:{chat_id}", display="message queued")
+
+
 def extra_tools() -> list[Tool]:
     return [ApplyPatchTool(), DownloadTool(), HttpRequestTool(), ScheduleTaskTool(),
-            DependencyAuditTool(), ClarifyTool()]
+            DependencyAuditTool(), ClarifyTool(), SendMessageTool()]

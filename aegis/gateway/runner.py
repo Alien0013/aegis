@@ -89,10 +89,11 @@ class GatewayRunner:
             agent = self._agents.get(key)
             if agent is None or agent.session is not session:
                 agent = Agent.create(self.config, session=session, cwd=self.cwd, store=self.store)
-                agent.platform = ev.platform          # inject channel-specific behavior into the prompt
                 self._agents[key] = agent
                 if len(self._agents) > self._agent_cap:
                     del self._agents[next(iter(self._agents))]
+            agent.platform = ev.platform   # channel-specific prompt behavior
+            agent.chat_id = ev.chat_id     # current conversation (for the send_message tool)
             try:
                 learned: list[str] = []
 

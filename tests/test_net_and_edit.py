@@ -181,3 +181,23 @@ def test_compaction_uses_aux_provider_helper():
     # build_aux_provider needs a real config; on failure it must fall back to agent.provider
     s = _summarizer(a)
     assert s is a.provider and a._aux_provider is s
+
+
+# --- send_message tool (proactive channel push) -----------------------------
+def test_send_message_tool(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.tools.extra_builtin import SendMessageTool
+    from aegis.tools.base import ToolContext
+    from aegis.tools.registry import default_registry
+    assert default_registry().get("send_message")               # registered
+
+    assert SendMessageTool().run({"text": "hi"}, ToolContext()).is_error   # no channel -> error
+    assert SendMessageTool().run({"text": ""}, ToolContext()).is_error      # empty -> error
+
+    r = SendMessageTool().run(
+        {"text": "leak sk-proj-ABCDEFGHIJ1234567890", "platform": "telegram", "chat_id": "7"},
+        ToolContext())
+    assert not r.is_error and "telegram:7" in r.content
+    from aegis.gateway.queue import DeliveryQueue
+    row = DeliveryQueue().due()[0]
+    assert row["platform"] == "telegram" and "[REDACTED]" in row["text"]   # redacted on the way out

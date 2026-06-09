@@ -69,6 +69,7 @@ class Agent:
         self.budget = IterationBudget(int(config.get("agent.max_iterations", DEFAULT_MAX_ITERATIONS)))
         self.tools_used = 0
         self.platform: str | None = None   # set by the gateway to the active channel (telegram, …)
+        self.chat_id: str | None = None     # set by the gateway to the active conversation id
         import threading
         self.cancel_event = threading.Event()   # set by .cancel() to interrupt a run
 
