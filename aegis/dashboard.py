@@ -45,7 +45,7 @@ h2{margin:.2em 0 .6em;font-size:16px}pre{white-space:pre-wrap;word-wrap:break-wo
 <div class=wrap><nav id=nav></nav><main id=view></main></div>
 <script>
 const V=document.getElementById('view'),NAV=document.getElementById('nav');let sid=null,_es=null;
-const TABS=['Chat','Live','Kanban','Cron','Models','Analytics','Sessions','Memory','Skills','Tools','Config','Status'];
+const TABS=['Chat','Live','Kanban','Cron','Models','Analytics','Keys','Pairing','Sessions','Memory','Skills','Tools','Config','Status'];
 const qs=new URLSearchParams(location.search),tok=qs.get('token')||localStorage.aegisToken||'';if(tok)localStorage.aegisToken=tok;
 function withTok(p){return '/api/'+p+(tok?(p.includes('?')?'&':'?')+'token='+encodeURIComponent(tok):'')}
 async function api(p){const r=await fetch(withTok(p));return r.json()}
@@ -54,7 +54,19 @@ function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':
 TABS.forEach(t=>{const b=document.createElement('button');b.textContent=t;b.onclick=()=>show(t,b);NAV.appendChild(b)});
 async function boot(){const s=await api('status');document.getElementById('sub').textContent='v'+s.version+' \\u00b7 '+s.provider+'/'+s.model;
 document.getElementById('stat').textContent=s.sessions+' sessions \\u00b7 '+s.skills+' skills \\u00b7 '+s.tools+' tools';show('Chat',NAV.children[0])}
-function show(t,btn){if(_es){_es.close();_es=null}[...NAV.children].forEach(b=>b.classList.toggle('on',b===btn));({Chat:chat,Live:live,Kanban:kanban,Cron:cron,Models:models,Analytics:analytics,Sessions:sessions,Memory:memory,Skills:skills,Tools:tools,Config:cfg,Status:status}[t])()}
+function show(t,btn){if(_es){_es.close();_es=null}[...NAV.children].forEach(b=>b.classList.toggle('on',b===btn));({Chat:chat,Live:live,Kanban:kanban,Cron:cron,Models:models,Analytics:analytics,Keys:keys,Pairing:pairing,Sessions:sessions,Memory:memory,Skills:skills,Tools:tools,Config:cfg,Status:status}[t])()}
+async function keys(){const d=await api('keys');
+V.innerHTML='<h2>API keys</h2><p class=mut>Stored in ~/.aegis/.env (chmod 600). Values are never shown.</p><div class=bar><input id=kk placeholder="KEY (e.g. OPENAI_API_KEY)" style="flex:0 0 240px"><input id=kv placeholder="value" type=password><button class=send id=kset>Save</button></div>'+d.map(x=>`<div class=row><span>${esc(x.key)}</span><span class=pill>${x.set?'\\u2705 set':'\\u2014 not set'} <a href=# data-k="${esc(x.key)}">set</a></span></div>`).join('');
+V.querySelectorAll('a[data-k]').forEach(a=>a.onclick=e=>{e.preventDefault();document.getElementById('kk').value=a.dataset.k;document.getElementById('kv').focus()});
+document.getElementById('kset').onclick=async()=>{const k=document.getElementById('kk').value.trim(),v=document.getElementById('kv').value;if(!k)return;await post('keys',{key:k,value:v});document.getElementById('kv').value='';keys()}}
+async function pairing(){const d=await api('pairing');const pend=d.pending||{},appr=d.approved||{};
+let h='<h2>Pairing</h2><h3>Pending</h3>';const pe=Object.entries(pend);
+h+=pe.length?pe.map(([plat,reqs])=>Object.entries(reqs||{}).map(([code,info])=>`<div class=row><span>${esc(plat)} \\u00b7 user ${esc(''+(info&&info.user_id||''))} \\u00b7 code <b>${esc(code)}</b></span><a href=# data-ap="${esc(plat)}" data-code="${esc(code)}">approve</a></div>`).join('')).join(''):'<p class=mut>none</p>';
+h+='<h3>Approved</h3>';const ae=Object.entries(appr);
+h+=ae.length?ae.map(([plat,users])=>(Array.isArray(users)?users:Object.keys(users||{})).map(u=>`<div class=row><span>${esc(plat)} \\u00b7 ${esc(''+u)}</span><a href=# data-rv="${esc(plat)}" data-u="${esc(''+u)}">revoke</a></div>`).join('')).join(''):'<p class=mut>none</p>';
+V.innerHTML=h;
+V.querySelectorAll('a[data-ap]').forEach(a=>a.onclick=async e=>{e.preventDefault();await post('pairing',{action:'approve',platform:a.dataset.ap,code:a.dataset.code});pairing()});
+V.querySelectorAll('a[data-rv]').forEach(a=>a.onclick=async e=>{e.preventDefault();await post('pairing',{action:'revoke',platform:a.dataset.rv,user_id:a.dataset.u});pairing()})}
 async function models(){const d=await api('models');
 const opts=(d.presets[d.provider]||[]).map(m=>`<option ${m===d.model?'selected':''}>${esc(m)}</option>`).join('');
 V.innerHTML='<h2>Model</h2><div class=card>Active: <b>'+esc(d.provider)+'</b> / <b>'+esc(d.model)+'</b></div><div class=bar><select id=mprov style="flex:0 0 200px">'+d.providers.map(p=>`<option ${p===d.provider?'selected':''}>${esc(p)}</option>`).join('')+'</select><select id=mmodel>'+opts+'</select><button class=send id=mset>Set</button></div><p class=mut>Switch the provider to refresh its model list.</p>';
@@ -116,6 +128,28 @@ def _redacted_config(config: Config) -> dict:
 
     walk("", getattr(config, "data", {}) or {})
     return out
+
+
+_COMMON_KEYS = [
+    "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY",
+    "GROQ_API_KEY", "DEEPSEEK_API_KEY", "XAI_API_KEY", "MISTRAL_API_KEY",
+    "TELEGRAM_BOT_TOKEN", "DISCORD_BOT_TOKEN", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN",
+    "NTFY_TOPIC", "TAVILY_API_KEY", "BRAVE_API_KEY",
+]
+
+
+def _env_keys() -> list:
+    """Known + present env keys with set-status only — values are NEVER returned."""
+    from . import config as cfg
+    present = set()
+    p = cfg.env_path()
+    if p.exists():
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                present.add(line.split("=", 1)[0].strip())
+    names = list(dict.fromkeys(_COMMON_KEYS + sorted(present)))
+    return [{"key": k, "set": k in present} for k in names]
 
 
 def make_handler(config: Config):
@@ -193,6 +227,11 @@ def make_handler(config: Config):
             elif path == "/api/analytics":
                 from .usage_log import cost_report
                 self._json(cost_report(int((q.get("days", ["30"])[0]) or 30)))
+            elif path == "/api/keys":
+                self._json(_env_keys())
+            elif path == "/api/pairing":
+                from .gateway.pairing import PairingStore
+                self._json(PairingStore().list())
             elif path == "/api/sessions":
                 self._json(SessionStore().list(100))
             elif path == "/api/session":
@@ -284,6 +323,21 @@ def make_handler(config: Config):
                     config.set("model.default", model)
                 return self._json({"ok": True, "provider": config.get("model.provider"),
                                    "model": config.get("model.default")})
+            if ppath == "/api/keys":
+                from .config import set_env_var
+                if body.get("key"):
+                    set_env_var(body["key"].strip(), body.get("value", ""))
+                    return self._json({"ok": True})
+                return self._json({"error": "missing key"})
+            if ppath == "/api/pairing":
+                from .gateway.pairing import PairingStore
+                ps = PairingStore()
+                act, plat = body.get("action"), body.get("platform", "")
+                if act == "approve" and body.get("code"):
+                    return self._json({"ok": ps.approve(plat, body["code"])})
+                if act == "revoke" and body.get("user_id"):
+                    return self._json({"ok": ps.revoke(plat, body["user_id"])})
+                return self._json({"error": "bad pairing request"})
             store = SessionStore()
             session = store.load(body.get("session_id") or "") or Session.create()
             agent = Agent.create(config, session=session, store=store)
@@ -304,7 +358,19 @@ def _dashboard_url(config: Config, host: str, port: int) -> str:
 
 def serve_dashboard(config: Config, host: str = "127.0.0.1", port: int = 9119,
                     open_browser: bool = False) -> None:
-    httpd = ThreadingHTTPServer((host, port), make_handler(config))
+    handler = make_handler(config)
+    requested = port
+    for candidate in range(port, port + 50):       # auto-select if the port is occupied
+        try:
+            httpd = ThreadingHTTPServer((host, candidate), handler)
+            break
+        except OSError:
+            continue
+    else:
+        raise OSError(f"no free port in {requested}–{requested + 49} on {host}")
+    port = httpd.server_address[1]
+    if port != requested:
+        print(f"  (port {requested} busy — using {port})")
     url = _dashboard_url(config, host, port)
     print(f"AEGIS control panel → {url}")
     print("  (leave this running; press Ctrl+C to stop)")

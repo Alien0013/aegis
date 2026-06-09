@@ -645,3 +645,61 @@ def test_dashboard_models_and_analytics(tmp_path, monkeypatch):
         assert an["calls"] >= 1 and an["total_cost_usd"] > 0 and "claude-opus-4-8" in an["by_model"]
     finally:
         srv.shutdown()
+
+
+# --- dashboard Keys + Pairing tabs + port auto-select -----------------------
+def test_dashboard_keys_pairing_and_port(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import http.client
+    import json
+    import socket
+    import threading
+    import time
+    from http.server import ThreadingHTTPServer
+    from aegis.config import Config
+    from aegis import dashboard
+    from aegis.dashboard import make_handler
+
+    cfg = Config.load()
+    cfg.set("dashboard.token", "")
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(cfg))
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    def req(m, p, b=None):
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        c.request(m, p, json.dumps(b) if b else None, {"content-type": "application/json"} if b else {})
+        return json.loads(c.getresponse().read())
+    try:
+        ks = req("GET", "/api/keys")
+        assert any(k["key"] == "OPENAI_API_KEY" and not k["set"] for k in ks)
+        req("POST", "/api/keys", {"key": "OPENAI_API_KEY", "value": "sk-proj-SECRET"})
+        ks = req("GET", "/api/keys")
+        assert [k for k in ks if k["key"] == "OPENAI_API_KEY"][0]["set"] is True
+        assert "SECRET" not in json.dumps(ks)              # value never exposed
+        from aegis.gateway.pairing import PairingStore
+        code = PairingStore().request_code("telegram", "999")
+        assert req("POST", "/api/pairing", {"action": "approve", "platform": "telegram", "code": code})["ok"]
+    finally:
+        srv.shutdown()
+
+    # port auto-select: occupy a port, dashboard advances past it
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    s.listen()
+    busy = s.getsockname()[1]
+    threading.Thread(target=dashboard.serve_dashboard,
+                     kwargs={"config": cfg, "host": "127.0.0.1", "port": busy}, daemon=True).start()
+    time.sleep(0.4)
+    found = None
+    for p in range(busy, busy + 50):
+        try:
+            c = http.client.HTTPConnection("127.0.0.1", p, timeout=1)
+            c.request("GET", "/api/status")
+            if c.getresponse().status == 200 and p != busy:
+                found = p
+                break
+        except Exception:
+            pass
+    s.close()
+    assert found and found != busy
