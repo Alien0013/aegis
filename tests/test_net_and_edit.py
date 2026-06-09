@@ -422,3 +422,53 @@ def test_acp_request_permission():
     assert run(reject)[0] is False
     assert run(json.dumps({"jsonrpc": "2.0", "method": "session/cancel", "params": {}}))[0] is False
     assert run("")[0] is False              # closed stdin -> deny
+
+
+# --- live event bus + dashboard SSE mirror (run.py WS dashboard mirror) ------
+def test_event_bus_pubsub_and_overflow():
+    from aegis.eventbus import EventBus
+    b = EventBus()
+    q = b.subscribe()
+    assert b.subscriber_count() == 1
+    b.publish({"type": "user_message", "text": "hi"})
+    assert q.get_nowait() == {"type": "user_message", "text": "hi"}
+    for i in range(500):
+        b.publish({"n": i})                 # overflow must never raise / block
+    b.unsubscribe(q)
+    assert b.subscriber_count() == 0
+
+
+def test_dashboard_sse_streams_events(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import http.client
+    import threading
+    import time
+    from http.server import ThreadingHTTPServer
+    from aegis.config import Config
+    from aegis.dashboard import make_handler
+    from aegis.eventbus import BUS
+
+    cfg = Config.load()
+    cfg.set("dashboard.token", "")
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(cfg))
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    got = {}
+
+    def reader():
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        c.request("GET", "/events")
+        r = c.getresponse()
+        assert "text/event-stream" in r.getheader("Content-Type")
+        buf = b""
+        while b"\n\n" not in buf:
+            buf += r.read(1)
+        got["line"] = buf.decode()
+
+    t = threading.Thread(target=reader, daemon=True)
+    t.start()
+    time.sleep(0.4)
+    BUS.publish({"platform": "telegram", "type": "user_message", "text": "hello dash"})
+    t.join(timeout=3)
+    srv.shutdown()
+    assert got["line"].startswith("data: ") and "hello dash" in got["line"]

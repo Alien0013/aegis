@@ -44,8 +44,8 @@ h2{margin:.2em 0 .6em;font-size:16px}pre{white-space:pre-wrap;word-wrap:break-wo
 <header><span class=logo>&#9670; AEGIS</span><span id=sub class=mut></span><span class=meta id=stat></span></header>
 <div class=wrap><nav id=nav></nav><main id=view></main></div>
 <script>
-const V=document.getElementById('view'),NAV=document.getElementById('nav');let sid=null;
-const TABS=['Chat','Sessions','Memory','Skills','Tools','Status'];
+const V=document.getElementById('view'),NAV=document.getElementById('nav');let sid=null,_es=null;
+const TABS=['Chat','Live','Sessions','Memory','Skills','Tools','Status'];
 const qs=new URLSearchParams(location.search),tok=qs.get('token')||localStorage.aegisToken||'';if(tok)localStorage.aegisToken=tok;
 function withTok(p){return '/api/'+p+(tok?(p.includes('?')?'&':'?')+'token='+encodeURIComponent(tok):'')}
 async function api(p){const r=await fetch(withTok(p));return r.json()}
@@ -54,7 +54,10 @@ function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':
 TABS.forEach(t=>{const b=document.createElement('button');b.textContent=t;b.onclick=()=>show(t,b);NAV.appendChild(b)});
 async function boot(){const s=await api('status');document.getElementById('sub').textContent='v'+s.version+' \\u00b7 '+s.provider+'/'+s.model;
 document.getElementById('stat').textContent=s.sessions+' sessions \\u00b7 '+s.skills+' skills \\u00b7 '+s.tools+' tools';show('Chat',NAV.children[0])}
-function show(t,btn){[...NAV.children].forEach(b=>b.classList.toggle('on',b===btn));({Chat:chat,Sessions:sessions,Memory:memory,Skills:skills,Tools:tools,Status:status}[t])()}
+function show(t,btn){if(_es){_es.close();_es=null}[...NAV.children].forEach(b=>b.classList.toggle('on',b===btn));({Chat:chat,Live:live,Sessions:sessions,Memory:memory,Skills:skills,Tools:tools,Status:status}[t])()}
+function live(){V.innerHTML='<h2>Live activity</h2><div id=feed><p class=mut>waiting for gateway activity\\u2026</p></div>';const feed=document.getElementById('feed');
+_es=new EventSource('/events'+(tok?'?token='+encodeURIComponent(tok):''));
+_es.onmessage=e=>{try{const d=JSON.parse(e.data);const r=document.createElement('div');r.className='row';r.innerHTML='<span>'+esc(d.platform||'')+' \\u00b7 '+esc(d.type)+'</span><span class=pill>'+esc((d.text||d.name||'').slice(0,80))+'</span>';if(feed.firstChild&&feed.firstChild.tagName==='P')feed.innerHTML='';feed.prepend(r)}catch(_){}}}
 function chat(){V.innerHTML='<h2>Chat</h2><div id=log></div><div class=bar><input id=inp placeholder="Message AEGIS\\u2026" autofocus><button class=send id=go>Send</button></div>';
 const log=document.getElementById('log'),inp=document.getElementById('inp');
 function add(role,txt){const d=document.createElement('div');d.className='msg '+role;d.textContent=txt;log.appendChild(d);d.scrollIntoView()}
@@ -118,6 +121,8 @@ def make_handler(config: Config):
                             "skills": len(SkillsLoader(config).available()),
                             "tools": len(default_registry().all()),
                             "exec_mode": config.get("tools.exec_mode")})
+            elif path == "/events":
+                self._stream_events()
             elif path == "/api/sessions":
                 self._json(SessionStore().list(100))
             elif path == "/api/session":
@@ -138,6 +143,29 @@ def make_handler(config: Config):
                              "groups": t.groups} for t in default_registry().all()])
             else:
                 self._json({"error": "not found"})
+
+        def _stream_events(self):
+            """Server-Sent Events: live mirror of gateway/agent activity (EventSource client)."""
+            import queue as _queue
+
+            from .eventbus import BUS
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            sub = BUS.subscribe()
+            try:
+                while True:
+                    try:
+                        ev = sub.get(timeout=15)
+                        self.wfile.write(f"data: {json.dumps(ev)}\n\n".encode())
+                    except _queue.Empty:
+                        self.wfile.write(b": keepalive\n\n")   # hold the connection open
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, ValueError):
+                pass                                            # client disconnected
+            finally:
+                BUS.unsubscribe(sub)
 
         def do_POST(self):  # noqa: N802
             if not self._authorized():

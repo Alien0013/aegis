@@ -106,8 +106,15 @@ class GatewayRunner:
             try:
                 learned: list[str] = []
 
+                from ..eventbus import BUS
+                BUS.publish({"platform": ev.platform, "chat_id": ev.chat_id,
+                             "type": "user_message", "text": text})
+
                 def _collect(ev_: dict) -> None:
                     t = ev_.get("type")
+                    if t in ("tool_start", "tool_result"):   # mirror tool activity to the dashboard
+                        BUS.publish({"platform": ev.platform, "chat_id": ev.chat_id, "type": t,
+                                     "name": ev_.get("name"), "summary": ev_.get("summary")})
                     if t == "tool_result" and not ev_.get("is_error") and ev_.get("name") == "memory":
                         learned.append(f"💾 {ev_.get('summary', 'remembered')}")
                     elif t == "tool_result" and not ev_.get("is_error") and ev_.get("name") == "skill":
@@ -124,6 +131,8 @@ class GatewayRunner:
                 reply = shape_reply(redact_secrets(final.content or ""), api_calls=api_calls)
                 if learned and self.config.get("gateway.show_learning", True):
                     reply += "\n\n— " + " · ".join(dict.fromkeys(learned))   # dedup, keep order
+                BUS.publish({"platform": ev.platform, "chat_id": ev.chat_id,
+                             "type": "assistant_message", "text": reply})
                 return reply
             except Exception as e:  # noqa: BLE001
                 return f"⚠ error: {type(e).__name__}: {e}"
