@@ -99,12 +99,14 @@ async function cfg(){const c=await api('config');const keys=Object.keys(c).sort(
 V.innerHTML='<h2>Config</h2><div class=bar><input id=ck placeholder="key (e.g. model.default)" style="flex:0 0 260px"><input id=cv placeholder="value"><button class=send id=cset>Set</button></div>'+keys.map(k=>`<div class=row><span class=mut>${esc(k)}</span><span>${esc(''+c[k])}</span></div>`).join('');
 document.getElementById('cset').onclick=async()=>{const k=document.getElementById('ck').value.trim(),v=document.getElementById('cv').value;if(!k)return;await post('config',{key:k,value:v});cfg()}}
 async function kanban(){const cols=['ready','in_progress','done','blocked'];const d=await api('kanban');
-V.innerHTML='<h2>Kanban</h2><div class=bar><input id=kt placeholder="New task title\\u2026"><button class=send id=kadd>Add</button></div><div id=board style="display:flex;gap:12px;align-items:flex-start"></div>';
+V.innerHTML='<h2>Kanban</h2><div class=bar><input id=kt placeholder="New task title\\u2026"><button class=send id=kadd>Add</button></div><div class=bar><input id=kg placeholder="Decompose a goal into tasks\\u2026"><button class=send id=kdec>Decompose</button><button class=send id=krun>\\u25b6 Run board</button></div><div id=board style="display:flex;gap:12px;align-items:flex-start"></div>';
 const board=document.getElementById('board');
 cols.forEach(c=>{const col=document.createElement('div');col.style='flex:1;min-width:0';col.innerHTML='<h3 style="text-transform:capitalize">'+c.replace('_',' ')+' ('+(d[c]||[]).length+')</h3>';
 (d[c]||[]).forEach(t=>{const card=document.createElement('div');card.className='card';card.innerHTML='<b>'+esc(t.title)+'</b>'+(t.body?'<pre>'+esc(t.body)+'</pre>':'')+'<div class=mut style="font-size:11px">'+cols.filter(s=>s!==c).map(s=>'<a href=# data-id="'+t.id+'" data-s="'+s+'">\\u2192 '+s.replace('_',' ')+'</a>').join(' \\u00b7 ')+'</div>';col.appendChild(card)});board.appendChild(col)});
 board.querySelectorAll('a[data-s]').forEach(a=>a.onclick=async e=>{e.preventDefault();await post('kanban',{action:'move',id:a.dataset.id,status:a.dataset.s});kanban()});
-document.getElementById('kadd').onclick=async()=>{const t=document.getElementById('kt').value.trim();if(!t)return;await post('kanban',{action:'create',title:t});kanban()}}
+document.getElementById('kadd').onclick=async()=>{const t=document.getElementById('kt').value.trim();if(!t)return;await post('kanban',{action:'create',title:t});kanban()}
+document.getElementById('kdec').onclick=async()=>{const g=document.getElementById('kg').value.trim();if(!g)return;document.getElementById('kdec').textContent='\\u2026';await post('kanban',{action:'decompose',goal:g});kanban()};
+document.getElementById('krun').onclick=async()=>{await post('kanban',{action:'run'});document.getElementById('krun').textContent='\\u25b6 running\\u2026';setTimeout(kanban,1500)}}
 function live(){V.innerHTML='<h2>Live activity</h2><div id=feed><p class=mut>waiting for gateway activity\\u2026</p></div>';const feed=document.getElementById('feed');
 _es=new EventSource('/events'+(tok?'?token='+encodeURIComponent(tok):''));
 _es.onmessage=e=>{try{const d=JSON.parse(e.data);const r=document.createElement('div');r.className='row';r.innerHTML='<span>'+esc(d.platform||'')+' \\u00b7 '+esc(d.type)+'</span><span class=pill>'+esc((d.text||d.name||'').slice(0,80))+'</span>';if(feed.firstChild&&feed.firstChild.tagName==='P')feed.innerHTML='';feed.prepend(r)}catch(_){}}}
@@ -349,6 +351,16 @@ def make_handler(config: Config):
                         body.get("status") in ("ready", "in_progress", "done", "blocked"):
                     ks._set_status(body["id"], body["status"])
                     return self._json({"ok": True})
+                if act == "decompose" and body.get("goal"):
+                    from .kanban_auto import decompose
+                    cards = decompose(body["goal"], config, store=ks)
+                    return self._json({"ok": True, "created": len(cards)})
+                if act == "run":
+                    import threading
+                    from .kanban_auto import run_board
+                    threading.Thread(target=run_board, args=(config,),
+                                     kwargs={"store": ks}, daemon=True).start()
+                    return self._json({"ok": True, "started": True})
                 return self._json({"error": "bad kanban request"})
             if ppath == "/api/cron":
                 from .cron import CronStore

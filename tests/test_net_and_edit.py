@@ -801,3 +801,45 @@ def test_kanban_extract_json_array():
     assert _extract_json_array('prefix [{"title":"a"}] suffix') == [{"title": "a"}]
     assert _extract_json_array("no json here") == []
     assert _extract_json_array("[broken json") == []
+
+
+# --- dashboard kanban automation (decompose + run in the UI) ----------------
+def test_dashboard_kanban_automation(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.agent.agent as agentmod
+    import http.client
+    import json
+    import threading
+    import time
+    from http.server import ThreadingHTTPServer
+    from aegis.config import Config
+    from aegis.dashboard import make_handler
+
+    class FakeResp:
+        def __init__(self, c): self.content = c
+
+    class FakeAgent:
+        def run(self, p):
+            return FakeResp('[{"title":"T1","body":"b1"},{"title":"T2","body":"b2"}]'
+                            if "GOAL:" in p else "done")
+    monkeypatch.setattr(agentmod.Agent, "create", staticmethod(lambda cfg, session=None: FakeAgent()))
+
+    cfg = Config.load()
+    cfg.set("dashboard.token", "")
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(cfg))
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    def req(m, p, b=None):
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        c.request(m, p, json.dumps(b) if b else None, {"content-type": "application/json"} if b else {})
+        return json.loads(c.getresponse().read())
+    try:
+        assert req("POST", "/api/kanban", {"action": "decompose", "goal": "launch"})["created"] == 2
+        assert len(req("GET", "/api/kanban")["ready"]) == 2
+        req("POST", "/api/kanban", {"action": "run"})
+        time.sleep(1.0)
+        b = req("GET", "/api/kanban")
+        assert len(b["done"]) == 2 and len(b["ready"]) == 0
+    finally:
+        srv.shutdown()
