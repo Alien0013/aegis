@@ -80,9 +80,16 @@ class TelegramAdapter(BasePlatformAdapter):
                     user_id=user_id,
                     user_name=username,
                 )
+                self._typing(ev.chat_id)        # show "typing…" while the agent works
                 reply = dispatch(ev)
                 if reply:
                     self.deliver(ev.chat_id, reply)
+
+    def _typing(self, chat_id: str) -> None:
+        try:
+            self._api("sendChatAction", chat_id=chat_id, action="typing")
+        except Exception:  # noqa: BLE001 — a missing indicator must never block the reply
+            pass
 
     def send_media(self, chat_id: str, path: str, caption: str = "") -> None:
         import os

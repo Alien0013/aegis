@@ -253,3 +253,19 @@ def test_acp_streams_tool_calls():
     assert sent[0]["status"] == "in_progress"
     assert sent[1]["status"] == "completed" and sent[1]["title"] == "ran ls"
     assert sent[2]["status"] == "failed"          # tool error surfaces as failed
+
+
+# --- gateway typing indicator (Hermes parity: gateway subsystem) ------------
+def test_telegram_typing_indicator(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "x")
+    from aegis.gateway.channels import TelegramAdapter
+    a = TelegramAdapter(token="123:abc")
+    calls = []
+    a._api = lambda method, **kw: calls.append((method, kw))
+    a._typing("42")
+    assert calls == [("sendChatAction", {"chat_id": "42", "action": "typing"})]
+
+    def boom(*a, **k):
+        raise RuntimeError("net")
+    a._api = boom
+    a._typing("42")                  # best-effort: never blocks the reply

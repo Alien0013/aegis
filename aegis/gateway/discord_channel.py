@@ -42,7 +42,8 @@ class DiscordAdapter(BasePlatformAdapter):
                 user_name=str(message.author),
             )
             loop = asyncio.get_event_loop()
-            reply = await loop.run_in_executor(None, dispatch, ev)
+            async with message.channel.typing():       # show "typing…" while the agent works
+                reply = await loop.run_in_executor(None, dispatch, ev)
             if reply:
                 import os
 
