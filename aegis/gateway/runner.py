@@ -93,8 +93,23 @@ class GatewayRunner:
                 if len(self._agents) > self._agent_cap:
                     del self._agents[next(iter(self._agents))]
             try:
-                final = agent.run(text)
-                return final.content or "(no response)"
+                learned: list[str] = []
+
+                def _collect(ev_: dict) -> None:
+                    t = ev_.get("type")
+                    if t == "tool_result" and not ev_.get("is_error") and ev_.get("name") == "memory":
+                        learned.append(f"💾 {ev_.get('summary', 'remembered')}")
+                    elif t == "tool_result" and not ev_.get("is_error") and ev_.get("name") == "skill":
+                        learned.append(f"📝 {ev_.get('summary', 'skill')}")
+                    elif t == "review_done":
+                        for a in ev_.get("actions") or []:
+                            learned.append(f"🧠 {a}")
+
+                final = agent.run(text, _collect)
+                reply = final.content or "(no response)"
+                if learned and self.config.get("gateway.show_learning", True):
+                    reply += "\n\n— " + " · ".join(dict.fromkeys(learned))   # dedup, keep order
+                return reply
             except Exception as e:  # noqa: BLE001
                 return f"⚠ error: {type(e).__name__}: {e}"
 

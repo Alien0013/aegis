@@ -211,6 +211,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "require_mention": False,             # in group chats, only respond when mentioned
         "mention_triggers": ["@aegis"],
         "cron_interval": 60,
+        "show_learning": True,                # append a 'remembered/learned' footer to replies
     },
     "fallback_providers": [],         # [{provider, model}]
     "custom_providers": [],           # [{name, base_url, api_mode, context_length, env_var}]
