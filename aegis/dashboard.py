@@ -45,7 +45,7 @@ h2{margin:.2em 0 .6em;font-size:16px}pre{white-space:pre-wrap;word-wrap:break-wo
 <div class=wrap><nav id=nav></nav><main id=view></main></div>
 <script>
 const V=document.getElementById('view'),NAV=document.getElementById('nav');let sid=null,_es=null;
-const TABS=['Chat','Live','Kanban','Cron','Models','Analytics','Keys','Pairing','Sessions','Memory','Skills','Tools','Config','Status'];
+const TABS=['Chat','Live','Kanban','Cron','Models','Analytics','Keys','Pairing','Sessions','Memory','Skills','Tools','Logs','System','Config','Status'];
 const qs=new URLSearchParams(location.search),tok=qs.get('token')||localStorage.aegisToken||'';if(tok)localStorage.aegisToken=tok;
 function withTok(p){return '/api/'+p+(tok?(p.includes('?')?'&':'?')+'token='+encodeURIComponent(tok):'')}
 async function api(p){const r=await fetch(withTok(p));return r.json()}
@@ -54,7 +54,13 @@ function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':
 TABS.forEach(t=>{const b=document.createElement('button');b.textContent=t;b.onclick=()=>show(t,b);NAV.appendChild(b)});
 async function boot(){const s=await api('status');document.getElementById('sub').textContent='v'+s.version+' \\u00b7 '+s.provider+'/'+s.model;
 document.getElementById('stat').textContent=s.sessions+' sessions \\u00b7 '+s.skills+' skills \\u00b7 '+s.tools+' tools';show('Chat',NAV.children[0])}
-function show(t,btn){if(_es){_es.close();_es=null}[...NAV.children].forEach(b=>b.classList.toggle('on',b===btn));({Chat:chat,Live:live,Kanban:kanban,Cron:cron,Models:models,Analytics:analytics,Keys:keys,Pairing:pairing,Sessions:sessions,Memory:memory,Skills:skills,Tools:tools,Config:cfg,Status:status}[t])()}
+function show(t,btn){if(_es){_es.close();_es=null}[...NAV.children].forEach(b=>b.classList.toggle('on',b===btn));({Chat:chat,Live:live,Kanban:kanban,Cron:cron,Models:models,Analytics:analytics,Keys:keys,Pairing:pairing,Sessions:sessions,Memory:memory,Skills:skills,Tools:tools,Logs:logs,System:system,Config:cfg,Status:status}[t])()}
+async function logs(){const d=await api('logs');
+V.innerHTML='<h2>Logs</h2><p class=mut>'+esc(d.path)+'</p><pre style="max-height:70vh;overflow:auto;font-size:12px">'+esc((d.lines||[]).join('\\n')||'(empty)')+'</pre>'}
+async function system(){const s=await api('system');
+const cp=(s.checkpoints||[]).map(c=>`<div class=row><span>${esc(c.id)} ${esc(c.label||'')}</span><span class=pill>${esc(c.at||'')}</span></div>`).join('')||'<p class=mut>no checkpoints</p>';
+V.innerHTML='<h2>System</h2>'+[['version',s.version],['python',s.python],['platform',s.platform],['home',s.aegis_home],['disk',s.disk_free_gb+' / '+s.disk_total_gb+' GB free']].map(([k,v])=>`<div class=row><span class=mut>${k}</span><span>${esc(''+v)}</span></div>`).join('')+'<div class=bar><button class=send id=bk>Backup now</button><span id=bkr class=mut></span></div><h3>Checkpoints</h3>'+cp;
+document.getElementById('bk').onclick=async()=>{document.getElementById('bkr').textContent='backing up\\u2026';const r=await post('system',{action:'backup'});document.getElementById('bkr').textContent=r.path?('\\u2705 '+r.path):'failed'}}
 async function keys(){const d=await api('keys');
 V.innerHTML='<h2>API keys</h2><p class=mut>Stored in ~/.aegis/.env (chmod 600). Values are never shown.</p><div class=bar><input id=kk placeholder="KEY (e.g. OPENAI_API_KEY)" style="flex:0 0 240px"><input id=kv placeholder="value" type=password><button class=send id=kset>Save</button></div>'+d.map(x=>`<div class=row><span>${esc(x.key)}</span><span class=pill>${x.set?'\\u2705 set':'\\u2014 not set'} <a href=# data-k="${esc(x.key)}">set</a></span></div>`).join('');
 V.querySelectorAll('a[data-k]').forEach(a=>a.onclick=e=>{e.preventDefault();document.getElementById('kk').value=a.dataset.k;document.getElementById('kv').focus()});
@@ -152,6 +158,31 @@ def _env_keys() -> list:
     return [{"key": k, "set": k in present} for k in names]
 
 
+def _system_info() -> dict:
+    """Host + install facts and recent checkpoints for the System tab (no psutil dependency)."""
+    import platform
+    import shutil
+    from . import __version__
+    from . import config as cfg
+    home = cfg.get_home()
+    du = shutil.disk_usage(str(home))
+    try:
+        from .checkpoints import CheckpointStore
+        cps = [{"id": c.id, "label": c.label, "at": getattr(c, "created_at", "")}
+               for c in CheckpointStore().list()[:20]]
+    except Exception:  # noqa: BLE001
+        cps = []
+    return {
+        "version": __version__,
+        "python": platform.python_version(),
+        "platform": f"{platform.system()} ({platform.machine()})",
+        "aegis_home": str(home),
+        "disk_free_gb": round(du.free / 1e9, 1),
+        "disk_total_gb": round(du.total / 1e9, 1),
+        "checkpoints": cps,
+    }
+
+
 def make_handler(config: Config):
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a):
@@ -232,6 +263,13 @@ def make_handler(config: Config):
             elif path == "/api/pairing":
                 from .gateway.pairing import PairingStore
                 self._json(PairingStore().list())
+            elif path == "/api/system":
+                self._json(_system_info())
+            elif path == "/api/logs":
+                from . import config as _cfg
+                lp = _cfg.logs_dir() / "aegis.log"
+                lines = lp.read_text(errors="replace").splitlines()[-200:] if lp.exists() else []
+                self._json({"path": str(lp), "lines": lines})
             elif path == "/api/sessions":
                 self._json(SessionStore().list(100))
             elif path == "/api/session":
@@ -338,6 +376,11 @@ def make_handler(config: Config):
                 if act == "revoke" and body.get("user_id"):
                     return self._json({"ok": ps.revoke(plat, body["user_id"])})
                 return self._json({"error": "bad pairing request"})
+            if ppath == "/api/system":
+                if body.get("action") == "backup":
+                    from .backup import create_backup
+                    return self._json({"ok": True, "path": str(create_backup())})
+                return self._json({"error": "unknown system action"})
             store = SessionStore()
             session = store.load(body.get("session_id") or "") or Session.create()
             agent = Agent.create(config, session=session, store=store)

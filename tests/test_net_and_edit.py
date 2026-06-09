@@ -703,3 +703,35 @@ def test_dashboard_keys_pairing_and_port(tmp_path, monkeypatch):
             pass
     s.close()
     assert found and found != busy
+
+
+# --- dashboard System + Logs tabs -------------------------------------------
+def test_dashboard_system_and_logs(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import http.client
+    import json
+    import os
+    import threading
+    from http.server import ThreadingHTTPServer
+    from aegis.config import Config
+    from aegis.dashboard import make_handler, _system_info
+
+    assert {"version", "platform", "disk_total_gb", "checkpoints"} <= set(_system_info())
+    cfg = Config.load()
+    cfg.set("dashboard.token", "")
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(cfg))
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    def req(m, p, b=None):
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        c.request(m, p, json.dumps(b) if b else None, {"content-type": "application/json"} if b else {})
+        return json.loads(c.getresponse().read())
+    try:
+        assert req("GET", "/api/system")["disk_total_gb"] > 0
+        lg = req("GET", "/api/logs")
+        assert "path" in lg and "lines" in lg
+        bk = req("POST", "/api/system", {"action": "backup"})
+        assert bk["ok"] and bk["path"].endswith(".zip") and os.path.exists(bk["path"])
+    finally:
+        srv.shutdown()
