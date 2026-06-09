@@ -61,7 +61,7 @@ def test_trajectory_export_formats():
     assert [c["from"] for c in hf["conversations"]] == ["system", "human", "gpt", "tool"]
     try:
         t.export("/tmp/_t_bad.jsonl", [s.id], fmt="nope")
-        assert False, "should reject unknown format"
+        raise AssertionError("should reject unknown format")
     except ValueError:
         pass
 

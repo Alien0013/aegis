@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 
 
 # --- SSRF guard (offline: literal IPs / locally-resolvable hosts) ----------
