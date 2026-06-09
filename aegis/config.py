@@ -134,7 +134,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "max_iterations": 50,
         "stream": True,
         "reasoning_effort": "off",   # off|minimal|low|medium|high|xhigh
-        "compression": {"preserve_first": 3, "preserve_last": 20},
+        "compression": {"preserve_first": 3, "preserve_last": 20, "max_tool_tokens": 600,
+                        # when the window fills, roll into a fresh child session (parent kept
+                        # intact, lineage chained) instead of editing history in place
+                        "split_sessions": True},
     },
     "memory": {
         "enabled": True,
@@ -178,10 +181,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "learn": {
         "auto": False,               # auto-review sessions on exit to propose memory/skill candidates
-        "background": False,          # forked self-improvement review after substantial turns — opt-in
-        "memory_every": 5,            # run a memory review every N turns
-        "skill_every_iters": 4,       # run a skill review when a turn used >= N tool iterations
-        "auto_apply": False,          # fork writes memory/skills directly; else queue candidates (safer)
+        "background": True,           # forked self-improvement review after substantial turns (on, like Hermes)
+        "memory_every": 6,            # run a memory review every N turns
+        "skill_every_iters": 5,       # run a skill review when a turn used >= N tool iterations
+        "auto_apply": True,           # fork writes memory/skills directly (set False to only queue candidates)
     },
     "mcp": {
         "enabled": True,

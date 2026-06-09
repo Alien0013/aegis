@@ -133,6 +133,15 @@ class ToolExecutor:
         return [r for r in results if r is not None]
 
 
+def _next_in_lineage(title: str) -> str:
+    """Auto-number a continuation session title: 'Task' -> 'Task (2)' -> 'Task (3)'."""
+    import re
+    m = re.match(r"^(.*?) \((\d+)\)$", title or "")
+    if m:
+        return f"{m.group(1)} ({int(m.group(2)) + 1})"
+    return f"{(title or 'session').strip()} (2)"
+
+
 def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
     """Drive one user turn to completion. Returns the final assistant message."""
     emit = on_event or (lambda e: None)
@@ -229,21 +238,42 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                     pass
             before_n = len(session.messages)
             before_tok = compaction.estimated_tokens(session.messages)
-            session.messages = compaction.compress(
+            compressed = compaction.compress(
                 session.messages, agent.provider,
                 preserve_first=comp.get("preserve_first", 3),
                 preserve_last=comp.get("preserve_last", 20),
                 max_tool_tokens=comp.get("max_tool_tokens", 600),
             )
-            after_tok = compaction.estimated_tokens(session.messages)
-            # Record what was compacted and why, so the user can inspect it later.
+            after_tok = compaction.estimated_tokens(compressed)
             from ..constants import COMPACT_THRESHOLD
             from ..util import now_iso
             rec = {"at": now_iso(), "iteration": budget.api_call_count,
-                   "messages_before": before_n, "messages_after": len(session.messages),
+                   "messages_before": before_n, "messages_after": len(compressed),
                    "tokens_before": before_tok, "tokens_after": after_tok,
                    "reason": f"context exceeded {int(COMPACT_THRESHOLD * 100)}% of the window"}
-            session.meta.setdefault("compactions", []).append(rec)
+
+            split = comp.get("split_sessions", True) and agent.store is not None
+            if split and len(compressed) < before_n:
+                # Roll into a fresh child session (Hermes-style): keep the full parent in the
+                # store, continue in a child holding [summary + recent tail], lineage chained.
+                from ..session import Session
+                parent = session
+                try:
+                    agent.store.save(parent)                  # preserve full parent history
+                except Exception:  # noqa: BLE001
+                    pass
+                child = Session.create(title=_next_in_lineage(parent.title), parent_id=parent.id)
+                child.messages = compressed
+                child.meta["forked_from"] = parent.id
+                child.meta["summary"] = parent.meta.get("summary", "")
+                child.meta.setdefault("compactions", []).append(rec)
+                agent.session = child
+                agent.tool_context.session = child
+                session = child
+                rec = {**rec, "split": True, "child_session": child.id, "parent_session": parent.id}
+            else:
+                session.messages = compressed
+                session.meta.setdefault("compactions", []).append(rec)
             emit({"type": "compacted", **rec})
             agent.refresh_volatile()
 

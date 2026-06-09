@@ -132,13 +132,59 @@ def test_forked_review_writes_agent_created_skill(tmp_path):
     assert provenance.is_agent_created("deploy-flow")
 
 
+def test_compaction_splits_into_child_session(tmp_path):
+    """When the window fills on a tool turn, roll into a child session (parent kept, lineage chained)."""
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.session import Session, SessionStore
+    from aegis.types import LLMResponse, Message, ToolCall
+
+    class Dual:
+        context_length = 1; name = "f"; model = "m"; api_mode = None; auth = None
+        def __init__(self): self.n = 0
+        def describe(self): return "f"
+        def complete(self, messages, tools=None, **k):
+            if tools is None:                       # compaction asking for a summary
+                return LLMResponse(text="SUMMARY of earlier turns")
+            self.n += 1
+            if self.n == 1:
+                return LLMResponse(text="", tool_calls=[ToolCall("c1", "list_dir", {"path": "."})])
+            return LLMResponse(text="final")
+
+    cfg = Config.load()
+    cfg.data["tools"]["exec_mode"] = "full"
+    cfg.data["learn"]["background"] = False
+    store = SessionStore()
+    s = Session.create("My Task")
+    s.messages = [Message.system("sys")] + [
+        (Message.user(f"u{i}") if i % 2 == 0 else Message.assistant(f"a{i}")) for i in range(40)]
+    store.save(s)
+    parent_id = s.id
+    a = Agent(config=cfg, provider=Dual(), session=s, store=store, cwd=tmp_path)
+    a.run("continue")
+    assert a.session.id != parent_id                       # rolled into a child
+    assert a.session.parent_id == parent_id                # lineage chained
+    assert a.session.title == "My Task (2)"                # auto-numbered
+    assert len(a.session.messages) < len(store.load(parent_id).messages)  # child is compressed
+    assert store.load(parent_id) is not None               # parent preserved full
+    assert a.session.id in {c["id"] for c in store.children(parent_id)}
+
+
+def test_lineage_title_numbering():
+    from aegis.agent.loop import _next_in_lineage
+    assert _next_in_lineage("Task") == "Task (2)"
+    assert _next_in_lineage("Task (2)") == "Task (3)"
+    assert _next_in_lineage("") == "session (2)"
+
+
 def test_maybe_review_off_by_default_and_guards_recursion(tmp_path):
     from aegis.agent.agent import Agent
     from aegis.agent import review
     from aegis.config import Config
     from aegis.session import Session
     a = Agent(config=Config.load(), provider=FakeProvider(), session=Session.create(), cwd=tmp_path)
-    assert review.maybe_review(a, tools_this_turn=99) is False     # off unless learn.background
+    a.config.data["learn"]["background"] = False
+    assert review.maybe_review(a, tools_this_turn=99) is False     # off when disabled
     a._no_review = True
     a.config.data["learn"]["background"] = True
-    assert review.maybe_review(a, tools_this_turn=99) is False     # child never re-forks
+    assert review.maybe_review(a, tools_this_turn=99) is False     # child never re-forks even when on
