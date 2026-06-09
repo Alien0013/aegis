@@ -51,6 +51,11 @@ class GatewayRunner:
             return True
         return False
 
+    def steer(self, ev: MessageEvent, text: str) -> bool:
+        """Inject mid-run guidance into the active agent for ev's session. True if queued."""
+        agent = self._agents.get(self._key(ev))
+        return bool(agent is not None and agent.steer(text))
+
     def _session(self, key: str) -> Session:
         if key not in self._sessions:
             self._sessions[key] = self.store.load(key) or Session(id=key, title=key)
@@ -193,6 +198,7 @@ class GatewayRunner:
         threads: list[threading.Thread] = []
         for adapter in self.adapters:
             adapter._interrupt_cb = self.interrupt    # adapters that poll concurrently use this
+            adapter._steer_cb = self.steer            # mid-run /steer guidance
             t = threading.Thread(target=adapter.start, args=(self.dispatch,), daemon=True)
             t.start()
             threads.append(t)
@@ -205,6 +211,8 @@ class GatewayRunner:
         # in-process cron ticker so scheduled/one-shot jobs fire without a separate daemon
         threading.Thread(target=self._cron_ticker, daemon=True).start()
         print("  ▸ cron ticker up")
+        from . import memory_monitor          # periodic RSS log to catch leaks
+        memory_monitor.start()
         print("Gateway running. Ctrl+C to stop.")
         try:
             for t in threads:

@@ -68,7 +68,7 @@ def test_config_get_dotted_default():
     from aegis.config import Config
     c = Config.load()
     assert c.get("nope.nope.nope", "fallback") == "fallback"
-    assert c.get("tools.exec_mode") == "ask"
+    assert c.get("tools.exec_mode") == "auto"   # automatic tool approval by default
 
 
 def test_config_deep_merge_keeps_user_and_defaults():

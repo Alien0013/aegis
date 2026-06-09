@@ -10,23 +10,52 @@ from ..types import LLMResponse, Message, ToolSchema
 from .base import Provider
 
 
+# Failure class -> the recovery action the retry layer / loop should take.
+#   retry     : transient — back off and try the same request again
+#   rotate    : try the next key/provider immediately (bad key, quota exhausted)
+#   compress  : the request is too big — compact the session, don't failover
+#   abort     : retrying unchanged won't help (content policy, bad request)
+RECOVERY_ACTION = {
+    "rate_limit": "retry",
+    "auth": "rotate",
+    "billing": "rotate",
+    "context_overflow": "compress",
+    "content_policy": "abort",
+    "server": "retry",
+    "transient": "retry",
+    "client": "abort",
+    "invalid_response": "retry",
+}
+
+_OVERFLOW_HINTS = ("context length", "maximum context", "context_length_exceeded", "too long",
+                   "reduce the length", "too many tokens", "maximum number of tokens")
+_POLICY_HINTS = ("content policy", "content_policy", "content_filter", "moderation", "safety",
+                 "flagged", "responsibleai")
+_QUOTA_HINTS = ("insufficient_quota", "quota exceeded", "exceeded your current quota", "billing")
+
+
 def classify_provider_error(exc: Exception) -> str:
-    """Map a provider failure to a fallback trigger class:
-    rate_limit (429) · auth (401) · billing (402/403) · server (5xx) · client (4xx) ·
-    transient (timeout/dropped stream) · invalid_response (unparseable)."""
+    """Map a provider failure to a precise class so each gets the right recovery action:
+    rate_limit · auth · billing · context_overflow · content_policy · server · client ·
+    transient (timeout/dropped stream) · invalid_response (unparseable). See ``RECOVERY_ACTION``."""
     from .chat_completions import ProviderHTTPError
     if isinstance(exc, ProviderHTTPError):
         s = exc.status
+        body = (getattr(exc, "body", "") or "").lower()
         if s == 429:
-            return "rate_limit"
+            return "billing" if any(h in body for h in _QUOTA_HINTS) else "rate_limit"
         if s == 401:
             return "auth"
         if s in (402, 403):
             return "billing"
+        if 400 <= s < 500:
+            if any(h in body for h in _OVERFLOW_HINTS):
+                return "context_overflow"      # compress, don't failover
+            if any(h in body for h in _POLICY_HINTS):
+                return "content_policy"        # don't retry unchanged
+            return "client"
         if 500 <= s < 600:
             return "server"
-        if 400 <= s < 500:
-            return "client"
         return "transient"
     try:
         import httpx
@@ -37,6 +66,11 @@ def classify_provider_error(exc: Exception) -> str:
     if isinstance(exc, (TimeoutError, ConnectionError)):
         return "transient"
     return "invalid_response"
+
+
+def recovery_action(reason: str) -> str:
+    """The recovery action for a failure class (see ``RECOVERY_ACTION``)."""
+    return RECOVERY_ACTION.get(reason, "retry")
 
 
 class FallbackProvider:

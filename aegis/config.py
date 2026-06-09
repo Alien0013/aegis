@@ -145,7 +145,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "provider": "",              # "" builtin only; or "mem0" | "jsonl"
     },
     "tools": {
-        "exec_mode": "ask",          # deny | allowlist | ask | smart | auto | full
+        "exec_mode": "auto",         # deny | allowlist | ask | smart | auto | full
+                                     # 'auto' auto-approves tools (hardline blocklist + deny_groups
+                                     # still apply); set 'ask' to prompt on dangerous tools.
         "deny_groups": [],           # e.g. ["runtime", "automation"]
         "allowlist": [],             # shell command prefixes auto-approved
         "toolsets": ["core", "mcp"], # enabled toolsets (add "browser","computer" to opt in)
@@ -189,8 +191,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "memory_every": 6,            # run a memory review every N turns
         "skill_every_iters": 5,       # run a skill review when a turn used >= N tool iterations
         "auto_apply": True,           # auto-write reviewed MEMORY (low risk); False = queue candidates
-        "auto_apply_skills": False,   # auto-write reviewed SKILLS; default human-gated (avoids
-                                      # cross-tenant skill pollution). Set True for full autonomy.
+        "auto_apply_skills": True,    # auto-write reviewed SKILLS too (full autonomy; False = human-gated)
     },
     "mcp": {
         "enabled": True,

@@ -70,8 +70,10 @@ class Agent:
         self.tools_used = 0
         self.platform: str | None = None   # set by the gateway to the active channel (telegram, …)
         self.chat_id: str | None = None     # set by the gateway to the active conversation id
+        import queue
         import threading
         self.cancel_event = threading.Event()   # set by .cancel() to interrupt a run
+        self.steer_queue: queue.Queue = queue.Queue()   # mid-run guidance injected via .steer()
 
         self.tool_context = ToolContext(
             cwd=self.cwd, config=config, memory=self.memory, skills=self.skills,
@@ -192,9 +194,18 @@ class Agent:
         """Request the current run to stop at the next safe point (interrupt-aware loop)."""
         self.cancel_event.set()
 
+    def steer(self, text: str) -> bool:
+        """Inject guidance into a run in progress; the loop folds it into the next model call
+        without restarting the turn. Returns True if queued."""
+        if text and text.strip():
+            self.steer_queue.put(text.strip())
+            return True
+        return False
+
     def run(self, user_input: str | Message, on_event: OnEvent | None = None) -> Message:
         self.cancel_event.clear()
         self._compact_stuck = False        # reset the no-progress-compaction guard each turn
+        self._overflow_retried = False     # one-shot context_overflow -> compress guard, per turn
         if not self.session.messages:      # first turn of a session
             from ..plugins import fire_hook
             fire_hook("on_session_start", self)

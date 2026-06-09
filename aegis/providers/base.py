@@ -112,22 +112,20 @@ class Provider:
                     cwd=cwd,
                 )
             except Exception as e:  # noqa: BLE001
-                # Classify: retry transient errors (rate-limit, 5xx, timeouts, dropped
-                # streams) with jittered exponential backoff; rotate keys on 401/429.
+                # Map the failure to a precise recovery action and act on it:
+                #   abort/compress -> don't retry here (the loop compacts on context_overflow);
+                #   rotate -> switch key/provider then retry; retry -> jittered backoff.
                 import random
                 import time
-                status = getattr(e, "status", None)
-                transient_status = status in (408, 409, 425, 429, 500, 502, 503, 504, 529)
-                transient_net = type(e).__name__ in (
-                    "TimeoutException", "ConnectError", "ConnectTimeout", "ReadTimeout",
-                    "ReadError", "RemoteProtocolError", "PoolTimeout")
-                if attempts < 4 and (transient_status or transient_net):
-                    if status in (401, 429) and hasattr(self.auth, "rotate"):
-                        self.auth.rotate()
-                    time.sleep(min(30.0, (2 ** attempts) * 1.5) + random.random())
-                    attempts += 1
-                    continue
-                raise
+                from .fallback import classify_provider_error, recovery_action
+                action = recovery_action(classify_provider_error(e))
+                if action in ("abort", "compress") or attempts >= 4:
+                    raise
+                if action == "rotate" and hasattr(self.auth, "rotate"):
+                    self.auth.rotate()                     # bad key / quota -> next credential
+                time.sleep(min(30.0, (2 ** attempts) * 1.5) + random.random())
+                attempts += 1
+                continue
 
     def describe(self) -> str:
         return f"{self.name} · {self.model} · {self.api_mode.value} · {self.auth.describe()}"

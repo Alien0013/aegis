@@ -917,18 +917,22 @@ def test_permission_override_and_cron_approval(tmp_path, monkeypatch):
     seen = {}
 
     class A:
-        def __init__(self): self.permissions = PermissionEngine(Config.load())
+        def __init__(self):
+            c = Config.load(); c.data["tools"]["exec_mode"] = "ask"   # base = ask, so override shows
+            self.permissions = PermissionEngine(c)
         def run(self, p):
             seen["mode"] = self.permissions.mode
             return type("R", (), {"content": "ok"})()
     monkeypatch.setattr(am.Agent, "create", staticmethod(lambda cfg, session=None: A()))
 
     s = CronStore(); s.add("every 1s", "do")
-    cfg = Config.load(); cfg.data.setdefault("cron", {})["approval"] = "approve"   # in-memory
+    cfg = Config.load(); cfg.data["tools"]["exec_mode"] = "ask"
+    cfg.data.setdefault("cron", {})["approval"] = "approve"   # in-memory
     tick(cfg, store=s, verbose=False)
-    assert seen["mode"] == ExecMode.AUTO
+    assert seen["mode"] == ExecMode.AUTO          # approve -> cron overrides to auto
 
     s2 = CronStore(); s2.add("every 1s", "do2")
-    cfg2 = Config.load(); cfg2.data.setdefault("cron", {})["approval"] = "deny"
+    cfg2 = Config.load(); cfg2.data["tools"]["exec_mode"] = "ask"
+    cfg2.data.setdefault("cron", {})["approval"] = "deny"
     tick(cfg2, store=s2, verbose=False)
-    assert seen["mode"] != ExecMode.AUTO          # deny -> inherits config (ask), not auto
+    assert seen["mode"] == ExecMode.ASK           # deny -> no override, inherits config (ask)

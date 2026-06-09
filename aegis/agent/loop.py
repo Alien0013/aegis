@@ -156,6 +156,42 @@ def _summarizer(agent):
     return s
 
 
+def _drain_steering(agent, session) -> None:
+    """Fold any guidance queued via ``agent.steer()`` into the conversation before the next
+    model call — appended to the last tool message to preserve role alternation."""
+    q = getattr(agent, "steer_queue", None)
+    if q is None:
+        return
+    notes = []
+    while not q.empty():
+        try:
+            notes.append(q.get_nowait())
+        except Exception:  # noqa: BLE001
+            break
+    if not notes:
+        return
+    text = "\n".join(f"[user steering]: {n}" for n in notes)
+    for m in reversed(session.messages):
+        if m.role == "tool":
+            m.content = (m.content or "") + "\n\n" + text
+            return
+    session.messages.append(Message.user(text))
+
+
+def _force_compact(agent, session):
+    """Compress unconditionally — recovery from a provider context_overflow. Tighter tail than
+    the proactive path so the request actually shrinks below the window."""
+    comp = agent.config.get("agent.compression", {}) or {}
+    session.messages = compaction.compress(
+        session.messages, _summarizer(agent),
+        preserve_first=comp.get("preserve_first", 3),
+        preserve_last=min(10, comp.get("preserve_last", 20)),
+        max_tool_tokens=min(400, comp.get("max_tool_tokens", 600)),
+    )
+    agent.refresh_volatile()
+    return session
+
+
 def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
     """Proactively compact BEFORE the next model call if the window is near full. Returns the
     (possibly new child) session. Splits into a child session when a store + split are enabled."""
@@ -232,6 +268,7 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
     schemas = agent.registry.schemas(available)
     executor = ToolExecutor(agent.registry, agent.permissions, agent.tool_context, emit)
     continuations = 0
+    empty_nudges = 0
     from ..util import estimate_tokens
     schema_tokens = estimate_tokens(json.dumps(schemas))   # tools count toward the window
 
@@ -247,6 +284,7 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
             session.messages.append(stop)
             return stop
         emit({"type": "iteration", "n": budget.api_call_count + 1, "max": budget.max_iterations})
+        _drain_steering(agent, session)        # fold in any mid-run /steer guidance
         session.messages = governance.normalize(session.messages)
         # Compact BEFORE the model call so an over-full window never reaches the provider.
         session = _maybe_compact(agent, session, schema_tokens, budget, emit)
@@ -268,6 +306,14 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
             )
         except Exception as e:  # noqa: BLE001
             from .._log import log_exc
+            from ..providers.fallback import classify_provider_error, recovery_action
+            # context_overflow -> compact the session and retry once, instead of failing the turn.
+            if (recovery_action(classify_provider_error(e)) == "compress"
+                    and not getattr(agent, "_overflow_retried", False)):
+                agent._overflow_retried = True
+                emit({"type": "compacting", "reason": "context_overflow"})
+                session = _force_compact(agent, session)
+                continue
             log_exc("provider.complete failed")
             msg = f"{type(e).__name__}: {e}"
             low = str(e).lower()
@@ -300,11 +346,22 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                 session.messages.append(
                     Message.user("Continue exactly where you left off. Do not repeat or re-introduce."))
                 continue
+            # Empty reply after using tools = a dead-end turn; nudge it to continue (twice max)
+            # rather than handing back nothing.
+            if not (resp.text or "").strip() and agent.tools_used > 0 and empty_nudges < 2:
+                empty_nudges += 1
+                emit({"type": "empty_nudge", "n": empty_nudges})
+                session.messages.append(Message.user(
+                    "You returned an empty reply after using tools. Continue: take the next "
+                    "action, or give the final answer."))
+                continue
+            # Periodic skill-save nudge: every N tool-uses across a long session (not once-ever).
             from ..constants import SKILL_AUTOGEN_THRESHOLD
-            if (agent.tools_used >= SKILL_AUTOGEN_THRESHOLD
-                    and agent.config.get("skills.autogen", True)
-                    and not agent.session.meta.get("nudged")):
-                agent.session.meta["nudged"] = True
+            interval = int(agent.config.get("learn.skill_nudge_interval", SKILL_AUTOGEN_THRESHOLD) or 0)
+            last = int(agent.session.meta.get("_last_skill_nudge", 0))
+            if (interval > 0 and agent.config.get("skills.autogen", True)
+                    and agent.tools_used - last >= interval):
+                agent.session.meta["_last_skill_nudge"] = agent.tools_used
                 emit({"type": "skill_nudge"})
             emit({"type": "final", "text": resp.text})
             return assistant_msg

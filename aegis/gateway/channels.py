@@ -94,6 +94,13 @@ class TelegramAdapter(BasePlatformAdapter):
                     if cb and w and w.is_alive() and cb(ev):
                         self.send(ev.chat_id, "🛑 stopped.")
                         continue
+                # '/steer <text>' while a turn is running injects guidance without restarting it.
+                if msg["text"].startswith("/steer "):
+                    scb = getattr(self, "_steer_cb", None)
+                    w = self._workers.get(ev.chat_id)
+                    if scb and w and w.is_alive() and scb(ev, msg["text"][len("/steer "):].strip()):
+                        self.send(ev.chat_id, "🧭 steering noted.")
+                        continue
                 self._enqueue(ev)
 
     def _enqueue(self, ev: MessageEvent) -> None:
