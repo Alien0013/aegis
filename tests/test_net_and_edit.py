@@ -338,3 +338,13 @@ def test_telegram_inplace_status(monkeypatch):
 
     calls.clear(); a._finish("42", 555, "| A | B |\n|---|---|\n| 1 | 2 |")   # table tableified on edit
     assert calls[0][0] == "editMessageText" and "•" in calls[0][1]["text"] and "|" not in calls[0][1]["text"]
+
+
+# --- group-chat sender context (run.py observed-group context) --------------
+def test_telegram_group_context():
+    from aegis.gateway.channels import _with_group_context
+    assert _with_group_context({"text": "hi", "chat": {"type": "private"}, "from": {"username": "tj"}}) == "hi"
+    assert _with_group_context(
+        {"text": "deploy", "chat": {"type": "supergroup"}, "from": {"username": "tj"}}) == "[tj]: deploy"
+    assert _with_group_context(
+        {"text": "yo", "chat": {"type": "group"}, "from": {"first_name": "Sam", "id": 9}}) == "[Sam]: yo"

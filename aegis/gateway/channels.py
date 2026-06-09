@@ -73,10 +73,11 @@ class TelegramAdapter(BasePlatformAdapter):
                 if self.allowed and not (names & self.allowed):
                     self.send(str(msg["chat"]["id"]), "⛔ not authorized.")
                     continue
+                text = _with_group_context(msg)   # prefix sender in group chats; DMs untouched
                 ev = MessageEvent(
                     platform="telegram",
                     chat_id=str(msg["chat"]["id"]),
-                    text=msg["text"],
+                    text=text,
                     user_id=user_id,
                     user_name=username,
                 )
@@ -153,6 +154,17 @@ class TelegramAdapter(BasePlatformAdapter):
                 self._api("sendMessage", chat_id=chat_id, text=chunk)
             except Exception:  # noqa: BLE001
                 pass
+
+
+def _with_group_context(msg: dict) -> str:
+    """In a group/supergroup, prefix the sender so the agent knows who is speaking (Telegram
+    delivers every member's messages to the bot). DMs are returned unchanged. Hermes parity."""
+    text = msg.get("text", "")
+    if msg.get("chat", {}).get("type") in ("group", "supergroup"):
+        frm = msg.get("from", {})
+        who = frm.get("username") or frm.get("first_name") or str(frm.get("id", "user"))
+        return f"[{who}]: {text}"
+    return text
 
 
 def build_adapter(name: str) -> BasePlatformAdapter:
