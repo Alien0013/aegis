@@ -86,3 +86,24 @@ def test_schema_sanitizer_strips_annotations_keeps_structure():
     assert "$schema" not in out and "examples" not in out
     assert "readOnly" not in out["properties"]["a"]   # nested annotation dropped
     assert out["required"] == ["a"]                   # structure preserved
+
+
+# --- system-prompt: agentic guidance + per-channel hints --------------------
+def test_prompt_has_agentic_and_capability_guidance():
+    from aegis.agent.context import ContextBuilder
+    from aegis.config import Config
+    p = ContextBuilder(Config.load()).build()
+    assert "tool-use enforcement" in p                 # act, don't describe
+    assert "WORKING artifact" in p                      # finish the job, no fabrication
+    assert "aegis gateway --channels telegram" in p     # knows its own gateway
+    assert "NEVER echo it back" in p                    # secrets rule
+
+
+def test_platform_hint_only_when_on_a_channel():
+    from aegis.agent.context import ContextBuilder
+    from aegis.config import Config
+    b = ContextBuilder(Config.load())
+    assert "You are on Telegram" not in b.build()                       # REPL: no hint
+    tg = b.build(platform="telegram")
+    assert "You are on Telegram" in tg and "NO table" in tg             # Telegram: formatting hint
+    assert "You are on Discord" in b.build(platform="discord")

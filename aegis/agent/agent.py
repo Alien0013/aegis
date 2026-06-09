@@ -68,6 +68,7 @@ class Agent:
         self.reasoning = config.get("agent.reasoning_effort", "off")
         self.budget = IterationBudget(int(config.get("agent.max_iterations", DEFAULT_MAX_ITERATIONS)))
         self.tools_used = 0
+        self.platform: str | None = None   # set by the gateway to the active channel (telegram, …)
         import threading
         self.cancel_event = threading.Event()   # set by .cancel() to interrupt a run
 
@@ -154,6 +155,7 @@ class Agent:
             skills_index=skills_index,
             memory_block=memory_block,
             runtime_block=self._build_runtime_block(),
+            platform=getattr(self, "platform", None),
         )
 
     def ensure_system_prompt(self, force: bool = False) -> None:
