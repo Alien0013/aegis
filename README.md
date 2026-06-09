@@ -18,7 +18,8 @@ Any model · any channel · runs on your machine · learns as it goes — in ~11
   <a href="#-quickstart">Quickstart</a> ·
   <a href="#-architecture">Architecture</a> ·
   <a href="#-features">Features</a> ·
-  <a href="docs/index.md">Docs</a>
+  <a href="docs/index.md">Docs</a> ·
+  <a href="assets/onepager.html">One-pager</a>
 </p>
 
 ---
@@ -109,6 +110,35 @@ sequenceDiagram
         end
     end
     A->>A: persist · usage/cost log · background learn · trajectory capture
+```
+
+### Multi-channel gateway
+
+```mermaid
+flowchart LR
+    subgraph Channels
+        TG[Telegram]; DC[Discord]; SL[Slack]; SG[Signal]
+        MX[Matrix]; EM[Email]; WH[Webhook]; NT[ntfy]
+    end
+    Channels -->|normalized MessageEvent| HUB["Gateway hub<br/>session routing · pairing · typing"]
+    HUB -->|per-conversation| AG["Agent<br/>(redaction · friendly errors · PLATFORM_HINTS)"]
+    AG -->|reply / MEDIA / status edit| OUT["Delivery queue<br/>(durable · retrying)"]
+    OUT --> Channels
+    CRON["Cron ticker<br/>recurring + one-shot"] -->|send_message| OUT
+    AG -->|live events| DASH["Dashboard (SSE)"]
+```
+
+### The learning loop
+
+```mermaid
+flowchart LR
+    S["Finished turn / session"] --> R["Forked review agent<br/>(memory + skill tools only)"]
+    R --> C["Candidates<br/>(secret-redacted)"]
+    C -->|auto_apply or /learn approve| M["MEMORY.md · USER.md"]
+    C -->|promote| K["Skills (SKILL.md)<br/>provenance-tracked"]
+    M --> P["Next session's system prompt"]
+    K --> P
+    K --> CUR["Curator<br/>active → stale → archived"]
 ```
 
 ## 📦 Install (one line)

@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AEGIS — the terminal AI agent you actually own</title>
+<style>
+  :root{ --bg:#0d1117; --card:#161b22; --line:#243040; --fg:#e6edf3; --mut:#8b949e;
+         --accent:#7c9eff; --accent2:#a371f7; --ok:#3fb950; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif}
+  .page{max-width:920px;margin:0 auto;padding:48px 40px}
+  .hero{text-align:center;padding:24px 0 8px}
+  .logo{font-size:40px;font-weight:800;letter-spacing:-1px}
+  .logo .d{color:var(--accent)}
+  .tag{font-size:20px;font-weight:600;margin:10px 0 6px}
+  .sub{color:var(--mut);font-size:15px;max-width:640px;margin:0 auto}
+  .pills{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin:18px 0 6px}
+  .pill{background:var(--card);border:1px solid var(--line);border-radius:999px;
+        padding:5px 12px;font-size:12.5px;color:var(--mut)}
+  .pill b{color:var(--fg)}
+  .install{background:#0a0e14;border:1px solid var(--line);border-radius:10px;
+           padding:14px 16px;margin:22px auto;max-width:680px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+           font-size:13.5px;color:#cdd9e5;overflow:auto}
+  .install .c{color:var(--ok)}
+  h2{font-size:15px;text-transform:uppercase;letter-spacing:1.5px;color:var(--accent2);
+     margin:34px 0 14px;border-bottom:1px solid var(--line);padding-bottom:8px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px}
+  .card h3{margin:0 0 6px;font-size:15px}
+  .card p{margin:0;color:var(--mut);font-size:13.5px}
+  .feat{columns:2;column-gap:28px;font-size:13.5px;color:var(--mut)}
+  .feat div{break-inside:avoid;margin-bottom:7px}
+  .feat b{color:var(--fg)}
+  .foot{text-align:center;color:var(--mut);font-size:12.5px;margin-top:38px;
+        border-top:1px solid var(--line);padding-top:16px}
+  a{color:var(--accent);text-decoration:none}
+  @media print{ body{background:#fff;color:#111} .page{padding:0}
+    .card,.install,.pill{border-color:#ddd;background:#fafafa} .sub,.card p,.feat{color:#444}
+    h2{color:#5b3fb0} .logo .d{color:#3b5bdb} a{color:#3b5bdb} }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="hero">
+    <div class="logo"><span class="d">◆</span> AEGIS</div>
+    <div class="tag">The terminal AI agent you actually own.</div>
+    <div class="sub">Any model · any channel · runs on your machine · learns as it goes —
+      with a core small enough to read in an afternoon (~11k lines).</div>
+    <div class="pills">
+      <span class="pill"><b>29</b> providers</span>
+      <span class="pill"><b>33</b> tools</span>
+      <span class="pill"><b>9</b> channels</span>
+      <span class="pill">API key <b>+</b> OAuth</span>
+      <span class="pill"><b>MIT</b> · self-hosted</span>
+    </div>
+  </div>
+
+  <div class="install">
+    <span class="c">$</span> curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash<br>
+    <span class="c">$</span> aegis            <span style="color:#6e7681"># start chatting · or `aegis ui` for the browser dashboard</span>
+  </div>
+
+  <h2>Why AEGIS</h2>
+  <div class="grid">
+    <div class="card"><h3>🪶 Tiny, auditable core</h3><p>Full-platform capability in ~11k lines across 81 modules — small enough to read and trust end to end. None of the sprawl.</p></div>
+    <div class="card"><h3>🔌 Truly model-agnostic</h3><p>29 provider presets — Claude, GPT, Gemini, Llama, DeepSeek, Qwen, Grok, local Ollama — behind one interface, with API-key and OAuth, fallback chains, and per-prompt routing.</p></div>
+    <div class="card"><h3>🧠 It actually learns</h3><p>A real closed loop: reviews finished sessions, extracts memory + skills (secret-redacted), promotes them on your approval. Optional background review + cross-session recall.</p></div>
+    <div class="card"><h3>🛡️ Safe by default</h3><p>Permission cascade with a hardline blocklist (refuses <code>rm -rf /</code> even in yolo), pre-exec scanning, fail-closed sandboxes, and prompt-injection-aware tool results.</p></div>
+    <div class="card"><h3>📡 Everywhere you are</h3><p>One agent serving CLI, Telegram, Discord, Slack, Signal, Matrix, Email, webhooks, and ntfy — with voice transcription, native file attachments, and a durable delivery queue.</p></div>
+    <div class="card"><h3>🖥️ Do everything in the browser</h3><p>A rich dashboard: live activity feed, chat, a kanban board, scheduled tasks, config, sessions, memory, skills — no terminal required.</p></div>
+  </div>
+
+  <h2>Batteries included</h2>
+  <div class="feat">
+    <div><b>Tools</b> — files, shell, web, browser automation, code exec, LSP, GitHub, image gen, voice, OSV vulnerability audit.</div>
+    <div><b>MCP</b> — connect external tool servers <i>and</i> expose your own.</div>
+    <div><b>Gateway</b> — proactive messaging, per-channel formatting, mid-run "stop", in-place status.</div>
+    <div><b>Scheduling</b> — recurring + one-shot cron ("remind me at 5pm") delivered to any channel.</div>
+    <div><b>OpenAI-compatible API</b> — <code>aegis serve</code> exposes your agent at <code>/v1/chat/completions</code>.</div>
+    <div><b>Editor integration</b> — ACP with permission prompts and filesystem delegation.</div>
+    <div><b>Trajectory export</b> — jsonl · openai-finetune · sharegpt.</div>
+    <div><b>Cost analytics</b> — cache-aware spend, per model.</div>
+  </div>
+
+  <div class="foot">
+    MIT · self-hosted · your keys, your data, your machine ·
+    <a href="https://github.com/Alien0013/aegis">github.com/Alien0013/aegis</a>
+  </div>
+
+</div>
+</body>
+</html>
