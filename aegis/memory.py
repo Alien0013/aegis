@@ -41,29 +41,35 @@ class MemoryStore:
         atomic_write(self._path(target), MEMORY_DELIM.join(entries) + "\n" if entries else "")
 
     def add(self, target: str, content: str) -> str:
+        from ._locks import STORE_LOCK
         content = content.strip()
-        entries = self.entries(target)
-        if content in entries:
-            return "already remembered"
-        entries.append(content)
-        self._write_entries(target, entries)
+        with STORE_LOCK:                       # serialize read-modify-write (no lost updates)
+            entries = self.entries(target)
+            if content in entries:
+                return "already remembered"
+            entries.append(content)
+            self._write_entries(target, entries)
         return f"remembered in {_FILES[target]}"
 
     def replace(self, target: str, match: str, content: str) -> str:
-        entries = self.entries(target)
-        for i, e in enumerate(entries):
-            if match in e:
-                entries[i] = content.strip()
-                self._write_entries(target, entries)
-                return f"updated entry in {_FILES[target]}"
+        from ._locks import STORE_LOCK
+        with STORE_LOCK:
+            entries = self.entries(target)
+            for i, e in enumerate(entries):
+                if match in e:
+                    entries[i] = content.strip()
+                    self._write_entries(target, entries)
+                    return f"updated entry in {_FILES[target]}"
         return f"no entry matching '{match}'"
 
     def remove(self, target: str, match: str) -> str:
-        entries = self.entries(target)
-        kept = [e for e in entries if match not in e]
-        if len(kept) == len(entries):
-            return f"no entry matching '{match}'"
-        self._write_entries(target, kept)
+        from ._locks import STORE_LOCK
+        with STORE_LOCK:
+            entries = self.entries(target)
+            kept = [e for e in entries if match not in e]
+            if len(kept) == len(entries):
+                return f"no entry matching '{match}'"
+            self._write_entries(target, kept)
         return f"removed {len(entries) - len(kept)} entry(ies) from {_FILES[target]}"
 
 

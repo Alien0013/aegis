@@ -53,11 +53,13 @@ def _save(data: dict[str, dict]) -> None:
 
 def record(name: str, origin: str) -> None:
     """origin: 'agent' (curatable) or 'user' (protected)."""
-    data = _load()
-    entry = data.setdefault(name, {})
-    entry.setdefault("at", now_iso())
-    entry["origin"] = origin
-    _save(data)
+    from ._locks import STORE_LOCK
+    with STORE_LOCK:                       # serialize read-modify-write on provenance.json
+        data = _load()
+        entry = data.setdefault(name, {})
+        entry.setdefault("at", now_iso())
+        entry["origin"] = origin
+        _save(data)
 
 
 def is_agent_created(name: str) -> bool:
@@ -65,9 +67,11 @@ def is_agent_created(name: str) -> bool:
 
 
 def pin(name: str, pinned: bool = True) -> None:
-    data = _load()
-    data.setdefault(name, {"origin": "user", "at": now_iso()})["pinned"] = pinned
-    _save(data)
+    from ._locks import STORE_LOCK
+    with STORE_LOCK:
+        data = _load()
+        data.setdefault(name, {"origin": "user", "at": now_iso()})["pinned"] = pinned
+        _save(data)
 
 
 def is_pinned(name: str) -> bool:

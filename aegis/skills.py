@@ -175,12 +175,14 @@ class SkillsLoader:
 
     def record_use(self, name: str) -> None:
         import json
+        from ._locks import STORE_LOCK
         from .util import atomic_write, now_iso
-        data = self.usage()
-        entry = data.setdefault(name, {"count": 0, "last_used": ""})
-        entry["count"] += 1
-        entry["last_used"] = now_iso()
-        atomic_write(self._usage_path(), json.dumps(data, indent=2))
+        with STORE_LOCK:                       # serialize read-modify-write on usage.json
+            data = self.usage()
+            entry = data.setdefault(name, {"count": 0, "last_used": ""})
+            entry["count"] += 1
+            entry["last_used"] = now_iso()
+            atomic_write(self._usage_path(), json.dumps(data, indent=2))
 
     def improve(self, name: str, note: str) -> Path | None:
         """Append a learned note to a skill's body (closing the create→use→improve loop)."""

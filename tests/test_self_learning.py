@@ -166,6 +166,25 @@ def test_compaction_splits_into_child_session(tmp_path):
     assert a.session.id in {c["id"] for c in store.children(parent_id)}
 
 
+def test_store_lock_prevents_lost_updates():
+    """Concurrent writers to the shared memory store must not clobber each other (the
+    background-review thread + the foreground agent share it)."""
+    import threading
+    from aegis.memory import MemoryStore
+    m = MemoryStore()
+
+    def writer(start):
+        for i in range(start, start + 40):
+            m.add("memory", f"fact-{i}")
+
+    threads = [threading.Thread(target=writer, args=(b,)) for b in (0, 1000, 2000, 3000)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(m.entries("memory")) == 160          # all 4x40 survived, none lost
+
+
 def test_lineage_title_numbering():
     from aegis.agent.loop import _next_in_lineage
     assert _next_in_lineage("Task") == "Task (2)"

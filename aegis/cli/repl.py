@@ -122,14 +122,25 @@ class Renderer:
             detail = args.get("command") or args.get("path") or args.get("url") or args.get("query") or ""
             _out(f"  ⚙ {e['name']}({str(detail)[:80]})", style="cyan")
         elif t == "tool_result":
-            style = "red" if e.get("is_error") else "green"
-            _out(f"    ↳ {e['summary']}", style=style)
+            if not e.get("is_error") and e.get("name") == "memory":
+                _out(f"    💾 remembered: {e['summary']}", style="magenta")
+            elif not e.get("is_error") and e.get("name") == "skill":
+                _out(f"    📝 skill: {e['summary']}", style="magenta")
+            else:
+                style = "red" if e.get("is_error") else "green"
+                _out(f"    ↳ {e['summary']}", style=style)
         elif t == "compacting":
             _out("  … compacting context …", style="yellow")
         elif t == "budget_exhausted":
             _out("  … step limit reached; summarizing …", style="yellow")
         elif t == "skill_nudge":
             _out("  💡 tip: save this workflow as a skill (`skill` create) so you can reuse it.", style="magenta")
+        elif t == "review_started":
+            _out(f"  🧠 reflecting on this session ({e.get('kind', '')})…", style="bright_black")
+        elif t == "review_done":
+            acts = e.get("actions") or []
+            if acts:
+                _out("  🧠 learned & saved: " + "; ".join(acts), style="magenta")
         elif t == "error":
             _out(f"  ✖ {e['message']}", style="red")
         elif t == "final":

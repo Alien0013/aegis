@@ -108,10 +108,12 @@ def maybe_review(agent, tools_this_turn: int) -> bool:
     kind = "combined" if (review_memory and review_skill) else ("memory" if review_memory else "skill")
     auto_apply = bool(cfg.get("learn.auto_apply", False))
 
+    on_ev = getattr(agent.tool_context, "emit", None)   # surface what it saves to the user
+
     def _run():
         try:
             if auto_apply:
-                run_review(agent, kind)            # writes directly
+                run_review(agent, kind, on_event=on_ev)   # writes directly + reports back
             else:
                 _propose_only(agent, kind)         # safer default: queue candidates
         except Exception:  # noqa: BLE001
