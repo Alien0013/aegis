@@ -45,7 +45,7 @@ h2{margin:.2em 0 .6em;font-size:16px}pre{white-space:pre-wrap;word-wrap:break-wo
 <div class=wrap><nav id=nav></nav><main id=view></main></div>
 <script>
 const V=document.getElementById('view'),NAV=document.getElementById('nav');let sid=null,_es=null;
-const TABS=['Chat','Live','Kanban','Cron','Models','Analytics','Keys','Pairing','Sessions','Memory','Skills','Tools','Logs','System','Config','Status'];
+const TABS=['Chat','Live','Kanban','Cron','Models','Analytics','Keys','Pairing','MCP','Webhooks','Sessions','Memory','Skills','Tools','Logs','System','Config','Status'];
 const qs=new URLSearchParams(location.search),tok=qs.get('token')||localStorage.aegisToken||'';if(tok)localStorage.aegisToken=tok;
 function withTok(p){return '/api/'+p+(tok?(p.includes('?')?'&':'?')+'token='+encodeURIComponent(tok):'')}
 async function api(p){const r=await fetch(withTok(p));return r.json()}
@@ -54,7 +54,15 @@ function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':
 TABS.forEach(t=>{const b=document.createElement('button');b.textContent=t;b.onclick=()=>show(t,b);NAV.appendChild(b)});
 async function boot(){const s=await api('status');document.getElementById('sub').textContent='v'+s.version+' \\u00b7 '+s.provider+'/'+s.model;
 document.getElementById('stat').textContent=s.sessions+' sessions \\u00b7 '+s.skills+' skills \\u00b7 '+s.tools+' tools';show('Chat',NAV.children[0])}
-function show(t,btn){if(_es){_es.close();_es=null}[...NAV.children].forEach(b=>b.classList.toggle('on',b===btn));({Chat:chat,Live:live,Kanban:kanban,Cron:cron,Models:models,Analytics:analytics,Keys:keys,Pairing:pairing,Sessions:sessions,Memory:memory,Skills:skills,Tools:tools,Logs:logs,System:system,Config:cfg,Status:status}[t])()}
+function show(t,btn){if(_es){_es.close();_es=null}[...NAV.children].forEach(b=>b.classList.toggle('on',b===btn));({Chat:chat,Live:live,Kanban:kanban,Cron:cron,Models:models,Analytics:analytics,Keys:keys,Pairing:pairing,MCP:mcp,Webhooks:webhooks,Sessions:sessions,Memory:memory,Skills:skills,Tools:tools,Logs:logs,System:system,Config:cfg,Status:status}[t])()}
+async function mcp(){const d=await api('mcp');
+V.innerHTML='<h2>MCP servers</h2><div class=bar><input id=mn placeholder="name" style="flex:0 0 160px"><input id=mc placeholder="command (e.g. npx -y @modelcontextprotocol/server-filesystem /path)"><button class=send id=madd>Add</button></div>'+(d.length?d.map(x=>`<div class=row><span><b>${esc(x.name)}</b> \\u2014 ${esc(x.command)} ${esc((x.args||[]).join(' '))}</span><a href=# data-r="${esc(x.name)}">remove</a></div>`).join(''):'<p class=mut>no servers</p>');
+V.querySelectorAll('a[data-r]').forEach(a=>a.onclick=async e=>{e.preventDefault();await post('mcp',{action:'remove',name:a.dataset.r});mcp()});
+document.getElementById('madd').onclick=async()=>{const n=document.getElementById('mn').value.trim(),c=document.getElementById('mc').value.trim();if(!n||!c)return;await post('mcp',{action:'add',name:n,command:c});mcp()}}
+async function webhooks(){const d=await api('webhooks');
+V.innerHTML='<h2>Webhooks</h2><div class=bar><input id=wn placeholder="name" style="flex:0 0 160px"><input id=wp placeholder="prompt to run on trigger"><button class=send id=wadd>Add</button></div>'+(d.length?d.map(x=>`<div class=row><span><b>${esc(x.name)}</b> \\u2014 ${esc(x.prompt)}</span><a href=# data-r="${esc(x.name)}">remove</a></div>`).join(''):'<p class=mut>no webhooks</p>');
+V.querySelectorAll('a[data-r]').forEach(a=>a.onclick=async e=>{e.preventDefault();await post('webhooks',{action:'remove',name:a.dataset.r});webhooks()});
+document.getElementById('wadd').onclick=async()=>{const n=document.getElementById('wn').value.trim(),p=document.getElementById('wp').value.trim();if(!n||!p)return;await post('webhooks',{action:'add',name:n,prompt:p});webhooks()}}
 async function logs(){const d=await api('logs');
 V.innerHTML='<h2>Logs</h2><p class=mut>'+esc(d.path)+'</p><pre style="max-height:70vh;overflow:auto;font-size:12px">'+esc((d.lines||[]).join('\\n')||'(empty)')+'</pre>'}
 async function system(){const s=await api('system');
@@ -263,6 +271,13 @@ def make_handler(config: Config):
             elif path == "/api/pairing":
                 from .gateway.pairing import PairingStore
                 self._json(PairingStore().list())
+            elif path == "/api/mcp":
+                servers = config.get("mcp.servers", {}) or {}
+                self._json([{"name": n, "command": (s or {}).get("command", ""),
+                             "args": (s or {}).get("args", [])} for n, s in servers.items()])
+            elif path == "/api/webhooks":
+                from .webhook import WebhookStore
+                self._json([{"name": w.name, "prompt": w.prompt} for w in WebhookStore().list()])
             elif path == "/api/system":
                 self._json(_system_info())
             elif path == "/api/logs":
@@ -381,6 +396,31 @@ def make_handler(config: Config):
                     from .backup import create_backup
                     return self._json({"ok": True, "path": str(create_backup())})
                 return self._json({"error": "unknown system action"})
+            if ppath == "/api/mcp":
+                servers = dict(config.get("mcp.servers", {}) or {})
+                act = body.get("action")
+                if act == "add" and body.get("name") and body.get("command"):
+                    parts = str(body["command"]).split()
+                    servers[body["name"]] = {"command": parts[0], "args": parts[1:]}
+                    config.data.setdefault("mcp", {})["servers"] = servers
+                    config.save()
+                    return self._json({"ok": True})
+                if act == "remove" and body.get("name") in servers:
+                    servers.pop(body["name"])
+                    config.data.setdefault("mcp", {})["servers"] = servers
+                    config.save()
+                    return self._json({"ok": True})
+                return self._json({"error": "bad mcp request"})
+            if ppath == "/api/webhooks":
+                from .webhook import WebhookStore
+                ws = WebhookStore()
+                act = body.get("action")
+                if act == "add" and body.get("name") and body.get("prompt"):
+                    ws.add(body["name"], body["prompt"])
+                    return self._json({"ok": True})
+                if act == "remove" and body.get("name"):
+                    return self._json({"ok": ws.remove(body["name"])})
+                return self._json({"error": "bad webhook request"})
             store = SessionStore()
             session = store.load(body.get("session_id") or "") or Session.create()
             agent = Agent.create(config, session=session, store=store)

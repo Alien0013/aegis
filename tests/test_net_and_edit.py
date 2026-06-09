@@ -735,3 +735,33 @@ def test_dashboard_system_and_logs(tmp_path, monkeypatch):
         assert bk["ok"] and bk["path"].endswith(".zip") and os.path.exists(bk["path"])
     finally:
         srv.shutdown()
+
+
+# --- dashboard MCP + Webhooks tabs ------------------------------------------
+def test_dashboard_mcp_and_webhooks(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import http.client
+    import json
+    import threading
+    from http.server import ThreadingHTTPServer
+    from aegis.config import Config
+    from aegis.dashboard import make_handler
+    cfg = Config.load()
+    cfg.set("dashboard.token", "")
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(cfg))
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    def req(m, p, b=None):
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        c.request(m, p, json.dumps(b) if b else None, {"content-type": "application/json"} if b else {})
+        return json.loads(c.getresponse().read())
+    try:
+        req("POST", "/api/mcp", {"action": "add", "name": "fs", "command": "npx server-fs /tmp"})
+        assert any(x["name"] == "fs" and x["command"] == "npx" for x in req("GET", "/api/mcp"))
+        assert req("POST", "/api/mcp", {"action": "remove", "name": "fs"})["ok"]
+        req("POST", "/api/webhooks", {"action": "add", "name": "ci", "prompt": "summarize build"})
+        assert any(x["name"] == "ci" for x in req("GET", "/api/webhooks"))
+        assert req("POST", "/api/webhooks", {"action": "remove", "name": "ci"})["ok"]
+    finally:
+        srv.shutdown()
