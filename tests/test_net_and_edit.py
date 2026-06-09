@@ -843,3 +843,41 @@ def test_dashboard_kanban_automation(tmp_path, monkeypatch):
         assert len(b["done"]) == 2 and len(b["ready"]) == 0
     finally:
         srv.shutdown()
+
+
+# --- dashboard Curator + Plugins + Profiles tabs ----------------------------
+def test_dashboard_curator_plugins_profiles(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import http.client
+    import json
+    import threading
+    from http.server import ThreadingHTTPServer
+    import aegis.config as cfg
+    from aegis.config import Config
+    from aegis.dashboard import make_handler
+    pdir = cfg.workspace_dir() / "personalities"
+    pdir.mkdir(parents=True, exist_ok=True)
+    (pdir / "pirate.md").write_text("arr")
+
+    c = Config.load()
+    c.set("dashboard.token", "")
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(c))
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    def req(m, p, b=None):
+        cc = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        cc.request(m, p, json.dumps(b) if b else None, {"content-type": "application/json"} if b else {})
+        return json.loads(cc.getresponse().read())
+    try:
+        cur = req("GET", "/api/curator")
+        assert "stale" in cur and "to_archive" in cur
+        assert "stale" in req("POST", "/api/curator", {})
+        pl = req("GET", "/api/plugins")
+        assert "loaded" in pl and "tools" in pl
+        pr = req("GET", "/api/profiles")
+        assert "pirate" in pr["available"]
+        req("POST", "/api/profiles", {"name": "pirate"})
+        assert req("GET", "/api/profiles")["active"] == "pirate"
+    finally:
+        srv.shutdown()

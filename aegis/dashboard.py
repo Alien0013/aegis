@@ -45,7 +45,7 @@ h2{margin:.2em 0 .6em;font-size:16px}pre{white-space:pre-wrap;word-wrap:break-wo
 <div class=wrap><nav id=nav></nav><main id=view></main></div>
 <script>
 const V=document.getElementById('view'),NAV=document.getElementById('nav');let sid=null,_es=null;
-const TABS=['Chat','Live','Kanban','Cron','Models','Analytics','Keys','Pairing','MCP','Webhooks','Sessions','Memory','Skills','Tools','Logs','System','Config','Status'];
+const TABS=['Chat','Live','Kanban','Cron','Models','Analytics','Keys','Pairing','MCP','Webhooks','Curator','Plugins','Profiles','Sessions','Memory','Skills','Tools','Logs','System','Themes','Config','Status'];
 const qs=new URLSearchParams(location.search),tok=qs.get('token')||localStorage.aegisToken||'';if(tok)localStorage.aegisToken=tok;
 function withTok(p){return '/api/'+p+(tok?(p.includes('?')?'&':'?')+'token='+encodeURIComponent(tok):'')}
 async function api(p){const r=await fetch(withTok(p));return r.json()}
@@ -54,7 +54,22 @@ function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':
 TABS.forEach(t=>{const b=document.createElement('button');b.textContent=t;b.onclick=()=>show(t,b);NAV.appendChild(b)});
 async function boot(){const s=await api('status');document.getElementById('sub').textContent='v'+s.version+' \\u00b7 '+s.provider+'/'+s.model;
 document.getElementById('stat').textContent=s.sessions+' sessions \\u00b7 '+s.skills+' skills \\u00b7 '+s.tools+' tools';show('Chat',NAV.children[0])}
-function show(t,btn){if(_es){_es.close();_es=null}[...NAV.children].forEach(b=>b.classList.toggle('on',b===btn));({Chat:chat,Live:live,Kanban:kanban,Cron:cron,Models:models,Analytics:analytics,Keys:keys,Pairing:pairing,MCP:mcp,Webhooks:webhooks,Sessions:sessions,Memory:memory,Skills:skills,Tools:tools,Logs:logs,System:system,Config:cfg,Status:status}[t])()}
+function show(t,btn){if(_es){_es.close();_es=null}[...NAV.children].forEach(b=>b.classList.toggle('on',b===btn));({Chat:chat,Live:live,Kanban:kanban,Cron:cron,Models:models,Analytics:analytics,Keys:keys,Pairing:pairing,MCP:mcp,Webhooks:webhooks,Curator:curator,Plugins:plugins,Profiles:profiles,Sessions:sessions,Memory:memory,Skills:skills,Tools:tools,Logs:logs,System:system,Themes:themes,Config:cfg,Status:status}[t])()}
+async function curator(){const d=await api('curator');
+const sec=(t,arr)=>'<h3>'+t+' ('+(arr||[]).length+')</h3>'+((arr||[]).map(x=>`<div class=row><span>${esc(''+x)}</span></div>`).join('')||'<p class=mut>none</p>');
+V.innerHTML='<h2>Curator</h2><p class=mut>Lifecycle: active \\u2192 stale (30d) \\u2192 archived (60d). Preview below.</p>'+sec('Would go stale',d.stale)+sec('Would archive',d.to_archive)+'<div class=bar><button class=send id=crun>Apply transitions</button><span id=crr class=mut></span></div>';
+document.getElementById('crun').onclick=async()=>{document.getElementById('crr').textContent='applying\\u2026';const r=await post('curator',{});document.getElementById('crr').textContent='\\u2705 '+((r.stale||[]).length)+' stale, '+((r.archived||[]).length)+' archived';curator()}}
+async function plugins(){const d=await api('plugins');
+V.innerHTML='<h2>Plugins</h2><p class=mut>Drop *.py with a register(api) into ~/.aegis/plugins/ \\u00b7 '+d.tools+' tool(s), '+(d.channels||[]).length+' channel(s).</p>'+((d.loaded||[]).map(f=>`<div class=row><span>${esc(f)}</span><span class=pill>loaded</span></div>`).join('')||'<p class=mut>no plugins</p>')+(d.errors||[]).map(e=>`<div class=row><span>${esc(e.file)}</span><span class=pill style="color:#f85149">${esc(e.error)}</span></div>`).join('')}
+async function profiles(){const d=await api('profiles');
+V.innerHTML='<h2>Personalities</h2><p class=mut>Active overrides SOUL.md. Files live in workspace/personalities/.</p><div class=row><span>Active</span><span><b>'+esc(d.active||'(default SOUL.md)')+'</b> '+(d.active?'<a href=# id=pclr>clear</a>':'')+'</span></div>'+(d.available||[]).map(n=>`<div class=row><span>${esc(n)}</span><a href=# data-p="${esc(n)}">activate</a></div>`).join('')||'<p class=mut>no personality files</p>';
+V.querySelectorAll('a[data-p]').forEach(a=>a.onclick=async e=>{e.preventDefault();await post('profiles',{name:a.dataset.p});profiles()});
+const clr=document.getElementById('pclr');if(clr)clr.onclick=async e=>{e.preventDefault();await post('profiles',{name:''});profiles()}}
+const THEMES={'Aegis Dark':{bg:'#0d0b14',panel:'#16131f',acc:'#a06bff'},'Midnight':{bg:'#0a0a14',panel:'#14142a',acc:'#5b8cff'},'Ember':{bg:'#1a1110',panel:'#2a1a17',acc:'#ff9e64'},'Mono':{bg:'#111111',panel:'#1c1c1c',acc:'#bbbbbb'},'Cyberpunk':{bg:'#0d0221',panel:'#1a0b2e',acc:'#ff2e97'}};
+function themes(){const cur=localStorage.aegisTheme||'Aegis Dark';
+V.innerHTML='<h2>Themes</h2>'+Object.keys(THEMES).map(n=>`<div class=row><span>${n}</span><a href=# data-t="${n}">${n===cur?'\\u2713 active':'apply'}</a></div>`).join('');
+V.querySelectorAll('a[data-t]').forEach(a=>a.onclick=e=>{e.preventDefault();applyTheme(a.dataset.t);localStorage.aegisTheme=a.dataset.t;themes()})}
+function applyTheme(n){const t=THEMES[n]||THEMES['Aegis Dark'];const r=document.documentElement.style;r.setProperty('--bg',t.bg);r.setProperty('--panel',t.panel);r.setProperty('--acc',t.acc)}
 async function mcp(){const d=await api('mcp');
 V.innerHTML='<h2>MCP servers</h2><div class=bar><input id=mn placeholder="name" style="flex:0 0 160px"><input id=mc placeholder="command (e.g. npx -y @modelcontextprotocol/server-filesystem /path)"><button class=send id=madd>Add</button></div>'+(d.length?d.map(x=>`<div class=row><span><b>${esc(x.name)}</b> \\u2014 ${esc(x.command)} ${esc((x.args||[]).join(' '))}</span><a href=# data-r="${esc(x.name)}">remove</a></div>`).join(''):'<p class=mut>no servers</p>');
 V.querySelectorAll('a[data-r]').forEach(a=>a.onclick=async e=>{e.preventDefault();await post('mcp',{action:'remove',name:a.dataset.r});mcp()});
@@ -122,7 +137,7 @@ async function memory(){const m=await api('memory');V.innerHTML='<h2>Memory</h2>
 async function skills(){const s=await api('skills');V.innerHTML='<h2>Skills ('+s.length+')</h2>'+s.map(x=>`<div class=card><b>${esc(x.name)}</b> \\u2014 ${esc(x.description)}</div>`).join('')}
 async function tools(){const s=await api('tools');V.innerHTML='<h2>Tools ('+s.length+')</h2>'+s.map(x=>`<div class=row><span>${esc(x.name)}</span><span class=pill>${(x.groups||[]).join(',')||'safe'}</span></div>`).join('')}
 async function status(){const s=await api('status');V.innerHTML='<h2>Status</h2>'+Object.entries(s).map(([k,v])=>`<div class=row><span class=mut>${k}</span><span>${esc(''+v)}</span></div>`).join('')}
-boot();
+applyTheme(localStorage.aegisTheme||'Aegis Dark');boot();
 </script></body></html>"""
 
 
@@ -166,6 +181,14 @@ def _env_keys() -> list:
                 present.add(line.split("=", 1)[0].strip())
     names = list(dict.fromkeys(_COMMON_KEYS + sorted(present)))
     return [{"key": k, "set": k in present} for k in names]
+
+
+def _profiles(config: Config) -> dict:
+    """Available personality files (workspace/personalities/*.md) + the active one."""
+    from . import config as cfg
+    d = cfg.workspace_dir() / "personalities"
+    names = sorted(p.stem for p in d.glob("*.md")) if d.exists() else []
+    return {"active": config.get("agent.personality") or "", "available": names}
 
 
 def _system_info() -> dict:
@@ -280,6 +303,17 @@ def make_handler(config: Config):
             elif path == "/api/webhooks":
                 from .webhook import WebhookStore
                 self._json([{"name": w.name, "prompt": w.prompt} for w in WebhookStore().list()])
+            elif path == "/api/curator":
+                from .curator import apply_transitions
+                self._json(apply_transitions(dry_run=True))      # preview
+            elif path == "/api/plugins":
+                from .plugins import load_plugins
+                api = load_plugins(quiet=True)
+                self._json({"loaded": [p.name for p in api.files],
+                            "errors": [{"file": f.name, "error": e} for f, e in api.errors],
+                            "tools": len(api.tools), "channels": list(api.channels)})
+            elif path == "/api/profiles":
+                self._json(_profiles(config))
             elif path == "/api/system":
                 self._json(_system_info())
             elif path == "/api/logs":
@@ -408,6 +442,12 @@ def make_handler(config: Config):
                     from .backup import create_backup
                     return self._json({"ok": True, "path": str(create_backup())})
                 return self._json({"error": "unknown system action"})
+            if ppath == "/api/curator":
+                from .curator import apply_transitions
+                return self._json(apply_transitions(dry_run=False))   # apply
+            if ppath == "/api/profiles":
+                config.set("agent.personality", body.get("name") or "")
+                return self._json({"ok": True, "active": config.get("agent.personality")})
             if ppath == "/api/mcp":
                 servers = dict(config.get("mcp.servers", {}) or {})
                 act = body.get("action")
