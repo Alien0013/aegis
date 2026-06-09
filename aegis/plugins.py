@@ -41,6 +41,30 @@ class PluginAPI:
         register_provider(spec)
         self.providers.append(getattr(spec, "name", str(spec)))
 
+    def register_hook(self, event: str, fn) -> None:
+        """Register an in-process Python hook. Events: 'on_session_start' (fn(agent)),
+        'pre_llm_call' (fn(messages, agent) -> messages|None to rewrite the request)."""
+        _HOOKS.setdefault(event, []).append(fn)
+
+
+# Process-global hook registry, populated by plugins' register(api) at load time.
+_HOOKS: dict[str, list] = {}
+
+
+def fire_hook(event: str, *args, **kwargs):
+    """Run every hook for an event. Returns the last non-None result so a rewrite hook can
+    replace the value (e.g. modified messages); else None. Never raises."""
+    result = None
+    for fn in _HOOKS.get(event, []):
+        try:
+            out = fn(*args, **kwargs)
+            if out is not None:
+                result = out
+        except Exception as e:  # noqa: BLE001 - a bad hook must not break the run
+            from ._log import log_exc
+            log_exc(f"plugin hook {event} failed: {e}")
+    return result
+
 
 def load_plugins(*, quiet: bool = False) -> PluginAPI:
     api = PluginAPI()

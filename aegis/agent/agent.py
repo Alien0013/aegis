@@ -195,6 +195,9 @@ class Agent:
     def run(self, user_input: str | Message, on_event: OnEvent | None = None) -> Message:
         self.cancel_event.clear()
         self._compact_stuck = False        # reset the no-progress-compaction guard each turn
+        if not self.session.messages:      # first turn of a session
+            from ..plugins import fire_hook
+            fire_hook("on_session_start", self)
         msg = user_input if isinstance(user_input, Message) else Message.user(user_input)
         self._apply_routing(msg.content)
         self.session.maybe_title_from(msg.content)

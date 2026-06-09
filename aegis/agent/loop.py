@@ -250,6 +250,10 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
         session.messages = governance.normalize(session.messages)
         # Compact BEFORE the model call so an over-full window never reaches the provider.
         session = _maybe_compact(agent, session, schema_tokens, budget, emit)
+        from ..plugins import fire_hook
+        rewritten = fire_hook("pre_llm_call", session.messages, agent)   # in-process Python hook
+        if isinstance(rewritten, list):
+            session.messages = rewritten
 
         def delta_cb(text: str) -> None:
             emit({"type": "assistant_delta", "text": text})

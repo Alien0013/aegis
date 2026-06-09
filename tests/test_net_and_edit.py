@@ -593,3 +593,19 @@ def test_dashboard_config_redaction_and_cron(tmp_path, monkeypatch):
         assert req("GET", "/api/config")["model.default"] == "gpt-5.5"
     finally:
         srv.shutdown()
+
+
+# --- in-process Python plugin hooks -----------------------------------------
+def test_python_plugin_hooks():
+    from aegis.plugins import PluginAPI, fire_hook, _HOOKS
+    _HOOKS.clear()
+    api = PluginAPI()
+    calls = []
+    api.register_hook("on_session_start", lambda agent: calls.append(agent))
+    api.register_hook("pre_llm_call", lambda msgs, agent: msgs + ["INJECTED"])
+    assert fire_hook("on_session_start", "A") is None and calls == ["A"]   # side-effect hook
+    assert fire_hook("pre_llm_call", ["a"], "A") == ["a", "INJECTED"]       # rewrite hook
+    api.register_hook("pre_llm_call", lambda m, a: (_ for _ in ()).throw(RuntimeError("x")))
+    assert fire_hook("pre_llm_call", ["x"], "A") == ["x", "INJECTED"]       # bad hook swallowed
+    assert fire_hook("unknown_event") is None
+    _HOOKS.clear()
