@@ -58,6 +58,7 @@ class ToolContext:
     skills: Any = None          # SkillsLoader
     session: Any = None         # Session
     agent: Any = None           # Agent (for subagent spawn)
+    fs: Any = None              # optional filesystem delegate (ACP: read/write via the editor)
     # callback(prompt:str)->bool used when a permission decision needs the user
     approver: Callable[[str], bool] | None = None
     # callback(question:str, choices:list[str])->str for the clarify tool (CLI prompts inline,

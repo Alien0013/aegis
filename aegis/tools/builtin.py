@@ -40,12 +40,15 @@ class ReadFileTool(Tool):
 
     def run(self, args, ctx) -> ToolResult:
         path = _resolve(ctx, args["path"])
-        if not path.exists():
-            return ToolResult.error(f"No such file: {path}")
-        if path.is_dir():
-            return ToolResult.error(f"{path} is a directory (use list_dir).")
+        fs = getattr(ctx, "fs", None)
+        if fs is None:                       # real filesystem (default)
+            if not path.exists():
+                return ToolResult.error(f"No such file: {path}")
+            if path.is_dir():
+                return ToolResult.error(f"{path} is a directory (use list_dir).")
         try:
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            text = fs.read_text(str(path)) if fs else path.read_text(encoding="utf-8", errors="replace")
+            lines = text.splitlines()
         except Exception as e:  # noqa: BLE001
             return ToolResult.error(f"Could not read {path}: {e}")
         offset = max(1, int(args.get("offset", 1)))
@@ -70,9 +73,13 @@ class WriteFileTool(Tool):
 
     def run(self, args, ctx) -> ToolResult:
         path = _resolve(ctx, args["path"])
-        path.parent.mkdir(parents=True, exist_ok=True)
+        fs = getattr(ctx, "fs", None)
         try:
-            path.write_text(args["content"], encoding="utf-8")
+            if fs:                           # delegate to the editor (ACP fs/write_text_file)
+                fs.write_text(str(path), args["content"])
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(args["content"], encoding="utf-8")
         except Exception as e:  # noqa: BLE001
             return ToolResult.error(f"Could not write {path}: {e}")
         n = args["content"].count("\n") + 1

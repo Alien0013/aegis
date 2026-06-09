@@ -472,3 +472,52 @@ def test_dashboard_sse_streams_events(tmp_path, monkeypatch):
     t.join(timeout=3)
     srv.shutdown()
     assert got["line"].startswith("data: ") and "hello dash" in got["line"]
+
+
+# --- ACP fs/ delegation (read/write through the editor) ---------------------
+def test_fs_delegate_read_write(tmp_path):
+    from aegis.tools.builtin import ReadFileTool, WriteFileTool
+    from aegis.tools.base import ToolContext
+    # default: real disk
+    p = tmp_path / "f.txt"
+    WriteFileTool().run({"path": str(p), "content": "hi\nthere"}, ToolContext(cwd=tmp_path))
+    assert p.read_text() == "hi\nthere"
+    assert "there" in ReadFileTool().run({"path": str(p)}, ToolContext(cwd=tmp_path)).content
+
+    # delegate: read/write routed through it, real disk untouched
+    class FakeFs:
+        def __init__(self): self.store = {"/buf.py": "from buffer"}
+        def read_text(self, path): return self.store[path]
+        def write_text(self, path, content): self.store[path] = content
+    fs = FakeFs()
+    ctx = ToolContext(cwd=tmp_path, fs=fs)
+    assert "from buffer" in ReadFileTool().run({"path": "/buf.py"}, ctx).content
+    WriteFileTool().run({"path": "/buf.py", "content": "edited"}, ctx)
+    assert fs.store["/buf.py"] == "edited"
+
+
+def test_acp_fs_rpc_roundtrip():
+    import io
+    import json
+    import threading
+    from aegis.acp import AcpServer, _AcpFs
+    srv = AcpServer.__new__(AcpServer)
+    srv._req_id = 0
+    srv._write_lock = threading.Lock()
+    srv.stdout = io.StringIO()
+    srv.stdin = io.StringIO(json.dumps(
+        {"jsonrpc": "2.0", "id": "req-1", "result": {"content": "BUFFER"}}) + "\n")
+    assert _AcpFs(srv, "s1").read_text("/x.py") == "BUFFER"
+    req = json.loads(srv.stdout.getvalue().strip())
+    assert req["method"] == "fs/read_text_file" and req["params"]["path"] == "/x.py"
+
+
+def test_acp_enables_fs_only_when_client_supports_it():
+    from aegis.acp import AcpServer
+    import threading
+    srv = AcpServer.__new__(AcpServer)
+    srv._write_lock = threading.Lock()
+    srv._initialize({"clientCapabilities": {"fs": {"readTextFile": True, "writeTextFile": True}}})
+    assert srv._client_fs is True
+    srv._initialize({"clientCapabilities": {}})       # no fs caps -> stays on real disk
+    assert srv._client_fs is False

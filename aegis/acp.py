@@ -52,6 +52,23 @@ class _SessionEntry:
 
 
 @dataclass
+class _AcpFs:
+    """Filesystem delegate that reads/writes through the ACP client (editor) so unsaved buffers
+    are honored, instead of touching local disk. Used only when the client advertises fs caps."""
+
+    def __init__(self, server: "AcpServer", sid: str):
+        self._server = server
+        self._sid = sid
+
+    def read_text(self, path: str) -> str:
+        r = self._server._rpc_call("fs/read_text_file", {"sessionId": self._sid, "path": path})
+        return r.get("content", "")
+
+    def write_text(self, path: str, content: str) -> None:
+        self._server._rpc_call("fs/write_text_file",
+                               {"sessionId": self._sid, "path": path, "content": content})
+
+
 class AcpServer:
     """JSON-RPC 2.0 over stdio implementing the Agent Client Protocol."""
 
@@ -63,6 +80,7 @@ class AcpServer:
     sessions: dict[str, _SessionEntry] = field(default_factory=dict)
     _write_lock: threading.Lock = field(default_factory=threading.Lock)
     _req_id: int = 0
+    _client_fs: bool = False    # client advertised fs/read_text_file + fs/write_text_file
 
     # -- low-level framing --------------------------------------------------
     def _write(self, obj: dict[str, Any]) -> None:
@@ -126,6 +144,8 @@ class AcpServer:
             version = min(int(client_version), PROTOCOL_VERSION)
         except (TypeError, ValueError):
             version = PROTOCOL_VERSION
+        fs_caps = ((params.get("clientCapabilities") or {}).get("fs") or {})
+        self._client_fs = bool(fs_caps.get("readTextFile") and fs_caps.get("writeTextFile"))
         return {
             "protocolVersion": version,
             "agentCapabilities": {
@@ -162,6 +182,8 @@ class AcpServer:
             store=self.store,
             approver=lambda desc: self._request_permission(sid, desc),
         )
+        if self._client_fs:                      # route file reads/writes through the editor
+            agent.tool_context.fs = _AcpFs(self, sid)
 
         def on_event(event: dict[str, Any]) -> None:
             etype = event.get("type")
@@ -216,6 +238,24 @@ class AcpServer:
                 },
             },
         )
+
+    def _rpc_call(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        """Send a request to the client and block for its response (reading stdin, which is
+        idle while the serve loop is suspended inside agent.run()). Returns the result dict."""
+        self._req_id += 1
+        rid = f"req-{self._req_id}"
+        self._write({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
+        for raw in self.stdin:
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if msg.get("id") == rid:
+                return msg.get("result") or {}
+        return {}
 
     def _request_permission(self, sid: str, description: str) -> bool:
         """Ask the editor to approve a tool action (ACP session/request_permission). Blocks
