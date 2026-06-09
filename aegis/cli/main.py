@@ -586,6 +586,12 @@ def cmd_sessions(args, config: Config) -> int:
 # gateway
 # --------------------------------------------------------------------------- #
 def cmd_gateway(args, config: Config) -> int:
+    action = getattr(args, "action", None)
+    if action in ("install", "uninstall", "status"):
+        from ..gateway.service import cmd_gateway_service
+        chans = args.channels or ",".join(config.get("gateway.channels", []) or []) or "telegram"
+        return cmd_gateway_service(action, chans)
+
     from ..gateway.channels import build_adapter
     from ..gateway.runner import GatewayRunner
 
@@ -703,6 +709,8 @@ def cmd_update(args, config: Config) -> int:
         subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--upgrade",
                         f"git+https://github.com/Alien0013/aegis.git@{branch}"])
     _print("✓ updated. Run `aegis doctor` to confirm.")
+    from ..gateway.service import restart_after_update
+    restart_after_update()        # bounce the gateway service if one is installed
     return 0
 
 
@@ -1125,6 +1133,8 @@ def build_parser() -> argparse.ArgumentParser:
     se.set_defaults(func=cmd_sessions)
 
     g = sub.add_parser("gateway", help="run the multi-channel gateway")
+    g.add_argument("action", nargs="?", choices=["run", "install", "uninstall", "status"],
+                   default="run", help="run, or install/uninstall/status as an OS service")
     g.add_argument("--channels", help="comma list: cli,telegram (default cli)")
     g.set_defaults(func=cmd_gateway)
 

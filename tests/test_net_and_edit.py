@@ -881,3 +881,15 @@ def test_dashboard_curator_plugins_profiles(tmp_path, monkeypatch):
         assert req("GET", "/api/profiles")["active"] == "pirate"
     finally:
         srv.shutdown()
+
+
+# --- gateway OS-service install (systemd/launchd) ---------------------------
+def test_gateway_service_module(monkeypatch):
+    from aegis.gateway import service
+    # bad action -> usage + nonzero
+    assert service.cmd_gateway_service("bogus") == 1
+    # restart with no installed unit is a safe no-op (False)
+    monkeypatch.setattr(service, "_systemd_path", lambda: __import__("pathlib").Path("/nonexistent/x.service"))
+    monkeypatch.setattr(service, "_launchd_path", lambda: __import__("pathlib").Path("/nonexistent/x.plist"))
+    assert service.restart() is False
+    assert isinstance(service.status(), str)
