@@ -71,11 +71,11 @@ def context_window(model: str | None, config=None) -> int | None:
     return None
 
 
-def refresh() -> int:
+def refresh(timeout: float = 20.0) -> int:
     """Pull the models.dev database into the disk cache. Returns the number of models cached."""
     global _cache
     import httpx
-    r = httpx.get("https://models.dev/api.json", timeout=20)
+    r = httpx.get("https://models.dev/api.json", timeout=timeout)
     r.raise_for_status()
     data = r.json()
     out: dict[str, dict] = {}

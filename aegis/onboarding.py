@@ -173,6 +173,8 @@ def run_onboarding(
 
     if not _configure_model(config, state, advanced, probe, input_func, secret_func, out):
         return 1
+    if input_func is input:          # real interactive setup only — never hit the network in tests
+        _refresh_model_metadata(out)
     _configure_web(config, state, advanced, input_func, secret_func, out)
     _configure_memory(config, state, advanced, input_func, out)
     _configure_agent_surface(config, state, advanced, input_func, out)
@@ -866,6 +868,17 @@ def _recommended_toolsets() -> list[str]:
     toolsets.append("lsp")
     toolsets.append("mcp")
     return toolsets
+
+
+def _refresh_model_metadata(out: Output) -> None:
+    """Best-effort: pull live model context windows from models.dev once at setup so the
+    compaction/auto-split math is right for any model. Silent + non-fatal if offline."""
+    try:
+        from . import model_meta
+        n = model_meta.refresh(timeout=8.0)
+        out(f"✓ cached context windows for {n} models (models.dev)")
+    except Exception:  # noqa: BLE001
+        pass   # offline / blocked — the bundled snapshot is used instead
 
 
 def _configure_memory(config: Config, state: OnboardingState, advanced: bool,
