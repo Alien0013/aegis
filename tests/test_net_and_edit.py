@@ -348,3 +348,47 @@ def test_telegram_group_context():
         {"text": "deploy", "chat": {"type": "supergroup"}, "from": {"username": "tj"}}) == "[tj]: deploy"
     assert _with_group_context(
         {"text": "yo", "chat": {"type": "group"}, "from": {"first_name": "Sam", "id": 9}}) == "[Sam]: yo"
+
+
+# --- mid-run interruption + per-chat queue (run.py interruption handling) ----
+def test_control_interrupt_detection():
+    from aegis.gateway.base import is_control_interrupt
+    for t in ["stop", "STOP", "/stop", "cancel", "abort!", " halt "]:
+        assert is_control_interrupt(t)
+    for t in ["stop the server", "cancel my subscription", "what is abort()", "hi"]:
+        assert not is_control_interrupt(t)
+
+
+def test_runner_interrupt_sets_cancel(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import threading
+    from aegis.gateway.runner import GatewayRunner
+    from aegis.gateway.base import MessageEvent
+    gr = GatewayRunner.__new__(GatewayRunner)
+    gr.session_mode = "per_channel"
+
+    class FakeAgent:
+        cancel_event = threading.Event()
+    gr._agents = {"telegram:42": FakeAgent()}
+    assert gr.interrupt(MessageEvent(platform="telegram", chat_id="42", text="stop")) is True
+    assert gr._agents["telegram:42"].cancel_event.is_set()
+    assert gr.interrupt(MessageEvent(platform="telegram", chat_id="99", text="stop")) is False
+
+
+def test_telegram_per_chat_queue_orders_turns(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "x")
+    import threading
+    import time
+    from aegis.gateway.channels import TelegramAdapter
+    from aegis.gateway.base import MessageEvent
+    a = TelegramAdapter(token="123:abc")
+    seen = []
+    a._typing = lambda c: None
+    a._send_status = lambda c, t: None
+    a._finish = lambda c, s, r: seen.append(r)
+    a._dispatch = lambda ev: f"reply:{ev.text}"
+    a._queues, a._workers, a._qlock = {}, {}, threading.Lock()
+    for n in ["a", "b", "c"]:
+        a._enqueue(MessageEvent(platform="telegram", chat_id="7", text=n))
+    time.sleep(0.3)
+    assert seen == ["reply:a", "reply:b", "reply:c"]      # single worker, ordered

@@ -42,6 +42,15 @@ class GatewayRunner:
             return f"{ev.platform}:peer:{uid}"
         return f"{ev.platform}:{ev.chat_id}:{uid}"  # per_channel_peer (default)
 
+    def interrupt(self, ev: MessageEvent) -> bool:
+        """Cancel the run in progress for ev's session (sets the agent's cancel_event). True if
+        an active agent was signalled."""
+        agent = self._agents.get(self._key(ev))
+        if agent is not None and not agent.cancel_event.is_set():
+            agent.cancel_event.set()
+            return True
+        return False
+
     def _session(self, key: str) -> Session:
         if key not in self._sessions:
             self._sessions[key] = self.store.load(key) or Session(id=key, title=key)
@@ -174,6 +183,7 @@ class GatewayRunner:
         from .queue import DeliveryQueue
         threads: list[threading.Thread] = []
         for adapter in self.adapters:
+            adapter._interrupt_cb = self.interrupt    # adapters that poll concurrently use this
             t = threading.Thread(target=adapter.start, args=(self.dispatch,), daemon=True)
             t.start()
             threads.append(t)

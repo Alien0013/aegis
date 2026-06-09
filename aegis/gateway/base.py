@@ -58,6 +58,15 @@ class BasePlatformAdapter:
                 self.send(chat_id, f"📎 {path}")
 
 
+_CONTROL_RE = re.compile(r"^\s*/?(stop|cancel|abort|halt)\s*!?\s*$", re.IGNORECASE)
+
+
+def is_control_interrupt(text: str) -> bool:
+    """True for a bare 'stop'/'cancel'/'abort'/'halt' (optionally '/stop') — used to cancel a
+    run in progress rather than start a new turn."""
+    return bool(_CONTROL_RE.match(text or ""))
+
+
 _MEDIA_RE = re.compile(r"^[ \t]*MEDIA:[ \t]*(\S.*?)[ \t]*$", re.MULTILINE)
 
 

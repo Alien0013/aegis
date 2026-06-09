@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 
 import httpx
 
-from .base import BasePlatformAdapter, Dispatch, MessageEvent
+from .base import BasePlatformAdapter, Dispatch, MessageEvent, is_control_interrupt
 
 
 class CLIChannel(BasePlatformAdapter):
@@ -54,6 +55,12 @@ class TelegramAdapter(BasePlatformAdapter):
             return r.json()
 
     def start(self, dispatch: Dispatch) -> None:
+        # Poll on this thread; run each turn on a per-chat worker so the poller keeps reading —
+        # that's what lets a 'stop' message interrupt a run already in progress.
+        self._dispatch = dispatch
+        self._queues: dict[str, list[MessageEvent]] = {}
+        self._workers: dict[str, threading.Thread] = {}
+        self._qlock = threading.Lock()
         offset = 0
         while True:
             try:
@@ -73,18 +80,42 @@ class TelegramAdapter(BasePlatformAdapter):
                 if self.allowed and not (names & self.allowed):
                     self.send(str(msg["chat"]["id"]), "⛔ not authorized.")
                     continue
-                text = _with_group_context(msg)   # prefix sender in group chats; DMs untouched
                 ev = MessageEvent(
                     platform="telegram",
                     chat_id=str(msg["chat"]["id"]),
-                    text=text,
+                    text=_with_group_context(msg),   # prefix sender in groups; DMs untouched
                     user_id=user_id,
                     user_name=username,
                 )
-                self._typing(ev.chat_id)        # instant feedback…
-                status_id = self._send_status(ev.chat_id, "🤔 working…")   # …then a live status bubble
-                reply = dispatch(ev)
-                self._finish(ev.chat_id, status_id, reply)
+                # A bare 'stop' while this chat has a turn running cancels it (no new turn).
+                if is_control_interrupt(msg["text"]):
+                    cb = getattr(self, "_interrupt_cb", None)
+                    w = self._workers.get(ev.chat_id)
+                    if cb and w and w.is_alive() and cb(ev):
+                        self.send(ev.chat_id, "🛑 stopped.")
+                        continue
+                self._enqueue(ev)
+
+    def _enqueue(self, ev: MessageEvent) -> None:
+        with self._qlock:
+            self._queues.setdefault(ev.chat_id, []).append(ev)
+            w = self._workers.get(ev.chat_id)
+            if not (w and w.is_alive()):     # one worker per chat -> turns stay ordered
+                w = threading.Thread(target=self._drain, args=(ev.chat_id,), daemon=True)
+                self._workers[ev.chat_id] = w
+                w.start()
+
+    def _drain(self, chat_id: str) -> None:
+        while True:
+            with self._qlock:
+                q = self._queues.get(chat_id) or []
+                ev = q.pop(0) if q else None
+                if ev is None:
+                    return
+            self._typing(chat_id)
+            status_id = self._send_status(chat_id, "🤔 working…")
+            reply = self._dispatch(ev)
+            self._finish(chat_id, status_id, reply)
 
     def _typing(self, chat_id: str) -> None:
         try:
