@@ -609,3 +609,39 @@ def test_python_plugin_hooks():
     assert fire_hook("pre_llm_call", ["x"], "A") == ["x", "INJECTED"]       # bad hook swallowed
     assert fire_hook("unknown_event") is None
     _HOOKS.clear()
+
+
+# --- dashboard Models + Analytics tabs (richer control panel) ---------------
+def test_dashboard_models_and_analytics(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import http.client
+    import json
+    import threading
+    from http.server import ThreadingHTTPServer
+    from aegis.config import Config
+    from aegis.dashboard import make_handler
+    from aegis import usage_log
+    from aegis.types import Usage
+    usage_log.log("anthropic", "claude-opus-4-8", Usage(2000, 1000, 500))
+
+    cfg = Config.load()
+    cfg.set("dashboard.token", "")
+    cfg.set("model.provider", "openai")
+    cfg.set("model.default", "gpt-5.5")
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(cfg))
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    def req(m, p, b=None):
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        c.request(m, p, json.dumps(b) if b else None, {"content-type": "application/json"} if b else {})
+        return json.loads(c.getresponse().read())
+    try:
+        md = req("GET", "/api/models")
+        assert md["provider"] == "openai" and "openai" in md["providers"] and md["presets"].get("openai")
+        req("POST", "/api/models", {"provider": "anthropic", "model": "claude-opus-4-8"})
+        assert req("GET", "/api/models")["provider"] == "anthropic"
+        an = req("GET", "/api/analytics?days=30")
+        assert an["calls"] >= 1 and an["total_cost_usd"] > 0 and "claude-opus-4-8" in an["by_model"]
+    finally:
+        srv.shutdown()

@@ -45,7 +45,7 @@ h2{margin:.2em 0 .6em;font-size:16px}pre{white-space:pre-wrap;word-wrap:break-wo
 <div class=wrap><nav id=nav></nav><main id=view></main></div>
 <script>
 const V=document.getElementById('view'),NAV=document.getElementById('nav');let sid=null,_es=null;
-const TABS=['Chat','Live','Kanban','Cron','Sessions','Memory','Skills','Tools','Config','Status'];
+const TABS=['Chat','Live','Kanban','Cron','Models','Analytics','Sessions','Memory','Skills','Tools','Config','Status'];
 const qs=new URLSearchParams(location.search),tok=qs.get('token')||localStorage.aegisToken||'';if(tok)localStorage.aegisToken=tok;
 function withTok(p){return '/api/'+p+(tok?(p.includes('?')?'&':'?')+'token='+encodeURIComponent(tok):'')}
 async function api(p){const r=await fetch(withTok(p));return r.json()}
@@ -54,7 +54,16 @@ function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':
 TABS.forEach(t=>{const b=document.createElement('button');b.textContent=t;b.onclick=()=>show(t,b);NAV.appendChild(b)});
 async function boot(){const s=await api('status');document.getElementById('sub').textContent='v'+s.version+' \\u00b7 '+s.provider+'/'+s.model;
 document.getElementById('stat').textContent=s.sessions+' sessions \\u00b7 '+s.skills+' skills \\u00b7 '+s.tools+' tools';show('Chat',NAV.children[0])}
-function show(t,btn){if(_es){_es.close();_es=null}[...NAV.children].forEach(b=>b.classList.toggle('on',b===btn));({Chat:chat,Live:live,Kanban:kanban,Cron:cron,Sessions:sessions,Memory:memory,Skills:skills,Tools:tools,Config:cfg,Status:status}[t])()}
+function show(t,btn){if(_es){_es.close();_es=null}[...NAV.children].forEach(b=>b.classList.toggle('on',b===btn));({Chat:chat,Live:live,Kanban:kanban,Cron:cron,Models:models,Analytics:analytics,Sessions:sessions,Memory:memory,Skills:skills,Tools:tools,Config:cfg,Status:status}[t])()}
+async function models(){const d=await api('models');
+const opts=(d.presets[d.provider]||[]).map(m=>`<option ${m===d.model?'selected':''}>${esc(m)}</option>`).join('');
+V.innerHTML='<h2>Model</h2><div class=card>Active: <b>'+esc(d.provider)+'</b> / <b>'+esc(d.model)+'</b></div><div class=bar><select id=mprov style="flex:0 0 200px">'+d.providers.map(p=>`<option ${p===d.provider?'selected':''}>${esc(p)}</option>`).join('')+'</select><select id=mmodel>'+opts+'</select><button class=send id=mset>Set</button></div><p class=mut>Switch the provider to refresh its model list.</p>';
+const psel=document.getElementById('mprov'),msel=document.getElementById('mmodel');
+psel.onchange=()=>{const ms=d.presets[psel.value]||[];msel.innerHTML=ms.map(m=>`<option>${esc(m)}</option>`).join('')||'<option>(type in Config)</option>'};
+document.getElementById('mset').onclick=async()=>{await post('models',{provider:psel.value,model:msel.value});models()}}
+async function analytics(){const r=await api('analytics?days=30');
+const rows=Object.entries(r.by_model||{}).map(([m,v])=>`<div class=row><span>${esc(m)}</span><span class=pill>${v.calls} calls · $${(v.cost_usd||0).toFixed(4)}</span></div>`).join('');
+V.innerHTML='<h2>Analytics (30 days)</h2><div class=card><b>'+r.calls+'</b> calls · <b>$'+(r.total_cost_usd||0).toFixed(4)+'</b> total · '+(r.cache_read_tokens||0)+' cached tokens</div>'+(rows||'<p class=mut>no usage yet</p>')}
 async function cron(){const j=await api('cron');
 V.innerHTML='<h2>Scheduled tasks</h2><div class=bar><input id=cs placeholder="schedule (e.g. every 2h · at 17:00 · 0 9 * * 1)" style="flex:0 0 240px"><input id=cp placeholder="prompt to run\\u2026"><button class=send id=cadd>Add</button></div>'+(j.length?'':'<p class=mut>no jobs</p>')+j.map(x=>`<div class=row><span>${x.enabled?'\\u25b6':'\\u23f8'} <b>${esc(x.schedule)}</b> \\u2014 ${esc(x.prompt)}${x.one_shot?' <span class=pill>once</span>':''}</span><span><a href=# data-t="${x.id}">toggle</a> \\u00b7 <a href=# data-r="${x.id}">delete</a></span></div>`).join('');
 V.querySelectorAll('a[data-t]').forEach(a=>a.onclick=async e=>{e.preventDefault();const cur=j.find(x=>x.id===a.dataset.t);await post('cron',{action:'toggle',id:a.dataset.t,enabled:!cur.enabled});cron()});
@@ -172,6 +181,18 @@ def make_handler(config: Config):
                             for j in CronStore().list()])
             elif path == "/api/config":
                 self._json(_redacted_config(config))
+            elif path == "/api/models":
+                from .onboarding import MODEL_PRESETS
+                from .providers.registry import list_providers
+                self._json({
+                    "provider": config.get("model.provider"),
+                    "model": config.get("model.default"),
+                    "providers": sorted(list_providers()),
+                    "presets": {p: [m for m, _ in MODEL_PRESETS.get(p, [])] for p in MODEL_PRESETS},
+                })
+            elif path == "/api/analytics":
+                from .usage_log import cost_report
+                self._json(cost_report(int((q.get("days", ["30"])[0]) or 30)))
             elif path == "/api/sessions":
                 self._json(SessionStore().list(100))
             elif path == "/api/session":
@@ -255,6 +276,14 @@ def make_handler(config: Config):
                     config.set(key, val)
                     return self._json({"ok": True})
                 return self._json({"error": "missing key"})
+            if ppath == "/api/models":
+                prov, model = body.get("provider"), body.get("model")
+                if prov:
+                    config.set("model.provider", prov)
+                if model:
+                    config.set("model.default", model)
+                return self._json({"ok": True, "provider": config.get("model.provider"),
+                                   "model": config.get("model.default")})
             store = SessionStore()
             session = store.load(body.get("session_id") or "") or Session.create()
             agent = Agent.create(config, session=session, store=store)
