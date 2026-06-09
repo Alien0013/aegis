@@ -70,7 +70,7 @@ def test_surface_inventory_counts_tools_and_skills():
 
     assert tools.enabled_count >= 20
     assert tools.total_count >= tools.enabled_count
-    assert "browser" in tools.enabled_names
+    assert "bash" in tools.enabled_names      # core tool, no optional dep (browser needs playwright)
     assert skills.bundled_count >= 20
     assert "web-research" in skills.names
 

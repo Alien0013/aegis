@@ -158,8 +158,10 @@ def test_chat_adapters_dont_render_tables():
 # --- gateway secret redaction + aux-model compaction -----------------------
 def test_redact_secrets_covers_telegram_and_keys():
     from aegis.redact import redact_secrets
-    out = redact_secrets("tok 8588602695:AAGH8RDjbO_mJ6_F4l7XDiHKh26TXqNonwg and sk-proj-ABCDEFGHIJ1234567890")
-    assert "8588602695" not in out and "sk-proj" not in out
+    # synthetic token matching the Telegram shape (\d{8,10}:[A-Za-z0-9_-]{35}) — NOT a real key
+    fake = "1234567890:FAKEfakeFAKEfakeFAKEfakeFAKEfake000"
+    out = redact_secrets(f"tok {fake} and sk-proj-ABCDEFGHIJ1234567890")
+    assert "1234567890" not in out and "sk-proj" not in out
     assert out.count("[REDACTED]") == 2
     assert redact_secrets("plain text") == "plain text"
 

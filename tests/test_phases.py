@@ -245,6 +245,7 @@ def test_daemon_status_includes_failed_unit_hint(monkeypatch):
     import aegis.daemon as daemon
 
     monkeypatch.setattr(daemon, "systemd_available", lambda: True)
+    monkeypatch.setattr(daemon.shutil, "which", lambda *_: "/usr/bin/systemctl")  # CI may lack it
 
     def fake_systemctl(*args):
         assert args[0] == "show"
@@ -276,6 +277,7 @@ def test_daemon_status_parses_active_running_unit(monkeypatch):
     import aegis.daemon as daemon
 
     monkeypatch.setattr(daemon, "systemd_available", lambda: True)
+    monkeypatch.setattr(daemon.shutil, "which", lambda *_: "/usr/bin/systemctl")  # CI may lack it
     monkeypatch.setattr(
         daemon,
         "_systemctl",
