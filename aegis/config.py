@@ -185,7 +185,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "background": True,           # forked self-improvement review after substantial turns (on by default)
         "memory_every": 6,            # run a memory review every N turns
         "skill_every_iters": 5,       # run a skill review when a turn used >= N tool iterations
-        "auto_apply": True,           # fork writes memory/skills directly (set False to only queue candidates)
+        "auto_apply": True,           # fork writes reviewed memory directly (False = only queue)
+        "auto_apply_skills": False,   # also auto-apply reviewed SKILLS (full autonomy; off = human-gated)
     },
     "mcp": {
         "enabled": True,

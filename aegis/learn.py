@@ -104,9 +104,10 @@ def list_candidates(status: str = "pending") -> list[dict]:
 def background_tick(config, session) -> bool:
     """Background learning: every N assistant turns, review the session off-thread.
 
-    Off by default. Enable with `learn.background: true` + `learn.background_every: <N>`.
-    Memory candidates can auto-apply (low risk) via `learn.auto_apply`; skills always
-    stay pending for human review. Returns True if a review was kicked off."""
+    Enable with `learn.background: true` + `learn.background_every: <N>`. Memory candidates
+    auto-apply via `learn.auto_apply` (low risk). Skills stay pending for human review by
+    default — set `learn.auto_apply_skills: true` to let them auto-apply too (full autonomy).
+    Returns True if a review was kicked off."""
     every = int(config.get("learn.background_every", 0) or 0)
     if every <= 0 or not config.get("learn.background", False) or session is None:
         return False
@@ -116,14 +117,17 @@ def background_tick(config, session) -> bool:
         return False
     session.meta["_last_bg_review"] = turns
     auto = bool(config.get("learn.auto_apply", False))
+    auto_skills = bool(config.get("learn.auto_apply_skills", False))
 
     def _run():
         try:
             found = review_session(config, session.id)
-            if auto:
-                for c in found:
-                    if c.get("type") == "memory":      # skills need a human gate
-                        apply_candidate(c["id"], config)
+            for c in found:
+                kind = c.get("type")
+                if kind == "memory" and auto:                  # low risk -> auto
+                    apply_candidate(c["id"], config)
+                elif kind == "skill" and auto_skills:          # opt-in full autonomy
+                    apply_candidate(c["id"], config)
         except Exception:  # noqa: BLE001
             from ._log import log_exc
             log_exc("background learn review failed")

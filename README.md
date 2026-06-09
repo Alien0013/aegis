@@ -42,7 +42,7 @@ aegis            # start chatting   ·   aegis ui   # …or a clickable browser 
 |---|---|
 | 🪶 **Tiny, auditable core** | ~11k lines across 81 modules — small enough to read and trust end to end. Full-platform capability, none of the sprawl. |
 | 🔌 **Truly model-agnostic** | **29 provider presets** (Claude, GPT, Gemini, Llama, DeepSeek, Qwen, Grok, local Ollama…) behind one interface, with **API-key *and* OAuth** auth, fallback chains, credential pools, and per-prompt routing. |
-| 🧠 **It actually learns** | A real closed loop: reviews finished sessions, extracts memory + skills (secret-redacted), promotes them on approval. Optional background review + FTS5 cross-session recall. |
+| 🧠 **It actually learns** | **Autonomous memory** — saves your preferences, facts, and corrections as it works (no asking). Plus a background self-improvement loop that reviews finished sessions, auto-applies memory, and proposes new skills (secret-redacted; skills human-gated by default, fully autonomous with one flag). FTS5 cross-session recall. |
 | 🛡️ **Safe by default** | Permission cascade with a **hardline blocklist** (refuses `rm -rf /` even in yolo), pre-exec scanning, **fail-closed** docker/ssh/singularity/modal sandboxes, and untrusted-tool-result wrapping against prompt injection. |
 | 📡 **Everywhere you are** | One agent serving CLI, Telegram, Discord, Slack, Signal, Matrix, Email, and webhooks — with voice-memo transcription and a durable, retrying delivery queue. |
 | 🧰 **Batteries included** | **33 tools, 26 skills** + hub import, MCP (client **and** server), an OpenAI-compatible API, a web dashboard, cron, trajectory export, cost analytics, and OSV vulnerability auditing. |
@@ -262,7 +262,7 @@ aegis insights                 # usage analytics
 | Safety | hardline blocklist (even in yolo) · pre-exec scanning · fail-closed docker/ssh/singularity/modal sandboxes |
 | MCP | client **and** server |
 | Channels | CLI · Telegram · Discord · Slack · Signal · Matrix · Email · Webhook · ntfy |
-| Learning | human-gated closed loop + optional background review + FTS5 recall |
+| Learning | autonomous memory + background self-improvement (auto-applies memory, proposes skills; fully autonomous via `learn.auto_apply_skills`) + FTS5 recall |
 | Trajectory export | jsonl · openai-finetune · sharegpt |
 | Cost analytics | cache-aware, by model |
 | On-ramps | one-line install · `aegis ui` browser dashboard with a live activity feed |

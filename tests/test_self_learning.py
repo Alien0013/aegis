@@ -212,3 +212,38 @@ def test_maybe_review_off_by_default_and_guards_recursion(tmp_path):
     a._no_review = True
     a.config.data["learn"]["background"] = True
     assert review.maybe_review(a, tools_this_turn=99) is False     # child never re-forks even when on
+
+
+# --- learning autonomy: memory always auto, skills opt-in -------------------
+def test_background_learn_skill_autonomy(monkeypatch):
+    import time
+    from unittest.mock import patch
+    import aegis.learn as learn
+    applied = []
+
+    class Cfg:
+        def __init__(self, **k): self.k = k
+        def get(self, key, d=None): return self.k.get(key, d)
+
+    class Sess:
+        id = "s"
+
+        class M:
+            role = "assistant"
+            content = "x"
+        def __init__(self): self.meta = {}; self.messages = [self.M(), self.M()]
+
+    with patch.object(learn, "review_session",
+                      lambda cfg, sid: [{"id": "m1", "type": "memory"}, {"id": "s1", "type": "skill"}]), \
+         patch.object(learn, "apply_candidate", lambda cid, cfg: applied.append(cid)):
+        # default: skills gated -> only memory auto-applies
+        learn.background_tick(Cfg(**{"learn.background": True, "learn.background_every": 1,
+                                     "learn.auto_apply": True}), Sess())
+        time.sleep(0.2)
+        assert applied == ["m1"]
+        applied.clear()
+        # auto_apply_skills on -> skills auto-apply too
+        learn.background_tick(Cfg(**{"learn.background": True, "learn.background_every": 1,
+                                     "learn.auto_apply": True, "learn.auto_apply_skills": True}), Sess())
+        time.sleep(0.2)
+        assert "m1" in applied and "s1" in applied
