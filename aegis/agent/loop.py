@@ -251,8 +251,15 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
         except Exception as e:  # noqa: BLE001
             from .._log import log_exc
             log_exc("provider.complete failed")
-            emit({"type": "error", "message": f"{type(e).__name__}: {e}"})
-            err = Message.assistant(f"[provider error] {e}")
+            msg = f"{type(e).__name__}: {e}"
+            low = str(e).lower()
+            if "not a chat model" in low or ("model" in low and ("404" in low or "does not exist" in low)):
+                msg += ("\n  → That model isn't available on this endpoint/auth. Pick another with "
+                        "`aegis model set <provider> <model>` (e.g. gpt-5.2-chat-latest for an API "
+                        "key), or use the `codex` provider + `codex login` for ChatGPT-subscription "
+                        "models like gpt-5.5-pro.")
+            emit({"type": "error", "message": msg})
+            err = Message.assistant(f"[provider error] {msg}")
             session.messages.append(err)
             return err
 

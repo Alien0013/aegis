@@ -24,6 +24,7 @@ Output = Callable[[str], None]
 
 MODEL_PRESETS: dict[str, list[tuple[str, str]]] = {
     "codex": [
+        ("gpt-5.5-pro", "GPT-5.5 Pro (most capable)"),
         ("gpt-5.5", "GPT-5.5 Codex"),
         ("gpt-5.4", "GPT-5.4 Codex"),
         ("gpt-5.4-mini", "GPT-5.4 mini Codex"),
@@ -32,6 +33,7 @@ MODEL_PRESETS: dict[str, list[tuple[str, str]]] = {
         ("codex-auto-review", "Codex auto review"),
     ],
     "openai-codex": [
+        ("gpt-5.5-pro", "GPT-5.5 Pro (most capable)"),
         ("gpt-5.5", "GPT-5.5 Codex"),
         ("gpt-5.4", "GPT-5.4 Codex"),
         ("gpt-5.4-mini", "GPT-5.4 mini Codex"),
@@ -40,11 +42,12 @@ MODEL_PRESETS: dict[str, list[tuple[str, str]]] = {
         ("codex-auto-review", "Codex auto review"),
     ],
     "openai": [
-        ("gpt-5.5", "GPT-5.5 (latest frontier, recommended)"),
-        ("gpt-5.5-pro", "GPT-5.5 Pro (most capable)"),
+        ("gpt-5.5", "GPT-5.5 (latest frontier)"),
+        ("gpt-5.5-pro", "GPT-5.5 Pro (most capable — ChatGPT subscription/OAuth, not API key)"),
         ("gpt-5.4", "GPT-5.4"),
         ("gpt-5.3", "GPT-5.3"),
         ("gpt-5.2", "GPT-5.2"),
+        ("gpt-5.2-chat-latest", "GPT-5.2 Chat (API-key friendly)"),
         ("gpt-5-mini", "GPT-5 mini (fast, cheap)"),
         ("gpt-5-nano", "GPT-5 nano (fastest)"),
         ("o3", "o3 (deep reasoning)"),
