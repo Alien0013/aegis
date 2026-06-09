@@ -184,15 +184,20 @@ def review(stale_after_days: int = STALE_AFTER_DAYS) -> dict:
     }
 
 
-def prune(dry_run: bool = True, stale_after_days: int = STALE_AFTER_DAYS) -> list[str]:
-    """Suggest (or archive) stale skills.
+ARCHIVE_AFTER_DAYS = 60
 
-    With ``dry_run`` (default) returns the names that *would* be archived. With
+
+def prune(dry_run: bool = True, stale_after_days: int = STALE_AFTER_DAYS) -> list[str]:
+    """Suggest (or archive) stale skills — ONLY agent-created, non-pinned, non-protected
+    ones (bundled, hub-installed, user, and pinned skills are never touched).
+
+    With ``dry_run`` (default) returns the names that *would* be archived; with
     ``dry_run=False`` it archives them and returns the names actually archived.
     """
+    from . import provenance
     candidates = [
         s.name for s in _scan()
-        if not s.malformed and s.age_days >= stale_after_days
+        if not s.malformed and s.age_days >= stale_after_days and provenance.curatable(s.name)
     ]
     if dry_run:
         return candidates
@@ -201,6 +206,45 @@ def prune(dry_run: bool = True, stale_after_days: int = STALE_AFTER_DAYS) -> lis
         if archive(name):
             archived.append(name)
     return archived
+
+
+def apply_transitions(dry_run: bool = True) -> dict[str, list[str]]:
+    """Walk curatable skills and classify by the lifecycle clock: active → stale (>30d) →
+    archived (>60d). With ``dry_run=False`` the archive-eligible ones are archived (never
+    deleted — archive is recoverable). Pinned/protected/user skills bypass entirely."""
+    from . import provenance
+    stale, to_archive = [], []
+    for s in _scan():
+        if s.malformed or not provenance.curatable(s.name):
+            continue
+        if s.age_days >= ARCHIVE_AFTER_DAYS:
+            to_archive.append(s.name)
+        elif s.age_days >= STALE_AFTER_DAYS:
+            stale.append(s.name)
+    archived: list[str] = []
+    if not dry_run:
+        consolidated, pruned = _classify_removed(to_archive)
+        for name in to_archive:
+            if archive(name):
+                archived.append(name)
+        return {"stale": stale, "archived": archived,
+                "consolidated": consolidated, "pruned": pruned}
+    return {"stale": stale, "to_archive": to_archive}
+
+
+def _classify_removed(names: list[str]) -> tuple[list[str], list[str]]:
+    """Split removed skills into *consolidated* (a near-duplicate survives, so the content
+    lives on elsewhere) vs *pruned* (genuinely stale, no overlap)."""
+    dups = {d["name"] for d in _find_duplicates(_scan())}
+    consolidated = [n for n in names if n in dups]
+    pruned = [n for n in names if n not in dups]
+    return consolidated, pruned
+
+
+def pin(name: str, pinned: bool = True) -> None:
+    """Pin a skill so the curator never auto-archives it (it can still be improved)."""
+    from . import provenance
+    provenance.pin(name, pinned)
 
 
 def archive(name: str) -> bool:
@@ -302,6 +346,38 @@ def cmd_curator(args, config) -> int:
         else:
             print(f"cannot restore '{name}' (not archived, or a live skill exists)")
         return 0 if ok else 1
+
+    if action == "transitions":
+        apply = bool(getattr(args, "apply", False))
+        r = apply_transitions(dry_run=not apply)
+        if apply:
+            print(f"  archived: {', '.join(r['archived']) or 'none'}")
+            if r.get("consolidated"):
+                print(f"  consolidated (near-duplicate survives): {', '.join(r['consolidated'])}")
+            if r.get("pruned"):
+                print(f"  pruned (stale, no overlap): {', '.join(r['pruned'])}")
+            print(f"  now stale (watching): {', '.join(r['stale']) or 'none'}")
+        else:
+            print(f"  stale (>{STALE_AFTER_DAYS}d): {', '.join(r['stale']) or 'none'}")
+            print(f"  would archive (>{ARCHIVE_AFTER_DAYS}d, use --apply): "
+                  + (', '.join(r['to_archive']) or 'none'))
+        return 0
+
+    if action == "pin":
+        if not name:
+            print("error: usage: aegis curator pin <name>")
+            return 1
+        pin(name, True)
+        print(f"pinned {name} (curator will never auto-archive it)")
+        return 0
+
+    if action == "unpin":
+        if not name:
+            print("error: usage: aegis curator unpin <name>")
+            return 1
+        pin(name, False)
+        print(f"unpinned {name}")
+        return 0
 
     print(f"error: unknown action '{action}'")
     return 1

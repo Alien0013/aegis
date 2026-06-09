@@ -10,11 +10,41 @@ from ..types import LLMResponse, Message, ToolSchema
 from .base import Provider
 
 
+def classify_provider_error(exc: Exception) -> str:
+    """Map a provider failure to a fallback trigger class (à la Hermes credential pool):
+    rate_limit (429) · auth (401) · billing (402/403) · server (5xx) · client (4xx) ·
+    transient (timeout/dropped stream) · invalid_response (unparseable)."""
+    from .chat_completions import ProviderHTTPError
+    if isinstance(exc, ProviderHTTPError):
+        s = exc.status
+        if s == 429:
+            return "rate_limit"
+        if s == 401:
+            return "auth"
+        if s in (402, 403):
+            return "billing"
+        if 500 <= s < 600:
+            return "server"
+        if 400 <= s < 500:
+            return "client"
+        return "transient"
+    try:
+        import httpx
+        if isinstance(exc, (httpx.TimeoutException, httpx.TransportError)):
+            return "transient"
+    except Exception:  # noqa: BLE001
+        pass
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return "transient"
+    return "invalid_response"
+
+
 class FallbackProvider:
     def __init__(self, primary: Provider, fallbacks: list[Provider]):
         self.primary = primary
         self.fallbacks = fallbacks
         self.active = primary
+        self.last_trigger: tuple[str, str] | None = None   # (provider_name, reason)
 
     # -- Provider-compatible surface ---------------------------------------
     @property
@@ -51,7 +81,12 @@ class FallbackProvider:
                 self.active = prov
                 return resp
             except Exception as e:  # noqa: BLE001
+                reason = classify_provider_error(e)
+                self.last_trigger = (getattr(prov, "name", "?"), reason)
                 last_err = e
+                from .._log import info
+                info(f"fallback: {getattr(prov, 'name', '?')} failed ({reason}); "
+                     + ("trying next provider" if prov is not chain[-1] else "chain exhausted"))
                 continue
         raise last_err or RuntimeError("all providers failed")
 

@@ -1001,8 +1001,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     cu = sub.add_parser("curator", help="background skill maintenance")
     cu.add_argument("action", nargs="?",
-                    choices=["status", "review", "prune", "archive", "restore"], default="status")
+                    choices=["status", "review", "prune", "archive", "restore",
+                             "transitions", "pin", "unpin"], default="status")
     cu.add_argument("name", nargs="?")
+    cu.add_argument("--apply", action="store_true", help="apply changes (transitions/prune)")
     cu.set_defaults(func=_curator.cmd_curator)
 
     for _name in ("dashboard", "ui"):       # `aegis ui` is the friendly alias

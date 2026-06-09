@@ -21,11 +21,12 @@ class Session:
     meta: dict[str, Any] = field(default_factory=dict)
     created_at: str = field(default_factory=now_iso)
     updated_at: str = field(default_factory=now_iso)
+    parent_id: str | None = None        # session lineage (set when forked, e.g. on compaction)
 
     @staticmethod
-    def create(title: str = "") -> "Session":
+    def create(title: str = "", parent_id: str | None = None) -> "Session":
         sid = new_id("sess")
-        return Session(id=sid, title=title or sid)
+        return Session(id=sid, title=title or sid, parent_id=parent_id)
 
     def to_row(self) -> dict:
         return {
@@ -33,6 +34,7 @@ class Session:
             "title": self.title,
             "created_at": self.created_at,
             "updated_at": now_iso(),
+            "parent_id": self.parent_id,
             "data": json.dumps(
                 {
                     "messages": [m.to_dict() for m in self.messages],
@@ -45,6 +47,7 @@ class Session:
     @staticmethod
     def from_row(row: sqlite3.Row) -> "Session":
         data = json.loads(row["data"])
+        keys = row.keys()
         return Session(
             id=row["id"],
             title=row["title"],
@@ -53,6 +56,7 @@ class Session:
             meta=data.get("meta", {}),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            parent_id=row["parent_id"] if "parent_id" in keys else None,
         )
 
     def maybe_title_from(self, text: str) -> None:
@@ -89,10 +93,12 @@ class SessionStore:
                        data TEXT
                    )"""
             )
-            # add `summary` to pre-existing tables
+            # add new columns to pre-existing tables
             cols = {r[1] for r in c.execute("PRAGMA table_info(sessions)").fetchall()}
             if "summary" not in cols:
                 c.execute("ALTER TABLE sessions ADD COLUMN summary TEXT")
+            if "parent_id" not in cols:
+                c.execute("ALTER TABLE sessions ADD COLUMN parent_id TEXT")
             # full-text index over message content (graceful if FTS5 is unavailable)
             try:
                 c.execute("CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5("
@@ -107,11 +113,11 @@ class SessionStore:
         row["summary"] = session.meta.get("summary", "")
         with self._conn() as c:
             c.execute(
-                """INSERT INTO sessions (id, title, created_at, updated_at, summary, data)
-                   VALUES (:id, :title, :created_at, :updated_at, :summary, :data)
+                """INSERT INTO sessions (id, title, created_at, updated_at, summary, parent_id, data)
+                   VALUES (:id, :title, :created_at, :updated_at, :summary, :parent_id, :data)
                    ON CONFLICT(id) DO UPDATE SET
                      title=excluded.title, updated_at=excluded.updated_at,
-                     summary=excluded.summary, data=excluded.data""",
+                     summary=excluded.summary, parent_id=excluded.parent_id, data=excluded.data""",
                 row,
             )
             if getattr(self, "_fts", False):
@@ -147,6 +153,28 @@ class SessionStore:
                 (limit,),
             ).fetchall()
             return [dict(r) for r in rows]
+
+    def children(self, parent_id: str) -> list[dict]:
+        """Sessions forked from ``parent_id`` (lineage chain), oldest first."""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT id, title, created_at FROM sessions WHERE parent_id=? ORDER BY created_at",
+                (parent_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def fork(self, parent: Session, *, carry_summary: bool = True) -> Session:
+        """Create a child session linked to ``parent`` (e.g. when compaction splits a long
+        session). The child keeps the system prompt + a summary breadcrumb of the parent."""
+        child = Session.create(title=parent.title, parent_id=parent.id)
+        system = [m for m in parent.messages if m.role == "system"][:1]
+        child.messages = list(system)
+        if carry_summary:
+            child.meta["forked_from"] = parent.id
+            child.meta["summary"] = parent.meta.get("summary", "")
+        self.save(parent)
+        self.save(child)
+        return child
 
     def delete(self, sid: str) -> bool:
         with self._conn() as c:
