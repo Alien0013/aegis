@@ -107,7 +107,8 @@ class GatewayRunner:
                             learned.append(f"🧠 {a}")
 
                 final = agent.run(text, _collect)
-                reply = final.content or "(no response)"
+                from ..redact import redact_secrets
+                reply = redact_secrets(final.content or "(no response)")   # never leak a key to a chat
                 if learned and self.config.get("gateway.show_learning", True):
                     reply += "\n\n— " + " · ".join(dict.fromkeys(learned))   # dedup, keep order
                 return reply

@@ -13,21 +13,13 @@ the skill; re-promoting an existing skill bumps its version and records the chan
 from __future__ import annotations
 
 import json
-import re
 
 from . import config as cfg
 from .types import new_id
 from .util import atomic_write, now_iso, read_text
 
-# redact common secret shapes before storing/promoting a candidate
-_SECRET_RE = re.compile(
-    r"(sk-[A-Za-z0-9_\-]{16,}|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|xox[bap]-[A-Za-z0-9-]{10,}|"
-    r"AIza[0-9A-Za-z_\-]{20,}|eyJ[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,})"
-)
-
-
-def _redact(text: str) -> str:
-    return _SECRET_RE.sub("[REDACTED]", text or "")
+# redact common secret shapes before storing/promoting a candidate (shared with the gateway)
+from .redact import redact_secrets as _redact
 
 
 def _store_path():

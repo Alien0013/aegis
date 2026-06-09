@@ -142,6 +142,20 @@ def _next_in_lineage(title: str) -> str:
     return f"{(title or 'session').strip()} (2)"
 
 
+def _summarizer(agent):
+    """Provider used for compaction summaries — the cheap auxiliary model when configured,
+    else the main provider. Built once and cached on the agent."""
+    s = getattr(agent, "_aux_provider", None)
+    if s is None:
+        try:
+            from ..providers.registry import build_aux_provider
+            s = build_aux_provider(agent.config)
+        except Exception:  # noqa: BLE001 - never block compaction on aux setup
+            s = agent.provider
+        agent._aux_provider = s
+    return s
+
+
 def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
     """Proactively compact BEFORE the next model call if the window is near full. Returns the
     (possibly new child) session. Splits into a child session when a store + split are enabled."""
@@ -162,7 +176,7 @@ def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
     before_n = len(session.messages)
     before_tok = compaction.estimated_tokens(session.messages)
     compressed = compaction.compress(
-        session.messages, agent.provider,
+        session.messages, _summarizer(agent),    # summarize on the cheap aux model, not the main one
         preserve_first=comp.get("preserve_first", 3),
         preserve_last=comp.get("preserve_last", 20),
         max_tool_tokens=comp.get("max_tool_tokens", 600),

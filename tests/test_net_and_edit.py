@@ -153,3 +153,31 @@ def test_chat_adapters_dont_render_tables():
     from aegis.gateway.discord_channel import DiscordAdapter
     assert TelegramAdapter.renders_tables is False
     assert DiscordAdapter.renders_tables is False
+
+
+# --- gateway secret redaction + aux-model compaction (deep Hermes audit) ----
+def test_redact_secrets_covers_telegram_and_keys():
+    from aegis.redact import redact_secrets
+    out = redact_secrets("tok 8588602695:AAGH8RDjbO_mJ6_F4l7XDiHKh26TXqNonwg and sk-proj-ABCDEFGHIJ1234567890")
+    assert "8588602695" not in out and "sk-proj" not in out
+    assert out.count("[REDACTED]") == 2
+    assert redact_secrets("plain text") == "plain text"
+
+
+def test_learn_redact_reuses_shared_module():
+    from aegis import learn
+    from aegis.redact import redact_secrets
+    assert learn._redact is redact_secrets        # single source of truth
+
+
+def test_compaction_uses_aux_provider_helper():
+    # _summarizer caches a provider on the agent and falls back to the main provider
+    from aegis.agent.loop import _summarizer
+
+    class FakeAgent:
+        provider = object()
+        config = None
+    a = FakeAgent()
+    # build_aux_provider needs a real config; on failure it must fall back to agent.provider
+    s = _summarizer(a)
+    assert s is a.provider and a._aux_provider is s
