@@ -60,7 +60,7 @@ class SignalAdapter(BasePlatformAdapter):
                     continue
                 reply = dispatch(ev)
                 if reply:
-                    self.send(ev.chat_id, reply)
+                    self.deliver(ev.chat_id, reply)
 
     def _parse(self, out: str) -> list[MessageEvent]:
         """signal-cli emits one JSON object per line (JSON-RPC envelope)."""

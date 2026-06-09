@@ -43,8 +43,24 @@ class DiscordAdapter(BasePlatformAdapter):
             loop = asyncio.get_event_loop()
             reply = await loop.run_in_executor(None, dispatch, ev)
             if reply:
-                for i in range(0, len(reply), 1900):
-                    await message.channel.send(reply[i:i + 1900])
+                import os
+
+                import discord
+
+                from .base import split_media
+                clean, media = split_media(reply)
+                for i in range(0, len(clean), 1900):
+                    chunk = clean[i:i + 1900]
+                    if chunk:
+                        await message.channel.send(chunk)
+                for path in media:                       # native file attachments
+                    try:
+                        if os.path.exists(path):
+                            await message.channel.send(file=discord.File(path))
+                        else:
+                            await message.channel.send(f"(file not found: {path})")
+                    except Exception:  # noqa: BLE001
+                        await message.channel.send(f"📎 {path}")
 
         client.run(self.token, log_handler=None)
 

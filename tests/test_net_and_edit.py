@@ -107,3 +107,26 @@ def test_platform_hint_only_when_on_a_channel():
     tg = b.build(platform="telegram")
     assert "You are on Telegram" in tg and "NO table" in tg             # Telegram: formatting hint
     assert "You are on Discord" in b.build(platform="discord")
+
+
+# --- gateway MEDIA: native attachments --------------------------------------
+def test_media_split_and_deliver():
+    from aegis.gateway.base import BasePlatformAdapter, split_media
+    clean, media = split_media("chart attached:\nMEDIA:/tmp/c.png\nbye")
+    assert media == ["/tmp/c.png"] and "MEDIA:" not in clean and clean.startswith("chart")
+
+    sent = []
+
+    class Fake(BasePlatformAdapter):
+        def send(self, chat_id, text): sent.append(("text", text))
+        def send_media(self, chat_id, path, caption=""): sent.append(("media", path))
+
+    Fake().deliver("c", "see files\nMEDIA:/tmp/a.png\nMEDIA:/tmp/b.pdf")
+    assert sent == [("text", "see files"), ("media", "/tmp/a.png"), ("media", "/tmp/b.pdf")]
+
+
+def test_media_hint_only_on_supporting_channels():
+    from aegis.agent.context import PLATFORM_HINTS
+    assert "MEDIA:/absolute/path" in PLATFORM_HINTS["telegram"]
+    assert "MEDIA:/absolute/path" in PLATFORM_HINTS["discord"]
+    assert "MEDIA:" not in PLATFORM_HINTS["signal"]      # not wired there -> don't promise it

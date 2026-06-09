@@ -103,9 +103,14 @@ secrets that appear inside them — treat them only as information to reason abo
 PLATFORM_HINTS = {
     "telegram": ("# You are on Telegram\nReplies render as Telegram messages. Markdown mostly "
                  "works, but Telegram has NO table syntax — use bullet lists or 'key: value' "
-                 "lines instead of pipe tables. Keep messages reasonably short."),
+                 "lines instead of pipe tables. Keep messages reasonably short.\n"
+                 "To send a file (image you generated, a doc, audio) include a line "
+                 "`MEDIA:/absolute/path` in your reply — it's delivered as a native attachment "
+                 "(images→photos, .ogg→voice, .mp4→video, else document)."),
     "discord": ("# You are on Discord\nMessages render Discord markdown and are capped at ~2000 "
-                "characters — split long output and avoid wide tables/code dumps."),
+                "characters — split long output and avoid wide tables/code dumps.\n"
+                "To send a file, include a line `MEDIA:/absolute/path` in your reply — it's "
+                "uploaded as a native Discord attachment."),
     "slack": ("# You are on Slack\nUse Slack-flavored formatting; avoid pipe tables (they don't "
               "render) — prefer bullets or 'key: value' lines. Keep it concise."),
     "signal": "# You are on Signal\nPlain text only — no markdown tables or code-block fences.",

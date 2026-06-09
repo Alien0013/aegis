@@ -24,7 +24,7 @@ class CLIChannel(BasePlatformAdapter):
             ev = MessageEvent(platform="cli", chat_id="local", text=text, user_id="local")
             reply = dispatch(ev)
             if reply:
-                self.send("local", reply)
+                self.deliver("local", reply)
 
     def send(self, chat_id: str, text: str) -> None:
         print(f"\naegis> {text}\n")
@@ -81,7 +81,25 @@ class TelegramAdapter(BasePlatformAdapter):
                 )
                 reply = dispatch(ev)
                 if reply:
-                    self.send(ev.chat_id, reply)
+                    self.deliver(ev.chat_id, reply)
+
+    def send_media(self, chat_id: str, path: str, caption: str = "") -> None:
+        import os
+        if not os.path.exists(path):
+            self.send(chat_id, f"(file not found: {path})")
+            return
+        ext = os.path.splitext(path)[1].lower()
+        method, field = ("sendPhoto", "photo") if ext in (".png", ".jpg", ".jpeg", ".webp") \
+            else ("sendVoice", "voice") if ext == ".ogg" \
+            else ("sendVideo", "video") if ext in (".mp4", ".mov") \
+            else ("sendDocument", "document")
+        try:
+            with open(path, "rb") as fh, httpx.Client(timeout=120) as c:
+                r = c.post(f"{self._base}/{method}", data={"chat_id": chat_id, "caption": caption},
+                           files={field: fh})
+                r.raise_for_status()
+        except Exception:  # noqa: BLE001 — fall back to a path note
+            self.send(chat_id, f"📎 file ready: {path}")
 
     def send(self, chat_id: str, text: str) -> None:
         # Telegram caps messages at 4096 chars.
