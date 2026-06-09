@@ -178,9 +178,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "learn": {
         "auto": False,               # auto-review sessions on exit to propose memory/skill candidates
-        "background": False,          # review periodically mid-session (off-thread) — opt-in
-        "background_every": 0,        # review every N assistant turns when background is on (0 = off)
-        "auto_apply": False,          # auto-promote memory candidates (skills always need review)
+        "background": False,          # forked self-improvement review after substantial turns — opt-in
+        "memory_every": 5,            # run a memory review every N turns
+        "skill_every_iters": 4,       # run a skill review when a turn used >= N tool iterations
+        "auto_apply": False,          # fork writes memory/skills directly; else queue candidates (safer)
     },
     "mcp": {
         "enabled": True,

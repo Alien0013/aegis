@@ -205,7 +205,9 @@ class Agent:
             self.memory.history.append("user", msg.content, self.session.id)
 
         before = (self.budget.usage.input_tokens, self.budget.usage.output_tokens)
+        tools_before = self.tools_used
         result = run_conversation(self, on_event)
+        tools_this_turn = self.tools_used - tools_before
 
         # Log this turn's token usage (for `aegis cost` / insights).
         try:
@@ -233,8 +235,9 @@ class Agent:
                 from .._log import log_exc
                 log_exc("final session save failed")
         try:
-            from .. import learn, trajectory
-            learn.background_tick(self.config, self.session)
+            from .. import trajectory
+            from . import review
+            review.maybe_review(self, tools_this_turn)   # forked self-improvement (Hermes Tier-1)
             trajectory.capture_turn(self.config, self.session)
         except Exception:  # noqa: BLE001
             pass

@@ -211,8 +211,9 @@ class SkillsLoader:
         return header + skill.full_body()
 
     def create(self, name: str, description: str, body: str,
-               extra_frontmatter: dict | None = None) -> Path:
-        """Write a new personal skill (the self-improvement / auto-skill path)."""
+               extra_frontmatter: dict | None = None, origin: str = "user") -> Path:
+        """Write a new personal skill. ``origin='agent'`` marks it curatable (self-improvement
+        path); ``origin='user'`` (default, manual/CLI) keeps it protected from auto-curation."""
         import re as _re
         from .util import atomic_write
 
@@ -227,6 +228,12 @@ class SkillsLoader:
                           else f"{k}: {yaml.safe_dump(v).strip()}" for k, v in fm.items())
         atomic_write(d / "SKILL.md", f"---\n{front}\n---\n\n{body.strip()}\n")
         self.invalidate()
+        try:
+            from . import provenance
+            # explicit origin wins; otherwise inherit the active context (agent during review)
+            provenance.record(name, origin if origin != "user" else provenance.current_origin())
+        except Exception:  # noqa: BLE001
+            pass
         return d / "SKILL.md"
 
     def invalidate(self) -> None:

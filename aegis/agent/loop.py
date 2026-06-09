@@ -185,6 +185,8 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
         budget.usage.add(resp.usage)
         assistant_msg = resp.to_message()
         session.messages.append(assistant_msg)
+        if resp.reasoning:
+            emit({"type": "reasoning_delta", "text": resp.reasoning})
         emit({"type": "assistant_message", "text": resp.text,
               "tool_calls": [tc.to_dict() for tc in resp.tool_calls]})
 
