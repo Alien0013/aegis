@@ -241,7 +241,7 @@ class Agent:
         try:
             from .. import trajectory
             from . import review
-            review.maybe_review(self, tools_this_turn)   # forked self-improvement (Hermes Tier-1)
+            review.maybe_review(self, tools_this_turn)   # forked self-improvement
             trajectory.capture_turn(self.config, self.session)
         except Exception:  # noqa: BLE001
             pass

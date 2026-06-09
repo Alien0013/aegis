@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "aegis-agent-harness"
 version = "0.1.0"
-description = "AEGIS — a self-improving, multi-provider, multi-channel terminal agent harness (Hermes + OpenClaw, in Python)."
+description = "AEGIS — a self-improving, multi-provider, multi-channel terminal agent harness."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

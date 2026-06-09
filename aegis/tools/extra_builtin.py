@@ -1,4 +1,4 @@
-"""Additional built-in tools that Hermes/OpenClaw ship with: patch, download,
+"""Additional built-in tools: patch, download,
 generic HTTP, and agent-callable task scheduling.
 """
 

@@ -1,4 +1,4 @@
-"""Background self-improvement review (Hermes Tier-1).
+"""Background self-improvement review.
 
 After a substantial turn, fork a child Agent that inherits the parent's provider/model
 but runs with a **memory + skill-only tool whitelist**, reviews the conversation, and

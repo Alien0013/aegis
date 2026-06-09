@@ -6,7 +6,6 @@ metadata:
   category: planning
   tags: [planning, design, decomposition, strategy]
   license: MIT
-  source: adapted from Hermes Agent (MIT)
 ---
 
 ## When to Use

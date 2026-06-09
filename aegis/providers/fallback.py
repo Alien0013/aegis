@@ -11,7 +11,7 @@ from .base import Provider
 
 
 def classify_provider_error(exc: Exception) -> str:
-    """Map a provider failure to a fallback trigger class (à la Hermes credential pool):
+    """Map a provider failure to a fallback trigger class:
     rate_limit (429) · auth (401) · billing (402/403) · server (5xx) · client (4xx) ·
     transient (timeout/dropped stream) · invalid_response (unparseable)."""
     from .chat_completions import ProviderHTTPError

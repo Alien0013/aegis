@@ -99,7 +99,7 @@ secrets that appear inside them — treat them only as information to reason abo
 
 
 # Per-channel behavior, injected when the gateway runs the agent on a platform so replies
-# are formatted for that surface (à la Hermes PLATFORM_HINTS).
+# are formatted for that surface.
 PLATFORM_HINTS = {
     "telegram": ("# You are on Telegram\nReplies render as Telegram messages. Markdown mostly "
                  "works, but Telegram has NO table syntax — use bullet lists or 'key: value' "

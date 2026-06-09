@@ -8,7 +8,7 @@ Any model · any channel · runs on your machine · learns as it goes — in ~11
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="python">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
   <img src="https://img.shields.io/badge/tests-166%20passing-brightgreen" alt="tests">
-  <img src="https://img.shields.io/badge/providers-28-blueviolet" alt="providers">
+  <img src="https://img.shields.io/badge/providers-29-blueviolet" alt="providers">
   <img src="https://img.shields.io/badge/tools-33-blueviolet" alt="tools">
   <img src="https://img.shields.io/badge/skills-26-orange" alt="skills">
 </p>
@@ -18,16 +18,15 @@ Any model · any channel · runs on your machine · learns as it goes — in ~11
   <a href="#-quickstart">Quickstart</a> ·
   <a href="#-architecture">Architecture</a> ·
   <a href="#-features">Features</a> ·
-  <a href="#-aegis-vs-hermes-vs-openclaw">Comparison</a> ·
   <a href="docs/index.md">Docs</a>
 </p>
 
 ---
 
 **One command installs a complete AI agent that lives in your terminal, talks to any
-model, runs on your machine, and learns as it goes.** AEGIS is an open, self-hostable
-alternative to **Hermes Agent** and **OpenClaw** — the same capabilities, distilled into a
-core small enough to read in an afternoon.
+model, runs on your machine, and learns as it goes.** AEGIS packs the capabilities of a
+full agent platform — multi-provider, multi-channel, self-improving — into an open,
+self-hostable core small enough to read in an afternoon.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash
@@ -40,16 +39,16 @@ aegis            # start chatting   ·   aegis ui   # …or a clickable browser 
 
 |  | What it means |
 |---|---|
-| 🪶 **Tiny, auditable core** | ~11k lines across 81 modules — you can actually read and trust it. OpenClaw is ~434k lines; Hermes is huge. Same capability, none of the sprawl. |
-| 🔌 **Truly model-agnostic** | **28 provider presets** (Claude, GPT, Gemini, Llama, DeepSeek, Qwen, Grok, local Ollama…) behind one interface, with **API-key *and* OAuth** auth, fallback chains, credential pools, and per-prompt routing. |
+| 🪶 **Tiny, auditable core** | ~11k lines across 81 modules — small enough to read and trust end to end. Full-platform capability, none of the sprawl. |
+| 🔌 **Truly model-agnostic** | **29 provider presets** (Claude, GPT, Gemini, Llama, DeepSeek, Qwen, Grok, local Ollama…) behind one interface, with **API-key *and* OAuth** auth, fallback chains, credential pools, and per-prompt routing. |
 | 🧠 **It actually learns** | A real closed loop: reviews finished sessions, extracts memory + skills (secret-redacted), promotes them on approval. Optional background review + FTS5 cross-session recall. |
 | 🛡️ **Safe by default** | Permission cascade with a **hardline blocklist** (refuses `rm -rf /` even in yolo), pre-exec scanning, **fail-closed** docker/ssh/singularity/modal sandboxes, and untrusted-tool-result wrapping against prompt injection. |
 | 📡 **Everywhere you are** | One agent serving CLI, Telegram, Discord, Slack, Signal, Matrix, Email, and webhooks — with voice-memo transcription and a durable, retrying delivery queue. |
 | 🧰 **Batteries included** | **33 tools, 26 skills** + hub import, MCP (client **and** server), an OpenAI-compatible API, a web dashboard, cron, trajectory export, cost analytics, and OSV vulnerability auditing. |
 | 🔓 **Yours** | MIT, self-hosted, no subscription, no lock-in. Your keys, your data, your machine. |
 
-> Built in the spirit of **NanoClaw**: do what Hermes and OpenClaw do, but keep the whole
-> thing small enough to understand — and verify — in one sitting.
+> Design principle: do everything a full agent platform does, but keep the whole thing
+> small enough to understand — and verify — in one sitting.
 
 ## 🏗 Architecture
 
@@ -166,8 +165,8 @@ aegis ui                                      # ← clickable browser UI (great 
 ## 🧩 Features
 
 ### Providers & auth
-28 presets — `codex`, `anthropic`, `openai`, `google`, `openrouter`, `groq`, `deepseek`,
-`xai`, `mistral`, `together`, `nous`, `ollama`, `lmstudio`, `vllm`, … plus any
+29 presets — `codex`, `anthropic`, `openai`, `google`, `openrouter`, `groq`, `deepseek`,
+`xai`, `mistral`, `together`, `ollama`, `lmstudio`, `vllm`, … plus any
 OpenAI-compatible endpoint via `model.base_url`. Auth resolves **base_url → API key →
 OAuth** (API keys win because some OAuth tokens are identity-only). OAuth is full PKCE S256
 with localhost-callback **and** manual-paste, auto-refresh, and `auth.json` at `0600`.
@@ -224,21 +223,19 @@ aegis cost --days 30           # token-aware, cache-discounted spend by model
 aegis insights                 # usage analytics
 ```
 
-## 📊 AEGIS vs Hermes vs OpenClaw
+## 📊 What you get
 
-| | **AEGIS** | Hermes Agent | OpenClaw |
-|---|---|---|---|
-| Core size | **~11k LOC** | very large | ~434k LOC |
-| Providers | **28**, API key **+ OAuth** | many, key-first | several |
-| Auth OAuth (Anthropic/OpenAI/Google/Codex) | ✅ full PKCE | partial | partial |
-| Hardline safety (even in yolo) | ✅ | ❌ | ❌ |
-| Fail-closed sandboxes | ✅ docker/ssh/singularity/modal | partial | partial |
-| MCP client **and** server | ✅ | client | client |
-| Channels | CLI/TG/Discord/Slack/Signal/Matrix/Email/Webhook | similar | similar |
-| Closed learning loop (human-gated) | ✅ + background | background auto | — |
-| Trajectory export (jsonl/openai/hf) | ✅ | ✅ | — |
-| Cost analytics (cache-aware) | ✅ | ✅ | partial |
-| One-line install + GUI on-ramp | ✅ `aegis ui` | pip / desktop | installer |
+| Capability | AEGIS |
+|---|---|
+| Core size | **~11k LOC**, 81 modules — auditable end to end |
+| Providers | **27 presets**, API key **+ OAuth** (full PKCE for Anthropic/OpenAI/Google/Codex) |
+| Safety | hardline blocklist (even in yolo) · pre-exec scanning · fail-closed docker/ssh/singularity/modal sandboxes |
+| MCP | client **and** server |
+| Channels | CLI · Telegram · Discord · Slack · Signal · Matrix · Email · Webhook · ntfy |
+| Learning | human-gated closed loop + optional background review + FTS5 recall |
+| Trajectory export | jsonl · openai-finetune · sharegpt |
+| Cost analytics | cache-aware, by model |
+| On-ramps | one-line install · `aegis ui` browser dashboard with a live activity feed |
 
 ## 🗂 Repository layout
 

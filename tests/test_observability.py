@@ -209,7 +209,7 @@ def test_onboarding_offers_detected_key_user_decides(monkeypatch):
 
 
 def test_import_claude_cli_login(monkeypatch, tmp_path):
-    """Reuse an existing Claude Code login (OpenClaw's approach) for the anthropic provider."""
+    """Reuse an existing Claude Code login for the anthropic provider."""
     import json
     import time
     from aegis.providers.auth import AuthStore, import_claude_cli_login

@@ -181,8 +181,6 @@ def installed() -> dict:
 
 # Known skill hubs (taps). `aegis skills hub install <name>` installs all SKILL.md packages.
 DEFAULT_TAPS = {
-    "hermeshub": "amanning3390/hermeshub",
-    "openclaw": "VoltAgent/awesome-openclaw-skills",
     "anthropic": "anthropics/skills",
 }
 

@@ -2,8 +2,7 @@
 
 Beyond summarizing the dropped middle, the preserved head/tail are pruned: oversized
 tool outputs are boundary-truncated and inline base64 images are stripped, so a few
-huge tool dumps in recent turns can't blow the window on their own (à la Hermes
-ContextCompressor)."""
+huge tool dumps in recent turns can't blow the window on their own."""
 
 from __future__ import annotations
 

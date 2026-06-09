@@ -7,7 +7,7 @@ compaction/auto-split thresholds are then wrong. This resolves the *actual* wind
     explicit config  >  models.dev cache (opt-in refresh)  >  bundled snapshot  >  None
 
 The bundled snapshot is offline-first; `aegis models refresh` pulls the full models.dev
-database (4000+ models) into ~/.aegis/models_cache.json. (Inspired by Hermes' models_dev.)
+database (4000+ models) into ~/.aegis/models_cache.json.
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 """Persistent memory: file-backed MEMORY.md / USER.md + append-only history.
 
-Hermes-style: § delimited entries, char limits, atomic writes, and a *frozen
+§-delimited entries, char limits, atomic writes, and a *frozen
 snapshot* taken at session start so the system prompt stays byte-stable for
 prefix-cache reuse. Tool writes land on disk immediately and surface at the next
 session/compaction rebuild.

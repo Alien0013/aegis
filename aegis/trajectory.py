@@ -1,5 +1,5 @@
 """Trajectory / research tooling: record sessions as trajectories, export JSONL,
-compress, and report metrics (à la Hermes batch trajectory generation).
+compress, and report metrics for batch trajectory generation.
 """
 
 from __future__ import annotations

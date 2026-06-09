@@ -172,7 +172,7 @@ class HTTPMemoryProvider(MemoryProvider):
             pass
 
 
-# Niche providers Hermes lists — wired via the generic HTTP backend (configure endpoints).
+# Niche providers wired via the generic HTTP backend (configure endpoints).
 _HTTP_PROVIDERS = {"openviking", "supermemory", "byterover", "hindsight", "holographic", "retaindb"}
 
 

@@ -131,7 +131,7 @@ def test_media_hint_only_on_supporting_channels():
     assert "MEDIA:" not in PLATFORM_HINTS["signal"]      # not wired there -> don't promise it
 
 
-# --- reasoning scrub + table rewrite (Hermes parity) ------------------------
+# --- reasoning scrub + table rewrite ---------------------------------------
 def test_strip_reasoning_blocks():
     from aegis.agent.governance import strip_reasoning
     assert strip_reasoning("<think>plan\nmore</think>\n\nFinal: 42.") == "Final: 42."
@@ -155,7 +155,7 @@ def test_chat_adapters_dont_render_tables():
     assert DiscordAdapter.renders_tables is False
 
 
-# --- gateway secret redaction + aux-model compaction (deep Hermes audit) ----
+# --- gateway secret redaction + aux-model compaction -----------------------
 def test_redact_secrets_covers_telegram_and_keys():
     from aegis.redact import redact_secrets
     out = redact_secrets("tok 8588602695:AAGH8RDjbO_mJ6_F4l7XDiHKh26TXqNonwg and sk-proj-ABCDEFGHIJ1234567890")
@@ -218,7 +218,7 @@ def test_ntfy_channel(monkeypatch):
     assert sent["url"] == "https://ntfy.sh/aegis-alerts" and sent["body"] == "done ✅".encode()
 
 
-# --- cron one-shot scheduling (Hermes parity: agent/cron subsystem) ---------
+# --- cron one-shot scheduling ----------------------------------------------
 def test_cron_oneshot_lifecycle(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import time
@@ -240,7 +240,7 @@ def test_cron_oneshot_lifecycle(monkeypatch, tmp_path):
     assert r.run_at == 0.0 and is_due(r, now)               # recurring unaffected
 
 
-# --- ACP tool-call streaming (Hermes parity: acp_adapter subsystem) ---------
+# --- ACP tool-call streaming -----------------------------------------------
 def test_acp_streams_tool_calls():
     from aegis.acp import AcpServer
     srv = AcpServer.__new__(AcpServer)
@@ -255,7 +255,7 @@ def test_acp_streams_tool_calls():
     assert sent[2]["status"] == "failed"          # tool error surfaces as failed
 
 
-# --- gateway typing indicator (Hermes parity: gateway subsystem) ------------
+# --- gateway typing indicator ----------------------------------------------
 def test_telegram_typing_indicator(monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "x")
     from aegis.gateway.channels import TelegramAdapter

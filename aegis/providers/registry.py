@@ -158,7 +158,7 @@ PROVIDERS: dict[str, ProviderSpec] = {
         "together", ApiMode.CHAT_COMPLETIONS, "https://api.together.xyz/v1",
         "meta-llama/Llama-3.3-70B-Instruct-Turbo", 128_000, ["TOGETHER_API_KEY"],
     ),
-    # --- additional OpenAI-compatible cloud providers (Hermes-parity) ---
+    # --- additional OpenAI-compatible cloud providers ---
     "huggingface": ProviderSpec(
         "huggingface", ApiMode.CHAT_COMPLETIONS, "https://router.huggingface.co/v1",
         "Qwen/Qwen2.5-72B-Instruct", 128_000, ["HF_TOKEN", "HUGGINGFACE_API_KEY"],
@@ -211,10 +211,6 @@ PROVIDERS: dict[str, ProviderSpec] = {
     "sambanova": ProviderSpec(
         "sambanova", ApiMode.CHAT_COMPLETIONS, "https://api.sambanova.ai/v1",
         "Meta-Llama-3.3-70B-Instruct", 64_000, ["SAMBANOVA_API_KEY"],
-    ),
-    "nous": ProviderSpec(
-        "nous", ApiMode.CHAT_COMPLETIONS, "https://inference-api.nousresearch.com/v1",
-        "Hermes-4-405B", 128_000, ["NOUS_API_KEY"],
     ),
     "vllm": ProviderSpec(
         "vllm", ApiMode.CHAT_COMPLETIONS, "http://localhost:8000/v1",

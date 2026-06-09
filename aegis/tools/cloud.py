@@ -1,6 +1,6 @@
 """Provider-agnostic 'tool gateway' backends: cloud image gen, cloud browser, status.
 
-Mirrors Hermes' Nous Portal tool gateway but self-hosted / bring-your-own-keys.
+A self-hosted cloud tool gateway (bring-your-own-keys).
 """
 
 from __future__ import annotations

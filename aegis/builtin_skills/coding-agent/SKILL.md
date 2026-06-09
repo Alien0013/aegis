@@ -12,7 +12,7 @@ metadata:
 ## When to Use
 When a task is large/long-running and better handed to a dedicated coding-agent
 CLI than done inline — e.g. "build this whole feature", "do this big refactor",
-"turn this issue into a PR". Mirrors OpenClaw's coding-agent skill.
+"turn this issue into a PR".
 
 ## Available drivers (detect with `which`)
 - `claude -p "<prompt>"` — Claude Code headless mode

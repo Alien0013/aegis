@@ -5,7 +5,7 @@ link-local, CGNAT, and cloud-metadata targets (169.254.169.254 and friends — t
 that hand out cloud credentials). Fail-closed: bad schemes and DNS failures are blocked.
 Override broad private-IP blocking with `security.allow_private_urls` (or env
 AEGIS_ALLOW_PRIVATE_URLS) — but cloud-metadata addresses stay blocked regardless, since
-they are never a legitimate agent target. (Ported from Hermes' tools/url_safety.py.)
+they are never a legitimate agent target.
 """
 
 from __future__ import annotations

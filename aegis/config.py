@@ -182,7 +182,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "learn": {
         "auto": False,               # auto-review sessions on exit to propose memory/skill candidates
-        "background": True,           # forked self-improvement review after substantial turns (on, like Hermes)
+        "background": True,           # forked self-improvement review after substantial turns (on by default)
         "memory_every": 6,            # run a memory review every N turns
         "skill_every_iters": 5,       # run a skill review when a turn used >= N tool iterations
         "auto_apply": True,           # fork writes memory/skills directly (set False to only queue candidates)

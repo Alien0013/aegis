@@ -143,7 +143,7 @@ def tick(config, sink=None, store: "CronStore | None" = None, verbose: bool = Tr
     """Run every due job once. ``sink(channel, text)`` delivers output. Returns jobs run.
 
     Shared by the standalone scheduler and the in-gateway ticker so cron fires whether or not
-    a separate daemon is running (reverse-engineered from Hermes' _start_cron_ticker)."""
+    a separate daemon is running."""
     from .agent.agent import Agent
     from .session import Session
 

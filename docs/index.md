@@ -1,7 +1,7 @@
 # AEGIS
 
 A self-improving, multi-provider, multi-channel **terminal agent harness** in Python —
-an open, self-hostable replacement for Hermes Agent and OpenClaw, in ~10k auditable lines.
+an open, self-hostable terminal agent harness in ~10k auditable lines.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash
@@ -26,4 +26,4 @@ aegis              # chat after onboarding
 - **Serve** — expose AEGIS as an OpenAI-compatible API or an **MCP server**.
 
 See the [Comparison](https://github.com/Alien0013/aegis/blob/main/COMPARISON.md) for the
-full feature matrix vs Hermes and OpenClaw.
+the full feature reference.

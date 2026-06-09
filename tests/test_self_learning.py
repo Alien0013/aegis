@@ -103,7 +103,7 @@ def test_session_fork_lineage(tmp_path):
     assert st.load(child.id).parent_id == parent.id     # persists across reload
 
 
-# --- forked review (Hermes Tier-1) ------------------------------------------
+# --- forked review ---------------------------------------------------------
 def test_forked_review_writes_agent_created_skill(tmp_path):
     from aegis import provenance
     from aegis.agent.agent import Agent

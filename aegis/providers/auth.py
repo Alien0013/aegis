@@ -272,7 +272,7 @@ class OAuthAuth(AuthProvider):
 
     def _authorize_url(self, challenge: str, state: str, redirect_uri: str) -> str:
         # extra params lead (claude.ai expects `code=true` first), then the standard set —
-        # matching the Claude CLI / Hermes authorize URL exactly.
+        # matching the Claude CLI authorize URL exactly.
         params = {
             **self.oauth.extra_authorize_params,
             "client_id": self.oauth.client_id,
@@ -463,7 +463,7 @@ class AuthStore:
 
 
 def import_claude_cli_login(store: "AuthStore | None" = None) -> tuple[bool, str]:
-    """Reuse an existing Claude Code / Claude CLI login on this host (OpenClaw's approach)
+    """Reuse an existing Claude Code / Claude CLI login on this host
     instead of running our own claude.ai OAuth. Reads the Claude CLI credential file and
     stores the token for the `anthropic` provider; refresh then works via the normal flow."""
     import pathlib

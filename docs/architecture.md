@@ -49,4 +49,3 @@ SQLite store with FTS5 full-text search across messages, summaries, and resume.
 Hub-and-spoke: adapters → `SessionStore` (deterministic keys, isolation modes) →
 agent. DM pairing, mention gating, control commands.
 
-See [COMPARISON.md](../COMPARISON.md) for the full feature matrix vs Hermes/OpenClaw.

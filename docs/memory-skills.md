@@ -18,7 +18,7 @@ skill is loaded) and tiered precedence (workspace > personal > configured > bund
 
 ```bash
 aegis skills                     # available skills
-aegis skills hub hermeshub       # import a whole hub (also: openclaw, anthropic)
+aegis skills hub anthropic       # import a whole hub
 aegis skills install git:owner/repo
 aegis skills new my-skill
 ```

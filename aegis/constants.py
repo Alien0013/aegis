@@ -11,7 +11,7 @@ COMPRESS_PRESERVE_LAST = 20
 MAX_PARALLEL_TOOLS = 8
 
 # --- Context window ---------------------------------------------------------
-# Match Hermes: models need a real working window for multi-step tool loops.
+# Models need a real working window for multi-step tool loops.
 MIN_CONTEXT_LENGTH = 64_000          # reject models below this at startup (override per-model)
 DEFAULT_CONTEXT_LENGTH = 128_000
 # Fraction of the context window we allow message history to fill before

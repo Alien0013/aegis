@@ -1,4 +1,4 @@
-"""Skill write-origin provenance — the Hermes curator invariant.
+"""Skill write-origin provenance — the curator invariant.
 
 Distinguishes **agent-created** skills (written by the agent / background review, and
 therefore eligible for automatic curation) from **user-created**, **bundled**, and

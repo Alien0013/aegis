@@ -1,6 +1,6 @@
 """`execute_code` — run Python in a child process that can call AEGIS tools via RPC.
 
-Hermes-style "zero-context-cost turn": the model writes a short Python script that
+A "zero-context-cost turn": the model writes a short Python script that
 orchestrates many tool calls; only the script's final stdout returns to the model,
 not every intermediate tool result. The child reaches tools over a Unix-domain
 socket (TCP fallback on Windows). Secrets are stripped from the child environment.

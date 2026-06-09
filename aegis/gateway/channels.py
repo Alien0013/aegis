@@ -189,7 +189,7 @@ class TelegramAdapter(BasePlatformAdapter):
 
 def _with_group_context(msg: dict) -> str:
     """In a group/supergroup, prefix the sender so the agent knows who is speaking (Telegram
-    delivers every member's messages to the bot). DMs are returned unchanged. Hermes parity."""
+    delivers every member's messages to the bot). DMs are returned unchanged."""
     text = msg.get("text", "")
     if msg.get("chat", {}).get("type") in ("group", "supergroup"):
         frm = msg.get("from", {})

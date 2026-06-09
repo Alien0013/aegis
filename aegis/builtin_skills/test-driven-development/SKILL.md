@@ -6,7 +6,6 @@ metadata:
   category: development
   tags: [testing, tdd, red-green-refactor, quality]
   license: MIT
-  source: adapted from Hermes Agent / obra-superpowers (MIT)
 ---
 
 ## When to Use

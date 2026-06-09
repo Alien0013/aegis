@@ -12,5 +12,5 @@ What would you like to happen? (CLI command, tool, provider, channel, config…)
 
 **Alternatives considered**
 
-**Does Hermes/OpenClaw do this?**
+**Prior art (other tools that do this)?**
 If so, how — it helps with parity decisions.

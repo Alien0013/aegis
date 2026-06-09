@@ -1,7 +1,7 @@
 """Process-global pub/sub for live activity (gateway turns, tool calls).
 
-The dashboard subscribes and streams events to the browser over SSE — the http.server-native
-equivalent of Hermes' WebSocket dashboard mirror. Publishers must never block or fail on a slow
+The dashboard subscribes and streams events to the browser over SSE — a live activity mirror.
+Publishers must never block or fail on a slow
 subscriber, so each subscriber has a bounded queue and overflow is dropped.
 """
 

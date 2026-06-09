@@ -1,4 +1,4 @@
-"""Final-reply shaping for chat surfaces (reverse-engineered from Hermes' run.py).
+"""Final-reply shaping for chat surfaces.
 
 Chat platforms are someone's phone inbox — they should get a short, safe message, not a raw
 HTTP body or an empty bubble. Two transforms, applied to the agent's reply before delivery:

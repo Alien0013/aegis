@@ -3,7 +3,7 @@
 27 presets: `codex`, `anthropic`, `openai`, `google`, `openrouter`, `groq`, `deepseek`, `xai`,
 `mistral`, `together`, `huggingface`, `novita`, `zai`, `kimi`, `minimax`, `nvidia`,
 `dashscope`, `stepfun`, `cerebras`, `perplexity`, `fireworks`, `hyperbolic`, `sambanova`,
-`nous`, `ollama`, `lmstudio`, `vllm` — plus any OpenAI-compatible endpoint via
+`ollama`, `lmstudio`, `vllm` — plus any OpenAI-compatible endpoint via
 `model.base_url` / `custom_providers`.
 
 ```bash
