@@ -129,6 +129,16 @@ class CronStore:
         self._save(kept)
         return len(kept) != len(jobs)
 
+    def set_enabled(self, job_id: str, enabled: bool) -> bool:
+        jobs = self._load()
+        hit = False
+        for j in jobs:
+            if j["id"] == job_id or j["id"].startswith(job_id):
+                j["enabled"] = enabled
+                hit = True
+        self._save(jobs)
+        return hit
+
     def mark_run(self, job_id: str, when: float) -> None:
         jobs = self._load()
         for j in jobs:

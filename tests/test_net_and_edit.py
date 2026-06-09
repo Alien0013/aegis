@@ -554,3 +554,42 @@ def test_dashboard_kanban_board(tmp_path, monkeypatch):
         assert not any(t["id"] == cid for t in board["ready"])
     finally:
         srv.shutdown()
+
+
+# --- dashboard Cron + Config tabs (manage everything in the UI) -------------
+def test_dashboard_config_redaction_and_cron(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.dashboard import _redacted_config
+
+    class C:
+        data = {"model": {"default": "gpt-5.5"}, "google": {"client_secret": "supersecretvalue"}}
+    rc = _redacted_config(C())
+    assert rc["model.default"] == "gpt-5.5"
+    assert "supersecret" not in str(rc["google.client_secret"]) and "••" in str(rc["google.client_secret"])
+
+    import http.client
+    import json
+    import threading
+    from http.server import ThreadingHTTPServer
+    from aegis.config import Config
+    from aegis.dashboard import make_handler
+    cfg = Config.load()
+    cfg.set("dashboard.token", "")
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(cfg))
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    def req(m, p, b=None):
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        c.request(m, p, json.dumps(b) if b else None, {"content-type": "application/json"} if b else {})
+        return json.loads(c.getresponse().read())
+    try:
+        jid = req("POST", "/api/cron", {"action": "add", "schedule": "every 2h", "prompt": "ci"})["id"]
+        assert any(j["id"] == jid and j["enabled"] for j in req("GET", "/api/cron"))
+        req("POST", "/api/cron", {"action": "toggle", "id": jid, "enabled": False})
+        assert not [j for j in req("GET", "/api/cron") if j["id"] == jid][0]["enabled"]
+        assert req("POST", "/api/cron", {"action": "remove", "id": jid})["ok"]
+        req("POST", "/api/config", {"key": "model.default", "value": "gpt-5.5"})
+        assert req("GET", "/api/config")["model.default"] == "gpt-5.5"
+    finally:
+        srv.shutdown()

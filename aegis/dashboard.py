@@ -45,7 +45,7 @@ h2{margin:.2em 0 .6em;font-size:16px}pre{white-space:pre-wrap;word-wrap:break-wo
 <div class=wrap><nav id=nav></nav><main id=view></main></div>
 <script>
 const V=document.getElementById('view'),NAV=document.getElementById('nav');let sid=null,_es=null;
-const TABS=['Chat','Live','Kanban','Sessions','Memory','Skills','Tools','Status'];
+const TABS=['Chat','Live','Kanban','Cron','Sessions','Memory','Skills','Tools','Config','Status'];
 const qs=new URLSearchParams(location.search),tok=qs.get('token')||localStorage.aegisToken||'';if(tok)localStorage.aegisToken=tok;
 function withTok(p){return '/api/'+p+(tok?(p.includes('?')?'&':'?')+'token='+encodeURIComponent(tok):'')}
 async function api(p){const r=await fetch(withTok(p));return r.json()}
@@ -54,7 +54,15 @@ function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':
 TABS.forEach(t=>{const b=document.createElement('button');b.textContent=t;b.onclick=()=>show(t,b);NAV.appendChild(b)});
 async function boot(){const s=await api('status');document.getElementById('sub').textContent='v'+s.version+' \\u00b7 '+s.provider+'/'+s.model;
 document.getElementById('stat').textContent=s.sessions+' sessions \\u00b7 '+s.skills+' skills \\u00b7 '+s.tools+' tools';show('Chat',NAV.children[0])}
-function show(t,btn){if(_es){_es.close();_es=null}[...NAV.children].forEach(b=>b.classList.toggle('on',b===btn));({Chat:chat,Live:live,Kanban:kanban,Sessions:sessions,Memory:memory,Skills:skills,Tools:tools,Status:status}[t])()}
+function show(t,btn){if(_es){_es.close();_es=null}[...NAV.children].forEach(b=>b.classList.toggle('on',b===btn));({Chat:chat,Live:live,Kanban:kanban,Cron:cron,Sessions:sessions,Memory:memory,Skills:skills,Tools:tools,Config:cfg,Status:status}[t])()}
+async function cron(){const j=await api('cron');
+V.innerHTML='<h2>Scheduled tasks</h2><div class=bar><input id=cs placeholder="schedule (e.g. every 2h · at 17:00 · 0 9 * * 1)" style="flex:0 0 240px"><input id=cp placeholder="prompt to run\\u2026"><button class=send id=cadd>Add</button></div>'+(j.length?'':'<p class=mut>no jobs</p>')+j.map(x=>`<div class=row><span>${x.enabled?'\\u25b6':'\\u23f8'} <b>${esc(x.schedule)}</b> \\u2014 ${esc(x.prompt)}${x.one_shot?' <span class=pill>once</span>':''}</span><span><a href=# data-t="${x.id}">toggle</a> \\u00b7 <a href=# data-r="${x.id}">delete</a></span></div>`).join('');
+V.querySelectorAll('a[data-t]').forEach(a=>a.onclick=async e=>{e.preventDefault();const cur=j.find(x=>x.id===a.dataset.t);await post('cron',{action:'toggle',id:a.dataset.t,enabled:!cur.enabled});cron()});
+V.querySelectorAll('a[data-r]').forEach(a=>a.onclick=async e=>{e.preventDefault();await post('cron',{action:'remove',id:a.dataset.r});cron()});
+document.getElementById('cadd').onclick=async()=>{const s=document.getElementById('cs').value.trim(),p=document.getElementById('cp').value.trim();if(!s||!p)return;await post('cron',{action:'add',schedule:s,prompt:p});cron()}}
+async function cfg(){const c=await api('config');const keys=Object.keys(c).sort();
+V.innerHTML='<h2>Config</h2><div class=bar><input id=ck placeholder="key (e.g. model.default)" style="flex:0 0 260px"><input id=cv placeholder="value"><button class=send id=cset>Set</button></div>'+keys.map(k=>`<div class=row><span class=mut>${esc(k)}</span><span>${esc(''+c[k])}</span></div>`).join('');
+document.getElementById('cset').onclick=async()=>{const k=document.getElementById('ck').value.trim(),v=document.getElementById('cv').value;if(!k)return;await post('config',{key:k,value:v});cfg()}}
 async function kanban(){const cols=['ready','in_progress','done','blocked'];const d=await api('kanban');
 V.innerHTML='<h2>Kanban</h2><div class=bar><input id=kt placeholder="New task title\\u2026"><button class=send id=kadd>Add</button></div><div id=board style="display:flex;gap:12px;align-items:flex-start"></div>';
 const board=document.getElementById('board');
@@ -79,6 +87,26 @@ async function tools(){const s=await api('tools');V.innerHTML='<h2>Tools ('+s.le
 async function status(){const s=await api('status');V.innerHTML='<h2>Status</h2>'+Object.entries(s).map(([k,v])=>`<div class=row><span class=mut>${k}</span><span>${esc(''+v)}</span></div>`).join('')}
 boot();
 </script></body></html>"""
+
+
+def _redacted_config(config: Config) -> dict:
+    """Flattened config for the UI, with secret-looking values masked (never echo keys)."""
+    import re as _re
+    secret = _re.compile(r"key|token|secret|password|client_secret", _re.IGNORECASE)
+    out: dict[str, str] = {}
+
+    def walk(prefix, node):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                walk(f"{prefix}.{k}" if prefix else k, v)
+        else:
+            val = node
+            if secret.search(prefix) and val:
+                val = "••••••" + str(val)[-4:] if len(str(val)) > 4 else "••••••"
+            out[prefix] = val
+
+    walk("", getattr(config, "data", {}) or {})
+    return out
 
 
 def make_handler(config: Config):
@@ -137,6 +165,13 @@ def make_handler(config: Config):
                                  "assignee": t.assignee, "priority": t.priority}
                                 for t in ks.list(status=s)]
                             for s in ("ready", "in_progress", "done", "blocked")})
+            elif path == "/api/cron":
+                from .cron import CronStore
+                self._json([{"id": j.id, "schedule": j.schedule, "prompt": j.prompt,
+                             "enabled": j.enabled, "one_shot": bool(j.run_at)}
+                            for j in CronStore().list()])
+            elif path == "/api/config":
+                self._json(_redacted_config(config))
             elif path == "/api/sessions":
                 self._json(SessionStore().list(100))
             elif path == "/api/session":
@@ -189,7 +224,8 @@ def make_handler(config: Config):
             from .session import Session, SessionStore
             n = int(self.headers.get("content-length", 0))
             body = json.loads(self.rfile.read(n) or b"{}")
-            if urlparse(self.path).path == "/api/kanban":
+            ppath = urlparse(self.path).path
+            if ppath == "/api/kanban":
                 from .kanban import KanbanStore
                 ks = KanbanStore()
                 act = body.get("action")
@@ -201,6 +237,24 @@ def make_handler(config: Config):
                     ks._set_status(body["id"], body["status"])
                     return self._json({"ok": True})
                 return self._json({"error": "bad kanban request"})
+            if ppath == "/api/cron":
+                from .cron import CronStore
+                cs = CronStore()
+                act = body.get("action")
+                if act == "add" and body.get("schedule") and body.get("prompt"):
+                    j = cs.add(body["schedule"], body["prompt"], body.get("channel", ""))
+                    return self._json({"id": j.id})
+                if act == "remove" and body.get("id"):
+                    return self._json({"ok": cs.remove(body["id"])})
+                if act == "toggle" and body.get("id"):
+                    return self._json({"ok": cs.set_enabled(body["id"], bool(body.get("enabled", True)))})
+                return self._json({"error": "bad cron request"})
+            if ppath == "/api/config":
+                key, val = body.get("key"), body.get("value")
+                if key:
+                    config.set(key, val)
+                    return self._json({"ok": True})
+                return self._json({"error": "missing key"})
             store = SessionStore()
             session = store.load(body.get("session_id") or "") or Session.create()
             agent = Agent.create(config, session=session, store=store)
