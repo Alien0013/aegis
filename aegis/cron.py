@@ -165,6 +165,10 @@ def tick(config, sink=None, store: "CronStore | None" = None, verbose: bool = Tr
             if verbose:
                 print(f"  ▸ running cron {job.id}: {job.prompt[:60]}")
             agent = Agent.create(config, session=Session.create())
+            # Headless approval policy for scheduled jobs (à la cron_mode): 'deny' (default, safe —
+            # dangerous tools blocked since nobody can approve) or 'approve' (auto-run, for trusted jobs).
+            if config and config.get("cron.approval", "deny") == "approve":
+                agent.permissions._mode_override = "auto"
             try:
                 result = agent.run(job.prompt)
                 if sink and job.channel:

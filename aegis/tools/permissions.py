@@ -80,8 +80,11 @@ class PermissionEngine:
 
     @property
     def mode(self) -> ExecMode:
+        # A per-agent override (set for a cron run or a /yolo toggle) wins over the config,
+        # without mutating the shared config that other surfaces read.
+        override = getattr(self, "_mode_override", None)
         try:
-            return ExecMode(self.config.get("tools.exec_mode", "ask"))
+            return ExecMode(override or self.config.get("tools.exec_mode", "ask"))
         except ValueError:
             return ExecMode.ASK
 

@@ -895,3 +895,40 @@ def test_gateway_service_module(monkeypatch):
     monkeypatch.setattr(service, "_launchd_path", lambda: __import__("pathlib").Path("/nonexistent/x.plist"))
     assert service.restart() is False
     assert isinstance(service.status(), str)
+
+
+# --- permission override seam: /yolo toggle + cron approval mode ------------
+def test_permission_override_and_cron_approval(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.config import Config
+    from aegis.tools.permissions import PermissionEngine, ExecMode
+    c = Config.load()
+    c.data["tools"]["exec_mode"] = "ask"
+    e = PermissionEngine(c)
+    assert e.mode == ExecMode.ASK
+    e._mode_override = "full"            # /yolo on
+    assert e.mode == ExecMode.FULL
+    e._mode_override = None              # /yolo off
+    assert e.mode == ExecMode.ASK
+
+    # cron approval mode: 'approve' -> the cron agent runs in auto; default 'deny' -> no override
+    import aegis.agent.agent as am
+    from aegis.cron import CronStore, tick
+    seen = {}
+
+    class A:
+        def __init__(self): self.permissions = PermissionEngine(Config.load())
+        def run(self, p):
+            seen["mode"] = self.permissions.mode
+            return type("R", (), {"content": "ok"})()
+    monkeypatch.setattr(am.Agent, "create", staticmethod(lambda cfg, session=None: A()))
+
+    s = CronStore(); s.add("every 1s", "do")
+    cfg = Config.load(); cfg.data.setdefault("cron", {})["approval"] = "approve"   # in-memory
+    tick(cfg, store=s, verbose=False)
+    assert seen["mode"] == ExecMode.AUTO
+
+    s2 = CronStore(); s2.add("every 1s", "do2")
+    cfg2 = Config.load(); cfg2.data.setdefault("cron", {})["approval"] = "deny"
+    tick(cfg2, store=s2, verbose=False)
+    assert seen["mode"] != ExecMode.AUTO          # deny -> inherits config (ask), not auto

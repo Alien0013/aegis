@@ -172,6 +172,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "paths": [],                 # extra skill dirs
         "autogen": True,
     },
+    "cron": {
+        "approval": "deny",          # headless approval for scheduled jobs: deny (safe) | approve (auto-run)
+    },
     "trajectory": {
         "enabled": False,            # auto-record each turn during agent runs
         "path": "trajectories.jsonl", # output file (relative to AEGIS_HOME unless absolute)
@@ -186,7 +189,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "memory_every": 6,            # run a memory review every N turns
         "skill_every_iters": 5,       # run a skill review when a turn used >= N tool iterations
         "auto_apply": True,           # fork writes reviewed memory directly (False = only queue)
-        "auto_apply_skills": False,   # also auto-apply reviewed SKILLS (full autonomy; off = human-gated)
+        "auto_apply_skills": True,    # also auto-apply reviewed SKILLS (full autonomy; False = human-gated)
     },
     "mcp": {
         "enabled": True,

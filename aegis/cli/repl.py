@@ -35,7 +35,7 @@ _approve_lock = threading.Lock()
 
 SLASH = ["/help", "/model", "/status", "/tools", "/skills", "/skill", "/memory", "/usage",
          "/compress", "/think", "/retry", "/undo", "/learn", "/background", "/tasks", "/rollback",
-         "/personality", "/save", "/sessions", "/new", "/clear", "/quit", "/exit"]
+         "/personality", "/save", "/sessions", "/new", "/clear", "/yolo", "/quit", "/exit"]
 
 
 def _out(text: str = "", style: str | None = None) -> None:
@@ -183,6 +183,13 @@ def handle_slash(cmd: str, agent: Agent) -> str:
     if name == "/help":
         _out("Commands: " + ", ".join(SLASH))
         _out("Anything else is sent to the agent.")
+    elif name == "/yolo":
+        eng = agent.permissions
+        on = getattr(eng, "_mode_override", None) == "full"
+        eng._mode_override = None if on else "full"
+        _out("🟢 exec mode restored (approvals on)." if on
+             else "⚠ YOLO ON — all tool approvals bypassed for this session "
+                  "(hardline blocklist still applies). /yolo again to turn off.")
     elif name == "/model":
         _out(f"current: {agent.provider.describe()}")
     elif name == "/status":
