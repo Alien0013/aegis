@@ -136,5 +136,8 @@ def build_adapter(name: str) -> BasePlatformAdapter:
     if name == "webhook":
         from .webhook_channel import WebhookChannel
         return WebhookChannel()
+    if name == "ntfy":
+        from .ntfy_channel import NtfyAdapter
+        return NtfyAdapter()
     raise ValueError(f"Unknown channel '{name}'. Available: cli, telegram, discord, slack, "
-                     "signal, matrix, email, webhook.")
+                     "signal, matrix, email, webhook, ntfy.")

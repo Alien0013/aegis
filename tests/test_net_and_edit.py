@@ -201,3 +201,18 @@ def test_send_message_tool(tmp_path, monkeypatch):
     from aegis.gateway.queue import DeliveryQueue
     row = DeliveryQueue().due()[0]
     assert row["platform"] == "telegram" and "[REDACTED]" in row["text"]   # redacted on the way out
+
+
+# --- ntfy push-notification channel -----------------------------------------
+def test_ntfy_channel(monkeypatch):
+    monkeypatch.setenv("NTFY_TOPIC", "aegis-alerts")
+    from aegis.gateway.channels import build_adapter
+    a = build_adapter("ntfy")
+    assert a.name == "ntfy" and a.server == "https://ntfy.sh" and a.renders_tables is False
+
+    import httpx
+    sent = {}
+    monkeypatch.setattr(httpx, "post",
+                        lambda url, content=None, headers=None, timeout=None: sent.update(url=url, body=content))
+    a.send("aegis-alerts", "done ✅")
+    assert sent["url"] == "https://ntfy.sh/aegis-alerts" and sent["body"] == "done ✅".encode()
