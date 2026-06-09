@@ -101,40 +101,8 @@ def list_candidates(status: str = "pending") -> list[dict]:
     return [c for c in _load() if c.get("status") == status]
 
 
-def background_tick(config, session) -> bool:
-    """Background learning: every N assistant turns, review the session off-thread.
-
-    Enable with `learn.background: true` + `learn.background_every: <N>`. Memory candidates
-    auto-apply via `learn.auto_apply` (low risk). Skills stay pending for human review by
-    default — set `learn.auto_apply_skills: true` to let them auto-apply too (full autonomy).
-    Returns True if a review was kicked off."""
-    every = int(config.get("learn.background_every", 0) or 0)
-    if every <= 0 or not config.get("learn.background", False) or session is None:
-        return False
-    turns = sum(1 for m in session.messages if m.role == "assistant" and m.content)
-    last = session.meta.get("_last_bg_review", 0)
-    if turns - last < every:
-        return False
-    session.meta["_last_bg_review"] = turns
-    auto = bool(config.get("learn.auto_apply", False))
-    auto_skills = bool(config.get("learn.auto_apply_skills", False))
-
-    def _run():
-        try:
-            found = review_session(config, session.id)
-            for c in found:
-                kind = c.get("type")
-                if kind == "memory" and auto:                  # low risk -> auto
-                    apply_candidate(c["id"], config)
-                elif kind == "skill" and auto_skills:          # opt-in full autonomy
-                    apply_candidate(c["id"], config)
-        except Exception:  # noqa: BLE001
-            from ._log import log_exc
-            log_exc("background learn review failed")
-
-    import threading
-    threading.Thread(target=_run, daemon=True).start()
-    return True
+# NOTE: the live background-learning path is agent/review.py::maybe_review (spawned per turn
+# from Agent.run). This module provides the candidate store + apply_candidate it delegates to.
 
 
 def apply_candidate(cand_id: str, config) -> str:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from . import config as cfg
@@ -22,10 +22,13 @@ class CronJob:
     id: str
     schedule: str
     prompt: str
-    channel: str = ""          # optional "telegram:<chat_id>" sink
+    channel: str = ""          # optional "telegram:<chat_id>" sink (single target; back-compat)
     last_run: float = 0.0
     enabled: bool = True
     run_at: float = 0.0        # >0 marks a one-shot job: fire once at this epoch, then disable
+    script: str = ""           # path to a Python file run first; its stdout is prepended as context
+    skills: list[str] = field(default_factory=list)   # skills to load before running
+    deliver: str = ""          # comma-sep "platform:chat_id" targets; supersedes ``channel`` when set
 
 
 _INTERVAL_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -114,10 +117,11 @@ class CronStore:
     def list(self) -> list[CronJob]:
         return [CronJob(**j) for j in self._load()]
 
-    def add(self, schedule: str, prompt: str, channel: str = "") -> CronJob:
+    def add(self, schedule: str, prompt: str, channel: str = "", script: str = "",
+            skills: list[str] | None = None, deliver: str = "") -> CronJob:
         run_at = _parse_oneshot(schedule, time.time()) or 0.0
         job = CronJob(id=new_id("cron"), schedule=schedule, prompt=prompt, channel=channel,
-                      run_at=run_at)
+                      run_at=run_at, script=script, skills=skills or [], deliver=deliver)
         jobs = self._load()
         jobs.append(job.__dict__)
         self._save(jobs)
@@ -169,10 +173,15 @@ def tick(config, sink=None, store: "CronStore | None" = None, verbose: bool = Tr
             # dangerous tools blocked since nobody can approve) or 'approve' (auto-run, for trusted jobs).
             if config and config.get("cron.approval", "deny") == "approve":
                 agent.permissions._mode_override = "auto"
+            from .automation import build_prompt, delivery_targets, is_silent
+            prompt = build_prompt(job.prompt, skills=job.skills, script=job.script)
             try:
-                result = agent.run(job.prompt)
-                if sink and job.channel:
-                    sink(job.channel, result.content)
+                reply = agent.run(prompt).content
+                # [SILENT]/empty -> deliver nothing (monitors only notify on real change).
+                if sink and not is_silent(reply):
+                    targets = delivery_targets(job.deliver) or ([job.channel] if job.channel else [])
+                    for target in targets:
+                        sink(target, reply)
             except Exception as e:  # noqa: BLE001
                 print(f"    cron error: {e}")
             store.mark_run(job.id, now)

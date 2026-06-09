@@ -20,7 +20,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import config as cfg
@@ -36,6 +36,9 @@ class Webhook:
     name: str
     prompt: str
     secret: str = ""
+    deliver: str = ""                                  # comma-sep "platform:chat_id" delivery targets
+    events: list[str] = field(default_factory=list)    # X-GitHub-Event allowlist (empty = all)
+    skills: list[str] = field(default_factory=list)    # skills to load before running
 
 
 class WebhookStore:
@@ -57,9 +60,11 @@ class WebhookStore:
                 return Webhook(**h)
         return None
 
-    def add(self, name: str, prompt: str, secret: str = "") -> Webhook:
+    def add(self, name: str, prompt: str, secret: str = "", deliver: str = "",
+            events: list[str] | None = None, skills: list[str] | None = None) -> Webhook:
         """Add or replace the subscription named ``name``."""
-        hook = Webhook(name=name, prompt=prompt, secret=secret)
+        hook = Webhook(name=name, prompt=prompt, secret=secret, deliver=deliver,
+                       events=events or [], skills=skills or [])
         hooks = [h for h in self._load() if h["name"] != name]
         hooks.append(hook.__dict__)
         self._save(hooks)
@@ -150,13 +155,25 @@ def make_handler(config, store: WebhookStore):
             if not verify_signature(hook.secret, body, sig):
                 return self._json(401, {"error": "invalid signature"})
 
-            prompt = render_prompt(hook.prompt, name, body)
+            # GitHub event allowlist: skip (200) when this event isn't in the hook's filter.
+            if hook.events:
+                event = self.headers.get("X-GitHub-Event", "")
+                if event not in hook.events:
+                    return self._json(200, {"ok": True, "skipped": "event"})
+
+            from .automation import build_prompt, delivery_targets, enqueue_delivery, is_silent
+            prompt = build_prompt(render_prompt(hook.prompt, name, body), skills=hook.skills)
             try:
                 agent = Agent.create(config, session=Session.create())
-                result = agent.run(prompt)
-                return self._json(200, {"ok": True, "reply": result.content})
+                reply = agent.run(prompt).content
             except Exception as e:  # noqa: BLE001
                 return self._json(500, {"error": str(e)})
+
+            # Deliver to configured channels via the durable outbox, honoring [SILENT].
+            if hook.deliver and not is_silent(reply):
+                for target in delivery_targets(hook.deliver):
+                    enqueue_delivery(target, reply)
+            return self._json(200, {"ok": True, "reply": reply})
 
     return Handler
 
@@ -190,11 +207,21 @@ def cmd_webhook(args, config) -> int:
         if isinstance(prompt, list):
             prompt = " ".join(prompt)
         if not name or not prompt:
-            print('usage: aegis webhook add <name> "<prompt template>" [--secret S]')
+            print('usage: aegis webhook add <name> "<prompt>" [--secret S] '
+                  '[--deliver telegram:ID] [--events pull_request,push] [--skills github-review]')
             return 2
-        hook = store.add(name, prompt, getattr(args, "secret", "") or "")
-        lock = " (signed)" if hook.secret else ""
-        print(f"added webhook '{hook.name}'{lock}: {truncate(hook.prompt, 80)}")
+        events = [e.strip() for e in (getattr(args, "events", "") or "").split(",") if e.strip()]
+        skills = [s.strip() for s in (getattr(args, "skills", "") or "").split(",") if s.strip()]
+        hook = store.add(name, prompt, getattr(args, "secret", "") or "",
+                         deliver=getattr(args, "deliver", "") or "", events=events, skills=skills)
+        bits = ["(signed)"] if hook.secret else []
+        if hook.deliver:
+            bits.append(f"→{hook.deliver}")
+        if hook.events:
+            bits.append(f"events={','.join(hook.events)}")
+        if hook.skills:
+            bits.append(f"skills={','.join(hook.skills)}")
+        print(f"added webhook '{hook.name}' {' '.join(bits)}: {truncate(hook.prompt, 60)}")
         return 0
 
     if action == "remove":

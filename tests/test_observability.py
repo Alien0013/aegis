@@ -80,22 +80,10 @@ def test_compaction_prunes_tool_output_and_images():
     assert "[image omitted]" in joined
 
 
-def test_background_learn_is_opt_in_and_gated(monkeypatch):
+def test_background_tick_removed():
+    """The dead duplicate path is gone; agent/review.py::maybe_review is the live one."""
     from aegis import learn
-    from aegis.config import Config
-    from aegis.session import Session
-    from aegis.types import Message
-    calls = {"n": 0}
-    monkeypatch.setattr(learn, "review_session", lambda *a, **k: calls.__setitem__("n", calls["n"] + 1) or [])
-    s = Session.create()
-    s.messages = [Message.assistant("a1"), Message.assistant("a2")]
-    cfg = Config.load()
-    assert learn.background_tick(cfg, s) is False         # off by default
-    cfg.data["learn"].update({"background": True, "background_every": 2})
-    assert learn.background_tick(cfg, s) is True          # 2 turns >= every=2
-    import time; time.sleep(0.2)
-    assert calls["n"] == 1
-    assert learn.background_tick(cfg, s) is False          # no new turns -> no re-review
+    assert not hasattr(learn, "background_tick")
 
 
 def test_dependency_audit_tool(monkeypatch, tmp_path):

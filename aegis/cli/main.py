@@ -311,7 +311,11 @@ def cmd_cron(args, config: Config) -> int:
     if args.action == "add":
         if not args.schedule or not args.prompt:
             return _die('usage: aegis cron add "<schedule>" "<prompt>"')
-        job = store.add(args.schedule, " ".join(args.prompt) if isinstance(args.prompt, list) else args.prompt)
+        prompt = " ".join(args.prompt) if isinstance(args.prompt, list) else args.prompt
+        skills = [s.strip() for s in (getattr(args, "skills", "") or "").split(",") if s.strip()]
+        job = store.add(prompt=prompt, schedule=args.schedule,
+                        script=getattr(args, "script", "") or "", skills=skills,
+                        deliver=getattr(args, "deliver", "") or "")
         _print(f"added cron {job.id}: [{job.schedule}] {job.prompt[:60]}")
         return 0
     if args.action == "rm":
@@ -996,6 +1000,9 @@ def build_parser() -> argparse.ArgumentParser:
     wh.add_argument("action", nargs="?", choices=["list", "add", "remove", "serve"], default="list")
     wh.add_argument("name", nargs="?"); wh.add_argument("prompt", nargs="*")
     wh.add_argument("--secret"); wh.add_argument("--host"); wh.add_argument("--port", type=int)
+    wh.add_argument("--deliver", help="comma-sep platform:chat_id targets, e.g. telegram:42")
+    wh.add_argument("--events", help="comma-sep X-GitHub-Event allowlist, e.g. pull_request,push")
+    wh.add_argument("--skills", help="comma-sep skills to load before running")
     wh.set_defaults(func=_webhook.cmd_webhook)
 
     hk = sub.add_parser("hooks", help="lifecycle shell hooks")
@@ -1107,6 +1114,9 @@ def build_parser() -> argparse.ArgumentParser:
     cr.add_argument("action", nargs="?", choices=["list", "add", "rm", "run"], default="list")
     cr.add_argument("schedule", nargs="?", help='e.g. "30m", "@daily", or 5-field cron')
     cr.add_argument("prompt", nargs="*")
+    cr.add_argument("--script", help="Python file to run first; its stdout is prepended as context")
+    cr.add_argument("--skills", help="comma-sep skills to load before running")
+    cr.add_argument("--deliver", help="comma-sep platform:chat_id targets (supersedes single channel)")
     cr.set_defaults(func=cmd_cron)
 
     t = sub.add_parser("tools", help="list tools; `doctor` for availability; `status` for backends")

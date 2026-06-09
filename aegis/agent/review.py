@@ -105,17 +105,25 @@ def maybe_review(agent, tools_this_turn: int) -> bool:
         return False
     if review_memory:
         meta["_turns_since_memory"] = 0
-    kind = "combined" if (review_memory and review_skill) else ("memory" if review_memory else "skill")
+    # Memory and skills gate independently: memory is low-risk (auto by default); skills are
+    # human-gated by default to avoid writing executable instructions to disk unattended.
     auto_apply = bool(cfg.get("learn.auto_apply", False))
+    auto_apply_skills = bool(cfg.get("learn.auto_apply_skills", False))
 
     on_ev = getattr(agent.tool_context, "emit", None)   # surface what it saves to the user
 
     def _run():
         try:
-            if auto_apply:
-                run_review(agent, kind, on_event=on_ev)   # writes directly + reports back
-            else:
-                _propose_only(agent, kind)         # safer default: queue candidates
+            if review_memory:
+                if auto_apply:
+                    run_review(agent, "memory", on_event=on_ev)   # writes directly + reports back
+                else:
+                    _propose_only(agent, "memory")                # queue candidate
+            if review_skill:
+                if auto_apply_skills:
+                    run_review(agent, "skill", on_event=on_ev)
+                else:
+                    _propose_only(agent, "skill")                 # safer default: queue candidate
         except Exception:  # noqa: BLE001
             from .._log import log_exc
             log_exc("background review failed")
