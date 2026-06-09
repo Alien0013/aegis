@@ -145,6 +145,11 @@ def _next_in_lineage(title: str) -> str:
 def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
     """Proactively compact BEFORE the next model call if the window is near full. Returns the
     (possibly new child) session. Splits into a child session when a store + split are enabled."""
+    # Once a compaction can't meaningfully shrink the window (e.g. the preserved tail itself
+    # exceeds the threshold), stop retrying this turn — otherwise we'd burn a model call on a
+    # no-op summary every iteration until the budget is exhausted.
+    if getattr(agent, "_compact_stuck", False):
+        return session
     if not compaction.should_compress(session.messages, agent.provider.context_length, schema_tokens):
         return session
     emit({"type": "compacting"})
@@ -162,14 +167,22 @@ def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
         preserve_last=comp.get("preserve_last", 20),
         max_tool_tokens=comp.get("max_tool_tokens", 600),
     )
+    after_tok = compaction.estimated_tokens(compressed)
+    # If we're STILL over the threshold after compacting, the preserved tail is the floor —
+    # further compaction can't help, so don't retry this turn (avoids per-iteration thrash).
+    still_over = compaction.should_compress(compressed, agent.provider.context_length, schema_tokens)
     from ..constants import COMPACT_THRESHOLD
     from ..util import now_iso
     rec = {"at": now_iso(), "iteration": budget.api_call_count,
            "messages_before": before_n, "messages_after": len(compressed),
-           "tokens_before": before_tok, "tokens_after": compaction.estimated_tokens(compressed),
+           "tokens_before": before_tok, "tokens_after": after_tok,
            "reason": f"context exceeded {int(COMPACT_THRESHOLD * 100)}% of the window"}
+    if still_over:
+        agent._compact_stuck = True
+        rec["stuck"] = True
 
-    if comp.get("split_sessions", True) and agent.store is not None and len(compressed) < before_n:
+    if not still_over and comp.get("split_sessions", True) and agent.store is not None \
+            and len(compressed) < before_n:
         from ..session import Session
         parent = session
         try:

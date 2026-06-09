@@ -132,20 +132,29 @@ def test_forked_review_writes_agent_created_skill(tmp_path):
     assert provenance.is_agent_created("deploy-flow")
 
 
-def test_compaction_splits_into_child_session(tmp_path):
-    """When the window fills on a tool turn, roll into a child session (parent kept, lineage chained)."""
+def test_compaction_splits_into_child_session(tmp_path, monkeypatch):
+    """When the window fills, roll into a child session (parent kept, lineage chained)."""
+    from aegis.agent import compaction
     from aegis.agent.agent import Agent
     from aegis.config import Config
     from aegis.session import Session, SessionStore
-    from aegis.types import LLMResponse, Message, ToolCall
+    from aegis.types import LLMResponse, Message
+
+    # deterministic: over the threshold on the first check, under it after compaction
+    calls = {"n": 0}
+
+    def fake_should(messages, ctx, overhead=0):
+        calls["n"] += 1
+        return calls["n"] == 1
+    monkeypatch.setattr(compaction, "should_compress", fake_should)
 
     class Dual:
-        context_length = 1; name = "f"; model = "m"; api_mode = None; auth = None
+        context_length = 200_000; name = "f"; model = "m"; api_mode = None; auth = None
         def describe(self): return "f"
         def complete(self, messages, tools=None, **k):
-            if tools is None:                       # compaction asking for a summary
+            if tools is None:
                 return LLMResponse(text="SUMMARY of earlier turns")
-            return LLMResponse(text="final")        # proactive compaction already split before this
+            return LLMResponse(text="final")        # compaction already split before this call
 
     cfg = Config.load()
     cfg.data["tools"]["exec_mode"] = "full"
