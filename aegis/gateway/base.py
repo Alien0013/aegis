@@ -80,7 +80,7 @@ def tableify(text: str) -> str:
             i += 2
             while i < len(lines) and _TABLE_ROW.match(lines[i]):
                 cells = [c.strip() for c in lines[i].strip().strip("|").split("|")]
-                pairs = [f"{h}: {c}" for h, c in zip(header, cells) if c]
+                pairs = [f"{h}: {c}" for h, c in zip(header, cells, strict=False) if c]
                 out.append("• " + " — ".join(pairs))
                 i += 1
         else:
