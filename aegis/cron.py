@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from . import config as cfg
 from .types import new_id
@@ -24,6 +25,7 @@ class CronJob:
     channel: str = ""          # optional "telegram:<chat_id>" sink
     last_run: float = 0.0
     enabled: bool = True
+    run_at: float = 0.0        # >0 marks a one-shot job: fire once at this epoch, then disable
 
 
 _INTERVAL_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -37,6 +39,30 @@ def _interval_seconds(schedule: str) -> int | None:
         s = s[6:]
     if s and s[-1] in _INTERVAL_UNITS and s[:-1].isdigit():
         return int(s[:-1]) * _INTERVAL_UNITS[s[-1]]
+    return None
+
+
+def _parse_oneshot(schedule: str, now: float) -> float | None:
+    """Resolve a one-shot schedule to a target epoch, else None. Forms:
+    'in 2h' / 'in 30m', 'at 17:00' (next occurrence), or an ISO datetime '2026-06-10T17:00'."""
+    s = schedule.strip().lower()
+    if s.startswith("in "):                          # relative delay
+        d = s[3:].strip()
+        if d and d[-1] in _INTERVAL_UNITS and d[:-1].isdigit():
+            return now + int(d[:-1]) * _INTERVAL_UNITS[d[-1]]
+        return None
+    m = re.match(r"^at (\d{1,2}):(\d{2})$", s)        # clock time -> next today/tomorrow
+    if m:
+        base = datetime.fromtimestamp(now)
+        target = base.replace(hour=int(m.group(1)), minute=int(m.group(2)), second=0, microsecond=0)
+        if target.timestamp() <= now:
+            target += timedelta(days=1)
+        return target.timestamp()
+    if re.match(r"^\d{4}-\d{2}-\d{2}", schedule.strip()):  # ISO datetime
+        try:
+            return datetime.fromisoformat(schedule.strip().replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return None
     return None
 
 
@@ -59,6 +85,8 @@ def _cron_field_matches(field: str, value: int) -> bool:
 def is_due(job: CronJob, now: float) -> bool:
     if not job.enabled:
         return False
+    if job.run_at:                                   # one-shot: fire once when its time arrives
+        return job.last_run == 0.0 and now >= job.run_at
     interval = _interval_seconds(job.schedule)
     if interval is not None:
         return (now - job.last_run) >= interval
@@ -87,7 +115,9 @@ class CronStore:
         return [CronJob(**j) for j in self._load()]
 
     def add(self, schedule: str, prompt: str, channel: str = "") -> CronJob:
-        job = CronJob(id=new_id("cron"), schedule=schedule, prompt=prompt, channel=channel)
+        run_at = _parse_oneshot(schedule, time.time()) or 0.0
+        job = CronJob(id=new_id("cron"), schedule=schedule, prompt=prompt, channel=channel,
+                      run_at=run_at)
         jobs = self._load()
         jobs.append(job.__dict__)
         self._save(jobs)
@@ -104,6 +134,8 @@ class CronStore:
         for j in jobs:
             if j["id"] == job_id:
                 j["last_run"] = when
+                if j.get("run_at"):          # one-shot: done after it fires once
+                    j["enabled"] = False
         self._save(jobs)
 
 

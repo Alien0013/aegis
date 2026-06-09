@@ -216,3 +216,25 @@ def test_ntfy_channel(monkeypatch):
                         lambda url, content=None, headers=None, timeout=None: sent.update(url=url, body=content))
     a.send("aegis-alerts", "done ✅")
     assert sent["url"] == "https://ntfy.sh/aegis-alerts" and sent["body"] == "done ✅".encode()
+
+
+# --- cron one-shot scheduling (Hermes parity: agent/cron subsystem) ---------
+def test_cron_oneshot_lifecycle(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import time
+    from aegis.cron import CronStore, is_due, _parse_oneshot
+    now = time.time()
+    assert abs(_parse_oneshot("in 2h", now) - (now + 7200)) < 2
+    assert _parse_oneshot("at 17:00", now) > now
+    assert _parse_oneshot("every 5m", now) is None        # recurring, not one-shot
+
+    s = CronStore()
+    j = s.add("in 1h", "ping", "ntfy:alerts")
+    assert j.run_at > now and not is_due(j, now)
+    assert is_due(j, j.run_at + 1)                          # fires when its time arrives
+    s.mark_run(j.id, j.run_at + 1)
+    done = s.list()[0]
+    assert done.enabled is False and not is_due(done, done.run_at + 999)   # one-shot, done
+
+    r = CronStore().add("every 10m", "poll")
+    assert r.run_at == 0.0 and is_due(r, now)               # recurring unaffected
