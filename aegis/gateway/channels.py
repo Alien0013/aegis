@@ -105,12 +105,46 @@ class TelegramAdapter(BasePlatformAdapter):
 
     def _enqueue(self, ev: MessageEvent) -> None:
         with self._qlock:
+            w = self._workers.get(ev.chat_id)
+            busy = bool(w and w.is_alive())
+        if busy:
+            handled, note = self._apply_busy_mode(ev)
+            if note:
+                self.send(ev.chat_id, note)
+            if handled:
+                return
+        with self._qlock:
             self._queues.setdefault(ev.chat_id, []).append(ev)
             w = self._workers.get(ev.chat_id)
             if not (w and w.is_alive()):     # one worker per chat -> turns stay ordered
                 w = threading.Thread(target=self._drain, args=(ev.chat_id,), daemon=True)
                 self._workers[ev.chat_id] = w
                 w.start()
+
+    def _apply_busy_mode(self, ev: MessageEvent) -> tuple[bool, str]:
+        """A normal message arrived while this chat has a turn running. Apply
+        gateway.busy_mode: queue (default — run it next), steer (fold it into the
+        running turn), interrupt (cancel the turn, then run it). Returns
+        (handled, first_touch_note); handled=True means don't enqueue."""
+        config = getattr(self, "_config", None)
+        mode = str(config.get("gateway.busy_mode", "queue")) if config else "queue"
+        handled = False
+        applied = "queue"
+        if mode == "steer":
+            scb = getattr(self, "_steer_cb", None)
+            if scb and scb(ev, ev.text):     # falls back to queue if the run just ended
+                handled, applied = True, "steer"
+        elif mode == "interrupt":
+            cb = getattr(self, "_interrupt_cb", None)
+            if cb and cb(ev):                # cancel now; the message still runs next
+                applied = "interrupt"
+        note = ""
+        if config is not None:
+            from ..firstrun import BUSY_FLAG, busy_hint, is_seen, mark_seen
+            if not is_seen(config, BUSY_FLAG):
+                mark_seen(config, BUSY_FLAG)
+                note = busy_hint(applied)
+        return handled, note
 
     def _drain(self, chat_id: str) -> None:
         while True:

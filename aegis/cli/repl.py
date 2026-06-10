@@ -390,7 +390,9 @@ def interactive(config: Config, *, model=None, provider_name=None,
                 break
             continue
         try:
-            agent.run(expand_references(user, agent.cwd), Renderer())
+            from ..firstrun import profile_build_directive
+            agent.run(expand_references(user, agent.cwd) + profile_build_directive(config),
+                      Renderer())
         except KeyboardInterrupt:
             agent.cancel()   # stop the loop at the next safe point; discard partial work
             _out("\n  ⏹ interrupted — stopped this turn (your session is intact)", style="yellow")

@@ -212,7 +212,7 @@ def test_onboarding_terminal_menu_uses_selector_markers(monkeypatch):
     text = "\n".join(out)
     assert "  ❯ OpenAI" in text
     assert "  ⬡ Telegram" in text
-    assert "CONFIGURING TOOLS & SKILLS" in text
+    assert "Tools & skills" in text
     assert "model-visible tools:" in text
     assert "skills available:" in text
     assert "OpenAI (GPT-4o / GPT-5 API) (1)" not in text

@@ -22,6 +22,51 @@ Input = Callable[[str], str]
 Output = Callable[[str], None]
 
 
+# -- presentation -----------------------------------------------------------
+# Color only on a real terminal (and never into a test's capture list).
+def _tty_color(out: Output) -> bool:
+    return (out is print and sys.stdout.isatty()
+            and not os.environ.get("NO_COLOR"))
+
+
+def _paint(text: str, code: str, out: Output) -> str:
+    return f"\x1b[{code}m{text}\x1b[0m" if _tty_color(out) else text
+
+
+class _Stepper:
+    """Numbers the wizard's section headers ([2/6] Model & inference …)."""
+
+    def __init__(self, total: int):
+        self.n = 0
+        self.total = total
+
+
+_STEP: _Stepper | None = None
+
+
+def _hdr(out: Output, title: str) -> None:
+    global _STEP
+    tag = ""
+    if _STEP is not None:
+        _STEP.n += 1
+        tag = f"[{_STEP.n}/{_STEP.total}] "
+    line = f"{tag}{title}"
+    out("")
+    out(_paint(f"━━ {line} " + "━" * max(0, 53 - len(line)), "1;36", out))
+
+
+def _banner(out: Output) -> None:
+    from . import __version__
+    logo = (
+        "  ▄▀█ █▀▀ █▀▀ █ █▀\n"
+        "  █▀█ ██▄ █▄█ █ ▄█"
+    )
+    out("")
+    out(_paint(logo, "1;36", out))
+    out(_paint(f"  v{__version__} — your personal agent harness", "2", out))
+    out("")
+
+
 MODEL_PRESETS: dict[str, list[tuple[str, str]]] = {
     "codex": [
         ("gpt-5.5-pro", "GPT-5.5 Pro (most capable)"),
@@ -130,10 +175,9 @@ def run_onboarding(
     state = OnboardingState(channels=[], services=[], workspace_files=[], service_errors=[], errors=[])
 
     out = output_func
-    out("")
-    out("AEGIS ONBOARDING")
-    out("─────────────────────────────────────────────────────────")
-    out("SECURITY NOTICE: AEGIS can execute commands, edit files, and connect")
+    _banner(out)
+    out(_paint("SECURITY NOTICE:", "1;33", out) +
+        " AEGIS can execute commands, edit files, and connect")
     out("to messaging networks when you enable those tools. Use it only in a")
     out("trusted environment and keep API keys private.")
     if not _confirm("Acknowledge security notice and proceed?", True, input_func, out):
@@ -174,6 +218,8 @@ def run_onboarding(
     elif quick:
         advanced = False
 
+    global _STEP
+    _STEP = _Stepper(6 if advanced else 5)   # memory is an advanced-only section
     if not _configure_model(config, state, advanced, probe, input_func, secret_func, out):
         return 1
     if input_func is input:          # real interactive setup only — never hit the network in tests
@@ -621,9 +667,7 @@ def _configure_model(
     secret_func: Input,
     out: Output,
 ) -> bool:
-    out("")
-    out("CONFIGURING MODEL INFERENCE")
-    out("─────────────────────────────────────────────────────────")
+    _hdr(out, "Model & inference")
     _detected = [e for e in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY",
                              "GEMINI_API_KEY", "OPENROUTER_API_KEY", "GROQ_API_KEY",
                              "DEEPSEEK_API_KEY", "XAI_API_KEY", "MISTRAL_API_KEY")
@@ -839,9 +883,7 @@ def _configure_web(
     secret_func: Input,
     out: Output,
 ) -> None:
-    out("")
-    out("CONFIGURING WEB BROWSING TOOLS")
-    out("─────────────────────────────────────────────────────────")
+    _hdr(out, "Web search")
     options = [
         ("duckduckgo", "DuckDuckGo (key-free)"),
         ("brave", "Brave Search API"),
@@ -890,9 +932,7 @@ def _configure_memory(config: Config, state: OnboardingState, advanced: bool,
     an optional external provider on top. Advanced-only so the quick path stays fast."""
     if not advanced:
         return
-    out("")
-    out("MEMORY")
-    out("─────────────────────────────────────────────────────────")
+    _hdr(out, "Memory")
     out("File memory (MEMORY.md / USER.md) is always on. Optionally add a backend:")
     choice = _choose(
         "Long-term memory backend:",
@@ -916,9 +956,7 @@ def _configure_agent_surface(
     input_func: Input,
     out: Output,
 ) -> None:
-    out("")
-    out("CONFIGURING TOOLS & SKILLS")
-    out("─────────────────────────────────────────────────────────")
+    _hdr(out, "Tools & skills")
     current = list(config.get("tools.toolsets", []) or ["core", "mcp"])
     recommended = _recommended_toolsets()
     if advanced:
@@ -980,9 +1018,7 @@ def _configure_channels(
     secret_func: Input,
     out: Output,
 ) -> None:
-    out("")
-    out("MESSAGING & CHANNELS")
-    out("─────────────────────────────────────────────────────────")
+    _hdr(out, "Messaging & channels")
     channel_options = [("telegram", "Telegram")]
     if advanced:
         channel_options.extend([("discord", "Discord"), ("slack", "Slack")])
@@ -1088,9 +1124,7 @@ def _configure_services(
     input_func: Input,
     out: Output,
 ) -> None:
-    out("")
-    out("GATEWAY & DAEMON INSTALLATION")
-    out("─────────────────────────────────────────────────────────")
+    _hdr(out, "Background services")
     from .daemon import systemd_available
 
     if not systemd_available():
@@ -1176,8 +1210,7 @@ def _summary_data(config: Config, state: OnboardingState, *, ok: bool = True) ->
 
 def _summary(config: Config, state: OnboardingState, out: Output) -> None:
     out("")
-    out("ONBOARDING COMPLETE")
-    out("─────────────────────────────────────────────────────────")
+    out(_paint("━━ ✓ Setup complete " + "━" * 36, "1;32", out))
     out(f"Config:          {cfg.config_path()}")
     out(f"Primary brain:   {config.get('model.provider')} {config.get('model.default')}")
     out(f"Web search:      {config.get('web.search_backend')}")
@@ -1195,9 +1228,7 @@ def _summary(config: Config, state: OnboardingState, out: Output) -> None:
     if state.service_errors:
         out(f"Service issues:  {', '.join(state.service_errors)}")
     out("")
-    out("Graphical control panel (easiest — opens in your browser):")
-    out("  aegis ui")
-    out(f"  or open: {state.dashboard_url}")
-    out("")
-    out("Start chatting in the terminal:")
-    out("  aegis")
+    out(_paint("Next steps:", "1", out))
+    out(f"  {_paint('aegis ui', '1;36', out)}      → web control panel ({state.dashboard_url})")
+    out(f"  {_paint('aegis', '1;36', out)}         → chat in the terminal")
+    out(f"  {_paint('aegis doctor', '1;36', out)}  → verify the install end to end")

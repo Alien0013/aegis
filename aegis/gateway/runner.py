@@ -92,6 +92,10 @@ class GatewayRunner:
         # Voice memos / audio attachments -> transcribe and prepend.
         text = self._maybe_transcribe(ev, text)
 
+        # Very first message ever -> one-shot, consent-gated profile-build offer.
+        from ..firstrun import profile_build_directive
+        text += profile_build_directive(self.config)
+
         # Serialize per session so one session isn't run concurrently (race on messages).
         with self._lock:
             lock = self._key_locks.setdefault(key, threading.Lock())
@@ -199,6 +203,7 @@ class GatewayRunner:
         for adapter in self.adapters:
             adapter._interrupt_cb = self.interrupt    # adapters that poll concurrently use this
             adapter._steer_cb = self.steer            # mid-run /steer guidance
+            adapter._config = self.config             # busy_mode + first-touch hints
             t = threading.Thread(target=adapter.start, args=(self.dispatch,), daemon=True)
             t.start()
             threads.append(t)
