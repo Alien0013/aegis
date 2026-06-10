@@ -30,6 +30,9 @@ aegis gateway --channels telegram,discord,slack,signal,matrix,email,webhook
   `queue` (default — runs next), `steer` (folds into the running turn), or
   `interrupt` (cancels the turn, then runs). A bare `stop` always cancels;
   `/steer <text>` always folds. A one-time tip explains this the first time it fires.
+- **In-chat commands** — `/new` · `/status` · `/whoami` · `/model [id]` (switch the
+  model for this session) · `/compress` (force-compact) · `/busy [mode]` ·
+  `/goal <text>` / `/subgoal <text>` (persistent goals) · `/steer <text>` · `stop`.
 
 ## Scheduled delivery
 
