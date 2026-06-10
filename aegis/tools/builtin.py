@@ -74,6 +74,8 @@ class WriteFileTool(Tool):
     def run(self, args, ctx) -> ToolResult:
         path = _resolve(ctx, args["path"])
         fs = getattr(ctx, "fs", None)
+        if fs is None:
+            _lsp_snapshot(ctx, path)
         try:
             if fs:                           # delegate to the editor (ACP fs/write_text_file)
                 fs.write_text(str(path), args["content"])
@@ -83,7 +85,8 @@ class WriteFileTool(Tool):
         except Exception as e:  # noqa: BLE001
             return ToolResult.error(f"Could not write {path}: {e}")
         n = args["content"].count("\n") + 1
-        return ToolResult.ok(f"Wrote {n} lines to {path}", display=f"wrote {path.name}")
+        msg = f"Wrote {n} lines to {path}" + ("" if fs else _lsp_delta(ctx, path))
+        return ToolResult.ok(msg, display=f"wrote {path.name}")
 
 
 class EditFileTool(Tool):
@@ -112,10 +115,47 @@ class EditFileTool(Tool):
             return ToolResult.error("old_string not found in file." + _closest_hint(text, old))
         if count > 1 and not args.get("replace_all"):
             return ToolResult.error(f"old_string appears {count}× — pass replace_all=true or add context.")
+        _lsp_snapshot(ctx, path)
         text = text.replace(old, new) if args.get("replace_all") else text.replace(old, new, 1)
         path.write_text(text, encoding="utf-8")
-        return ToolResult.ok(f"Edited {path} ({count if args.get('replace_all') else 1} replacement(s)).",
+        return ToolResult.ok(f"Edited {path} ({count if args.get('replace_all') else 1} replacement(s))."
+                             + _lsp_delta(ctx, path),
                              display=f"edited {path.name}")
+
+
+def _lsp_enabled(ctx, path) -> bool:
+    cfg = getattr(ctx, "config", None)
+    if cfg is None or not cfg.get("lsp.on_edit", True):
+        return False
+    if "lsp" not in (cfg.get("tools.toolsets", []) or []):
+        return False
+    from ..lsp.servers import find_server
+    return find_server(str(path), cfg) is not None
+
+
+def _lsp_snapshot(ctx, path) -> None:
+    """Pre-edit diagnostics baseline so only NEW problems get reported after the edit."""
+    try:
+        if path.exists() and _lsp_enabled(ctx, path):
+            from ..lsp import get_service
+            get_service(ctx.config).snapshot(str(path), str(ctx.cwd))
+    except Exception:  # noqa: BLE001  (LSP must never break an edit)
+        pass
+
+
+def _lsp_delta(ctx, path) -> str:
+    """Diagnostics the edit introduced, as a footer for the tool result ('' when clean)."""
+    try:
+        if not _lsp_enabled(ctx, path):
+            return ""
+        from ..lsp import get_service
+        from ..lsp.service import format_diags
+        new = get_service(ctx.config).delta(str(path), str(ctx.cwd))
+        if new:
+            return "\n\nNew diagnostics introduced by this edit:\n" + format_diags(new)
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
 
 
 def _closest_hint(text: str, old: str) -> str:
