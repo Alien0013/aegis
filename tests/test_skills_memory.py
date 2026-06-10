@@ -87,14 +87,26 @@ def test_memory_add_replace_remove_dedup():
     assert "bun" not in s.raw("memory")
 
 
-def test_memory_char_limit_drops_oldest():
+def test_memory_char_limit_refuses_not_drops():
+    """Old facts are never silently dropped: at the cap the write is refused with a
+    consolidation directive, and everything already stored survives."""
     from aegis.constants import MEMORY_CHAR_LIMIT
     from aegis.memory import MemoryStore
     s = MemoryStore()
+    added = 0
     for i in range(200):
-        s.add("memory", f"fact number {i} " + "x" * 50)
-    assert len(s.raw("memory")) <= MEMORY_CHAR_LIMIT + 200
-    assert "fact number 199" in s.raw("memory")          # newest kept
+        r = s.add("memory", f"fact number {i} " + "x" * 50)
+        if r.startswith("memory full"):
+            assert "Consolidate" in r and "fact number 0" in r   # guidance lists entries
+            break
+        added += 1
+    assert 0 < added < 200                                # the cap was actually hit
+    raw = s.raw("memory")
+    assert "fact number 0" in raw                         # OLDEST still there — nothing lost
+    assert len(raw) <= MEMORY_CHAR_LIMIT + 200
+    # after consolidating (removing), adds work again
+    assert "removed" in s.remove("memory", "fact number 0")
+    assert s.add("memory", "fresh fact").startswith("remembered")
 
 
 def test_memory_history_append_recent():

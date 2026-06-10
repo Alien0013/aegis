@@ -18,6 +18,33 @@ from .util import append_line, atomic_write, now_iso, read_text
 _FILES = {"memory": "MEMORY.md", "user": "USER.md"}
 _LIMITS = {"memory": MEMORY_CHAR_LIMIT, "user": USER_CHAR_LIMIT}
 
+# Prompt-injection patterns for STORED memory. Memory enters the system prompt on
+# every future session, so a poisoned entry (compromised tool output, sister-session
+# write, hand edit) would inject forever. Flagged content is refused at write time;
+# entries already on disk are masked in the snapshot but stay visible to the memory
+# tool so the user can inspect and remove them.
+import re as _re
+
+_INJECTION_PATTERNS: tuple[tuple[_re.Pattern, str], ...] = (
+    (_re.compile(r"ignore\s+(?:all\s+)?(?:previous|prior|above)\s+(?:instructions|messages|rules)", _re.I),
+     "instruction-override"),
+    (_re.compile(r"disregard\s+(?:the\s+)?(?:system|previous|your)\s+(?:prompt|instructions|rules)", _re.I),
+     "instruction-override"),
+    (_re.compile(r"</?\s*(?:system|assistant)\s*>", _re.I), "role-tag smuggling"),
+    (_re.compile(r"\byou\s+must\s+(?:always|now)\s+(?:obey|respond|reply|do)\b", _re.I),
+     "coercive directive"),
+    (_re.compile(r"curl[^\n]{0,100}\|\s*(?:ba)?sh\b", _re.I), "pipe-to-shell"),
+    (_re.compile(r"\bnew\s+system\s+prompt\b", _re.I), "prompt replacement"),
+)
+
+
+def scan_entry(text: str) -> str | None:
+    """Return why this content must not enter memory, or None if clean."""
+    for pat, why in _INJECTION_PATTERNS:
+        if pat.search(text or ""):
+            return why
+    return None
+
 
 class MemoryStore:
     def __init__(self, base: Path | None = None):
@@ -47,11 +74,21 @@ class MemoryStore:
         return [e.strip() for e in raw.split("§") if e.strip()] if raw else []
 
     def _write_entries(self, target: str, entries: list[str]) -> None:
-        # enforce char limit by dropping oldest entries
-        limit = _LIMITS[target]
-        while entries and len(MEMORY_DELIM.join(entries)) > limit:
-            entries.pop(0)
         atomic_write(self._path(target), MEMORY_DELIM.join(entries) + "\n" if entries else "")
+
+    def _over_limit(self, target: str, entries: list[str]) -> str:
+        """'' if the entries fit, else a consolidation directive. Old facts are never
+        silently dropped — the model is told to merge/remove instead (refusing beats
+        quietly forgetting)."""
+        limit = _LIMITS[target]
+        total = len(MEMORY_DELIM.join(entries))
+        if total <= limit:
+            return ""
+        listing = "\n".join(f"  - {e[:90]}" for e in entries[:-1])
+        return (f"memory full ({total:,}/{limit:,} chars): this write would exceed the limit. "
+                "Nothing was dropped. Consolidate NOW in this turn: use action=replace to merge "
+                "overlapping entries into shorter ones, or action=remove for stale ones, then "
+                f"retry. Current entries:\n{listing}")
 
     @staticmethod
     def _norm(text: str) -> str:
@@ -64,31 +101,48 @@ class MemoryStore:
         return " ".join(w for w in words if w not in stop)
 
     def add(self, target: str, content: str) -> str:
-        from ._locks import STORE_LOCK
+        from ._locks import STORE_LOCK, file_lock
         content = content.strip()
-        with STORE_LOCK:                       # serialize read-modify-write (no lost updates)
+        why = scan_entry(content)
+        if why:
+            return (f"refused: content matches a prompt-injection pattern ({why}) and must "
+                    "not enter persistent memory. Rephrase as a plain factual note.")
+        # STORE_LOCK serializes threads; file_lock serializes PROCESSES (gateway + CLI +
+        # cron share these files). entries() re-reads from disk inside the locks, so we
+        # always append to the other writer's latest state instead of clobbering it.
+        with STORE_LOCK, file_lock(self._path(target)):
             entries = self.entries(target)
             norm = self._norm(content)
             if norm and norm in {self._norm(e) for e in entries}:
                 return "already remembered"
             entries.append(content)
+            over = self._over_limit(target, entries)
+            if over:
+                return over
             self._write_entries(target, entries)
         return f"remembered in {_FILES[target]}"
 
     def replace(self, target: str, match: str, content: str) -> str:
-        from ._locks import STORE_LOCK
-        with STORE_LOCK:
+        from ._locks import STORE_LOCK, file_lock
+        why = scan_entry(content)
+        if why:
+            return (f"refused: replacement matches a prompt-injection pattern ({why}) and "
+                    "must not enter persistent memory.")
+        with STORE_LOCK, file_lock(self._path(target)):
             entries = self.entries(target)
             for i, e in enumerate(entries):
                 if match in e:
                     entries[i] = content.strip()
+                    over = self._over_limit(target, entries)
+                    if over:
+                        return over
                     self._write_entries(target, entries)
                     return f"updated entry in {_FILES[target]}"
         return f"no entry matching '{match}'"
 
     def remove(self, target: str, match: str) -> str:
-        from ._locks import STORE_LOCK
-        with STORE_LOCK:
+        from ._locks import STORE_LOCK, file_lock
+        with STORE_LOCK, file_lock(self._path(target)):
             entries = self.entries(target)
             kept = [e for e in entries if match not in e]
             if len(kept) == len(entries):
@@ -167,8 +221,19 @@ class MemoryManager:
         # turn; `is_stale()` lets the loop re-capture as soon as the files actually change
         # (a memory-tool write, background review, or a hand edit) so saved facts surface
         # on the very next turn instead of only on the next process/compaction.
-        self._snapshot = {"memory": self.store.raw("memory"), "user": self._read_user()}
+        self._snapshot = {"memory": self._sanitized("memory"), "user": self._read_user()}
         self._snapshot_mtimes = self._memory_mtimes()
+
+    def _sanitized(self, target: str) -> str:
+        """Entries for the system-prompt snapshot, with any injection-matching entry
+        masked. Disk state is untouched — the memory tool still shows the original so
+        the user can inspect and remove it (silently hiding it would hide the attack)."""
+        out = []
+        for e in self.store.entries(target):
+            why = scan_entry(e)
+            out.append(f"[BLOCKED: stored entry matched a prompt-injection pattern ({why}); "
+                       "inspect with the memory tool and remove it]" if why else e)
+        return MEMORY_DELIM.join(out)
 
     def _memory_files(self) -> list:
         # workspace/USER.md is watched ONLY so that if someone drops a legacy file
@@ -199,7 +264,7 @@ class MemoryManager:
         :meth:`_migrate_workspace_profile` and parked, so there is never a second
         live profile file to wonder about."""
         self._migrate_workspace_profile()
-        return self.store.raw("user")
+        return self._sanitized("user")
 
     def _migrate_workspace_profile(self) -> None:
         """One-time: import a legacy hand-edited workspace/USER.md into
@@ -221,7 +286,7 @@ class MemoryManager:
             pass                              # unwritable workspace — try again next refresh
 
     def refresh_snapshot(self) -> None:
-        self._snapshot = {"memory": self.store.raw("memory"), "user": self._read_user()}
+        self._snapshot = {"memory": self._sanitized("memory"), "user": self._read_user()}
         self._snapshot_mtimes = self._memory_mtimes()
 
     def build_context_block(self) -> str:
@@ -252,12 +317,17 @@ class MemoryManager:
             if not args.get("content"):
                 return ToolResult.error("content is required for add")
             result = self.store.add(target, args["content"])
+            if result.startswith(("memory full", "refused")):
+                return ToolResult.error(result)      # the model must consolidate / rephrase
             return ToolResult.ok(f"{result} — now in context from your next message on.",
                                  display=f"remembered in memories/{_FILES[target]}")
         if action == "replace":
             if not args.get("match") or not args.get("content"):
                 return ToolResult.error("replace needs match and content")
-            return ToolResult.ok(self.store.replace(target, args["match"], args["content"]))
+            result = self.store.replace(target, args["match"], args["content"])
+            if result.startswith(("memory full", "refused")):
+                return ToolResult.error(result)
+            return ToolResult.ok(result)
         if action == "remove":
             if not args.get("match"):
                 return ToolResult.error("remove needs match")
