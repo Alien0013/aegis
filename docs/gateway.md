@@ -26,6 +26,10 @@ aegis gateway --channels telegram,discord,slack,signal,matrix,email,webhook
   Group **mention gating** via `gateway.require_mention`.
 - **Session isolation** — `gateway.session_mode`: `main | per_channel | per_channel_peer
   | per_peer`.
+- **Busy handling** — a message landing mid-turn follows `gateway.busy_mode`:
+  `queue` (default — runs next), `steer` (folds into the running turn), or
+  `interrupt` (cancels the turn, then runs). A bare `stop` always cancels;
+  `/steer <text>` always folds. A one-time tip explains this the first time it fires.
 
 ## Scheduled delivery
 

@@ -41,3 +41,22 @@ tools:
 
 `web.search_backend: auto | duckduckgo | brave | tavily | serper` (set the matching
 `*_API_KEY`).
+
+## Code intelligence (LSP)
+
+Persistent language servers (13 languages bundled — Python, TS/JS, Go, Rust, C/C++,
+Bash, YAML, PHP, Lua, Terraform, Docker, Zig, Ruby) stay alive per project root.
+Missing servers auto-install into `<home>/lsp` (npm/go/pip).
+
+- **Edit feedback**: after every `write_file`/`edit_file` inside a git project, only
+  the diagnostics *introduced by that edit* are appended to the tool result (a
+  diff-based line-shift keeps pre-existing ones quiet). Toggle with `lsp.on_edit`.
+- The `lsp` tool adds `rename`, `symbols`, `status`, and `restart` on top of
+  `diagnostics` / `hover` / `definition` / `references`.
+
+```yaml
+lsp:
+  on_edit: true          # report new diagnostics after edits
+  auto_install: true     # install missing servers into <home>/lsp
+  servers: {".py": "pylsp"}   # per-extension command override
+```
