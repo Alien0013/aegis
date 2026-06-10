@@ -39,8 +39,9 @@ def test_onboarding_rejects_key_as_provider(monkeypatch):
     workspace = cfg_paths.workspace_dir()
     assert (workspace / "SOUL.md").exists()
     assert (workspace / "AGENTS.md").exists()
-    assert (workspace / "USER.md").exists()
     assert (workspace / "README.md").exists()
+    # No workspace/USER.md — the profile lives only in memories/USER.md (Hermes parity).
+    assert not (workspace / "USER.md").exists()
 
 
 def test_onboarding_can_select_oauth(monkeypatch):

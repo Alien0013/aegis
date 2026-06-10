@@ -1066,16 +1066,17 @@ def _seed_workspace(state: OnboardingState, out: Output) -> None:
             "- Explain risky actions before running them.\n"
             "- Keep secrets out of logs and replies.\n"
         ),
-        "USER.md": (
-            "# User Profile\n\n"
-            "Add stable preferences, aliases, or project notes here.\n"
-        ),
+        # NOTE: no workspace/USER.md — the user profile lives in ONE place,
+        # memories/USER.md (managed by the `memory` tool), matching Hermes. A
+        # hand-edited workspace/USER.md is still honored if you create one, but
+        # it isn't seeded, so there's a single obvious source of truth.
         "README.md": (
             "# AEGIS Workspace\n\n"
             "This directory is persistent context for AEGIS.\n\n"
             "- SOUL.md: persona and tone.\n"
             "- AGENTS.md: operating rules.\n"
-            "- USER.md: stable user preferences.\n"
+            "- Your profile (name, preferences) lives in memories/USER.md and is\n"
+            "  managed by the agent's `memory` tool — just tell it and it remembers.\n"
             "- Skills are available with `aegis skills` and the `skill` tool.\n"
             "- Tools are visible with `aegis tools`.\n"
             "- Plugins are visible with `aegis plugins`.\n"

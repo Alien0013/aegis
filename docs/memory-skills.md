@@ -2,8 +2,20 @@
 
 ## Memory
 
-File-backed `MEMORY.md` / `USER.md` (`§`-delimited, char-capped) + `history.jsonl`. The
-agent persists facts via the `memory` tool. Pluggable external backends:
+Two file-backed stores in `~/.aegis/memories/` (`§`-delimited, char-capped) plus
+`history.jsonl`:
+
+- **`MEMORY.md`** — the agent's own notes (environment facts, project conventions, quirks).
+- **`USER.md`** — the single user profile (name, preferences, workflow). This is the
+  one and only profile file; the agent manages it via the `memory` tool — just tell it
+  something and it remembers. (A hand-edited `workspace/USER.md` is merged in if you
+  create one, but it isn't seeded — `memories/USER.md` is the source of truth.)
+
+Both enter the system prompt as a **frozen snapshot** for prefix-cache stability; the
+snapshot is rebuilt automatically on the next turn whenever the files change, so a fact
+you give the agent is in context from your next message on — even within one long chat.
+
+Pluggable external backends layer on top of the built-in files:
 
 ```yaml
 memory:

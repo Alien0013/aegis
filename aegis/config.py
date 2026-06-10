@@ -337,7 +337,11 @@ class Workspace:
 
     SOUL.md   -> persona / tone (context tier)
     AGENTS.md / .aegis.md / CLAUDE.md -> operational rules (project + global)
-    USER.md   -> user profile (volatile tier)
+
+    The user profile is NOT a workspace file — it lives in memories/USER.md and
+    is assembled by MemoryManager (with a legacy hand-edited workspace/USER.md
+    merged in only if one already exists). ``user_profile()`` below is retained
+    for backward compatibility but isn't part of prompt assembly.
 
     Project-local files in ``cwd`` take precedence over the global workspace.
     """
