@@ -24,6 +24,39 @@ def test_saved_user_facts_reach_prompt_after_refresh(tmp_path, monkeypatch):
     assert "About the user" in block and "TJ" in block
 
 
+def test_memory_is_stale_after_write_and_clears_on_refresh(tmp_path, monkeypatch):
+    config = _cfg(tmp_path, monkeypatch)
+    from aegis.memory import MemoryManager
+
+    mm = MemoryManager(config)
+    assert not mm.is_stale()                 # fresh snapshot
+    mm.store.add("user", "Name: TJ")         # a write (memory tool / background review)
+    assert mm.is_stale()                     # detected via mtime, no manual flag needed
+    mm.refresh_snapshot()
+    assert not mm.is_stale()                 # cleared
+
+
+def test_bot_remembers_fact_saved_on_previous_turn(tmp_path, monkeypatch):
+    """The reported bug: a long-lived chat (gateway) froze the system prompt at turn 1,
+    so anything saved mid-conversation never re-entered context. The loop now rebuilds
+    when memory changed — so turn 2 sees what turn 1 saved."""
+    config = _cfg(tmp_path, monkeypatch)
+    from aegis.agent.agent import Agent
+    from aegis.agent.loop import run_conversation
+
+    agent = Agent.create(config)
+    agent.ensure_system_prompt()                          # turn 1 builds the prompt
+    assert "TJ" not in agent.session.messages[0].content
+    # mid-conversation, the memory tool saves a fact (writes to disk)
+    agent.memory.handle_tool({"action": "add", "target": "user",
+                              "content": "The user's name is TJ."})
+    # next turn: simulate the top of run_conversation's refresh-on-stale check
+    if agent.memory.is_stale():
+        agent.refresh_volatile()
+    assert "TJ" in agent.session.messages[0].content      # the bot now remembers
+    assert run_conversation is not None                   # import sanity
+
+
 def test_manual_workspace_profile_merges_into_prompt(tmp_path, monkeypatch):
     config = _cfg(tmp_path, monkeypatch)
     from aegis import config as cfg

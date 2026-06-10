@@ -288,7 +288,14 @@ def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
 def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
     """Drive one user turn to completion. Returns the final assistant message."""
     emit = on_event or (lambda e: None)
-    agent.ensure_system_prompt()
+    # Surface memory saved on a previous turn: if the files changed since the snapshot
+    # (memory tool, background review, or a hand edit), rebuild the system prompt now so
+    # the agent actually remembers. Cheap mtime check; rebuilds only on changed turns,
+    # so the prefix cache survives every turn where nothing changed.
+    if agent.memory is not None and agent.memory.is_stale():
+        agent.refresh_volatile()
+    else:
+        agent.ensure_system_prompt()
     session = agent.session
     budget = agent.budget
     budget.reset()

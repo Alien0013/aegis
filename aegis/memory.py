@@ -148,8 +148,33 @@ class MemoryManager:
         self.external = external
         self.enabled = bool(config.get("memory.enabled", True))
         self.user_enabled = bool(config.get("memory.user_profile_enabled", True))
-        # frozen snapshot at construction (session start)
+        # Frozen snapshot, captured at construction and re-captured by refresh_snapshot().
+        # Freezing keeps the system prompt byte-stable for prefix-cache reuse WITHIN a
+        # turn; `is_stale()` lets the loop re-capture as soon as the files actually change
+        # (a memory-tool write, background review, or a hand edit) so saved facts surface
+        # on the very next turn instead of only on the next process/compaction.
         self._snapshot = {"memory": self.store.raw("memory"), "user": self._read_user()}
+        self._snapshot_mtimes = self._memory_mtimes()
+
+    def _memory_files(self) -> list:
+        return [self.store._path("memory"), self.store._path("user"),
+                cfg.workspace_dir() / "USER.md"]
+
+    def _memory_mtimes(self) -> dict:
+        out = {}
+        for p in self._memory_files():
+            try:
+                out[str(p)] = p.stat().st_mtime
+            except OSError:
+                out[str(p)] = 0.0
+        return out
+
+    def is_stale(self) -> bool:
+        """True if any memory file changed since the snapshot was captured — the cue
+        for the loop to rebuild the system prompt so newly-saved facts become visible."""
+        if not self.enabled:
+            return False
+        return self._memory_mtimes() != self._snapshot_mtimes
 
     def _read_user(self) -> str:
         """The full user profile: the hand-edited workspace/USER.md (if it's been
@@ -164,6 +189,7 @@ class MemoryManager:
 
     def refresh_snapshot(self) -> None:
         self._snapshot = {"memory": self.store.raw("memory"), "user": self._read_user()}
+        self._snapshot_mtimes = self._memory_mtimes()
 
     def build_context_block(self) -> str:
         if not self.enabled:
@@ -192,8 +218,9 @@ class MemoryManager:
         if action == "add":
             if not args.get("content"):
                 return ToolResult.error("content is required for add")
-            return ToolResult.ok(self.store.add(target, args["content"]),
-                                 display="memory updated (loads on the next session or /new)")
+            result = self.store.add(target, args["content"])
+            return ToolResult.ok(f"{result} — now in context from your next message on.",
+                                 display=f"remembered in memories/{_FILES[target]}")
         if action == "replace":
             if not args.get("match") or not args.get("content"):
                 return ToolResult.error("replace needs match and content")
