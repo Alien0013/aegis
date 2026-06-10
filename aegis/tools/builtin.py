@@ -55,6 +55,9 @@ class ReadFileTool(Tool):
         limit = int(args.get("limit", 2000))
         chunk = lines[offset - 1: offset - 1 + limit]
         body = "\n".join(f"{offset + i:6d}\t{ln}" for i, ln in enumerate(chunk))
+        if fs is None:
+            from . import file_state
+            file_state.note(path)            # freshness stamp for later stale-write checks
         return ToolResult.ok(truncate(body, MAX_OUTPUT), display=f"read {path.name} ({len(chunk)} lines)")
 
 
@@ -74,7 +77,13 @@ class WriteFileTool(Tool):
     def run(self, args, ctx) -> ToolResult:
         path = _resolve(ctx, args["path"])
         fs = getattr(ctx, "fs", None)
+        stale = ""
         if fs is None:
+            from . import file_safety, file_state
+            denied = file_safety.authorize_write(path, ctx)
+            if denied:
+                return ToolResult.error(denied)
+            stale = file_state.stale_warning(path)
             _lsp_snapshot(ctx, path)
         try:
             if fs:                           # delegate to the editor (ACP fs/write_text_file)
@@ -84,8 +93,11 @@ class WriteFileTool(Tool):
                 path.write_text(args["content"], encoding="utf-8")
         except Exception as e:  # noqa: BLE001
             return ToolResult.error(f"Could not write {path}: {e}")
+        if fs is None:
+            from . import file_state
+            file_state.note(path)
         n = args["content"].count("\n") + 1
-        msg = f"Wrote {n} lines to {path}" + ("" if fs else _lsp_delta(ctx, path))
+        msg = f"Wrote {n} lines to {path}" + ("" if fs else _lsp_delta(ctx, path)) + stale
         return ToolResult.ok(msg, display=f"wrote {path.name}")
 
 
@@ -108,18 +120,33 @@ class EditFileTool(Tool):
         path = _resolve(ctx, args["path"])
         if not path.exists():
             return ToolResult.error(f"No such file: {path}")
+        from . import file_safety, file_state
+        denied = file_safety.authorize_write(path, ctx)
+        if denied:
+            return ToolResult.error(denied)
+        stale = file_state.stale_warning(path)
         text = path.read_text(encoding="utf-8", errors="replace")
         old, new = args["old_string"], args["new_string"]
+        via = ""
         count = text.count(old)
         if count == 0:
-            return ToolResult.error("old_string not found in file." + _closest_hint(text, old))
+            # Fuzzy recovery: whitespace/indentation drift is the usual cause. Only a
+            # UNIQUE fuzzy match is trusted; ambiguity falls through to the error.
+            from .fuzzy import find_fuzzy, reindent
+            hit = find_fuzzy(text, old)
+            if hit is None:
+                return ToolResult.error("old_string not found in file." + _closest_hint(text, old))
+            matched, strategy = hit
+            old, new = matched, reindent(new, matched, old)
+            count, via = 1, f" (matched via {strategy} — whitespace drift auto-recovered)"
         if count > 1 and not args.get("replace_all"):
             return ToolResult.error(f"old_string appears {count}× — pass replace_all=true or add context.")
         _lsp_snapshot(ctx, path)
         text = text.replace(old, new) if args.get("replace_all") else text.replace(old, new, 1)
         path.write_text(text, encoding="utf-8")
+        file_state.note(path)
         return ToolResult.ok(f"Edited {path} ({count if args.get('replace_all') else 1} replacement(s))."
-                             + _lsp_delta(ctx, path),
+                             + via + _lsp_delta(ctx, path) + stale,
                              display=f"edited {path.name}")
 
 
