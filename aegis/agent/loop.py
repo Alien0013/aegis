@@ -32,11 +32,13 @@ def _provider_complete(provider, messages, *, tools=None, **kwargs):
 class ToolExecutor:
     """Runs requested tool calls (concurrently), enforcing permissions per call."""
 
-    def __init__(self, registry, permissions, ctx: ToolContext, on_event: OnEvent):
+    def __init__(self, registry, permissions, ctx: ToolContext, on_event: OnEvent,
+                 guard=None):
         self.registry = registry
         self.permissions = permissions
         self.ctx = ctx
         self.emit = on_event
+        self.guard = guard          # per-turn ToolLoopGuard (None in bare/test usage)
 
     def _run_hooks(self, event: str, context: dict) -> None:
         cfg = getattr(self.ctx, "config", None)
@@ -67,8 +69,11 @@ class ToolExecutor:
         self.emit({"type": "tool_start", "id": call.id, "name": call.name, "args": call.arguments})
         self._run_hooks("pre_tool", {"tool": call.name, "args": str(call.arguments)[:300]})
         self._maybe_checkpoint(call)
+        blocked = self.guard.check(call.name, call.arguments) if self.guard else None
         tool = self.registry.get(call.name)
-        if tool is None:
+        if blocked:
+            res = ToolResult.error(blocked)        # loop guard: don't run it again
+        elif tool is None:
             res = ToolResult.error(f"unknown tool '{call.name}'")
         else:
             allowed, reason = self.permissions.authorize(tool, call.arguments, self.ctx)
@@ -79,6 +84,10 @@ class ToolExecutor:
                     res = tool.run(call.arguments, self.ctx)
                 except Exception as e:  # noqa: BLE001
                     res = ToolResult.error(f"tool raised {type(e).__name__}: {e}")
+        if self.guard and not blocked:
+            warn = self.guard.record(call.name, call.arguments, res.content, res.is_error)
+            if warn:
+                res.content = (res.content or "") + "\n\n" + warn
         self.emit({"type": "tool_result", "id": call.id, "name": call.name,
                    "summary": res.summary, "is_error": res.is_error,
                    "classification": res.classification})
@@ -286,7 +295,12 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
 
     available = agent.registry.available(agent.config.get("tools.toolsets", ["core"]))
     schemas = agent.registry.schemas(available)
-    executor = ToolExecutor(agent.registry, agent.permissions, agent.tool_context, emit)
+    from .guardrails import ToolLoopGuard
+    guard = ToolLoopGuard(
+        warn_after=int(agent.config.get("tools.loop_warn_after", 3)),
+        block_after=int(agent.config.get("tools.loop_block_after", 5)),
+    )
+    executor = ToolExecutor(agent.registry, agent.permissions, agent.tool_context, emit, guard)
     continuations = 0
     empty_nudges = 0
     from ..util import estimate_tokens
@@ -390,6 +404,17 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
         results = executor.execute(resp.tool_calls)
         session.messages.extend(results)
         agent.tools_used += len(resp.tool_calls)
+        # Todo staleness nudge: once the model starts a todo list, keep it honest.
+        if any(tc.name == "todo_write" for tc in resp.tool_calls):
+            session.meta["_last_todo_use"] = agent.tools_used
+        elif (session.meta.get("_last_todo_use") is not None and results
+                and agent.tools_used - session.meta["_last_todo_use"]
+                >= int(agent.config.get("tools.todo_nudge_after", 15))):
+            session.meta["_last_todo_use"] = agent.tools_used
+            results[-1].content = (results[-1].content or "") + (
+                "\n\n<system-reminder>The todo list hasn't been updated in a while. If the "
+                "plan changed or items are done, update it with todo_write; if it's stale, "
+                "clear it.</system-reminder>")
         # Refund the step for a pure "zero-context-cost" compute turn (only execute_code) so
         # code-heavy runs aren't penalized against the iteration budget.
         if resp.tool_calls and all(tc.name == "execute_code" for tc in resp.tool_calls):

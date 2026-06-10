@@ -107,6 +107,14 @@ class AnthropicTransport(ProviderTransport):
     ) -> LLMResponse:
         url = f"{base_url}/v1/messages"
         system, wire_messages = self._to_wire(messages)
+        # Conversation cache breakpoints ("system + last 3"): mark the final content block
+        # of the last 3 wire messages so the whole conversation prefix is a cache READ on
+        # the next turn instead of being re-billed at full input price every call
+        # (~75% input-cost cut on multi-turn sessions; markers move forward each turn).
+        for wm in wire_messages[-3:]:
+            blocks = wm.get("content")
+            if isinstance(blocks, list) and blocks and isinstance(blocks[-1], dict):
+                blocks[-1]["cache_control"] = {"type": "ephemeral"}
         headers = {
             "Content-Type": "application/json",
             "anthropic-version": ANTHROPIC_VERSION,
@@ -142,8 +150,8 @@ class AnthropicTransport(ProviderTransport):
             payload["system"] = sys_blocks
         wire_tools = self._to_wire_tools(tools)
         if wire_tools:
-            # Cache the tool definitions too (they're stable within a session).
-            wire_tools[-1]["cache_control"] = {"type": "ephemeral"}
+            # No marker on tools: the system-prompt breakpoint already caches the tools
+            # prefix, and Anthropic allows at most 4 breakpoints (1 system + 3 messages).
             payload["tools"] = wire_tools
 
         if stream:
@@ -154,6 +162,11 @@ class AnthropicTransport(ProviderTransport):
         with httpx.Client(timeout=timeout) as client:
             r = client.post(url, headers=headers, json=payload)
         _raise_for_status(r)
+        try:
+            from .. import ratelimit
+            ratelimit.record(r.headers, "anthropic")
+        except Exception:  # noqa: BLE001
+            pass
         data = r.json()
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
