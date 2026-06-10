@@ -223,6 +223,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "show_learning": True,                # append a 'remembered/learned' footer to replies
         "busy_mode": "queue",                 # message-while-busy: queue | steer | interrupt
     },
+    "goals": {
+        "max_turns": 20,        # /goal auto-continuation budget before pausing
+    },
     "lsp": {
         "on_edit": True,        # report NEW diagnostics after write_file/edit_file
         "auto_install": True,   # install missing language servers into <home>/lsp

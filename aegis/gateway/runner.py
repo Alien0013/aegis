@@ -80,7 +80,16 @@ class GatewayRunner:
         if text in ("/status", "/help"):
             return (f"AEGIS gateway · provider={self.config.get('model.provider')} · "
                     f"model={self.config.get('model.default')} · session={key}\n"
-                    f"Commands: /new (reset), /status")
+                    f"Commands: /new (reset), /status, /goal <text>, /subgoal <text>")
+        if text.startswith(("/goal", "/subgoal")):
+            from .. import goals
+            with self._lock:
+                session = self._session(key)
+            reply, start_turn = goals.handle_command(session, text, self.config)
+            self.store.save(session)
+            if not start_turn:
+                return reply or ""
+            text = goals.get(session)["text"]   # fall through: run the new goal as this turn
 
         # Mention gating: in shared channels only respond when a trigger is present.
         if self.require_mention and self.mention_triggers and not text.startswith("/"):
@@ -133,11 +142,22 @@ class GatewayRunner:
                             learned.append(f"🧠 {a}")
 
                 final = agent.run(text, _collect)
+                final_text = final.content or ""
+                goal_notes: list[str] = []
+                try:                       # standing /goal: judge + auto-continue (Ralph loop)
+                    from .. import goals
+                    final_text = goals.run_loop(agent, final_text, goal_notes.append, _collect)
+                    if goal_notes:
+                        self.store.save(session)
+                except Exception:  # noqa: BLE001  (goal machinery must never eat the reply)
+                    pass
                 from ..redact import redact_secrets
                 from .replies import shape_reply
                 api_calls = getattr(getattr(agent, "budget", None), "api_call_count", 0)
                 # secrets out, raw provider errors -> friendly one-liner, empty -> clear message
-                reply = shape_reply(redact_secrets(final.content or ""), api_calls=api_calls)
+                reply = shape_reply(redact_secrets(final_text), api_calls=api_calls)
+                if goal_notes:
+                    reply += "\n\n" + "\n".join(goal_notes)
                 if learned and self.config.get("gateway.show_learning", True):
                     reply += "\n\n— " + " · ".join(dict.fromkeys(learned))   # dedup, keep order
                 BUS.publish({"platform": ev.platform, "chat_id": ev.chat_id,

@@ -8,6 +8,20 @@ Run any command with `-h` for details. `aegis` alone opens the REPL.
   `--continue`, `--worktree/-w`, `--yolo`)
 - `aegis batch FILE` — run a prompt per line
 
+## Persistent goals (`/goal`)
+
+A standing objective that survives turns (the Ralph loop). After every turn a
+small judge call decides done-or-continue; on continue the agent automatically
+takes the next step — until done, paused, or the budget (`goals.max_turns`,
+default 20) runs out. Works in the REPL and on every gateway channel.
+
+- `/goal <text>` — set the goal and start working
+- `/goal` / `pause` / `resume` / `clear`
+- `/subgoal <text>` — add acceptance criteria mid-loop (`remove <N>`, `clear`)
+
+State lives in the session, so it survives resume. Any real message you send
+preempts the loop; `/status` shows the active goal plus a local session recap.
+
 ## Setup & config
 - `aegis setup` / `aegis onboard` — wizard
 - `aegis model [list|set <provider> [<model>]]`

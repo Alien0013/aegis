@@ -35,7 +35,8 @@ _approve_lock = threading.Lock()
 
 SLASH = ["/help", "/model", "/status", "/tools", "/skills", "/skill", "/memory", "/usage",
          "/compress", "/think", "/retry", "/undo", "/learn", "/background", "/tasks", "/rollback",
-         "/personality", "/save", "/sessions", "/new", "/clear", "/yolo", "/quit", "/exit"]
+         "/personality", "/save", "/sessions", "/new", "/clear", "/yolo", "/goal", "/subgoal",
+         "/quit", "/exit"]
 
 
 def _out(text: str = "", style: str | None = None) -> None:
@@ -172,6 +173,38 @@ def banner(agent: Agent) -> None:
 # --------------------------------------------------------------------------- #
 # Slash commands
 # --------------------------------------------------------------------------- #
+def session_recap(session) -> list[str]:
+    """Local recap of the conversation so far — counts, top tools, files touched,
+    last prompt/reply. Computed from in-memory messages; no LLM call."""
+    from collections import Counter
+    users = [m for m in session.messages if m.role == "user"]
+    assistants = [m for m in session.messages if m.role == "assistant" and m.content]
+    tools = [m for m in session.messages if m.role == "tool"]
+    if not users and not tools:
+        return []
+    lines = ["— recap —",
+             f"turns: {len(users)} user / {len(assistants)} assistant · {len(tools)} tool results"]
+    names = Counter(getattr(m, "name", None) for m in tools if getattr(m, "name", None))
+    if names:
+        lines.append("top tools: " + ", ".join(f"{n}×{c}" for n, c in names.most_common(5)))
+    files = []
+    for m in reversed(session.messages):
+        if m.role == "assistant":
+            for tc in (getattr(m, "tool_calls", None) or []):
+                p = (getattr(tc, "arguments", None) or {}).get("path")
+                if p and p not in files:
+                    files.append(p)
+        if len(files) >= 5:
+            break
+    if files:
+        lines.append("recent files: " + ", ".join(files[:5]))
+    if users:
+        lines.append(f"last prompt: {users[-1].content[:120]}")
+    if assistants:
+        lines.append(f"last reply: {assistants[-1].content[:120]}")
+    return lines
+
+
 def handle_slash(cmd: str, agent: Agent) -> str:
     """Return 'break' to exit the REPL, else ''. """
     parts = cmd.strip().split()
@@ -200,6 +233,12 @@ def handle_slash(cmd: str, agent: Agent) -> str:
         if comps:
             saved = sum(c["tokens_before"] - c["tokens_after"] for c in comps)
             _out(f"compactions: {len(comps)} (~{saved:,} tokens reclaimed; {comps[-1]['reason']})")
+        from .. import goals
+        g = goals.get(agent.session)
+        if g:
+            _out(goals.status_line(g), style="cyan")
+        for line in session_recap(agent.session):
+            _out(line, style="bright_black")
         _out(_status_line(agent))
     elif name == "/think":
         level = arg or "medium"
@@ -385,14 +424,27 @@ def interactive(config: Config, *, model=None, provider_name=None,
         user = user.strip()
         if not user:
             continue
-        if user.startswith("/"):
+        if user.startswith(("/goal", "/subgoal")):
+            from .. import goals
+            reply, start_turn = goals.handle_command(agent.session, user, config)
+            if reply:
+                _out(reply, style="cyan")
+            store.save(agent.session)
+            if not start_turn:
+                continue
+            user = goals.get(agent.session)["text"]   # run the new goal as this turn
+        elif user.startswith("/"):
             if handle_slash(user, agent) == "break":
                 break
             continue
         try:
             from ..firstrun import profile_build_directive
-            agent.run(expand_references(user, agent.cwd) + profile_build_directive(config),
-                      Renderer())
+            renderer = Renderer()
+            res = agent.run(expand_references(user, agent.cwd) + profile_build_directive(config),
+                            renderer)
+            from .. import goals
+            goals.run_loop(agent, res.content or "",
+                           lambda s: _out(f"  {s}", style="magenta"), renderer)
         except KeyboardInterrupt:
             agent.cancel()   # stop the loop at the next safe point; discard partial work
             _out("\n  ⏹ interrupted — stopped this turn (your session is intact)", style="yellow")
