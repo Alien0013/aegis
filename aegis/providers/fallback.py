@@ -118,6 +118,11 @@ class FallbackProvider:
                 reason = classify_provider_error(e)
                 self.last_trigger = (getattr(prov, "name", "?"), reason)
                 last_err = e
+                # content_policy / context_overflow: another provider can't fix it (the request
+                # itself is the problem) — stop failing over and let the caller handle it
+                # (the loop compresses on context_overflow). Saves wasted calls down the chain.
+                if recovery_action(reason) in ("abort", "compress"):
+                    raise
                 from .._log import info
                 info(f"fallback: {getattr(prov, 'name', '?')} failed ({reason}); "
                      + ("trying next provider" if prov is not chain[-1] else "chain exhausted"))

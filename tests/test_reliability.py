@@ -69,3 +69,32 @@ def test_steer_appends_user_msg_when_no_tool_message():
     agent.steer_queue.put("actually use python")
     _drain_steering(agent, s)
     assert s.messages[-1].role == "user" and "actually use python" in s.messages[-1].content
+
+
+def test_fallback_short_circuits_unfixable_errors():
+    from aegis.providers.fallback import FallbackProvider
+    from aegis.providers.chat_completions import ProviderHTTPError
+
+    class P:
+        def __init__(self, name, exc=None, resp=None):
+            self.name = name; self.exc = exc; self.resp = resp; self.calls = 0
+        def complete(self, messages, tools=None, **kw):
+            self.calls += 1
+            if self.exc:
+                raise self.exc
+            return self.resp
+
+    # content_policy on primary -> raise immediately, DON'T try the fallback
+    prim = P("a", exc=ProviderHTTPError(400, "rejected by our content policy"))
+    fb = P("b", resp="ok")
+    try:
+        FallbackProvider(prim, [fb]).complete([])
+        raise AssertionError("should have raised")
+    except ProviderHTTPError:
+        pass
+    assert fb.calls == 0                         # never reached the fallback
+
+    # server error on primary -> DOES fail over
+    prim2 = P("a", exc=ProviderHTTPError(503, "overloaded"))
+    fb2 = P("b", resp="recovered")
+    assert FallbackProvider(prim2, [fb2]).complete([]) == "recovered" and fb2.calls == 1
