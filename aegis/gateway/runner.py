@@ -80,9 +80,56 @@ class GatewayRunner:
         if text in ("/status", "/help"):
             return (f"AEGIS gateway · provider={self.config.get('model.provider')} · "
                     f"model={self.config.get('model.default')} · session={key}\n"
-                    f"Commands: /new (reset), /status, /goal <text>, /subgoal <text>")
+                    "Commands: /new · /status · /whoami · /model [id] · /compress · "
+                    "/busy [mode] · /goal <text> · /subgoal <text> · /steer <text> · stop")
+        if text == "/whoami":
+            return (f"platform: {ev.platform}\nuser: {ev.user_id or '?'}"
+                    f"{f' (@{ev.user_name})' if ev.user_name else ''}\nchat: {ev.chat_id}\n"
+                    f"session: {key}\nbusy_mode: {self.config.get('gateway.busy_mode', 'queue')}")
+        if text == "/model" or text.startswith("/model "):
+            arg = text[len("/model"):].strip()
+            with self._lock:
+                session = self._session(key)
+            if not arg:
+                cur = session.meta.get("model") or self.config.get("model.default")
+                return f"model: {cur}\nSwitch for this session with /model <id>."
+            session.meta["model"] = arg
+            self.store.save(session)
+            self._agents.pop(key, None)        # rebuild with the new model next turn
+            return f"✓ model for this session → {arg}"
+        if text == "/busy" or text.startswith("/busy "):
+            arg = text[len("/busy"):].strip()
+            if not arg:
+                return (f"busy_mode: {self.config.get('gateway.busy_mode', 'queue')} "
+                        "(queue | steer | interrupt)")
+            if arg not in ("queue", "steer", "interrupt"):
+                return "usage: /busy queue|steer|interrupt"
+            self.config.set("gateway.busy_mode", arg)
+            self.config.save()
+            return f"✓ busy_mode → {arg}"
+        if text == "/compress":
+            with self._lock:
+                session = self._session(key)
+            agent = self._agents.get(key) or Agent.create(
+                self.config, session=session, cwd=self.cwd, store=self.store,
+                model=session.meta.get("model"))
+            from ..agent.loop import _force_compact
+            before = len(session.messages)
+            try:
+                _force_compact(agent, session)
+            except Exception as e:  # noqa: BLE001
+                return f"⚠ compress failed: {type(e).__name__}: {e}"
+            self.store.save(session)
+            return f"🗜 compressed: {before} → {len(session.messages)} messages"
         if text.startswith(("/goal", "/subgoal")):
             from .. import goals
+            # Replacing the goal mid-run would race the active continuation loop — reject
+            # like /goal status etc. stay safe (they only touch control-plane state).
+            running = (lk := self._key_locks.get(key)) is not None and lk.locked()
+            arg = text.split(None, 1)[1].strip().lower() if " " in text else ""
+            if (running and text.startswith("/goal")
+                    and arg not in ("", "status", "pause", "resume", "clear")):
+                return "⚠ a turn is running — send 'stop' first, then set the new goal."
             with self._lock:
                 session = self._session(key)
             reply, start_turn = goals.handle_command(session, text, self.config)
@@ -115,7 +162,8 @@ class GatewayRunner:
             # model's prompt prefix stays cached); rebuild if the session was reset.
             agent = self._agents.get(key)
             if agent is None or agent.session is not session:
-                agent = Agent.create(self.config, session=session, cwd=self.cwd, store=self.store)
+                agent = Agent.create(self.config, session=session, cwd=self.cwd, store=self.store,
+                                     model=session.meta.get("model"))   # /model override
                 self._agents[key] = agent
                 if len(self._agents) > self._agent_cap:
                     del self._agents[next(iter(self._agents))]
