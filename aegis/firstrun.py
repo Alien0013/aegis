@@ -49,6 +49,36 @@ def busy_hint(mode: str) -> str:
             "without restarting. Won't show again.")
 
 
+# Contextual feature-discovery tips: shown once each, at the moment they're relevant.
+# trigger -> (flag, tip). The REPL calls maybe_tip(config, trigger) after a turn.
+_TIPS = {
+    "many_tools": ("tip_goal",
+                   "that was a long multi-step task — `/goal <objective>` lets me keep "
+                   "working toward a goal across turns without you re-prompting."),
+    "edit_failed": ("tip_atref",
+                    "you can pull a file (or part of one) straight into a message with "
+                    "`@file:path:10-20`, `@diff`, or `@staged`."),
+    "repeated_approve": ("tip_always",
+                         "answer `a` at an approval prompt to allow that command for the "
+                         "rest of the session instead of confirming each time."),
+    "long_session": ("tip_compress",
+                     "long session — `/compress here 3` keeps the last 3 exchanges verbatim "
+                     "and summarizes the rest, or `/compress focus <topic>` to bias it."),
+}
+
+
+def maybe_tip(config: Config, trigger: str) -> str:
+    """Return a one-time contextual tip for ``trigger`` (and mark it seen), else ''."""
+    entry = _TIPS.get(trigger)
+    if not entry or not config.get("onboarding.tips", True):
+        return ""
+    flag, text = entry
+    if is_seen(config, flag):
+        return ""
+    mark_seen(config, flag)
+    return "💡 " + text
+
+
 def profile_build_directive(config: Config) -> str:
     """One-shot system note appended to the user's very first message ever:
     offer (never assume) to build a short user profile, consent-gated at every

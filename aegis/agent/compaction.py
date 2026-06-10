@@ -71,7 +71,8 @@ def _split_at_safe_boundary(convo: list[Message], preserve_last: int) -> int:
 
 
 def compress(messages: list[Message], provider, *, preserve_first: int = 3,
-             preserve_last: int = 20, max_tool_tokens: int = 600) -> list[Message]:
+             preserve_last: int = 20, max_tool_tokens: int = 600,
+             focus: str = "") -> list[Message]:
     system_msgs = [m for m in messages if m.role == "system"]
     convo = [m for m in messages if m.role != "system"]
     tail_start = _split_at_safe_boundary(convo, preserve_last)
@@ -110,6 +111,8 @@ def compress(messages: list[Message], provider, *, preserve_first: int = 3,
                     "5. Completed work — what is already DONE (so it isn't redone).\n"
                     "6. Pending & next step — what remains, and the exact next action.\n"
                     "Be factual and specific (paths, commands, names). No filler."
+                    + (f"\nFOCUS: weight the summary toward anything related to: {focus}"
+                       if focus else "")
                 ),
                 Message.user(transcript[:60_000]),
             ],

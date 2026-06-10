@@ -96,13 +96,28 @@ class PermissionEngine:
     def allowlist(self) -> list[str]:
         return list(self.config.get("tools.allowlist", []) or [])
 
+    def _target(self, tool: Tool, args: dict) -> str:
+        # For command-style tools, match the command string; else the tool name.
+        return str(args.get("command") or args.get("cmd") or tool.name).strip()
+
     def _matches_allowlist(self, tool: Tool, args: dict) -> bool:
+        target = self._target(tool, args)
+        # Runtime allow-always grants (added when the user picks "always" at a prompt);
+        # session-scoped, never persisted unless the user also edits config.
+        runtime = getattr(self, "_runtime_allow", None)
+        if runtime and (target in runtime or any(target.startswith(p) for p in runtime)):
+            return True
         if not self.allowlist:
             return False
-        # For command-style tools, match the command string; else match tool name.
-        target = args.get("command") or args.get("cmd") or tool.name
-        target = str(target).strip()
         return any(target.startswith(prefix) for prefix in self.allowlist)
+
+    def allow_always(self, tool: Tool, args: dict) -> None:
+        """Remember this tool/command so ``ask`` mode stops re-prompting for it this session."""
+        if not hasattr(self, "_runtime_allow"):
+            self._runtime_allow: set[str] = set()
+        cmd = str(args.get("command") or args.get("cmd") or "").strip()
+        # For shell commands, generalize to the first token (e.g. 'git ' allows all git).
+        self._runtime_allow.add((cmd.split()[0] + " ") if cmd else tool.name)
 
     def check(self, tool: Tool, args: dict, ctx: ToolContext) -> Decision:
         if not tool.groups:
@@ -183,7 +198,13 @@ class PermissionEngine:
         if ctx.approver is None:
             return False, f"denied (no approver{'; ' + flagged if flagged else ''})"
         prompt = self._format_prompt(tool, args) + (f"  ⚠ {flagged}" if flagged else "")
-        approved = ctx.approver(prompt)
+        verdict = ctx.approver(prompt)
+        # The approver may return True/False, or the string "always" to allow this
+        # tool/command for the rest of the session without re-prompting.
+        if verdict == "always" and not flagged:    # never auto-allow a flagged command
+            self.allow_always(tool, args)
+            return True, "approved by user (always, this session)"
+        approved = bool(verdict)
         return (approved, "approved by user" if approved else "rejected by user")
 
     @staticmethod

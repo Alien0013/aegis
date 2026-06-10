@@ -52,33 +52,95 @@ def _raw(text: str) -> None:
 
 
 _AT_RE = re.compile(r"@([^\s]+)")
+_RANGE_RE = re.compile(r"^(.*?):(\d+)-(\d+)$")
+_SENSITIVE_REF = (".ssh", ".aws", ".gnupg", ".kube", "id_rsa", "id_ed25519", ".env",
+                  "credentials", ".netrc", "authorized_keys", ".git-credentials")
+
+
+def _ref_sensitive(raw: str) -> bool:
+    low = raw.lower()
+    return any(s in low for s in _SENSITIVE_REF)
+
+
+def _git(cwd: Path, *argv: str) -> str:
+    import subprocess
+    try:
+        out = subprocess.run(["git", *argv], cwd=cwd, capture_output=True, text=True,
+                             timeout=15, check=False)
+        return (out.stdout or out.stderr or "").strip()
+    except Exception as e:  # noqa: BLE001
+        return f"(git failed: {e})"
 
 
 def expand_references(text: str, cwd: Path) -> str:
-    """Expand `@path` tokens by appending the referenced file's contents."""
+    """Expand `@…` references inline context:
+
+    @path · @file:path[:10-20] (line range) · @folder:path · @diff · @staged ·
+    @git:<ref> · @url:https://… — sensitive paths (.ssh, .env, keys) are refused."""
     extras = []
     for m in _AT_RE.finditer(text):
-        p = Path(m.group(1)).expanduser()
+        raw = m.group(1).rstrip(",.;!?")
+        kind, _, value = raw.partition(":")
+        if raw == "diff":
+            extras.append(f"\n\n<git-diff>\n{_git(cwd, 'diff')[:20_000]}\n</git-diff>")
+            continue
+        if raw == "staged":
+            extras.append(f"\n\n<git-staged>\n{_git(cwd, 'diff', '--cached')[:20_000]}\n</git-staged>")
+            continue
+        if kind == "git" and value:
+            extras.append(f'\n\n<git-show ref="{value}">\n'
+                          f"{_git(cwd, 'show', '--stat', value)[:20_000]}\n</git-show>")
+            continue
+        if kind == "url" and value.startswith(("http://", "https://")):
+            try:
+                import httpx
+                from ..net_safety import guard
+                err = guard(value)
+                body = err or httpx.get(value, timeout=15, follow_redirects=True).text[:20_000]
+            except Exception as e:  # noqa: BLE001
+                body = f"(fetch failed: {e})"
+            extras.append(f'\n\n<url-content href="{value}">\n{body}\n</url-content>')
+            continue
+        target = value if kind in ("file", "folder") and value else raw
+        if _ref_sensitive(target):
+            extras.append(f"\n\n[reference @{raw} refused: sensitive path]")
+            continue
+        start = end = None
+        rng = _RANGE_RE.match(target)
+        if rng:
+            target, start, end = rng.group(1), int(rng.group(2)), int(rng.group(3))
+        p = Path(target).expanduser()
         if not p.is_absolute():
             p = cwd / p
-        if p.is_file():
+        if kind == "folder" or p.is_dir():
             try:
-                body = p.read_text(encoding="utf-8", errors="replace")[:20_000]
-                extras.append(f'\n\n<file path="{m.group(1)}">\n{body}\n</file>')
+                names = sorted(x.name + ("/" if x.is_dir() else "") for x in p.iterdir())[:200]
+                extras.append(f'\n\n<folder path="{target}">\n' + "\n".join(names) + "\n</folder>")
+            except OSError:
+                pass
+        elif p.is_file():
+            try:
+                body = p.read_text(encoding="utf-8", errors="replace")
+                if start is not None:
+                    lines = body.splitlines()[start - 1:end]
+                    body = "\n".join(f"{start + i}: {ln}" for i, ln in enumerate(lines))
+                extras.append(f'\n\n<file path="{target}">\n{body[:20_000]}\n</file>')
             except Exception:  # noqa: BLE001
                 pass
     return text + "".join(extras)
 
 
 def make_approver(auto: bool = False):
-    def approver(prompt_text: str) -> bool:
+    def approver(prompt_text: str):
         if auto:
             return True
         with _approve_lock:
             try:
-                ans = input(f"\n  ⚠ {prompt_text} [y/N] ").strip().lower()
+                ans = input(f"\n  ⚠ {prompt_text} [y/N/a=always] ").strip().lower()
             except (EOFError, KeyboardInterrupt):
                 return False
+            if ans in ("a", "always"):
+                return "always"        # allow this tool/command for the rest of the session
             return ans in ("y", "yes")
     return approver
 
@@ -287,15 +349,29 @@ def handle_slash(cmd: str, agent: Agent) -> str:
     elif name == "/usage":
         u = agent.budget.usage
         _out(f"tokens this session — input: {u.input_tokens:,}  output: {u.output_tokens:,}", style="cyan")
+        from .. import ratelimit
+        rl = ratelimit.summary()
+        if rl:
+            _out("  " + rl, style="bright_black")
     elif name == "/compress":
+        # /compress            — standard boundaries
+        # /compress here [N]   — keep only the last N exchanges verbatim (default 2)
+        # /compress focus <t>  — weight the summary toward topic <t>
         from ..agent import compaction, governance
         from ..agent.loop import _summarizer
         comp = agent.config.get("agent.compression", {}) or {}
+        preserve_last, focus = comp.get("preserve_last", 20), ""
+        words = arg.split() if arg else []
+        if words and words[0] == "here":
+            n = int(words[1]) if len(words) > 1 and words[1].isdigit() else 2
+            preserve_last = max(2, n * 2)        # an exchange ≈ user + assistant
+        elif words and words[0] == "focus":
+            focus = " ".join(words[1:])
         before = len(agent.session.messages)
         agent.session.messages = governance.normalize(compaction.compress(
             agent.session.messages, _summarizer(agent),   # cheap aux model, like auto-compaction
             preserve_first=comp.get("preserve_first", 3),
-            preserve_last=comp.get("preserve_last", 20)))
+            preserve_last=preserve_last, focus=focus))
         agent.refresh_volatile()
         _out(f"context compressed: {before} → {len(agent.session.messages)} messages.", style="yellow")
     elif name == "/personality":
@@ -446,11 +522,18 @@ def interactive(config: Config, *, model=None, provider_name=None,
         try:
             from ..firstrun import profile_build_directive
             renderer = Renderer()
+            tools_before = agent.tools_used
             res = agent.run(expand_references(user, agent.cwd) + profile_build_directive(config),
                             renderer)
             from .. import goals
             goals.run_loop(agent, res.content or "",
                            lambda s: _out(f"  {s}", style="magenta"), renderer)
+            from ..firstrun import maybe_tip
+            tools_this = agent.tools_used - tools_before
+            trigger = ("many_tools" if tools_this >= 8 else
+                       "long_session" if len(agent.session.messages) >= 40 else None)
+            if trigger and (tip := maybe_tip(config, trigger)):
+                _out("  " + tip, style="bright_black")
         except KeyboardInterrupt:
             agent.cancel()   # stop the loop at the next safe point; discard partial work
             _out("\n  ⏹ interrupted — stopped this turn (your session is intact)", style="yellow")

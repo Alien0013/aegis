@@ -45,6 +45,27 @@ def _allow_private(config) -> bool:
         return False
 
 
+def _domain_match(host: str, pattern: str) -> bool:
+    p = pattern.strip().lower().lstrip("*.")
+    return bool(p) and (host == p or host.endswith("." + p))
+
+
+def check_domain_policy(host: str, config) -> str:
+    """'' when allowed; else why. ``web.deny_domains`` always wins; a non-empty
+    ``web.allow_domains`` turns fetching into allowlist-only."""
+    if config is None:
+        return ""
+    deny = config.get("web.deny_domains", []) or []
+    allow = config.get("web.allow_domains", []) or []
+    deny = deny if isinstance(deny, (list, tuple)) else []     # tolerate stub configs
+    allow = allow if isinstance(allow, (list, tuple)) else []
+    if any(_domain_match(host, d) for d in deny):
+        return f"domain '{host}' is on web.deny_domains"
+    if allow and not any(_domain_match(host, a) for a in allow):
+        return f"domain '{host}' is not on web.allow_domains (allowlist mode)"
+    return ""
+
+
 def is_safe_url(url: str, config=None) -> tuple[bool, str]:
     """Return (ok, reason). Resolves DNS and checks the actual target IP(s)."""
     try:
@@ -57,6 +78,9 @@ def is_safe_url(url: str, config=None) -> tuple[bool, str]:
         return False, f"unsupported scheme '{scheme or '∅'}' (only http/https)"
     if not host:
         return False, "no host in URL"
+    policy = check_domain_policy(host, config)
+    if policy:
+        return False, policy
     if host in _METADATA_HOSTS:
         return False, "cloud-metadata hostname"
     allow = _allow_private(config)
