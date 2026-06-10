@@ -93,6 +93,17 @@ class History:
     def append(self, role: str, content: str, session: str = "") -> None:
         append_line(self.path, json.dumps({"ts": now_iso(), "role": role,
                                            "content": content, "session": session}))
+        self._maybe_rotate()
+
+    def _maybe_rotate(self, max_bytes: int = 10_000_000, keep_lines: int = 2000) -> None:
+        """history.jsonl grows forever otherwise; past the cap keep the recent tail."""
+        try:
+            if self.path.stat().st_size <= max_bytes:
+                return
+            lines = read_text(self.path).strip().splitlines()[-keep_lines:]
+            atomic_write(self.path, "\n".join(lines) + "\n")
+        except OSError:
+            pass
 
     def recent(self, n: int = 50, max_chars: int = 32_000) -> list[dict]:
         raw = read_text(self.path)

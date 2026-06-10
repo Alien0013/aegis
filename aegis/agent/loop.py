@@ -96,10 +96,19 @@ class ToolExecutor:
         if limit <= 0 or estimate_tokens(content) <= limit:
             return content
         import os
+        import time
         from .. import config as cfg
         d = cfg.sub("tool_outputs")
         try:
             os.makedirs(d, exist_ok=True)
+            cutoff = time.time() - 7 * 86400          # spills are scratch — prune old ones
+            for old in os.listdir(d):
+                p = os.path.join(d, old)
+                try:
+                    if os.path.getmtime(p) < cutoff:
+                        os.unlink(p)
+                except OSError:
+                    continue
             path = os.path.join(d, f"{call.name}_{call.id}.txt")
             with open(path, "w", encoding="utf-8") as f:
                 f.write(content)
@@ -182,12 +191,12 @@ def _force_compact(agent, session):
     """Compress unconditionally — recovery from a provider context_overflow. Tighter tail than
     the proactive path so the request actually shrinks below the window."""
     comp = agent.config.get("agent.compression", {}) or {}
-    session.messages = _engine(agent).compress(
+    session.messages = governance.normalize(_engine(agent).compress(
         session.messages, _summarizer(agent),
         preserve_first=comp.get("preserve_first", 3),
         preserve_last=min(10, comp.get("preserve_last", 20)),
         max_tool_tokens=min(400, comp.get("max_tool_tokens", 600)),
-    )
+    ))
     agent.refresh_volatile()
     return session
 
@@ -296,9 +305,10 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
             return stop
         emit({"type": "iteration", "n": budget.api_call_count + 1, "max": budget.max_iterations})
         _drain_steering(agent, session)        # fold in any mid-run /steer guidance
-        session.messages = governance.normalize(session.messages)
-        # Compact BEFORE the model call so an over-full window never reaches the provider.
+        # Compact BEFORE the model call so an over-full window never reaches the provider,
+        # then normalize AFTER so a compaction boundary can never ship a broken tool pair.
         session = _maybe_compact(agent, session, schema_tokens, budget, emit)
+        session.messages = governance.normalize(session.messages)
         from ..plugins import fire_hook
         rewritten = fire_hook("pre_llm_call", session.messages, agent)   # in-process Python hook
         if isinstance(rewritten, list):

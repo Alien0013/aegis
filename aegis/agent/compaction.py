@@ -54,11 +54,19 @@ def should_compress(messages: list[Message], context_length: int, overhead_token
     return estimated_tokens(messages) + overhead_tokens > context_length * COMPACT_THRESHOLD
 
 
-def _split_at_user_boundary(convo: list[Message], preserve_last: int) -> int:
-    """Return an index for the tail start that lands on a user message."""
+def _split_at_safe_boundary(convo: list[Message], preserve_last: int) -> int:
+    """Tail-start index at a safe boundary: a user message when one exists in the
+    window, else an assistant message (keeps its tool results with it). Long
+    agentic turns often have a single user message at the top — without the
+    assistant fallback the tail came back EMPTY and the model's most recent
+    working state was summarized away mid-task."""
     start = max(0, len(convo) - preserve_last)
-    while start < len(convo) and convo[start].role != "user":
-        start += 1
+    for i in range(start, len(convo)):
+        if convo[i].role == "user":
+            return i
+    for i in range(start, len(convo)):
+        if convo[i].role == "assistant":
+            return i
     return min(start, len(convo))
 
 
@@ -66,14 +74,19 @@ def compress(messages: list[Message], provider, *, preserve_first: int = 3,
              preserve_last: int = 20, max_tool_tokens: int = 600) -> list[Message]:
     system_msgs = [m for m in messages if m.role == "system"]
     convo = [m for m in messages if m.role != "system"]
-    tail_start = _split_at_user_boundary(convo, preserve_last)
-    if tail_start <= preserve_first:
+    tail_start = _split_at_safe_boundary(convo, preserve_last)
+    # Extend the head cut past any tool results so a tool group is never split —
+    # an assistant with tool_calls whose results were summarized away is a wire error.
+    cut = preserve_first
+    while cut < tail_start and convo[cut].role == "tool":
+        cut += 1
+    if tail_start <= cut:
         # Nothing meaningful to summarize, but still prune oversized tool dumps.
         return system_msgs + _prune_messages(convo, max_tool_tokens)
 
     # Prune oversized tool outputs / images in the kept turns before summarizing the rest.
-    head = _prune_messages(convo[:preserve_first], max_tool_tokens)
-    middle = convo[preserve_first:tail_start]
+    head = _prune_messages(convo[:cut], max_tool_tokens)
+    middle = convo[cut:tail_start]
     tail = _prune_messages(convo[tail_start:], max_tool_tokens)
     if not middle:
         return system_msgs + head + tail
@@ -86,8 +99,17 @@ def compress(messages: list[Message], provider, *, preserve_first: int = 3,
         resp = provider.complete(
             [
                 Message.system(
-                    "Summarize the following conversation excerpt. Preserve decisions, file "
-                    "paths, commands, results, and open threads. Be terse and factual."
+                    "You are compressing an agent conversation so work can continue seamlessly "
+                    "with this summary in place of the original messages. Write a structured "
+                    "handoff with exactly these sections (skip a section only if truly empty):\n"
+                    "1. Primary request — what the user asked for, including later refinements.\n"
+                    "2. Key decisions & constraints — choices made and rules to respect.\n"
+                    "3. Files & code — every file touched, with the specific functions/lines "
+                    "that matter and any snippets still needed.\n"
+                    "4. Errors & fixes — what failed, how it was fixed, what to avoid repeating.\n"
+                    "5. Completed work — what is already DONE (so it isn't redone).\n"
+                    "6. Pending & next step — what remains, and the exact next action.\n"
+                    "Be factual and specific (paths, commands, names). No filler."
                 ),
                 Message.user(transcript[:60_000]),
             ],

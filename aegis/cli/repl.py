@@ -288,13 +288,16 @@ def handle_slash(cmd: str, agent: Agent) -> str:
         u = agent.budget.usage
         _out(f"tokens this session — input: {u.input_tokens:,}  output: {u.output_tokens:,}", style="cyan")
     elif name == "/compress":
-        from ..agent import compaction
+        from ..agent import compaction, governance
+        from ..agent.loop import _summarizer
         comp = agent.config.get("agent.compression", {}) or {}
-        agent.session.messages = compaction.compress(
-            agent.session.messages, agent.provider,
-            preserve_first=comp.get("preserve_first", 3), preserve_last=comp.get("preserve_last", 20))
+        before = len(agent.session.messages)
+        agent.session.messages = governance.normalize(compaction.compress(
+            agent.session.messages, _summarizer(agent),   # cheap aux model, like auto-compaction
+            preserve_first=comp.get("preserve_first", 3),
+            preserve_last=comp.get("preserve_last", 20)))
         agent.refresh_volatile()
-        _out("context compressed.", style="yellow")
+        _out(f"context compressed: {before} → {len(agent.session.messages)} messages.", style="yellow")
     elif name == "/personality":
         if arg:
             agent.config.data.setdefault("agent", {})["personality"] = arg
