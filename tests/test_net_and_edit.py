@@ -243,16 +243,21 @@ def test_cron_oneshot_lifecycle(monkeypatch, tmp_path):
 
 
 # --- ACP tool-call streaming -----------------------------------------------
-def test_acp_streams_tool_calls():
-    from aegis.acp import AcpServer
-    srv = AcpServer.__new__(AcpServer)
+def test_acp_streams_tool_calls(tmp_path):
+    from aegis.acp import AcpServer, _SessionEntry
+    from aegis.session import Session
+    srv = AcpServer(config=None)
+    entry = _SessionEntry(session=Session.create(), cwd=tmp_path)
     sent = []
     srv._notify = lambda method, params: sent.append(params["update"])
-    srv._send_tool_call("s1", {"id": "c1", "name": "bash"}, status="in_progress")
-    srv._send_tool_call("s1", {"id": "c1", "name": "bash", "summary": "ran ls"}, status="completed")
-    srv._send_tool_call("s1", {"id": "c2", "name": "edit_file", "is_error": True}, status="completed")
-    assert [u["sessionUpdate"] for u in sent] == ["tool_call"] * 3
-    assert sent[0]["status"] == "in_progress"
+    srv._send_tool_call("s1", entry, {"id": "c1", "name": "bash"}, status="in_progress")
+    srv._send_tool_call("s1", entry, {"id": "c1", "name": "bash", "summary": "ran ls"},
+                        status="completed")
+    srv._send_tool_call("s1", entry, {"id": "c2", "name": "edit_file", "is_error": True},
+                        status="completed")
+    # start opens a tool_call; completion updates it in place (ACP tool_call_update)
+    assert [u["sessionUpdate"] for u in sent] == ["tool_call", "tool_call_update", "tool_call_update"]
+    assert sent[0]["status"] == "in_progress" and sent[0]["kind"] == "execute"
     assert sent[1]["status"] == "completed" and sent[1]["title"] == "ran ls"
     assert sent[2]["status"] == "failed"          # tool error surfaces as failed
 
@@ -403,27 +408,36 @@ def test_acp_request_permission():
     import threading
     from aegis.acp import AcpServer
 
-    def run(response_line):
-        srv = AcpServer.__new__(AcpServer)
-        srv._req_id = 0
-        srv._write_lock = threading.Lock()
-        srv.stdout = io.StringIO()
-        srv.stdin = io.StringIO(response_line + "\n")
-        allowed = srv._request_permission("s1", "run bash: rm -rf build")
-        return allowed, json.loads(srv.stdout.getvalue().strip())
+    def run(outcome):
+        """Ask on a worker (like a real prompt turn) and answer via the routing loop."""
+        srv = AcpServer(config=None, stdin=io.StringIO(), stdout=io.StringIO())
+        result = {}
 
-    allow_resp = json.dumps({"jsonrpc": "2.0", "id": "perm-1",
-                             "result": {"outcome": {"outcome": "selected", "optionId": "allow"}}})
-    ok, req = run(allow_resp)
+        def ask():
+            result["allowed"] = srv._request_permission("s1", "run bash: rm -rf build")
+        t = threading.Thread(target=ask, daemon=True)
+        t.start()
+        for _ in range(200):                     # wait for the request to be written
+            if srv.stdout.getvalue().strip():
+                break
+            import time
+            time.sleep(0.01)
+        req = json.loads(srv.stdout.getvalue().splitlines()[0])
+        if outcome == "cancel":
+            srv._handle({"jsonrpc": "2.0", "id": 99, "method": "session/cancel",
+                         "params": {"sessionId": "s1"}})
+        else:
+            srv._handle({"jsonrpc": "2.0", "id": req["id"],
+                         "result": {"outcome": {"outcome": "selected", "optionId": outcome}}})
+        t.join(timeout=3)
+        return result["allowed"], req
+
+    ok, req = run("allow")
     assert ok is True
     assert req["method"] == "session/request_permission"
     assert [o["optionId"] for o in req["params"]["options"]] == ["allow", "reject"]
-
-    reject = json.dumps({"jsonrpc": "2.0", "id": "perm-1",
-                         "result": {"outcome": {"outcome": "selected", "optionId": "reject"}}})
-    assert run(reject)[0] is False
-    assert run(json.dumps({"jsonrpc": "2.0", "method": "session/cancel", "params": {}}))[0] is False
-    assert run("")[0] is False              # closed stdin -> deny
+    assert run("reject")[0] is False
+    assert run("cancel")[0] is False         # client cancelled while we waited -> deny
 
 
 # --- live event bus + dashboard SSE mirror (run.py WS dashboard mirror) ------
@@ -502,26 +516,33 @@ def test_acp_fs_rpc_roundtrip():
     import io
     import json
     import threading
+    import time
     from aegis.acp import AcpServer, _AcpFs
-    srv = AcpServer.__new__(AcpServer)
-    srv._req_id = 0
-    srv._write_lock = threading.Lock()
-    srv.stdout = io.StringIO()
-    srv.stdin = io.StringIO(json.dumps(
-        {"jsonrpc": "2.0", "id": "req-1", "result": {"content": "BUFFER"}}) + "\n")
-    assert _AcpFs(srv, "s1").read_text("/x.py") == "BUFFER"
-    req = json.loads(srv.stdout.getvalue().strip())
+    srv = AcpServer(config=None, stdin=io.StringIO(), stdout=io.StringIO())
+    got = {}
+
+    def read():
+        got["text"] = _AcpFs(srv, "s1").read_text("/x.py")
+    t = threading.Thread(target=read, daemon=True)
+    t.start()
+    for _ in range(200):
+        if srv.stdout.getvalue().strip():
+            break
+        time.sleep(0.01)
+    req = json.loads(srv.stdout.getvalue().splitlines()[0])
+    srv._handle({"jsonrpc": "2.0", "id": req["id"], "result": {"content": "BUFFER"}})
+    t.join(timeout=3)
+    assert got["text"] == "BUFFER"
     assert req["method"] == "fs/read_text_file" and req["params"]["path"] == "/x.py"
 
 
 def test_acp_enables_fs_only_when_client_supports_it():
     from aegis.acp import AcpServer
-    import threading
-    srv = AcpServer.__new__(AcpServer)
-    srv._write_lock = threading.Lock()
-    srv._initialize({"clientCapabilities": {"fs": {"readTextFile": True, "writeTextFile": True}}})
+    srv = AcpServer(config=None)
+    srv._initialize(1, params={"clientCapabilities": {"fs": {"readTextFile": True,
+                                                             "writeTextFile": True}}})
     assert srv._client_fs is True
-    srv._initialize({"clientCapabilities": {}})       # no fs caps -> stays on real disk
+    srv._initialize(2, params={"clientCapabilities": {}})   # no fs caps -> stays on real disk
     assert srv._client_fs is False
 
 

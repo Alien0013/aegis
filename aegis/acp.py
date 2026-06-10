@@ -1,22 +1,20 @@
-"""Agent Client Protocol (ACP) stdio server for IDE integration (Zed).
+"""Agent Client Protocol (ACP) stdio server for IDE integration (Zed et al.).
 
-Implements a minimal but correct subset of Zed's Agent Client Protocol over
-newline-delimited JSON-RPC 2.0 on stdin/stdout. The editor (client) launches
-``aegis acp`` as a subprocess and speaks JSON-RPC; we drive an :class:`Agent`
-per session and stream assistant text back as ``session/update`` notifications.
+Speaks newline-delimited JSON-RPC 2.0 on stdin/stdout. The editor launches
+``aegis acp`` as a subprocess; we drive one :class:`Agent` per session and
+stream updates back as ``session/update`` notifications.
 
-Wire protocol (one JSON object per line, ``\\n`` terminated)::
+Architecture: the serve loop is the **only** stdin reader. Prompts run on a
+worker thread (one per session at a time) so the loop keeps reading while a
+turn is in flight — that's what makes ``session/cancel`` actually interrupt a
+run, and lets client responses (permission outcomes, fs results) route back to
+whichever call is waiting.
 
-    --> {"jsonrpc":"2.0","id":1,"method":"initialize","params":{...}}
-    <-- {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{...}}}
-    --> {"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/p","mcpServers":[]}}
-    <-- {"jsonrpc":"2.0","id":2,"result":{"sessionId":"sess_..."}}
-    --> {"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"sess_...","prompt":[...]}}
-    <-- {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"...","update":{...}}}   (0..n)
-    <-- {"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}
-
-The implementation is intentionally synchronous: prompts are processed one at a
-time on the read loop, streaming updates out as the agent produces deltas.
+Editor-facing niceties:
+  - file edits are sent as ACP ``diff`` content blocks so the editor renders a
+    proper before/after review,
+  - ``session/load`` replays a stored session's history,
+  - tool calls carry an ACP ``kind`` (read/edit/execute/fetch) and locations.
 """
 
 from __future__ import annotations
@@ -24,7 +22,7 @@ from __future__ import annotations
 import json
 import sys
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -42,6 +40,12 @@ METHOD_NOT_FOUND = -32601
 INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
 
+_NO_REPLY = object()    # handler sentinel: the response is sent later (async prompt)
+
+_TOOL_KIND = {"read_file": "read", "list_dir": "read", "grep": "search", "glob": "search",
+              "write_file": "edit", "edit_file": "edit", "bash": "execute",
+              "execute_code": "execute", "web_search": "fetch", "web_fetch": "fetch"}
+
 
 @dataclass
 class _SessionEntry:
@@ -49,12 +53,13 @@ class _SessionEntry:
 
     session: Session
     cwd: Path
+    agent: Agent | None = None        # set while a prompt is running (for cancel)
+    busy: bool = False
 
 
-@dataclass
 class _AcpFs:
-    """Filesystem delegate that reads/writes through the ACP client (editor) so unsaved buffers
-    are honored, instead of touching local disk. Used only when the client advertises fs caps."""
+    """Filesystem delegate that reads/writes through the ACP client (editor) so unsaved
+    buffers are honored, instead of touching local disk."""
 
     def __init__(self, server: "AcpServer", sid: str):
         self._server = server
@@ -72,19 +77,20 @@ class _AcpFs:
 class AcpServer:
     """JSON-RPC 2.0 over stdio implementing the Agent Client Protocol."""
 
-    config: Config
-    stdin: TextIO = field(default_factory=lambda: sys.stdin)
-    stdout: TextIO = field(default_factory=lambda: sys.stdout)
-    store: SessionStore | None = None
-
-    sessions: dict[str, _SessionEntry] = field(default_factory=dict)
-    _write_lock: threading.Lock = field(default_factory=threading.Lock)
-    _req_id: int = 0
-    _client_fs: bool = False    # client advertised fs/read_text_file + fs/write_text_file
+    def __init__(self, config: Config, stdin: TextIO | None = None,
+                 stdout: TextIO | None = None, store: SessionStore | None = None):
+        self.config = config
+        self.stdin = stdin or sys.stdin
+        self.stdout = stdout or sys.stdout
+        self.store = store
+        self.sessions: dict[str, _SessionEntry] = {}
+        self._write_lock = threading.Lock()
+        self._req_id = 0
+        self._client_fs = False     # client advertised fs/read_text_file + fs/write_text_file
+        self._waiters: dict[Any, dict] = {}   # our request id -> {event, result}
 
     # -- low-level framing --------------------------------------------------
     def _write(self, obj: dict[str, Any]) -> None:
-        """Serialize one JSON-RPC message as a single newline-delimited line."""
         line = json.dumps(obj, ensure_ascii=False)
         with self._write_lock:
             self.stdout.write(line + "\n")
@@ -99,6 +105,9 @@ class AcpServer:
     def _notify(self, method: str, params: dict[str, Any]) -> None:
         self._write({"jsonrpc": "2.0", "method": method, "params": params})
 
+    def _update(self, sid: str, update: dict[str, Any]) -> None:
+        self._notify("session/update", {"sessionId": sid, "update": update})
+
     # -- main loop ----------------------------------------------------------
     def serve(self) -> None:
         """Read JSON-RPC messages line by line until stdin closes."""
@@ -112,13 +121,19 @@ class AcpServer:
                 self._error(None, PARSE_ERROR, "invalid JSON")
                 continue
             self._handle(msg)
+        # stdin closed: release anything still waiting on a client response
+        for w in list(self._waiters.values()):
+            w["event"].set()
 
     def _handle(self, msg: dict[str, Any]) -> None:
         req_id = msg.get("id")
         method = msg.get("method")
-        params = msg.get("params") or {}
-        # Responses/notifications coming from the client (no method) are ignored.
         if not isinstance(method, str):
+            # response from the client -> route to the waiting call
+            if req_id is not None and req_id in self._waiters:
+                w = self._waiters.pop(req_id)
+                w["result"] = msg.get("result") or {}
+                w["event"].set()
             return
         try:
             handler = self._METHODS.get(method)
@@ -126,8 +141,8 @@ class AcpServer:
                 if req_id is not None:
                     self._error(req_id, METHOD_NOT_FOUND, f"unknown method: {method}")
                 return
-            result = handler(self, params)
-            if req_id is not None:
+            result = handler(self, req_id, params=msg.get("params") or {})
+            if req_id is not None and result is not _NO_REPLY:
                 self._result(req_id, result)
         except _RpcError as e:
             if req_id is not None:
@@ -136,9 +151,21 @@ class AcpServer:
             if req_id is not None:
                 self._error(req_id, INTERNAL_ERROR, f"{type(e).__name__}: {e}")
 
+    # -- client calls (worker thread -> editor) ------------------------------
+    def _rpc_call(self, method: str, params: dict[str, Any], timeout: float = 300.0) -> dict[str, Any]:
+        """Send a request to the client and wait for the serve loop to route the response."""
+        with self._write_lock:
+            self._req_id += 1
+            rid = f"req-{self._req_id}"
+        waiter = {"event": threading.Event(), "result": {}, "sid": params.get("sessionId")}
+        self._waiters[rid] = waiter
+        self._write({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
+        waiter["event"].wait(timeout)
+        self._waiters.pop(rid, None)
+        return waiter["result"]
+
     # -- method handlers ----------------------------------------------------
-    def _initialize(self, params: dict[str, Any]) -> dict[str, Any]:
-        # Echo the lower of the client's requested version and ours; default to ours.
+    def _initialize(self, req_id, params: dict[str, Any]) -> dict[str, Any]:
         client_version = params.get("protocolVersion", PROTOCOL_VERSION)
         try:
             version = min(int(client_version), PROTOCOL_VERSION)
@@ -149,7 +176,7 @@ class AcpServer:
         return {
             "protocolVersion": version,
             "agentCapabilities": {
-                "loadSession": False,
+                "loadSession": True,
                 "promptCapabilities": {
                     "image": False,
                     "audio": False,
@@ -159,150 +186,166 @@ class AcpServer:
             "authMethods": [],
         }
 
-    def _session_new(self, params: dict[str, Any]) -> dict[str, Any]:
+    def _session_new(self, req_id, params: dict[str, Any]) -> dict[str, Any]:
         cwd = Path(params.get("cwd") or Path.cwd()).expanduser()
         session = Session.create()
         self.sessions[session.id] = _SessionEntry(session=session, cwd=cwd)
         return {"sessionId": session.id}
 
-    def _session_prompt(self, params: dict[str, Any]) -> dict[str, Any]:
+    def _session_load(self, req_id, params: dict[str, Any]) -> dict[str, Any]:
+        """Restore a stored session and replay its history as updates."""
+        sid = params.get("sessionId")
+        stored = self.store.load(sid) if (self.store and isinstance(sid, str)) else None
+        if stored is None:
+            raise _RpcError(INVALID_PARAMS, f"unknown sessionId: {sid!r}")
+        cwd = Path(params.get("cwd") or Path.cwd()).expanduser()
+        self.sessions[stored.id] = _SessionEntry(session=stored, cwd=cwd)
+        for m in stored.messages:
+            if m.role == "user":
+                self._update(stored.id, {"sessionUpdate": "user_message_chunk",
+                                         "content": {"type": "text", "text": m.content}})
+            elif m.role == "assistant" and m.content:
+                self._update(stored.id, {"sessionUpdate": "agent_message_chunk",
+                                         "content": {"type": "text", "text": m.content}})
+        return {}
+
+    def _session_prompt(self, req_id, params: dict[str, Any]):
         sid = params.get("sessionId")
         entry = self.sessions.get(sid) if isinstance(sid, str) else None
         if entry is None:
             raise _RpcError(INVALID_PARAMS, f"unknown sessionId: {sid!r}")
+        if entry.busy:
+            raise _RpcError(INVALID_REQUEST, "a prompt is already running for this session")
 
         text = _flatten_prompt(params.get("prompt"))
         if not text.strip():
             raise _RpcError(INVALID_PARAMS, "empty prompt")
 
-        agent = Agent.create(
-            self.config,
-            session=entry.session,
-            cwd=entry.cwd,
-            store=self.store,
-            approver=lambda desc: self._request_permission(sid, desc),
-        )
-        if self._client_fs:                      # route file reads/writes through the editor
-            agent.tool_context.fs = _AcpFs(self, sid)
+        entry.busy = True
+        threading.Thread(target=self._run_prompt, args=(req_id, sid, entry, text),
+                         daemon=True).start()
+        return _NO_REPLY              # the worker sends the response when the turn ends
 
-        def on_event(event: dict[str, Any]) -> None:
-            etype = event.get("type")
-            if etype == "assistant_delta":
-                self._send_chunk(sid, event.get("text", ""))
-            elif etype == "tool_start":            # surface tool activity in the editor (Zed etc.)
-                self._send_tool_call(sid, event, status="in_progress")
-            elif etype == "tool_result":
-                self._send_tool_call(sid, event, status="completed")
-
+    def _run_prompt(self, req_id, sid: str, entry: _SessionEntry, text: str) -> None:
         try:
-            result = agent.run(text, on_event)
-        except Exception as e:  # noqa: BLE001
-            self._notify(
-                "session/update",
-                {
-                    "sessionId": sid,
-                    "update": {
-                        "sessionUpdate": "agent_message_chunk",
-                        "content": {"type": "text", "text": f"[error] {type(e).__name__}: {e}"},
-                    },
-                },
+            agent = Agent.create(
+                self.config,
+                session=entry.session,
+                cwd=entry.cwd,
+                store=self.store,
+                approver=lambda desc: self._request_permission(sid, desc),
             )
-            return {"stopReason": "error"}
+            entry.agent = agent
+            if self._client_fs:              # route file reads/writes through the editor
+                agent.tool_context.fs = _AcpFs(self, sid)
 
-        # Streaming providers already emitted deltas; if nothing streamed (e.g. a
-        # non-streaming provider) send the full message once so the editor sees it.
-        if not getattr(agent, "stream", True) and result.content:
-            self._send_chunk(sid, result.content)
+            def on_event(event: dict[str, Any]) -> None:
+                etype = event.get("type")
+                if etype == "assistant_delta":
+                    self._send_chunk(sid, event.get("text", ""))
+                elif etype == "tool_start":
+                    self._send_tool_call(sid, entry, event, status="in_progress")
+                elif etype == "tool_result":
+                    self._send_tool_call(sid, entry, event, status="completed")
 
-        return {"stopReason": "end_turn"}
+            result = agent.run(text, on_event)
+            if agent.cancel_event.is_set():
+                self._result(req_id, {"stopReason": "cancelled"})
+                return
+            # Streaming providers already emitted deltas; if nothing streamed send it once.
+            if not getattr(agent, "stream", True) and result.content:
+                self._send_chunk(sid, result.content)
+            self._result(req_id, {"stopReason": "end_turn"})
+        except Exception as e:  # noqa: BLE001
+            self._send_chunk(sid, f"[error] {type(e).__name__}: {e}")
+            self._result(req_id, {"stopReason": "error"})
+        finally:
+            entry.agent = None
+            entry.busy = False
 
-    def _session_cancel(self, params: dict[str, Any]) -> dict[str, Any]:
-        # We process prompts synchronously, so by the time a cancel arrives the
-        # turn is already done. Acknowledge so the client doesn't hang.
+    def _session_cancel(self, req_id, params: dict[str, Any]) -> dict[str, Any]:
+        sid = params.get("sessionId")
+        entry = self.sessions.get(sid) if isinstance(sid, str) else None
+        if entry is not None and entry.agent is not None:
+            entry.agent.cancel()             # the worker replies with stopReason: cancelled
+        # release any call waiting on this session's client (permission prompt etc.) as a deny
+        for rid, w in list(self._waiters.items()):
+            if w.get("sid") == sid:
+                self._waiters.pop(rid, None)
+                w["event"].set()
         return {}
 
-    def _authenticate(self, params: dict[str, Any]) -> dict[str, Any]:
-        # No auth required for the local stdio agent.
-        return {}
+    def _authenticate(self, req_id, params: dict[str, Any]) -> dict[str, Any]:
+        return {}                            # no auth required for the local stdio agent
 
+    # -- updates ------------------------------------------------------------
     def _send_chunk(self, sid: str, text: str) -> None:
-        if not text:
-            return
-        self._notify(
-            "session/update",
-            {
-                "sessionId": sid,
-                "update": {
-                    "sessionUpdate": "agent_message_chunk",
-                    "content": {"type": "text", "text": text},
-                },
-            },
-        )
-
-    def _rpc_call(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
-        """Send a request to the client and block for its response (reading stdin, which is
-        idle while the serve loop is suspended inside agent.run()). Returns the result dict."""
-        self._req_id += 1
-        rid = f"req-{self._req_id}"
-        self._write({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
-        for raw in self.stdin:
-            line = raw.strip()
-            if not line:
-                continue
-            try:
-                msg = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if msg.get("id") == rid:
-                return msg.get("result") or {}
-        return {}
+        if text:
+            self._update(sid, {"sessionUpdate": "agent_message_chunk",
+                               "content": {"type": "text", "text": text}})
 
     def _request_permission(self, sid: str, description: str) -> bool:
-        """Ask the editor to approve a tool action (ACP session/request_permission). Blocks
-        reading stdin for the matching response — safe because the serve loop is suspended
-        up-stack inside agent.run() while this fires."""
-        self._req_id += 1
-        rid = f"perm-{self._req_id}"
-        self._write({
-            "jsonrpc": "2.0", "id": rid, "method": "session/request_permission",
-            "params": {
-                "sessionId": sid,
-                "toolCall": {"toolCallId": rid, "title": description or "tool action",
-                             "kind": "other", "status": "pending"},
-                "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"},
-                            {"optionId": "reject", "name": "Reject", "kind": "reject_once"}],
-            },
+        """Ask the editor to approve a tool action (runs on the prompt worker)."""
+        result = self._rpc_call("session/request_permission", {
+            "sessionId": sid,
+            "toolCall": {"toolCallId": f"perm-{self._req_id}", "title": description or "tool action",
+                         "kind": "other", "status": "pending"},
+            "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+                        {"optionId": "reject", "name": "Reject", "kind": "reject_once"}],
         })
-        for raw in self.stdin:
-            line = raw.strip()
-            if not line:
-                continue
-            try:
-                msg = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if msg.get("id") == rid:
-                outcome = (msg.get("result") or {}).get("outcome") or {}
-                return outcome.get("outcome") == "selected" and outcome.get("optionId") == "allow"
-            if msg.get("method") in ("session/cancel", "$/cancelRequest"):
-                return False          # client cancelled while we waited -> treat as deny
-        return False                  # stdin closed -> deny
+        outcome = (result or {}).get("outcome") or {}
+        return outcome.get("outcome") == "selected" and outcome.get("optionId") == "allow"
 
-    def _send_tool_call(self, sid: str, event: dict[str, Any], *, status: str) -> None:
+    def _send_tool_call(self, sid: str, entry: _SessionEntry, event: dict[str, Any],
+                        *, status: str) -> None:
         name = event.get("name") or "tool"
         update: dict[str, Any] = {
-            "sessionUpdate": "tool_call",
+            "sessionUpdate": "tool_call" if status == "in_progress" else "tool_call_update",
             "toolCallId": str(event.get("id") or name),
             "title": event.get("summary") or name,
             "status": "failed" if event.get("is_error") else status,
-            "kind": "other",
+            "kind": _TOOL_KIND.get(name, "other"),
         }
-        self._notify("session/update", {"sessionId": sid, "update": update})
+        args = event.get("args") or {}
+        if status == "in_progress" and isinstance(args, dict):
+            update["rawInput"] = {k: v for k, v in args.items() if isinstance(v, (str, int, bool))}
+            diff = self._edit_diff(entry, name, args)
+            if diff is not None:
+                update["content"] = [diff]
+            if isinstance(args.get("path"), str):
+                update["locations"] = [{"path": str((entry.cwd / args["path"]).resolve()
+                                                    if not Path(args["path"]).is_absolute()
+                                                    else args["path"])}]
+        self._update(sid, update)
+
+    @staticmethod
+    def _edit_diff(entry: _SessionEntry, name: str, args: dict[str, Any]) -> dict[str, Any] | None:
+        """ACP diff content block for file edits, so editors render a before/after review."""
+        raw = args.get("path")
+        if not isinstance(raw, str) or not raw:
+            return None
+        path = Path(raw)
+        if not path.is_absolute():
+            path = entry.cwd / path
+        try:
+            old_text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+        except OSError:
+            old_text = ""
+        if name == "write_file" and isinstance(args.get("content"), str):
+            return {"type": "diff", "path": str(path), "oldText": old_text,
+                    "newText": args["content"]}
+        if name == "edit_file" and isinstance(args.get("old_string"), str):
+            new, old = str(args.get("new_string", "")), str(args["old_string"])
+            replaced = (old_text.replace(old, new)
+                        if args.get("replace_all") else old_text.replace(old, new, 1))
+            return {"type": "diff", "path": str(path), "oldText": old_text, "newText": replaced}
+        return None
 
     _METHODS = {
         "initialize": _initialize,
         "authenticate": _authenticate,
         "session/new": _session_new,
+        "session/load": _session_load,
         "session/prompt": _session_prompt,
         "session/cancel": _session_cancel,
     }
@@ -318,12 +361,7 @@ class _RpcError(Exception):
 
 
 def _flatten_prompt(prompt: Any) -> str:
-    """Collapse an ACP prompt (list of content blocks, or a raw string) to text.
-
-    ACP sends ``prompt`` as a list of content blocks. We extract ``text`` blocks
-    and the ``text``/``uri`` of embedded ``resource`` / ``resource_link`` blocks;
-    other block types (image/audio) are skipped since we advertise no support.
-    """
+    """Collapse an ACP prompt (list of content blocks, or a raw string) to text."""
     if isinstance(prompt, str):
         return prompt
     if not isinstance(prompt, list):

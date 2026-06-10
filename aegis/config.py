@@ -221,6 +221,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "mention_triggers": ["@aegis"],
         "cron_interval": 60,
         "show_learning": True,                # append a 'remembered/learned' footer to replies
+        "busy_mode": "queue",                 # message-while-busy: queue | steer | interrupt
+    },
+    "lsp": {
+        "on_edit": True,        # report NEW diagnostics after write_file/edit_file
+        "auto_install": True,   # install missing language servers into <home>/lsp
+        "servers": {},          # extension -> command override (".py": "pylsp")
+    },
+    "onboarding": {
+        "profile_build": "ask",   # offer to build a user profile on the first message (ask | off)
+        "seen": {},               # first-touch hints already shown (see firstrun.py)
     },
     "fallback_providers": [],         # [{provider, model}]
     "custom_providers": [],           # [{name, base_url, api_mode, context_length, env_var}]
