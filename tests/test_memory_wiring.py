@@ -91,3 +91,17 @@ def test_fts_query_tokenization():
     q = SessionStore._fts_query("what did we decide about the auth refactor?")
     assert '"auth"' in q and '"refactor"' in q and " OR " in q
     assert '"what"' not in q and '"the"' not in q
+
+
+def test_memory_add_dedups_near_duplicates(tmp_path, monkeypatch):
+    _cfg(tmp_path, monkeypatch)
+    from aegis.memory import MemoryStore
+
+    store = MemoryStore()
+    assert "remembered" in store.add("user", "The user's name is TJ.")
+    # same fact, different phrasing -> rejected (this is the exact dup from the field report)
+    assert store.add("user", "User's name is TJ") == "already remembered"
+    assert store.add("user", "the users name is tj.") == "already remembered"
+    # a genuinely different fact still lands
+    assert "remembered" in store.add("user", "TJ prefers dark mode.")
+    assert len(store.entries("user")) == 2

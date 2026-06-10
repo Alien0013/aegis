@@ -40,12 +40,23 @@ class MemoryStore:
             entries.pop(0)
         atomic_write(self._path(target), MEMORY_DELIM.join(entries) + "\n" if entries else "")
 
+    @staticmethod
+    def _norm(text: str) -> str:
+        """Normalized form for near-duplicate detection — \"The user's name is TJ.\"
+        and \"User's name is TJ\" are the same fact."""
+        import re
+        text = text.lower().replace("'", "").replace("’", "")   # user's == users
+        words = re.sub(r"[^a-z0-9 ]+", " ", text).split()
+        stop = {"the", "a", "an", "is", "are", "was", "were"}
+        return " ".join(w for w in words if w not in stop)
+
     def add(self, target: str, content: str) -> str:
         from ._locks import STORE_LOCK
         content = content.strip()
         with STORE_LOCK:                       # serialize read-modify-write (no lost updates)
             entries = self.entries(target)
-            if content in entries:
+            norm = self._norm(content)
+            if norm and norm in {self._norm(e) for e in entries}:
                 return "already remembered"
             entries.append(content)
             self._write_entries(target, entries)
