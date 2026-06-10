@@ -6,9 +6,9 @@ Layout of the runtime home (``$AEGIS_HOME`` or ``~/.aegis``)::
     .env             secrets (API keys); KEY=VALUE, injected into os.environ
     auth.json        OAuth tokens (chmod 0600)
     state.db         sessions (SQLite)
-    memories/        MEMORY.md, USER.md, history.jsonl
+    memories/        MEMORY.md, USER.md (the user profile), history.jsonl
     skills/          user/managed SKILL.md packages
-    workspace/       SOUL.md, AGENTS.md, USER.md (identity + rules)
+    workspace/       SOUL.md, AGENTS.md (identity + rules — no USER.md here)
     logs/
 
 Precedence for settings: CLI flags > config.yaml > .env/env vars > defaults.
@@ -338,10 +338,9 @@ class Workspace:
     SOUL.md   -> persona / tone (context tier)
     AGENTS.md / .aegis.md / CLAUDE.md -> operational rules (project + global)
 
-    The user profile is NOT a workspace file — it lives in memories/USER.md and
-    is assembled by MemoryManager (with a legacy hand-edited workspace/USER.md
-    merged in only if one already exists). ``user_profile()`` below is retained
-    for backward compatibility but isn't part of prompt assembly.
+    The user profile is NOT a workspace file — it lives in memories/USER.md,
+    owned by MemoryManager/the memory tool. (A legacy workspace/USER.md from old
+    installs is auto-migrated there once and parked as USER.md.migrated.)
 
     Project-local files in ``cwd`` take precedence over the global workspace.
     """
@@ -353,9 +352,6 @@ class Workspace:
 
     def soul(self) -> str:
         return read_text(workspace_dir() / "SOUL.md").strip()
-
-    def user_profile(self) -> str:
-        return read_text(workspace_dir() / "USER.md").strip()
 
     def rules(self) -> str:
         """Merge global workspace rules + project rules (project appended last)."""

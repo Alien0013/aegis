@@ -1067,9 +1067,9 @@ def _seed_workspace(state: OnboardingState, out: Output) -> None:
             "- Keep secrets out of logs and replies.\n"
         ),
         # NOTE: no workspace/USER.md — the user profile lives in ONE place,
-        # memories/USER.md (managed by the `memory` tool), matching Hermes. A
-        # hand-edited workspace/USER.md is still honored if you create one, but
-        # it isn't seeded, so there's a single obvious source of truth.
+        # memories/USER.md (managed by the `memory` tool). A legacy
+        # workspace/USER.md from an older install is auto-migrated there once
+        # and parked as USER.md.migrated, so there is a single source of truth.
         "README.md": (
             "# AEGIS Workspace\n\n"
             "This directory is persistent context for AEGIS.\n\n"

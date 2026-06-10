@@ -57,23 +57,41 @@ def test_bot_remembers_fact_saved_on_previous_turn(tmp_path, monkeypatch):
     assert run_conversation is not None                   # import sanity
 
 
-def test_manual_workspace_profile_merges_into_prompt(tmp_path, monkeypatch):
+def test_legacy_workspace_profile_migrates_once(tmp_path, monkeypatch):
+    """Old installs had a second USER.md in workspace/. It is folded into
+    memories/USER.md exactly once and parked — ONE profile file from then on."""
     config = _cfg(tmp_path, monkeypatch)
     from aegis import config as cfg
     from aegis.memory import MemoryManager
 
-    # untouched onboarding template -> skipped (pure noise)
-    (cfg.workspace_dir() / "USER.md").write_text(
-        "# User Profile\n\nAdd stable preferences, aliases, or project notes here.\n")
+    legacy = cfg.workspace_dir() / "USER.md"
+    legacy.write_text("# User Profile\n\nPrefers dark mode and short answers.\n\nName: TJ\n")
     mm = MemoryManager(config)
-    assert "Add stable preferences" not in mm.build_context_block()
-
-    # a real hand-edited profile -> included alongside learned facts
-    (cfg.workspace_dir() / "USER.md").write_text("Prefers dark mode and short answers.\n")
-    mm.store.add("user", "Name: TJ")
-    mm.refresh_snapshot()
+    # content imported into the canonical store...
+    entries = mm.store.entries("user")
+    assert "Prefers dark mode and short answers." in entries and "Name: TJ" in entries
+    # ...and reaches the prompt from the single source
     block = mm.build_context_block()
     assert "dark mode" in block and "Name: TJ" in block
+    # the legacy file is parked — no second live USER.md anymore
+    assert not legacy.exists()
+    assert (cfg.workspace_dir() / "USER.md.migrated").exists()
+    # re-running is a no-op (no duplicates)
+    mm.refresh_snapshot()
+    assert mm.store.entries("user").count("Name: TJ") == 1
+
+
+def test_untouched_template_workspace_profile_is_discarded(tmp_path, monkeypatch):
+    config = _cfg(tmp_path, monkeypatch)
+    from aegis import config as cfg
+    from aegis.memory import MemoryManager
+
+    legacy = cfg.workspace_dir() / "USER.md"
+    legacy.write_text("# User Profile\n\nAdd stable preferences, aliases, or project notes here.\n")
+    mm = MemoryManager(config)
+    assert mm.store.entries("user") == []              # template noise not imported
+    assert not legacy.exists()                          # but still parked
+    assert "Add stable preferences" not in mm.build_context_block()
 
 
 def test_slash_new_refreshes_memory_snapshot(tmp_path, monkeypatch):

@@ -157,6 +157,8 @@ class MemoryManager:
         self._snapshot_mtimes = self._memory_mtimes()
 
     def _memory_files(self) -> list:
+        # workspace/USER.md is watched ONLY so that if someone drops a legacy file
+        # there mid-run, is_stale() fires and the refresh migrates it immediately.
         return [self.store._path("memory"), self.store._path("user"),
                 cfg.workspace_dir() / "USER.md"]
 
@@ -177,15 +179,32 @@ class MemoryManager:
         return self._memory_mtimes() != self._snapshot_mtimes
 
     def _read_user(self) -> str:
-        """The full user profile: the hand-edited workspace/USER.md (if it's been
-        edited past the onboarding template) + facts the memory tool learned.
-        Both must reach the prompt — splitting them was how 'remembered' facts
-        went missing from new sessions."""
-        learned = self.store.raw("user")
-        manual = read_text(cfg.workspace_dir() / "USER.md").strip()
-        if manual.startswith("# User Profile") and "Add stable preferences" in manual:
-            manual = ""                       # untouched template — pure noise
-        return "\n\n".join(p for p in (manual, learned) if p)
+        """The user profile — memories/USER.md is the ONE canonical file (like the
+        reference layout: profile = memory store, workspace = persona/rules only).
+        A legacy workspace/USER.md from older installs is folded in once by
+        :meth:`_migrate_workspace_profile` and parked, so there is never a second
+        live profile file to wonder about."""
+        self._migrate_workspace_profile()
+        return self.store.raw("user")
+
+    def _migrate_workspace_profile(self) -> None:
+        """One-time: import a legacy hand-edited workspace/USER.md into
+        memories/USER.md (deduped), then rename it to USER.md.migrated. The rename
+        is the done-marker; nothing re-reads the old location afterwards."""
+        legacy = cfg.workspace_dir() / "USER.md"
+        if not legacy.exists():
+            return
+        try:
+            manual = read_text(legacy).strip()
+            if manual.startswith("# User Profile") and "Add stable preferences" in manual:
+                manual = ""                   # untouched onboarding template — nothing to keep
+            for block in manual.split("\n\n"):
+                block = block.strip()
+                if block and not block.startswith("#"):   # skip bare headings
+                    self.store.add("user", block)
+            legacy.rename(legacy.with_suffix(".md.migrated"))
+        except OSError:
+            pass                              # unwritable workspace — try again next refresh
 
     def refresh_snapshot(self) -> None:
         self._snapshot = {"memory": self.store.raw("memory"), "user": self._read_user()}

@@ -11,7 +11,7 @@ Included entries (relative to the home):
     .env             secrets (API keys)
     auth.json        OAuth tokens
     cron.json        scheduled jobs
-    workspace/       SOUL.md, AGENTS.md, USER.md (identity + rules)
+    workspace/       SOUL.md, AGENTS.md (identity + rules)
     skills/          SKILL.md packages
     memories/        MEMORY.md, USER.md, history.jsonl
     state.db         sessions (omitted when ``quick=True``)

@@ -8,8 +8,8 @@ Two file-backed stores in `~/.aegis/memories/` (`§`-delimited, char-capped) plu
 - **`MEMORY.md`** — the agent's own notes (environment facts, project conventions, quirks).
 - **`USER.md`** — the single user profile (name, preferences, workflow). This is the
   one and only profile file; the agent manages it via the `memory` tool — just tell it
-  something and it remembers. (A hand-edited `workspace/USER.md` is merged in if you
-  create one, but it isn't seeded — `memories/USER.md` is the source of truth.)
+  something and it remembers. (A `workspace/USER.md` from an older install is migrated
+  into it automatically, once, and parked as `USER.md.migrated`.)
 
 Both enter the system prompt as a **frozen snapshot** for prefix-cache stability; the
 snapshot is rebuilt automatically on the next turn whenever the files change, so a fact
