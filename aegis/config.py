@@ -159,6 +159,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "modal_pip": [],             # extra pip packages for the modal sandbox image
         "allow_local_fallback": False,  # if a sandbox backend is down, refuse (fail closed)
         "max_result_tokens": 4000,   # spill tool outputs larger than this to disk (0 = never)
+        "loop_warn_after": 3,        # warn after N identical tool failures/results in a turn
+        "loop_block_after": 5,       # hard-block an identical failing call after N repeats
+        "todo_nudge_after": 15,      # remind to update the todo list after N tool uses
+        "sensitive_write_allow": [], # absolute paths exempt from file-write safety gating
     },
     "auxiliary": {                   # small/cheap model for compaction, vision, smart-approval
         "provider": "",              # "" = reuse main provider
@@ -204,6 +208,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "web": {
         "search_backend": "auto",    # auto | duckduckgo | brave | tavily | serper
+        "allow_domains": [],         # if non-empty, web_fetch is allowlist-only (suffix match)
+        "deny_domains": [],          # never fetch these domains (always wins)
     },
     "server": {
         "host": "127.0.0.1",
@@ -222,6 +228,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "cron_interval": 60,
         "show_learning": True,                # append a 'remembered/learned' footer to replies
         "busy_mode": "queue",                 # message-while-busy: queue | steer | interrupt
+        "admins": [],                         # user ids/@handles with full command access
+                                              #   (empty = single-user; everyone is admin)
+        "user_commands": [],                  # extra slash commands non-admins may run
     },
     "goals": {
         "max_turns": 20,        # /goal auto-continuation budget before pausing
@@ -234,6 +243,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "onboarding": {
         "profile_build": "ask",   # offer to build a user profile on the first message (ask | off)
         "seen": {},               # first-touch hints already shown (see firstrun.py)
+        "tips": True,             # contextual feature-discovery tips (one-time each)
     },
     "fallback_providers": [],         # [{provider, model}]
     "custom_providers": [],           # [{name, base_url, api_mode, context_length, env_var}]

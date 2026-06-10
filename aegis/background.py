@@ -23,7 +23,9 @@ class BackgroundManager:
         self._tasks: dict[str, BgTask] = {}
         self._lock = threading.Lock()
 
-    def spawn(self, config: Any, prompt: str) -> str:
+    def spawn(self, config: Any, prompt: str, *, cwd=None, on_done=None) -> str:
+        """Run ``prompt`` in a background agent. ``on_done(task)`` (if given) fires
+        when it finishes — used to announce the result back into a chat."""
         from .agent.agent import Agent
         from .session import Session
 
@@ -33,7 +35,7 @@ class BackgroundManager:
 
         def _work():
             try:
-                agent = Agent.create(config, session=Session.create())
+                agent = Agent.create(config, session=Session.create(), cwd=cwd)
                 result = agent.run(prompt)
                 with self._lock:
                     task.result = result.content or ""
@@ -42,6 +44,11 @@ class BackgroundManager:
                 with self._lock:
                     task.error = f"{type(e).__name__}: {e}"
                     task.status = "error"
+            if on_done is not None:
+                try:
+                    on_done(task)
+                except Exception:  # noqa: BLE001
+                    pass
 
         threading.Thread(target=_work, daemon=True).start()
         return task.id

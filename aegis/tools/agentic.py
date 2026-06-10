@@ -43,6 +43,9 @@ class SubagentTool(Tool):
                       "description": "Several self-contained instructions, run in parallel."},
             "toolsets": {"type": "array", "items": {"type": "string"},
                          "description": "Toolsets the children may use (default: core)."},
+            "background": {"type": "boolean",
+                           "description": "Return immediately and run the task in the background; "
+                                          "its result is announced back when done (single task only)."},
         },
     }
 
@@ -62,6 +65,9 @@ class SubagentTool(Tool):
         if not tasks:
             return ToolResult.error("provide `task` (string) or `tasks` (array of strings).")
         toolsets = args.get("toolsets")
+
+        if args.get("background") and depth == 1:
+            return self._spawn_background(tasks, ctx, config)
 
         def _one(task: str) -> str:
             sid = new_id("sub")
@@ -89,6 +95,33 @@ class SubagentTool(Tool):
             results = list(ex.map(_one, tasks))
         body = "\n\n".join(f"## subagent {i + 1}\n{r}" for i, r in enumerate(results))
         return ToolResult.ok(body, display=f"{len(tasks)} subagents finished")
+
+    def _spawn_background(self, tasks, ctx, config) -> ToolResult:
+        """Fire-and-forget delegation: the child runs after this turn ends and its
+        result is announced into the originating chat (gateway) or kept for /tasks (CLI)."""
+        from ..background import get_manager
+        platform = getattr(ctx.agent, "platform", None)
+        chat_id = getattr(ctx.agent, "chat_id", None)
+
+        def _announce(task) -> None:
+            text = (f"✅ background task done:\n{task.result}" if task.status == "done"
+                    else f"⚠ background task failed: {task.error}")
+            if platform and chat_id:                 # announce back into the chat via the outbox
+                try:
+                    from ..gateway.queue import DeliveryQueue
+                    DeliveryQueue().enqueue(platform, chat_id, text[:3500])
+                    return
+                except Exception:  # noqa: BLE001
+                    pass
+            from ..eventbus import BUS              # else surface on the live dashboard feed
+            BUS.publish({"type": "background_done", "platform": platform or "cli",
+                         "chat_id": chat_id, "text": text[:2000]})
+
+        ids = [get_manager().spawn(config, t, cwd=ctx.cwd, on_done=_announce) for t in tasks]
+        return ToolResult.ok(
+            f"started {len(ids)} background task(s): {', '.join(ids)}. I'll report the "
+            "result(s) here when they finish — continuing with your other work meanwhile.",
+            display=f"{len(ids)} background task(s) started")
 
 
 class ImageGenTool(Tool):

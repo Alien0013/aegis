@@ -702,6 +702,14 @@ def cmd_update(args, config: Config) -> int:
                    "git+https://github.com/Alien0013/aegis.git")
         return 0
 
+    try:                              # snapshot config/state so a bad update is recoverable
+        from .. import backup
+        snap = backup.make_snapshot("pre-update")
+        backup.prune_snapshots(int(config.get("snapshots.keep", 10)))
+        _print(f"  ▸ pre-update snapshot: {snap.name} (restore with `aegis snapshot restore`)")
+    except Exception as e:  # noqa: BLE001
+        _print(f"  ! snapshot before update failed (continuing): {e}")
+
     if is_git:
         _print(f"updating from git ({branch}) at {pkg_root}…")
         subprocess.run(["git", "fetch", "-q", "origin", branch], cwd=str(pkg_root))
@@ -979,6 +987,12 @@ def build_parser() -> argparse.ArgumentParser:
     im = sub.add_parser("import", help="restore a backup zip")
     im.add_argument("path")
     im.set_defaults(func=_backup.cmd_import)
+
+    snap = sub.add_parser("snapshot", help="config/state snapshots (auto before updates)")
+    snap.add_argument("action", nargs="?", choices=["create", "restore", "prune", "list"],
+                      default="list")
+    snap.add_argument("label", nargs="?", help="label (create) | id (restore) | N (prune)")
+    snap.set_defaults(func=_backup.cmd_snapshot)
 
     ins = sub.add_parser("insights", help="usage analytics over your history")
     ins.add_argument("--days", type=int, default=30); ins.add_argument("--source")

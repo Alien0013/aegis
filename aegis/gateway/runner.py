@@ -42,6 +42,25 @@ class GatewayRunner:
             return f"{ev.platform}:peer:{uid}"
         return f"{ev.platform}:{ev.chat_id}:{uid}"  # per_channel_peer (default)
 
+    _ALWAYS_ALLOWED = {"/help", "/whoami", "/status"}
+
+    def _is_admin(self, ev: MessageEvent) -> bool:
+        admins = self.config.get("gateway.admins", []) or []
+        if not admins:
+            return True                      # no admin list configured => single-user, all admin
+        ids = {ev.user_id, ev.user_name, f"@{ev.user_name}" if ev.user_name else None}
+        return bool(ids & {str(a) for a in admins})
+
+    def _user_commands(self) -> list[str]:
+        allowed = self.config.get("gateway.user_commands", []) or []
+        return sorted(self._ALWAYS_ALLOWED | {str(c) for c in allowed})
+
+    def _command_allowed(self, ev: MessageEvent, text: str) -> bool:
+        if self._is_admin(ev):
+            return True
+        cmd = text.split()[0].lower()
+        return cmd in self._ALWAYS_ALLOWED or cmd in set(self.config.get("gateway.user_commands", []) or [])
+
     def interrupt(self, ev: MessageEvent) -> bool:
         """Cancel the run in progress for ev's session (sets the agent's cancel_event). True if
         an active agent was signalled."""
@@ -71,6 +90,12 @@ class GatewayRunner:
             code = pairing.request_code(ev.platform, ev.user_id or "?")
             return (f"⛔ Not authorized. Ask the operator to run:\n"
                     f"  aegis pairing approve {ev.platform} {code}")
+        # Command tiers: admins get every command; regular users only an allowlisted
+        # subset (+ the always-allowed floor). Unset admin list => everyone is admin
+        # (backward-compatible single-user default).
+        if text.startswith("/") and not self._command_allowed(ev, text):
+            return ("⛔ That command is restricted to admins. Available to you: "
+                    + ", ".join(self._user_commands()))
         # Intercept control commands before the agent.
         if text in ("/stop", "/new", "/reset"):
             with self._lock:
@@ -286,9 +311,37 @@ class GatewayRunner:
         print("  ▸ cron ticker up")
         from . import memory_monitor          # periodic RSS log to catch leaks
         memory_monitor.start()
+        import signal
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                signal.signal(sig, self._on_shutdown_signal)
+            except (ValueError, OSError):     # not on the main thread / unsupported
+                pass
         print("Gateway running. Ctrl+C to stop.")
         try:
             for t in threads:
                 t.join()
         except KeyboardInterrupt:
+            self._record_shutdown("KeyboardInterrupt")
             print("\nGateway stopped.")
+
+    def _on_shutdown_signal(self, signum, _frame) -> None:
+        import signal
+        self._record_shutdown(signal.Signals(signum).name)
+        raise KeyboardInterrupt
+
+    def _record_shutdown(self, cause: str) -> None:
+        """Durably log who/what triggered shutdown so 'the gateway keeps dying' is
+        diagnosable after the fact. Fast + best-effort — never blocks teardown."""
+        try:
+            import json
+            import os
+            from .. import config as cfg
+            from ..util import now_iso
+            rec = {"at": now_iso(), "cause": cause, "pid": os.getpid(),
+                   "ppid": os.getppid(), "channels": [a.name for a in self.adapters]}
+            path = cfg.logs_dir() / "shutdowns.jsonl"
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec) + "\n")
+        except Exception:  # noqa: BLE001
+            pass
