@@ -34,15 +34,26 @@ def test_web_fetch_tool_refuses_metadata():
 
 
 # --- fuzzy edit recovery ----------------------------------------------------
-def test_edit_file_fuzzy_hint(tmp_path):
+def test_edit_file_fuzzy_recovers_whitespace(tmp_path):
     from aegis.tools.builtin import EditFileTool
     from aegis.tools.base import ToolContext
     (tmp_path / "f.py").write_text("def hello():\n    return  42\n")   # two spaces
+    # model's old_string has one space — fuzzy match auto-recovers instead of failing
     r = EditFileTool().run(
         {"path": "f.py", "old_string": "return 42", "new_string": "return 43"},
         ToolContext(cwd=tmp_path))
-    assert r.is_error
-    assert "Closest match" in r.content and "return  42" in r.content   # surfaces the real text
+    assert not r.is_error and "auto-recovered" in r.content
+    assert "return 43" in (tmp_path / "f.py").read_text()
+
+
+def test_edit_file_hint_when_no_fuzzy_match(tmp_path):
+    from aegis.tools.builtin import EditFileTool
+    from aegis.tools.base import ToolContext
+    (tmp_path / "f.py").write_text("def hello():\n    return 42\n")
+    r = EditFileTool().run(
+        {"path": "f.py", "old_string": "completely different line", "new_string": "x"},
+        ToolContext(cwd=tmp_path))
+    assert r.is_error and "not found" in r.content
 
 
 # --- nearest AGENTS.md (monorepo) ------------------------------------------
