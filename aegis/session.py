@@ -191,11 +191,26 @@ class SessionStore:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    @staticmethod
+    def _fts_query(query: str) -> str:
+        """Natural-language query -> FTS5 OR-of-terms (ranked). A whole-query phrase
+        match meant 'what did we decide about X' could never hit anything."""
+        import re
+        stop = {"the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "we", "i",
+                "you", "it", "is", "are", "was", "were", "do", "did", "does", "done",
+                "have", "has", "had", "what", "when", "how", "who", "our", "my", "your",
+                "this", "that", "about", "with", "like", "so", "far", "me", "us"}
+        toks = [t for t in re.findall(r"[A-Za-z0-9_]{2,}", query)
+                if t.lower() not in stop][:12]
+        if not toks:
+            return '"' + query.replace('"', "") + '"'
+        return " OR ".join(f'"{t}"' for t in toks)
+
     def search_messages(self, query: str, limit: int = 8) -> list[dict]:
         """Cross-session recall: ranked message snippets across past sessions (FTS5)."""
         if getattr(self, "_fts", False):
             try:
-                match = '"' + query.replace('"', "") + '"'   # phrase match, escape quotes
+                match = self._fts_query(query)
                 with self._conn() as c:
                     rows = c.execute(
                         "SELECT session_id, title, role, ts, "
@@ -207,17 +222,20 @@ class SessionStore:
                          "role": r["role"], "snippet": r["snip"].replace("\n", " ")} for r in rows]
             except sqlite3.OperationalError:
                 pass
-        # LIKE fallback
+        # Fallback without FTS: scan recent sessions for ANY query term.
+        import re
+        toks = [t.lower() for t in re.findall(r"[A-Za-z0-9_]{2,}", query)][:12] or [query.lower()]
         out: list[dict] = []
-        q = query.lower()
         with self._conn() as c:
-            rows = c.execute("SELECT * FROM sessions WHERE data LIKE ? ORDER BY updated_at DESC LIMIT ?",
-                             (f"%{query}%", limit * 3)).fetchall()
+            rows = c.execute("SELECT * FROM sessions ORDER BY updated_at DESC LIMIT ?",
+                             (limit * 5,)).fetchall()
         for row in rows:
             sess = Session.from_row(row)
             for m in sess.messages:
-                if m.role in ("user", "assistant") and m.content and q in m.content.lower():
-                    idx = m.content.lower().find(q)
+                low = m.content.lower() if m.content else ""
+                hit = next((t for t in toks if t in low), None)
+                if m.role in ("user", "assistant") and hit:
+                    idx = low.find(hit)
                     snippet = m.content[max(0, idx - 80):idx + 160].strip().replace("\n", " ")
                     out.append({"session": sess.id, "title": sess.title,
                                 "when": sess.updated_at, "role": m.role, "snippet": snippet})

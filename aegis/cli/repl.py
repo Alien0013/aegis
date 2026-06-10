@@ -360,7 +360,10 @@ def handle_slash(cmd: str, agent: Agent) -> str:
     elif name in ("/new", "/clear"):
         agent.session = Session.create()
         agent.tool_context.session = agent.session
-        _out(f"started new session {agent.session.id}", style="green")
+        agent.refresh_volatile()   # thaw the memory snapshot: facts saved THIS process
+        n = len(agent.memory.store.entries("user")) if agent.memory else 0
+        extra = f" · {n} user fact(s) loaded" if n else ""
+        _out(f"started new session {agent.session.id}{extra}", style="green")
     else:
         _out(f"unknown command {name}; /help for list", style="yellow")
     return ""

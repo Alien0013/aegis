@@ -127,10 +127,21 @@ class MemoryManager:
         self.enabled = bool(config.get("memory.enabled", True))
         self.user_enabled = bool(config.get("memory.user_profile_enabled", True))
         # frozen snapshot at construction (session start)
-        self._snapshot = {"memory": self.store.raw("memory"), "user": self.store.raw("user")}
+        self._snapshot = {"memory": self.store.raw("memory"), "user": self._read_user()}
+
+    def _read_user(self) -> str:
+        """The full user profile: the hand-edited workspace/USER.md (if it's been
+        edited past the onboarding template) + facts the memory tool learned.
+        Both must reach the prompt — splitting them was how 'remembered' facts
+        went missing from new sessions."""
+        learned = self.store.raw("user")
+        manual = read_text(cfg.workspace_dir() / "USER.md").strip()
+        if manual.startswith("# User Profile") and "Add stable preferences" in manual:
+            manual = ""                       # untouched template — pure noise
+        return "\n\n".join(p for p in (manual, learned) if p)
 
     def refresh_snapshot(self) -> None:
-        self._snapshot = {"memory": self.store.raw("memory"), "user": self.store.raw("user")}
+        self._snapshot = {"memory": self.store.raw("memory"), "user": self._read_user()}
 
     def build_context_block(self) -> str:
         if not self.enabled:
@@ -160,7 +171,7 @@ class MemoryManager:
             if not args.get("content"):
                 return ToolResult.error("content is required for add")
             return ToolResult.ok(self.store.add(target, args["content"]),
-                                 display="memory updated (effective next session)")
+                                 display="memory updated (loads on the next session or /new)")
         if action == "replace":
             if not args.get("match") or not args.get("content"):
                 return ToolResult.error("replace needs match and content")
