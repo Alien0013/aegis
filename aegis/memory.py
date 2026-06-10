@@ -26,6 +26,19 @@ class MemoryStore:
     def _path(self, target: str) -> Path:
         return self.base / _FILES[target]
 
+    def ensure_files(self) -> None:
+        """Create empty MEMORY.md / USER.md if missing so the store is always present
+        and hand-editable, instead of appearing only after the first write. Empty files
+        parse as zero entries, so nothing spurious enters the prompt."""
+        for name in _FILES.values():
+            p = self.base / name
+            if not p.exists():
+                try:
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_text("", encoding="utf-8")
+                except OSError:
+                    pass
+
     def raw(self, target: str) -> str:
         return read_text(self._path(target)).strip()
 
@@ -148,6 +161,7 @@ class MemoryManager:
         self.external = external
         self.enabled = bool(config.get("memory.enabled", True))
         self.user_enabled = bool(config.get("memory.user_profile_enabled", True))
+        self.store.ensure_files()             # MEMORY.md + USER.md always present + editable
         # Frozen snapshot, captured at construction and re-captured by refresh_snapshot().
         # Freezing keeps the system prompt byte-stable for prefix-cache reuse WITHIN a
         # turn; `is_stale()` lets the loop re-capture as soon as the files actually change

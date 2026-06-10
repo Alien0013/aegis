@@ -1092,6 +1092,11 @@ def _seed_workspace(state: OnboardingState, out: Output) -> None:
     state.workspace_files = created
     if created:
         out(f"✓ workspace initialized: {workspace}")
+    # Create the memory store up front so MEMORY.md / USER.md are visible and editable
+    # from first run (not only after the agent's first write).
+    from .memory import MemoryStore
+    MemoryStore().ensure_files()
+    out(f"✓ memory store ready: {cfg.memories_dir()} (MEMORY.md, USER.md)")
 
 
 def _configure_dashboard(config: Config, state: OnboardingState, out: Output) -> None:

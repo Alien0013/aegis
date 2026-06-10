@@ -24,6 +24,21 @@ def test_saved_user_facts_reach_prompt_after_refresh(tmp_path, monkeypatch):
     assert "About the user" in block and "TJ" in block
 
 
+def test_memory_files_always_present(tmp_path, monkeypatch):
+    """MEMORY.md and USER.md exist from first run (not only after a write), and an
+    empty file injects nothing into the prompt."""
+    config = _cfg(tmp_path, monkeypatch)
+    from aegis import config as cfg
+    from aegis.memory import MemoryManager
+
+    MemoryManager(config)                                   # construction ensures the files
+    assert (cfg.memories_dir() / "MEMORY.md").exists()
+    assert (cfg.memories_dir() / "USER.md").exists()
+    # empty files parse as zero entries -> no spurious memory block
+    mm = MemoryManager(config)
+    assert mm.store.entries("memory") == [] and mm.build_context_block() == ""
+
+
 def test_memory_is_stale_after_write_and_clears_on_refresh(tmp_path, monkeypatch):
     config = _cfg(tmp_path, monkeypatch)
     from aegis.memory import MemoryManager
