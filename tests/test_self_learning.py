@@ -149,7 +149,8 @@ def test_compaction_splits_into_child_session(tmp_path, monkeypatch):
     monkeypatch.setattr(compaction, "should_compress", fake_should)
 
     class Dual:
-        context_length = 200_000; name = "f"; model = "m"; api_mode = None; auth = None
+        # small window so the token-budgeted tail (a fraction of it) leaves a middle to compress
+        context_length = 2000; name = "f"; model = "m"; api_mode = None; auth = None
         def describe(self): return "f"
         def complete(self, messages, tools=None, **k):
             if tools is None:
@@ -161,8 +162,11 @@ def test_compaction_splits_into_child_session(tmp_path, monkeypatch):
     cfg.data["learn"]["background"] = False
     store = SessionStore()
     s = Session.create("My Task")
+    # substantial messages so the conversation exceeds the protected tail budget
+    body = "this is turn content with enough words to carry real token weight here "
     s.messages = [Message.system("sys")] + [
-        (Message.user(f"u{i}") if i % 2 == 0 else Message.assistant(f"a{i}")) for i in range(40)]
+        (Message.user(f"u{i} {body}") if i % 2 == 0 else Message.assistant(f"a{i} {body}"))
+        for i in range(40)]
     store.save(s)
     parent_id = s.id
     a = Agent(config=cfg, provider=Dual(), session=s, store=store, cwd=tmp_path)

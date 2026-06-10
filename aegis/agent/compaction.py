@@ -1,8 +1,16 @@
-"""Context compaction via LLM summarization (preserve first N + last M turns).
+"""Context compaction via LLM summarization (preserve head + a token-budgeted tail).
 
-Beyond summarizing the dropped middle, the preserved head/tail are pruned: oversized
-tool outputs are boundary-truncated and inline base64 images are stripped, so a few
-huge tool dumps in recent turns can't blow the window on their own."""
+The middle is summarized into a structured handoff; the preserved head/tail are pruned
+(oversized tool outputs boundary-truncated, inline base64 images stripped). Four guards
+keep long, repeatedly-compacted sessions coherent:
+  * the tail is protected by a TOKEN budget, not a fixed message count, so recent work
+    survives whether the messages are tiny or huge;
+  * a prior summary is FOLDED into the next one (the summarizer updates it) instead of
+    being re-summarized as ordinary middle — no summary-of-summary drift;
+  * the summarizer input is capped to what the (possibly small) auxiliary model can fit;
+  * on summarizer failure the dropped window still yields a deterministic anchor digest
+    (files, commands, last request) rather than being lost to "(compaction failed)".
+"""
 
 from __future__ import annotations
 
@@ -13,6 +21,9 @@ from ..types import Message
 from ..util import estimate_tokens
 
 _IMG_DATA_URI = re.compile(r"data:image/[a-zA-Z.+-]+;base64,[A-Za-z0-9+/=\s]{200,}")
+_SUMMARY_MARKER = "[Earlier conversation summarized]"
+# Tokens of recent conversation to protect by default when a caller doesn't pass a budget.
+_DEFAULT_TAIL_TOKENS = 6000
 
 
 def _strip_images(text: str) -> str:
@@ -54,13 +65,16 @@ def should_compress(messages: list[Message], context_length: int, overhead_token
     return estimated_tokens(messages) + overhead_tokens > context_length * COMPACT_THRESHOLD
 
 
-def _split_at_safe_boundary(convo: list[Message], preserve_last: int) -> int:
-    """Tail-start index at a safe boundary: a user message when one exists in the
-    window, else an assistant message (keeps its tool results with it). Long
-    agentic turns often have a single user message at the top — without the
-    assistant fallback the tail came back EMPTY and the model's most recent
-    working state was summarized away mid-task."""
-    start = max(0, len(convo) - preserve_last)
+def _msg_tokens(m: Message) -> int:
+    return (estimate_tokens(m.content or "") + estimate_tokens(m.reasoning or "")
+            + sum(estimate_tokens(str(tc.arguments)) for tc in m.tool_calls))
+
+
+def _snap_to_boundary(convo: list[Message], start: int) -> int:
+    """Move ``start`` forward to a safe split: a user message if one exists at/after it,
+    else an assistant message (keeps its tool results with it). Avoids returning an empty
+    tail (which would summarize away the model's most recent working state) and never
+    splits a tool group."""
     for i in range(start, len(convo)):
         if convo[i].role == "user":
             return i
@@ -70,12 +84,80 @@ def _split_at_safe_boundary(convo: list[Message], preserve_last: int) -> int:
     return min(start, len(convo))
 
 
+def _tail_start(convo: list[Message], preserve_last: int, tail_tokens: int | None) -> int:
+    """Index where the protected tail begins. Token-budget mode (tail_tokens given) walks
+    back from the end accumulating tokens until the budget is met, so recent context is
+    protected by SIZE not message count; otherwise falls back to the last ``preserve_last``
+    messages. Either way the result is snapped to a safe boundary."""
+    if tail_tokens is None:
+        start = max(0, len(convo) - preserve_last)
+    else:
+        total, start = 0, 0
+        for i in range(len(convo) - 1, -1, -1):
+            total += _msg_tokens(convo[i])
+            if total >= tail_tokens:
+                start = i
+                break
+    return _snap_to_boundary(convo, start)
+
+
+def _summary_input_budget(provider) -> int:
+    """Max chars of transcript to hand the summarizer, sized to the aux model's window
+    (reserve room for the instruction + the summary output). Prevents shipping more than
+    a small auxiliary model can read."""
+    ctx = getattr(provider, "context_length", 0) or 0
+    if ctx <= 0:
+        return 60_000                       # unknown window -> conservative fixed cap
+    usable_tokens = max(2_000, ctx - 6_000)  # ~2k instruction + ~4k output headroom
+    return usable_tokens * 4                 # ~4 chars/token
+
+
+def _is_summary_note(m: Message) -> bool:
+    return m.role == "assistant" and bool(m.content) and m.content.startswith(_SUMMARY_MARKER)
+
+
+def _fallback_summary(middle: list[Message], prior: list[str]) -> str:
+    """Deterministic digest when the summarizer call fails — keep continuity anchors
+    (prior summary, file/path mentions, the most recent user request) instead of losing
+    the whole dropped window."""
+    files: list[str] = []
+    for m in middle:
+        for tok in re.findall(r"(?:/[\w.\-/]+|[\w.\-/]+\.[A-Za-z]{1,8})\b", m.content or ""):
+            if len(tok) > 3 and tok not in files:
+                files.append(tok)
+    last_user = next((m.content for m in reversed(middle)
+                      if m.role == "user" and m.content), "")
+    parts = ["(automatic summary unavailable — deterministic anchors preserved)"]
+    if prior:
+        parts.append("Carried-forward prior summary:\n" + prior[-1])
+    if files:
+        parts.append("Files / paths referenced in the dropped turns: " + ", ".join(files[:20]))
+    if last_user:
+        parts.append("Most recent user request in the dropped turns: " + last_user[:600])
+    return "\n\n".join(parts)
+
+
+_SUMMARY_INSTRUCTION = (
+    "You are compressing an agent conversation so work can continue seamlessly with this "
+    "summary in place of the original messages. Write a structured handoff with exactly "
+    "these sections (skip a section only if truly empty):\n"
+    "1. Primary request — what the user asked for, including later refinements.\n"
+    "2. Key decisions & constraints — choices made and rules to respect.\n"
+    "3. Files & code — every file touched, with the specific functions/lines that matter "
+    "and any snippets still needed.\n"
+    "4. Errors & fixes — what failed, how it was fixed, what to avoid repeating.\n"
+    "5. Completed work — what is already DONE (so it isn't redone).\n"
+    "6. Pending & next step — what remains, and the exact next action.\n"
+    "Be factual and specific (paths, commands, names). No filler."
+)
+
+
 def compress(messages: list[Message], provider, *, preserve_first: int = 3,
              preserve_last: int = 20, max_tool_tokens: int = 600,
-             focus: str = "") -> list[Message]:
+             focus: str = "", tail_tokens: int | None = None) -> list[Message]:
     system_msgs = [m for m in messages if m.role == "system"]
     convo = [m for m in messages if m.role != "system"]
-    tail_start = _split_at_safe_boundary(convo, preserve_last)
+    tail_start = _tail_start(convo, preserve_last, tail_tokens)
     # Extend the head cut past any tool results so a tool group is never split —
     # an assistant with tool_calls whose results were summarized away is a wire error.
     cut = preserve_first
@@ -92,36 +174,44 @@ def compress(messages: list[Message], provider, *, preserve_first: int = 3,
     if not middle:
         return system_msgs + head + tail
 
+    # Iterative fold: a summary note from a previous compaction in the middle is UPDATED,
+    # not re-summarized (that would drift). Pull prior summaries out; the newest is handed
+    # to the summarizer to carry forward. Their bodies are dropped from the new transcript.
+    prior = [m.content[len(_SUMMARY_MARKER):].strip() for m in middle if _is_summary_note(m)]
+    new_middle = [m for m in middle if not _is_summary_note(m)]
+
+    if not new_middle:
+        # The middle was only prior summaries — keep the most recent, drop the rest. No call.
+        if not prior:
+            return system_msgs + head + tail
+        note = Message.assistant(_SUMMARY_MARKER + "\n" + prior[-1])
+        return system_msgs + head + [note] + tail
+
     transcript = "\n".join(
         f"{m.role}: {m.content}" + (f" [tools: {[tc.name for tc in m.tool_calls]}]" if m.tool_calls else "")
-        for m in middle
+        for m in new_middle
     )
+    instruction = _SUMMARY_INSTRUCTION + (
+        f"\nFOCUS: weight the summary toward anything related to: {focus}" if focus else "")
+    if prior:
+        instruction += ("\nA PRIOR SUMMARY is included first — carry EVERY fact in it "
+                        "forward, then merge in the new material; output one consolidated "
+                        "summary, not two.")
+        user_content = f"PRIOR SUMMARY:\n{prior[-1]}\n\nNEW MATERIAL:\n{transcript}"
+    else:
+        user_content = transcript
+    user_content = user_content[:_summary_input_budget(provider)]   # fit the aux model
+
     try:
         resp = provider.complete(
-            [
-                Message.system(
-                    "You are compressing an agent conversation so work can continue seamlessly "
-                    "with this summary in place of the original messages. Write a structured "
-                    "handoff with exactly these sections (skip a section only if truly empty):\n"
-                    "1. Primary request — what the user asked for, including later refinements.\n"
-                    "2. Key decisions & constraints — choices made and rules to respect.\n"
-                    "3. Files & code — every file touched, with the specific functions/lines "
-                    "that matter and any snippets still needed.\n"
-                    "4. Errors & fixes — what failed, how it was fixed, what to avoid repeating.\n"
-                    "5. Completed work — what is already DONE (so it isn't redone).\n"
-                    "6. Pending & next step — what remains, and the exact next action.\n"
-                    "Be factual and specific (paths, commands, names). No filler."
-                    + (f"\nFOCUS: weight the summary toward anything related to: {focus}"
-                       if focus else "")
-                ),
-                Message.user(transcript[:60_000]),
-            ],
-            tools=None,
-            stream=False,
+            [Message.system(instruction), Message.user(user_content)],
+            tools=None, stream=False,
         )
-        summary = resp.text.strip() or "(summary unavailable)"
-    except Exception as e:  # noqa: BLE001
-        summary = f"(compaction failed: {e}; older turns dropped)"
+        summary = resp.text.strip()
+        if not summary:
+            raise ValueError("empty summary")
+    except Exception:  # noqa: BLE001 — keep continuity anchors instead of losing the window
+        summary = _fallback_summary(new_middle, prior)
 
-    note = Message.assistant("[Earlier conversation summarized]\n" + summary)
+    note = Message.assistant(_SUMMARY_MARKER + "\n" + summary)
     return system_msgs + head + [note] + tail

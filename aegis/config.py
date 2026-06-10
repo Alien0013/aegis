@@ -137,6 +137,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "context_engine": "default", # context-management strategy (plugins can register others)
         "reasoning_effort": "off",   # off|minimal|low|medium|high|xhigh
         "compression": {"preserve_first": 3, "preserve_last": 20, "max_tool_tokens": 600,
+                        # tail protected by a TOKEN budget = this fraction of the model's
+                        # window (scales with the model; preserve_last is the legacy fallback)
+                        "tail_fraction": 0.25,
                         # when the window fills, roll into a fresh child session (parent kept
                         # intact, lineage chained) instead of editing history in place
                         "split_sessions": True},

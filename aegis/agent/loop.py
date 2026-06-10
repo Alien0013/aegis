@@ -196,6 +196,17 @@ def _drain_steering(agent, session) -> None:
     session.messages.append(Message.user(text))
 
 
+def _tail_token_budget(agent, comp: dict, *, tight: bool = False) -> int:
+    """Tokens of recent conversation to protect during compaction — a fraction of the
+    model's window so the tail scales with the model, not a fixed message count. The
+    overflow-recovery path uses a tighter fraction so the request actually shrinks."""
+    ctx = getattr(agent.provider, "context_length", 0) or 0
+    frac = comp.get("tail_fraction", 0.25)
+    if tight:
+        frac = min(frac, 0.12)
+    return int(ctx * frac) if ctx > 0 else (3000 if tight else 6000)
+
+
 def _force_compact(agent, session):
     """Compress unconditionally — recovery from a provider context_overflow. Tighter tail than
     the proactive path so the request actually shrinks below the window."""
@@ -203,7 +214,7 @@ def _force_compact(agent, session):
     session.messages = governance.normalize(_engine(agent).compress(
         session.messages, _summarizer(agent),
         preserve_first=comp.get("preserve_first", 3),
-        preserve_last=min(10, comp.get("preserve_last", 20)),
+        tail_tokens=_tail_token_budget(agent, comp, tight=True),
         max_tool_tokens=min(400, comp.get("max_tool_tokens", 600)),
     ))
     agent.refresh_volatile()
@@ -243,7 +254,7 @@ def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
     compressed = engine.compress(
         session.messages, _summarizer(agent),    # summarize on the cheap aux model, not the main one
         preserve_first=comp.get("preserve_first", 3),
-        preserve_last=comp.get("preserve_last", 20),
+        tail_tokens=_tail_token_budget(agent, comp),   # token-budgeted tail, scales with the window
         max_tool_tokens=comp.get("max_tool_tokens", 600),
     )
     after_tok = compaction.estimated_tokens(compressed)

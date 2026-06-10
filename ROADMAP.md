@@ -16,6 +16,10 @@ Each item is small enough to land with tests in one sitting unless marked (L).
   the agent and parallel subagents. (`tools/file_state.py`)
 - [x] **Structured compaction handoff** — sectioned template (request /
   decisions / files / errors / completed / next step). (`agent/compaction.py`)
+- [x] **Compaction quality** — token-budgeted tail (scales with the window,
+  not a fixed message count), iterative summary fold (prior summary updated,
+  no summary-of-summary drift), deterministic anchor fallback on summarizer
+  failure, summarizer input capped to the aux model's window. (`agent/compaction.py`)
 - [x] **File-write path safety** — sensitive paths require approval. (`tools/file_safety.py`)
 - [x] **Pre-update state snapshot** — auto before `aegis update`;
   `aegis snapshot create|restore|prune|list`. (`backup.py`)
