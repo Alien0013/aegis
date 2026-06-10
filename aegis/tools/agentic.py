@@ -3,30 +3,47 @@
 from __future__ import annotations
 
 import base64
+import threading
 import time
 
 import httpx
 
+from ..types import new_id
 from ..util import slugify
 from .base import Tool, ToolContext, ToolResult
+
+# Process-global registry of spawned subagents (id -> {status, task}) for observability and a
+# bounded view of recent children. Capped so it can't grow without bound.
+_REGISTRY: dict[str, dict] = {}
+_REG_LOCK = threading.Lock()
+
+
+def _register(sid: str, **fields) -> None:
+    with _REG_LOCK:
+        _REGISTRY.setdefault(sid, {}).update(fields)
+        if len(_REGISTRY) > 200:                       # drop oldest
+            for k in list(_REGISTRY)[:len(_REGISTRY) - 200]:
+                _REGISTRY.pop(k, None)
 
 
 class SubagentTool(Tool):
     name = "spawn_subagent"
     description = (
-        "Delegate a self-contained sub-task to a fresh child agent with its own context. "
-        "Returns only the child's final answer. Use for research/exploration that would "
-        "otherwise flood the main context."
+        "Delegate self-contained sub-task(s) to fresh child agents, each with its own context. "
+        "Pass `task` for one, or `tasks` (array) to run several IN PARALLEL (bounded). Returns "
+        "each child's final answer. Use for research/exploration/fan-out that would otherwise "
+        "flood the main context."
     )
     groups = ["automation"]
     parameters = {
         "type": "object",
         "properties": {
-            "task": {"type": "string", "description": "Complete, self-contained instructions."},
+            "task": {"type": "string", "description": "One complete, self-contained instruction."},
+            "tasks": {"type": "array", "items": {"type": "string"},
+                      "description": "Several self-contained instructions, run in parallel."},
             "toolsets": {"type": "array", "items": {"type": "string"},
-                         "description": "Toolsets the child may use (default: core)."},
+                         "description": "Toolsets the children may use (default: core)."},
         },
-        "required": ["task"],
     }
 
     def run(self, args, ctx: ToolContext) -> ToolResult:
@@ -37,17 +54,41 @@ class SubagentTool(Tool):
         depth = (getattr(parent, "_depth", 0) if parent else 0) + 1
         if depth > 2:
             return ToolResult.error("subagent depth limit reached (max 2).")
-
         config = ctx.config
         if config is None:
             return ToolResult.error("no config available for subagent.")
-        child = Agent.create(config, session=Session.create(), cwd=ctx.cwd)
-        child._depth = depth  # type: ignore[attr-defined]
-        if args.get("toolsets"):
-            child.config.data.setdefault("tools", {})["toolsets"] = args["toolsets"]
-        ctx.emit_event(type="subagent_start", task=args["task"][:80])
-        result = child.run(args["task"])
-        return ToolResult.ok(result.content or "(no output)", display="subagent finished")
+        tasks = list(args.get("tasks") or ([] if args.get("task") is None else [args["task"]]))
+        tasks = [t for t in tasks if isinstance(t, str) and t.strip()]
+        if not tasks:
+            return ToolResult.error("provide `task` (string) or `tasks` (array of strings).")
+        toolsets = args.get("toolsets")
+
+        def _one(task: str) -> str:
+            sid = new_id("sub")
+            _register(sid, status="running", task=task[:80])
+            ctx.emit_event(type="subagent_start", id=sid, task=task[:80])
+            try:
+                child = Agent.create(config, session=Session.create(), cwd=ctx.cwd)
+                child._depth = depth  # type: ignore[attr-defined]
+                if toolsets:
+                    child.config.data.setdefault("tools", {})["toolsets"] = toolsets
+                out = (child.run(task).content or "(no output)")
+                _register(sid, status="done")
+                ctx.emit_event(type="subagent_done", id=sid, status="done")
+                return out
+            except Exception as e:  # noqa: BLE001 - isolate one child's failure
+                _register(sid, status="error")
+                ctx.emit_event(type="subagent_done", id=sid, status="error")
+                return f"[subagent error] {e}"
+
+        if len(tasks) == 1:
+            return ToolResult.ok(_one(tasks[0]), display="subagent finished")
+        cap = max(1, int(config.get("agent.subagent_concurrency", 4) or 1))
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(cap, len(tasks))) as ex:
+            results = list(ex.map(_one, tasks))
+        body = "\n\n".join(f"## subagent {i + 1}\n{r}" for i, r in enumerate(results))
+        return ToolResult.ok(body, display=f"{len(tasks)} subagents finished")
 
 
 class ImageGenTool(Tool):

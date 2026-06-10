@@ -182,7 +182,7 @@ def _force_compact(agent, session):
     """Compress unconditionally — recovery from a provider context_overflow. Tighter tail than
     the proactive path so the request actually shrinks below the window."""
     comp = agent.config.get("agent.compression", {}) or {}
-    session.messages = compaction.compress(
+    session.messages = _engine(agent).compress(
         session.messages, _summarizer(agent),
         preserve_first=comp.get("preserve_first", 3),
         preserve_last=min(10, comp.get("preserve_last", 20)),
@@ -190,6 +190,16 @@ def _force_compact(agent, session):
     )
     agent.refresh_volatile()
     return session
+
+
+def _engine(agent):
+    """The active context engine for this agent (cached)."""
+    e = getattr(agent, "_context_engine", None)
+    if e is None:
+        from .context_engine import get_engine
+        e = get_engine(agent.config)
+        agent._context_engine = e
+    return e
 
 
 def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
@@ -200,7 +210,8 @@ def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
     # no-op summary every iteration until the budget is exhausted.
     if getattr(agent, "_compact_stuck", False):
         return session
-    if not compaction.should_compress(session.messages, agent.provider.context_length, schema_tokens):
+    engine = _engine(agent)
+    if not engine.should_compress(session.messages, agent.provider.context_length, schema_tokens):
         return session
     emit({"type": "compacting"})
     comp = agent.config.get("agent.compression", {}) or {}
@@ -211,7 +222,7 @@ def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
             pass
     before_n = len(session.messages)
     before_tok = compaction.estimated_tokens(session.messages)
-    compressed = compaction.compress(
+    compressed = engine.compress(
         session.messages, _summarizer(agent),    # summarize on the cheap aux model, not the main one
         preserve_first=comp.get("preserve_first", 3),
         preserve_last=comp.get("preserve_last", 20),
@@ -220,7 +231,7 @@ def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
     after_tok = compaction.estimated_tokens(compressed)
     # If we're STILL over the threshold after compacting, the preserved tail is the floor —
     # further compaction can't help, so don't retry this turn (avoids per-iteration thrash).
-    still_over = compaction.should_compress(compressed, agent.provider.context_length, schema_tokens)
+    still_over = engine.should_compress(compressed, agent.provider.context_length, schema_tokens)
     from ..constants import COMPACT_THRESHOLD
     from ..util import now_iso
     rec = {"at": now_iso(), "iteration": budget.api_call_count,
@@ -369,6 +380,10 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
         results = executor.execute(resp.tool_calls)
         session.messages.extend(results)
         agent.tools_used += len(resp.tool_calls)
+        # Refund the step for a pure "zero-context-cost" compute turn (only execute_code) so
+        # code-heavy runs aren't penalized against the iteration budget.
+        if resp.tool_calls and all(tc.name == "execute_code" for tc in resp.tool_calls):
+            budget.refund()
 
         # Incremental persist so a crash mid-turn doesn't lose progress.
         if agent.store is not None:

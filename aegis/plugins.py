@@ -46,6 +46,11 @@ class PluginAPI:
         'pre_llm_call' (fn(messages, agent) -> messages|None to rewrite the request)."""
         _HOOKS.setdefault(event, []).append(fn)
 
+    def register_context_engine(self, name: str, engine_cls) -> None:
+        """Register a custom context-management strategy (select via agent.context_engine)."""
+        from .agent.context_engine import register
+        register(name, engine_cls)
+
 
 # Process-global hook registry, populated by plugins' register(api) at load time.
 _HOOKS: dict[str, list] = {}

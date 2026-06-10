@@ -29,6 +29,11 @@ class IterationBudget:
     def reset(self) -> None:
         self.api_call_count = 0
 
+    def refund(self) -> None:
+        """Give back one iteration — used for cheap local turns (e.g. execute_code) so a
+        code-heavy run isn't penalized against the step budget."""
+        self.api_call_count = max(0, self.api_call_count - 1)
+
     @property
     def remaining(self) -> int:
         return self.max_iterations - self.api_call_count
@@ -56,6 +61,12 @@ class Agent:
         self.session = session
         self.cwd = cwd or Path.cwd()
         self.registry = registry or default_registry()
+        try:                                   # a custom context engine may expose its own tools
+            from .context_engine import get_engine
+            for t in get_engine(config).tools():
+                self.registry.register(t)
+        except Exception:  # noqa: BLE001
+            pass
         self.permissions = PermissionEngine(config)
         self.memory = memory if memory is not None else (
             MemoryManager(config) if config.get("memory.enabled", True) else None

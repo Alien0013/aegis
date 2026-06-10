@@ -61,11 +61,33 @@ def _sharegpt(traj: dict) -> dict:
     return {"conversations": convs}
 
 
+def _toolxml(traj: dict) -> dict:
+    """Tool-use fine-tuning format: assistant tool calls wrapped in ``<tool_call>{json}</tool_call>``
+    and tool results in ``<tool_response>…</tool_response>`` — the function-calling shape used to
+    train tool-using models. Returns ``{"messages": [{role, content}]}``."""
+    out = []
+    for s in traj.get("messages", []):
+        role = s["role"]
+        content = s.get("content") or ""
+        if role == "assistant" and s.get("tool_calls"):
+            calls = "\n".join(
+                "<tool_call>" + json.dumps({"name": tc.get("name", ""),
+                                            "arguments": tc.get("arguments", {})}) + "</tool_call>"
+                for tc in s["tool_calls"])
+            out.append({"role": "assistant", "content": (content + "\n" + calls).strip()})
+        elif role == "tool":
+            out.append({"role": "tool", "content": f"<tool_response>\n{content}\n</tool_response>"})
+        else:
+            out.append({"role": role, "content": content})
+    return {"messages": out}
+
+
 _FORMATTERS = {
     "aegis": lambda t: t,            # native (full fidelity + metrics)
     "openai": _openai_finetune,      # OpenAI fine-tune JSONL
     "hf": _sharegpt,                 # HuggingFace / ShareGPT
     "sharegpt": _sharegpt,
+    "toolxml": _toolxml,             # <tool_call>/<tool_response> XML for tool-use fine-tuning
 }
 
 

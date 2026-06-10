@@ -1083,7 +1083,7 @@ def build_parser() -> argparse.ArgumentParser:
     tj = sub.add_parser("trajectory", help="record/export/compress session trajectories")
     tj.add_argument("action", nargs="?", choices=["stats", "export", "compress"], default="stats")
     tj.add_argument("--out")
-    tj.add_argument("--format", choices=["aegis", "openai", "hf", "sharegpt"], default="aegis",
+    tj.add_argument("--format", choices=["aegis", "openai", "hf", "sharegpt", "toolxml"], default="aegis",
                     help="export format: native, OpenAI fine-tune, or HuggingFace/ShareGPT")
     tj.add_argument("--summarize", action="store_true", help="LLM-summarize long tool outputs when compressing")
     tj.set_defaults(func=_traj.cmd_trajectory)

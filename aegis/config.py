@@ -133,6 +133,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "agent": {
         "max_iterations": 50,
         "stream": True,
+        "subagent_concurrency": 4,   # max child agents run in parallel by spawn_subagent
+        "context_engine": "default", # context-management strategy (plugins can register others)
         "reasoning_effort": "off",   # off|minimal|low|medium|high|xhigh
         "compression": {"preserve_first": 3, "preserve_last": 20, "max_tool_tokens": 600,
                         # when the window fills, roll into a fresh child session (parent kept
