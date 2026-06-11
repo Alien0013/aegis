@@ -422,15 +422,31 @@ def _chat_event_row(event: dict) -> dict:
     return row
 
 
+def _dashboard_chat_cwd(body: dict) -> str:
+    raw = body.get("cwd") or body.get("project") or body.get("worktree") or ""
+    text = str(raw).strip()
+    return str(Path(text).expanduser()) if text else ""
+
+
+def _dashboard_chat_meta(body: dict, route: str) -> dict:
+    cwd = _dashboard_chat_cwd(body)
+    meta = {"surface_route": route}
+    if cwd:
+        meta["dashboard_cwd"] = cwd
+    return meta
+
+
 def _dashboard_chat_response(body: dict, chat_runner) -> dict:
     events: list[dict] = []
     result = None
+    cwd = _dashboard_chat_cwd(body)
     try:
         result = chat_runner.run_prompt(
             body.get("message", ""),
             session_id=body.get("session_id") or None,
+            cwd=cwd or None,
             surface="dashboard",
-            meta={"surface_route": "/api/chat"},
+            meta=_dashboard_chat_meta(body, "/api/chat"),
             on_event=lambda event: events.append(dict(event)),
         )
         reply = result.text
@@ -442,6 +458,7 @@ def _dashboard_chat_response(body: dict, chat_runner) -> dict:
         "trace_id": result.trace_id if result else "",
         "turn_id": result.turn_id if result else "",
         "run_id": result.run_id if result else "",
+        "cwd": cwd,
         "events": [_chat_event_row(e) for e in events[-80:]],
     }
 
@@ -449,7 +466,8 @@ def _dashboard_chat_response(body: dict, chat_runner) -> dict:
 def _dashboard_chat_stream(body: dict, chat_runner, send) -> dict:
     events: list[dict] = []
     result = None
-    send({"type": "start", "session_id": body.get("session_id") or ""})
+    cwd = _dashboard_chat_cwd(body)
+    send({"type": "start", "session_id": body.get("session_id") or "", "cwd": cwd})
 
     def on_event(event: dict) -> None:
         events.append(dict(event))
@@ -459,8 +477,9 @@ def _dashboard_chat_stream(body: dict, chat_runner, send) -> dict:
         result = chat_runner.run_prompt(
             body.get("message", ""),
             session_id=body.get("session_id") or None,
+            cwd=cwd or None,
             surface="dashboard",
-            meta={"surface_route": "/api/chat/stream"},
+            meta=_dashboard_chat_meta(body, "/api/chat/stream"),
             on_event=on_event,
         )
         final = {
@@ -470,6 +489,7 @@ def _dashboard_chat_stream(body: dict, chat_runner, send) -> dict:
             "trace_id": result.trace_id,
             "turn_id": result.turn_id,
             "run_id": result.run_id,
+            "cwd": cwd,
             "events": [_chat_event_row(e) for e in events[-80:]],
         }
         send(final)
@@ -482,6 +502,7 @@ def _dashboard_chat_stream(body: dict, chat_runner, send) -> dict:
             "trace_id": "",
             "turn_id": "",
             "run_id": "",
+            "cwd": cwd,
             "events": [_chat_event_row(ev) for ev in events[-80:]],
         }
         send(final)

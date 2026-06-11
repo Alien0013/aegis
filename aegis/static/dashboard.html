@@ -453,10 +453,12 @@ async function openAgent(id){
 }
 
 PAGES.chat=()=>{
-  V.innerHTML='<div class="chatwrap"><div id="clog"></div>'+
+  const savedCwd=sessionStorage.aegisChatCwd||'';
+  V.innerHTML='<div class="bar"><input id="ccwd" placeholder="working directory for this chat" value="'+esc(savedCwd)+'"><button class="btn ghost" id="ccwdclear">Clear</button></div>'+
+    '<div class="chatwrap"><div id="clog"></div>'+
     '<div class="chatbar"><textarea id="cin" rows="1" placeholder="Message AEGIS…  (Enter to send · Shift+Enter for newline)"></textarea>'+
     '<button class="btn" id="csend">Send</button><button class="btn ghost" id="cnew" title="new conversation">＋</button></div></div>';
-  const log=$('#clog'),inp=$('#cin');let sid=sessionStorage.aegisChatSid||null;
+  const log=$('#clog'),inp=$('#cin'),cwdInp=$('#ccwd');let sid=sessionStorage.aegisChatSid||null;
   function add(role,text,raw){const w=document.createElement('div');w.className='msg '+role;
     w.innerHTML='<div class="av">'+(role==='user'?'You':'Æ')+'</div><div class="bub">'+(raw?text:md(text))+'</div>';
     log.appendChild(w);log.scrollTop=log.scrollHeight;return w}
@@ -465,6 +467,7 @@ PAGES.chat=()=>{
     if(r.run_id)links.push('<a href="#" data-run="'+esc(r.run_id)+'">run '+esc(r.run_id.slice(0,12))+'</a>');
     if(r.trace_id)links.push('<a href="#" data-trace="'+esc(r.trace_id)+'">trace '+esc(r.trace_id.slice(0,12))+'</a>');
     if(r.session_id)links.push('<a href="#" data-session="'+esc(r.session_id)+'">session '+esc(r.session_id.slice(0,12))+'</a>');
+    if(r.cwd)links.push('<span class="pill mono">'+esc(r.cwd)+'</span>');
     const ev=(r.events||[]).filter(e=>['iteration','tool_start','tool_result','compacting','compacted','reasoning_delta','error'].includes(e.type)).slice(-8);
     const rows=ev.map(e=>'<span class="pill">'+esc(e.type)+(e.name?': '+esc(e.name):'')+(e.summary?': '+esc(e.summary):'')+(e.target?' · '+esc(clip(e.target,80)):'')+'</span>').join('');
     return (links.length||rows)?'<div class="detail-meta chatmeta">'+links.join(' · ')+(rows?'<div>'+rows+'</div>':'')+'</div>':'';
@@ -482,18 +485,20 @@ PAGES.chat=()=>{
     const m=inp.value.trim();if(!m)return;inp.value='';inp.style.height='auto';
     add('user',m);
     const w=add('assistant','<span class="typing"><i></i><i></i><i></i></span>',true);
-    const state={events:[],reply:'',session_id:sid||'',trace_id:'',turn_id:'',run_id:''};
-    try{await postStream('chat/stream',{message:m,session_id:sid},ev=>{
-      if(ev.type==='start'){state.session_id=ev.session_id||state.session_id}
+    const cwd=cwdInp.value.trim();if(cwd)sessionStorage.aegisChatCwd=cwd;else sessionStorage.removeItem('aegisChatCwd');
+    const state={events:[],reply:'',session_id:sid||'',trace_id:'',turn_id:'',run_id:'',cwd:cwd};
+    try{await postStream('chat/stream',{message:m,session_id:sid,cwd:cwd},ev=>{
+      if(ev.type==='start'){state.session_id=ev.session_id||state.session_id;state.cwd=ev.cwd||state.cwd}
       else if(ev.type==='event'&&ev.event){state.events.push(ev.event);renderChatBubble(w,state,true)}
       else if(ev.type==='final'||ev.type==='error'){Object.assign(state,ev)}
     });sid=state.session_id;sessionStorage.aegisChatSid=sid;renderChatBubble(w,state,false);
-    }catch(e){try{const r=await post('chat',{message:m,session_id:sid});Object.assign(state,r);sid=r.session_id;sessionStorage.aegisChatSid=sid;renderChatBubble(w,state,false)}
+    }catch(e){try{const r=await post('chat',{message:m,session_id:sid,cwd:cwd});Object.assign(state,r);sid=r.session_id;sessionStorage.aegisChatSid=sid;renderChatBubble(w,state,false)}
       catch(_){w.querySelector('.bub').innerHTML='<span class="err">request failed — is a provider configured?</span>'}}
     log.scrollTop=log.scrollHeight;
   }
   $('#csend').onclick=send;
   $('#cnew').onclick=()=>{sid=null;sessionStorage.removeItem('aegisChatSid');log.innerHTML='';toast('new conversation')};
+  $('#ccwdclear').onclick=()=>{cwdInp.value='';sessionStorage.removeItem('aegisChatCwd');toast('chat cwd cleared')};
   inp.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}};
   inp.oninput=()=>{inp.style.height='auto';inp.style.height=Math.min(140,inp.scrollHeight)+'px'};
   inp.focus();
@@ -762,16 +767,18 @@ PAGES.personas=async()=>{
 
 PAGES.projects=async()=>{
   const d=await api('projects'),rows=d.projects||[];$('#pstat').textContent=rows.length+' found';
-  V.innerHTML='<div class="card"><table class="tbl"><tr><th>project</th><th>kind</th><th>branch</th><th>activity</th><th>marker</th></tr>'+
-    (rows.map(x=>'<tr><td><b>'+esc(x.name)+'</b><div class="mono mut">'+esc(x.path)+'</div></td><td>'+esc(x.kind||'project')+(x.current?' <span class="pill acc">current</span>':'')+'</td><td class="mono">'+esc(x.branch||'')+'</td><td>'+esc(x.run_count||0)+' runs<div class="mono mut">'+esc((x.surfaces||[]).join(', '))+' '+esc((x.last_run_at||'').slice(0,16))+'</div></td><td>'+esc(x.marker||'')+'</td></tr>').join('')||'<tr><td colspan="5" class="empty">no projects</td></tr>')+
+  V.innerHTML='<div class="card"><table class="tbl"><tr><th>project</th><th>kind</th><th>branch</th><th>activity</th><th>marker</th><th></th></tr>'+
+    (rows.map(x=>'<tr><td><b>'+esc(x.name)+'</b><div class="mono mut">'+esc(x.path)+'</div></td><td>'+esc(x.kind||'project')+(x.current?' <span class="pill acc">current</span>':'')+'</td><td class="mono">'+esc(x.branch||'')+'</td><td>'+esc(x.run_count||0)+' runs<div class="mono mut">'+esc((x.surfaces||[]).join(', '))+' '+esc((x.last_run_at||'').slice(0,16))+'</div></td><td>'+esc(x.marker||'')+'</td><td><a href="#" data-chatcwd="'+esc(x.path||'')+'">chat here</a></td></tr>').join('')||'<tr><td colspan="6" class="empty">no projects</td></tr>')+
     '</table></div>';
+  V.querySelectorAll('[data-chatcwd]').forEach(a=>a.onclick=e=>{e.preventDefault();sessionStorage.aegisChatCwd=a.dataset.chatcwd;go('chat')});
 };
 
 PAGES.worktrees=async()=>{
   const d=await api('worktrees'),rows=d.worktrees||[];$('#pstat').textContent=d.available?rows.length+' worktree(s)':'not a git worktree';
-  V.innerHTML='<div class="card"><table class="tbl"><tr><th>path</th><th>branch</th><th>head</th><th>state</th><th>activity</th></tr>'+
-    (rows.map(x=>'<tr><td class="mono">'+esc(x.path)+'</td><td>'+esc(x.branch||'(detached)')+'</td><td class="mono mut">'+esc((x.head||'').slice(0,12))+'</td><td>'+(x.dirty?'<span class="pill err">dirty</span>':'<span class="pill ok">clean</span>')+(x.detached?' <span class="pill">detached</span>':'')+'</td><td>'+esc(x.run_count||0)+' runs<div class="mono mut">'+esc((x.surfaces||[]).join(', '))+' '+esc((x.last_run_at||'').slice(0,16))+'</div></td></tr>').join('')||'<tr><td colspan="5" class="empty">'+esc(d.note||'no worktrees')+'</td></tr>')+
+  V.innerHTML='<div class="card"><table class="tbl"><tr><th>path</th><th>branch</th><th>head</th><th>state</th><th>activity</th><th></th></tr>'+
+    (rows.map(x=>'<tr><td class="mono">'+esc(x.path)+'</td><td>'+esc(x.branch||'(detached)')+'</td><td class="mono mut">'+esc((x.head||'').slice(0,12))+'</td><td>'+(x.dirty?'<span class="pill err">dirty</span>':'<span class="pill ok">clean</span>')+(x.detached?' <span class="pill">detached</span>':'')+'</td><td>'+esc(x.run_count||0)+' runs<div class="mono mut">'+esc((x.surfaces||[]).join(', '))+' '+esc((x.last_run_at||'').slice(0,16))+'</div></td><td><a href="#" data-chatcwd="'+esc(x.path||'')+'">chat here</a></td></tr>').join('')||'<tr><td colspan="6" class="empty">'+esc(d.note||'no worktrees')+'</td></tr>')+
     '</table></div>';
+  V.querySelectorAll('[data-chatcwd]').forEach(a=>a.onclick=e=>{e.preventDefault();sessionStorage.aegisChatCwd=a.dataset.chatcwd;go('chat')});
 };
 
 PAGES.evals=async()=>{

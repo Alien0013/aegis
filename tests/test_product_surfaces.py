@@ -597,6 +597,62 @@ def test_dashboard_chat_stream_emits_progress_and_final():
     assert final["run_id"] == "run_streamchat"
 
 
+def test_dashboard_chat_accepts_cwd_and_records_project_worktree(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.dashboard import _dashboard_chat_response
+    from aegis.runs import RunStore
+    from aegis.surface import SurfaceRunner
+    from aegis.types import Message
+
+    project = tmp_path / "project"
+    project.mkdir()
+    seen = {}
+
+    class FakeAgent:
+        stream = False
+
+        def __init__(self, session, cwd):
+            self.session = session
+            self.cwd = cwd
+            self.config = Config.load()
+            self.provider = SimpleNamespace(name="fake", model="fake-model", api_mode="fake")
+            self.budget = SimpleNamespace(usage=SimpleNamespace(input_tokens=0, output_tokens=0,
+                                                                cache_read=0, cache_write=0))
+            self.tool_context = SimpleNamespace(session=session)
+            self._trace_context = {"trace_id": "trace_dash_cwd", "turn_id": "turn_dash_cwd"}
+
+        def run(self, prompt, on_event=None):
+            seen["prompt"] = prompt
+            seen["cwd"] = self.cwd
+            return Message.assistant(f"cwd:{self.cwd}")
+
+    monkeypatch.setattr(
+        Agent,
+        "create",
+        staticmethod(lambda config, session=None, cwd=None, **_kwargs: FakeAgent(session, cwd)),
+    )
+
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = False
+    runner = SurfaceRunner(cfg, cwd=tmp_path, include_mcp=False)
+    data = _dashboard_chat_response(
+        {"message": "where am I?", "session_id": "dash:cwd", "cwd": str(project)},
+        runner,
+    )
+
+    assert data["reply"] == f"cwd:{project}"
+    assert data["cwd"] == str(project)
+    assert seen["cwd"] == project
+    run = RunStore().get(data["run_id"])
+    assert run["surface"] == "dashboard"
+    assert run["data"]["cwd"] == str(project)
+    assert run["data"]["project"] == str(project)
+    assert run["data"]["dashboard_cwd"] == str(project)
+
+
 def test_dashboard_models_exposes_resolver_report():
     from aegis.config import Config
     from aegis.dashboard import _dashboard_models

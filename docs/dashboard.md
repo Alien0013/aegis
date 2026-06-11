@@ -32,6 +32,7 @@ The dashboard exposes read-only cockpit APIs used by the no-build frontend:
   linked child session from the cockpit.
 - `/api/agents` — primary agent, typed subagent registry, and background agents
 - `/api/projects` and `/api/worktrees` — current project/worktree inventory
+  with cockpit "chat here" handoff into the Chat page's working directory
 - `/api/evals` — eval run store, JSONL eval records, and replay summaries
 - `/api/mcp/catalog` — configured MCP servers/catalog metadata; add `?live=1`
   to probe advertised tools, resources, and prompts
@@ -41,7 +42,8 @@ The dashboard exposes read-only cockpit APIs used by the no-build frontend:
 - `POST /api/chat` — cockpit chat turn runner. Responses include `run_id`,
   `trace_id`, `turn_id`, `session_id`, the final `reply`, and a compact event
   summary so the Chat page can link directly into the run, trace, and session
-  views after each turn.
+  views after each turn. Send `cwd`, `project`, or `worktree` to run the turn
+  in that directory and record project/worktree metadata in run history.
 - `POST /api/chat/stream` — same chat runner over Server-Sent Events. The
   dashboard uses it to show iteration/tool/reasoning progress in the assistant
   bubble while the turn is still running, with `/api/chat` as a compatibility
