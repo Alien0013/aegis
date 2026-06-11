@@ -25,6 +25,33 @@ def _without_thinking(m: Message) -> Message:
     return dataclasses.replace(m, thinking_blocks=[], reasoning="")
 
 
+def _with_retrieved_memory(m: Message, fetched: str) -> Message:
+    import dataclasses
+    content = f"<retrieved_memory>\n{fetched}\n</retrieved_memory>\n\n{m.content}"
+    return dataclasses.replace(m, content=content)
+
+
+def _provider_wire_messages(agent, messages: list[Message]) -> list[Message]:
+    """Return provider-only message copies for volatile context tweaks.
+
+    Retrieved memory is relevant to this turn, but it is not part of the user's
+    canonical transcript and must not be persisted into history or memory sync.
+    """
+    wire_messages = messages
+    fetched = str(getattr(agent, "_retrieved_memory_for_turn", "") or "").strip()
+    target = str(getattr(agent, "_retrieved_memory_user_content", "") or "")
+    if fetched and target:
+        for idx in range(len(messages) - 1, -1, -1):
+            msg = messages[idx]
+            if msg.role == "user" and msg.content == target:
+                wire_messages = list(messages)
+                wire_messages[idx] = _with_retrieved_memory(msg, fetched)
+                break
+    if getattr(agent, "_strip_thinking", False):
+        wire_messages = [_without_thinking(m) for m in wire_messages]
+    return wire_messages
+
+
 def _provider_complete(provider, messages, *, tools=None, **kwargs):
     """Call provider.complete without breaking older Provider-compatible fakes/plugins."""
     import inspect
@@ -834,13 +861,10 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
             reasoned_live["v"] = True       # noqa: B023 — consumed within this iteration only
             emit({"type": "reasoning_delta", "text": text})
 
-        # Thinking-signature recovery (one-shot, this turn): when set, send the wire a
-        # COPY of the messages with thinking blocks removed. The canonical session is
-        # never mutated — persisting a stripped message would permanently corrupt the
-        # stored thinking signatures and 400 on every future turn (Hermes #24107).
-        wire_messages = session.messages
-        if getattr(agent, "_strip_thinking", False):
-            wire_messages = [_without_thinking(m) for m in session.messages]
+        # Provider-only volatile context tweaks use COPY messages. The canonical session
+        # is never mutated: retrieved memory is wire-only, and persisting stripped
+        # thinking blocks would corrupt future Anthropic turns (Hermes #24107).
+        wire_messages = _provider_wire_messages(agent, session.messages)
         provider_span = None
         response_state = _response_state_for_agent(agent, getattr(agent.session, "id", ""))
         _record_response_request_meta(session, response_state)

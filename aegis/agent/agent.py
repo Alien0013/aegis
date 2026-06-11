@@ -390,6 +390,8 @@ class Agent:
         self._compact_stuck = False        # reset the no-progress-compaction guard each turn
         self._overflow_retried = False     # one-shot context_overflow -> compress guard, per turn
         self._strip_thinking = False       # one-shot thinking-signature 400 -> resend w/o blocks
+        self._retrieved_memory_for_turn = ""
+        self._retrieved_memory_user_content = ""
         if not self.session.messages:      # first turn of a session
             from ..plugins import fire_hook
             fire_hook("on_session_start", self)
@@ -407,8 +409,8 @@ class Agent:
             try:
                 fetched = self.memory.prefetch(msg.content)
                 if fetched:
-                    msg.content = (f"<retrieved_memory>\n{fetched}\n</retrieved_memory>\n\n"
-                                   f"{msg.content}")
+                    self._retrieved_memory_for_turn = fetched
+                    self._retrieved_memory_user_content = msg.content
                 self.memory.queue_prefetch(msg.content)   # warm the next turn in the background
             except Exception:  # noqa: BLE001
                 pass

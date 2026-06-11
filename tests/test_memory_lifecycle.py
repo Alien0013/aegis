@@ -119,25 +119,51 @@ def test_provider_tools_registered_on_agent(tmp_path, monkeypatch):
     assert agent.registry.get("provider_recall") is not None   # registered at construction
 
 
-def test_prefetch_injected_into_user_message(tmp_path, monkeypatch):
+def test_prefetch_is_wire_only_not_persisted(tmp_path, monkeypatch):
     config = _cfg(tmp_path, monkeypatch)
     from aegis.agent.agent import Agent
     from aegis.memory import MemoryManager
+    from aegis.session import Session
+    from aegis.types import LLMResponse
 
     class P:
-        def prefetch(self, q, *, session_id=""): return "RELEVANT PAST FACT"
-    agent = Agent.create(config, memory=MemoryManager(config, external=P()))
+        def __init__(self):
+            self.queued = ""
+            self.synced = []
 
-    captured = {}
-    def fake_run_conversation(a, on_event=None):
-        captured["first_user"] = next(m.content for m in a.session.messages if m.role == "user")
-        from aegis.types import Message
-        return Message.assistant("done")
-    import aegis.agent.agent as am
-    monkeypatch.setattr(am, "run_conversation", fake_run_conversation)
+        def prefetch(self, q, *, session_id=""): return "RELEVANT PAST FACT"
+        def queue_prefetch(self, q, *, session_id=""): self.queued = q
+        def sync_turn(self, messages): self.synced = list(messages)
+
+    class Provider:
+        context_length = 200_000
+        name = "fake"
+        model = "fake"
+        api_mode = None
+        auth = None
+
+        def __init__(self):
+            self.wire_user = ""
+
+        def complete(self, messages, **_kwargs):
+            self.wire_user = next(m.content for m in reversed(messages) if m.role == "user")
+            return LLMResponse(text="done")
+
+    provider = Provider()
+    external = P()
+    agent = Agent(config=config, provider=provider, session=Session.create(),
+                  memory=MemoryManager(config, external=external), cwd=tmp_path)
     agent.run("what did we decide?")
-    assert "<retrieved_memory>" in captured["first_user"]
-    assert "RELEVANT PAST FACT" in captured["first_user"]
+
+    assert "<retrieved_memory>" in provider.wire_user
+    assert "RELEVANT PAST FACT" in provider.wire_user
+    user_message = next(m.content for m in agent.session.messages if m.role == "user")
+    assert user_message == "what did we decide?"
+    assert external.queued == "what did we decide?"
+    assert all("<retrieved_memory>" not in m.content for m in agent.session.messages)
+    assert all("<retrieved_memory>" not in m.content for m in external.synced)
+    recent = agent.memory.history.recent(2)
+    assert all("<retrieved_memory>" not in row["content"] for row in recent)
 
 
 def test_switch_and_end_fire_hooks(tmp_path, monkeypatch):
