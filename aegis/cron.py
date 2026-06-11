@@ -169,17 +169,22 @@ def tick(config, sink=None, store: "CronStore | None" = None, verbose: bool = Tr
             if verbose:
                 print(f"  ▸ running cron {job.id}: {job.prompt[:60]}")
             agent = Agent.create(config, session=Session.create())
+            from .automation import build_prompt, delivery_targets, is_silent
+            targets = delivery_targets(job.deliver) or ([job.channel] if job.channel else [])
+            first_target = targets[0] if targets else ""
+            platform, _, chat_id = first_target.partition(":")
+            if platform and chat_id:
+                agent.platform = platform
+                agent.chat_id = chat_id
             # Headless approval policy for scheduled jobs (à la cron_mode): 'deny' (default, safe —
             # dangerous tools blocked since nobody can approve) or 'approve' (auto-run, for trusted jobs).
             if config and config.get("cron.approval", "deny") == "approve":
                 agent.permissions._mode_override = "auto"
-            from .automation import build_prompt, delivery_targets, is_silent
             prompt = build_prompt(job.prompt, skills=job.skills, script=job.script)
             try:
                 reply = agent.run(prompt).content
                 # [SILENT]/empty -> deliver nothing (monitors only notify on real change).
                 if sink and not is_silent(reply):
-                    targets = delivery_targets(job.deliver) or ([job.channel] if job.channel else [])
                     for target in targets:
                         sink(target, reply)
             except Exception as e:  # noqa: BLE001
@@ -189,9 +194,53 @@ def tick(config, sink=None, store: "CronStore | None" = None, verbose: bool = Tr
     return ran
 
 
+def build_delivery_sink(config, *, verbose: bool = True):
+    """Return a sink that sends cron output to configured gateway channels.
+
+    Cron can run as its own service without the inbound gateway loop. In that
+    mode we still want scheduled ``deliver=platform:chat`` jobs to reach the
+    user, so send directly when an adapter is configured and queue as a fallback.
+    """
+    from .automation import enqueue_delivery
+
+    channels = []
+    if config is not None:
+        channels = list(config.get("gateway.channels", []) or [])
+    adapters = {}
+    for name in channels:
+        try:
+            from .gateway.channels import build_adapter
+            adapter = build_adapter(str(name), config)
+            adapters[adapter.name] = adapter
+        except Exception as e:  # noqa: BLE001
+            if verbose:
+                print(f"  ! cron delivery adapter {name!r} unavailable: {e}")
+
+    def sink(target: str, text: str) -> None:
+        platform, _, chat_id = (target or "").partition(":")
+        if not platform or not chat_id:
+            if verbose:
+                print(f"  ! cron delivery target ignored: {target!r}")
+            return
+        adapter = adapters.get(platform)
+        if adapter is not None:
+            try:
+                adapter.send(chat_id, text or "")
+                return
+            except Exception as e:  # noqa: BLE001
+                if verbose:
+                    print(f"  ! cron delivery to {target} failed, queued for retry: {e}")
+        if enqueue_delivery(target, text or "") and verbose:
+            print(f"  ▸ queued cron delivery for {target}")
+
+    return sink
+
+
 def run_scheduler(config, sink=None, poll: int = 30) -> None:
     """Blocking loop that runs due jobs. ``sink(channel, text)`` delivers output."""
     store = CronStore()
+    if sink is None:
+        sink = build_delivery_sink(config)
     print(f"AEGIS cron scheduler running (poll {poll}s, {len(store.list())} jobs). Ctrl+C to stop.")
     try:
         while True:

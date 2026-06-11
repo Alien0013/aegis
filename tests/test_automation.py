@@ -26,6 +26,28 @@ def test_automation_helpers(tmp_path):
     assert "Load these skills first: s1" in prompt and "HELLO CONTEXT" in prompt and prompt.endswith("do the thing")
 
 
+def test_cron_delivery_sink_sends_via_configured_adapter(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.config import Config
+    from aegis.cron import build_delivery_sink
+    import aegis.gateway.channels as channels
+
+    sent = []
+
+    class FakeAdapter:
+        name = "telegram"
+        def send(self, chat_id, text):
+            sent.append((chat_id, text))
+
+    cfg = Config.load()
+    cfg.data.setdefault("gateway", {})["channels"] = ["telegram"]
+    monkeypatch.setattr(channels, "build_adapter", lambda _name, _config: FakeAdapter())
+
+    build_delivery_sink(cfg, verbose=False)("telegram:42", "daily brief")
+
+    assert sent == [("42", "daily brief")]
+
+
 # --- TASK 1: webhooks deliver / filter / chain skills -----------------------
 def _fake_agent(monkeypatch, reply="hello"):
     import aegis.agent.agent as am
@@ -148,6 +170,31 @@ def test_cron_multi_deliver(monkeypatch, tmp_path):
     calls = []
     tick(None, sink=lambda ch, txt: calls.append(ch), store=s, verbose=False)
     assert calls == ["telegram:1", "discord:2"]          # one sink call per target
+
+
+def test_cron_sets_delivery_target_as_agent_context(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.agent.agent as am
+    from aegis.cron import CronStore, tick
+
+    seen = {}
+
+    class A:
+        permissions = type("P", (), {"_mode_override": None})()
+        platform = None
+        chat_id = None
+        def run(self, _prompt):
+            seen["platform"] = self.platform
+            seen["chat_id"] = self.chat_id
+            return type("R", (), {"content": "[SILENT]"})()
+
+    monkeypatch.setattr(am.Agent, "create", staticmethod(lambda cfg, session=None: A()))
+    s = CronStore()
+    s.add("every 1s", "send update", deliver="telegram:42")
+
+    tick(None, sink=lambda _ch, _txt: None, store=s, verbose=False)
+
+    assert seen == {"platform": "telegram", "chat_id": "42"}
 
 
 def test_cron_script_context_in_prompt(monkeypatch, tmp_path):

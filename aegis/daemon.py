@@ -1,4 +1,4 @@
-"""User-level service helpers for the AEGIS dashboard and gateway."""
+"""User-level service helpers for the AEGIS dashboard, gateway, and cron runner."""
 
 from __future__ import annotations
 
@@ -161,14 +161,78 @@ WantedBy=default.target
     return ServiceResult(True, f"{unit.name} installed")
 
 
+def install_cron_service(config: Config, *, enable_now: bool = True) -> ServiceResult:
+    if shutil.which("systemctl") is None:
+        return ServiceResult(False, "systemctl not found")
+    unit = _unit_dir() / "aegis-cron.service"
+    content = f"""[Unit]
+Description=AEGIS cron scheduler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=AEGIS_HOME={cfg.get_home()}
+WorkingDirectory=%h
+ExecStart={_aegis_bin()} cron run
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+"""
+    atomic_write(unit, content)
+    reload_res = _systemctl("daemon-reload")
+    if reload_res.returncode != 0:
+        return ServiceResult(False, reload_res.stderr.strip() or "systemd daemon-reload failed")
+    if enable_now:
+        res = _systemctl("enable", "--now", unit.name)
+        if res.returncode != 0:
+            return ServiceResult(False, res.stderr.strip() or "systemd enable failed")
+        failed = _failed_after_start(unit.name)
+        if failed:
+            return ServiceResult(False, f"{unit.name} installed but failed: {failed}")
+    return ServiceResult(True, f"{unit.name} installed")
+
+
+def cron_service_status() -> str:
+    if not systemd_available():
+        return "user systemd unavailable"
+    return _unit_state("aegis-cron.service")
+
+
+def control_cron_service(action: str) -> ServiceResult:
+    if action not in {"start", "stop", "restart"}:
+        return ServiceResult(False, f"unknown cron service action: {action}")
+    if shutil.which("systemctl") is None:
+        return ServiceResult(False, "systemctl not found")
+    res = _systemctl(action, "aegis-cron.service")
+    ok = res.returncode == 0
+    return ServiceResult(ok, res.stdout.strip() or res.stderr.strip() or action)
+
+
+def remove_cron_service() -> ServiceResult:
+    if shutil.which("systemctl"):
+        _systemctl("disable", "--now", "aegis-cron.service")
+    try:
+        (_unit_dir() / "aegis-cron.service").unlink()
+        removed = True
+    except FileNotFoundError:
+        removed = False
+    if shutil.which("systemctl"):
+        _systemctl("daemon-reload")
+    return ServiceResult(True, "aegis-cron.service removed" if removed else "aegis-cron.service not installed")
+
+
 def status() -> dict[str, str]:
     out: dict[str, str] = {}
     if not systemd_available():
         return {
             "aegis-dashboard.service": "user systemd unavailable",
             "aegis-gateway.service": "user systemd unavailable",
+            "aegis-cron.service": "user systemd unavailable",
         }
-    for unit in ("aegis-dashboard.service", "aegis-gateway.service"):
+    for unit in ("aegis-dashboard.service", "aegis-gateway.service", "aegis-cron.service"):
         out[unit] = _unit_state(unit)
     return out
 

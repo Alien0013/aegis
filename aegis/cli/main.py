@@ -324,6 +324,25 @@ def cmd_cron(args, config: Config) -> int:
     if args.action == "run":
         run_scheduler(config)
         return 0
+    if args.action == "install":
+        from ..daemon import install_cron_service
+        res = install_cron_service(config, enable_now=not getattr(args, "no_start", False))
+        _print(("✓ " if res.ok else "! ") + res.message)
+        return 0 if res.ok else 1
+    if args.action == "status":
+        from ..daemon import cron_service_status
+        _print(f"aegis-cron.service: {cron_service_status()}")
+        return 0
+    if args.action in ("start", "stop", "restart"):
+        from ..daemon import control_cron_service
+        res = control_cron_service(args.action)
+        _print(("✓ " if res.ok else "! ") + res.message)
+        return 0 if res.ok else 1
+    if args.action == "uninstall":
+        from ..daemon import remove_cron_service
+        res = remove_cron_service()
+        _print(("✓ " if res.ok else "! ") + res.message)
+        return 0 if res.ok else 1
     # list
     for j in store.list():
         _print(f"  {j.id}  [{j.schedule}]  {j.prompt[:60]}")
@@ -741,7 +760,7 @@ def cmd_uninstall(args, config: Config) -> int:
         launcher_candidates.add(Path(found_launcher).expanduser())
     venv = home / "venv"
 
-    for unit in ("aegis-dashboard.service", "aegis-gateway.service"):
+    for unit in ("aegis-dashboard.service", "aegis-gateway.service", "aegis-cron.service"):
         if shutil.which("systemctl"):
             subprocess.run(
                 ["systemctl", "--user", "disable", "--now", unit],
@@ -1134,12 +1153,16 @@ def build_parser() -> argparse.ArgumentParser:
     sv.set_defaults(func=cmd_serve)
 
     cr = sub.add_parser("cron", help="schedule recurring agent tasks")
-    cr.add_argument("action", nargs="?", choices=["list", "add", "rm", "run"], default="list")
+    cr.add_argument("action", nargs="?",
+                    choices=["list", "add", "rm", "run", "install", "uninstall",
+                             "status", "start", "stop", "restart"],
+                    default="list")
     cr.add_argument("schedule", nargs="?", help='e.g. "30m", "@daily", or 5-field cron')
     cr.add_argument("prompt", nargs="*")
     cr.add_argument("--script", help="Python file to run first; its stdout is prepended as context")
     cr.add_argument("--skills", help="comma-sep skills to load before running")
     cr.add_argument("--deliver", help="comma-sep platform:chat_id targets (supersedes single channel)")
+    cr.add_argument("--no-start", action="store_true", help="write service unit but do not start it")
     cr.set_defaults(func=cmd_cron)
 
     t = sub.add_parser("tools", help="list tools; `doctor` for availability; `status` for backends")

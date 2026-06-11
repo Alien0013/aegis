@@ -60,8 +60,10 @@ def test_uninstall_purge_removes_installed_artifacts(monkeypatch, tmp_path):
     wants_dir.mkdir(parents=True)
     dashboard_unit = unit_dir / "aegis-dashboard.service"
     gateway_link = wants_dir / "aegis-gateway.service"
+    cron_unit = unit_dir / "aegis-cron.service"
     dashboard_unit.write_text("[Service]\n", encoding="utf-8")
     gateway_link.write_text("[Service]\n", encoding="utf-8")
+    cron_unit.write_text("[Service]\n", encoding="utf-8")
 
     monkeypatch.setenv("AEGIS_HOME", str(home))
     monkeypatch.setenv("AEGIS_BIN_DIR", str(bin_dir))
@@ -74,3 +76,4 @@ def test_uninstall_purge_removes_installed_artifacts(monkeypatch, tmp_path):
     assert not launcher.exists()
     assert not dashboard_unit.exists()
     assert not gateway_link.exists()
+    assert not cron_unit.exists()

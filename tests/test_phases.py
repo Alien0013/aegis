@@ -238,6 +238,7 @@ def test_daemon_status_handles_missing_systemd(monkeypatch):
 
     assert st["aegis-dashboard.service"] == "user systemd unavailable"
     assert st["aegis-gateway.service"] == "user systemd unavailable"
+    assert st["aegis-cron.service"] == "user systemd unavailable"
 
 
 def test_daemon_status_includes_failed_unit_hint(monkeypatch):
@@ -313,6 +314,51 @@ def test_dashboard_service_refuses_occupied_port(monkeypatch):
 
     assert not res.ok
     assert "already in use" in res.message
+
+
+def test_cron_service_install_writes_unit(monkeypatch, tmp_path):
+    import subprocess
+
+    import aegis.daemon as daemon
+    from aegis.config import Config
+
+    calls = []
+
+    def fake_which(name):
+        return "/usr/bin/aegis" if name == "aegis" else "/usr/bin/systemctl"
+
+    def fake_systemctl(*args):
+        calls.append(args)
+        return subprocess.CompletedProcess(["systemctl", *args], 0, stdout="", stderr="")
+
+    monkeypatch.setattr(daemon.shutil, "which", fake_which)
+    monkeypatch.setattr(daemon, "_unit_dir", lambda: tmp_path)
+    monkeypatch.setattr(daemon, "_systemctl", fake_systemctl)
+    monkeypatch.setattr(daemon, "_failed_after_start", lambda _unit: "")
+
+    res = daemon.install_cron_service(Config.load())
+
+    assert res.ok
+    unit = (tmp_path / "aegis-cron.service").read_text(encoding="utf-8")
+    assert "ExecStart=/usr/bin/aegis cron run" in unit
+    assert ("enable", "--now", "aegis-cron.service") in calls
+
+
+def test_cron_cli_install_no_start(monkeypatch, capsys):
+    from aegis.cli.main import main
+    import aegis.daemon as daemon
+
+    seen = {}
+
+    def fake_install(_config, *, enable_now=True):
+        seen["enable_now"] = enable_now
+        return daemon.ServiceResult(True, "cron ok")
+
+    monkeypatch.setattr(daemon, "install_cron_service", fake_install)
+
+    assert main(["cron", "install", "--no-start"]) == 0
+    assert seen["enable_now"] is False
+    assert "cron ok" in capsys.readouterr().out
 
 
 def test_github_tool_needs_gh(tmp_path, monkeypatch):

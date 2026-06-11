@@ -69,6 +69,22 @@ def test_schedule_task_tool(tmp_path):
     assert len(CronStore().list()) == 1
 
 
+def test_schedule_task_defaults_to_current_channel(tmp_path):
+    from aegis.config import Config
+    from aegis.cron import CronStore
+    from aegis.tools.base import ToolContext
+    from aegis.tools.extra_builtin import ScheduleTaskTool
+
+    agent = type("Agent", (), {"platform": "telegram", "chat_id": "42"})()
+    ctx = ToolContext(cwd=tmp_path, config=Config.load(), agent=agent)
+    res = ScheduleTaskTool().run({"schedule": "30m", "prompt": "check"}, ctx)
+
+    assert not res.is_error
+    job = CronStore().list()[0]
+    assert job.deliver == "telegram:42"
+    assert "telegram:42" in res.content
+
+
 def test_bash_tool_runs(tmp_path):
     from aegis.tools.builtin import BashTool
     res = BashTool().run({"command": "echo hello-bash"}, _ctx(tmp_path))

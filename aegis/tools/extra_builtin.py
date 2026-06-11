@@ -123,14 +123,25 @@ class ScheduleTaskTool(Tool):
         "properties": {
             "schedule": {"type": "string"},
             "prompt": {"type": "string", "description": "instructions to run on schedule"},
+            "deliver": {"type": "string",
+                        "description": "optional comma-separated platform:chat_id delivery targets"},
         },
         "required": ["schedule", "prompt"],
     }
 
     def run(self, args, ctx: ToolContext) -> ToolResult:
         from ..cron import CronStore
-        job = CronStore().add(args["schedule"], args["prompt"])
-        return ToolResult.ok(f"scheduled {job.id} [{job.schedule}] (run `aegis cron run` to activate)",
+        agent = getattr(ctx, "agent", None)
+        deliver = (args.get("deliver") or "").strip()
+        if not deliver:
+            platform = getattr(agent, "platform", None)
+            chat_id = getattr(agent, "chat_id", None)
+            if platform and chat_id:
+                deliver = f"{platform}:{chat_id}"
+        job = CronStore().add(args["schedule"], args["prompt"], deliver=deliver)
+        target = f" -> {deliver}" if deliver else ""
+        return ToolResult.ok(f"scheduled {job.id} [{job.schedule}]{target} "
+                             "(runs when `aegis cron install` service or `aegis gateway` is active)",
                              display=f"scheduled {job.id}")
 
 
