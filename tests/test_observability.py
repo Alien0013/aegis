@@ -64,6 +64,84 @@ def test_agent_usage_log_records_cache_deltas(monkeypatch, tmp_path):
     ]
 
 
+def test_provider_attempt_hooks_fire_for_success_and_error(tmp_path):
+    import json
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.hooks import EVENTS
+    from aegis.plugins import PluginAPI, _HOOKS
+    from aegis.session import Session
+    from aegis.types import LLMResponse, Usage
+    from conftest import FakeProvider
+
+    assert {"pre_api_request", "post_api_request", "api_request_error"} <= set(EVENTS)
+
+    original_hooks = {event: list(hooks) for event, hooks in _HOOKS.items()}
+    _HOOKS.clear()
+    events: list[tuple[str, dict]] = []
+    api = PluginAPI()
+
+    def record(event: str):
+        def _hook(payload, _agent):
+            if event == "pre_api_request":
+                payload["request"]["mutated_by_hook"] = True
+            events.append((event, payload))
+
+        return _hook
+
+    try:
+        for event in ("pre_api_request", "post_api_request", "api_request_error"):
+            api.register_hook(event, record(event))
+
+        cfg = Config.load()
+        cfg.data["memory"]["enabled"] = False
+        cfg.data["hooks"] = {}
+        provider = FakeProvider([LLMResponse(text="ok", usage=Usage(2, 1))])
+        agent = Agent(config=cfg, provider=provider, session=Session.create(), cwd=tmp_path)
+
+        agent.run("hello secret-token")
+
+        assert [event for event, _payload in events] == ["pre_api_request", "post_api_request"]
+        pre_payload = events[0][1]
+        post_payload = events[1][1]
+        assert pre_payload["api_request_id"].startswith("api_")
+        assert pre_payload["session_id"] == agent.session.id
+        assert pre_payload["turn_id"].startswith("turn_")
+        assert pre_payload["provider"] == "fake"
+        assert pre_payload["model"] == "fake-model"
+        assert pre_payload["request"]["message_count"] >= 1
+        assert pre_payload["request"]["tool_schema_count"] >= 0
+        assert "secret-token" not in json.dumps(pre_payload["request"])
+        assert post_payload["status"] == "ok"
+        assert post_payload["response"]["input_tokens"] == 2
+        assert post_payload["response"]["output_tokens"] == 1
+        assert post_payload["response"]["duration_ms"] >= 0
+        assert "mutated_by_hook" not in post_payload["request"]
+
+        events.clear()
+
+        class FailingProvider(FakeProvider):
+            def complete(self, messages, tools=None, stream=False, on_delta=None):
+                self.calls += 1
+                raise RuntimeError("provider exploded")
+
+        failing = FailingProvider()
+        failed_agent = Agent(config=cfg, provider=failing, session=Session.create(), cwd=tmp_path)
+        msg = failed_agent.run("explode")
+
+        assert "[provider error]" in msg.content
+        assert [event for event, _payload in events] == ["pre_api_request", "api_request_error"]
+        error_payload = events[1][1]
+        assert error_payload["status"] == "error"
+        assert error_payload["error"]["type"] == "RuntimeError"
+        assert error_payload["error"]["message"] == "provider exploded"
+        assert error_payload["error"]["recovery"] == "retry"
+        assert error_payload["error"]["duration_ms"] >= 0
+    finally:
+        _HOOKS.clear()
+        _HOOKS.update(original_hooks)
+
+
 def test_cost_pricing_prefix_match():
     from aegis.usage_log import _price
     assert _price("claude-opus-4-8")[1] == 25.0      # output price (Opus 4.5+ tier)

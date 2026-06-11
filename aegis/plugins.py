@@ -53,8 +53,13 @@ class PluginAPI:
             _PLUGIN_PROVIDERS.setdefault(self._current_plugin, []).append(name)
 
     def register_hook(self, event: str, fn) -> None:
-        """Register an in-process Python hook. Events: 'on_session_start' (fn(agent)),
-        'pre_llm_call' (fn(messages, agent) -> messages|None to rewrite the request)."""
+        """Register an in-process Python hook.
+
+        Events include 'on_session_start' (fn(agent)), 'pre_llm_call'
+        (fn(messages, agent) -> messages|None to rewrite the request), and
+        provider observers: 'pre_api_request', 'post_api_request',
+        'api_request_error' (fn(payload, agent)).
+        """
         _HOOKS.setdefault(event, []).append(fn)
         if self._current_plugin is not None:
             _PLUGIN_HOOKS.setdefault(self._current_plugin, []).append((event, fn))

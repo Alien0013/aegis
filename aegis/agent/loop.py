@@ -245,6 +245,69 @@ def _response_trace_data(resp, duration_ms: int) -> dict:
     return data
 
 
+def _hook_json(value) -> str:
+    if isinstance(value, (dict, list, tuple)):
+        try:
+            return json.dumps(value, sort_keys=True, default=str)
+        except Exception:  # noqa: BLE001
+            return str(value)
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _shell_hook_context(payload: dict[str, Any]) -> dict[str, str]:
+    return {str(key): _hook_json(value) for key, value in payload.items()}
+
+
+def _observer_payload_copy(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return json.loads(json.dumps(payload, default=str))
+    except Exception:  # noqa: BLE001
+        return dict(payload)
+
+
+def _provider_observer_base(
+    agent,
+    *,
+    api_request_id: str,
+    session,
+    trace_id: str,
+    turn_id: str,
+    provider_span,
+    request: dict,
+) -> dict[str, Any]:
+    span_id = ""
+    if isinstance(provider_span, dict):
+        span_id = str(provider_span.get("span_id") or "")
+    provider = getattr(agent, "provider", None)
+    return {
+        "api_request_id": api_request_id,
+        "session_id": str(getattr(session, "id", "") or ""),
+        "trace_id": trace_id,
+        "turn_id": turn_id,
+        "run_id": str(getattr(agent, "_surface_run_id", "") or ""),
+        "provider": str(getattr(provider, "name", "") or ""),
+        "model": str(getattr(provider, "model", "") or ""),
+        "api_mode": _trace_scalar(getattr(provider, "api_mode", "")),
+        "span_id": span_id,
+        "request": request,
+    }
+
+
+def _fire_provider_observer(agent, event: str, payload: dict[str, Any]) -> None:
+    try:
+        from ..plugins import fire_hook
+        fire_hook(event, _observer_payload_copy(payload), agent)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from ..hooks import run_hooks
+        run_hooks(agent.config, event, _shell_hook_context(payload))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _usage_cost_usd(model: str, usage, config) -> float:
     try:
         from ..usage_log import _price
@@ -881,6 +944,10 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
         provider_span = None
         response_state = _response_state_for_agent(agent, getattr(agent.session, "id", ""))
         _record_response_request_meta(session, response_state)
+        api_request_id = new_id("api")
+        request_payload = _provider_trace_data(
+            agent, wire_messages, schemas, response_state, prompt_meta
+        )
         if trace_store and turn_span:
             try:
                 provider_span = trace_store.start_span(
@@ -891,10 +958,20 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                     kind="provider_call",
                     provider=getattr(agent.provider, "name", ""),
                     model=getattr(agent.provider, "model", ""),
-                    data=_provider_trace_data(agent, wire_messages, schemas, response_state, prompt_meta),
+                    data=request_payload,
                 )
             except Exception:  # noqa: BLE001
                 provider_span = None
+        observer_base = _provider_observer_base(
+            agent,
+            api_request_id=api_request_id,
+            session=session,
+            trace_id=trace_id,
+            turn_id=turn_id,
+            provider_span=provider_span,
+            request=request_payload,
+        )
+        _fire_provider_observer(agent, "pre_api_request", observer_base)
         provider_started = time.perf_counter()
         try:
             agent._active_response_id = ""
@@ -917,6 +994,20 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
             from .._log import log_exc
             from ..providers.fallback import classify_provider_error, recovery_action
             action = recovery_action(classify_provider_error(e))
+            provider_duration_ms = int((time.perf_counter() - provider_started) * 1000)
+            error_data = {
+                "type": type(e).__name__,
+                "message": str(e),
+                "recovery": action,
+                "duration_ms": provider_duration_ms,
+            }
+            error_payload = dict(observer_base)
+            error_payload.update({
+                "status": "error",
+                "duration_ms": provider_duration_ms,
+                "error": error_data,
+            })
+            _fire_provider_observer(agent, "api_request_error", error_payload)
             # Signed thinking blocks were invalidated upstream -> resend without them (once).
             if action == "strip_thinking" and not getattr(agent, "_strip_thinking", False):
                 if trace_store and provider_span:
@@ -928,7 +1019,7 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                                 "error": f"{type(e).__name__}: {e}",
                                 "error_type": type(e).__name__,
                                 "recovery": "strip_thinking",
-                                "duration_ms": int((time.perf_counter() - provider_started) * 1000),
+                                "duration_ms": provider_duration_ms,
                             },
                         )
                     except Exception:  # noqa: BLE001
@@ -947,7 +1038,7 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                                 "error": f"{type(e).__name__}: {e}",
                                 "error_type": type(e).__name__,
                                 "recovery": "compress",
-                                "duration_ms": int((time.perf_counter() - provider_started) * 1000),
+                                "duration_ms": provider_duration_ms,
                             },
                         )
                     except Exception:  # noqa: BLE001
@@ -964,7 +1055,7 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                         data={
                             "error": f"{type(e).__name__}: {e}",
                             "error_type": type(e).__name__,
-                            "duration_ms": int((time.perf_counter() - provider_started) * 1000),
+                            "duration_ms": provider_duration_ms,
                         },
                     )
                 except Exception:  # noqa: BLE001
@@ -985,19 +1076,27 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
 
         budget.api_call_count += 1
         budget.usage.add(resp.usage)
+        provider_duration_ms = int((time.perf_counter() - provider_started) * 1000)
+        response_payload = _response_trace_data(resp, provider_duration_ms)
         if trace_store and provider_span:
             try:
-                provider_duration_ms = int((time.perf_counter() - provider_started) * 1000)
                 trace_store.finish_span(
                     provider_span["span_id"],
                     status="ok",
                     cost=_usage_cost_usd(getattr(agent.provider, "model", ""), resp.usage, agent.config),
                     cache_read=getattr(resp.usage, "cache_read", 0),
                     cache_write=getattr(resp.usage, "cache_write", 0),
-                    data=_response_trace_data(resp, provider_duration_ms),
+                    data=response_payload,
                 )
             except Exception:  # noqa: BLE001
                 pass
+        success_payload = dict(observer_base)
+        success_payload.update({
+            "status": "ok",
+            "duration_ms": provider_duration_ms,
+            "response": response_payload,
+        })
+        _fire_provider_observer(agent, "post_api_request", success_payload)
         from .governance import strip_reasoning
         resp.text = strip_reasoning(resp.text)   # drop any inlined <think>…</think> blocks
         assistant_msg = resp.to_message()
