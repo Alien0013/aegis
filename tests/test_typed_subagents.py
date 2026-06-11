@@ -21,6 +21,7 @@ def capture(monkeypatch):
         self.ensure_system_prompt(force=True)
         seen["tools"] = {t.name for t in self.registry.all()}
         seen.setdefault("tasks", []).append(task if isinstance(task, str) else task.content)
+        seen["reasoning"] = getattr(self, "reasoning", "")
         seen["system_prompt"] = self.session.messages[0].content
         seen["prompt_parts"] = list(self.session.meta.get("prompt_parts") or [])
         seen["session_meta"] = dict(self.session.meta)
@@ -69,3 +70,37 @@ def test_continuation_reuses_child(tmp_path, capture):
     assert any(p["name"] == "subagent_role:plan" for p in capture["prompt_parts"])
     r3 = tool.run({"task": "x", "continue_id": "sub_nope"}, _ctx(tmp_path))
     assert r3.is_error
+
+
+def test_subagent_inherits_parent_runtime_controls(tmp_path, capture):
+    from aegis.session import Session
+
+    config = Config.load()
+    parent_session = Session.create()
+    parent_session.meta["runtime_controls"] = {
+        "provider": "openai",
+        "model": "gpt-5.5-pro",
+        "reasoning_effort": "high",
+        "reasoning_display": "live",
+        "busy_mode": "steer",
+    }
+
+    class Parent:
+        pass
+
+    parent = Parent()
+    parent.session = parent_session
+    parent.config = config
+    parent.memory = None
+
+    ctx = ToolContext(cwd=tmp_path, config=config, agent=parent)
+    r = SubagentTool().run({"task": "plan this", "agent_type": "plan"}, ctx)
+
+    assert not r.is_error
+    controls = capture["session_meta"]["runtime_controls"]
+    assert controls["provider"] == "openai"
+    assert controls["model"] == "gpt-5.5-pro"
+    assert controls["reasoning_effort"] == "high"
+    assert capture["session_meta"]["runtime"]["reasoning_display"] == "live"
+    assert capture["session_meta"]["runtime"]["busy_mode"] == "steer"
+    assert capture["reasoning"] == "high"

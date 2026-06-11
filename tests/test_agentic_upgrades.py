@@ -66,6 +66,53 @@ def test_subagent_tasks_expand_context_references(tmp_path, monkeypatch):
     assert "<file path=" in seen["task"]
 
 
+def test_background_spawn_inherits_parent_runtime_controls(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import time
+    import aegis.surface as surface
+    from aegis.background import BackgroundManager
+    from aegis.config import Config
+    from aegis.session import Session
+
+    seen = {}
+
+    class FakeRunner:
+        def __init__(self, config, cwd=None, include_mcp=True):
+            pass
+
+        def run_prompt(self, prompt, **kwargs):
+            seen["prompt"] = prompt
+            seen["meta"] = kwargs.get("meta") or {}
+            seen["session_id"] = kwargs.get("session_id", "")
+            return type("R", (), {"text": "ok", "run_id": "run_bg"})()
+
+    parent = Session.create()
+    parent.meta["runtime_controls"] = {
+        "provider": "openai",
+        "model": "gpt-5.5-pro",
+        "reasoning_effort": "high",
+        "reasoning_display": "live",
+        "busy_mode": "steer",
+    }
+    monkeypatch.setattr(surface, "SurfaceRunner", FakeRunner)
+
+    mgr = BackgroundManager()
+    tid = mgr.spawn(Config.load(), "do it later", parent_session=parent)
+    for _ in range(50):
+        task = mgr.get(tid)
+        if task and task.status != "running":
+            break
+        time.sleep(0.01)
+
+    assert seen["session_id"] == f"background:{tid}"
+    controls = seen["meta"]["runtime_controls"]
+    assert controls["provider"] == "openai"
+    assert controls["model"] == "gpt-5.5-pro"
+    assert controls["reasoning_effort"] == "high"
+    assert seen["meta"]["runtime"]["reasoning_display"] == "live"
+    assert seen["meta"]["runtime"]["busy_mode"] == "steer"
+
+
 # --- iteration-budget refund ------------------------------------------------
 def test_iteration_budget_refund():
     from aegis.agent.agent import IterationBudget

@@ -583,6 +583,32 @@ def session_runtime_controls(session: Session | None) -> dict[str, str]:
     return out
 
 
+def runtime_controls_meta(controls: dict[str, Any] | None) -> dict[str, Any]:
+    """Session metadata shape for inherited runtime controls."""
+    clean = {k: str(v) for k, v in (controls or {}).items() if v not in (None, "")}
+    if not clean:
+        return {}
+    meta: dict[str, Any] = {"runtime_controls": clean}
+    if clean.get("model"):
+        meta["model"] = clean["model"]
+    if clean.get("provider"):
+        meta["provider"] = clean["provider"]
+    runtime = {k: v for k, v in clean.items()
+               if k in {"reasoning_effort", "reasoning_display", "busy_mode"}}
+    if runtime:
+        meta["runtime"] = runtime
+    return meta
+
+
+def inherit_session_runtime(parent: Session | None, child: Session | None) -> dict[str, str]:
+    """Copy parent session runtime controls into a fresh delegated/forked session."""
+    if child is None:
+        return {}
+    controls = session_runtime_controls(parent)
+    child.meta.update(runtime_controls_meta(controls))
+    return controls
+
+
 def remember_session_runtime(agent: Any, **updates: Any) -> dict[str, str]:
     """Persist terminal/gateway runtime controls on the active session."""
     session = getattr(agent, "session", None)

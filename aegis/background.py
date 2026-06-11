@@ -24,14 +24,20 @@ class BackgroundManager:
         self._tasks: dict[str, BgTask] = {}
         self._lock = threading.Lock()
 
-    def spawn(self, config: Any, prompt: str, *, cwd=None, on_done=None) -> str:
+    def spawn(self, config: Any, prompt: str, *, cwd=None, on_done=None,
+              parent_session=None) -> str:
         """Run ``prompt`` in a background agent. ``on_done(task)`` (if given) fires
         when it finishes — used to announce the result back into a chat."""
-        from .surface import SurfaceRunner
+        from .surface import SurfaceRunner, runtime_controls_meta, session_runtime_controls
 
         task = BgTask(id=new_id("bg"), prompt=prompt)
         with self._lock:
             self._tasks[task.id] = task
+
+        meta = {
+            "background_task_id": task.id,
+            **runtime_controls_meta(session_runtime_controls(parent_session)),
+        }
 
         def _work():
             try:
@@ -41,7 +47,7 @@ class BackgroundManager:
                     session_id=f"background:{task.id}",
                     title=f"background {task.id}",
                     surface="background",
-                    meta={"background_task_id": task.id},
+                    meta=meta,
                 )
                 with self._lock:
                     task.result = result.text or ""

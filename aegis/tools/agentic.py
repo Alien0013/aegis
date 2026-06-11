@@ -121,11 +121,13 @@ class SubagentTool(Tool):
                 return ToolResult.error(f"no continuable subagent '{args['continue_id']}' "
                                         "(it may have been evicted)")
             try:
-                from ..surface import SurfaceRunner
+                from ..surface import SurfaceRunner, apply_session_runtime, inherit_session_runtime
 
                 role_type = str(entry.get("type") or atype)
                 role_spec = AGENT_TYPES.get(role_type, spec)
                 child_session = getattr(child, "session", None)
+                inherit_session_runtime(getattr(parent, "session", None), child_session)
+                apply_session_runtime(child)
                 if child_session is not None and _seed_role_prompt(
                     child_session, role_type, _role_prompt(role_type, role_spec)
                 ):
@@ -180,8 +182,11 @@ class SubagentTool(Tool):
                 if spec["tools"] is not None:
                     kwargs["registry"] = _restricted_registry(spec["tools"])
                 child_session = Session.create()
+                from ..surface import apply_session_runtime, inherit_session_runtime
+                inherit_session_runtime(getattr(parent, "session", None), child_session)
                 _seed_role_prompt(child_session, atype, role_prompt)
                 child = Agent.create(config, session=child_session, cwd=ctx.cwd, **kwargs)
+                apply_session_runtime(child)
                 child._depth = depth  # type: ignore[attr-defined]
                 if toolsets:
                     child.config.data.setdefault("tools", {})["toolsets"] = toolsets
@@ -257,7 +262,13 @@ class SubagentTool(Tool):
             BUS.publish({"type": "background_done", "platform": platform or "cli",
                          "chat_id": chat_id, "text": text[:2000]})
 
-        ids = [get_manager().spawn(config, t, cwd=ctx.cwd, on_done=_announce) for t in tasks]
+        parent_session = getattr(ctx.agent, "session", None)
+        ids = [
+            get_manager().spawn(
+                config, t, cwd=ctx.cwd, on_done=_announce, parent_session=parent_session
+            )
+            for t in tasks
+        ]
         return ToolResult.ok(
             f"started {len(ids)} background task(s): {', '.join(ids)}. I'll report the "
             "result(s) here when they finish — continuing with your other work meanwhile.",
