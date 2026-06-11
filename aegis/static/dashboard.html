@@ -407,14 +407,24 @@ PAGES.runs=async()=>{
 };
 
 PAGES.agents=async()=>{
-  const d=await api('agents'),agents=d.agents||[],types=d.types||[];$('#pstat').textContent=agents.length+' visible';
-  V.innerHTML='<div class="grid c2">'+
+  const d=await api('agents'),agents=d.agents||[],active=d.active_runs||[],types=d.types||[];
+  const roster=agents.filter(a=>a.kind!=='active_run');$('#pstat').textContent=agents.length+' visible';
+  V.innerHTML=(active.length?'<div class="card"><h3 style="margin-top:0">Active runs</h3><table class="tbl"><tr><th>run</th><th>surface</th><th>status</th><th>links</th></tr>'+
+    active.map(a=>'<tr class="click" data-agent="'+esc(a.id)+'"><td><b>'+esc(a.task||a.id)+'</b><div class="mono mut">'+esc(a.run_id||a.id)+'</div></td><td>'+esc(a.surface||a.type||'agent')+'</td><td>'+statusPill(a.status||'running')+'</td><td class="detail-meta">'+
+      (a.run_id?'<a href="#" data-runlink="'+esc(a.run_id)+'">run</a>':'')+
+      (a.session_id?'<a href="#" data-session="'+esc(a.session_id)+'">session</a>':'')+
+      (a.trace_id?'<a href="#" data-trace="'+esc(a.trace_id)+'">trace</a>':'')+
+    '</td></tr>').join('')+'</table></div>':'')+
+  '<div class="grid c2">'+
     '<div class="card"><h3 style="margin-top:0">Agents</h3><table class="tbl"><tr><th>id</th><th>type</th><th>status</th><th>task</th></tr>'+
-    (agents.map(a=>'<tr class="click" data-agent="'+esc(a.id)+'"><td class="mono">'+esc(a.id)+(a.run_id?'<div class="mut">run '+esc(a.run_id)+'</div>':'')+'</td><td>'+esc(a.type||a.kind||'agent')+'</td><td><span class="pill '+(a.status==='error'?'err':a.status==='done'||a.status==='configured'?'ok':'acc')+'">'+esc(a.status||'unknown')+'</span></td><td class="mut">'+esc(a.task||a.preview||a.model||'')+'</td></tr>').join('')||'<tr><td colspan="4" class="empty">no agents visible</td></tr>')+
+    (roster.map(a=>'<tr class="click" data-agent="'+esc(a.id)+'"><td class="mono">'+esc(a.id)+(a.run_id?'<div class="mut">run '+esc(a.run_id)+'</div>':'')+'</td><td>'+esc(a.type||a.kind||'agent')+'</td><td><span class="pill '+(a.status==='error'?'err':a.status==='done'||a.status==='configured'?'ok':'acc')+'">'+esc(a.status||'unknown')+'</span></td><td class="mut">'+esc(a.task||a.preview||a.model||'')+'</td></tr>').join('')||'<tr><td colspan="4" class="empty">no agents visible</td></tr>')+
     '</table></div><div class="card"><h3 style="margin-top:0">Types</h3>'+
     (types.map(t=>'<div class="row"><span><b>'+esc(t.name)+'</b> <span class="mut">'+(t.readonly?'read-only':'full')+'</span></span><span class="pill">'+esc(Array.isArray(t.tools)?t.tools.length+' tools':t.tools)+'</span></div>').join('')||'<div class="empty">agent types unavailable</div>')+
     '</div></div>';
   V.querySelectorAll('[data-agent]').forEach(r=>r.onclick=()=>openAgent(r.dataset.agent));
+  V.querySelectorAll('[data-runlink]').forEach(a=>a.onclick=e=>{e.preventDefault();e.stopPropagation();openRun(a.dataset.runlink)});
+  V.querySelectorAll('[data-session]').forEach(a=>a.onclick=e=>{e.preventDefault();e.stopPropagation();openSession(a.dataset.session)});
+  V.querySelectorAll('[data-trace]').forEach(a=>a.onclick=e=>{e.preventDefault();e.stopPropagation();openTrace(a.dataset.trace)});
 };
 
 async function openAgent(id){

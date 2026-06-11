@@ -400,6 +400,51 @@ def _dashboard_run_row(run: dict) -> dict:
     }
 
 
+def _latest_trace_id_for_session(config: Config | None, session_id: str) -> str:
+    if not session_id:
+        return ""
+    try:
+        from .tracing import TraceStore
+        store = TraceStore.from_config(config or Config.load())
+        traces = store.list_traces(session_id=session_id, limit=1)
+    except Exception:  # noqa: BLE001
+        return ""
+    if not traces:
+        return ""
+    return str(traces[0].get("trace_id") or traces[0].get("id") or "")
+
+
+def _dashboard_agent_from_run(run: dict, config: Config | None = None) -> dict:
+    row = _dashboard_run_row(run)
+    data = row.get("data") if isinstance(row.get("data"), dict) else {}
+    trace_id = row.get("trace_id") or _latest_trace_id_for_session(config, row.get("session_id", ""))
+    return {
+        "id": row["id"],
+        "kind": "active_run" if row.get("status") == "running" else "run",
+        "type": row.get("surface") or row.get("kind") or "agent",
+        "status": row.get("status") or "recorded",
+        "task": row.get("title") or row.get("preview") or "",
+        "preview": row.get("summary") or row.get("preview") or "",
+        "run_id": row["id"],
+        "session_id": row.get("session_id", ""),
+        "trace_id": trace_id,
+        "surface": row.get("surface", ""),
+        "model": data.get("model") or "",
+        "provider": data.get("provider") or "",
+        "started_at": row.get("started_at", ""),
+        "updated_at": row.get("updated_at", ""),
+    }
+
+
+def _dashboard_active_run_agents(config: Config) -> list[dict]:
+    try:
+        from .runs import RunStore
+        rows = RunStore().list(limit=50, status="running")
+    except Exception:  # noqa: BLE001
+        return []
+    return [_dashboard_agent_from_run(row, config) for row in rows]
+
+
 def _chat_event_row(event: dict) -> dict:
     etype = str(event.get("type") or "")
     row = {
@@ -859,15 +904,18 @@ def _dashboard_run_detail(query: dict, config: Config | None = None) -> dict:
 
 
 def _dashboard_agents(config: Config) -> dict:
+    active_runs = _dashboard_active_run_agents(config)
     agents = [{
         "id": "primary",
         "kind": "agent",
         "type": "general",
-        "status": "configured",
+        "status": "running" if active_runs else "configured",
         "provider": config.get("model.provider"),
         "model": config.get("model.default"),
         "toolsets": config.get("tools.toolsets", []),
+        "active_runs": len(active_runs),
     }]
+    agents.extend(active_runs)
     types = []
     try:
         from .tools.agentic import AGENT_TYPES, _REGISTRY, _REG_LOCK
@@ -903,7 +951,7 @@ def _dashboard_agents(config: Config) -> dict:
                            "run_id": run_id, "session_id": session_id, "trace_id": trace_id})
     except Exception:  # noqa: BLE001
         pass
-    return {"agents": agents, "types": types}
+    return {"agents": agents, "active_runs": active_runs, "types": types}
 
 
 def _dashboard_agent_detail(query: dict, config: Config) -> dict:
@@ -916,6 +964,7 @@ def _dashboard_agent_detail(query: dict, config: Config) -> dict:
             recent = RunStore().list(limit=10)
         except Exception:  # noqa: BLE001
             recent = []
+        active_runs = _dashboard_active_run_agents(config)
         return {
             "found": True,
             "id": "primary",
@@ -923,12 +972,37 @@ def _dashboard_agent_detail(query: dict, config: Config) -> dict:
                 "id": "primary",
                 "kind": "agent",
                 "type": "general",
-                "status": "configured",
+                "status": "running" if active_runs else "configured",
                 "provider": config.get("model.provider"),
                 "model": config.get("model.default"),
                 "toolsets": config.get("tools.toolsets", []),
+                "active_runs": len(active_runs),
             },
+            "active_runs": active_runs,
             "runs": [_dashboard_run_row(r) for r in recent],
+        }
+
+    run_detail = None
+    try:
+        from .runs import RunStore
+        run = RunStore().get(agent_id)
+    except Exception:  # noqa: BLE001
+        run = None
+    if run is not None:
+        agent = _dashboard_agent_from_run(run, config)
+        run_detail = _dashboard_run_detail({"id": [run["id"]]}, config)
+        session_id = str(agent.get("session_id") or "")
+        trace_id = str(agent.get("trace_id") or "")
+        session = _dashboard_session_detail(session_id) if session_id else None
+        trace = _dashboard_trace_detail({"id": [trace_id]}, config) if trace_id else None
+        return {
+            "found": True,
+            "id": agent_id,
+            "agent": agent,
+            "run": (run_detail or {}).get("run") if run_detail else None,
+            "session": session,
+            "trace": trace,
+            "messages": (session or {}).get("messages", []),
         }
 
     agent: dict | None = None

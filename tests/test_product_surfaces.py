@@ -1606,6 +1606,62 @@ def test_agent_state_tool_sessions_traces_evals_and_background():
     assert isinstance(json.loads(tool.run({"action": "background"}, ctx).content), list)
 
 
+def test_dashboard_agents_include_active_runs():
+    from aegis.config import Config
+    from aegis.dashboard import _dashboard_agent_detail, _dashboard_agents
+    from aegis.runs import RunStore
+    from aegis.session import Session, SessionStore
+    from aegis.tracing import TraceStore
+    from aegis.types import Message
+
+    cfg = Config.load()
+    session = Session.create("active cockpit")
+    session.messages = [Message.user("ship active monitor")]
+    SessionStore().save(session)
+    TraceStore.from_config(cfg).start_span(
+        trace_id="trace_active_run",
+        session_id=session.id,
+        turn_id="turn_active",
+        kind="turn",
+    )
+    run = RunStore().start(
+        surface="dashboard",
+        kind="dashboard",
+        title="active cockpit run",
+        session_id=session.id,
+        prompt="ship active monitor",
+        data={"provider": "fake", "model": "fake-model"},
+    )
+
+    agents = _dashboard_agents(cfg)
+    active = next(a for a in agents["active_runs"] if a["run_id"] == run["id"])
+
+    assert active["kind"] == "active_run"
+    assert active["status"] == "running"
+    assert active["session_id"] == session.id
+    assert active["trace_id"] == "trace_active_run"
+    assert any(a["id"] == run["id"] for a in agents["agents"])
+    primary = next(a for a in agents["agents"] if a["id"] == "primary")
+    assert primary["status"] == "running"
+    assert primary["active_runs"] >= 1
+
+    detail = _dashboard_agent_detail({"id": [run["id"]]}, cfg)
+    assert detail["found"] is True
+    assert detail["agent"]["kind"] == "active_run"
+    assert detail["run"]["id"] == run["id"]
+    assert detail["trace"]["trace"]["id"] == "trace_active_run"
+    assert detail["messages"][0]["content"] == "ship active monitor"
+
+
+def test_dashboard_agents_page_has_active_runs_section():
+    from importlib import resources
+
+    html = (resources.files("aegis") / "static" / "dashboard.html").read_text(encoding="utf-8")
+
+    assert "Active runs" in html
+    assert "data-runlink" in html
+
+
 def test_dashboard_run_detail_uses_configured_trace_path(tmp_path):
     from aegis.config import Config
     from aegis.dashboard import _dashboard_run_detail
