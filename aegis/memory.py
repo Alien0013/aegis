@@ -541,6 +541,8 @@ class MemoryManager:
         self._session_id = new_session_id
         self._provider_call("on_session_switch",
                             old_session_id=old_session_id, new_session_id=new_session_id)
+        if self.external:
+            self._snapshot["external"] = self._external_prompt_block()
 
     def on_delegation(self, task: str, result: str) -> None:
         self._provider_call("on_delegation", task, result)

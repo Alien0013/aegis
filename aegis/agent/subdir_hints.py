@@ -33,14 +33,26 @@ class SubdirHintTracker:
         self._seen_dirs: set[str] = set()
 
     def _candidate_dirs(self, call_name: str, args: dict) -> list[Path]:
-        """Directories a tool call works in (the dir of any path argument)."""
+        """Directories a tool call works in, including workspace ancestors."""
         dirs: list[Path] = []
         for key in ("path", "file", "directory", "dir"):
             val = args.get(key)
             if isinstance(val, str) and val:
                 p = Path(val).expanduser()
                 p = p if p.is_absolute() else (self.cwd / p)
-                dirs.append(p if p.is_dir() else p.parent)
+                dirs.extend(self._ancestor_dirs(p if p.is_dir() else p.parent))
+        return dirs
+
+    def _ancestor_dirs(self, leaf: Path) -> list[Path]:
+        try:
+            rel = leaf.resolve().relative_to(self.cwd)
+        except (OSError, ValueError):
+            return [leaf]
+        dirs: list[Path] = []
+        cur = self.cwd
+        for part in rel.parts:
+            cur = cur / part
+            dirs.append(cur)
         return dirs
 
     def hints_for(self, call_name: str, args: dict) -> str:

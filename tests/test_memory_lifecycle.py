@@ -86,6 +86,34 @@ def test_external_prompt_block_is_snapshotted_until_refresh(tmp_path, monkeypatc
     assert provider.prompt_calls == 3
 
 
+def test_external_prompt_block_refreshes_on_session_switch(tmp_path, monkeypatch):
+    config = _cfg(tmp_path, monkeypatch)
+    from aegis.memory import MemoryManager
+
+    class SessionBoundProvider:
+        def __init__(self):
+            self.session_id = "before"
+
+        def initialize(self, session_id="", **kw):
+            self.session_id = session_id
+
+        def on_session_switch(self, *, old_session_id, new_session_id, **kw):
+            self.session_id = new_session_id
+
+        def system_prompt_block(self):
+            return f"session-bound {self.session_id}"
+
+    mm = MemoryManager(config, external=SessionBoundProvider())
+    mm.initialize("old")
+    assert "session-bound old" in mm.build_context_block()
+
+    mm.on_session_switch("old", "new")
+
+    block = mm.build_context_block()
+    assert "session-bound new" in block
+    assert "session-bound old" not in block
+
+
 def test_hooks_are_fail_soft(tmp_path, monkeypatch):
     config = _cfg(tmp_path, monkeypatch)
     from aegis.memory import MemoryManager
@@ -403,6 +431,18 @@ def test_subdir_hints_inject_on_first_entry(tmp_path):
     assert t.hints_for("read_file", {"path": "pkg/other.py"}) == ""
     # cwd itself is never hinted (loaded at startup)
     assert t.hints_for("read_file", {"path": "top.py"}) == ""
+
+
+def test_subdir_hints_inject_ancestor_rule_for_deep_first_read(tmp_path):
+    from aegis.agent.subdir_hints import SubdirHintTracker
+    (tmp_path / "pkg" / "sub").mkdir(parents=True)
+    (tmp_path / "pkg" / "AGENTS.md").write_text("PACKAGE-ROOT RULES")
+    t = SubdirHintTracker(tmp_path)
+
+    h1 = t.hints_for("read_file", {"path": "pkg/sub/module.py"})
+
+    assert "PACKAGE-ROOT RULES" in h1 and 'dir="pkg"' in h1
+    assert t.hints_for("read_file", {"path": "pkg/other.py"}) == ""
 
 
 def test_subdir_hints_disabled_via_config(tmp_path, monkeypatch):
