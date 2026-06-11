@@ -27,9 +27,9 @@ The dashboard exposes read-only cockpit APIs used by the no-build frontend:
   and `session_id` filters for cockpit slicing
 - `/api/run?id=...` — one run plus linked session and trace detail when available
 - `/api/session?id=...` — transcript plus session detail, including runtime,
-  trace id, prompt-part metadata, parent, and child branches for replay/debug
-  views. `POST /api/session {"action":"branch","id":"sess_..."}` creates a
-  linked child session from the cockpit.
+  run/trace breadcrumbs, prompt/context metadata, parent, and child branches
+  for replay/debug views. `POST /api/session {"action":"branch","id":"sess_..."}`
+  creates a linked child session from the cockpit.
 - `/api/agents` — primary agent, typed subagent registry, and background agents
 - `/api/projects` and `/api/worktrees` — current project/worktree inventory
   with cockpit "chat here" handoff into the Chat page's working directory

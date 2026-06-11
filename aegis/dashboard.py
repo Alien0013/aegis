@@ -649,6 +649,7 @@ def _message_detail(message, index: int) -> dict:
 
 def _session_prompt_detail(sess) -> dict:
     meta = getattr(sess, "meta", {}) if hasattr(sess, "meta") else {}
+    meta = meta if isinstance(meta, dict) else {}
     parts = [_jsonable(p) for p in (meta.get("prompt_parts") or []) if isinstance(p, dict)]
     by_tier: dict[str, list[dict]] = {}
     for part in parts:
@@ -677,7 +678,47 @@ def _session_prompt_detail(sess) -> dict:
     }
 
 
-def _dashboard_session_detail(session_id: str) -> dict:
+def _dashboard_session_links(sess, config: Config | None = None, *, limit: int = 10) -> dict:
+    try:
+        from .runs import RunStore
+        runs = [_dashboard_run_row(r) for r in RunStore().list(session_id=sess.id, limit=limit)]
+    except Exception:  # noqa: BLE001
+        runs = []
+    try:
+        trace_payload = _dashboard_traces({"session_id": [sess.id], "limit": [str(limit)]}, config)
+        traces = list(trace_payload.get("traces") or [])[:limit]
+        trace_source = str(trace_payload.get("source") or "")
+    except Exception:  # noqa: BLE001
+        traces = []
+        trace_source = ""
+
+    meta = getattr(sess, "meta", {}) if hasattr(sess, "meta") else {}
+    meta = meta if isinstance(meta, dict) else {}
+    meta_trace_ids = [
+        str(meta.get(key) or "") for key in ("last_trace_id", "trace_id")
+        if meta.get(key)
+    ]
+    trace_ids = []
+    for value in [r.get("trace_id", "") for r in runs] + \
+            [t.get("trace_id") or t.get("id", "") for t in traces] + meta_trace_ids:
+        value = str(value or "")
+        if value and value not in trace_ids:
+            trace_ids.append(value)
+    run_ids = [str(r.get("id") or "") for r in runs if r.get("id")]
+    return {
+        "runs": runs,
+        "traces": _jsonable(traces),
+        "links": {
+            "run_ids": run_ids,
+            "trace_ids": trace_ids,
+            "latest_run_id": run_ids[0] if run_ids else str(meta.get("last_run_id", "")),
+            "latest_trace_id": trace_ids[0] if trace_ids else str(meta.get("last_trace_id", "")),
+            "trace_source": trace_source,
+        },
+    }
+
+
+def _dashboard_session_detail(session_id: str, config: Config | None = None) -> dict:
     from .session import SessionStore
     store = SessionStore()
     sess = store.load(session_id)
@@ -686,6 +727,7 @@ def _dashboard_session_detail(session_id: str) -> dict:
     metrics = _session_metrics(sess)
     children = store.children(sess.id)
     parent = store.load(sess.parent_id) if sess.parent_id else None
+    linked = _dashboard_session_links(sess, config)
     return {
         "found": True,
         "id": sess.id,
@@ -703,6 +745,9 @@ def _dashboard_session_detail(session_id: str) -> dict:
         "metrics": metrics,
         "prompt": _session_prompt_detail(sess),
         "messages": [_message_detail(m, i) for i, m in enumerate(sess.messages)],
+        "runs": linked["runs"],
+        "traces": linked["traces"],
+        "links": linked["links"],
         "todos": _jsonable(sess.todos),
         "meta": _jsonable(sess.meta),
     }
@@ -806,7 +851,7 @@ def _dashboard_trace_detail(query: dict, config: Config | None = None) -> dict:
                 "evaluation": evaluation,
             }
 
-    session = _dashboard_session_detail(trace_id)
+    session = _dashboard_session_detail(trace_id, config)
     if session.get("found"):
         spans = _session_span_rows(session)
         try:
@@ -864,7 +909,7 @@ def _dashboard_run_detail(query: dict, config: Config | None = None) -> dict:
     if stored:
         session_id = stored.get("session_id", "")
         trace_id = stored.get("trace_id", "")
-        session = _dashboard_session_detail(session_id) if session_id else None
+        session = _dashboard_session_detail(session_id, config) if session_id else None
         trace = _dashboard_trace_detail({"id": [trace_id]}, config) if trace_id else None
         return {
             "found": True,
@@ -875,7 +920,7 @@ def _dashboard_run_detail(query: dict, config: Config | None = None) -> dict:
             "messages": (session or {}).get("messages", []),
         }
 
-    session = _dashboard_session_detail(run_id)
+    session = _dashboard_session_detail(run_id, config)
     if session.get("found"):
         goal = (session.get("metrics") or {}).get("goal") or {}
         run = {
@@ -994,7 +1039,7 @@ def _dashboard_agent_detail(query: dict, config: Config) -> dict:
         run_detail = _dashboard_run_detail({"id": [run["id"]]}, config)
         session_id = str(agent.get("session_id") or "")
         trace_id = str(agent.get("trace_id") or "")
-        session = _dashboard_session_detail(session_id) if session_id else None
+        session = _dashboard_session_detail(session_id, config) if session_id else None
         trace = _dashboard_trace_detail({"id": [trace_id]}, config) if trace_id else None
         return {
             "found": True,
@@ -1050,7 +1095,7 @@ def _dashboard_agent_detail(query: dict, config: Config) -> dict:
         run = run_detail.get("run") or {}
         session_id = session_id or str(run.get("session_id") or "")
         trace_id = trace_id or str(run.get("trace_id") or "")
-    session = _dashboard_session_detail(session_id) if session_id else None
+    session = _dashboard_session_detail(session_id, config) if session_id else None
     trace = _dashboard_trace_detail({"id": [trace_id]}, config) if trace_id else None
     return {
         "found": True,
@@ -1557,11 +1602,14 @@ def make_handler(config: Config):
             elif path == "/api/session":
                 sid = q.get("id", [""])[0]
                 s = SessionStore().load(sid)
-                detail = _dashboard_session_detail(sid) if sid else {"found": False}
+                detail = _dashboard_session_detail(sid, config) if sid else {"found": False}
                 self._json({
                     "messages": [{"role": m.role, "content": m.content}
                                  for m in (s.messages if s else []) if m.content],
                     "detail": detail,
+                    "runs": detail.get("runs", []),
+                    "traces": detail.get("traces", []),
+                    "links": detail.get("links", {}),
                     "lineage": {
                         "parent": detail.get("parent"),
                         "children": detail.get("children", []),

@@ -992,6 +992,12 @@ def test_dashboard_public_plan_endpoints(tmp_path, monkeypatch):
         assert session_detail["detail"]["prompt"]["hash"] == "hash_dash"
         assert session_detail["detail"]["prompt"]["part_count"] == 1
         assert session_detail["detail"]["prompt"]["tiers"]["stable"][0]["name"] == "identity"
+        assert session_detail["detail"]["runs"][0]["id"] == run["id"]
+        assert session_detail["detail"]["traces"][0]["id"] == "trace_dash"
+        assert session_detail["detail"]["links"]["run_ids"] == [run["id"]]
+        assert "trace_dash" in session_detail["detail"]["links"]["trace_ids"]
+        assert session_detail["links"]["latest_run_id"] == run["id"]
+        assert session_detail["links"]["latest_trace_id"] == "trace_dash"
         branch = post("/api/session", {"action": "branch", "id": s.id, "title": "plan branch"})
         assert branch["ok"] is True
         assert branch["parent_id"] == s.id
