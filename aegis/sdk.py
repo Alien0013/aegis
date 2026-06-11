@@ -179,7 +179,8 @@ class AegisClient:
                 title=title or session.title,
                 session_id=session.id,
                 prompt=text,
-                data={"model": model or "", "provider": provider or "",
+                data={"model": model or controls.get("model", ""),
+                      "provider": provider or controls.get("provider", ""),
                       "context_references": reference_meta,
                       **_workspace_run_meta(run_cwd)},
             )
@@ -187,6 +188,7 @@ class AegisClient:
         except Exception:  # noqa: BLE001
             run_store = None
         try:
+            agent._surface_run_id = run_id
             message = agent.run(user_input, emit)
         except Exception as exc:
             if run_store is not None and run_id:
@@ -491,17 +493,15 @@ class AegisClient:
             except TypeError:
                 return self.provider_factory()
 
-    @staticmethod
-    def _expand(prompt: str, cwd: Path) -> str:
+    def _expand(self, prompt: str, cwd: Path) -> str:
         from .context_refs import expand_references
 
-        return expand_references(prompt, cwd)
+        return expand_references(prompt, cwd, config=self.config)
 
-    @staticmethod
-    def _expand_result(prompt: str, cwd: Path):
+    def _expand_result(self, prompt: str, cwd: Path):
         from .context_refs import expand_reference_result
 
-        return expand_reference_result(prompt, cwd)
+        return expand_reference_result(prompt, cwd, config=self.config)
 
     @staticmethod
     def _images(images: Iterable[str | Path] | None) -> list[str]:

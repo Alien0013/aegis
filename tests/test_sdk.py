@@ -58,6 +58,41 @@ def test_sdk_run_saves_session_and_trace():
     assert turn_span["data"]["prompt"]["prompt_parts"]
 
 
+def test_sdk_provider_metadata_includes_run_id(tmp_path):
+    from aegis.config import Config
+    from aegis.sdk import AegisClient
+    from aegis.types import LLMResponse
+
+    class MetadataProvider:
+        context_length = 200_000
+        name = "fake"
+        model = "fake-model"
+        api_mode = None
+        auth = None
+
+        def __init__(self):
+            self.metadata = {}
+
+        def describe(self):
+            return "fake"
+
+        def complete(self, messages, tools=None, stream=False, on_delta=None, metadata=None):
+            self.metadata = dict(metadata or {})
+            return LLMResponse(text="ok")
+
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = False
+    provider = MetadataProvider()
+    client = AegisClient(config=cfg, provider_factory=lambda **_: provider, cwd=tmp_path, include_mcp=False)
+
+    result = client.run("sdk breadcrumbs", title="sdk metadata")
+
+    assert provider.metadata["session_id"] == result.session_id
+    assert provider.metadata["trace_id"] == result.trace_id
+    assert provider.metadata["turn_id"] == result.turn_id
+    assert provider.metadata["run_id"] == result.run_id
+
+
 def test_sdk_resume_branch_replay_and_eval_suite(tmp_path):
     import json
 
@@ -214,3 +249,55 @@ def test_sdk_expands_context_references_and_records_metadata(tmp_path):
 
     assert any("sdk attached context" in content for content in provider.messages[0])
     assert session.meta["last_context_references"]["count"] == 1
+
+
+def test_sdk_mcp_context_reference_uses_client_config(tmp_path):
+    import sys
+
+    from aegis.config import Config
+    from aegis.sdk import AegisClient
+    from aegis.types import LLMResponse
+
+    class Provider:
+        context_length = 200_000
+        name = "fake"
+        model = "fake-model"
+        api_mode = None
+        auth = None
+
+        def __init__(self):
+            self.messages = []
+
+        def describe(self):
+            return "fake"
+
+        def complete(self, messages, **_kwargs):
+            self.messages.append([m.content for m in messages])
+            return LLMResponse(text="ok")
+
+    server = tmp_path / "mcp_srv.py"
+    server.write_text(
+        "import json,sys\n"
+        "def s(o): sys.stdout.write(json.dumps(o)+chr(10)); sys.stdout.flush()\n"
+        "for line in sys.stdin:\n"
+        "    line=line.strip()\n"
+        "    if not line: continue\n"
+        "    m=json.loads(line); mid=m.get('id'); meth=m.get('method')\n"
+        "    if meth=='initialize': s({'jsonrpc':'2.0','id':mid,'result':{'protocolVersion':'2025-06-18','capabilities':{},'serverInfo':{'name':'t','version':'1'}}})\n"
+        "    elif meth=='resources/read': s({'jsonrpc':'2.0','id':mid,'result':{'contents':[{'uri':m['params']['uri'],'text':'sdk mcp attached context'}]}})\n",
+        encoding="utf-8",
+    )
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = False
+    cfg.data.setdefault("mcp", {})["servers"] = {
+        "sdk": {"command": sys.executable, "args": [str(server)]}
+    }
+    provider = Provider()
+    client = AegisClient(config=cfg, provider_factory=lambda **_: provider, cwd=tmp_path, include_mcp=False)
+
+    result = client.run("review @mcp:sdk:note://a")
+    session = client.resume(result.session_id)
+
+    assert any("sdk mcp attached context" in content for content in provider.messages[0])
+    assert session.meta["last_context_references"]["references"][0]["kind"] == "mcp"
+    assert session.meta["last_context_references"]["references"][0]["target"] == "sdk:note://a"
