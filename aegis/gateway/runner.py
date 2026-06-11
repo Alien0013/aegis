@@ -89,6 +89,13 @@ class GatewayRunner:
             self._sessions[key] = self.store.load(key) or Session(id=key, title=key)
         return self._sessions[key]
 
+    def _drop_agent(self, key: str):
+        agent = self._agents.pop(key, None)
+        if agent is not None:
+            from ..surface import _close_agent
+            _close_agent(agent)
+        return agent
+
     @staticmethod
     def _parse_model_override(arg: str) -> tuple[str, str]:
         raw = arg.strip()
@@ -173,13 +180,7 @@ class GatewayRunner:
         # Intercept control commands before the agent.
         if text in ("/stop", "/new", "/reset"):
             def action(proxy):
-                agent = self._agents.pop(key, None)
-                end = getattr(agent, "end_session", None)
-                if callable(end):
-                    try:
-                        end()
-                    except Exception:  # noqa: BLE001
-                        pass
+                self._drop_agent(key)
                 fresh = Session(id=key, title=key)
                 self._sessions[key] = fresh
                 proxy.session = fresh
@@ -232,7 +233,7 @@ class GatewayRunner:
                     model=model,
                 )
                 self.store.save(session)
-                self._agents.pop(key, None)        # rebuild with the new model next turn
+                self._drop_agent(key)        # rebuild with the new model next turn
                 label = f"{provider}/" if provider else ""
                 reply = f"✓ model for this session → {label}{model}"
                 if warning and validation.get("warning"):
@@ -258,7 +259,7 @@ class GatewayRunner:
                     return warning
                 remember_session_runtime(type("A", (), {"session": session})(), provider=arg)
                 self.store.save(session)
-                self._agents.pop(key, None)
+                self._drop_agent(key)
                 reply = f"✓ provider for this session → {arg}"
                 if warning and validation.get("warning"):
                     reply += f"\nwarning: {warning}"
@@ -425,7 +426,7 @@ class GatewayRunner:
                     ho = pop_handoff(ev.platform, ev.chat_id)
                     if ho and (adopted := self.store.load(ho)) is not None:
                         self._sessions[key] = adopted
-                        self._agents.pop(key, None)
+                        self._drop_agent(key)
                 except Exception:  # noqa: BLE001
                     pass
                 session = self._session(key)
@@ -449,10 +450,7 @@ class GatewayRunner:
                 self._agents[key] = agent
                 if len(self._agents) > self._agent_cap:
                     evict_key = next(iter(self._agents))
-                    evicted = self._agents.pop(evict_key, None)
-                    if evicted is not None:
-                        from ..surface import _close_agent
-                        _close_agent(evicted)
+                    self._drop_agent(evict_key)
             else:
                 from ..surface import apply_session_runtime
                 apply_session_runtime(agent)

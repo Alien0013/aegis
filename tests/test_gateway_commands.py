@@ -116,12 +116,19 @@ def test_model_session_override(tmp_path, monkeypatch):
     r = _runner(tmp_path, monkeypatch)
     key = r._key(_ev("x"))
     assert "Switch for this session" in r.dispatch(_ev("/model"))
-    r._agents[key] = object()                       # a cached agent to invalidate
+    closed = []
+
+    class CachedAgent:
+        def end_session(self):
+            closed.append("closed")
+
+    r._agents[key] = CachedAgent()                  # a cached agent to invalidate
     out = r.dispatch(_ev("/model gpt-5.5-pro"))
     assert "→ gpt-5.5-pro" in out
     assert r._session(key).meta["model"] == "gpt-5.5-pro"
     assert r._session(key).meta["runtime_controls"]["model"] == "gpt-5.5-pro"
     assert key not in r._agents                     # cache dropped -> rebuilt next turn
+    assert closed == ["closed"]
     assert "gpt-5.5-pro" in r.dispatch(_ev("/model"))
     from aegis.runs import RunStore
     run = next(row for row in RunStore().list(session_id=key, limit=10)
