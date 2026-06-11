@@ -706,6 +706,7 @@ def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
         child.meta["compression_depth"] = depth
         child.meta["parent_end_reason"] = "compression"
         child.meta["summary"] = parent.meta.get("summary", "")
+        rec = {**rec, "split": True, "child_session": child.id, "parent_session": parent.id}
         child.meta.setdefault("compactions", []).append(rec)
         try:
             agent.store.save(parent)                    # preserve full parent history + end reason
@@ -714,7 +715,6 @@ def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
             pass
         agent.switch_session(child)            # fires the memory session-switch hook
         session = child
-        rec = {**rec, "split": True, "child_session": child.id, "parent_session": parent.id}
         try:
             from .context_engine import call_hook
             call_hook(engine, "on_session_switch", agent, parent, child, reason="compression")
@@ -788,6 +788,7 @@ def compact_now(agent, session=None, emit: OnEvent | None = None, *,
         child.meta["compression_depth"] = depth
         child.meta["parent_end_reason"] = "manual_compression"
         child.meta["summary"] = parent.meta.get("summary", "")
+        rec = {**rec, "split": True, "child_session": child.id, "parent_session": parent.id}
         child.meta.setdefault("compactions", []).append(rec)
         try:
             agent.store.save(parent)
@@ -796,7 +797,6 @@ def compact_now(agent, session=None, emit: OnEvent | None = None, *,
             pass
         agent.switch_session(child)            # fires the memory session-switch hook
         session = child
-        rec = {**rec, "split": True, "child_session": child.id, "parent_session": parent.id}
         try:
             from .context_engine import call_hook
             call_hook(engine, "on_session_switch", agent, parent, child, reason="manual_compression")

@@ -112,6 +112,39 @@ def test_compaction_split_records_session_provenance(tmp_path):
     assert child.meta["lineage_root"] == session.id
     assert child.meta["lineage_depth"] == 1
     assert child.id in parent.meta["child_sessions"]
+    compaction = child.meta["compactions"][0]
+    assert compaction["split"] is True
+    assert compaction["parent_session"] == parent.id
+    assert compaction["child_session"] == child.id
+
+
+def test_manual_compaction_split_records_session_provenance(tmp_path):
+    from aegis.agent.loop import compact_now
+    from aegis.session import Session, SessionStore
+    from aegis.types import LLMResponse, Message
+
+    class Windowed(FakeProvider):
+        context_length = 100_000
+
+    store = SessionStore()
+    session = Session.create("manual long task")
+    session.messages = [Message.user(("manual context " * 2000) + str(i)) for i in range(40)]
+    provider = Windowed([LLMResponse(text="manual summary")])
+    a = _agent(provider, tmp_path, store=store)
+    a.session = session
+    a.tool_context.session = session
+
+    compact_now(a, preserve_last=1)
+
+    parent = store.load(session.id)
+    child = store.load(a.session.id)
+    assert parent.meta["end_reason"] == "manual_compression"
+    assert child.meta["creator_kind"] == "manual_compression"
+    compaction = child.meta["compactions"][0]
+    assert compaction["manual"] is True
+    assert compaction["split"] is True
+    assert compaction["parent_session"] == parent.id
+    assert compaction["child_session"] == child.id
 
 
 # --- #8 failure modes ------------------------------------------------------
