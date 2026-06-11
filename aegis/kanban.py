@@ -34,6 +34,9 @@ class Task:
     priority: int
     created_at: str
     updated_at: str
+    run_id: str = ""
+    session_id: str = ""
+    trace_id: str = ""
 
     @staticmethod
     def from_row(row: sqlite3.Row) -> "Task":
@@ -46,6 +49,9 @@ class Task:
             priority=row["priority"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            run_id=row["run_id"] if "run_id" in row.keys() else "",
+            session_id=row["session_id"] if "session_id" in row.keys() else "",
+            trace_id=row["trace_id"] if "trace_id" in row.keys() else "",
         )
 
 
@@ -90,9 +96,16 @@ class KanbanStore:
                        assignee TEXT,
                        priority INTEGER NOT NULL DEFAULT 0,
                        created_at TEXT,
-                       updated_at TEXT
+                       updated_at TEXT,
+                       run_id TEXT,
+                       session_id TEXT,
+                       trace_id TEXT
                    )"""
             )
+            cols = {r[1] for r in c.execute("PRAGMA table_info(tasks)").fetchall()}
+            for name in ("run_id", "session_id", "trace_id"):
+                if name not in cols:
+                    c.execute(f"ALTER TABLE tasks ADD COLUMN {name} TEXT")
             c.execute(
                 """CREATE TABLE IF NOT EXISTS comments (
                        id TEXT PRIMARY KEY,
@@ -114,11 +127,18 @@ class KanbanStore:
             priority=int(priority),
             created_at=now,
             updated_at=now,
+            run_id="",
+            session_id="",
+            trace_id="",
         )
         with self._conn() as c:
             c.execute(
-                """INSERT INTO tasks (id,title,body,status,assignee,priority,created_at,updated_at)
-                   VALUES (:id,:title,:body,:status,:assignee,:priority,:created_at,:updated_at)""",
+                """INSERT INTO tasks
+                   (id,title,body,status,assignee,priority,created_at,updated_at,
+                    run_id,session_id,trace_id)
+                   VALUES
+                   (:id,:title,:body,:status,:assignee,:priority,:created_at,:updated_at,
+                    :run_id,:session_id,:trace_id)""",
                 task.__dict__,
             )
         return task
@@ -190,6 +210,22 @@ class KanbanStore:
             self.comment(task_id, f"BLOCKED: {reason}")
         return ok
 
+    def record_breadcrumbs(
+        self,
+        task_id: str,
+        *,
+        run_id: str = "",
+        session_id: str = "",
+        trace_id: str = "",
+    ) -> bool:
+        with self._conn() as c:
+            cur = c.execute(
+                """UPDATE tasks SET run_id=?, session_id=?, trace_id=?, updated_at=?
+                   WHERE id=?""",
+                (run_id, session_id, trace_id, now_iso(), task_id),
+            )
+            return cur.rowcount > 0
+
     def reopen(self, task_id: str) -> bool:
         """Send a blocked/done task back to ``ready`` and drop its assignee."""
         with self._conn() as c:
@@ -256,8 +292,7 @@ def dispatch(config, worker: str = "agent") -> Task | None:
     error recorded. Returns the task that was processed, or ``None`` if the board
     had no ready work.
     """
-    from .agent.agent import Agent
-    from .session import Session
+    from .surface import SurfaceRunner
 
     store = KanbanStore()
     task = store.claim_next(worker)
@@ -265,10 +300,21 @@ def dispatch(config, worker: str = "agent") -> Task | None:
         return None
 
     prompt = task.title if not task.body else f"{task.title}\n\n{task.body}"
-    agent = Agent.create(config, session=Session.create(title=task.title))
+    runner = SurfaceRunner(config, include_mcp=True, reuse_agents=False)
     try:
-        reply = agent.run(prompt)
-        store.comment(task.id, reply.content)
+        result = runner.run_prompt(
+            prompt,
+            title=task.title,
+            surface="kanban",
+            meta={"kanban_task_id": task.id, "kanban_worker": worker},
+        )
+        store.record_breadcrumbs(
+            task.id,
+            run_id=result.run_id,
+            session_id=result.session.id,
+            trace_id=result.trace_id,
+        )
+        store.comment(task.id, result.text)
         store.complete(task.id)
     except Exception as e:  # noqa: BLE001
         store.block(task.id, f"agent error: {e}")

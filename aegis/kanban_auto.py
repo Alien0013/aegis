@@ -58,6 +58,12 @@ def run_board(config, worker: str = "auto", max_tasks: int = 20,
     if n > 1:
         from concurrent.futures import ThreadPoolExecutor
         store = store or KanbanStore()
+        # Warm shared stores before lane threads start; their lazy schema migrations
+        # are process-safe after initialization, but concurrent first init can race.
+        from .runs import RunStore
+        from .session import SessionStore
+        RunStore()
+        SessionStore()
         lanes = [f"lane-{i + 1}" for i in range(n)]
         per = max(1, max_tasks // n)
         with ThreadPoolExecutor(max_workers=n) as ex:
@@ -65,21 +71,31 @@ def run_board(config, worker: str = "auto", max_tasks: int = 20,
                                                     store=store, on_event=on_event, workers=1),
                              lanes)
         return [tid for r in results for tid in r]
-    from .agent.agent import Agent
-    from .session import Session
+    from .surface import SurfaceRunner
     store = store or KanbanStore()
     done: list[str] = []
+    runner = SurfaceRunner(config, include_mcp=True, reuse_agents=False)
     for _ in range(max_tasks):
         task = store.claim_next(worker, lane=worker)
         if task is None:
             break
         if on_event:
             on_event(f"▸ {task.title}")
-        agent = Agent.create(config, session=Session.create())
         prompt = f"{task.title}\n\n{task.body}".strip()
         try:
-            resp = agent.run(prompt)
-            store.comment(task.id, (resp.content or "")[:1000])
+            result = runner.run_prompt(
+                prompt,
+                title=task.title,
+                surface="kanban",
+                meta={"kanban_task_id": task.id, "kanban_worker": worker},
+            )
+            store.record_breadcrumbs(
+                task.id,
+                run_id=result.run_id,
+                session_id=result.session.id,
+                trace_id=result.trace_id,
+            )
+            store.comment(task.id, (result.text or "")[:1000])
             store.complete(task.id)
             done.append(task.id)
         except Exception as e:  # noqa: BLE001 - one bad task must not halt the board

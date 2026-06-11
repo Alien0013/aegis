@@ -637,10 +637,18 @@ PAGES.kanban=async()=>{
     col.innerHTML='<h4>'+c.replace('_',' ')+'<span>'+(d[c]||[]).length+'</span></h4>';
     (d[c]||[]).forEach(t=>{const k=document.createElement('div');k.className='kcard';
       k.innerHTML='<b>'+esc(t.title)+'</b>'+(t.body?'<div class="mut" style="font-size:12px;margin-top:3px">'+esc(t.body.slice(0,140))+'</div>':'')+
+        ((t.run_id||t.session_id||t.trace_id)?'<div class="mono mut" style="font-size:11px;margin-top:6px">'+
+          (t.run_id?'<a href="#" data-run="'+esc(t.run_id)+'">run '+esc(t.run_id.slice(0,12))+'</a> ':'')+
+          (t.session_id?'<a href="#" data-session="'+esc(t.session_id)+'">session</a> ':'')+
+          (t.trace_id?'<a href="#" data-trace="'+esc(t.trace_id)+'">trace</a>':'')+
+        '</div>':'')+
         '<div class="mv">'+cols.filter(s=>s!==c).map(s=>'<a href="#" data-id="'+t.id+'" data-s="'+s+'">→ '+s.replace('_',' ')+'</a>').join('')+'</div>';
       col.appendChild(k)});
     board.appendChild(col)});
   board.querySelectorAll('a[data-s]').forEach(a=>a.onclick=async e=>{e.preventDefault();await post('kanban',{action:'move',id:a.dataset.id,status:a.dataset.s});PAGES.kanban()});
+  board.querySelectorAll('[data-run]').forEach(a=>a.onclick=e=>{e.preventDefault();openRun(a.dataset.run)});
+  board.querySelectorAll('[data-session]').forEach(a=>a.onclick=e=>{e.preventDefault();openSession(a.dataset.session)});
+  board.querySelectorAll('[data-trace]').forEach(a=>a.onclick=e=>{e.preventDefault();openTrace(a.dataset.trace)});
   $('#kadd').onclick=async()=>{const t=$('#kt').value.trim();if(!t)return;await post('kanban',{action:'create',title:t});PAGES.kanban()};
   $('#kdec').onclick=async()=>{const g=$('#kg').value.trim();if(!g)return;$('#kdec').textContent='decomposing…';await post('kanban',{action:'decompose',goal:g});PAGES.kanban()};
   $('#krun').onclick=async()=>{await post('kanban',{action:'run'});toast('board run started','ok');setTimeout(PAGES.kanban,1500)};

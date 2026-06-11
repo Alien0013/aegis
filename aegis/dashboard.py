@@ -1479,7 +1479,9 @@ def make_handler(config: Config):
                 from .kanban import KanbanStore
                 ks = KanbanStore()
                 self._json({s: [{"id": t.id, "title": t.title, "body": t.body,
-                                 "assignee": t.assignee, "priority": t.priority}
+                                 "assignee": t.assignee, "priority": t.priority,
+                                 "run_id": t.run_id, "session_id": t.session_id,
+                                 "trace_id": t.trace_id}
                                 for t in ks.list(status=s)]
                             for s in ("ready", "in_progress", "done", "blocked")})
             elif path == "/api/cron":

@@ -1037,6 +1037,7 @@ def test_kanban_automation(tmp_path, monkeypatch):
     import aegis.agent.agent as agentmod
     from aegis import kanban_auto
     from aegis.kanban import KanbanStore
+    from aegis.runs import RunStore
 
     class FakeResp:
         def __init__(self, c): self.content = c
@@ -1058,6 +1059,13 @@ def test_kanban_automation(tmp_path, monkeypatch):
     assert len(done) == 2
     assert not store.list(status="ready") and len(store.list(status="done")) == 2
     assert store.comments(done[0])           # agent result recorded on each card
+    task = store.show(done[0])
+    assert task.run_id.startswith("run_")
+    assert task.session_id.startswith("sess_")
+    run = RunStore().get(task.run_id)
+    assert run and run["surface"] == "kanban"
+    assert run["data"]["kanban_task_id"] == task.id
+    assert run["data"]["kanban_worker"] == "auto"
 
 
 def test_kanban_extract_json_array():
@@ -1105,6 +1113,8 @@ def test_dashboard_kanban_automation(tmp_path, monkeypatch):
         time.sleep(1.0)
         b = req("GET", "/api/kanban")
         assert len(b["done"]) == 2 and len(b["ready"]) == 0
+        assert b["done"][0]["run_id"].startswith("run_")
+        assert b["done"][0]["session_id"].startswith("sess_")
     finally:
         srv.shutdown()
 
