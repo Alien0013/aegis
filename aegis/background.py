@@ -40,6 +40,7 @@ class BackgroundManager:
         }
 
         def _work():
+            runner = None
             try:
                 runner = SurfaceRunner(config, cwd=cwd, include_mcp=True)
                 result = runner.run_prompt(
@@ -57,6 +58,13 @@ class BackgroundManager:
                 with self._lock:
                     task.error = f"{type(e).__name__}: {e}"
                     task.status = "error"
+            finally:
+                close = getattr(runner, "close", None)
+                if callable(close):
+                    try:
+                        close()
+                    except Exception:  # noqa: BLE001
+                        pass
             if on_done is not None:
                 try:
                     on_done(task)

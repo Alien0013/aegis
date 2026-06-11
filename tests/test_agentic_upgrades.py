@@ -86,6 +86,9 @@ def test_background_spawn_inherits_parent_runtime_controls(tmp_path, monkeypatch
             seen["session_id"] = kwargs.get("session_id", "")
             return type("R", (), {"text": "ok", "run_id": "run_bg"})()
 
+        def close(self):
+            seen["closed"] = seen.get("closed", 0) + 1
+
     parent = Session.create()
     parent.meta["runtime_controls"] = {
         "provider": "openai",
@@ -111,6 +114,7 @@ def test_background_spawn_inherits_parent_runtime_controls(tmp_path, monkeypatch
     assert controls["reasoning_effort"] == "high"
     assert seen["meta"]["runtime"]["reasoning_display"] == "live"
     assert seen["meta"]["runtime"]["busy_mode"] == "steer"
+    assert seen["closed"] == 1
 
 
 # --- iteration-budget refund ------------------------------------------------
