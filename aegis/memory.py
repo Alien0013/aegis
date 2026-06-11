@@ -369,12 +369,14 @@ class MemoryManager:
         self.enabled = bool(config.get("memory.enabled", True))
         self.user_enabled = bool(config.get("memory.user_profile_enabled", True))
         self.store.ensure_files()             # MEMORY.md + USER.md always present + editable
+        self._session_id = ""
         # Frozen snapshot, captured at construction and re-captured by refresh_snapshot().
         # Freezing keeps the system prompt byte-stable for prefix-cache reuse WITHIN a
         # turn; `is_stale()` lets the loop re-capture as soon as the files actually change
         # (a memory-tool write, background review, or a hand edit) so saved facts surface
-        # on the very next turn instead of only on the next process/compaction.
-        self._snapshot = {"memory": self._sanitized("memory"), "user": self._read_user()}
+        # on the very next turn instead of only on the next process/compaction. External
+        # provider prompt blocks are frozen here too; per-turn recall belongs in prefetch().
+        self._snapshot = self._capture_snapshot()
         self._snapshot_mtimes = self._memory_mtimes()
 
     def _sanitized(self, target: str) -> str:
@@ -454,8 +456,21 @@ class MemoryManager:
         except OSError:
             pass                              # unwritable workspace — try again next refresh
 
+    def _capture_snapshot(self) -> dict[str, str]:
+        return {
+            "memory": self._sanitized("memory"),
+            "user": self._read_user(),
+            "external": self._external_prompt_block(),
+        }
+
+    def _external_prompt_block(self) -> str:
+        if not self.external:
+            return ""
+        ext = self._provider_call("system_prompt_block") or ""
+        return ext.strip() if isinstance(ext, str) else ""
+
     def refresh_snapshot(self) -> None:
-        self._snapshot = {"memory": self._sanitized("memory"), "user": self._read_user()}
+        self._snapshot = self._capture_snapshot()
         self._snapshot_mtimes = self._memory_mtimes()
 
     def build_context_block(self) -> str:
@@ -467,10 +482,9 @@ class MemoryManager:
             parts.append(mem)
         if self.user_enabled and self._snapshot.get("user"):
             parts.append(self._snapshot["user"])
-        if self.external:
-            ext = self._provider_call("system_prompt_block") or ""
-            if ext.strip():
-                parts.append(ext.strip())
+        ext = self._snapshot.get("external", "")
+        if ext:
+            parts.append(ext)
         if not parts:
             return ""
         return "<memory>\n" + "\n\n".join(parts) + "\n</memory>"
@@ -495,6 +509,8 @@ class MemoryManager:
     def initialize(self, session_id: str = "") -> None:
         self._session_id = session_id
         self._provider_call("initialize", session_id=session_id)
+        if self.external:
+            self._snapshot["external"] = self._external_prompt_block()
 
     def prefetch(self, query: str) -> str:
         """Relevant memory for THIS turn, fetched synchronously from the provider.

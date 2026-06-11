@@ -55,6 +55,37 @@ def test_manager_fans_out_every_hook(tmp_path, monkeypatch):
         assert hook in kinds, f"{hook} was never fanned out"
 
 
+def test_external_prompt_block_is_snapshotted_until_refresh(tmp_path, monkeypatch):
+    config = _cfg(tmp_path, monkeypatch)
+    from aegis.memory import MemoryManager
+
+    class SessionBoundProvider:
+        def __init__(self):
+            self.block = "before init"
+            self.prompt_calls = 0
+
+        def initialize(self, session_id="", **kw):
+            self.block = f"session-bound {session_id}"
+
+        def system_prompt_block(self):
+            self.prompt_calls += 1
+            return self.block
+
+    provider = SessionBoundProvider()
+    mm = MemoryManager(config, external=provider)
+    mm.initialize("sess-1")
+    block = mm.build_context_block()
+
+    assert "session-bound sess-1" in block
+    provider.block = "changed live"
+    assert "changed live" not in mm.build_context_block()
+    assert provider.prompt_calls == 2        # construction + initialize, not every render
+
+    mm.refresh_snapshot()
+    assert "changed live" in mm.build_context_block()
+    assert provider.prompt_calls == 3
+
+
 def test_hooks_are_fail_soft(tmp_path, monkeypatch):
     config = _cfg(tmp_path, monkeypatch)
     from aegis.memory import MemoryManager
