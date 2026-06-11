@@ -206,7 +206,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "compress": False,           # prune/summarize large tool outputs before writing
     },
     "learn": {
-        "auto": False,               # auto-review sessions on exit to propose memory/skill candidates
+        "auto": True,                # auto-review sessions on exit to propose memory/skill candidates
         "background": True,           # forked self-improvement review after substantial turns (on by default)
         "memory_every": 6,            # run a memory review every N turns
         "skill_every_iters": 5,       # run a skill review when a turn used >= N tool iterations
