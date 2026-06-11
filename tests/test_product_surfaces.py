@@ -106,6 +106,23 @@ def test_batch_command_records_batch_surface(monkeypatch, tmp_path):
     assert by_prompt["second"]["data"]["batch_index"] == 2
 
 
+def test_model_set_rejects_unknown_provider_with_suggestion(capsys):
+    from argparse import Namespace
+
+    from aegis.cli import main
+    from aegis.config import Config
+
+    cfg = Config.load()
+
+    rc = main.cmd_model(Namespace(action="set", provider="anthropc", model=None), cfg)
+
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "Unknown provider 'anthropc'" in err
+    assert "anthropic" in err
+    assert cfg.get("model.provider") != "anthropc"
+
+
 def test_chat_query_nonstream_prints_once(monkeypatch, capsys):
     from argparse import Namespace
 

@@ -11,6 +11,7 @@ API keys win when both are configured because OAuth scopes can be identity-only.
 
 from __future__ import annotations
 
+import difflib
 import os
 
 from dataclasses import dataclass, field
@@ -229,6 +230,15 @@ PROVIDERS: dict[str, ProviderSpec] = {
 # Runtime plugin registrations
 _PLUGINS: dict[str, ProviderSpec] = {}
 _PLUGIN_BOOTSTRAPPING = False
+_STRICT_MODEL_PRESET_PROVIDERS = {
+    "anthropic",
+    "codex",
+    "deepseek",
+    "google",
+    "groq",
+    "openai",
+    "openai-codex",
+}
 
 
 def register_provider(spec: ProviderSpec) -> None:
@@ -267,9 +277,9 @@ def _all_specs() -> dict[str, ProviderSpec]:
     return {**PROVIDERS, **_PLUGINS}
 
 
-def list_providers() -> list[str]:
-    ensure_plugin_providers()
-    return sorted(_all_specs().keys())
+def list_providers(config: cfg.Config | None = None) -> list[str]:
+    ensure_plugin_providers(config)
+    return sorted(_specs_for(config).keys())
 
 
 def _transport_for(api_mode: ApiMode) -> ProviderTransport:
@@ -300,6 +310,121 @@ def _custom_specs(config: cfg.Config) -> dict[str, ProviderSpec]:
     return out
 
 
+def _specs_for(config: cfg.Config | None = None) -> dict[str, ProviderSpec]:
+    specs = _all_specs()
+    if config is not None:
+        specs = {**specs, **_custom_specs(config)}
+    return specs
+
+
+def _preset_model_ids(provider_name: str) -> list[str]:
+    try:
+        from ..onboarding import MODEL_PRESETS
+    except Exception:  # noqa: BLE001
+        return []
+    return [str(value) for value, _label in MODEL_PRESETS.get(provider_name, []) if value]
+
+
+def _append_unique(items: list[str], value: str | None) -> None:
+    value = str(value or "").strip()
+    if value and value not in items:
+        items.append(value)
+
+
+def known_models_for(provider_name: str, config: cfg.Config | None = None) -> list[str]:
+    """Known/preset model ids for a provider, used for suggestions only."""
+    ensure_plugin_providers(config)
+    specs = _specs_for(config)
+    spec = specs.get(provider_name)
+    models: list[str] = []
+    if spec is not None:
+        _append_unique(models, spec.default_model)
+    for model in _preset_model_ids(provider_name):
+        _append_unique(models, model)
+    return models
+
+
+def _close_matches(value: str, choices: list[str]) -> list[str]:
+    return difflib.get_close_matches(str(value or ""), choices, n=3, cutoff=0.45)
+
+
+def validate_model_choice(
+    provider_name: str | None,
+    model: str | None,
+    config: cfg.Config | None = None,
+) -> dict:
+    """Validate provider/model selection without treating model presets as a hard allowlist."""
+    ensure_plugin_providers(config)
+    provider_name = str(provider_name or "").strip()
+    model = str(model or "").strip()
+    custom = _custom_specs(config) if config is not None else {}
+    specs = _specs_for(config)
+    spec = specs.get(provider_name)
+    base_url_override = bool(config is not None and config.get("model.base_url"))
+    result = {
+        "ok": True,
+        "provider": provider_name,
+        "model": model,
+        "provider_known": spec is not None,
+        "model_known": None,
+        "provider_suggestions": [],
+        "model_suggestions": [],
+    }
+    if spec is None and not base_url_override:
+        names = sorted(specs)
+        result.update({
+            "ok": False,
+            "message": (
+                f"Unknown provider '{provider_name}'. Known: {', '.join(names)}. "
+                "Set model.base_url for a custom endpoint."
+            ),
+            "provider_suggestions": _close_matches(provider_name, names),
+        })
+        return result
+
+    if spec is None:
+        result.update({"provider_known": False, "model_known": False, "custom_allowed": True})
+        return result
+
+    models = known_models_for(provider_name, config)
+    if not model:
+        result["model_known"] = False
+        return result
+    if model in models:
+        result["model_known"] = True
+        return result
+
+    custom_model_ok = (
+        provider_name in custom
+        or provider_name in _PLUGINS
+        or provider_name in {"lmstudio", "ollama", "openrouter", "vllm"}
+        or base_url_override
+        or provider_name not in _STRICT_MODEL_PRESET_PROVIDERS
+    )
+    result["model_known"] = False
+    if custom_model_ok or not models:
+        result["custom_allowed"] = True
+        return result
+
+    result.update({
+        "warning": f"Model '{model}' is not in the known {provider_name} preset list.",
+        "model_suggestions": _close_matches(model, models),
+    })
+    return result
+
+
+def model_validation_message(validation: dict | None) -> str:
+    if not validation:
+        return ""
+    text = validation.get("message") or validation.get("warning") or ""
+    suggestions = validation.get("provider_suggestions") or validation.get("model_suggestions") or []
+    if suggestions:
+        label = "Did you mean" if validation.get("provider_suggestions") else "Closest known models"
+        suffix = f"{label}: {', '.join(str(s) for s in suggestions)}."
+        text = f"{text} {suffix}".strip()
+    return text
+
+
 def _resolve_auth(spec: ProviderSpec, prefer: str | None = None) -> AuthProvider:
     """Pick OAuth or API key. ``prefer`` can force 'oauth' or 'apikey'."""
     if spec.api_mode == ApiMode.CODEX_APP_SERVER or spec.auth_scheme == "codex-cli":
@@ -327,7 +452,7 @@ def build_provider(config: cfg.Config, *, model: str | None = None, name: str | 
     """Resolve a concrete Provider from config (+ optional overrides)."""
     ensure_plugin_providers(config)
     name = name or config.get("model.provider", "anthropic")
-    specs = {**_all_specs(), **_custom_specs(config)}
+    specs = _specs_for(config)
 
     base_url_override = config.get("model.base_url")
     api_mode_override = config.get("model.api_mode")
@@ -346,10 +471,8 @@ def build_provider(config: cfg.Config, *, model: str | None = None, name: str | 
                 auth_scheme="none",
             )
         else:
-            raise ValueError(
-                f"Unknown provider '{name}'. Known: {', '.join(sorted(specs))}. "
-                f"Set model.base_url for a custom endpoint."
-            )
+            validation = validate_model_choice(name, model or config.get("model.default", ""), config)
+            raise ValueError(model_validation_message(validation))
 
     api_mode = ApiMode(api_mode_override) if api_mode_override else spec.api_mode
     base_url = base_url_override or spec.base_url
@@ -413,9 +536,9 @@ def build_aux_provider(
     return build_provider(config)
 
 
-def get_spec(name: str) -> ProviderSpec | None:
-    ensure_plugin_providers()
-    return _all_specs().get(name)
+def get_spec(name: str, config: cfg.Config | None = None) -> ProviderSpec | None:
+    ensure_plugin_providers(config)
+    return _specs_for(config).get(name)
 
 
 def auth_for(name: str, prefer: str | None = None) -> AuthProvider:
@@ -547,9 +670,10 @@ def provider_report(config: cfg.Config) -> dict:
     builtins = dict(PROVIDERS)
     plugins = dict(_PLUGINS)
     custom = _custom_specs(config)
-    specs = {**builtins, **plugins, **custom}
+    specs = _specs_for(config)
     configured_provider = config.get("model.provider", "anthropic")
     configured_model = config.get("model.default")
+    configured_validation = validate_model_choice(configured_provider, configured_model, config)
 
     active: dict
     chain: list[dict] = []
@@ -560,6 +684,10 @@ def provider_report(config: cfg.Config) -> dict:
             role="primary",
             configured={"provider": configured_provider, "model": configured_model or ""},
         )
+        active["model_validation"] = configured_validation
+        validation_msg = model_validation_message(configured_validation)
+        if validation_msg and configured_validation.get("warning"):
+            active["warning"] = validation_msg
         chain.append(active)
     except Exception as exc:  # noqa: BLE001
         active = {
@@ -567,6 +695,7 @@ def provider_report(config: cfg.Config) -> dict:
             "name": configured_provider,
             "model": configured_model or "",
             "error": f"{type(exc).__name__}: {exc}",
+            "model_validation": configured_validation,
             "configured": {"provider": configured_provider, "model": configured_model or ""},
         }
 
@@ -575,6 +704,7 @@ def provider_report(config: cfg.Config) -> dict:
         configured = item if isinstance(item, dict) else {}
         provider_name = configured.get("provider") or ""
         model = configured.get("model") or ""
+        validation = validate_model_choice(provider_name or configured_provider, model or configured_model, config)
         try:
             resolved = build_provider(config, model=model or None, name=provider_name or None)
             row = _provider_status(
@@ -582,6 +712,10 @@ def provider_report(config: cfg.Config) -> dict:
                 role=f"fallback:{index}",
                 configured={"provider": provider_name, "model": model},
             )
+            row["model_validation"] = validation
+            validation_msg = model_validation_message(validation)
+            if validation_msg and validation.get("warning"):
+                row["warning"] = validation_msg
             fallbacks.append(row)
             chain.append(row)
         except Exception as exc:  # noqa: BLE001
@@ -590,6 +724,7 @@ def provider_report(config: cfg.Config) -> dict:
                 "name": provider_name,
                 "model": model,
                 "error": f"{type(exc).__name__}: {exc}",
+                "model_validation": validation,
                 "configured": {"provider": provider_name, "model": model},
             })
 
@@ -613,6 +748,11 @@ def provider_report(config: cfg.Config) -> dict:
             row["capability_summary"] = _capability_summary(capabilities)
         if provider_name not in specs and not config.get("model.base_url"):
             row["warning"] = "unknown provider"
+        validation = validate_model_choice(provider_name, model, config)
+        row["model_validation"] = validation
+        validation_msg = model_validation_message(validation)
+        if validation_msg:
+            row["warning"] = validation_msg
         routing.append(row)
 
     provider_catalog = []

@@ -1062,8 +1062,20 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                     pass
             log_exc("provider.complete failed")
             msg = f"{type(e).__name__}: {e}"
+            try:
+                from ..providers.registry import model_validation_message, validate_model_choice
+                validation = validate_model_choice(
+                    getattr(agent.provider, "name", ""),
+                    getattr(agent.provider, "model", ""),
+                    agent.config,
+                )
+                hint = model_validation_message(validation)
+            except Exception:  # noqa: BLE001
+                hint = ""
             low = str(e).lower()
-            if "not a chat model" in low or ("model" in low and ("404" in low or "does not exist" in low)):
+            if hint:
+                msg += f"\n  → {hint}"
+            elif "not a chat model" in low or ("model" in low and ("404" in low or "does not exist" in low)):
                 msg += ("\n  → That model isn't available on this endpoint/auth. Pick another with "
                         "`aegis model set <provider> <model>` (e.g. gpt-5.2-chat-latest for an API "
                         "key), or use the `codex` provider + `codex login` for ChatGPT-subscription "

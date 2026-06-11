@@ -94,17 +94,24 @@ def cmd_model(args, config: Config) -> int:
     from ..providers import registry
 
     if args.action == "list":
-        for name in registry.list_providers():
-            spec = registry.get_spec(name)
+        for name in registry.list_providers(config):
+            spec = registry.get_spec(name, config)
             _print(f"  {name:<12} {spec.default_model:<40} ({spec.context_length:,} ctx)")
         return 0
     if args.action == "set":
         if not args.provider:
             return _die("usage: aegis model set <provider> [<model>]")
-        spec = registry.get_spec(args.provider)
+        spec = registry.get_spec(args.provider, config)
+        model = args.model or (spec.default_model if spec else "default")
+        validation = registry.validate_model_choice(args.provider, model, config)
+        if not validation.get("ok", True):
+            return _die(registry.model_validation_message(validation))
         config.set("model.provider", args.provider)
-        config.set("model.default", args.model or (spec.default_model if spec else "default"))
+        config.set("model.default", model)
         _print(f"model -> {config.get('model.provider')}/{config.get('model.default')}")
+        warning = registry.model_validation_message(validation)
+        if warning and validation.get("warning"):
+            _print(f"warning: {warning}")
         return 0
     # show
     report = registry.provider_report(config)
@@ -122,6 +129,9 @@ def cmd_model(args, config: Config) -> int:
         _print(f"auth:      {auth.get('description', '')} ({'ready' if auth.get('available') else 'missing'})")
         if active.get("base_url"):
             _print(f"base_url:  {active.get('base_url')}")
+    warning = registry.model_validation_message(active.get("model_validation"))
+    if warning and active.get("warning"):
+        _print(f"model warning: {warning}")
     fallbacks = report.get("fallbacks") or []
     if fallbacks:
         _print("fallbacks:")

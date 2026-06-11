@@ -803,6 +803,52 @@ def test_provider_report_exposes_chain_routing_and_catalog():
     assert openai["capabilities"]["images"] is True
 
 
+def test_model_validation_warns_with_suggestions_without_blocking_custom():
+    from aegis.config import Config
+    from aegis.providers.registry import (
+        model_validation_message,
+        provider_report,
+        validate_model_choice,
+    )
+
+    cfg = Config.load()
+    typo = validate_model_choice("anthropic", "claude-sonet-4-6", cfg)
+    assert typo["ok"] is True
+    assert typo["model_known"] is False
+    assert "claude-sonnet-4-6" in typo["model_suggestions"]
+    assert "Closest known models" in model_validation_message(typo)
+
+    cfg.data["custom_providers"] = [
+        {
+            "name": "localtest",
+            "base_url": "http://local.test/v1",
+            "api_mode": "chat_completions",
+            "context_length": 70_000,
+        }
+    ]
+    custom = validate_model_choice("localtest", "fresh-local-model", cfg)
+    assert custom["ok"] is True
+    assert custom["custom_allowed"] is True
+    assert not custom.get("warning")
+
+    cfg.data["model"] = {"provider": "anthropic", "default": "claude-sonet-4-6"}
+    report = provider_report(cfg)
+    assert "claude-sonnet-4-6" in report["active"]["warning"]
+    assert report["active"]["model_validation"]["model_suggestions"]
+
+
+def test_model_validation_rejects_unknown_provider_with_suggestion():
+    from aegis.config import Config
+    from aegis.providers.registry import model_validation_message, validate_model_choice
+
+    validation = validate_model_choice("anthropc", "claude-sonnet-4-6", Config.load())
+
+    assert validation["ok"] is False
+    assert validation["provider_known"] is False
+    assert "anthropic" in validation["provider_suggestions"]
+    assert "Unknown provider 'anthropc'" in model_validation_message(validation)
+
+
 def test_openai_codex_builds_oauth_responses_provider():
     from aegis.config import Config
     from aegis.providers import build_provider

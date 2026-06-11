@@ -1722,13 +1722,30 @@ def make_handler(config: Config):
                     return self._json({"ok": True})
                 return self._json({"error": "missing key"})
             if ppath == "/api/models":
+                from .providers import registry
                 prov, model = body.get("provider"), body.get("model")
+                target_provider = prov or config.get("model.provider")
+                target_model = model or config.get("model.default")
+                validation = registry.validate_model_choice(target_provider, target_model, config)
+                if not validation.get("ok", True):
+                    return self._json({
+                        "ok": False,
+                        "error": registry.model_validation_message(validation),
+                        "validation": validation,
+                    })
                 if prov:
                     config.set("model.provider", prov)
                 if model:
                     config.set("model.default", model)
+                validation = registry.validate_model_choice(
+                    config.get("model.provider"),
+                    config.get("model.default"),
+                    config,
+                )
                 return self._json({"ok": True, "provider": config.get("model.provider"),
-                                   "model": config.get("model.default")})
+                                   "model": config.get("model.default"),
+                                   "warning": registry.model_validation_message(validation),
+                                   "validation": validation})
             if ppath == "/api/keys":
                 from .config import set_env_var
                 if body.get("key"):
