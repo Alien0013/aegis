@@ -319,7 +319,13 @@ class MemoryManager:
             result = self.store.add(target, args["content"])
             if result.startswith(("memory full", "refused")):
                 return ToolResult.error(result)      # the model must consolidate / rephrase
-            return ToolResult.ok(f"{result} — now in context from your next message on.",
+            if (self.config.get("memory.refresh", "session") or "session") == "message":
+                note = "now in context from your next message on."
+            else:                                    # session mode: durable now, loads later
+                note = ("saved durably — it enters the prompt on the next session "
+                        "(or at the next compaction). Keep using it from this "
+                        "conversation's own context meanwhile.")
+            return ToolResult.ok(f"{result} — {note}",
                                  display=f"remembered in memories/{_FILES[target]}")
         if action == "replace":
             if not args.get("match") or not args.get("content"):

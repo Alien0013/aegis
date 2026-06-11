@@ -317,11 +317,17 @@ def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
 def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
     """Drive one user turn to completion. Returns the final assistant message."""
     emit = on_event or (lambda e: None)
-    # Surface memory saved on a previous turn: if the files changed since the snapshot
-    # (memory tool, background review, or a hand edit), rebuild the system prompt now so
-    # the agent actually remembers. Cheap mtime check; rebuilds only on changed turns,
-    # so the prefix cache survives every turn where nothing changed.
-    if agent.memory is not None and agent.memory.is_stale():
+    # Memory freshness policy (memory.refresh):
+    #   "session" (default, Hermes-style) — the snapshot stays FROZEN for the whole
+    #     session so the prompt prefix is byte-stable and the cache never thrashes,
+    #     no matter how often memory is written. Saves are durable on disk at once
+    #     and load on the next session — or earlier, for free, whenever something
+    #     else already rebuilds the prompt (compaction, session split, /model).
+    #   "message" — mtime check each turn; a changed file rebuilds the prompt so
+    #     facts apply from the very next message (one cache miss per write).
+    refresh_mode = (agent.config.get("memory.refresh", "session") or "session")
+    if (refresh_mode == "message" and agent.memory is not None
+            and agent.memory.is_stale()):
         agent.refresh_volatile()
     else:
         agent.ensure_system_prompt()

@@ -212,3 +212,34 @@ def test_memory_add_dedups_near_duplicates(tmp_path, monkeypatch):
     # a genuinely different fact still lands
     assert "remembered" in store.add("user", "TJ prefers dark mode.")
     assert len(store.entries("user")) == 2
+
+
+def test_refresh_policy_session_keeps_snapshot_frozen(monkeypatch):
+    """Default (Hermes-style): mid-session memory writes must NOT rebuild the prompt;
+    'message' mode must. Cache stability vs freshness is config-chosen."""
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.session import Session
+    from aegis.types import Message
+
+    def run_one(mode):
+        cfg = Config.load()
+        cfg.data["memory"]["refresh"] = mode
+        agent = Agent.create(cfg, session=Session.create())
+        monkeypatch.setattr(type(agent.memory), "is_stale", lambda self: True)
+        calls = {"refresh": 0}
+        monkeypatch.setattr(agent, "refresh_volatile", lambda: calls.__setitem__("refresh", calls["refresh"] + 1))
+        monkeypatch.setattr("aegis.agent.agent.run_conversation",
+                            lambda a, on_event=None: Message.assistant("ok"))
+        from aegis.agent import loop
+        # call the real loop entry just far enough to hit the policy gate
+        monkeypatch.setattr(loop, "_provider_complete",
+                            lambda *a, **k: (_ for _ in ()).throw(StopIteration))
+        try:
+            loop.run_conversation(agent)
+        except (StopIteration, RuntimeError, Exception):
+            pass
+        return calls["refresh"]
+
+    assert run_one("session") == 0      # frozen: stale memory does not rebuild mid-session
+    assert run_one("message") >= 1      # message mode: rebuilds so the fact applies now

@@ -148,6 +148,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "enabled": True,
         "user_profile_enabled": True,
         "provider": "",              # "" builtin only; or "mem0" | "jsonl"
+        "refresh": "session",        # session = snapshot frozen per session (cache-stable,
+                                     #   Hermes-style; new facts load next session/compaction)
+                                     # message = rebuild prompt when memory files change
+                                     #   (facts apply next message; one cache miss per write)
     },
     "tools": {
         "exec_mode": "auto",         # deny | allowlist | ask | smart | auto | full
