@@ -153,6 +153,18 @@ def make_handler(config: Config):
                 or self.headers.get("X-Aegis-Session")
                 or None
             )
+            provider_name = (
+                metadata.get("provider")
+                or body.get("provider")
+                or self.headers.get("X-Aegis-Provider")
+                or None
+            )
+            cwd = (
+                metadata.get("cwd")
+                or body.get("cwd")
+                or self.headers.get("X-Aegis-Cwd")
+                or None
+            )
 
             cid = new_id("chatcmpl")
 
@@ -162,6 +174,8 @@ def make_handler(config: Config):
                     session_id=session_id,
                     history=history,
                     model=model,
+                    provider_name=provider_name,
+                    cwd=cwd,
                     stream=False,
                     surface="serve",
                     meta={"request_id": cid},
@@ -208,6 +222,8 @@ def make_handler(config: Config):
                 session_id=session_id,
                 history=history,
                 model=model,
+                provider_name=provider_name,
+                cwd=cwd,
                 stream=True,
                 surface="serve",
                 meta={"request_id": cid},

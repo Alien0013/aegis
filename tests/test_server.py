@@ -116,7 +116,11 @@ def test_openai_chat_completions_http_nonstream_records_run_metadata(monkeypatch
     try:
         status, data = _request(port, "POST", "/v1/chat/completions", {
             "model": "served-model",
-            "metadata": {"session_id": "serve:http"},
+            "metadata": {
+                "session_id": "serve:http",
+                "provider": "served-provider",
+                "cwd": str(tmp_path / "project"),
+            },
             "messages": [
                 {"role": "system", "content": "stay terse"},
                 {"role": "user", "content": "hi"},
@@ -140,6 +144,8 @@ def test_openai_chat_completions_http_nonstream_records_run_metadata(monkeypatch
     assert call["stream"] is False
     assert call["session_id"] == "serve:http"
     assert call["model"] == "served-model"
+    assert call["provider_name"] == "served-provider"
+    assert call["cwd"] == str(tmp_path / "project")
 
 
 def test_openai_chat_completions_stream_sse_contract(monkeypatch, tmp_path):
@@ -153,6 +159,8 @@ def test_openai_chat_completions_stream_sse_contract(monkeypatch, tmp_path):
     try:
         status, data = _request(port, "POST", "/v1/chat/completions", {
             "model": "served-model",
+            "provider": "stream-provider",
+            "cwd": str(tmp_path / "stream-project"),
             "stream": True,
             "session_id": "serve:stream",
             "messages": [{"role": "user", "content": "hi"}],
@@ -173,3 +181,5 @@ def test_openai_chat_completions_stream_sse_contract(monkeypatch, tmp_path):
     assert chunks[-1]["metadata"]["session_id"] == "serve:stream"
     assert chunks[-1]["metadata"]["trace_id"] == "trace_http"
     assert _FakeRunner.calls[0]["stream"] is True
+    assert _FakeRunner.calls[0]["provider_name"] == "stream-provider"
+    assert _FakeRunner.calls[0]["cwd"] == str(tmp_path / "stream-project")
