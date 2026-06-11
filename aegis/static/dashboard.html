@@ -464,11 +464,15 @@ async function openAgent(id){
 
 PAGES.chat=()=>{
   const savedCwd=sessionStorage.aegisChatCwd||'';
-  V.innerHTML='<div class="bar"><input id="ccwd" placeholder="working directory for this chat" value="'+esc(savedCwd)+'"><button class="btn ghost" id="ccwdclear">Clear</button></div>'+
+  const savedProvider=sessionStorage.aegisChatProvider||'',savedModel=sessionStorage.aegisChatModel||'';
+  V.innerHTML='<div class="bar"><input id="ccwd" placeholder="working directory for this chat" value="'+esc(savedCwd)+'">'+
+    '<input id="cprov" placeholder="provider" value="'+esc(savedProvider)+'" style="flex:0 0 170px">'+
+    '<input id="cmodel" placeholder="model" value="'+esc(savedModel)+'" style="flex:0 0 220px">'+
+    '<button class="btn ghost" id="cctxclear">Clear</button></div>'+
     '<div class="chatwrap"><div id="clog"></div>'+
     '<div class="chatbar"><textarea id="cin" rows="1" placeholder="Message AEGIS…  (Enter to send · Shift+Enter for newline)"></textarea>'+
     '<button class="btn" id="csend">Send</button><button class="btn ghost" id="cnew" title="new conversation">＋</button></div></div>';
-  const log=$('#clog'),inp=$('#cin'),cwdInp=$('#ccwd');let sid=sessionStorage.aegisChatSid||null;
+  const log=$('#clog'),inp=$('#cin'),cwdInp=$('#ccwd'),providerInp=$('#cprov'),modelInp=$('#cmodel');let sid=sessionStorage.aegisChatSid||null;
   function add(role,text,raw){const w=document.createElement('div');w.className='msg '+role;
     w.innerHTML='<div class="av">'+(role==='user'?'You':'Æ')+'</div><div class="bub">'+(raw?text:md(text))+'</div>';
     log.appendChild(w);log.scrollTop=log.scrollHeight;return w}
@@ -496,19 +500,24 @@ PAGES.chat=()=>{
     add('user',m);
     const w=add('assistant','<span class="typing"><i></i><i></i><i></i></span>',true);
     const cwd=cwdInp.value.trim();if(cwd)sessionStorage.aegisChatCwd=cwd;else sessionStorage.removeItem('aegisChatCwd');
+    const provider=providerInp.value.trim(),model=modelInp.value.trim();
+    if(provider)sessionStorage.aegisChatProvider=provider;else sessionStorage.removeItem('aegisChatProvider');
+    if(model)sessionStorage.aegisChatModel=model;else sessionStorage.removeItem('aegisChatModel');
+    const payload={message:m,session_id:sid,cwd:cwd,provider:provider,model:model};
     const state={events:[],reply:'',session_id:sid||'',trace_id:'',turn_id:'',run_id:'',cwd:cwd};
-    try{await postStream('chat/stream',{message:m,session_id:sid,cwd:cwd},ev=>{
+    try{await postStream('chat/stream',payload,ev=>{
       if(ev.type==='start'){state.session_id=ev.session_id||state.session_id;state.cwd=ev.cwd||state.cwd}
       else if(ev.type==='event'&&ev.event){state.events.push(ev.event);renderChatBubble(w,state,true)}
       else if(ev.type==='final'||ev.type==='error'){Object.assign(state,ev)}
     });sid=state.session_id;sessionStorage.aegisChatSid=sid;renderChatBubble(w,state,false);
-    }catch(e){try{const r=await post('chat',{message:m,session_id:sid,cwd:cwd});Object.assign(state,r);sid=r.session_id;sessionStorage.aegisChatSid=sid;renderChatBubble(w,state,false)}
+    }catch(e){try{const r=await post('chat',payload);Object.assign(state,r);sid=r.session_id;sessionStorage.aegisChatSid=sid;renderChatBubble(w,state,false)}
       catch(_){w.querySelector('.bub').innerHTML='<span class="err">request failed — is a provider configured?</span>'}}
     log.scrollTop=log.scrollHeight;
   }
   $('#csend').onclick=send;
   $('#cnew').onclick=()=>{sid=null;sessionStorage.removeItem('aegisChatSid');log.innerHTML='';toast('new conversation')};
-  $('#ccwdclear').onclick=()=>{cwdInp.value='';sessionStorage.removeItem('aegisChatCwd');toast('chat cwd cleared')};
+  $('#cctxclear').onclick=()=>{cwdInp.value='';providerInp.value='';modelInp.value='';
+    sessionStorage.removeItem('aegisChatCwd');sessionStorage.removeItem('aegisChatProvider');sessionStorage.removeItem('aegisChatModel');toast('chat context cleared')};
   inp.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}};
   inp.oninput=()=>{inp.style.height='auto';inp.style.height=Math.min(140,inp.scrollHeight)+'px'};
   inp.focus();

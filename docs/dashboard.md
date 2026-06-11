@@ -43,7 +43,8 @@ The dashboard exposes read-only cockpit APIs used by the no-build frontend:
   `trace_id`, `turn_id`, `session_id`, the final `reply`, and a compact event
   summary so the Chat page can link directly into the run, trace, and session
   views after each turn. Send `cwd`, `project`, or `worktree` to run the turn
-  in that directory and record project/worktree metadata in run history.
+  in that directory and record project/worktree metadata in run history; send
+  `provider`/`provider_name` and `model` to steer only that dashboard turn.
 - `POST /api/chat/stream` — same chat runner over Server-Sent Events. The
   dashboard uses it to show iteration/tool/reasoning progress in the assistant
   bubble while the turn is still running, with `/api/chat` as a compatibility

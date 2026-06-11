@@ -1842,6 +1842,21 @@ def test_dashboard_agents_page_has_active_runs_section():
     assert "data-runlink" in html
 
 
+def test_dashboard_chat_page_sends_runtime_controls():
+    from importlib import resources
+
+    html = (resources.files("aegis") / "static" / "dashboard.html").read_text(encoding="utf-8")
+
+    assert "aegisChatProvider" in html
+    assert "aegisChatModel" in html
+    assert 'id="cprov"' in html
+    assert 'id="cmodel"' in html
+    assert "provider:provider" in html
+    assert "model:model" in html
+    assert "postStream('chat/stream',payload" in html
+    assert "post('chat',payload" in html
+
+
 def test_dashboard_run_detail_uses_configured_trace_path(tmp_path):
     from aegis.config import Config
     from aegis.dashboard import _dashboard_run_detail
