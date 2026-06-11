@@ -116,7 +116,8 @@ def _is_summary_note(m: Message) -> bool:
     return m.role == "assistant" and bool(m.content) and m.content.startswith(_SUMMARY_MARKER)
 
 
-def _fallback_summary(middle: list[Message], prior: list[str]) -> str:
+def _fallback_summary(middle: list[Message], prior: list[str],
+                      pre_compress_context: str = "") -> str:
     """Deterministic digest when the summarizer call fails — keep continuity anchors
     (prior summary, file/path mentions, the most recent user request) instead of losing
     the whole dropped window."""
@@ -130,6 +131,8 @@ def _fallback_summary(middle: list[Message], prior: list[str]) -> str:
     parts = ["(automatic summary unavailable — deterministic anchors preserved)"]
     if prior:
         parts.append("Carried-forward prior summary:\n" + prior[-1])
+    if pre_compress_context:
+        parts.append("Memory provider pre-compression notes:\n" + pre_compress_context)
     if files:
         parts.append("Files / paths referenced in the dropped turns: " + ", ".join(files[:20]))
     if last_user:
@@ -154,7 +157,8 @@ _SUMMARY_INSTRUCTION = (
 
 def compress(messages: list[Message], provider, *, preserve_first: int = 3,
              preserve_last: int = 20, max_tool_tokens: int = 600,
-             focus: str = "", tail_tokens: int | None = None) -> list[Message]:
+             focus: str = "", tail_tokens: int | None = None,
+             pre_compress_context: str = "") -> list[Message]:
     system_msgs = [m for m in messages if m.role == "system"]
     convo = [m for m in messages if m.role != "system"]
     tail_start = _tail_start(convo, preserve_last, tail_tokens)
@@ -180,11 +184,16 @@ def compress(messages: list[Message], provider, *, preserve_first: int = 3,
     prior = [m.content[len(_SUMMARY_MARKER):].strip() for m in middle if _is_summary_note(m)]
     new_middle = [m for m in middle if not _is_summary_note(m)]
 
+    pre_compress_context = (pre_compress_context or "").strip()
+
     if not new_middle:
         # The middle was only prior summaries — keep the most recent, drop the rest. No call.
         if not prior:
             return system_msgs + head + tail
-        note = Message.assistant(_SUMMARY_MARKER + "\n" + prior[-1])
+        body = prior[-1]
+        if pre_compress_context:
+            body = f"{body}\n\nMemory provider pre-compression notes:\n{pre_compress_context}"
+        note = Message.assistant(_SUMMARY_MARKER + "\n" + body)
         return system_msgs + head + [note] + tail
 
     transcript = "\n".join(
@@ -193,13 +202,19 @@ def compress(messages: list[Message], provider, *, preserve_first: int = 3,
     )
     instruction = _SUMMARY_INSTRUCTION + (
         f"\nFOCUS: weight the summary toward anything related to: {focus}" if focus else "")
+    prelude = ""
+    if pre_compress_context:
+        prelude = (
+            "MEMORY PROVIDER PRE-COMPRESSION NOTES:\n"
+            f"{pre_compress_context}\n\n"
+        )
     if prior:
         instruction += ("\nA PRIOR SUMMARY is included first — carry EVERY fact in it "
                         "forward, then merge in the new material; output one consolidated "
                         "summary, not two.")
-        user_content = f"PRIOR SUMMARY:\n{prior[-1]}\n\nNEW MATERIAL:\n{transcript}"
+        user_content = f"{prelude}PRIOR SUMMARY:\n{prior[-1]}\n\nNEW MATERIAL:\n{transcript}"
     else:
-        user_content = transcript
+        user_content = f"{prelude}{transcript}"
     user_content = user_content[:_summary_input_budget(provider)]   # fit the aux model
 
     try:
@@ -211,7 +226,7 @@ def compress(messages: list[Message], provider, *, preserve_first: int = 3,
         if not summary:
             raise ValueError("empty summary")
     except Exception:  # noqa: BLE001 — keep continuity anchors instead of losing the window
-        summary = _fallback_summary(new_middle, prior)
+        summary = _fallback_summary(new_middle, prior, pre_compress_context)
 
     note = Message.assistant(_SUMMARY_MARKER + "\n" + summary)
     return system_msgs + head + [note] + tail

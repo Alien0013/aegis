@@ -75,16 +75,42 @@ def test_prior_summary_is_folded_not_resummarized():
     assert len(notes) == 1 and "CONSOLIDATED" in notes[0].content
 
 
+def test_pre_compress_context_is_summary_input_only():
+    from aegis.agent.compaction import compress
+
+    msgs = _convo(8, body="middle material ")
+    fp = FakeProvider(reply="SUMMARY WITHOUT RAW NOTE")
+    out = compress(
+        msgs,
+        fp,
+        preserve_first=1,
+        tail_tokens=1,
+        pre_compress_context="keep provider-only fact",
+    )
+
+    assert fp.seen_user is not None
+    assert fp.seen_user.startswith("MEMORY PROVIDER PRE-COMPRESSION NOTES:")
+    assert "keep provider-only fact" in fp.seen_user
+    assert all("keep provider-only fact" not in (m.content or "") for m in out)
+
+
 def test_middle_all_prior_summaries_keeps_latest_without_call():
     from aegis.agent.compaction import compress, _SUMMARY_MARKER
     msgs = [Message.system("s"), Message.user("u0"), Message.assistant("a0"),
             Message.assistant(f"{_SUMMARY_MARKER}\nold facts"),
             Message.user("recent"), Message.assistant("recent reply")]
     fp = FakeProvider()
-    out = compress(msgs, fp, preserve_first=2, tail_tokens=50)
+    out = compress(
+        msgs,
+        fp,
+        preserve_first=2,
+        preserve_last=2,
+        pre_compress_context="provider note",
+    )
     assert fp.seen_user is None                      # no LLM call needed
     notes = [m for m in out if (m.content or "").startswith(_SUMMARY_MARKER)]
     assert len(notes) == 1 and "old facts" in notes[0].content
+    assert "provider note" in notes[0].content
 
 
 # --- deterministic failure fallback -----------------------------------------
@@ -95,9 +121,16 @@ def test_summary_failure_keeps_anchors():
         msgs.append(Message.assistant(
             f"editing src/module_{i}.py and config.yaml with a fair amount of detail here"))
         msgs.append(Message.user(f"step {i} keep going with more words to fill the budget"))
-    out = compress(msgs, FakeProvider(reply=None), preserve_first=1, tail_tokens=30)
+    out = compress(
+        msgs,
+        FakeProvider(reply=None),
+        preserve_first=1,
+        tail_tokens=30,
+        pre_compress_context="provider fallback note",
+    )
     note = next(m for m in out if (m.content or "").startswith("[Earlier"))
     assert "deterministic anchors" in note.content
+    assert "provider fallback note" in note.content
     assert "loop.py" in note.content or "config.yaml" in note.content   # anchors survived
 
 

@@ -526,17 +526,36 @@ def _tail_token_budget(agent, comp: dict, *, tight: bool = False) -> int:
     return int(ctx * frac) if ctx > 0 else (3000 if tight else 6000)
 
 
+def _memory_pre_compress_context(agent, session) -> str:
+    if not agent.memory:
+        return ""
+    try:
+        agent.memory.refresh_snapshot()
+        note = agent.memory.on_pre_compress(session.messages)
+    except Exception:  # noqa: BLE001
+        return ""
+    return note.strip() if isinstance(note, str) else ""
+
+
 def _force_compact(agent, session):
     """Compress unconditionally — recovery from a provider context_overflow. Tighter tail than
     the proactive path so the request actually shrinks below the window."""
     comp = agent.config.get("agent.compression", {}) or {}
+    engine = _engine(agent)
+    pre_compress_context = _memory_pre_compress_context(agent, session)
+    try:
+        from .context_engine import call_hook
+        call_hook(engine, "on_pre_compress", agent, session)
+    except Exception:  # noqa: BLE001
+        pass
     before_n = len(session.messages)
     before_tok = compaction.estimated_tokens(session.messages)
-    session.messages = governance.normalize(_engine(agent).compress(
+    session.messages = governance.normalize(engine.compress(
         session.messages, _summarizer(agent),
         preserve_first=comp.get("preserve_first", 3),
         tail_tokens=_tail_token_budget(agent, comp, tight=True),
         max_tool_tokens=min(400, comp.get("max_tool_tokens", 600)),
+        pre_compress_context=pre_compress_context,
     ))
     after_tok = compaction.estimated_tokens(session.messages)
     from ..util import now_iso
@@ -577,12 +596,7 @@ def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
         return session
     emit({"type": "compacting"})
     comp = agent.config.get("agent.compression", {}) or {}
-    if agent.memory:                       # flush memory so the summary reflects latest facts
-        try:
-            agent.memory.refresh_snapshot()
-            agent.memory.on_pre_compress(session.messages)   # provider pre-compression hook
-        except Exception:  # noqa: BLE001
-            pass
+    pre_compress_context = _memory_pre_compress_context(agent, session)
     try:
         from .context_engine import call_hook
         call_hook(engine, "on_pre_compress", agent, session)
@@ -595,6 +609,7 @@ def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
         preserve_first=comp.get("preserve_first", 3),
         tail_tokens=_tail_token_budget(agent, comp),   # token-budgeted tail, scales with the window
         max_tool_tokens=comp.get("max_tool_tokens", 600),
+        pre_compress_context=pre_compress_context,
     )
     after_tok = compaction.estimated_tokens(compressed)
     # If we're STILL over the threshold after compacting, the preserved tail is the floor —
@@ -661,11 +676,7 @@ def compact_now(agent, session=None, emit: OnEvent | None = None, *,
     engine = _engine(agent)
     emit({"type": "compacting", "reason": reason})
     comp = agent.config.get("agent.compression", {}) or {}
-    if agent.memory:
-        try:
-            agent.memory.refresh_snapshot()
-        except Exception:  # noqa: BLE001
-            pass
+    pre_compress_context = _memory_pre_compress_context(agent, session)
     try:
         from .context_engine import call_hook
         call_hook(engine, "on_pre_compress", agent, session)
@@ -684,6 +695,8 @@ def compact_now(agent, session=None, emit: OnEvent | None = None, *,
         kwargs["tail_tokens"] = _tail_token_budget(agent, comp)
     if focus:
         kwargs["focus"] = focus
+    if pre_compress_context:
+        kwargs["pre_compress_context"] = pre_compress_context
     compressed = governance.normalize(engine.compress(session.messages, _summarizer(agent), **kwargs))
     after_tok = compaction.estimated_tokens(compressed)
 

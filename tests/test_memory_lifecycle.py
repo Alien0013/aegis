@@ -166,6 +166,101 @@ def test_prefetch_is_wire_only_not_persisted(tmp_path, monkeypatch):
     assert all("<retrieved_memory>" not in row["content"] for row in recent)
 
 
+def test_pre_compress_note_reaches_manual_summary_input(tmp_path, monkeypatch):
+    config = _cfg(tmp_path, monkeypatch)
+    from aegis.agent.agent import Agent
+    from aegis.agent.loop import compact_now
+    from aegis.memory import MemoryManager
+    from aegis.session import Session
+    from aegis.types import LLMResponse, Message
+
+    class P:
+        def on_pre_compress(self, _messages):
+            return "MANUAL MEMORY FACT"
+
+    class Provider:
+        context_length = 200_000
+        name = "fake"
+        model = "fake"
+        api_mode = None
+        auth = None
+
+        def __init__(self):
+            self.summary_input = ""
+
+        def complete(self, messages, **_kwargs):
+            self.summary_input = messages[-1].content
+            return LLMResponse(text="summary without raw memory note")
+
+    provider = Provider()
+    session = Session.create()
+    session.messages = [Message.system("s")]
+    for i in range(8):
+        session.messages.append(Message.user(f"old request {i}"))
+        session.messages.append(Message.assistant(f"old answer {i}"))
+    agent = Agent(config=config, provider=provider, session=session,
+                  memory=MemoryManager(config, external=P()), cwd=tmp_path)
+
+    compact_now(agent, preserve_last=1)
+
+    assert "MANUAL MEMORY FACT" in provider.summary_input
+    assert all("MANUAL MEMORY FACT" not in (m.content or "") for m in agent.session.messages)
+
+
+def test_pre_compress_note_passed_to_context_engine(tmp_path, monkeypatch):
+    config = _cfg(tmp_path, monkeypatch)
+    from aegis.agent import context_engine as ce
+    from aegis.agent.agent import Agent
+    from aegis.memory import MemoryManager
+    from aegis.session import Session
+    from aegis.types import LLMResponse, Message
+
+    captured = {}
+
+    class CaptureEngine:
+        name = "capture-memory-precompress"
+
+        def __init__(self):
+            self.done = False
+
+        def should_compress(self, _messages, _context_length, _overhead_tokens=0):
+            return not self.done
+
+        def compress(self, messages, _provider, **kw):
+            self.done = True
+            captured["pre_compress_context"] = kw.get("pre_compress_context")
+            return list(messages)
+
+        def tools(self):
+            return []
+
+    class P:
+        def on_pre_compress(self, _messages):
+            return "AUTOMATIC MEMORY FACT"
+
+    class Provider:
+        context_length = 200_000
+        name = "fake"
+        model = "fake"
+        api_mode = None
+        auth = None
+
+        def complete(self, _messages, **_kwargs):
+            return LLMResponse(text="done")
+
+    ce.register("capture-memory-precompress", CaptureEngine)
+    config.data["agent"]["context_engine"] = "capture-memory-precompress"
+    session = Session.create()
+    session.messages = [Message.user("old")]
+    agent = Agent(config=config, provider=Provider(), session=session,
+                  memory=MemoryManager(config, external=P()), cwd=tmp_path)
+
+    agent.run("go")
+
+    assert captured["pre_compress_context"] == "AUTOMATIC MEMORY FACT"
+    assert all("AUTOMATIC MEMORY FACT" not in (m.content or "") for m in agent.session.messages)
+
+
 def test_switch_and_end_fire_hooks(tmp_path, monkeypatch):
     config = _cfg(tmp_path, monkeypatch)
     from aegis.agent.agent import Agent
