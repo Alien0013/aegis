@@ -72,6 +72,95 @@ def test_skill_discovery_refreshes_when_files_change(tmp_path):
     assert sl.discover()["fresh"].description == "discovered after cache."
 
 
+def test_skill_tool_create_updates_same_turn_prompt_index(tmp_path):
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.session import Session
+    from aegis.types import LLMResponse, ToolCall
+
+    class Provider:
+        context_length = 200_000
+        name = "fake"
+        model = "fake-model"
+        api_mode = None
+        auth = None
+
+        def __init__(self):
+            self.prompts = []
+            self.calls = 0
+
+        def describe(self):
+            return "fake"
+
+        def complete(self, messages, tools=None, **_kwargs):
+            self.prompts.append(messages[0].content)
+            self.calls += 1
+            if self.calls == 1:
+                return LLMResponse(tool_calls=[ToolCall(
+                    id="tc_skill",
+                    name="skill",
+                    arguments={
+                        "action": "create",
+                        "name": "fresh-loop",
+                        "description": "Use for same-turn skill refresh.",
+                        "body": "## Steps\n1. use the fresh loop",
+                    },
+                )])
+            return LLMResponse(text="done")
+
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = False
+    provider = Provider()
+    agent = Agent(config=cfg, provider=provider, session=Session.create(), cwd=tmp_path)
+
+    agent.run("create a skill")
+
+    assert len(provider.prompts) == 2
+    assert "fresh-loop" not in provider.prompts[0]
+    assert "fresh-loop" in provider.prompts[1]
+
+
+def test_external_skill_file_refreshes_next_agent_turn(tmp_path):
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.session import Session
+    from aegis.types import LLMResponse
+
+    class Provider:
+        context_length = 200_000
+        name = "fake"
+        model = "fake-model"
+        api_mode = None
+        auth = None
+
+        def __init__(self):
+            self.prompts = []
+
+        def describe(self):
+            return "fake"
+
+        def complete(self, messages, tools=None, **_kwargs):
+            self.prompts.append(messages[0].content)
+            return LLMResponse(text="ok")
+
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = False
+    provider = Provider()
+    agent = Agent(config=cfg, provider=provider, session=Session.create(), cwd=tmp_path)
+
+    agent.run("first")
+    fresh = tmp_path / "skills" / "external-skill"
+    fresh.mkdir(parents=True)
+    (fresh / "SKILL.md").write_text(
+        "---\nname: external-skill\ndescription: available after external install.\n---\nbody",
+        encoding="utf-8",
+    )
+    agent.run("second")
+
+    assert "external-skill" not in provider.prompts[0]
+    assert "external-skill" in provider.prompts[-1]
+
+
 def test_index_block_progressive():
     from aegis.config import Config
     from aegis.skills import SkillsLoader

@@ -713,8 +713,16 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
     #   "frozen" / "never" — keep the prompt prefix fixed until an explicit
     #     refresh/rebuild path such as /new, compaction, or a new process.
     refresh_mode = (agent.config.get("memory.refresh", "session") or "session")
-    if (refresh_mode not in {"frozen", "never"} and agent.memory is not None
-            and agent.memory.is_stale()):
+    memory_stale = (
+        refresh_mode not in {"frozen", "never"}
+        and agent.memory is not None
+        and agent.memory.is_stale()
+    )
+    skills_stale = bool(
+        getattr(agent, "skills", None) is not None
+        and getattr(agent.skills, "is_stale", lambda: False)()
+    )
+    if memory_stale or skills_stale:
         agent.refresh_volatile()
     else:
         agent.ensure_system_prompt()

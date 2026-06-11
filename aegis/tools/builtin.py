@@ -679,6 +679,7 @@ class SkillTool(Tool):
                 path = ctx.skills.create(args["name"], args["description"], args["body"])
             except Exception as e:  # noqa: BLE001
                 return ToolResult.error(f"could not create skill: {e}")
+            _refresh_agent_prompt(ctx)
             return ToolResult.ok(f"saved skill '{args['name']}' to {path}", display=f"created skill {args['name']}")
         if action == "improve":
             if not args.get("name") or not args.get("body"):
@@ -686,6 +687,7 @@ class SkillTool(Tool):
             path = ctx.skills.improve(args["name"], args["body"])
             if path is None:
                 return ToolResult.error(f"skill '{args['name']}' not found.")
+            _refresh_agent_prompt(ctx)
             return ToolResult.ok(f"recorded a learned note on '{args['name']}'", display=f"improved {args['name']}")
         if action == "stats":
             usage = ctx.skills.usage()
@@ -701,6 +703,16 @@ class SkillTool(Tool):
         if body is None:
             return ToolResult.error(f"skill '{name}' not found.")
         return ToolResult.ok(body, display=f"loaded skill {name}")
+
+
+def _refresh_agent_prompt(ctx) -> None:
+    agent = getattr(ctx, "agent", None)
+    refresh = getattr(agent, "refresh_volatile", None)
+    if callable(refresh):
+        try:
+            refresh()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def all_builtin_tools() -> list[Tool]:

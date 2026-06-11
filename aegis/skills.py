@@ -153,6 +153,11 @@ class SkillsLoader:
         self._cache_signature = signature
         return found
 
+    def is_stale(self) -> bool:
+        if self._cache is None:
+            return False
+        return self._cache_signature != self._discovery_signature()
+
     def _discovery_signature(self) -> tuple:
         entries: list[tuple[str, int, int]] = []
         for _tier, base in self._search_paths():
