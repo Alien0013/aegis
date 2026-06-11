@@ -687,6 +687,8 @@ def test_dashboard_chat_response_includes_cockpit_breadcrumbs():
         def run_prompt(self, prompt, **kwargs):
             assert kwargs["surface"] == "dashboard"
             assert kwargs["meta"]["surface_route"] == "/api/chat"
+            assert kwargs["model"] == "dash-model"
+            assert kwargs["provider_name"] == "dash-provider"
             on_event = kwargs["on_event"]
             on_event({"type": "iteration", "n": 1, "max": 3})
             on_event({"type": "tool_start", "name": "search", "args": {"query": "aegis"}})
@@ -699,7 +701,11 @@ def test_dashboard_chat_response_includes_cockpit_breadcrumbs():
                 run_id="run_dashchat",
             )
 
-    data = _dashboard_chat_response({"message": "hello"}, Runner())
+    data = _dashboard_chat_response({
+        "message": "hello",
+        "model": "dash-model",
+        "provider": "dash-provider",
+    }, Runner())
 
     assert data["reply"] == "reply:hello"
     assert data["session_id"] == "sess_dashchat"
@@ -721,6 +727,8 @@ def test_dashboard_chat_stream_emits_progress_and_final():
         def run_prompt(self, prompt, **kwargs):
             assert kwargs["surface"] == "dashboard"
             assert kwargs["meta"]["surface_route"] == "/api/chat/stream"
+            assert kwargs["model"] == "stream-model"
+            assert kwargs["provider_name"] == "stream-provider"
             on_event = kwargs["on_event"]
             on_event({"type": "iteration", "n": 1, "max": 2})
             on_event({"type": "tool_start", "name": "grep", "args": {"query": "Hermes"}})
@@ -733,7 +741,11 @@ def test_dashboard_chat_stream_emits_progress_and_final():
             )
 
     sent = []
-    final = _dashboard_chat_stream({"message": "hello"}, Runner(), sent.append)
+    final = _dashboard_chat_stream({
+        "message": "hello",
+        "model": "stream-model",
+        "provider_name": "stream-provider",
+    }, Runner(), sent.append)
 
     assert [row["type"] for row in sent] == ["start", "event", "event", "final"]
     assert sent[1]["event"]["summary"] == "1/2"

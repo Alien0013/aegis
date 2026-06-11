@@ -482,6 +482,17 @@ def _dashboard_chat_meta(body: dict, route: str) -> dict:
     return meta
 
 
+def _dashboard_chat_runtime(body: dict) -> dict:
+    model = str(body.get("model") or "").strip()
+    provider = str(body.get("provider") or body.get("provider_name") or "").strip()
+    out = {}
+    if model:
+        out["model"] = model
+    if provider:
+        out["provider_name"] = provider
+    return out
+
+
 def _publish_dashboard_chat_event(
     body: dict,
     etype: str,
@@ -539,6 +550,7 @@ def _dashboard_chat_response(body: dict, chat_runner) -> dict:
             body.get("message", ""),
             session_id=body.get("session_id") or None,
             cwd=cwd or None,
+            **_dashboard_chat_runtime(body),
             surface="dashboard",
             meta=_dashboard_chat_meta(body, "/api/chat"),
             on_event=on_event,
@@ -578,6 +590,7 @@ def _dashboard_chat_stream(body: dict, chat_runner, send) -> dict:
             body.get("message", ""),
             session_id=body.get("session_id") or None,
             cwd=cwd or None,
+            **_dashboard_chat_runtime(body),
             surface="dashboard",
             meta=_dashboard_chat_meta(body, "/api/chat/stream"),
             on_event=on_event,
