@@ -1445,6 +1445,52 @@ def test_surface_runner_provider_metadata_includes_run_id(tmp_path):
     assert provider.metadata["run_id"] == result.run_id
 
 
+def test_surface_runner_run_metadata_uses_session_runtime_controls(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.runs import RunStore
+    from aegis.session import Session
+    from aegis.surface import SurfaceRunner
+    from aegis.types import Message
+
+    captured = {}
+
+    class FakeAgent:
+        def __init__(self, session):
+            self.session = session
+            self.tool_context = SimpleNamespace(session=session)
+
+        def run(self, prompt, on_event=None):
+            self._trace_context = {"trace_id": "trace_runtime_run", "turn_id": "turn_runtime_run"}
+            return Message.assistant("ok")
+
+    def create(_config, **kwargs):
+        captured.update(kwargs)
+        return FakeAgent(kwargs["session"])
+
+    cfg = Config.load()
+    session = Session.create("runtime run metadata")
+    session.meta["runtime_controls"] = {
+        "provider": "runtime-provider",
+        "model": "runtime-model",
+    }
+    monkeypatch.setattr(Agent, "create", staticmethod(create))
+
+    result = SurfaceRunner(cfg, cwd=tmp_path, include_mcp=False).run_prompt(
+        "hello",
+        session=session,
+        surface="cli",
+    )
+
+    assert captured["provider_name"] == "runtime-provider"
+    assert captured["model"] == "runtime-model"
+    run = RunStore().get(result.run_id)
+    assert run["data"]["provider"] == "runtime-provider"
+    assert run["data"]["model"] == "runtime-model"
+
+
 def test_renderer_reasoning_display_modes(monkeypatch):
     import contextlib
     import io

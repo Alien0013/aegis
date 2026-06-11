@@ -250,6 +250,21 @@ class SurfaceRunner:
                 effective_prompt = prompt
         run_store = None
         run_id = ""
+        controls = session_runtime_controls(session)
+        agent_provider = getattr(agent, "provider", None)
+        cfg_get = getattr(self.config, "get", lambda _key, default="": default)
+        effective_model = (
+            model
+            or controls.get("model")
+            or str(getattr(agent_provider, "model", "") or "")
+            or str(cfg_get("model.default", "") or "")
+        )
+        effective_provider = (
+            provider_name
+            or controls.get("provider")
+            or str(getattr(agent_provider, "name", "") or "")
+            or str(cfg_get("model.provider", "") or "")
+        )
         try:
             from .runs import RunStore
 
@@ -263,8 +278,8 @@ class SurfaceRunner:
                 data={
                     **(meta or {}),
                     "context_references": reference_meta,
-                    "model": model or "",
-                    "provider": provider_name or "",
+                    "model": effective_model,
+                    "provider": effective_provider,
                     "platform": platform or "",
                     "chat_id": chat_id or "",
                     **_workspace_run_meta(run_cwd),
