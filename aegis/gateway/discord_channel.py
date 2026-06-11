@@ -44,8 +44,8 @@ class DiscordAdapter(BasePlatformAdapter):
                 text=message.content, user_id=str(message.author.id),
                 user_name=str(message.author),
             )
-            setattr(ev, "_discord_channel", message.channel)
-            setattr(ev, "_discord_loop", self._loop)
+            ev._discord_channel = message.channel
+            ev._discord_loop = self._loop
             self._submit_inbound(ev, raw_text=message.content)
 
         client.run(self.token, log_handler=None)

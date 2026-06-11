@@ -10,11 +10,14 @@ import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from .. import __version__
 from ..config import Config
 from ..session import Session, SessionStore
+
+if TYPE_CHECKING:
+    from ..agent.agent import Agent
 from ..surface import (
     SurfaceRunner,
     apply_session_runtime,

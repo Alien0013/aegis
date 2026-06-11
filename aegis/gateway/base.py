@@ -71,8 +71,8 @@ class BasePlatformAdapter:
         done: threading.Event | None = None
         if wait:
             done = threading.Event()
-            setattr(ev, "_reply_event", done)
-            setattr(ev, "_reply_inline", True)
+            ev._reply_event = done
+            ev._reply_inline = True
         self._enqueue(ev)
         if done is None:
             return None
@@ -105,7 +105,7 @@ class BasePlatformAdapter:
         self._ensure_inbound_queue()
         key = self._conversation_key(ev)
         if not hasattr(ev, "_queued_at"):
-            setattr(ev, "_queued_at", time.monotonic())
+            ev._queued_at = time.monotonic()
         with self._qlock:
             worker = self._workers.get(key)
             busy = bool(worker and worker.is_alive() and key in self._active)
@@ -116,7 +116,7 @@ class BasePlatformAdapter:
             if handled:
                 done = getattr(ev, "_reply_event", None)
                 if done is not None:
-                    setattr(ev, "_reply_text", "")
+                    ev._reply_text = ""
                     done.set()
                 return
         with self._qlock:
@@ -174,7 +174,7 @@ class BasePlatformAdapter:
             finally:
                 with self._qlock:
                     self._active.discard(key)
-            setattr(ev, "_reply_text", reply or "")
+            ev._reply_text = reply or ""
             if not getattr(ev, "_reply_inline", False):
                 try:
                     self._deliver_reply(ev, reply, state)

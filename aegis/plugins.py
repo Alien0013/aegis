@@ -36,9 +36,9 @@ class PluginAPI:
         self._current_plugin: Path | None = None
 
     def register_tool(self, tool) -> None:
-        setattr(tool, "source", getattr(tool, "source", "") or "plugin")
+        tool.source = getattr(tool, "source", "") or "plugin"
         if self._current_plugin is not None:
-            setattr(tool, "_aegis_plugin", str(self._current_plugin))
+            tool._aegis_plugin = str(self._current_plugin)
         self.tools.append(tool)
 
     def register_channel(self, name: str, factory) -> None:

@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import sys
 import threading
-from pathlib import Path
 from typing import Any
 
 from ..config import Config
 from ..session import Session, SessionStore
 from ..surface import SurfaceRunner
-from ..types import Message
 from . import repl
 
 

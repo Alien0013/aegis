@@ -831,7 +831,7 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
         reasoned_live = {"v": False}
 
         def reasoning_cb(text: str) -> None:
-            reasoned_live["v"] = True
+            reasoned_live["v"] = True       # noqa: B023 — consumed within this iteration only
             emit({"type": "reasoning_delta", "text": text})
 
         # Thinking-signature recovery (one-shot, this turn): when set, send the wire a
