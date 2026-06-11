@@ -47,7 +47,9 @@ The dashboard exposes read-only cockpit APIs used by the no-build frontend:
 - `POST /api/chat/stream` — same chat runner over Server-Sent Events. The
   dashboard uses it to show iteration/tool/reasoning progress in the assistant
   bubble while the turn is still running, with `/api/chat` as a compatibility
-  fallback.
+  fallback. Dashboard chat start/progress/final events are also published to
+  `/events` so the Live activity page shows cockpit-originated turns alongside
+  gateway activity.
 
 ## Niceties
 

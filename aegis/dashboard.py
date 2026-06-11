@@ -436,10 +436,58 @@ def _dashboard_chat_meta(body: dict, route: str) -> dict:
     return meta
 
 
+def _publish_dashboard_chat_event(
+    body: dict,
+    etype: str,
+    *,
+    row: dict | None = None,
+    result: Any | None = None,
+    cwd: str = "",
+) -> None:
+    try:
+        from .eventbus import BUS
+
+        session_id = str(
+            getattr(getattr(result, "session", None), "id", "")
+            or body.get("session_id")
+            or ""
+        )
+        event = {
+            "platform": "dashboard",
+            "chat_id": session_id,
+            "session_id": session_id,
+            "type": etype,
+            "surface": "dashboard",
+            "cwd": cwd,
+        }
+        if row:
+            event.update({k: v for k, v in row.items() if v not in ("", None)})
+            event["type"] = str(row.get("type") or etype)
+        if result is not None:
+            for attr, key in (("run_id", "run_id"), ("trace_id", "trace_id"), ("turn_id", "turn_id")):
+                value = str(getattr(result, attr, "") or "")
+                if value:
+                    event[key] = value
+        if etype == "chat_start":
+            event["text"] = str(body.get("message", ""))[:240]
+        elif etype == "chat_final":
+            event["text"] = str(getattr(result, "text", "") or "")[:240]
+        BUS.publish(event)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _dashboard_chat_response(body: dict, chat_runner) -> dict:
     events: list[dict] = []
     result = None
     cwd = _dashboard_chat_cwd(body)
+    _publish_dashboard_chat_event(body, "chat_start", cwd=cwd)
+
+    def on_event(event: dict) -> None:
+        events.append(dict(event))
+        _publish_dashboard_chat_event(body, str(event.get("type") or "event"),
+                                      row=_chat_event_row(event), cwd=cwd)
+
     try:
         result = chat_runner.run_prompt(
             body.get("message", ""),
@@ -447,11 +495,14 @@ def _dashboard_chat_response(body: dict, chat_runner) -> dict:
             cwd=cwd or None,
             surface="dashboard",
             meta=_dashboard_chat_meta(body, "/api/chat"),
-            on_event=lambda event: events.append(dict(event)),
+            on_event=on_event,
         )
         reply = result.text
+        _publish_dashboard_chat_event(body, "chat_final", result=result, cwd=cwd)
     except Exception as e:  # noqa: BLE001
         reply = f"error: {e}"
+        _publish_dashboard_chat_event(body, "chat_error", cwd=cwd,
+                                      row={"type": "chat_error", "summary": str(e)})
     return {
         "reply": reply or "(no response)",
         "session_id": result.session.id if result else (body.get("session_id") or ""),
@@ -467,11 +518,14 @@ def _dashboard_chat_stream(body: dict, chat_runner, send) -> dict:
     events: list[dict] = []
     result = None
     cwd = _dashboard_chat_cwd(body)
+    _publish_dashboard_chat_event(body, "chat_start", cwd=cwd)
     send({"type": "start", "session_id": body.get("session_id") or "", "cwd": cwd})
 
     def on_event(event: dict) -> None:
         events.append(dict(event))
-        send({"type": "event", "event": _chat_event_row(event)})
+        row = _chat_event_row(event)
+        _publish_dashboard_chat_event(body, str(event.get("type") or "event"), row=row, cwd=cwd)
+        send({"type": "event", "event": row})
 
     try:
         result = chat_runner.run_prompt(
@@ -492,6 +546,7 @@ def _dashboard_chat_stream(body: dict, chat_runner, send) -> dict:
             "cwd": cwd,
             "events": [_chat_event_row(e) for e in events[-80:]],
         }
+        _publish_dashboard_chat_event(body, "chat_final", result=result, cwd=cwd)
         send(final)
         return final
     except Exception as e:  # noqa: BLE001
@@ -505,6 +560,8 @@ def _dashboard_chat_stream(body: dict, chat_runner, send) -> dict:
             "cwd": cwd,
             "events": [_chat_event_row(ev) for ev in events[-80:]],
         }
+        _publish_dashboard_chat_event(body, "chat_error", cwd=cwd,
+                                      row={"type": "chat_error", "summary": str(e)})
         send(final)
         return final
 

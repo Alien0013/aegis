@@ -597,6 +597,51 @@ def test_dashboard_chat_stream_emits_progress_and_final():
     assert final["run_id"] == "run_streamchat"
 
 
+def test_dashboard_chat_events_also_feed_live_activity():
+    import queue
+    from types import SimpleNamespace
+
+    from aegis.dashboard import _dashboard_chat_stream
+    from aegis.eventbus import BUS
+    from aegis.session import Session
+
+    class Runner:
+        def run_prompt(self, prompt, **kwargs):
+            on_event = kwargs["on_event"]
+            on_event({"type": "iteration", "n": 1, "max": 2})
+            on_event({"type": "tool_start", "name": "read_file", "args": {"path": "a.py"}})
+            return SimpleNamespace(
+                text=f"done:{prompt}",
+                session=Session(id="sess_livechat", title="live chat"),
+                trace_id="trace_livechat",
+                turn_id="turn_livechat",
+                run_id="run_livechat",
+            )
+
+    sub = BUS.subscribe()
+    try:
+        _dashboard_chat_stream(
+            {"message": "hello", "session_id": "sess_livechat", "cwd": "/tmp/project"},
+            Runner(),
+            lambda _row: None,
+        )
+        events = []
+        while True:
+            try:
+                events.append(sub.get_nowait())
+            except queue.Empty:
+                break
+    finally:
+        BUS.unsubscribe(sub)
+
+    assert [e["type"] for e in events] == ["chat_start", "iteration", "tool_start", "chat_final"]
+    assert events[0]["platform"] == "dashboard"
+    assert events[0]["text"] == "hello"
+    assert events[2]["name"] == "read_file"
+    assert events[-1]["run_id"] == "run_livechat"
+    assert events[-1]["cwd"] == "/tmp/project"
+
+
 def test_dashboard_chat_accepts_cwd_and_records_project_worktree(monkeypatch, tmp_path):
     from types import SimpleNamespace
 
