@@ -297,13 +297,56 @@ class History:
 
 
 class MemoryProvider:
-    """Pluggable external memory backend (vector DB, etc.). Built-in is always on."""
+    """Pluggable external memory backend (vector DB, hosted memory, etc.).
+
+    The built-in file store is always on; a provider layers on top. Every hook
+    is an optional no-op — implement only what your backend needs. Hooks mirror
+    the agent lifecycle so a backend can stay in sync without the loop knowing
+    its internals. ``MemoryManager`` calls these fail-soft (an exception in a
+    hook never breaks a turn).
+    """
+
+    name: str = "memory-provider"
+
+    # -- lifecycle ----------------------------------------------------------
+    def initialize(self, session_id: str = "", **kw) -> None:  # pragma: no cover - interface
+        """Called once when a manager binds to a session (provider warm-up)."""
 
     def system_prompt_block(self) -> str:  # pragma: no cover - interface
+        """Static block added to the system prompt (cache-stable)."""
         return ""
 
+    def prefetch(self, query: str, *, session_id: str = "") -> str:  # pragma: no cover
+        """Synchronously fetch memory relevant to ``query`` for THIS turn. The text
+        is injected as volatile context ahead of the model call (uncached)."""
+        return ""
+
+    def queue_prefetch(self, query: str, *, session_id: str = "") -> None:  # pragma: no cover
+        """Kick off a background fetch whose result a later turn can read — never blocks."""
+
     def sync_turn(self, messages) -> None:  # pragma: no cover - interface
-        ...
+        """Persist/ingest a completed turn (called after the response)."""
+
+    def tools(self) -> list:  # pragma: no cover - interface
+        """Provider-specific tools to expose to the model (registered on the agent)."""
+        return []
+
+    def on_session_end(self, messages) -> None:  # pragma: no cover - interface
+        """The session is ending (process exit, /new) — final flush/consolidation."""
+
+    def on_pre_compress(self, messages) -> str:  # pragma: no cover - interface
+        """About to compress; optionally return a note to preserve into the summary."""
+        return ""
+
+    def on_session_switch(self, *, old_session_id: str, new_session_id: str,
+                          **kw) -> None:  # pragma: no cover - interface
+        """The agent moved to a different session (resume, compaction split, /new)."""
+
+    def on_delegation(self, task: str, result: str, **kw) -> None:  # pragma: no cover
+        """A subagent/delegated task finished — record the task and its outcome."""
+
+    def shutdown(self) -> None:  # pragma: no cover - interface
+        """Release resources (threads, clients)."""
 
 
 class MemoryManager:
@@ -425,12 +468,69 @@ class MemoryManager:
         if self.user_enabled and self._snapshot.get("user"):
             parts.append(self._snapshot["user"])
         if self.external:
-            ext = self.external.system_prompt_block().strip()
-            if ext:
-                parts.append(ext)
+            ext = self._provider_call("system_prompt_block") or ""
+            if ext.strip():
+                parts.append(ext.strip())
         if not parts:
             return ""
         return "<memory>\n" + "\n\n".join(parts) + "\n</memory>"
+
+    # -- external-provider lifecycle fan-out --------------------------------
+    # Each is fail-soft: a provider hook must never break a turn. The built-in
+    # file store needs none of these (it's snapshot-driven); they exist so a
+    # layered provider stays in sync with the agent lifecycle.
+    def _provider_call(self, hook: str, *args, **kw):
+        if self.external is None:
+            return None
+        fn = getattr(self.external, hook, None)
+        if not callable(fn):
+            return None
+        try:
+            return fn(*args, **kw)
+        except Exception:  # noqa: BLE001
+            from ._log import log_exc
+            log_exc(f"memory provider {hook} failed")
+            return None
+
+    def initialize(self, session_id: str = "") -> None:
+        self._session_id = session_id
+        self._provider_call("initialize", session_id=session_id)
+
+    def prefetch(self, query: str) -> str:
+        """Relevant memory for THIS turn, fetched synchronously from the provider.
+        Returned text is injected as volatile context before the model call."""
+        block = self._provider_call("prefetch", query,
+                                    session_id=getattr(self, "_session_id", "")) or ""
+        return block.strip() if isinstance(block, str) else ""
+
+    def queue_prefetch(self, query: str) -> None:
+        self._provider_call("queue_prefetch", query,
+                            session_id=getattr(self, "_session_id", ""))
+
+    def sync_turn(self, messages) -> None:
+        self._provider_call("sync_turn", messages)
+
+    def provider_tools(self) -> list:
+        tools = self._provider_call("tools")
+        return list(tools) if tools else []
+
+    def on_session_end(self, messages) -> None:
+        self._provider_call("on_session_end", messages)
+
+    def on_pre_compress(self, messages) -> str:
+        note = self._provider_call("on_pre_compress", messages) or ""
+        return note.strip() if isinstance(note, str) else ""
+
+    def on_session_switch(self, old_session_id: str, new_session_id: str) -> None:
+        self._session_id = new_session_id
+        self._provider_call("on_session_switch",
+                            old_session_id=old_session_id, new_session_id=new_session_id)
+
+    def on_delegation(self, task: str, result: str) -> None:
+        self._provider_call("on_delegation", task, result)
+
+    def shutdown(self) -> None:
+        self._provider_call("shutdown")
 
     def handle_tool(self, args: dict):
         from .tools.base import ToolResult

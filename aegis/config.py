@@ -136,6 +136,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "subagent_concurrency": 4,   # max child agents run in parallel by spawn_subagent
         "context_engine": "default", # context-management strategy (plugins can register others)
         "reasoning_effort": "off",   # off|minimal|low|medium|high|xhigh
+        "subdir_hints": True,        # inject a subdir's rule files when the agent first works there
         "compression": {"preserve_first": 3, "preserve_last": 20, "max_tool_tokens": 600,
                         # tail protected by a TOKEN budget = this fraction of the model's
                         # window (scales with the model; preserve_last is the legacy fallback)
@@ -414,7 +415,7 @@ class Workspace:
     Project-local files in ``cwd`` take precedence over the global workspace.
     """
 
-    RULE_FILES = (".aegis.md", "AGENTS.md", "CLAUDE.md")
+    RULE_FILES = (".aegis.md", "AGENTS.md", "CLAUDE.md", ".cursorrules")
 
     def __init__(self, cwd: Path | None = None):
         self.cwd = cwd or Path.cwd()

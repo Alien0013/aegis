@@ -544,6 +544,14 @@ def _workspace_run_meta(cwd: Path) -> dict[str, str]:
 def _retarget_agent(agent: Any, *, session: Session) -> None:
     """Point a cached agent at the latest session object for this surface."""
 
+    switch = getattr(agent, "switch_session", None)
+    cur_id = getattr(getattr(agent, "session", None), "id", None)
+    if callable(switch) and cur_id != getattr(session, "id", None):
+        try:
+            switch(session)            # fires the memory session-switch hook
+            return
+        except Exception:  # noqa: BLE001
+            pass
     try:
         agent.session = session
     except Exception:  # noqa: BLE001
@@ -807,6 +815,18 @@ def run_control_action(
 
 
 def _close_agent(agent: Any) -> None:
+    end = getattr(agent, "end_session", None)      # memory session-end hook
+    if callable(end):
+        try:
+            end()
+        except Exception:  # noqa: BLE001
+            pass
+    memory = getattr(agent, "memory", None)
+    if memory is not None:
+        try:
+            memory.shutdown()
+        except Exception:  # noqa: BLE001
+            pass
     try:
         mcp = getattr(agent, "_mcp", None)
         if mcp is not None:

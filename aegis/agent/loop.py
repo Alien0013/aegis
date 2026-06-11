@@ -423,6 +423,16 @@ class ToolExecutor:
         if content and not res.is_error and is_untrusted:
             content = (f'<untrusted_tool_result source="{call.name}">\n{content}\n'
                        f"</untrusted_tool_result>")
+        # Subdirectory hints: local rule files for any new directory this call entered.
+        if not res.is_error:
+            try:
+                from .subdir_hints import hints_for_call
+                hint = hints_for_call(getattr(self.ctx, "agent", None), call.name,
+                                      call.arguments, self.ctx.cwd)
+                if hint:
+                    content = (content or "") + hint
+            except Exception:  # noqa: BLE001
+                pass
         return Message.tool(call.id, call.name, content)
 
     def execute(self, calls: list[ToolCall]) -> list[Message]:
@@ -543,6 +553,7 @@ def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
     if agent.memory:                       # flush memory so the summary reflects latest facts
         try:
             agent.memory.refresh_snapshot()
+            agent.memory.on_pre_compress(session.messages)   # provider pre-compression hook
         except Exception:  # noqa: BLE001
             pass
     try:
@@ -596,8 +607,7 @@ def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
             agent.store.save(child)                     # make continuation visible immediately
         except Exception:  # noqa: BLE001
             pass
-        agent.session = child
-        agent.tool_context.session = child
+        agent.switch_session(child)            # fires the memory session-switch hook
         session = child
         rec = {**rec, "split": True, "child_session": child.id, "parent_session": parent.id}
         try:
@@ -681,8 +691,7 @@ def compact_now(agent, session=None, emit: OnEvent | None = None, *,
             agent.store.save(child)
         except Exception:  # noqa: BLE001
             pass
-        agent.session = child
-        agent.tool_context.session = child
+        agent.switch_session(child)            # fires the memory session-switch hook
         session = child
         rec = {**rec, "split": True, "child_session": child.id, "parent_session": parent.id}
         try:

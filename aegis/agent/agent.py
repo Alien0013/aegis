@@ -127,6 +127,14 @@ class Agent:
         self.cancel_event = threading.Event()   # set by .cancel() to interrupt a run
         self.steer_queue: queue.Queue = queue.Queue()   # mid-run guidance injected via .steer()
 
+        if self.memory is not None:
+            self.memory.initialize(getattr(self.session, "id", ""))   # provider warm-up
+            for t in self.memory.provider_tools():                    # provider-specific tools
+                try:
+                    self.registry.register(t)
+                except Exception:  # noqa: BLE001
+                    pass
+
         self.tool_context = ToolContext(
             cwd=self.cwd, config=config, memory=self.memory, skills=self.skills,
             session=self.session, agent=self, approver=approver,
@@ -152,12 +160,13 @@ class Agent:
         store: SessionStore | None = None,
         include_mcp: bool = False,
         registry: ToolRegistry | None = None,
+        memory: MemoryManager | None = None,
     ) -> "Agent":
         from ..providers.fallback import build_with_fallbacks
         provider = build_with_fallbacks(config, model=model, name=provider_name)
         session = session or Session.create()
         agent = cls(config=config, provider=provider, session=session, cwd=cwd,
-                    approver=approver, store=store, registry=registry)
+                    approver=approver, store=store, registry=registry, memory=memory)
         if include_mcp:
             agent.load_mcp()
         return agent
@@ -295,6 +304,26 @@ class Agent:
             self.memory.refresh_snapshot()
         self.ensure_system_prompt(force=True)
 
+    def switch_session(self, new_session: Session) -> None:
+        """Move this agent to ``new_session`` and fire the memory session-switch hook
+        (resume, compaction split, /new). Keeps tool_context in sync."""
+        old_id = getattr(self.session, "id", "")
+        self.session = new_session
+        self.tool_context.session = new_session
+        if self.memory and getattr(new_session, "id", "") != old_id:
+            try:
+                self.memory.on_session_switch(old_id, new_session.id)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def end_session(self) -> None:
+        """Fire the memory session-end hook (process exit, agent teardown, /new)."""
+        if self.memory:
+            try:
+                self.memory.on_session_end(self.session.messages)
+            except Exception:  # noqa: BLE001
+                pass
+
     # -- run ----------------------------------------------------------------
     def _apply_routing(self, text: str) -> None:
         """Per-prompt provider routing: swap provider/model when a rule matches."""
@@ -353,6 +382,15 @@ class Agent:
                 msg.content = f"{wb}\n\n{msg.content}"
         except Exception:  # noqa: BLE001
             pass
+        if self.memory:                    # provider prefetch relevant to THIS turn (volatile)
+            try:
+                fetched = self.memory.prefetch(msg.content)
+                if fetched:
+                    msg.content = (f"<retrieved_memory>\n{fetched}\n</retrieved_memory>\n\n"
+                                   f"{msg.content}")
+                self.memory.queue_prefetch(msg.content)   # warm the next turn in the background
+            except Exception:  # noqa: BLE001
+                pass
         self.session.messages.append(msg)
         self.tool_context.emit = on_event
         try:
@@ -388,12 +426,7 @@ class Agent:
 
         if self.memory and result.content:
             self.memory.history.append("assistant", result.content, self.session.id)
-            if self.memory.external:
-                try:
-                    self.memory.external.sync_turn(self.session.messages)
-                except Exception:  # noqa: BLE001
-                    from .._log import log_exc
-                    log_exc("external memory sync_turn failed")
+            self.memory.sync_turn(self.session.messages)   # fan out to the provider, fail-soft
         if self.store:
             try:
                 self.store.save(self.session)

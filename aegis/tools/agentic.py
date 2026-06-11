@@ -181,6 +181,12 @@ class SubagentTool(Tool):
                     turn_id=result.turn_id,
                 )
                 ctx.emit_event(type="subagent_done", id=sid, status="done")
+                parent_mem = getattr(parent, "memory", None)   # delegation hook on the parent
+                if parent_mem is not None:
+                    try:
+                        parent_mem.on_delegation(task, out)
+                    except Exception:  # noqa: BLE001
+                        pass
                 return sid, out
             except Exception as e:  # noqa: BLE001 - isolate one child's failure
                 _register(sid, status="error")
