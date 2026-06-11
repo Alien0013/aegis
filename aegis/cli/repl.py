@@ -851,7 +851,12 @@ def handle_slash(
     elif name == "/background":
         if arg:
             from ..background import get_manager
-            tid = get_manager().spawn(agent.config, arg, parent_session=agent.session)
+            tid = get_manager().spawn(
+                agent.config,
+                arg,
+                cwd=getattr(agent, "cwd", None),
+                parent_session=agent.session,
+            )
             _out(f"started background task {tid}", style="green")
         else:
             _out("usage: /background <prompt>")

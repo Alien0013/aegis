@@ -498,6 +498,41 @@ def test_terminal_model_override_rejects_unknown_provider(monkeypatch, tmp_path)
     assert agent.provider is provider
 
 
+def test_terminal_background_inherits_agent_cwd(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from aegis.cli import repl
+    from aegis.config import Config
+    from aegis.session import Session
+
+    captured = {}
+
+    class Manager:
+        def spawn(self, config, prompt, *, cwd=None, on_done=None, parent_session=None):
+            captured.update({
+                "config": config,
+                "prompt": prompt,
+                "cwd": cwd,
+                "parent_session": parent_session,
+            })
+            return "bg_test"
+
+    out = []
+    cfg = Config.load()
+    session = Session.create("terminal bg")
+    agent = SimpleNamespace(config=cfg, session=session, cwd=tmp_path / "project")
+    monkeypatch.setattr("aegis.background.get_manager", lambda: Manager())
+    monkeypatch.setattr(repl, "_out", lambda text="", style=None: out.append(str(text)))
+
+    repl.handle_slash("/background inspect later", agent)
+
+    assert "started background task bg_test" in "\n".join(out)
+    assert captured["config"] is cfg
+    assert captured["prompt"] == "inspect later"
+    assert captured["cwd"] == tmp_path / "project"
+    assert captured["parent_session"] is session
+
+
 def test_terminal_resume_reapplies_session_runtime(monkeypatch):
     from aegis.cli import repl
     from aegis.config import Config
