@@ -86,6 +86,7 @@ class ChatCompletionsTransport(ProviderTransport):
         tool_runner=None,
         approver=None,
         cwd=None,
+        on_reasoning: OnDelta | None = None,
     ) -> LLMResponse:
         url = f"{base_url}/chat/completions"
         headers = {"Content-Type": "application/json", **(extra_headers or {}), **auth.headers()}
@@ -105,7 +106,7 @@ class ChatCompletionsTransport(ProviderTransport):
             payload["tool_choice"] = "auto"
 
         if stream:
-            return self._stream(url, headers, payload, on_delta, timeout)
+            return self._stream(url, headers, payload, on_delta, timeout, on_reasoning)
         return self._blocking(url, headers, payload, timeout)
 
     def _blocking(self, url, headers, payload, timeout) -> LLMResponse:
@@ -128,13 +129,16 @@ class ChatCompletionsTransport(ProviderTransport):
             text=msg.get("content") or "",
             tool_calls=tool_calls,
             finish_reason=choice.get("finish_reason"),
+            reasoning=msg.get("reasoning_content") or msg.get("reasoning") or "",
             usage=Usage(usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0),
                         (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)),
             raw=data,
         )
 
-    def _stream(self, url, headers, payload, on_delta, timeout) -> LLMResponse:
+    def _stream(self, url, headers, payload, on_delta, timeout,
+                on_reasoning=None) -> LLMResponse:
         text_parts: list[str] = []
+        reasoning_parts: list[str] = []
         # tool calls accumulate by index
         tc_acc: dict[int, dict] = {}
         finish_reason = None
@@ -167,6 +171,11 @@ class ChatCompletionsTransport(ProviderTransport):
                             text_parts.append(content)
                             if on_delta:
                                 on_delta(content)
+                        rc = delta.get("reasoning_content") or delta.get("reasoning")
+                        if rc:                       # DeepSeek/OpenRouter-style reasoning stream
+                            reasoning_parts.append(rc)
+                            if on_reasoning:
+                                on_reasoning(rc)
                         for tc in delta.get("tool_calls", []):
                             idx = tc.get("index", 0)
                             slot = tc_acc.setdefault(idx, {"id": None, "name": "", "args": ""})
@@ -186,6 +195,7 @@ class ChatCompletionsTransport(ProviderTransport):
             text="".join(text_parts),
             tool_calls=tool_calls,
             finish_reason=finish_reason,
+            reasoning="".join(reasoning_parts),
             usage=usage,
         )
 

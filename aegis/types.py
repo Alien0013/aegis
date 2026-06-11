@@ -56,6 +56,9 @@ class Message:
     name: str | None = None  # tool name for tool messages
     # optional reasoning / thinking text (kept out of provider wire unless supported)
     reasoning: str = ""
+    # raw provider thinking blocks (incl. signatures) — Anthropic requires these to be
+    # echoed back verbatim on tool-use turns when thinking is enabled
+    thinking_blocks: list = field(default_factory=list)
     # optional image references (file paths or data URLs)
     images: list[str] = field(default_factory=list)
 
@@ -69,6 +72,8 @@ class Message:
             d["name"] = self.name
         if self.reasoning:
             d["reasoning"] = self.reasoning
+        if self.thinking_blocks:
+            d["thinking_blocks"] = self.thinking_blocks
         if self.images:
             d["images"] = self.images
         return d
@@ -85,6 +90,7 @@ class Message:
             tool_call_id=d.get("tool_call_id"),
             name=d.get("name"),
             reasoning=d.get("reasoning", "") or "",
+            thinking_blocks=d.get("thinking_blocks", []) or [],
             images=d.get("images", []) or [],
         )
 
@@ -131,6 +137,7 @@ class LLMResponse:
     tool_calls: list[ToolCall] = field(default_factory=list)
     finish_reason: str | None = None
     reasoning: str = ""
+    thinking_blocks: list = field(default_factory=list)
     usage: Usage = field(default_factory=Usage)
     raw: Any = None
 
@@ -140,4 +147,5 @@ class LLMResponse:
             content=self.text,
             tool_calls=list(self.tool_calls),
             reasoning=self.reasoning,
+            thinking_blocks=list(self.thinking_blocks),
         )

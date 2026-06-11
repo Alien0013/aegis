@@ -19,6 +19,11 @@ from .schema import sanitize as _sanitize_schema
 
 ANTHROPIC_VERSION = "2023-06-01"
 
+# Models on the adaptive-thinking API surface (budget_tokens would 400 on fable/4.7/4.8
+# and is deprecated on the 4.6 family). Prefix-matched.
+_ADAPTIVE_THINKING_PREFIXES = ("claude-fable", "claude-opus-4-6", "claude-opus-4-7",
+                               "claude-opus-4-8", "claude-sonnet-4-6")
+
 
 class AnthropicTransport(ProviderTransport):
     api_mode = ApiMode.ANTHROPIC_MESSAGES
@@ -59,6 +64,9 @@ class AnthropicTransport(ProviderTransport):
             elif m.role == "assistant":
                 flush_user()
                 blocks: list[dict] = []
+                # Thinking blocks (with signatures) MUST precede text/tool_use and be
+                # echoed verbatim, or thinking+tool-use turns are rejected by the API.
+                blocks.extend(getattr(m, "thinking_blocks", []) or [])
                 if m.content:
                     blocks.append({"type": "text", "text": m.content})
                 for tc in m.tool_calls:
@@ -104,6 +112,7 @@ class AnthropicTransport(ProviderTransport):
         tool_runner=None,
         approver=None,
         cwd=None,
+        on_reasoning: OnDelta | None = None,
     ) -> LLMResponse:
         url = f"{base_url}/v1/messages"
         system, wire_messages = self._to_wire(messages)
@@ -127,13 +136,21 @@ class AnthropicTransport(ProviderTransport):
             "messages": wire_messages,
             "stream": stream,
         }
-        # Extended thinking: map effort -> token budget (must be < max_tokens).
-        budget = {"minimal": 1024, "low": 2048, "medium": 8192, "high": 16384,
-                  "xhigh": 32768}.get(reasoning)
-        if budget:
-            if max_tokens <= budget:
-                payload["max_tokens"] = budget + 4096
-            payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
+        # Thinking. Fable 5 / Opus 4.6+ / Sonnet 4.6 use ADAPTIVE thinking + the effort
+        # parameter (budget_tokens is removed there and returns a 400); older models keep
+        # the legacy budget_tokens mode. reasoning == "off" sends no thinking field at all.
+        if reasoning != "off" and reasoning in ("minimal", "low", "medium", "high", "xhigh"):
+            if model.startswith(_ADAPTIVE_THINKING_PREFIXES):
+                payload["thinking"] = {"type": "adaptive", "display": "summarized"}
+                payload["output_config"] = {"effort": {
+                    "minimal": "low", "low": "low", "medium": "medium",
+                    "high": "high", "xhigh": "max"}[reasoning]}
+            else:
+                budget = {"minimal": 1024, "low": 2048, "medium": 8192, "high": 16384,
+                          "xhigh": 32768}[reasoning]
+                if max_tokens <= budget:
+                    payload["max_tokens"] = budget + 4096
+                payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
         # claude.ai/Claude-Code OAuth tokens require the system prompt to begin with the
         # Claude Code identity block, or the Messages API rejects the request. Detect OAuth
         # by the bearer beta header and prepend it.
@@ -155,7 +172,7 @@ class AnthropicTransport(ProviderTransport):
             payload["tools"] = wire_tools
 
         if stream:
-            return self._stream(url, headers, payload, on_delta, timeout)
+            return self._stream(url, headers, payload, on_delta, timeout, on_reasoning)
         return self._blocking(url, headers, payload, timeout)
 
     def _blocking(self, url, headers, payload, timeout) -> LLMResponse:
@@ -170,6 +187,8 @@ class AnthropicTransport(ProviderTransport):
         data = r.json()
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
+        reasoning_parts: list[str] = []
+        thinking_blocks: list[dict] = []
         for block in data.get("content", []):
             if block.get("type") == "text":
                 text_parts.append(block.get("text", ""))
@@ -177,17 +196,24 @@ class AnthropicTransport(ProviderTransport):
                 tool_calls.append(
                     ToolCall(id=block["id"], name=block["name"], arguments=block.get("input", {}))
                 )
+            elif block.get("type") in ("thinking", "redacted_thinking"):
+                thinking_blocks.append(block)            # verbatim, incl. signature
+                if block.get("thinking"):
+                    reasoning_parts.append(block["thinking"])
         u = data.get("usage", {})
         return LLMResponse(
             text="".join(text_parts),
             tool_calls=tool_calls,
             finish_reason=data.get("stop_reason"),
+            reasoning="\n".join(reasoning_parts),
+            thinking_blocks=thinking_blocks,
             usage=Usage(u.get("input_tokens", 0), u.get("output_tokens", 0),
                         u.get("cache_read_input_tokens", 0), u.get("cache_creation_input_tokens", 0)),
             raw=data,
         )
 
-    def _stream(self, url, headers, payload, on_delta, timeout) -> LLMResponse:
+    def _stream(self, url, headers, payload, on_delta, timeout,
+                on_reasoning=None) -> LLMResponse:
         text_parts: list[str] = []
         blocks: dict[int, dict] = {}   # index -> {type, ...}
         tool_args: dict[int, str] = {}
@@ -221,6 +247,17 @@ class AnthropicTransport(ProviderTransport):
                                 on_delta(t)
                         elif delta.get("type") == "input_json_delta":
                             tool_args[idx] = tool_args.get(idx, "") + delta.get("partial_json", "")
+                        elif delta.get("type") == "thinking_delta":
+                            t = delta.get("thinking", "")
+                            b = blocks.get(idx)
+                            if b is not None:
+                                b["thinking"] = b.get("thinking", "") + t
+                            if on_reasoning and t:
+                                on_reasoning(t)
+                        elif delta.get("type") == "signature_delta":
+                            b = blocks.get(idx)
+                            if b is not None:
+                                b["signature"] = b.get("signature", "") + delta.get("signature", "")
                     elif etype == "message_delta":
                         d = ev.get("delta", {})
                         if d.get("stop_reason"):
@@ -236,14 +273,22 @@ class AnthropicTransport(ProviderTransport):
                     elif etype == "message_stop":
                         break
         tool_calls: list[ToolCall] = []
+        thinking_blocks: list[dict] = []
+        reasoning_parts: list[str] = []
         for idx, block in sorted(blocks.items()):
             if block.get("type") == "tool_use":
                 raw = tool_args.get(idx, "") or "{}"
                 tool_calls.append(ToolCall.from_json_args(block["id"], block["name"], raw))
+            elif block.get("type") in ("thinking", "redacted_thinking"):
+                thinking_blocks.append(block)            # rebuilt verbatim (text + signature)
+                if block.get("thinking"):
+                    reasoning_parts.append(block["thinking"])
         return LLMResponse(
             text="".join(text_parts),
             tool_calls=tool_calls,
             finish_reason=stop_reason,
+            reasoning="\n".join(reasoning_parts),
+            thinking_blocks=thinking_blocks,
             usage=usage,
         )
 

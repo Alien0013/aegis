@@ -96,8 +96,7 @@ def _banner(out: Output) -> None:
 
 MODEL_PRESETS: dict[str, list[tuple[str, str]]] = {
     "codex": [
-        ("gpt-5.5-pro", "GPT-5.5 Pro (most capable)"),
-        ("gpt-5.5", "GPT-5.5 Codex"),
+        ("gpt-5.5", "GPT-5.5 Codex (most capable)"),
         ("gpt-5.4", "GPT-5.4 Codex"),
         ("gpt-5.4-mini", "GPT-5.4 mini Codex"),
         ("gpt-5.3-codex", "GPT-5.3 Codex"),
@@ -105,8 +104,7 @@ MODEL_PRESETS: dict[str, list[tuple[str, str]]] = {
         ("codex-auto-review", "Codex auto review"),
     ],
     "openai-codex": [
-        ("gpt-5.5-pro", "GPT-5.5 Pro (most capable)"),
-        ("gpt-5.5", "GPT-5.5 Codex"),
+        ("gpt-5.5", "GPT-5.5 Codex (most capable)"),
         ("gpt-5.4", "GPT-5.4 Codex"),
         ("gpt-5.4-mini", "GPT-5.4 mini Codex"),
         ("gpt-5.3-codex", "GPT-5.3 Codex"),
@@ -115,7 +113,6 @@ MODEL_PRESETS: dict[str, list[tuple[str, str]]] = {
     ],
     "openai": [
         ("gpt-5.5", "GPT-5.5 (latest frontier)"),
-        ("gpt-5.5-pro", "GPT-5.5 Pro (most capable — ChatGPT subscription/OAuth, not API key)"),
         ("gpt-5.4", "GPT-5.4"),
         ("gpt-5.3", "GPT-5.3"),
         ("gpt-5.2", "GPT-5.2"),
@@ -130,8 +127,10 @@ MODEL_PRESETS: dict[str, list[tuple[str, str]]] = {
     ],
     "anthropic": [
         ("claude-sonnet-4-6", "Claude Sonnet 4.6 (balanced, recommended)"),
-        ("claude-opus-4-8", "Claude Opus 4.8 (most capable)"),
+        ("claude-opus-4-8", "Claude Opus 4.8 (most capable Opus)"),
+        ("claude-fable-5", "Claude Fable 5 (frontier tier above Opus)"),
         ("claude-haiku-4-5", "Claude Haiku 4.5 (fast, cheap)"),
+        ("claude-opus-4-6", "Claude Opus 4.6"),
         ("claude-sonnet-4-5", "Claude Sonnet 4.5"),
     ],
     "google": [

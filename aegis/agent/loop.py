@@ -377,10 +377,17 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
         def delta_cb(text: str) -> None:
             emit({"type": "assistant_delta", "text": text})
 
+        reasoned_live = {"v": False}
+
+        def reasoning_cb(text: str) -> None:
+            reasoned_live["v"] = True
+            emit({"type": "reasoning_delta", "text": text})
+
         try:
             resp = _provider_complete(
                 agent.provider, session.messages, tools=schemas, stream=agent.stream, on_delta=delta_cb,
                 reasoning=getattr(agent, "reasoning", "off"),
+                on_reasoning=reasoning_cb,
                 tool_runner=executor.execute_one_raw,
                 approver=getattr(agent.tool_context, "approver", None),
                 cwd=agent.cwd,
@@ -402,7 +409,7 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                 msg += ("\n  → That model isn't available on this endpoint/auth. Pick another with "
                         "`aegis model set <provider> <model>` (e.g. gpt-5.2-chat-latest for an API "
                         "key), or use the `codex` provider + `codex login` for ChatGPT-subscription "
-                        "models like gpt-5.5-pro.")
+                        "models like gpt-5.5.")
             emit({"type": "error", "message": msg})
             err = Message.assistant(f"[provider error] {msg}")
             session.messages.append(err)
@@ -414,8 +421,9 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
         resp.text = strip_reasoning(resp.text)   # drop any inlined <think>…</think> blocks
         assistant_msg = resp.to_message()
         session.messages.append(assistant_msg)
-        if resp.reasoning:
+        if resp.reasoning and not reasoned_live["v"]:    # blocking path: emit once at the end
             emit({"type": "reasoning_delta", "text": resp.reasoning})
+        reasoned_live["v"] = False
         emit({"type": "assistant_message", "text": resp.text,
               "tool_calls": [tc.to_dict() for tc in resp.tool_calls]})
 

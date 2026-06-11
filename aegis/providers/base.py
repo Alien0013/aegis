@@ -92,7 +92,17 @@ class Provider:
         tool_runner: ToolRunner | None = None,
         approver: ApprovalHandler | None = None,
         cwd: Path | None = None,
+        on_reasoning: OnDelta | None = None,
     ) -> LLMResponse:
+        # Live thinking stream: only transports that accept on_reasoning get it.
+        extra_kwargs = {}
+        if on_reasoning is not None:
+            import inspect
+            try:
+                if "on_reasoning" in inspect.signature(self.transport.complete).parameters:
+                    extra_kwargs["on_reasoning"] = on_reasoning
+            except (TypeError, ValueError):
+                pass
         attempts = 0
         while True:
             try:
@@ -110,6 +120,7 @@ class Provider:
                     tool_runner=tool_runner,
                     approver=approver,
                     cwd=cwd,
+                    **extra_kwargs,
                 )
             except Exception as e:  # noqa: BLE001
                 # Map the failure to a precise recovery action and act on it:

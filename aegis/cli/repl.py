@@ -171,6 +171,16 @@ class Renderer:
 
     def __call__(self, e: dict) -> None:
         t = e["type"]
+        if t == "reasoning_delta":
+            # live thinking stream, rendered dim so it reads as scratchpad, not answer
+            if not getattr(self, "_thinking", False):
+                self._thinking = True
+                _raw("\x1b[2m\u273d thinking\u2026\n")
+            _raw("\x1b[2m" + e["text"] + "\x1b[0m")
+            return
+        if getattr(self, "_thinking", False):
+            self._thinking = False
+            _raw("\x1b[0m\n")
         if t == "assistant_delta":
             self._streaming = True
             _raw(e["text"])
