@@ -300,12 +300,12 @@ class AcpServer:
                 on_event=on_event,
             )
             if agent.cancel_event.is_set():
-                self._result(req_id, {"stopReason": "cancelled"})
+                self._result(req_id, _prompt_result("cancelled", result))
                 return
             # Streaming providers already emitted deltas; if nothing streamed send it once.
             if not getattr(agent, "stream", True) and result.text:
                 self._send_chunk(sid, result.text)
-            self._result(req_id, {"stopReason": "end_turn"})
+            self._result(req_id, _prompt_result("end_turn", result))
         except Exception as e:  # noqa: BLE001
             self._send_chunk(sid, f"[error] {type(e).__name__}: {e}")
             self._result(req_id, {"stopReason": "error"})
@@ -503,6 +503,25 @@ def _prompt_meta(session: Session) -> dict[str, Any]:
         "contextReferences": _jsonable(last_refs),
         "contextReferenceHistory": _jsonable(ref_history[-10:]),
     }
+
+
+def _prompt_result(stop_reason: str, result: Any | None = None) -> dict[str, Any]:
+    payload: dict[str, Any] = {"stopReason": stop_reason}
+    if result is None:
+        return payload
+    session = getattr(result, "session", None)
+    session_id = getattr(session, "id", "") if session is not None else ""
+    if session_id:
+        payload["sessionId"] = session_id
+    for attr, key in (
+        ("run_id", "runId"),
+        ("trace_id", "traceId"),
+        ("turn_id", "turnId"),
+    ):
+        value = str(getattr(result, attr, "") or "")
+        if value:
+            payload[key] = value
+    return payload
 
 
 def _session_row(row: dict[str, Any], *, store: SessionStore) -> dict[str, Any]:

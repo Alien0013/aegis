@@ -152,6 +152,45 @@ def test_acp_prompt_streams_and_completes(monkeypatch, tmp_path):
     assert any("echo:hi" in json.dumps(u) for u in updates)
 
 
+def test_acp_prompt_returns_run_trace_turn_metadata(monkeypatch, tmp_path):
+    class FakeAgent:
+        stream = False
+        tool_context = type("TC", (), {})()
+
+        def __init__(self):
+            import threading
+            self.cancel_event = threading.Event()
+            self._trace_context = {}
+
+        def run(self, text, on_event=None):
+            self._trace_context = {"trace_id": "trace_acp", "turn_id": "turn_acp"}
+            return type("R", (), {"content": f"echo:{text}"})()
+
+    init = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+    new = {"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {"cwd": str(tmp_path)}}
+    server, out = _server(monkeypatch, tmp_path, json.dumps(init) + "\n" + json.dumps(new) + "\n",
+                          agent=FakeAgent())
+    server.serve()
+    sid = next(m for m in _lines(out) if m.get("id") == 2)["result"]["sessionId"]
+
+    server._handle({"jsonrpc": "2.0", "id": 3, "method": "session/prompt",
+                    "params": {"sessionId": sid, "prompt": "hi"}})
+    done = _wait_for(out, lambda m: m.get("id") == 3)
+    result = done["result"]
+
+    assert result["stopReason"] == "end_turn"
+    assert result["sessionId"] == sid
+    assert result["runId"].startswith("run_")
+    assert result["traceId"] == "trace_acp"
+    assert result["turnId"] == "turn_acp"
+
+    from aegis.session import SessionStore
+    saved = SessionStore().load(sid)
+    assert saved.meta["last_run_id"] == result["runId"]
+    assert saved.meta["last_trace_id"] == "trace_acp"
+    assert saved.meta["last_turn_id"] == "turn_acp"
+
+
 def test_acp_prompt_preserves_image_blocks(monkeypatch, tmp_path):
     seen = {}
 

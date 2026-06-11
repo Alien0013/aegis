@@ -79,6 +79,10 @@ preempts the loop; `/status` shows the active goal plus a local session recap.
 - `aegis dashboard`, `aegis acp`, `aegis pairing`, `aegis background`
 - `aegis plugins [list|doctor|path|install|enable|disable|remove]`
 
+ACP `session/prompt` responses include `sessionId`, `runId`, `traceId`, and
+`turnId` when available, matching the dashboard/RPC breadcrumb model for editor
+deep-links and replay.
+
 `aegis batch FILE` runs one prompt per non-comment line. Each prompt records a
 separate `batch` run with `batch_source`, `batch_index`, and `batch_total`
 metadata for dashboard filtering and replay.
