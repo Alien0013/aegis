@@ -1328,6 +1328,75 @@ def test_mcp_server_uses_full_tool_context_and_visible_inventory(monkeypatch, tm
     }
 
 
+def test_mcp_server_initializes_provider_tools_and_shutdown(monkeypatch, tmp_path):
+    import io
+    import json
+
+    from aegis.config import Config
+    from aegis.mcp.server import run_mcp_server
+    from aegis.tools.base import Tool, ToolResult
+    from aegis.tools.registry import ToolRegistry
+
+    calls = []
+
+    class ProviderTool(Tool):
+        name = "provider_recall"
+        description = "Provider memory recall."
+        parameters = {"type": "object", "properties": {}}
+        toolset = "core"
+
+        def run(self, args, ctx):
+            calls.append(("tool", ctx.session.id, ctx.memory is not None))
+            return ToolResult.ok("provider ok")
+
+    class Provider:
+        def initialize(self, session_id="", **_kw):
+            calls.append(("initialize", session_id))
+
+        def tools(self):
+            calls.append(("tools",))
+            return [ProviderTool()]
+
+        def shutdown(self):
+            calls.append(("shutdown",))
+
+    class Perms:
+        def __init__(self, config):
+            self.config = config
+
+        def authorize(self, tool, args, ctx):
+            return True, ""
+
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("aegis.tools.registry.default_registry", lambda: ToolRegistry())
+    monkeypatch.setattr("aegis.tools.permissions.PermissionEngine", Perms)
+    monkeypatch.setattr("aegis.memory_providers.build_memory_provider",
+                        lambda _name, _config: Provider())
+
+    cfg = Config.load()
+    cfg.data.setdefault("memory", {})["provider"] = "fake"
+    cfg.data.setdefault("tools", {})["toolsets"] = ["core"]
+    messages = [
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+         "params": {"name": "provider_recall", "arguments": {}}},
+    ]
+    monkeypatch.setattr("sys.stdin", io.StringIO("\n".join(json.dumps(m) for m in messages) + "\n"))
+    out = io.StringIO()
+    monkeypatch.setattr("sys.stdout", out)
+
+    run_mcp_server(cfg)
+
+    rows = [json.loads(line) for line in out.getvalue().splitlines()]
+    assert [t["name"] for t in rows[0]["result"]["tools"]] == ["provider_recall"]
+    assert rows[1]["result"]["content"][0]["text"] == "provider ok"
+    assert ("initialize", "mcp:stdio") in calls
+    assert ("tools",) in calls
+    assert ("tool", "mcp:stdio", True) in calls
+    assert calls[-1] == ("shutdown",)
+
+
 def test_dashboard_mcp_catalog_live_inventory(tmp_path):
     import sys
 
