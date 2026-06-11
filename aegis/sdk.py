@@ -169,6 +169,19 @@ class AegisClient:
         before_tools = agent.tools_used
         run_store = None
         run_id = ""
+        agent_provider = getattr(agent, "provider", None)
+        effective_model = (
+            model
+            or controls.get("model")
+            or str(getattr(agent_provider, "model", "") or "")
+            or str(self.config.get("model.default", "") or "")
+        )
+        effective_provider = (
+            provider
+            or controls.get("provider")
+            or str(getattr(agent_provider, "name", "") or "")
+            or str(self.config.get("model.provider", "") or "")
+        )
         try:
             from .runs import RunStore
 
@@ -179,8 +192,8 @@ class AegisClient:
                 title=title or session.title,
                 session_id=session.id,
                 prompt=text,
-                data={"model": model or controls.get("model", ""),
-                      "provider": provider or controls.get("provider", ""),
+                data={"model": effective_model,
+                      "provider": effective_provider,
                       "context_references": reference_meta,
                       **_workspace_run_meta(run_cwd)},
             )

@@ -23,7 +23,10 @@ def test_sdk_run_saves_session_and_trace():
 
     assert result.text == "sdk ok"
     assert result.run_id.startswith("run_")
-    assert RunStore().get(result.run_id)["surface"] == "sdk"
+    run = RunStore().get(result.run_id)
+    assert run["surface"] == "sdk"
+    assert run["data"]["provider"] == "fake"
+    assert run["data"]["model"] == "fake-model"
     assert result.session_id
     assert result.trace_id.startswith("trace_")
     assert result.provider == "fake"
@@ -167,6 +170,7 @@ def test_sdk_reuses_session_scoped_agent_provider():
 
 def test_sdk_respects_session_runtime_controls():
     from aegis.config import Config
+    from aegis.runs import RunStore
     from aegis.sdk import AegisClient
     from aegis.session import Session, SessionStore
     from aegis.types import LLMResponse
@@ -214,6 +218,9 @@ def test_sdk_respects_session_runtime_controls():
     assert result.text == "controlled"
     assert captured["provider_name"] == "custom"
     assert captured["model"] == "session-model"
+    run = RunStore().get(result.run_id)
+    assert run["data"]["provider"] == "custom"
+    assert run["data"]["model"] == "session-model"
     assert captured["provider_obj"].last_reasoning == "high"
     assert cfg.get("display.reasoning") == "live"
     assert cfg.get("gateway.busy_mode") == "interrupt"
