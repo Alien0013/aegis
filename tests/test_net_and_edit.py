@@ -1050,6 +1050,7 @@ def test_kanban_automation(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.agent.agent as agentmod
     from aegis import kanban_auto
+    from aegis.config import Config
     from aegis.kanban import KanbanStore
     from aegis.runs import RunStore
 
@@ -1064,12 +1065,18 @@ def test_kanban_automation(tmp_path, monkeypatch):
             return FakeResp("did: " + prompt.splitlines()[0])
     monkeypatch.setattr(agentmod.Agent, "create", staticmethod(lambda cfg, session=None: FakeAgent()))
 
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = False
     store = KanbanStore()
-    cards = kanban_auto.decompose("ship the launch", None, store=store)
+    cards = kanban_auto.decompose("ship the launch", cfg, store=store)
     assert [c.title for c in cards] == ["Set up repo", "Write tests"]
     assert len(store.list(status="ready")) == 2
+    decomp = next(row for row in RunStore().list(surface="kanban", limit=10)
+                  if row["data"].get("kanban_action") == "decompose")
+    assert decomp["data"]["provider"] == cfg.get("model.provider")
+    assert decomp["data"]["model"] == cfg.get("model.default")
 
-    done = kanban_auto.run_board(None, store=store)
+    done = kanban_auto.run_board(cfg, store=store)
     assert len(done) == 2
     assert not store.list(status="ready") and len(store.list(status="done")) == 2
     assert store.comments(done[0])           # agent result recorded on each card

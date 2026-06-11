@@ -33,13 +33,17 @@ def _extract_json_array(text: str) -> list:
 
 def decompose(goal: str, config, store: KanbanStore | None = None) -> list:
     """Ask the agent to split ``goal`` into subtasks and create a card for each. Returns cards."""
-    from .agent.agent import Agent
-    from .session import Session
+    from .surface import SurfaceRunner
     store = store or KanbanStore()
-    agent = Agent.create(config, session=Session.create())
-    resp = agent.run(_DECOMPOSE_PROMPT.format(goal=goal))
+    runner = SurfaceRunner(config, include_mcp=True, reuse_agents=False)
+    result = runner.run_prompt(
+        _DECOMPOSE_PROMPT.format(goal=goal),
+        title="kanban decomposition",
+        surface="kanban",
+        meta={"kanban_action": "decompose"},
+    )
     created = []
-    for t in _extract_json_array(resp.content or ""):
+    for t in _extract_json_array(result.text or ""):
         if isinstance(t, dict) and t.get("title"):
             created.append(store.create(str(t["title"])[:120], str(t.get("body", ""))))
     return created
