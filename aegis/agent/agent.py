@@ -338,12 +338,21 @@ class Agent:
                 pass
 
     def end_session(self) -> None:
-        """Fire the memory session-end hook (process exit, agent teardown, /new)."""
+        """Fire session-end hooks (process exit, agent teardown, /new)."""
         if self.memory:
             try:
                 self.memory.on_session_end(self.session.messages)
             except Exception:  # noqa: BLE001
                 pass
+        try:
+            from ..hooks import run_hooks
+            run_hooks(
+                self.config,
+                "session_stop",
+                {"session_id": self.session.id, "message_count": len(self.session.messages)},
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     # -- run ----------------------------------------------------------------
     def _apply_routing(self, text: str) -> None:
@@ -395,6 +404,20 @@ class Agent:
         if not self.session.messages:      # first turn of a session
             from ..plugins import fire_hook
             fire_hook("on_session_start", self)
+            try:
+                from ..hooks import run_hooks
+                run_hooks(
+                    self.config,
+                    "session_start",
+                    {
+                        "session_id": self.session.id,
+                        "provider": getattr(self.provider, "name", ""),
+                        "model": getattr(self.provider, "model", ""),
+                        "cwd": str(self.cwd),
+                    },
+                )
+            except Exception:  # noqa: BLE001
+                pass
         msg = user_input if isinstance(user_input, Message) else Message.user(user_input)
         self._apply_routing(msg.content)
         self.session.maybe_title_from(msg.content)

@@ -100,6 +100,42 @@ def test_hooks_are_fail_soft(tmp_path, monkeypatch):
     assert mm.on_pre_compress([]) == ""
 
 
+def test_shell_session_lifecycle_hooks_fire(tmp_path, monkeypatch):
+    config = _cfg(tmp_path, monkeypatch)
+    config.data["memory"]["enabled"] = False
+    from aegis.agent.agent import Agent
+    from aegis.session import Session
+    from aegis.types import LLMResponse
+    from conftest import FakeProvider
+
+    calls = []
+
+    def fake_run_hooks(_config, event, context=None):
+        calls.append((event, dict(context or {})))
+        return []
+
+    monkeypatch.setattr("aegis.hooks.run_hooks", fake_run_hooks)
+    provider = FakeProvider([LLMResponse(text="one"), LLMResponse(text="two")])
+    agent = Agent(config=config, provider=provider, session=Session.create(), cwd=tmp_path)
+
+    agent.run("first")
+    agent.run("second")
+    agent.end_session()
+
+    events = [event for event, _context in calls]
+    assert events.count("session_start") == 1
+    assert events.count("user_prompt") == 2
+    assert events.count("session_stop") == 1
+    start = next(context for event, context in calls if event == "session_start")
+    stop = next(context for event, context in calls if event == "session_stop")
+    assert start["session_id"] == agent.session.id
+    assert start["provider"] == "fake"
+    assert start["model"] == "fake-model"
+    assert start["cwd"] == str(tmp_path)
+    assert stop["session_id"] == agent.session.id
+    assert stop["message_count"] == len(agent.session.messages)
+
+
 def test_provider_tools_registered_on_agent(tmp_path, monkeypatch):
     config = _cfg(tmp_path, monkeypatch)
     from aegis.agent.agent import Agent
