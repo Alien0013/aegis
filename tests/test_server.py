@@ -63,7 +63,9 @@ class _FakeRunner:
 
 def test_openai_models_lists_model_ids_not_only_provider_names(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis import config as cfg_paths
     from aegis.config import Config
+    from aegis.providers import registry
     from aegis.server import make_handler
 
     cfg = Config.load()
@@ -73,19 +75,34 @@ def test_openai_models_lists_model_ids_not_only_provider_names(monkeypatch, tmp_
         "base_url": "http://local.test/v1",
         "default_model": "local-default-model",
     }]
+    plug = cfg_paths.sub("plugins") / "server_provider.py"
+    plug.parent.mkdir(parents=True, exist_ok=True)
+    plug.write_text(
+        "from aegis.providers.registry import ProviderSpec\n"
+        "from aegis.providers.base import ApiMode\n"
+        "def register(api):\n"
+        "    api.register_provider(ProviderSpec(\n"
+        "        name='serverplug', api_mode=ApiMode.CHAT_COMPLETIONS,\n"
+        "        base_url='http://serverplug.local/v1', default_model='serverplug-model',\n"
+        "        context_length=64000, auth_scheme='none'))\n",
+        encoding="utf-8",
+    )
     srv, port = _serve(make_handler(cfg))
     try:
         status, data = _request(port, "GET", "/v1/models")
     finally:
         srv.shutdown()
         srv.server_close()
+        registry.unregister_provider("serverplug")
 
     assert status == 200
     ids = {row["id"] for row in json.loads(data)["data"]}
     assert "local-active-model" in ids
     assert "local-default-model" in ids
+    assert "serverplug-model" in ids
     assert "gpt-5.5" in ids
     assert "localtest" not in ids
+    assert "serverplug" not in ids
 
 
 def test_openai_chat_completions_http_nonstream_records_run_metadata(monkeypatch, tmp_path):

@@ -85,7 +85,6 @@ def _usage(agent) -> dict[str, Any]:
 
 
 def _models(config: Config) -> list[dict[str, Any]]:
-    from .onboarding import MODEL_PRESETS
     from .providers import registry
 
     seen: set[str] = set()
@@ -102,16 +101,9 @@ def _models(config: Config) -> list[dict[str, Any]]:
         rows.append(row)
 
     add(config.get("model.default"), config.get("model.provider", ""))
-    for provider, presets in MODEL_PRESETS.items():
-        for model, _label in presets:
+    for provider in registry.list_providers(config):
+        for model in registry.known_models_for(provider, config):
             add(model, provider)
-    for provider in registry.list_providers():
-        spec = registry.get_spec(provider)
-        if spec is not None:
-            add(spec.default_model, provider)
-    for item in config.get("custom_providers", []) or []:
-        if isinstance(item, dict):
-            add(item.get("default_model") or item.get("model"), item.get("name", ""))
     return rows
 
 

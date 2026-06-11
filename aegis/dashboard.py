@@ -613,19 +613,19 @@ def _dashboard_chat_stream(body: dict, chat_runner, send) -> dict:
 
 
 def _dashboard_models(config: Config) -> dict:
-    from .onboarding import MODEL_PRESETS
+    from .providers import registry
     from .providers.registry import provider_report
 
     report = provider_report(config)
-    provider_names = sorted({
+    provider_names = sorted(({
         str(row.get("name")) for row in report.get("provider_catalog", [])
         if row.get("name")
-    })
+    } | {str(config.get("model.provider") or "")}) - {""})
     report.update({
         "provider": config.get("model.provider"),
         "model": config.get("model.default"),
         "providers": provider_names,
-        "presets": {p: [m for m, _ in MODEL_PRESETS.get(p, [])] for p in MODEL_PRESETS},
+        "presets": {p: registry.known_models_for(p, config) for p in provider_names},
     })
     return report
 

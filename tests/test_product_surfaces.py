@@ -773,6 +773,7 @@ def test_dashboard_models_exposes_resolver_report():
     assert data["routing"][0]["provider"] == "localtest"
     assert data["routing"][0]["capabilities"]["tool_calls"] is True
     assert "localtest" in data["providers"]
+    assert data["presets"]["localtest"] == ["local-model"]
     assert any(row["name"] == "localtest" and row["origin"] == "custom"
                for row in data["provider_catalog"])
 
