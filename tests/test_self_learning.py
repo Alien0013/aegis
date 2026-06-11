@@ -109,6 +109,7 @@ def test_forked_review_writes_agent_created_skill(tmp_path):
     from aegis.agent.agent import Agent
     from aegis.agent import review
     from aegis.config import Config
+    from aegis.runs import RunStore
     from aegis.session import Session
     from aegis.types import LLMResponse, Message, ToolCall
 
@@ -130,6 +131,10 @@ def test_forked_review_writes_agent_created_skill(tmp_path):
     actions = review.run_review(a, "skill")
     assert actions and "deploy-flow" in a.skills.discover()
     assert provenance.is_agent_created("deploy-flow")
+    run = next(row for row in RunStore().list(surface="review", limit=5)
+               if row["data"].get("review_kind") == "skill")
+    assert run["data"]["provider"] == "f"
+    assert run["data"]["model"] == "m"
 
 
 def test_compaction_splits_into_child_session(tmp_path, monkeypatch):

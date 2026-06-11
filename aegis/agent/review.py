@@ -80,7 +80,16 @@ def run_review(agent, kind: str, on_event=None) -> list[str]:
             actions.append(ev.get("summary", ev["name"]))
 
     with provenance.origin_scope("agent"):     # skills written here are curatable
-        child.run(f"{prompt}\n\nCONVERSATION:\n{snapshot}", _capture)
+        from ..surface import SurfaceRunner
+        SurfaceRunner(agent.config, cwd=agent.cwd, include_mcp=False, reuse_agents=False).run_prompt(
+            f"{prompt}\n\nCONVERSATION:\n{snapshot}",
+            session=child.session,
+            agent=child,
+            surface="review",
+            title=f"{kind} review",
+            meta={"review_kind": kind},
+            on_event=_capture,
+        )
     if on_event:
         on_event({"type": "review_done", "kind": kind, "actions": actions})
     return actions
