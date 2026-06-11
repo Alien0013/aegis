@@ -448,7 +448,11 @@ class GatewayRunner:
                 apply_session_runtime(agent)
                 self._agents[key] = agent
                 if len(self._agents) > self._agent_cap:
-                    del self._agents[next(iter(self._agents))]
+                    evict_key = next(iter(self._agents))
+                    evicted = self._agents.pop(evict_key, None)
+                    if evicted is not None:
+                        from ..surface import _close_agent
+                        _close_agent(evicted)
             else:
                 from ..surface import apply_session_runtime
                 apply_session_runtime(agent)

@@ -57,6 +57,61 @@ def test_new_closes_cached_agent_before_reset(tmp_path, monkeypatch):
     assert r._session(key).messages == []
 
 
+def test_agent_cache_eviction_closes_cached_agent(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from aegis.gateway.base import MessageEvent
+    from aegis.types import Message
+
+    import aegis.gateway.runner as rmod
+
+    r = _runner(tmp_path, monkeypatch)
+    r._agent_cap = 1
+    closed = []
+
+    class FakeMemory:
+        def __init__(self, sid):
+            self.sid = sid
+
+        def shutdown(self):
+            closed.append((self.sid, "memory"))
+
+    class FakeTransport:
+        def __init__(self, sid):
+            self.sid = sid
+
+        def close(self):
+            closed.append((self.sid, "transport"))
+
+    class FakeAgent:
+        def __init__(self, session):
+            self.session = session
+            self.memory = FakeMemory(session.id)
+            self.provider = SimpleNamespace(transport=FakeTransport(session.id))
+            self.budget = SimpleNamespace(api_call_count=0)
+
+        def end_session(self):
+            closed.append((self.session.id, "end"))
+
+    monkeypatch.setattr(rmod.Agent, "create",
+                        staticmethod(lambda *args, **kwargs: FakeAgent(kwargs["session"])))
+    monkeypatch.setattr(r._surface_runner, "run_prompt",
+                        lambda *args, **kwargs: SimpleNamespace(message=Message.assistant("ok")))
+
+    ev1 = _ev("first")
+    ev2 = MessageEvent(platform="telegram", chat_id="c2", text="second",
+                       user_id="u1", user_name="alien")
+    key1 = r._key(ev1)
+    key2 = r._key(ev2)
+
+    assert r.dispatch(ev1) == "ok"
+    assert r.dispatch(ev2) == "ok"
+
+    assert key1 not in r._agents
+    assert key2 in r._agents
+    assert closed == [(key1, "end"), (key1, "memory"), (key1, "transport")]
+
+
 def test_model_session_override(tmp_path, monkeypatch):
     r = _runner(tmp_path, monkeypatch)
     key = r._key(_ev("x"))
