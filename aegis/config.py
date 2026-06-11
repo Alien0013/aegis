@@ -150,10 +150,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "provider": "",              # "" builtin only; or "mem0" | "jsonl"
         "memory_char_limit": 2200,   # whole-store budget for MEMORY.md (Hermes default)
         "user_char_limit": 1375,     # whole-store budget for USER.md (Hermes default)
-        "refresh": "session",        # session = snapshot frozen per session (cache-stable,
-                                     #   Hermes-style; new facts load next session/compaction)
-                                     # message = rebuild prompt when memory files change
+        "refresh": "session",        # session/message = rebuild when memory files change
                                      #   (facts apply next message; one cache miss per write)
+                                     # frozen/never = keep prompt fixed until explicit rebuild
     },
     "tools": {
         "exec_mode": "auto",         # deny | allowlist | ask | smart | auto | full

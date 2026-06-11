@@ -113,6 +113,43 @@ def test_bot_remembers_fact_saved_on_previous_turn(tmp_path, monkeypatch):
     assert run_conversation is not None                   # import sanity
 
 
+def test_default_agent_run_refreshes_stale_memory_on_next_turn(tmp_path, monkeypatch):
+    config = _cfg(tmp_path, monkeypatch)
+    from aegis.agent.agent import Agent
+    from aegis.session import Session
+    from aegis.types import LLMResponse
+
+    class CapturingProvider:
+        name = "fake"
+        model = "fake-model"
+        api_mode = "chat_completions"
+        context_length = 200_000
+
+        def __init__(self):
+            self.calls = []
+
+        def complete(self, messages, **_kwargs):
+            self.calls.append([m.content for m in messages])
+            return LLMResponse(text="ok")
+
+    provider = CapturingProvider()
+    agent = Agent(config=config, provider=provider, session=Session.create(), cwd=tmp_path)
+
+    agent.run("hello")
+    assert "The user's name is TJ" not in provider.calls[-1][0]
+
+    result = agent.memory.handle_tool({
+        "action": "add",
+        "target": "user",
+        "content": "The user's name is TJ.",
+    })
+    assert "next message" in result.content
+
+    agent.run("what is my name?")
+
+    assert "The user's name is TJ" in provider.calls[-1][0]
+
+
 def test_legacy_workspace_profile_migrates_once(tmp_path, monkeypatch):
     """Old installs had a second USER.md in workspace/. It is folded into
     memories/USER.md exactly once and parked — ONE profile file from then on."""
@@ -214,9 +251,9 @@ def test_memory_add_dedups_near_duplicates(tmp_path, monkeypatch):
     assert len(store.entries("user")) == 2
 
 
-def test_refresh_policy_session_keeps_snapshot_frozen(monkeypatch):
-    """Default (Hermes-style): mid-session memory writes must NOT rebuild the prompt;
-    'message' mode must. Cache stability vs freshness is config-chosen."""
+def test_refresh_policy_refreshes_default_and_allows_frozen(monkeypatch):
+    """Default turns refresh stale memory on the next message; frozen/never keeps
+    the old cache-first behavior for users who explicitly choose it."""
     from aegis.agent.agent import Agent
     from aegis.config import Config
     from aegis.session import Session
@@ -241,5 +278,7 @@ def test_refresh_policy_session_keeps_snapshot_frozen(monkeypatch):
             pass
         return calls["refresh"]
 
-    assert run_one("session") == 0      # frozen: stale memory does not rebuild mid-session
-    assert run_one("message") >= 1      # message mode: rebuilds so the fact applies now
+    assert run_one("session") >= 1      # default: stale facts apply next turn
+    assert run_one("message") >= 1      # alias: rebuilds so the fact applies now
+    assert run_one("frozen") == 0       # explicit cache-first mode
+    assert run_one("never") == 0

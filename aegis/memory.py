@@ -446,9 +446,10 @@ class MemoryManager:
             result = self.store.add(target, args["content"])
             if result.startswith(("memory full", "refused", "multiple entries")):
                 return ToolResult.error(result)      # the model must consolidate / rephrase
-            if (self.config.get("memory.refresh", "session") or "session") == "message":
+            refresh_mode = (self.config.get("memory.refresh", "session") or "session")
+            if refresh_mode not in {"frozen", "never"}:
                 note = "now in context from your next message on."
-            else:                                    # session mode (Hermes): durable now,
+            else:
                 note = ("saved durably — it enters the prompt on the next session "
                         "(or at the next compaction). Keep using it from this "
                         "conversation's own context meanwhile.")

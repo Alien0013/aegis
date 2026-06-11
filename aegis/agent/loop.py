@@ -708,15 +708,12 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
     """Drive one user turn to completion. Returns the final assistant message."""
     emit = on_event or (lambda e: None)
     # Memory freshness policy (memory.refresh):
-    #   "session" (default, Hermes-style) — the snapshot stays FROZEN for the whole
-    #     session so the prompt prefix is byte-stable and the cache never thrashes,
-    #     no matter how often memory is written. Saves are durable on disk at once
-    #     and load on the next session — or earlier, for free, whenever something
-    #     else already rebuilds the prompt (compaction, session split, /model).
-    #   "message" — mtime check each turn; a changed file rebuilds the prompt so
-    #     facts apply from the very next message (one cache miss per write).
+    #   "session" (default) / "message" — if memory files changed since the last
+    #     prompt snapshot, rebuild at the next turn so durable facts are visible.
+    #   "frozen" / "never" — keep the prompt prefix fixed until an explicit
+    #     refresh/rebuild path such as /new, compaction, or a new process.
     refresh_mode = (agent.config.get("memory.refresh", "session") or "session")
-    if (refresh_mode == "message" and agent.memory is not None
+    if (refresh_mode not in {"frozen", "never"} and agent.memory is not None
             and agent.memory.is_stale()):
         agent.refresh_volatile()
     else:
