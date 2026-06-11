@@ -470,8 +470,9 @@ class Agent:
         except Exception:  # noqa: BLE001
             pass
 
-        if self.memory and result.content:
-            self.memory.history.append("assistant", result.content, self.session.id)
+        if self.memory:
+            if result.content:
+                self.memory.history.append("assistant", result.content, self.session.id)
             self.memory.sync_turn(self.session.messages)   # fan out to the provider, fail-soft
         if self.store:
             try:

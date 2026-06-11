@@ -202,6 +202,42 @@ def test_prefetch_is_wire_only_not_persisted(tmp_path, monkeypatch):
     assert all("<retrieved_memory>" not in row["content"] for row in recent)
 
 
+def test_sync_turn_fires_for_empty_assistant_response(tmp_path, monkeypatch):
+    config = _cfg(tmp_path, monkeypatch)
+    from aegis.agent.agent import Agent
+    from aegis.memory import MemoryManager
+    from aegis.session import Session
+    from aegis.types import LLMResponse
+
+    class P:
+        def __init__(self):
+            self.synced = []
+
+        def sync_turn(self, messages):
+            self.synced.append([(m.role, m.content) for m in messages])
+
+    class Provider:
+        context_length = 200_000
+        name = "fake"
+        model = "fake"
+        api_mode = None
+        auth = None
+
+        def complete(self, messages, **_kwargs):
+            return LLMResponse(text="")
+
+    external = P()
+    agent = Agent(config=config, provider=Provider(), session=Session.create(),
+                  memory=MemoryManager(config, external=external), cwd=tmp_path)
+
+    result = agent.run("say nothing")
+
+    assert result.content == ""
+    assert len(external.synced) == 1
+    assert external.synced[0][-2:] == [("user", "say nothing"), ("assistant", "")]
+    assert all(row["role"] != "assistant" for row in agent.memory.history.recent(5))
+
+
 def test_pre_compress_note_reaches_manual_summary_input(tmp_path, monkeypatch):
     config = _cfg(tmp_path, monkeypatch)
     from aegis.agent.agent import Agent
