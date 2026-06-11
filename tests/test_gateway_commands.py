@@ -31,6 +31,32 @@ def test_whoami_and_help(tmp_path, monkeypatch):
     assert all(row["trace_id"].startswith("trace_") for row in runs)
 
 
+def test_new_closes_cached_agent_before_reset(tmp_path, monkeypatch):
+    from aegis.types import Message
+
+    r = _runner(tmp_path, monkeypatch)
+    ev = _ev("x")
+    key = r._key(ev)
+    old = r._session(key)
+    old.messages.append(Message.user("old gateway prompt"))
+    closed = []
+
+    class CachedAgent:
+        session = old
+
+        def end_session(self):
+            closed.append([m.content for m in self.session.messages])
+
+    r._agents[key] = CachedAgent()
+
+    out = r.dispatch(_ev("/new"))
+
+    assert "Started a fresh session" in out
+    assert closed == [["old gateway prompt"]]
+    assert key not in r._agents
+    assert r._session(key).messages == []
+
+
 def test_model_session_override(tmp_path, monkeypatch):
     r = _runner(tmp_path, monkeypatch)
     key = r._key(_ev("x"))

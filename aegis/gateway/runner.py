@@ -173,6 +173,13 @@ class GatewayRunner:
         # Intercept control commands before the agent.
         if text in ("/stop", "/new", "/reset"):
             def action(proxy):
+                agent = self._agents.pop(key, None)
+                end = getattr(agent, "end_session", None)
+                if callable(end):
+                    try:
+                        end()
+                    except Exception:  # noqa: BLE001
+                        pass
                 fresh = Session(id=key, title=key)
                 self._sessions[key] = fresh
                 proxy.session = fresh

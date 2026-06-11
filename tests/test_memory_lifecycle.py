@@ -275,6 +275,42 @@ def test_switch_and_end_fire_hooks(tmp_path, monkeypatch):
     assert "on_session_switch" in kinds and "on_session_end" in kinds
 
 
+def test_terminal_new_ends_old_session_before_switch(tmp_path, monkeypatch):
+    config = _cfg(tmp_path, monkeypatch)
+    from aegis.agent.agent import Agent
+    from aegis.cli import repl
+    from aegis.memory import MemoryManager
+    from aegis.session import Session, SessionStore
+    from aegis.types import LLMResponse, Message
+
+    class Provider:
+        context_length = 200_000
+        name = "fake"
+        model = "fake"
+        api_mode = None
+        auth = None
+
+        def complete(self, _messages, **_kwargs):
+            return LLMResponse(text="done")
+
+    class LifecycleProvider(RecordingProvider):
+        def on_session_end(self, messages):
+            self.calls.append(("on_session_end", [m.content for m in messages]))
+
+    p = LifecycleProvider()
+    old = Session.create(title="old")
+    old.messages = [Message.user("old prompt")]
+    agent = Agent(config=config, provider=Provider(), session=old,
+                  memory=MemoryManager(config, external=p), cwd=tmp_path)
+
+    repl.handle_slash("/new", agent, store=SessionStore())
+
+    kinds = [call[0] for call in p.calls]
+    assert kinds.index("on_session_end") < kinds.index("on_session_switch")
+    assert ("on_session_end", ["old prompt"]) in p.calls
+    assert agent.session.id != old.id
+
+
 # --- .cursorrules + subdirectory hints --------------------------------------
 def test_cursorrules_recognized(tmp_path):
     from aegis.config import Workspace

@@ -1017,6 +1017,12 @@ def handle_slash(
     elif name in ("/new", "/clear"):
         active_store = store or SessionStore()
         new_session = Session.create()
+        end = getattr(agent, "end_session", None)
+        if callable(end):
+            try:
+                end()
+            except Exception:  # noqa: BLE001
+                pass
         _switch_session(agent, new_session, reason="manual_new")
         active_store.save(agent.session)
         # thaw the memory snapshot: facts saved THIS process
