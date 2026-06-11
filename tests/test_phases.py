@@ -206,6 +206,21 @@ def test_cli_plugins_doctor_fails_on_load_error(capsys):
     assert "boom" in out
 
 
+def test_repl_prompt_toolkit_disabled_inside_running_loop(monkeypatch):
+    import asyncio
+
+    import aegis.cli.repl as repl
+
+    monkeypatch.setattr(repl, "PromptSession", object())
+
+    assert repl._prompt_session_supported() is True
+
+    async def inside_loop():
+        return repl._prompt_session_supported()
+
+    assert asyncio.run(inside_loop()) is False
+
+
 def test_daemon_install_reports_gateway_failure(monkeypatch, capsys):
     from types import SimpleNamespace
 

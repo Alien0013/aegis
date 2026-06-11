@@ -39,6 +39,23 @@ SLASH = ["/help", "/model", "/status", "/tools", "/skills", "/skill", "/memory",
          "/quit", "/exit"]
 
 
+def _prompt_session_supported() -> bool:
+    """Whether prompt_toolkit can safely run its synchronous prompt.
+
+    PromptSession.prompt() calls asyncio.run() internally. If AEGIS is launched
+    from a parent that already owns an event loop, that raises RuntimeError, so
+    fall back to plain input() instead of crashing the CLI.
+    """
+    if PromptSession is None:
+        return False
+    try:
+        import asyncio
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return True
+    return False
+
+
 def _out(text: str = "", style: str | None = None) -> None:
     if _console:
         _console.print(text, style=style)
@@ -516,7 +533,7 @@ def interactive(config: Config, *, model=None, provider_name=None,
     banner(agent)
 
     ps = None
-    if PromptSession is not None:
+    if _prompt_session_supported():
         from ..config import logs_dir
         ps = PromptSession(history=FileHistory(str(logs_dir() / "repl_history")),
                            completer=WordCompleter(SLASH, sentence=True))
