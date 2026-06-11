@@ -929,6 +929,9 @@ def handle_slash(
             _out("nothing to undo")
         else:
             agent.session.messages = msgs[:last_user]
+            active_store = store or getattr(agent, "store", None)
+            if active_store is not None:
+                active_store.save(agent.session)
             _out(f"undid last turn ({len(msgs) - last_user} messages removed)", style="yellow")
     elif name == "/learn":
         from ..learn import review_session

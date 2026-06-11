@@ -341,6 +341,36 @@ def test_terminal_session_picker_resume_and_branch(monkeypatch):
     assert store.load(agent.session.id).parent_id == alpha.id
 
 
+def test_terminal_undo_persists_session_mutation(monkeypatch):
+    from types import SimpleNamespace
+
+    from aegis.cli import repl
+    from aegis.config import Config
+    from aegis.session import Session, SessionStore
+    from aegis.types import Message
+
+    store = SessionStore()
+    session = Session.create("undo persistence")
+    session.messages = [
+        Message.user("first"),
+        Message.assistant("one"),
+        Message.user("second"),
+        Message.assistant("two"),
+    ]
+    store.save(session)
+    agent = SimpleNamespace(session=session, config=Config.load(), store=store)
+    out = []
+    monkeypatch.setattr(repl, "_out", lambda text="", style=None: out.append(str(text)))
+
+    assert repl.handle_slash("/undo", agent, store=store) == ""
+
+    assert [m.content for m in agent.session.messages] == ["first", "one"]
+    saved = store.load(session.id)
+    assert saved is not None
+    assert [m.content for m in saved.messages] == ["first", "one"]
+    assert "undid last turn (2 messages removed)" in "\n".join(out)
+
+
 def test_terminal_goal_continuation_uses_surface_runner(monkeypatch):
     from aegis import goals
     from aegis.cli import repl
