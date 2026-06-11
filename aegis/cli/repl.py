@@ -6,15 +6,21 @@ back to plain stdin/stdout otherwise so the harness runs anywhere.
 
 from __future__ import annotations
 
-import re
 import sys
 import threading
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Callable
 
 from .. import __version__
-from ..agent.agent import Agent
 from ..config import Config
 from ..session import Session, SessionStore
+from ..surface import (
+    SurfaceRunner,
+    apply_session_runtime,
+    remember_session_runtime,
+    run_control_action,
+)
 
 # --- optional pretty deps ---------------------------------------------------
 try:
@@ -30,13 +36,57 @@ try:
     from prompt_toolkit.completion import WordCompleter
 except Exception:  # noqa: BLE001
     PromptSession = None
+    WordCompleter = None
 
 _approve_lock = threading.Lock()
 
-SLASH = ["/help", "/model", "/status", "/tools", "/skills", "/skill", "/memory", "/usage",
-         "/compress", "/think", "/retry", "/undo", "/learn", "/background", "/tasks", "/rollback", "/diff", "/handoff",
-         "/personality", "/save", "/sessions", "/new", "/clear", "/yolo", "/goal", "/subgoal",
-         "/quit", "/exit"]
+@dataclass(frozen=True)
+class SlashCommand:
+    name: str
+    group: str
+    summary: str
+    usage: str = ""
+
+
+SLASH_COMMANDS = (
+    SlashCommand("/help", "discover", "show or search slash commands", "/help [term]"),
+    SlashCommand("/status", "discover", "show runtime, session, recap, and trace status"),
+    SlashCommand("/model", "discover", "show the active provider and model"),
+    SlashCommand("/tools", "discover", "list enabled tools"),
+    SlashCommand("/skills", "discover", "list loaded skills"),
+    SlashCommand("/trace", "observability", "list traces for this session or inspect one", "/trace [id]"),
+    SlashCommand("/evals", "observability", "list eval runs or inspect one", "/evals [id]"),
+    SlashCommand("/usage", "observability", "show token and rate-limit usage"),
+    SlashCommand("/sessions", "sessions", "pick recent sessions or search history", "/sessions [query]"),
+    SlashCommand("/resume", "sessions", "resume by picker number, id, title, or unique search", "/resume [number|id|title]"),
+    SlashCommand("/branch", "sessions", "fork this conversation into a named child session", "/branch [title]"),
+    SlashCommand("/new", "sessions", "start a fresh session"),
+    SlashCommand("/clear", "sessions", "start a fresh session"),
+    SlashCommand("/compress", "context", "compact context now", "/compress [here N|focus topic]"),
+    SlashCommand("/retry", "context", "rerun the last user turn"),
+    SlashCommand("/undo", "context", "remove the last user turn and its response"),
+    SlashCommand("/save", "context", "export this session to markdown", "/save [path]"),
+    SlashCommand("/think", "model control", "set reasoning effort", "/think off|minimal|low|medium|high|xhigh"),
+    SlashCommand("/reasoning", "model control", "set reasoning visibility or effort", "/reasoning off|summary|live|..."),
+    SlashCommand("/busy", "model control", "set busy input behavior", "/busy queue|steer|interrupt"),
+    SlashCommand("/goal", "goals", "set a standing goal and start it", "/goal <objective>"),
+    SlashCommand("/subgoal", "goals", "set a nested standing goal", "/subgoal <objective>"),
+    SlashCommand("/background", "agents", "launch a background agent task", "/background <prompt>"),
+    SlashCommand("/tasks", "agents", "list background tasks"),
+    SlashCommand("/agents", "agents", "list background agents"),
+    SlashCommand("/learn", "learning", "review this session for reusable memories or skills"),
+    SlashCommand("/skill", "learning", "create or extract a skill", "/skill [new <name> [description]]"),
+    SlashCommand("/memory", "learning", "show memory and user profile files"),
+    SlashCommand("/personality", "learning", "set the active persona", "/personality <name>"),
+    SlashCommand("/handoff", "channels", "hand this session to a gateway channel", "/handoff <platform> <chat_id>"),
+    SlashCommand("/diff", "workspace", "show changes since the last checkpoint", "/diff [checkpoint-id]"),
+    SlashCommand("/rollback", "workspace", "restore files from a checkpoint", "/rollback [checkpoint-id]"),
+    SlashCommand("/yolo", "workspace", "toggle this session's existing approval bypass"),
+    SlashCommand("/quit", "exit", "leave the terminal surface"),
+    SlashCommand("/exit", "exit", "leave the terminal surface"),
+)
+
+SLASH = [c.name for c in SLASH_COMMANDS]
 
 
 def _prompt_session_supported() -> bool:
@@ -68,83 +118,58 @@ def _raw(text: str) -> None:
     sys.stdout.flush()
 
 
-_AT_RE = re.compile(r"@([^\s]+)")
-_RANGE_RE = re.compile(r"^(.*?):(\d+)-(\d+)$")
-_SENSITIVE_REF = (".ssh", ".aws", ".gnupg", ".kube", "id_rsa", "id_ed25519", ".env",
-                  "credentials", ".netrc", "authorized_keys", ".git-credentials")
+def slash_matches(query: str = "") -> list[SlashCommand]:
+    q = query.strip().lower()
+    if not q:
+        return list(SLASH_COMMANDS)
+    return [
+        cmd for cmd in SLASH_COMMANDS
+        if q in cmd.name.lower()
+        or q in cmd.group.lower()
+        or q in cmd.summary.lower()
+        or q in cmd.usage.lower()
+    ]
 
 
-def _ref_sensitive(raw: str) -> bool:
-    low = raw.lower()
-    return any(s in low for s in _SENSITIVE_REF)
+def slash_help_lines(query: str = "") -> list[str]:
+    rows = slash_matches(query)
+    if not rows:
+        return [f"no slash commands match {query!r}"]
+    lines: list[str] = []
+    last_group = ""
+    if query:
+        lines.append(f"slash commands matching {query!r}:")
+    for cmd in rows:
+        if cmd.group != last_group:
+            lines.append(f"{cmd.group}:")
+            last_group = cmd.group
+        usage = cmd.usage or cmd.name
+        lines.append(f"  {usage:<34} {cmd.summary}")
+    if not query:
+        lines.append("Use /help <term> to filter.")
+    return lines
 
 
-def _git(cwd: Path, *argv: str) -> str:
-    import subprocess
-    try:
-        out = subprocess.run(["git", *argv], cwd=cwd, capture_output=True, text=True,
-                             timeout=15, check=False)
-        return (out.stdout or out.stderr or "").strip()
-    except Exception as e:  # noqa: BLE001
-        return f"(git failed: {e})"
+def make_slash_completer():
+    if WordCompleter is None:
+        return None
+    display = {cmd.name: cmd.usage or cmd.name for cmd in SLASH_COMMANDS}
+    meta = {cmd.name: f"{cmd.group}: {cmd.summary}" for cmd in SLASH_COMMANDS}
+    return WordCompleter(
+        SLASH,
+        ignore_case=True,
+        display_dict=display,
+        meta_dict=meta,
+        sentence=True,
+        match_middle=True,
+    )
 
 
 def expand_references(text: str, cwd: Path) -> str:
-    """Expand `@…` references inline context:
+    """Compatibility wrapper for shared prompt context references."""
+    from ..context_refs import expand_references as _expand
 
-    @path · @file:path[:10-20] (line range) · @folder:path · @diff · @staged ·
-    @git:<ref> · @url:https://… — sensitive paths (.ssh, .env, keys) are refused."""
-    extras = []
-    for m in _AT_RE.finditer(text):
-        raw = m.group(1).rstrip(",.;!?")
-        kind, _, value = raw.partition(":")
-        if raw == "diff":
-            extras.append(f"\n\n<git-diff>\n{_git(cwd, 'diff')[:20_000]}\n</git-diff>")
-            continue
-        if raw == "staged":
-            extras.append(f"\n\n<git-staged>\n{_git(cwd, 'diff', '--cached')[:20_000]}\n</git-staged>")
-            continue
-        if kind == "git" and value:
-            extras.append(f'\n\n<git-show ref="{value}">\n'
-                          f"{_git(cwd, 'show', '--stat', value)[:20_000]}\n</git-show>")
-            continue
-        if kind == "url" and value.startswith(("http://", "https://")):
-            try:
-                import httpx
-                from ..net_safety import guard
-                err = guard(value)
-                body = err or httpx.get(value, timeout=15, follow_redirects=True).text[:20_000]
-            except Exception as e:  # noqa: BLE001
-                body = f"(fetch failed: {e})"
-            extras.append(f'\n\n<url-content href="{value}">\n{body}\n</url-content>')
-            continue
-        target = value if kind in ("file", "folder") and value else raw
-        if _ref_sensitive(target):
-            extras.append(f"\n\n[reference @{raw} refused: sensitive path]")
-            continue
-        start = end = None
-        rng = _RANGE_RE.match(target)
-        if rng:
-            target, start, end = rng.group(1), int(rng.group(2)), int(rng.group(3))
-        p = Path(target).expanduser()
-        if not p.is_absolute():
-            p = cwd / p
-        if kind == "folder" or p.is_dir():
-            try:
-                names = sorted(x.name + ("/" if x.is_dir() else "") for x in p.iterdir())[:200]
-                extras.append(f'\n\n<folder path="{target}">\n' + "\n".join(names) + "\n</folder>")
-            except OSError:
-                pass
-        elif p.is_file():
-            try:
-                body = p.read_text(encoding="utf-8", errors="replace")
-                if start is not None:
-                    lines = body.splitlines()[start - 1:end]
-                    body = "\n".join(f"{start + i}: {ln}" for i, ln in enumerate(lines))
-                extras.append(f'\n\n<file path="{target}">\n{body[:20_000]}\n</file>')
-            except Exception:  # noqa: BLE001
-                pass
-    return text + "".join(extras)
+    return _expand(text, cwd)
 
 
 def make_approver(auto: bool = False):
@@ -183,21 +208,46 @@ def make_asker():
 class Renderer:
     """Turns agent events into terminal output."""
 
-    def __init__(self):
+    def __init__(self, config: Config | None = None):
         self._streaming = False
+        self.config = config
+        self._thinking_chars = 0
+        self.status = TerminalStatusState()
+
+    def _reasoning_mode(self) -> str:
+        if self.config is None:
+            return "summary"
+        return str(self.config.get("display.reasoning", "summary") or "summary")
 
     def __call__(self, e: dict) -> None:
+        self.status.update(e)
         t = e["type"]
         if t == "reasoning_delta":
-            # live thinking stream, rendered dim so it reads as scratchpad, not answer
-            if not getattr(self, "_thinking", False):
-                self._thinking = True
-                _raw("\x1b[2m\u273d thinking\u2026\n")
-            _raw("\x1b[2m" + e["text"] + "\x1b[0m")
+            mode = self._reasoning_mode()
+            if mode == "off":
+                return
+            text = e.get("text") or ""
+            self._thinking_chars += len(text)
+            if mode == "live":
+                # Provider-native thinking stream, rendered dim so it reads as process, not answer.
+                if not getattr(self, "_thinking", False):
+                    self._thinking = True
+                    _raw("\x1b[2m\u273d thinking\u2026\n")
+                _raw("\x1b[2m" + text + "\x1b[0m")
+            elif not getattr(self, "_thinking_summary", False):
+                self._thinking_summary = True
+                _out("  thinking…", style="bright_black")
             return
         if getattr(self, "_thinking", False):
             self._thinking = False
             _raw("\x1b[0m\n")
+        if t in ("assistant_message", "final", "tool_start", "error") and \
+                getattr(self, "_thinking_summary", False):
+            self._thinking_summary = False
+            if self._thinking_chars:
+                _out(f"  thinking complete ({self._thinking_chars:,} chars captured; "
+                     "use /reasoning live to stream)", style="bright_black")
+                self._thinking_chars = 0
         if t == "assistant_delta":
             self._streaming = True
             _raw(e["text"])
@@ -239,12 +289,89 @@ class Renderer:
                 self._streaming = False
 
 
-def _status_line(agent: Agent) -> str:
+@dataclass
+class TerminalStatusState:
+    iteration: int = 0
+    max_iterations: int = 0
+    active_tool: str = ""
+    last_tool: str = ""
+    compacting: bool = False
+    budget_exhausted: bool = False
+    last_event: str = ""
+
+    def update(self, event: dict[str, Any]) -> None:
+        etype = str(event.get("type") or "")
+        self.last_event = etype
+        if etype == "iteration":
+            self.iteration = int(event.get("n") or 0)
+            self.max_iterations = int(event.get("max") or 0)
+            self.compacting = False
+        elif etype == "tool_start":
+            self.active_tool = str(event.get("name") or "")
+            self.last_tool = self.active_tool
+        elif etype == "tool_result":
+            self.last_tool = str(event.get("name") or self.last_tool)
+            self.active_tool = ""
+        elif etype == "compacting":
+            self.compacting = True
+        elif etype == "budget_exhausted":
+            self.budget_exhausted = True
+        elif etype in {"assistant_message", "final", "error"}:
+            self.active_tool = ""
+            self.compacting = False
+
+    def segment(self) -> str:
+        bits: list[str] = []
+        if self.iteration and self.max_iterations:
+            bits.append(f"iter {self.iteration}/{self.max_iterations}")
+        if self.active_tool:
+            bits.append(f"tool {self.active_tool}")
+        elif self.last_tool:
+            bits.append(f"last tool {self.last_tool}")
+        if self.compacting:
+            bits.append("compacting")
+        if self.budget_exhausted:
+            bits.append("budget exhausted")
+        return " · ".join(bits)
+
+
+def _run_refs(agent: Any) -> tuple[str, str, str]:
+    meta = getattr(getattr(agent, "session", None), "meta", {}) or {}
+    trace_ctx = getattr(agent, "_trace_context", {}) or {}
+    run_id = str(meta.get("last_run_id") or "")
+    trace_id = str(meta.get("last_trace_id") or meta.get("trace_id") or trace_ctx.get("trace_id") or "")
+    turn_id = str(meta.get("last_turn_id") or meta.get("turn_id") or trace_ctx.get("turn_id") or "")
+    return run_id, trace_id, turn_id
+
+
+def _record_terminal_run(agent: Any, run: Any) -> None:
+    meta = getattr(getattr(agent, "session", None), "meta", None)
+    if not isinstance(meta, dict):
+        return
+    if getattr(run, "run_id", ""):
+        meta["last_run_id"] = str(run.run_id)
+    if getattr(run, "trace_id", ""):
+        meta["last_trace_id"] = str(run.trace_id)
+        meta["trace_id"] = str(run.trace_id)
+    if getattr(run, "turn_id", ""):
+        meta["last_turn_id"] = str(run.turn_id)
+        meta["turn_id"] = str(run.turn_id)
+
+
+def _status_line(agent: Agent, progress: TerminalStatusState | None = None) -> str:
     from ..agent.compaction import estimated_tokens
     u = agent.budget.usage
     used = estimated_tokens(agent.session.messages)
     fill = int(100 * used / max(1, agent.provider.context_length))
-    return f"  [{agent.provider.model} · ctx {fill}% · tokens in {u.input_tokens:,} out {u.output_tokens:,}]"
+    run_id, trace, _turn = _run_refs(agent)
+    suffix = ""
+    if progress and progress.segment():
+        suffix += f" · {progress.segment()}"
+    if run_id:
+        suffix += f" · run {run_id[:12]}"
+    if trace:
+        suffix += f" · trace {trace[:12]}"
+    return f"  [{agent.provider.model} · ctx {fill}% · tokens in {u.input_tokens:,} out {u.output_tokens:,}{suffix}]"
 
 
 def banner(agent: Agent) -> None:
@@ -257,6 +384,85 @@ def banner(agent: Agent) -> None:
         _console.print(Panel.fit(text, title="agent harness", border_style="magenta"))
     else:
         print("=" * 60 + f"\n{text}\n" + "=" * 60)
+
+
+def handle_goal_command(
+    text: str,
+    agent: Any,
+    store: SessionStore,
+    *,
+    out: Callable[[str, str | None], None] | None = None,
+) -> str | None:
+    """Handle `/goal` and `/subgoal`. Returns the prompt to run immediately."""
+
+    from .. import goals
+
+    emit = out or _out
+    reply, start_turn = goals.handle_command(agent.session, text, agent.config)
+    if reply:
+        emit(reply, "cyan")
+    store.save(agent.session)
+    if not start_turn:
+        return None
+    active = goals.get(agent.session)
+    return active["text"] if active else None
+
+
+def run_terminal_turn(
+    text: str,
+    agent: Any,
+    runner: SurfaceRunner,
+    store: SessionStore,
+    *,
+    surface: str,
+    on_event: Callable[[dict], None],
+    notify: Callable[[str], None] | None = None,
+    add_profile_directive: bool = True,
+):
+    """Run one terminal-surface turn with the same REPL/TUI lifecycle.
+
+    This is the Hermes-style terminal path: prompt preparation, shared
+    SurfaceRunner execution, goal continuation, first-run tips, and persistence
+    live in one place instead of being reimplemented per UI.
+    """
+
+    from ..firstrun import maybe_tip, profile_build_directive
+    from .. import goals
+
+    tools_before = getattr(agent, "tools_used", 0)
+    prompt = text + (profile_build_directive(agent.config) if add_profile_directive else "")
+    run = runner.run_prompt(
+        prompt,
+        session=agent.session,
+        agent=agent,
+        surface=surface,
+        on_event=on_event,
+    )
+    _record_terminal_run(agent, run)
+
+    def run_continuation(prompt_text: str):
+        cont = runner.run_prompt(
+            prompt_text,
+            session=agent.session,
+            agent=agent,
+            surface=surface,
+            on_event=on_event,
+        )
+        _record_terminal_run(agent, cont)
+        store.save(agent.session)
+        return cont.message
+
+    if notify is None:
+        notify = lambda line: _out(f"  {line}", style="magenta")
+    goals.run_loop(agent, run.message.content or "", notify, on_event, run_turn=run_continuation)
+
+    tools_this = getattr(agent, "tools_used", 0) - tools_before
+    trigger = ("many_tools" if tools_this >= 8 else
+               "long_session" if len(agent.session.messages) >= 40 else None)
+    if trigger and (tip := maybe_tip(agent.config, trigger)):
+        notify(tip)
+    store.save(agent.session)
+    return run.message
 
 
 # --------------------------------------------------------------------------- #
@@ -294,7 +500,128 @@ def session_recap(session) -> list[str]:
     return lines
 
 
-def handle_slash(cmd: str, agent: Agent) -> str:
+def _session_choices(store: SessionStore, query: str = "", limit: int = 20) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add_session(sid: str | None, *, snippet: str = "") -> None:
+        if not sid or sid in seen:
+            return
+        sess = store.load(sid)
+        if not sess:
+            return
+        seen.add(sess.id)
+        rows.append({
+            "id": sess.id,
+            "title": sess.title,
+            "updated_at": sess.updated_at,
+            "parent_id": sess.parent_id,
+            "summary": sess.meta.get("summary", ""),
+            "last_run_id": sess.meta.get("last_run_id", ""),
+            "last_trace_id": sess.meta.get("last_trace_id") or sess.meta.get("trace_id", ""),
+            "snippet": snippet,
+            "messages": len(sess.messages),
+        })
+
+    if query:
+        for row in store.search(query, limit=limit):
+            add_session(str(row.get("id") or ""))
+        if len(rows) < limit:
+            for hit in store.search_messages(query, limit=limit):
+                add_session(str(hit.get("session") or ""), snippet=str(hit.get("snippet") or ""))
+                if len(rows) >= limit:
+                    break
+    else:
+        for row in store.list(limit):
+            add_session(str(row.get("id") or ""))
+    return rows[:limit]
+
+
+def _remember_session_choices(agent: Any, rows: list[dict[str, Any]]) -> None:
+    try:
+        agent._terminal_session_choices = [str(r["id"]) for r in rows]
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _session_picker_lines(rows: list[dict[str, Any]], query: str = "") -> list[str]:
+    if not rows:
+        return [f"no sessions match {query!r}" if query else "no sessions yet"]
+    title = f"sessions matching {query!r}:" if query else "recent sessions:"
+    lines = [title]
+    for i, row in enumerate(rows, 1):
+        updated = str(row.get("updated_at") or "").replace("T", " ")[:16]
+        branch = " branch" if row.get("parent_id") else ""
+        msgs = row.get("messages", 0)
+        refs = []
+        if row.get("last_run_id"):
+            refs.append(f"run {str(row['last_run_id'])[:12]}")
+        if row.get("last_trace_id"):
+            refs.append(f"trace {str(row['last_trace_id'])[:12]}")
+        ref_text = " · " + " · ".join(refs) if refs else ""
+        lines.append(
+            f"  {i:>2}. {str(row['id'])[:14]:<14} {updated:<16} "
+            f"{row.get('title') or row['id']} ({msgs} msgs{branch}){ref_text}"
+        )
+        detail = row.get("snippet") or row.get("summary")
+        if detail:
+            lines.append(f"      {str(detail)[:140]}")
+    lines.append("resume with /resume <number|id|title>; fork with /branch [title]")
+    return lines
+
+
+def _resolve_session_ref(store: SessionStore, agent: Any, ref: str) -> Session | None:
+    ref = ref.strip()
+    if ref.isdigit():
+        choices = list(getattr(agent, "_terminal_session_choices", []) or [])
+        idx = int(ref) - 1
+        if 0 <= idx < len(choices):
+            return store.load(choices[idx])
+    sess = store.load(ref)
+    if sess:
+        return sess
+    matches = _session_choices(store, ref, limit=2)
+    if len(matches) == 1:
+        return store.load(matches[0]["id"])
+    return None
+
+
+def _switch_session(agent: Any, session: Session, *, reason: str) -> None:
+    old = getattr(agent, "session", None)
+    from ..surface import _retarget_agent
+
+    _retarget_agent(agent, session=session)
+    apply_session_runtime(agent)
+    try:
+        agent.refresh_volatile()
+    except Exception:  # noqa: BLE001
+        pass
+    if old is not None and getattr(old, "id", None) != getattr(session, "id", None):
+        try:
+            from ..agent.context_engine import call_hook, get_engine
+
+            call_hook(get_engine(agent.config), "on_session_switch", agent, old, session, reason=reason)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _parse_model_override(arg: str) -> tuple[str, str]:
+    raw = arg.strip()
+    if "/" in raw:
+        provider, model = raw.split("/", 1)
+        return provider.strip(), model.strip()
+    return "", raw
+
+
+def handle_slash(
+    cmd: str,
+    agent: Agent,
+    *,
+    runner: SurfaceRunner | None = None,
+    store: SessionStore | None = None,
+    surface: str = "repl",
+    on_event: Callable[[dict], None] | None = None,
+) -> str:
     """Return 'break' to exit the REPL, else ''. """
     parts = cmd.strip().split()
     name = parts[0].lower()
@@ -303,7 +630,8 @@ def handle_slash(cmd: str, agent: Agent) -> str:
     if name in ("/quit", "/exit"):
         return "break"
     if name == "/help":
-        _out("Commands: " + ", ".join(SLASH))
+        for line in slash_help_lines(arg):
+            _out(line)
         _out("Anything else is sent to the agent.")
     elif name == "/yolo":
         eng = agent.permissions
@@ -313,7 +641,32 @@ def handle_slash(cmd: str, agent: Agent) -> str:
              else "⚠ YOLO ON — all tool approvals bypassed for this session "
                   "(hardline blocklist still applies). /yolo again to turn off.")
     elif name == "/model":
-        _out(f"current: {agent.provider.describe()}")
+        if not arg:
+            controls = agent.session.meta.get("runtime_controls") or {}
+            stored = ""
+            if controls.get("provider") or controls.get("model"):
+                stored = f" · session override: {controls.get('provider') or '*'}" \
+                         f"/{controls.get('model') or '*'}"
+            _out(f"current: {agent.provider.describe()}{stored}")
+        else:
+            provider, model = _parse_model_override(arg)
+            if not model:
+                _out("usage: /model <model> or /model <provider>/<model>")
+            else:
+                remember_session_runtime(
+                    agent,
+                    provider=provider or None,
+                    model=model,
+                )
+                apply_session_runtime(agent)
+                try:
+                    agent.refresh_volatile()
+                except Exception:  # noqa: BLE001
+                    pass
+                if store is not None:
+                    store.save(agent.session)
+                label = f"{provider}/" if provider else ""
+                _out(f"model for this session → {label}{model}", style="green")
     elif name == "/status":
         _out(f"provider: {agent.provider.describe()}")
         _out(f"session: {agent.session.id} ({len(agent.session.messages)} msgs)")
@@ -326,6 +679,16 @@ def handle_slash(cmd: str, agent: Agent) -> str:
         g = goals.get(agent.session)
         if g:
             _out(goals.status_line(g), style="cyan")
+        run_id, trace_id, turn_id = _run_refs(agent)
+        if run_id or trace_id:
+            refs = []
+            if run_id:
+                refs.append(f"run {run_id}")
+            if trace_id:
+                refs.append(f"trace {trace_id}")
+            if turn_id:
+                refs.append(f"turn {turn_id}")
+            _out("last turn: " + " · ".join(refs), style="bright_black")
         for line in session_recap(agent.session):
             _out(line, style="bright_black")
         _out(_status_line(agent))
@@ -335,7 +698,40 @@ def handle_slash(cmd: str, agent: Agent) -> str:
             _out("usage: /think off|minimal|low|medium|high|xhigh")
         else:
             agent.reasoning = level
+            remember_session_runtime(agent, reasoning_effort=level)
+            if store is not None:
+                store.save(agent.session)
             _out(f"reasoning effort → {level}", style="green")
+    elif name == "/reasoning":
+        modes = {"off", "summary", "live"}
+        efforts = {"minimal", "low", "medium", "high", "xhigh"}
+        if not arg:
+            _out(f"display: {agent.config.get('display.reasoning', 'summary')} · "
+                 f"effort: {getattr(agent, 'reasoning', 'off')}")
+        elif arg in modes:
+            agent.config.data.setdefault("display", {})["reasoning"] = arg
+            remember_session_runtime(agent, reasoning_display=arg)
+            if store is not None:
+                store.save(agent.session)
+            _out(f"reasoning display → {arg}", style="green")
+        elif arg in efforts or arg == "off":
+            agent.reasoning = arg
+            remember_session_runtime(agent, reasoning_effort=arg)
+            if store is not None:
+                store.save(agent.session)
+            _out(f"reasoning effort → {arg}", style="green")
+        else:
+            _out("usage: /reasoning off|summary|live|minimal|low|medium|high|xhigh")
+    elif name == "/busy":
+        mode = arg or agent.config.get("gateway.busy_mode", "queue")
+        if mode not in ("queue", "steer", "interrupt"):
+            _out("usage: /busy queue|steer|interrupt")
+        else:
+            agent.config.data.setdefault("gateway", {})["busy_mode"] = mode
+            remember_session_runtime(agent, busy_mode=mode)
+            if store is not None:
+                store.save(agent.session)
+            _out(f"busy input mode → {mode}", style="green")
     elif name == "/tools":
         for t in agent.registry.all():
             g = f" [{','.join(t.groups)}]" if t.groups else ""
@@ -384,10 +780,8 @@ def handle_slash(cmd: str, agent: Agent) -> str:
         # /compress            — standard boundaries
         # /compress here [N]   — keep only the last N exchanges verbatim (default 2)
         # /compress focus <t>  — weight the summary toward topic <t>
-        from ..agent import compaction, governance
-        from ..agent.loop import _summarizer
-        comp = agent.config.get("agent.compression", {}) or {}
-        preserve_last, focus = comp.get("preserve_last", 20), ""
+        from ..agent.loop import compact_now
+        preserve_last, focus = None, ""
         words = arg.split() if arg else []
         if words and words[0] == "here":
             n = int(words[1]) if len(words) > 1 and words[1].isdigit() else 2
@@ -395,12 +789,46 @@ def handle_slash(cmd: str, agent: Agent) -> str:
         elif words and words[0] == "focus":
             focus = " ".join(words[1:])
         before = len(agent.session.messages)
-        agent.session.messages = governance.normalize(compaction.compress(
-            agent.session.messages, _summarizer(agent),   # cheap aux model, like auto-compaction
-            preserve_first=comp.get("preserve_first", 3),
-            preserve_last=preserve_last, focus=focus))
-        agent.refresh_volatile()
-        _out(f"context compressed: {before} → {len(agent.session.messages)} messages.", style="yellow")
+        before_session = agent.session.id
+        emit = on_event or (lambda _event: None)
+
+        def action(control_emit):
+            compact_now(
+                agent,
+                agent.session,
+                control_emit,
+                reason="manual_context_compression",
+                focus=focus,
+                preserve_last=preserve_last,
+            )
+            after = len(agent.session.messages)
+            tokens = ""
+            recs = agent.session.meta.get("compactions") or []
+            if recs:
+                latest = recs[-1]
+                saved = int(latest.get("tokens_before", 0) or 0) - int(
+                    latest.get("tokens_after", 0) or 0
+                )
+                tokens = f" (~{saved:,} tokens reclaimed)"
+            moved = f" · session {agent.session.id}" if agent.session.id != before_session else ""
+            return f"context compressed: {before} → {after} messages{tokens}{moved}."
+
+        run = run_control_action(
+            agent,
+            action,
+            config=agent.config,
+            session=agent.session,
+            surface=surface,
+            kind="compaction",
+            title="manual context compression",
+            prompt=cmd,
+            data={"focus": focus, "preserve_last": preserve_last},
+            on_event=emit,
+        )
+        _record_terminal_run(agent, run)
+        if store is not None:
+            store.save(agent.session)
+        _out(run.text, style="yellow")
     elif name == "/personality":
         if arg:
             agent.config.data.setdefault("agent", {})["personality"] = arg
@@ -422,13 +850,19 @@ def handle_slash(cmd: str, agent: Agent) -> str:
             _out("(no background tasks)")
         for t in tasks:
             _out(f"  {t['id']}  [{t['status']}]  {t['prompt']}  {t['result_preview']}")
+    elif name == "/agents":
+        from ..background import get_manager
+        tasks = get_manager().list()
+        if not tasks:
+            _out("(no background agents)")
+        for t in tasks:
+            _out(f"  {t['id']}  [{t['status']}]  {t['prompt'][:80]}")
     elif name == "/handoff":
         parts = (arg or "").split()
         if len(parts) < 2:
             _out("usage: /handoff <platform> <chat_id>  (e.g. /handoff telegram 123456789)")
         else:
             platform, chat_id = parts[0], parts[1]
-            from ..session import SessionStore
             SessionStore().save(agent.session)              # make history adoptable
             from ..handoff import set_handoff
             set_handoff(platform, chat_id, agent.session.id)
@@ -458,7 +892,18 @@ def handle_slash(cmd: str, agent: Agent) -> str:
         else:
             prompt = msgs[last_user].content
             agent.session.messages = msgs[:last_user]
-            agent.run(prompt, Renderer())
+            if runner is not None and store is not None:
+                run_terminal_turn(
+                    prompt,
+                    agent,
+                    runner,
+                    store,
+                    surface=surface,
+                    on_event=on_event or Renderer(agent.config),
+                    add_profile_directive=False,
+                )
+            else:
+                agent.run(prompt, Renderer(agent.config))
             _out(_status_line(agent), style="bright_black")
     elif name == "/undo":
         msgs = agent.session.messages
@@ -484,12 +929,94 @@ def handle_slash(cmd: str, agent: Agent) -> str:
         out.write_text("\n".join(lines), encoding="utf-8")
         _out(f"saved session → {out}", style="green")
     elif name == "/sessions":
-        for s in SessionStore().list(20):
-            _out(f"  {s['id']}  {s['title']}  ({s['updated_at']})")
+        active_store = store or SessionStore()
+        rows = _session_choices(active_store, arg, limit=20)
+        _remember_session_choices(agent, rows)
+        for line in _session_picker_lines(rows, arg):
+            _out(line)
+    elif name == "/resume":
+        active_store = store or SessionStore()
+        if not arg:
+            rows = _session_choices(active_store, limit=20)
+            _remember_session_choices(agent, rows)
+            for line in _session_picker_lines(rows):
+                _out(line)
+        else:
+            sess = _resolve_session_ref(active_store, agent, arg)
+            if not sess:
+                _out("session not found; try /sessions <query>", style="yellow")
+            else:
+                _switch_session(agent, sess, reason="manual_resume")
+                active_store.save(agent.session)
+                run_id, trace_id, _turn_id = _run_refs(agent)
+                refs = f" · run {run_id[:12]}" if run_id else ""
+                refs += f" · trace {trace_id[:12]}" if trace_id else ""
+                _out(f"resumed {sess.id} ({sess.title}){refs}", style="green")
+    elif name == "/branch":
+        active_store = store or SessionStore()
+        title = arg.strip() or agent.session.title
+        child = active_store.fork(agent.session)
+        if title:
+            child.title = title
+        child.meta["branch_surface"] = surface
+        child.meta["branch_reason"] = "manual_terminal_branch"
+        active_store.save(child)
+        parent_trace = (agent.session.meta.get("last_trace_id") or agent.session.meta.get("trace_id") or "")
+        _switch_session(agent, child, reason="manual_branch")
+        suffix = f" · trace {str(parent_trace)[:12]}" if parent_trace else ""
+        _out(f"branched session → {child.id} (from {child.parent_id}){suffix}", style="green")
+    elif name == "/trace":
+        try:
+            from ..tracing import TraceStore
+            store = TraceStore.from_config(agent.config)
+            if arg:
+                trace = store.get_trace(arg)
+                if not trace:
+                    _out("trace not found", style="yellow")
+                else:
+                    _out(f"trace {trace['trace_id']} · {trace['status']} · "
+                         f"{trace['span_count']} spans", style="cyan")
+                    for r in trace.get("spans", [])[:20]:
+                        _out(f"  {r['span_id'][:14]:<14} {r['kind']:<16} {r['status']:<9} "
+                             f"{r.get('tool_name') or r.get('model') or ''}")
+            else:
+                rows = store.list_traces(session_id=agent.session.id, limit=10)
+                if not rows:
+                    _out("(no traces for this session yet)")
+                for r in rows:
+                    _out(f"  {r['trace_id']}  {r.get('status', '')}  "
+                         f"{r.get('span_count', r.get('spans', 0))} spans")
+        except Exception as e:  # noqa: BLE001
+            _out(f"trace unavailable: {e}", style="yellow")
+    elif name == "/evals":
+        try:
+            from ..evals import EvalStore
+            store = EvalStore.from_config(agent.config)
+            if arg:
+                run = store.get_run(arg)
+                if not run:
+                    _out("eval run not found", style="yellow")
+                else:
+                    _out(f"{run['id']}  {run['suite']}  {run['passed']}/{run['total']}  "
+                         f"score={run['score']}", style="cyan")
+                    for result in run.get("results", [])[:20]:
+                        mark = "✓" if result.get("passed") else "✗"
+                        _out(f"  {mark} {result.get('case') or result.get('id')}  "
+                             f"score={result.get('score')}")
+            else:
+                rows = store.list_runs(limit=10)
+                if not rows:
+                    _out("(no eval runs yet)")
+                for r in rows:
+                    _out(f"  {r['id']}  {r['suite']}  {r['passed']}/{r['total']}  {r['created_at']}")
+        except Exception as e:  # noqa: BLE001
+            _out(f"evals unavailable: {e}", style="yellow")
     elif name in ("/new", "/clear"):
-        agent.session = Session.create()
-        agent.tool_context.session = agent.session
-        agent.refresh_volatile()   # thaw the memory snapshot: facts saved THIS process
+        active_store = store or SessionStore()
+        new_session = Session.create()
+        _switch_session(agent, new_session, reason="manual_new")
+        active_store.save(agent.session)
+        # thaw the memory snapshot: facts saved THIS process
         n = len(agent.memory.store.entries("user")) if agent.memory else 0
         extra = f" · {n} user fact(s) loaded" if n else ""
         _out(f"started new session {agent.session.id}{extra}", style="green")
@@ -501,42 +1028,50 @@ def handle_slash(cmd: str, agent: Agent) -> str:
 # --------------------------------------------------------------------------- #
 # Entry points
 # --------------------------------------------------------------------------- #
-def _make_agent(config, *, session, store, model, provider_name, auto) -> Agent:
-    agent = Agent.create(
-        config, session=session, model=model, provider_name=provider_name,
-        store=store, approver=make_approver(auto), include_mcp=True,
-    )
-    agent.tool_context.asker = make_asker()   # let the clarify tool prompt inline
-    return agent
-
-
 def run_once(config: Config, prompt: str, *, model=None, provider_name=None,
              session: Session | None = None, store: SessionStore | None = None, auto=False,
-             images: list[str] | None = None) -> str:
+             images: list[str] | None = None, surface: str = "cli",
+             meta: dict | None = None) -> str:
     from ..types import Message
     store = store or SessionStore()
     session = session or Session.create()
-    agent = _make_agent(config, session=session, store=store, model=model,
-                        provider_name=provider_name, auto=auto)
-    text = expand_references(prompt, agent.cwd)
-    user_input = Message.user(text, images=images) if images else text
-    result = agent.run(user_input, Renderer())
-    return result.content
+    runner = SurfaceRunner(config, store=store, include_mcp=True)
+    user_input = Message.user(prompt, images=images) if images else prompt
+    result = runner.run_prompt(
+        user_input,
+        session=session,
+        model=model,
+        provider_name=provider_name,
+        approver=make_approver(auto),
+        asker=make_asker(),
+        surface=surface,
+        meta=meta,
+        on_event=Renderer(config),
+    )
+    return result.text
 
 
 def interactive(config: Config, *, model=None, provider_name=None,
                 session: Session | None = None, store: SessionStore | None = None, auto=False) -> None:
     store = store or SessionStore()
     session = session or Session.create()
-    agent = _make_agent(config, session=session, store=store, model=model,
-                        provider_name=provider_name, auto=auto)
+    runner = SurfaceRunner(config, store=store, include_mcp=True)
+    agent = runner.make_agent(
+        session=session,
+        model=model,
+        provider_name=provider_name,
+        approver=make_approver(auto),
+        asker=make_asker(),
+        include_mcp=True,
+    )
+    store.save(agent.session)
     banner(agent)
 
     ps = None
     if _prompt_session_supported():
         from ..config import logs_dir
         ps = PromptSession(history=FileHistory(str(logs_dir() / "repl_history")),
-                           completer=WordCompleter(SLASH, sentence=True))
+                           completer=make_slash_completer())
 
     while True:
         try:
@@ -557,35 +1092,20 @@ def interactive(config: Config, *, model=None, provider_name=None,
         if not user:
             continue
         if user.startswith(("/goal", "/subgoal")):
-            from .. import goals
-            reply, start_turn = goals.handle_command(agent.session, user, config)
-            if reply:
-                _out(reply, style="cyan")
-            store.save(agent.session)
-            if not start_turn:
+            goal_prompt = handle_goal_command(user, agent, store)
+            if not goal_prompt:
                 continue
-            user = goals.get(agent.session)["text"]   # run the new goal as this turn
+            user = goal_prompt   # run the new goal as this turn
         elif user.startswith("/"):
-            if handle_slash(user, agent) == "break":
+            if handle_slash(user, agent, runner=runner, store=store,
+                            surface="repl", on_event=Renderer(config)) == "break":
                 break
             continue
         try:
-            from ..firstrun import profile_build_directive
-            renderer = Renderer()
-            tools_before = agent.tools_used
-            res = agent.run(expand_references(user, agent.cwd) + profile_build_directive(config),
-                            renderer)
-            from .. import goals
-            goals.run_loop(agent, res.content or "",
-                           lambda s: _out(f"  {s}", style="magenta"), renderer)
-            from ..firstrun import maybe_tip
-            tools_this = agent.tools_used - tools_before
-            trigger = ("many_tools" if tools_this >= 8 else
-                       "long_session" if len(agent.session.messages) >= 40 else None)
-            if trigger and (tip := maybe_tip(config, trigger)):
-                _out("  " + tip, style="bright_black")
+            renderer = Renderer(config)
+            run_terminal_turn(user, agent, runner, store, surface="repl", on_event=renderer)
         except KeyboardInterrupt:
             agent.cancel()   # stop the loop at the next safe point; discard partial work
             _out("\n  ⏹ interrupted — stopped this turn (your session is intact)", style="yellow")
         store.save(agent.session)
-        _out(_status_line(agent), style="bright_black")
+        _out(_status_line(agent, renderer.status), style="bright_black")

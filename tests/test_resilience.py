@@ -85,6 +85,35 @@ def test_compaction_records_metadata(tmp_path):
     assert "reason" in comps[0]
 
 
+def test_compaction_split_records_session_provenance(tmp_path):
+    from aegis.session import Session, SessionStore
+    from aegis.types import LLMResponse, Message
+
+    class Windowed(FakeProvider):
+        context_length = 100_000
+
+    store = SessionStore()
+    session = Session.create("long task")
+    session.messages = [Message.user(("prior context " * 2000) + str(i)) for i in range(80)]
+    provider = Windowed([LLMResponse(text="summary"), LLMResponse(text="final")])
+    a = _agent(provider, tmp_path, store=store)
+    a.session = session
+    a.tool_context.session = session
+
+    out = a.run("continue")
+
+    assert out.content == "final"
+    assert a.session.parent_id == session.id
+    parent = store.load(session.id)
+    child = store.load(a.session.id)
+    assert parent.meta["end_reason"] == "compression"
+    assert child.meta["creator_kind"] == "compression"
+    assert child.meta["reason"] == "context_compaction"
+    assert child.meta["lineage_root"] == session.id
+    assert child.meta["lineage_depth"] == 1
+    assert child.id in parent.meta["child_sessions"]
+
+
 # --- #8 failure modes ------------------------------------------------------
 def test_crashed_tool_does_not_break_run(tmp_path):
     from aegis.tools.base import Tool, ToolResult  # noqa: F401

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.metadata as importlib_metadata
+import json
 import os
 import subprocess
 import sys
@@ -22,6 +23,23 @@ def _print(s: str = "") -> None:
 # --------------------------------------------------------------------------- #
 # chat / interactive
 # --------------------------------------------------------------------------- #
+def _terminal_session(args, store):
+    from ..session import Session
+
+    resume = getattr(args, "resume", None)
+    if resume:
+        session = store.load(resume)
+        if not session:
+            return _die(f"session '{resume}' not found")
+        return session
+    if getattr(args, "cont", False):
+        session = store.latest()
+        if session:
+            _print(f"(continuing {session.id})")
+            return session
+    return Session.create()
+
+
 def _make_worktree() -> Path | None:
     try:
         root = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True,
@@ -38,7 +56,7 @@ def _make_worktree() -> Path | None:
 
 
 def cmd_chat(args, config: Config) -> int:
-    from ..session import Session, SessionStore
+    from ..session import SessionStore
     from . import repl
 
     if getattr(args, "worktree", False):
@@ -50,14 +68,9 @@ def cmd_chat(args, config: Config) -> int:
             _print("(not a git repo — worktree skipped)")
 
     store = SessionStore()
-    session = None
-    if args.resume:
-        session = store.load(args.resume) or _die(f"session '{args.resume}' not found")
-    elif args.cont:
-        session = store.latest()
-        if session:
-            _print(f"(continuing {session.id})")
-    session = session or Session.create()
+    session = _terminal_session(args, store)
+    if isinstance(session, int):
+        return session
 
     images = None
     if getattr(args, "image", None):
@@ -66,10 +79,8 @@ def cmd_chat(args, config: Config) -> int:
 
     prompt = args.query or (" ".join(args.prompt) if args.prompt else None)
     if prompt:
-        out = repl.run_once(config, prompt, model=args.model, provider_name=args.provider,
-                            session=session, store=store, auto=args.yolo, images=images)
-        if not config.get("agent.stream", True):
-            _print(out)
+        repl.run_once(config, prompt, model=args.model, provider_name=args.provider,
+                      session=session, store=store, auto=args.yolo, images=images)
         return 0
     repl.interactive(config, model=args.model, provider_name=args.provider,
                      session=session, store=store, auto=args.yolo)
@@ -259,6 +270,27 @@ def cmd_skills(args, config: Config) -> int:
 def cmd_mcp(args, config: Config) -> int:
     from ..mcp.client import build_manager
 
+    if args.action == "catalog":
+        from ..mcp.client import catalog
+        entries = catalog(config)
+        if not entries:
+            _print("(no MCP catalog entries configured in mcp.catalog)")
+            return 0
+        for e in entries:
+            target = e.get("url") or " ".join([e.get("command", ""), *e.get("args", [])])
+            _print(f"  {e['name']:<18} {e.get('description', '')}\n      {target.strip()}")
+        return 0
+    if args.action == "install":
+        if not args.name:
+            return _die("usage: aegis mcp install <catalog-name>")
+        try:
+            from ..mcp.client import install_from_catalog
+            spec = install_from_catalog(config, args.name)
+            target = spec.get("url") or " ".join([spec.get("command", ""), *spec.get("args", [])])
+            _print(f"installed MCP server '{args.name}' → {target.strip()}")
+            return 0
+        except KeyError:
+            return _die(f"MCP catalog entry '{args.name}' not found")
     if args.action == "serve":
         from ..mcp.server import run_mcp_server
         run_mcp_server(config)
@@ -280,17 +312,40 @@ def cmd_mcp(args, config: Config) -> int:
         config.save()
         _print(f"removed MCP server '{args.name}'")
         return 0
-    # list / test
+    # list / test / tools
     mgr = build_manager(config)
     if not mgr.clients:
         _print("(no MCP servers configured — `aegis mcp add <name> \"<command>\"`)")
         return 0
     for client in mgr.clients:
+        if args.action == "tools" and args.name and client.name != args.name:
+            continue
         kind = client.url or f"{client.command} {' '.join(client.args)}"
         try:
             client.connect()
             tools = client.list_tools()
-            _print(f"  {client.name:<16} {kind}\n      tools: {', '.join(t['name'] for t in tools) or '(none)'}")
+            if args.action == "tools":
+                _print(f"{client.name} ({kind})")
+                for t in tools:
+                    _print(f"  {t.get('name', ''):<24} {str(t.get('description', ''))[:90]}")
+                try:
+                    resources = client.list_resources()
+                except Exception:  # noqa: BLE001
+                    resources = []
+                if resources:
+                    _print("  resources:")
+                    for r in resources:
+                        _print(f"    {r.get('uri', ''):<32} {str(r.get('name') or r.get('description') or '')[:80]}")
+                try:
+                    prompts = client.list_prompts()
+                except Exception:  # noqa: BLE001
+                    prompts = []
+                if prompts:
+                    _print("  prompts:")
+                    for p in prompts:
+                        _print(f"    {p.get('name', ''):<32} {str(p.get('description', ''))[:80]}")
+            else:
+                _print(f"  {client.name:<16} {kind}\n      tools: {', '.join(t['name'] for t in tools) or '(none)'}")
             client.close()
         except Exception as e:  # noqa: BLE001
             _print(f"  {client.name:<16} {kind}\n      ERROR: {e}")
@@ -301,6 +356,12 @@ def cmd_serve(args, config: Config) -> int:
     from ..server import serve
     serve(config, host=args.host or config.get("server.host", "127.0.0.1"),
           port=args.port or int(config.get("server.port", 8790)))
+    return 0
+
+
+def cmd_rpc(args, config: Config) -> int:
+    from ..rpc import run_rpc_server
+    run_rpc_server(config)
     return 0
 
 
@@ -395,6 +456,7 @@ def cmd_tools(args, config: Config) -> int:
 
 
 def cmd_plugins(args, config: Config) -> int:
+    from .. import plugins as plugin_runtime
     from ..surface import plugin_inventory
 
     inv = plugin_inventory()
@@ -402,8 +464,38 @@ def cmd_plugins(args, config: Config) -> int:
     if action == "path":
         _print(str(inv.path))
         return 0
+    if action == "install":
+        if not getattr(args, "name", None):
+            return _die("usage: aegis plugins install <local-file-or-directory>")
+        try:
+            name = plugin_runtime.install(args.name, config, force=getattr(args, "force", False))
+            _print(f"installed plugin '{name}'")
+            return 0
+        except Exception as e:  # noqa: BLE001
+            return _die(str(e))
+    if action == "enable":
+        if plugin_runtime.enable(args.name, config):
+            _print(f"enabled {args.name}")
+            return 0
+        return _die(f"plugin '{args.name}' not found")
+    if action == "disable":
+        if plugin_runtime.disable(args.name, config):
+            _print(f"disabled {args.name}")
+            return 0
+        return _die(f"plugin '{args.name}' not found")
+    if action == "remove":
+        if plugin_runtime.remove(args.name, config):
+            _print(f"removed {args.name}")
+            return 0
+        return _die(f"plugin '{args.name}' not found")
     _print(f"plugin dir: {inv.path}")
     _print(f"plugin files: {inv.files_count}")
+    manifests = plugin_runtime.list_manifests(config)
+    if manifests:
+        _print("manifests:")
+        for m in manifests:
+            state = "on" if m.enabled else "off"
+            _print(f"  {state:<3} {m.name:<22} {m.version or '-':<10} {m.description}")
     if inv.loaded_files:
         for path in inv.loaded_files:
             _print(f"  ✓ {Path(path).name}")
@@ -422,6 +514,136 @@ def cmd_plugins(args, config: Config) -> int:
     else:
         _print("errors: none")
     return 1 if action == "doctor" and inv.errors else 0
+
+
+def cmd_tui(args, config: Config) -> int:
+    """Full terminal UI entry point."""
+    from ..session import SessionStore
+    from .tui import run_fullscreen
+
+    store = SessionStore()
+    session = _terminal_session(args, store)
+    if isinstance(session, int):
+        return session
+    config.data.setdefault("display", {})["status_footer"] = True
+    run_fullscreen(config, model=args.model, provider_name=args.provider,
+                   session=session, store=store, auto=args.yolo)
+    return 0
+
+
+def cmd_trace(args, config: Config) -> int:
+    try:
+        from ..tracing import TraceStore
+    except Exception as e:  # noqa: BLE001
+        return _die(f"trace store unavailable: {e}")
+    store = TraceStore.from_config(config)
+    action = getattr(args, "action", "list")
+    status_filter = str(getattr(args, "status", "") or "").strip().lower()
+    if action == "show":
+        if not args.id:
+            return _die("usage: aegis trace show <trace-id>")
+        trace = store.get_trace(args.id)
+        if not trace:
+            return _die(f"trace '{args.id}' not found")
+        if getattr(args, "json", False):
+            _print(json.dumps(trace, indent=2))
+            return 0
+        _print(f"trace:   {trace['trace_id']}")
+        _print(f"session: {trace.get('session_id') or '(none)'}")
+        _print(f"status:  {trace.get('status')} · spans: {trace.get('span_count')} · "
+               f"cache read/write: {trace.get('cache_read', 0):,}/{trace.get('cache_write', 0):,}")
+        for r in trace.get("spans", []):
+            label = r.get("tool_name") or r.get("model") or r.get("provider") or ""
+            _print(f"  {r['span_id'][:14]:<14} {r['kind']:<16} {r['status']:<9} {label}")
+        return 0
+    if action == "export":
+        traces = [store.get_trace(args.id)] if args.id else [
+            store.get_trace(t["trace_id"]) for t in store.list_traces(
+                session_id=args.session,
+                limit=args.limit,
+            )
+        ]
+        traces = [t for t in traces if t and _trace_status_matches(t, status_filter)]
+        data = "\n".join(json.dumps(t) for t in traces)
+        if args.out:
+            Path(args.out).expanduser().write_text(data + ("\n" if data else ""), encoding="utf-8")
+            _print(f"exported {len(traces)} trace(s) → {args.out}")
+        else:
+            _print(data)
+        return 0
+    if getattr(args, "spans", False):
+        rows = store.list_spans(session_id=args.session, limit=args.limit)
+        if status_filter:
+            rows = [r for r in rows if status_filter in str(r.get("status", "")).lower()]
+        if getattr(args, "json", False):
+            _print(json.dumps(rows, indent=2))
+            return 0
+        for r in rows:
+            _print(f"  {r['started_at']}  {r['trace_id'][:12]}  {r['kind']:<16} "
+                   f"{r['status']:<9} {r.get('tool_name') or r.get('model') or ''}")
+        if not rows:
+            _print("(no trace spans)")
+        return 0
+    rows = store.list_traces(session_id=args.session, limit=args.limit)
+    if status_filter:
+        rows = [r for r in rows if _trace_status_matches(r, status_filter)]
+    if getattr(args, "json", False):
+        _print(json.dumps(rows, indent=2))
+        return 0
+    if not rows:
+        _print("(no traces)")
+        return 0
+    for r in rows:
+        _print(f"  {r['trace_id']:<18} {r.get('status', ''):<8} "
+               f"{r.get('span_count', r.get('spans', 0)):>3} span(s)  "
+               f"{r.get('session_id') or ''}  {r.get('started_at') or ''}")
+    return 0
+
+
+def _trace_status_matches(trace: dict, status_filter: str) -> bool:
+    return not status_filter or status_filter in str(trace.get("status", "")).lower()
+
+
+def cmd_eval(args, config: Config) -> int:
+    try:
+        from ..evals import EvalStore, run_suite
+    except Exception as e:  # noqa: BLE001
+        return _die(f"evals unavailable: {e}")
+    store = EvalStore.from_config(config)
+    action = getattr(args, "action", "list")
+    if action == "show":
+        if not args.path:
+            return _die("usage: aegis eval show <run-id>")
+        run = store.get_run(args.path)
+        if not run:
+            return _die(f"eval run '{args.path}' not found")
+        if args.json:
+            _print(json.dumps(run, indent=2))
+            return 0
+        _print(f"eval:  {run['id']}  suite={run.get('suite')}  "
+               f"{run.get('passed')}/{run.get('total')} passed  score={run.get('score')}")
+        for result in run.get("results", []):
+            mark = "✓" if result.get("passed") else "✗"
+            _print(f"  {mark} {result.get('case') or result.get('id')}  score={result.get('score')}")
+            for grade in result.get("grades", []):
+                _print(f"      {grade.get('name')}: {grade.get('reason', '')}")
+        return 0
+    if action == "run":
+        if not args.path:
+            return _die("usage: aegis eval run <suite.jsonl>")
+        result = run_suite(args.path, config=config, store=store)
+        _print(json.dumps(result, indent=2) if args.json else
+               f"{result['suite']}: {result['passed']}/{result['total']} passed")
+        return 0 if result["passed"] == result["total"] else 1
+    rows = store.list_runs(limit=args.limit)
+    if args.json:
+        _print(json.dumps(rows, indent=2))
+        return 0
+    for r in rows:
+        _print(f"  {r['id']}  {r['suite']:<24} {r['passed']}/{r['total']}  {r['created_at']}")
+    if not rows:
+        _print("(no eval runs)")
+    return 0
 
 
 def cmd_status(args, config: Config) -> int:
@@ -584,6 +806,25 @@ def cmd_sessions(args, config: Config) -> int:
         s = store.load(args.id) if args.id else None
         if not s:
             return _die("session not found")
+        runtime = s.meta.get("runtime") or {}
+        if runtime:
+            _print(
+                f"runtime: {runtime.get('provider', '')}/{runtime.get('model', '')} "
+                f"({runtime.get('transport', '') or 'transport?'})"
+            )
+        if s.meta.get("trace_id"):
+            _print(f"trace: {s.meta.get('trace_id')}")
+        if s.meta.get("system_prompt_hash"):
+            _print(
+                f"prompt: {s.meta.get('system_prompt_hash')} · "
+                f"{s.meta.get('system_prompt_tokens', 0):,} tokens · "
+                f"{len(s.meta.get('prompt_parts') or [])} part(s)"
+            )
+            for p in (s.meta.get("prompt_parts") or [])[:12]:
+                _print(
+                    f"  {p.get('tier', ''):<8} {p.get('name', ''):<22} "
+                    f"{p.get('tokens', 0):>6} tok  {p.get('hash', '')}"
+                )
         for m in s.messages:
             if m.role in ("user", "assistant") and m.content:
                 _print(f"[{m.role}] {m.content[:500]}")
@@ -592,8 +833,7 @@ def cmd_sessions(args, config: Config) -> int:
         _print("removed" if store.delete(args.id) else "not found")
         return 0
     if args.action == "summarize":
-        from ..providers import build_provider
-        s = store.summarize(args.id, build_provider(config)) if args.id else None
+        s = store.summarize(args.id, config=config) if args.id else None
         _print(s or "usage: aegis sessions summarize <id>")
         return 0
     if args.action == "search":
@@ -816,16 +1056,16 @@ def cmd_batch(args, config: Config) -> int:
     _print(f"running {len(prompts)} prompt(s)…")
     for i, prompt in enumerate(prompts, 1):
         _print(f"\n=== [{i}/{len(prompts)}] {prompt[:70]} ===")
-        out = repl.run_once(config, prompt, model=args.model, provider_name=args.provider,
-                            session=Session.create(), auto=True)
-        if not config.get("agent.stream", True):
-            _print(out)
+        repl.run_once(config, prompt, model=args.model, provider_name=args.provider,
+                      session=Session.create(), auto=True, surface="batch",
+                      meta={"batch_source": src, "batch_index": i,
+                            "batch_total": len(prompts)})
     return 0
 
 
-_CMDS = ("chat model auth setup onboard status update skills plugins mcp serve cron tools memory "
+_CMDS = ("chat tui model auth setup onboard status update skills plugins mcp serve rpc cron tools memory "
          "config sessions gateway doctor completion backup import insights webhook "
-         "hooks kanban curator dashboard daemon acp pairing checkpoints background")
+         "hooks kanban curator dashboard daemon acp pairing checkpoints background trace eval")
 
 
 def cmd_checkpoints(args, config: Config) -> int:
@@ -949,6 +1189,14 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--worktree", "-w", action="store_true", help="run in an isolated git worktree")
     c.add_argument("--image", action="append", help="attach an image for vision (repeatable)")
     c.set_defaults(func=cmd_chat)
+
+    tui = sub.add_parser("tui", help="open the richer terminal agent surface")
+    tui.add_argument("-m", "--model")
+    tui.add_argument("--provider")
+    tui.add_argument("--resume", help="resume a session id/title")
+    tui.add_argument("--continue", dest="cont", action="store_true", help="continue the latest session")
+    tui.add_argument("--yolo", action="store_true", help="auto-approve all tools")
+    tui.set_defaults(func=cmd_tui)
 
     m = sub.add_parser("model", help="show/set the model")
     m.add_argument("action", nargs="?", choices=["list", "set"])
@@ -1137,20 +1385,47 @@ def build_parser() -> argparse.ArgumentParser:
     sk.add_argument("--force", action="store_true", help="install even if the security scan flags it")
     sk.set_defaults(func=cmd_skills)
 
-    pl = sub.add_parser("plugins", help="list loaded drop-in plugins and load errors")
-    pl.add_argument("action", nargs="?", choices=["list", "doctor", "path"], default="list")
+    pl = sub.add_parser("plugins", help="manage manifest and drop-in plugins")
+    pl.add_argument("action", nargs="?",
+                    choices=["list", "doctor", "path", "install", "enable", "disable", "remove"],
+                    default="list")
+    pl.add_argument("name", nargs="?")
+    pl.add_argument("--force", action="store_true", help="replace an installed local plugin")
     pl.set_defaults(func=cmd_plugins)
 
     mc = sub.add_parser("mcp", help="manage MCP servers (or `serve` to be one)")
-    mc.add_argument("action", nargs="?", choices=["list", "add", "remove", "test", "serve"], default="list")
+    mc.add_argument("action", nargs="?",
+                    choices=["list", "add", "remove", "test", "serve", "catalog", "install", "tools"],
+                    default="list")
     mc.add_argument("name", nargs="?")
     mc.add_argument("cmd", nargs="?", help='command line, e.g. "npx -y @modelcontextprotocol/server-filesystem /tmp"')
     mc.set_defaults(func=cmd_mcp)
+
+    tr = sub.add_parser("trace", help="inspect/export session traces")
+    tr.add_argument("action", nargs="?", choices=["list", "show", "export"], default="list")
+    tr.add_argument("id", nargs="?", help="trace id for `show`/`export`")
+    tr.add_argument("--session", help="filter spans by session id")
+    tr.add_argument("--status", help="filter list/export/spans by status text")
+    tr.add_argument("--limit", type=int, default=50)
+    tr.add_argument("--spans", action="store_true", help="list spans instead of trace summaries")
+    tr.add_argument("--out", help="write exported JSONL to a file")
+    tr.add_argument("--json", action="store_true")
+    tr.set_defaults(func=cmd_trace)
+
+    ev = sub.add_parser("eval", help="run/list/show offline eval suites")
+    ev.add_argument("action", nargs="?", choices=["list", "run", "show"], default="list")
+    ev.add_argument("path", nargs="?", help="jsonl suite path for `run`, run id for `show`")
+    ev.add_argument("--limit", type=int, default=20)
+    ev.add_argument("--json", action="store_true")
+    ev.set_defaults(func=cmd_eval)
 
     sv = sub.add_parser("serve", help="run an OpenAI-compatible API server")
     sv.add_argument("--host")
     sv.add_argument("--port", type=int)
     sv.set_defaults(func=cmd_serve)
+
+    rp = sub.add_parser("rpc", help="run a local JSON-RPC agent server over stdio")
+    rp.set_defaults(func=cmd_rpc)
 
     cr = sub.add_parser("cron", help="schedule recurring agent tasks")
     cr.add_argument("action", nargs="?",
@@ -1212,9 +1487,11 @@ def main(argv: list[str] | None = None) -> int:
         if _needs_first_run():
             return _handle_first_run(config)
         # default: interactive chat
-        from ..session import Session, SessionStore
+        from argparse import Namespace
+        from ..session import SessionStore
         from . import repl
-        repl.interactive(config, session=Session.create(), store=SessionStore())
+        store = SessionStore()
+        repl.interactive(config, session=_terminal_session(Namespace(), store), store=store)
         return 0
     try:
         return args.func(args, config)

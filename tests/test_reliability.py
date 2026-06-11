@@ -30,6 +30,46 @@ def test_error_classifier_taxonomy_and_actions():
     assert c(TimeoutError("slow")) == "transient" and a("transient") == "retry"
 
 
+def test_context_overflow_retry_trace_is_recovered(tmp_path):
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.providers.chat_completions import ProviderHTTPError
+    from aegis.session import Session
+    from aegis.tracing import TraceStore
+    from aegis.types import LLMResponse
+
+    class Provider:
+        context_length = 100_000
+        name = "fake"
+        model = "fake-model"
+        api_mode = None
+        auth = None
+
+        def __init__(self):
+            self.calls = 0
+
+        def complete(self, messages, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise ProviderHTTPError(400, "maximum context length is 8192 tokens")
+            return LLMResponse(text="recovered")
+
+    provider = Provider()
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = False
+    agent = Agent(config=cfg, provider=provider, session=Session.create(), cwd=tmp_path)
+
+    out = agent.run("work")
+    trace = TraceStore.from_config(cfg).get_trace(agent._trace_context["trace_id"])
+
+    assert out.content == "recovered"
+    assert trace["status"] == "ok"
+    assert [s["status"] for s in trace["spans"] if s["kind"] == "provider_call"] == ["retrying", "ok"]
+    assert trace["compactions"] == 1
+    compaction = next(s for s in trace["spans"] if s["kind"] == "compaction")
+    assert compaction["data"]["recovery"] is True
+
+
 def test_steer_folds_into_last_tool_message():
     from aegis.agent.loop import _drain_steering
     from aegis.types import Message

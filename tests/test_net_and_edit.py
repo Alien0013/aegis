@@ -184,16 +184,16 @@ def test_learn_redact_reuses_shared_module():
 
 
 def test_compaction_uses_aux_provider_helper():
-    # _summarizer caches a provider on the agent and falls back to the main provider
+    # _summarizer routes through AuxRouter and falls back to the main provider.
     from aegis.agent.loop import _summarizer
 
     class FakeAgent:
         provider = object()
         config = None
     a = FakeAgent()
-    # build_aux_provider needs a real config; on failure it must fall back to agent.provider
     s = _summarizer(a)
-    assert s is a.provider and a._aux_provider is s
+    assert s is a.provider
+    assert a._aux_router.provider_for("compaction") is s
 
 
 # --- send_message tool (proactive channel push) -----------------------------
@@ -607,6 +607,13 @@ def test_dashboard_config_redaction_and_cron(tmp_path, monkeypatch):
     from http.server import ThreadingHTTPServer
     from aegis.config import Config
     from aegis.dashboard import make_handler
+    import aegis.agent.agent as am
+
+    class A:
+        def run(self, prompt):
+            return type("R", (), {"content": f"ran {prompt}"})()
+
+    monkeypatch.setattr(am.Agent, "create", staticmethod(lambda cfg, session=None: A()))
     cfg = Config.load()
     cfg.set("dashboard.token", "")
     srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(cfg))
@@ -620,6 +627,10 @@ def test_dashboard_config_redaction_and_cron(tmp_path, monkeypatch):
     try:
         jid = req("POST", "/api/cron", {"action": "add", "schedule": "every 2h", "prompt": "ci"})["id"]
         assert any(j["id"] == jid and j["enabled"] for j in req("GET", "/api/cron"))
+        run = req("POST", "/api/cron", {"action": "run", "id": jid})
+        assert run["ok"] and run["run_id"]
+        ran = [j for j in req("GET", "/api/cron") if j["id"] == jid][0]
+        assert ran["run_count"] == 1 and ran["last_run_id"] == run["run_id"]
         req("POST", "/api/cron", {"action": "toggle", "id": jid, "enabled": False})
         assert not [j for j in req("GET", "/api/cron") if j["id"] == jid][0]["enabled"]
         assert req("POST", "/api/cron", {"action": "remove", "id": jid})["ok"]
@@ -801,6 +812,224 @@ def test_dashboard_mcp_and_webhooks(tmp_path, monkeypatch):
         srv.shutdown()
 
 
+def test_dashboard_public_plan_endpoints(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import http.client
+    import json
+    import threading
+    from http.server import ThreadingHTTPServer
+    from aegis.config import Config
+    from aegis.dashboard import make_handler
+    from aegis.session import Session, SessionStore
+    from aegis.types import Message, ToolCall
+    from aegis.tools.agentic import _REGISTRY, _REG_LOCK, _register
+    from aegis.tracing import TraceStore
+    from aegis.evals import EvalStore
+    from aegis.runs import RunStore
+
+    cfg = Config.load()
+    cfg.set("dashboard.token", "")
+    cfg.data.setdefault("mcp", {})["servers"] = {
+        "fs": {"command": "npx", "args": ["server-fs", "/tmp"]}
+    }
+    cfg.data.setdefault("mcp", {})["catalog"] = [
+        {"name": "catfs", "description": "Catalog FS", "command": "npx", "args": ["server-catfs", "/tmp"]}
+    ]
+    plugin_file = tmp_path / "dash_plugin.py"
+    plugin_file.write_text(
+        "from aegis.tools.base import Tool, ToolResult\n"
+        "class DashTool(Tool):\n"
+        "    name='dash_plugin_tool'\n"
+        "    description='Dashboard plugin tool.'\n"
+        "    parameters={'type':'object','properties':{}}\n"
+        "    def run(self,args,ctx): return ToolResult.ok('ok')\n"
+        "def register(api): api.register_tool(DashTool())\n",
+        encoding="utf-8",
+    )
+
+    s = Session.create("plan surface")
+    s.meta["system_prompt_hash"] = "hash_dash"
+    s.meta["prompt_parts"] = [
+        {"tier": "stable", "name": "identity", "hash": "p1", "chars": 10, "tokens": 3}
+    ]
+    s.messages = [
+        Message.user("ship the plan"),
+        Message.assistant("checking", [ToolCall("call_1", "search", {"query": "plan"})]),
+        Message.tool("call_1", "search", "ok"),
+        Message.assistant("done"),
+    ]
+    SessionStore().save(s)
+    TraceStore.from_config(cfg).write_trace(
+        [
+            {"span_id": "turn", "kind": "turn", "status": "ok",
+             "started_at": "2026-01-01T00:00:00+00:00",
+             "ended_at": "2026-01-01T00:00:04+00:00"},
+            {"span_id": "provider", "parent_span_id": "turn", "kind": "provider_call",
+             "status": "ok", "provider": "openai", "model": "gpt-5", "cost": 0.01,
+             "cache_read": 12, "cache_write": 3,
+             "started_at": "2026-01-01T00:00:00+00:00",
+             "ended_at": "2026-01-01T00:00:02+00:00",
+             "data": {"input_tokens": 100, "output_tokens": 20, "duration_ms": 2000}},
+            {"span_id": "tool", "parent_span_id": "turn", "kind": "tool", "status": "ok",
+             "tool_name": "search", "artifact_ref": "artifact://search",
+             "started_at": "2026-01-01T00:00:02+00:00",
+             "ended_at": "2026-01-01T00:00:03+00:00",
+             "data": {"args": {"query": "plan"}, "preview": "ok", "duration_ms": 1000}},
+            {"span_id": "compact", "parent_span_id": "turn", "kind": "compaction",
+             "status": "ok", "started_at": "2026-01-01T00:00:03+00:00",
+             "ended_at": "2026-01-01T00:00:04+00:00",
+             "data": {"messages_before": 8, "messages_after": 4}},
+        ],
+        trace_id="trace_dash",
+        session_id=s.id,
+    )
+    eval_run = EvalStore.from_config(cfg).add_run(
+        "dash-suite",
+        [{"case": "case-1", "passed": True, "score": 1.0,
+          "grades": [{"name": "ok", "passed": True, "score": 1.0}]}],
+    )
+    suite = tmp_path / "dash_suite.jsonl"
+    suite.write_text(
+        json.dumps({
+            "name": "dash-final",
+            "session_id": s.id,
+            "expected_contains": "done",
+        }) + "\n",
+        encoding="utf-8",
+    )
+    run = RunStore().start(
+        surface="dashboard",
+        kind="dashboard",
+        title="dash run",
+        session_id=s.id,
+        trace_id="trace_dash",
+        prompt="ship the plan",
+    )
+    RunStore().finish(run["id"], trace_id="trace_dash", result="done")
+    other_run = RunStore().start(
+        surface="gateway",
+        kind="delivery",
+        title="gate run",
+        session_id="gateway:room",
+        prompt="hello",
+    )
+    RunStore().finish(other_run["id"], status="error", error="offline")
+
+    with _REG_LOCK:
+        _REGISTRY.clear()
+    _register("sub_dash", status="done", task="inspect dashboard", type="explore",
+              run_id=run["id"], session_id=s.id, trace_id="trace_dash")
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(cfg))
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    def req(path):
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        c.request("GET", path)
+        return json.loads(c.getresponse().read())
+
+    def post(path, body):
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        c.request("POST", path, body=json.dumps(body), headers={"Content-Type": "application/json"})
+        return json.loads(c.getresponse().read())
+
+    try:
+        traces = req("/api/traces")
+        assert traces["source"] in {
+            "sessions", "aegis.tracing", "aegis.runtime.traces", "aegis.runtime_trace", "aegis.traces",
+        }
+        assert any((t.get("id") or t.get("trace_id")) in {s.id, "trace_dash"}
+                   for t in traces.get("traces", []))
+        trace_row = next(t for t in traces.get("traces", []) if (t.get("id") or t.get("trace_id")) == "trace_dash")
+        assert trace_row["spans"]["provider_calls"] == 1
+        assert trace_row["spans"]["tool_calls"] == 1
+        assert trace_row["spans"]["compactions"] == 1
+        assert trace_row["cache_read"] == 12
+        assert trace_row["models"] == ["gpt-5"]
+        assert any(r["id"] == run["id"] and r["session_id"] == s.id
+                   for r in req("/api/runs").get("runs", []))
+        dash_runs = req("/api/runs?surface=dashboard").get("runs", [])
+        assert any(r["id"] == run["id"] for r in dash_runs)
+        assert all(r["surface"] == "dashboard" for r in dash_runs)
+        error_runs = req("/api/runs?status=error").get("runs", [])
+        assert any(r["id"] == other_run["id"] for r in error_runs)
+        session_runs = req(f"/api/runs?session_id={s.id}").get("runs", [])
+        assert [r["id"] for r in session_runs] == [run["id"]]
+        agents = req("/api/agents").get("agents", [])
+        assert any(a["id"] == "sub_dash" and a["run_id"] == run["id"] for a in agents)
+        agent_detail = req("/api/agent?id=sub_dash")
+        assert agent_detail["found"] is True
+        assert agent_detail["agent"]["trace_id"] == "trace_dash"
+        assert agent_detail["run"]["id"] == run["id"]
+        assert agent_detail["trace"]["trace"]["id"] == "trace_dash"
+        assert agent_detail["messages"][0]["content"] == "ship the plan"
+        assert req("/api/projects").get("projects")
+        assert "worktrees" in req("/api/worktrees")
+        assert "evals" in req("/api/evals")
+        trace_detail = req("/api/trace?id=trace_dash")
+        assert trace_detail["found"] is True
+        assert trace_detail["trace"]["id"] == "trace_dash"
+        assert trace_detail["trace"]["spans"]["provider_calls"] == 1
+        assert trace_detail["trace"]["spans"]["tool_calls"] == 1
+        assert trace_detail["trace"]["spans"]["compactions"] == 1
+        assert trace_detail["trace"]["duration_ms"] == 4000
+        assert [span["span_id"] for span in trace_detail["spans"]] == ["turn", "provider", "tool", "compact"]
+        assert trace_detail["spans"][2]["data"]["preview"] == "ok"
+        assert trace_detail["spans"][2]["artifact_ref"] == "artifact://search"
+        assert trace_detail["replay"]["source"] == "trace"
+        assert any(g["name"] == "has_steps" for g in trace_detail["grades"])
+        run_detail = req(f"/api/run?id={run['id']}")
+        assert run_detail["found"] is True
+        assert run_detail["run"]["trace_id"] == "trace_dash"
+        assert run_detail["session"]["id"] == s.id
+        assert run_detail["messages"][1]["tool_calls"][0]["name"] == "search"
+        session_detail = req(f"/api/session?id={s.id}")
+        assert session_detail["messages"][0]["content"] == "ship the plan"
+        assert session_detail["detail"]["meta"]["system_prompt_hash"] == "hash_dash"
+        assert session_detail["detail"]["meta"]["prompt_parts"][0]["name"] == "identity"
+        assert session_detail["detail"]["prompt"]["hash"] == "hash_dash"
+        assert session_detail["detail"]["prompt"]["part_count"] == 1
+        assert session_detail["detail"]["prompt"]["tiers"]["stable"][0]["name"] == "identity"
+        branch = post("/api/session", {"action": "branch", "id": s.id, "title": "plan branch"})
+        assert branch["ok"] is True
+        assert branch["parent_id"] == s.id
+        assert branch["session"]["title"] == "plan branch"
+        assert branch["session"]["parent_id"] == s.id
+        parent_after_branch = req(f"/api/session?id={s.id}")
+        assert any(c["id"] == branch["session_id"]
+                   for c in parent_after_branch["lineage"]["children"])
+        child_detail = req(f"/api/session?id={branch['session_id']}")
+        assert child_detail["lineage"]["parent"]["id"] == s.id
+        eval_detail = req(f"/api/eval?id={eval_run['id']}")
+        assert eval_detail["found"] is True
+        assert eval_detail["summary"]["passed"] == 1
+        assert eval_detail["results"][0]["grades"][0]["name"] == "ok"
+        eval_post = post("/api/eval", {"action": "run", "path": str(suite)})
+        assert eval_post["ok"] is True
+        assert eval_post["eval"]["passed"] == 1
+        eval_post_detail = req(f"/api/eval?id={eval_post['eval']['id']}")
+        assert eval_post_detail["found"] is True
+        assert eval_post_detail["results"][0]["case"] == "dash-final"
+        cat = req("/api/mcp/catalog")
+        assert any(x["name"] == "fs" and x["transport"] == "stdio" for x in cat["servers"])
+        assert any(x["name"] == "catfs" and not x["installed"] for x in cat["catalog"])
+        installed = post("/api/mcp", {"action": "install", "name": "catfs"})
+        assert installed["ok"] is True
+        assert "catfs" in cfg.get("mcp.servers", {})
+        plugins = post("/api/plugins", {"action": "install", "source": str(plugin_file)})
+        assert plugins["ok"] is True and plugins["name"] == "dash_plugin"
+        assert post("/api/plugins", {"action": "disable", "name": "dash_plugin"})["ok"] is True
+        assert "dash_plugin" in cfg.get("plugins.disabled", [])
+        assert post("/api/plugins", {"action": "enable", "name": "dash_plugin"})["ok"] is True
+        assert "dash_plugin" in cfg.get("plugins.enabled", [])
+        assert post("/api/plugins", {"action": "remove", "name": "dash_plugin"})["ok"] is True
+    finally:
+        srv.shutdown()
+        with _REG_LOCK:
+            _REGISTRY.clear()
+
+
 # --- kanban automation: decompose a goal + autonomously work the board ------
 def test_kanban_automation(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
@@ -892,6 +1121,21 @@ def test_dashboard_curator_plugins_profiles(tmp_path, monkeypatch):
     pdir = cfg.workspace_dir() / "personalities"
     pdir.mkdir(parents=True, exist_ok=True)
     (pdir / "pirate.md").write_text("arr")
+    plug = cfg.sub("plugins") / "dash_ext"
+    plug.mkdir(parents=True, exist_ok=True)
+    (plug / "plugin.json").write_text(
+        '{"name":"dash_ext","version":"1.2.3","description":"dashboard extension","entrypoint":"main.py"}',
+        encoding="utf-8",
+    )
+    (plug / "main.py").write_text(
+        "from aegis.providers.registry import ProviderSpec\n"
+        "from aegis.providers.base import ApiMode\n"
+        "def register(api):\n"
+        "    api.register_provider(ProviderSpec('dashprov', ApiMode.CHAT_COMPLETIONS,\n"
+        "        'http://dash.local/v1', 'dash-model', 64000, auth_scheme='none'))\n"
+        "    api.register_channel('dashchan', lambda: object())\n",
+        encoding="utf-8",
+    )
 
     c = Config.load()
     c.set("dashboard.token", "")
@@ -909,6 +1153,10 @@ def test_dashboard_curator_plugins_profiles(tmp_path, monkeypatch):
         assert "stale" in req("POST", "/api/curator", {})
         pl = req("GET", "/api/plugins")
         assert "loaded" in pl and "tools" in pl
+        assert pl["providers"] == ["dashprov"]
+        assert pl["channels"] == ["dashchan"]
+        assert pl["manifests"][0]["name"] == "dash_ext"
+        assert pl["manifests"][0]["enabled"] is True
         pr = req("GET", "/api/profiles")
         assert "pirate" in pr["available"]
         req("POST", "/api/profiles", {"name": "pirate"})

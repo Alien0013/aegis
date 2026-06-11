@@ -38,6 +38,26 @@ def test_trajectory_record_export_stats(tmp_path):
     assert trajectory.stats()["trajectories"] >= 1
 
 
+def test_trajectory_openai_export_preserves_tool_call_ids():
+    from aegis import trajectory
+    from aegis.session import Session, SessionStore
+    from aegis.types import Message, ToolCall
+
+    s = Session.create()
+    s.messages = [
+        Message.user("inspect"),
+        Message.assistant("calling", [ToolCall("real_call", "read_file", {"path": "README.md"})]),
+        Message.tool("real_call", "read_file", "contents"),
+    ]
+    SessionStore().save(s)
+
+    traj = trajectory.record(s.id)
+    assert traj["messages"][1]["tool_calls"][0]["id"] == "real_call"
+    exported = trajectory._openai_finetune(traj)["messages"]
+    assert exported[1]["tool_calls"][0]["id"] == "real_call"
+    assert exported[2]["tool_call_id"] == "real_call"
+
+
 def test_trajectory_compress_truncates():
     from aegis import trajectory
     traj = {"messages": [{"role": "tool", "content": "x" * 5000}], "approx_tokens": 1}

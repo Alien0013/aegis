@@ -29,6 +29,7 @@ class MatrixAdapter(BasePlatformAdapter):
         self._loop: asyncio.AbstractEventLoop | None = None
 
     def start(self, dispatch: Dispatch) -> None:
+        self._init_inbound_queue(dispatch)
         try:
             from nio import AsyncClient, RoomMessageText
         except ImportError as e:  # noqa: BLE001
@@ -53,13 +54,7 @@ class MatrixAdapter(BasePlatformAdapter):
                     text=event.body, user_id=event.sender,
                     user_name=room.user_name(event.sender),
                 )
-                reply = await asyncio.get_event_loop().run_in_executor(None, dispatch, ev)
-                if reply:
-                    await client.room_send(
-                        room_id=room.room_id,
-                        message_type="m.room.message",
-                        content={"msgtype": "m.text", "body": reply},
-                    )
+                self._submit_inbound(ev)
 
             client.add_event_callback(on_message, RoomMessageText)
             try:

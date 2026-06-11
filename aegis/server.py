@@ -10,29 +10,84 @@ import json
 import os
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
 
-from .agent.agent import Agent
 from .config import Config
 from .providers import list_providers
-from .session import Session
+from .surface import SurfaceRunner
 from .types import Message, new_id
 
 
-def _convert(messages: list[dict]) -> tuple[list[Message], str]:
-    """Return (history_without_last_user, last_user_text)."""
-    internal = [Message.from_dict({"role": m["role"], "content": m.get("content", "") or ""})
-                for m in messages if m.get("role") != "system"]
-    last_user = ""
-    for m in reversed(internal):
-        if m.role == "user":
-            last_user = m.content
-            internal.remove(m)
+def _content(value: Any) -> tuple[str, list[str]]:
+    """OpenAI content string/parts -> AEGIS text + image references."""
+    if isinstance(value, str):
+        return value, []
+    if not isinstance(value, list):
+        return "" if value is None else str(value), []
+    texts: list[str] = []
+    images: list[str] = []
+    for part in value:
+        if not isinstance(part, dict):
+            texts.append(str(part))
+            continue
+        ptype = part.get("type")
+        if ptype in ("text", "input_text"):
+            texts.append(str(part.get("text", "")))
+        elif ptype in ("image_url", "input_image"):
+            image = part.get("image_url") or part.get("image")
+            if isinstance(image, dict):
+                image = image.get("url")
+            if image:
+                images.append(str(image))
+    return "\n".join(t for t in texts if t), images
+
+
+def _convert(messages: list[dict]) -> tuple[list[Message], Message]:
+    """Return (history_without_last_user, last_user_message)."""
+    internal: list[Message] = []
+    for m in messages:
+        role = str(m.get("role") or "user")
+        text, images = _content(m.get("content", ""))
+        if role in ("system", "developer"):
+            if text:
+                internal.append(Message.user(f"<{role}_instructions>\n{text}\n</{role}_instructions>"))
+        elif role == "assistant":
+            internal.append(Message.assistant(text))
+        elif role == "tool":
+            internal.append(Message(
+                role="tool",
+                content=text,
+                tool_call_id=m.get("tool_call_id"),
+                name=m.get("name"),
+            ))
+        else:
+            internal.append(Message.user(text, images=images))
+    last_user = Message.user("")
+    for i in range(len(internal) - 1, -1, -1):
+        if internal[i].role == "user":
+            last_user = internal.pop(i)
             break
     return internal, last_user
 
 
+def _usage(agent) -> dict[str, Any]:
+    usage = getattr(getattr(agent, "budget", None), "usage", None)
+    if usage is None:
+        return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    prompt = int(getattr(usage, "input_tokens", 0) or 0)
+    completion = int(getattr(usage, "output_tokens", 0) or 0)
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": prompt + completion,
+        "prompt_tokens_details": {"cached_tokens": int(getattr(usage, "cache_read", 0) or 0)},
+        "completion_tokens_details": {},
+    }
+
+
 def make_handler(config: Config):
     api_key = config.get("server.api_key") or os.environ.get("AEGIS_SERVER_KEY")
+    runner = SurfaceRunner(config, include_mcp=True)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):  # quiet
@@ -65,19 +120,37 @@ def make_handler(config: Config):
             history, last_user = _convert(body.get("messages", []))
             model = body.get("model")
             stream = bool(body.get("stream"))
+            metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
+            session_id = (
+                metadata.get("session_id")
+                or body.get("session_id")
+                or self.headers.get("X-Aegis-Session")
+                or None
+            )
 
-            session = Session.create()
-            session.messages = history
-            agent = Agent.create(config, session=session, model=model)
             cid = new_id("chatcmpl")
 
             if not stream:
-                result = agent.run(last_user)
+                result = runner.run_prompt(
+                    last_user,
+                    session_id=session_id,
+                    history=history,
+                    model=model,
+                    stream=False,
+                    surface="serve",
+                    meta={"request_id": cid},
+                )
                 return self._json(200, {
                     "id": cid, "object": "chat.completion", "created": int(time.time()),
-                    "model": agent.provider.model,
-                    "choices": [{"index": 0, "message": {"role": "assistant", "content": result.content},
+                    "model": result.agent.provider.model,
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": result.text},
                                  "finish_reason": "stop"}],
+                    "usage": _usage(result.agent),
+                    "metadata": {
+                        "session_id": result.session.id,
+                        "trace_id": result.trace_id,
+                        "run_id": result.run_id,
+                    },
                 })
 
             # streaming
@@ -88,7 +161,7 @@ def make_handler(config: Config):
             def emit(e: dict) -> None:
                 if e.get("type") == "assistant_delta":
                     chunk = {"id": cid, "object": "chat.completion.chunk", "created": int(time.time()),
-                             "model": agent.provider.model,
+                             "model": model or config.get("model.default", ""),
                              "choices": [{"index": 0, "delta": {"content": e["text"]}}]}
                     try:
                         self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
@@ -96,7 +169,25 @@ def make_handler(config: Config):
                     except (BrokenPipeError, ConnectionResetError):
                         pass
 
-            agent.run(last_user, emit)
+            result = runner.run_prompt(
+                last_user,
+                session_id=session_id,
+                history=history,
+                model=model,
+                stream=True,
+                surface="serve",
+                meta={"request_id": cid},
+                on_event=emit,
+            )
+            final = {"id": cid, "object": "chat.completion.chunk", "created": int(time.time()),
+                     "model": result.agent.provider.model,
+                     "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                     "metadata": {
+                         "session_id": result.session.id,
+                         "trace_id": result.trace_id,
+                         "run_id": result.run_id,
+                     }}
+            self.wfile.write(f"data: {json.dumps(final)}\n\n".encode())
             self.wfile.write(b"data: [DONE]\n\n")
 
     return Handler

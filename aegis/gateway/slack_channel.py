@@ -20,6 +20,7 @@ class SlackAdapter(BasePlatformAdapter):
             raise RuntimeError("SLACK_BOT_TOKEN and SLACK_APP_TOKEN must be set.")
 
     def start(self, dispatch: Dispatch) -> None:
+        self._init_inbound_queue(dispatch)
         try:
             from slack_bolt import App
             from slack_bolt.adapter.socket_mode import SocketModeHandler
@@ -38,14 +39,24 @@ class SlackAdapter(BasePlatformAdapter):
                 text=event.get("text", ""), user_id=event.get("user"),
                 thread_id=event.get("thread_ts"),
             )
-            reply = dispatch(ev)
-            if reply:
-                say(text=reply, thread_ts=event.get("thread_ts"))
+            self._submit_inbound(ev)
 
         SocketModeHandler(app, self.app_token).start()
 
     def send(self, chat_id: str, text: str) -> None:
         try:
             self._app.client.chat_postMessage(channel=chat_id, text=text)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _deliver_reply(self, ev: MessageEvent, reply: str, state=None) -> None:  # noqa: ANN001
+        if not reply:
+            return
+        try:
+            self._app.client.chat_postMessage(
+                channel=ev.chat_id,
+                text=reply,
+                thread_ts=ev.thread_id,
+            )
         except Exception:  # noqa: BLE001
             pass

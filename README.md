@@ -7,9 +7,9 @@ Any model · any channel · runs on your machine · learns as it goes — in ~20
   <a href="https://github.com/Alien0013/aegis/actions"><img src="https://github.com/Alien0013/aegis/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="python">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
-  <img src="https://img.shields.io/badge/tests-349%20passing-brightgreen" alt="tests">
+  <img src="https://img.shields.io/badge/tests-389%20passing-brightgreen" alt="tests">
   <img src="https://img.shields.io/badge/providers-29-blueviolet" alt="providers">
-  <img src="https://img.shields.io/badge/tools-34-blueviolet" alt="tools">
+  <img src="https://img.shields.io/badge/tools-35-blueviolet" alt="tools">
   <img src="https://img.shields.io/badge/skills-26-orange" alt="skills">
 </p>
 
@@ -37,7 +37,7 @@ aegis            # start chatting   ·   aegis ui   # …or a clickable browser 
 <p align="center"><img src="assets/screenshot.svg" alt="AEGIS session" width="720"></p>
 
 <p align="center"><img src="assets/dashboard.svg" alt="AEGIS web dashboard" width="760"><br>
-<sub><code>aegis ui</code> — overview, spend chart, chat, live activity, kanban, schedules, models, keys, MCP · Ctrl-K palette · 5 themes</sub></p>
+<sub><code>aegis ui</code> — cockpit, traces, runs, agents, chat, kanban, schedules, models, MCP · Ctrl-K palette · 5 themes</sub></p>
 
 ## ✨ Why AEGIS is different
 
@@ -48,7 +48,7 @@ aegis            # start chatting   ·   aegis ui   # …or a clickable browser 
 | 🧠 **It actually learns** | **Autonomous memory** — saves your preferences, facts, and corrections as it works (no asking). Plus a background self-improvement loop that reviews finished sessions, auto-applies memory, and proposes new skills (secret-redacted; skills human-gated by default, fully autonomous with one flag). FTS5 cross-session recall. |
 | 🛡️ **Safe by default** | Permission cascade with a **hardline blocklist** (refuses `rm -rf /` even in yolo), pre-exec scanning, **fail-closed** docker/ssh/singularity/modal sandboxes, and untrusted-tool-result wrapping against prompt injection. |
 | 📡 **Everywhere you are** | One agent serving CLI, Telegram, Discord, Slack, Signal, Matrix, Email, and webhooks — with voice-memo transcription and a durable, retrying delivery queue. |
-| 🧰 **Batteries included** | **34 tools, 26 skills** + hub import, MCP (client **and** server), an OpenAI-compatible API, a web dashboard, cron, trajectory export, cost analytics, and OSV vulnerability auditing. |
+| 🧰 **Batteries included** | **35 tools, 26 skills** + hub import, MCP (client **and** server), an OpenAI-compatible API, a web dashboard, cron, trajectory export, cost analytics, and OSV vulnerability auditing. |
 | 🔓 **Yours** | MIT, self-hosted, no subscription, no lock-in. Your keys, your data, your machine. |
 
 > Design principle: do everything a full agent platform does, but keep the whole thing
@@ -68,7 +68,7 @@ flowchart TB
     subgraph Core["Agent core"]
         LOOP["Bounded agent loop<br/>governance · compaction · budget"]
         PERM["Permission cascade<br/>hardline · groups · exec-mode · scan"]
-        REG["Tool registry<br/>34 tools + MCP + plugins"]
+        REG["Tool registry<br/>35 tools + MCP + plugins"]
     end
 
     subgraph Providers["Provider layer"]
@@ -190,9 +190,20 @@ codex login && aegis model set codex gpt-5.5  # ChatGPT subscription via Codex
 aegis model set ollama llama3.1               # …or fully local, no key
 
 aegis                                         # interactive REPL (streaming + slash cmds)
+aegis tui                                     # full-screen terminal cockpit
 aegis chat -q "summarize the files here"      # one-shot
 aegis chat --continue                         # resume last session
 aegis ui                                      # ← clickable browser UI (great for beginners)
+aegis trace list                              # inspect trace spans/runs
+aegis eval run suite.jsonl                    # replay offline eval cases
+```
+
+```python
+from aegis import AegisClient
+
+client = AegisClient()
+result = client.run("Summarize this repo", title="repo summary")
+print(result.text, result.session_id, result.trace_id)
 ```
 
 ## 🧩 Features
@@ -205,13 +216,13 @@ OAuth** (API keys win because some OAuth tokens are identity-only). OAuth is ful
 with localhost-callback **and** manual-paste, auto-refresh, and `auth.json` at `0600`.
 → [docs/providers.md](docs/providers.md)
 
-### Tools & permissions (34 tools)
+### Tools & permissions (35 tools)
 `read_file` · `write_file` · `edit_file` · `apply_patch` · `list_dir` · `glob` · `search` ·
 `bash` · `process` (with completion wakeups) · `web_fetch` · `web_search` · `http_request` ·
 `download` · `todo_write` · `memory` · `skill` · `clarify` (ask the user) ·
 `spawn_subagent` (typed: explore/plan/review) · `mixture_of_agents` · `generate_image` ·
 `execute_code` (RPC sandbox) · `browser` (Playwright) · `computer` (pyautogui) · `lsp` ·
-`github` · `dependency_audit` (OSV CVE scan) · every MCP tool (`mcp__server__tool`) and
+`github` · `agent_state` · `dependency_audit` (OSV CVE scan) · every MCP tool (`mcp__server__tool`) and
 plugin tools. Results are **classified** (success/error/refused/truncated/partial),
 oversized outputs **spill to disk**, and rarely-used tools ship **name-only (deferred
 schemas)** until `tool_search` activates them — cutting steady-state token overhead.
@@ -236,8 +247,14 @@ Always-on file memory (`MEMORY.md`/`USER.md` + `history.jsonl`), pluggable exter
 
 ### MCP (client + server)
 Connect any MCP server (stdio or Streamable HTTP) — tools appear as `mcp__server__tool`;
-also reads Claude-Desktop `mcp.json`. Or expose **AEGIS's own** tools/skills/memory as an
-MCP server: `aegis mcp serve`. → [docs/mcp.md](docs/mcp.md)
+also reads Claude-Desktop `mcp.json`. Local catalog recipes, install flow, and per-server
+tool filters are available through `aegis mcp catalog|install|tools`. Or expose
+**AEGIS's own** tools/skills/memory as an MCP server: `aegis mcp serve`.
+→ [docs/mcp.md](docs/mcp.md)
+
+### Plugins
+Drop-in `*.py` plugins still work, and manifest packages add lifecycle commands:
+`aegis plugins install|enable|disable|remove`. → [docs/plugins.md](docs/plugins.md)
 
 ### Channels / gateway
 One agent across CLI, Telegram, Discord, Slack, Signal, Matrix, Email, and webhooks — DM
@@ -272,13 +289,20 @@ aegis gateway --channels telegram,discord,slack
 ### Serve, schedule, observe
 ```bash
 aegis serve --port 8790        # OpenAI-compatible /v1/chat/completions + /v1/models
+aegis rpc                      # JSON-RPC stdio agent surface for local bridges
 aegis cron add "@daily" "summarize today's commits"
 aegis trajectory export --format openai   # or hf / sharegpt — fine-tune datasets
+aegis trace list               # trace spans for turns, providers, tools, agents
+aegis eval run suite.jsonl     # provider-free replay evals
 aegis cost --days 30           # token-aware, cache-discounted spend by model
 aegis insights                 # usage analytics
-aegis ui                       # control panel: overview + spend chart, chat, live feed,
-                               # kanban, schedules, models, keys, MCP — Ctrl-K palette, themes
+aegis ui                       # cockpit: traces, runs, agents, chat, live feed,
+                               # kanban, schedules, models, MCP — Ctrl-K palette, themes
 ```
+
+The same runtime is embeddable from Python with `from aegis import AegisClient`:
+session continuity, progress events, trace lookup, branching, and eval replay all
+use the normal AEGIS stores.
 
 ## 📊 What you get
 

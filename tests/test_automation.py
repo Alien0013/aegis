@@ -172,6 +172,40 @@ def test_cron_multi_deliver(monkeypatch, tmp_path):
     assert calls == ["telegram:1", "discord:2"]          # one sink call per target
 
 
+def test_cron_run_job_records_history(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.cron import CronStore, run_job
+    from aegis.dashboard import _dashboard_cron_jobs
+    from aegis.runs import RunStore
+
+    seen = _fake_cron_agent(monkeypatch, reply="here is the update")
+    store = CronStore()
+    job = store.add("every 1h", "summarize", deliver="telegram:1")
+    delivered = []
+
+    result = run_job(None, job.id, sink=lambda ch, txt: delivered.append((ch, txt)),
+                     store=store, verbose=False)
+
+    assert result["ok"]
+    assert result["job_id"] == job.id
+    assert result["session_id"] == f"cron:{job.id}"
+    assert delivered == [("telegram:1", "here is the update")]
+    assert "summarize" in seen["prompt"]
+
+    run = RunStore().get(result["run_id"])
+    assert run and run["surface"] == "cron" and run["status"] == "ok"
+    assert run["data"]["cron_job_id"] == job.id
+    assert run["data"]["cron_schedule"] == "every 1h"
+    assert CronStore().get(job.id).last_run > 0
+
+    jobs = _dashboard_cron_jobs()
+    dash = next(j for j in jobs if j["id"] == job.id)
+    assert dash["run_count"] == 1
+    assert dash["last_run_id"] == result["run_id"]
+    assert dash["last_status"] == "ok"
+    assert dash["history"][0]["data"]["cron_job_id"] == job.id
+
+
 def test_cron_sets_delivery_target_as_agent_context(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.agent.agent as am

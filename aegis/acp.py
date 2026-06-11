@@ -29,6 +29,8 @@ from typing import Any, TextIO
 from .agent.agent import Agent
 from .config import Config
 from .session import Session, SessionStore
+from .surface import SurfaceRunner
+from .types import Message
 
 # ACP protocol version we implement (Zed currently negotiates integer versions).
 PROTOCOL_VERSION = 1
@@ -82,7 +84,8 @@ class AcpServer:
         self.config = config
         self.stdin = stdin or sys.stdin
         self.stdout = stdout or sys.stdout
-        self.store = store
+        self.store = store or SessionStore()
+        self.runner = SurfaceRunner(config, store=self.store, include_mcp=True)
         self.sessions: dict[str, _SessionEntry] = {}
         self._write_lock = threading.Lock()
         self._req_id = 0
@@ -177,8 +180,14 @@ class AcpServer:
             "protocolVersion": version,
             "agentCapabilities": {
                 "loadSession": True,
+                "sessionManagement": {
+                    "list": True,
+                    "detail": True,
+                    "search": True,
+                    "fork": True,
+                },
                 "promptCapabilities": {
-                    "image": False,
+                    "image": True,
                     "audio": False,
                     "embeddedContext": True,
                 },
@@ -209,6 +218,37 @@ class AcpServer:
                                          "content": {"type": "text", "text": m.content}})
         return {}
 
+    def _session_list(self, req_id, params: dict[str, Any]) -> dict[str, Any]:
+        limit = _int_param(params, "limit", 30, minimum=1, maximum=200)
+        query = str(params.get("query") or params.get("search") or "").strip()
+        rows = self.store.search(query, limit=limit) if query else self.store.list(limit=limit)
+        return {"sessions": [_session_row(row, store=self.store) for row in rows]}
+
+    def _session_get(self, req_id, params: dict[str, Any]) -> dict[str, Any]:
+        sid = params.get("sessionId") or params.get("id")
+        session = self.store.load(sid) if isinstance(sid, str) else None
+        if session is None:
+            raise _RpcError(INVALID_PARAMS, f"unknown sessionId: {sid!r}")
+        return {"session": _session_detail(session, store=self.store)}
+
+    def _session_fork(self, req_id, params: dict[str, Any]) -> dict[str, Any]:
+        sid = params.get("sessionId") or params.get("id")
+        parent = self.store.load(sid) if isinstance(sid, str) else None
+        if parent is None:
+            raise _RpcError(INVALID_PARAMS, f"unknown sessionId: {sid!r}")
+        child = self.store.fork(parent)
+        title = str(params.get("title") or "").strip()
+        if title:
+            child.title = title[:120]
+            self.store.save(child)
+        cwd = Path(params.get("cwd") or Path.cwd()).expanduser()
+        self.sessions[child.id] = _SessionEntry(session=child, cwd=cwd)
+        return {
+            "sessionId": child.id,
+            "parentSessionId": parent.id,
+            "session": _session_detail(child, store=self.store),
+        }
+
     def _session_prompt(self, req_id, params: dict[str, Any]):
         sid = params.get("sessionId")
         entry = self.sessions.get(sid) if isinstance(sid, str) else None
@@ -218,24 +258,27 @@ class AcpServer:
             raise _RpcError(INVALID_REQUEST, "a prompt is already running for this session")
 
         text = _flatten_prompt(params.get("prompt"))
-        if not text.strip():
+        images = _prompt_images(params.get("prompt"))
+        if not text.strip() and not images:
             raise _RpcError(INVALID_PARAMS, "empty prompt")
+        prompt = Message.user(text, images=images) if images else text
 
         entry.busy = True
-        threading.Thread(target=self._run_prompt, args=(req_id, sid, entry, text),
+        threading.Thread(target=self._run_prompt, args=(req_id, sid, entry, prompt),
                          daemon=True).start()
         return _NO_REPLY              # the worker sends the response when the turn ends
 
-    def _run_prompt(self, req_id, sid: str, entry: _SessionEntry, text: str) -> None:
+    def _run_prompt(self, req_id, sid: str, entry: _SessionEntry, prompt: str | Message) -> None:
         try:
-            agent = Agent.create(
-                self.config,
-                session=entry.session,
-                cwd=entry.cwd,
-                store=self.store,
-                approver=lambda desc: self._request_permission(sid, desc),
-            )
-            entry.agent = agent
+            agent = entry.agent
+            if agent is None or agent.session is not entry.session:
+                agent = self.runner.make_agent(
+                    session=entry.session,
+                    cwd=entry.cwd,
+                    approver=lambda desc: self._request_permission(sid, desc),
+                    include_mcp=True,
+                )
+                entry.agent = agent
             if self._client_fs:              # route file reads/writes through the editor
                 agent.tool_context.fs = _AcpFs(self, sid)
 
@@ -248,19 +291,25 @@ class AcpServer:
                 elif etype == "tool_result":
                     self._send_tool_call(sid, entry, event, status="completed")
 
-            result = agent.run(text, on_event)
+            result = self.runner.run_prompt(
+                prompt,
+                session=entry.session,
+                agent=agent,
+                surface="acp",
+                meta={"acp_session_id": sid},
+                on_event=on_event,
+            )
             if agent.cancel_event.is_set():
                 self._result(req_id, {"stopReason": "cancelled"})
                 return
             # Streaming providers already emitted deltas; if nothing streamed send it once.
-            if not getattr(agent, "stream", True) and result.content:
-                self._send_chunk(sid, result.content)
+            if not getattr(agent, "stream", True) and result.text:
+                self._send_chunk(sid, result.text)
             self._result(req_id, {"stopReason": "end_turn"})
         except Exception as e:  # noqa: BLE001
             self._send_chunk(sid, f"[error] {type(e).__name__}: {e}")
             self._result(req_id, {"stopReason": "error"})
         finally:
-            entry.agent = None
             entry.busy = False
 
     def _session_cancel(self, req_id, params: dict[str, Any]) -> dict[str, Any]:
@@ -316,6 +365,13 @@ class AcpServer:
                 update["locations"] = [{"path": str((entry.cwd / args["path"]).resolve()
                                                     if not Path(args["path"]).is_absolute()
                                                     else args["path"])}]
+        elif status == "completed":
+            preview = event.get("preview") or event.get("summary") or ""
+            if preview:
+                update["content"] = [{"type": "text", "text": str(preview)}]
+            if event.get("duration_ms") is not None:
+                update["metadata"] = {"duration_ms": event.get("duration_ms"),
+                                      "classification": event.get("classification", "")}
         self._update(sid, update)
 
     @staticmethod
@@ -346,6 +402,12 @@ class AcpServer:
         "authenticate": _authenticate,
         "session/new": _session_new,
         "session/load": _session_load,
+        "session/list": _session_list,
+        "session/get": _session_get,
+        "session/detail": _session_get,
+        "session/search": _session_list,
+        "session/fork": _session_fork,
+        "session/branch": _session_fork,
         "session/prompt": _session_prompt,
         "session/cancel": _session_cancel,
     }
@@ -388,6 +450,116 @@ def _flatten_prompt(prompt: Any) -> str:
                 header = f"<context uri=\"{uri}\">\n" if uri else "<context>\n"
                 parts.append(f"{header}{txt}\n</context>")
     return "\n".join(p for p in parts if p)
+
+
+def _prompt_images(prompt: Any) -> list[str]:
+    if not isinstance(prompt, list):
+        return []
+    images: list[str] = []
+    for block in prompt:
+        if not isinstance(block, dict):
+            continue
+        image = None
+        btype = block.get("type")
+        if btype in {"image", "image_url", "input_image"}:
+            image = block.get("image_url") or block.get("image") or block.get("url")
+        elif btype == "resource":
+            res = block.get("resource") or {}
+            mime = str(res.get("mimeType") or res.get("mime_type") or "")
+            if mime.startswith("image/"):
+                image = res.get("uri") or res.get("blob") or res.get("data")
+        if isinstance(image, dict):
+            image = image.get("url") or image.get("uri")
+        if image:
+            images.append(str(image))
+    return images
+
+
+def _int_param(
+    params: dict[str, Any],
+    name: str,
+    default: int,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int:
+    try:
+        value = int(params.get(name, default))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _prompt_meta(session: Session) -> dict[str, Any]:
+    parts = [p for p in (session.meta.get("prompt_parts") or []) if isinstance(p, dict)]
+    last_refs = (session.meta.get("last_context_references")
+                 if isinstance(session.meta.get("last_context_references"), dict) else {})
+    ref_history = [r for r in (session.meta.get("context_references") or []) if isinstance(r, dict)]
+    return {
+        "hash": session.meta.get("system_prompt_hash", ""),
+        "tokens": int(session.meta.get("system_prompt_tokens", 0) or 0),
+        "chars": int(session.meta.get("system_prompt_chars", 0) or 0),
+        "parts": len(parts),
+        "contextReferences": _jsonable(last_refs),
+        "contextReferenceHistory": _jsonable(ref_history[-10:]),
+    }
+
+
+def _session_row(row: dict[str, Any], *, store: SessionStore) -> dict[str, Any]:
+    sid = str(row.get("id") or "")
+    session = store.load(sid) if sid else None
+    runtime = (session.meta.get("runtime") if session else {}) or {}
+    meta = session.meta if session else {}
+    messages = session.messages if session else []
+    return {
+        "sessionId": sid,
+        "id": sid,
+        "title": row.get("title", ""),
+        "createdAt": row.get("created_at", ""),
+        "updatedAt": row.get("updated_at", ""),
+        "parentSessionId": row.get("parent_id"),
+        "messageCount": len([m for m in messages if m.role in {"user", "assistant"}]),
+        "runtime": runtime,
+        "traceId": meta.get("trace_id", ""),
+        "prompt": _prompt_meta(session) if session else {},
+    }
+
+
+def _message_block(message) -> dict[str, Any]:
+    return {
+        "role": message.role,
+        "content": [{"type": "text", "text": message.content or ""}],
+    }
+
+
+def _jsonable(value: Any) -> Any:
+    try:
+        json.dumps(value)
+        return value
+    except TypeError:
+        if isinstance(value, dict):
+            return {str(k): _jsonable(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple, set)):
+            return [_jsonable(v) for v in value]
+        return str(value)
+
+
+def _session_detail(session: Session, *, store: SessionStore) -> dict[str, Any]:
+    return {
+        "sessionId": session.id,
+        "id": session.id,
+        "title": session.title,
+        "createdAt": session.created_at,
+        "updatedAt": session.updated_at,
+        "parentSessionId": session.parent_id,
+        "children": store.children(session.id),
+        "messages": [_message_block(m) for m in session.messages if m.role != "system"],
+        "runtime": session.meta.get("runtime") or {},
+        "runtimeControls": session.meta.get("runtime_controls") or {},
+        "traceId": session.meta.get("trace_id", ""),
+        "prompt": _prompt_meta(session),
+        "summary": session.meta.get("summary", ""),
+    }
 
 
 def run_acp(config: Config) -> None:

@@ -25,6 +25,7 @@ from ..tools.base import ToolResult
 from ..types import LLMResponse, Message, ToolCall, ToolSchema
 from .auth import AuthProvider
 from .base import ApiMode, ApprovalHandler, OnDelta, ProviderTransport, ToolRunner
+from .schema import sanitize as _sanitize_schema
 
 
 class CodexAppServerError(RuntimeError):
@@ -454,7 +455,8 @@ class CodexAppServerTransport(ProviderTransport):
                     "name": name,
                     "namespace": "aegis",
                     "description": str(tool.get("description") or f"AEGIS {name} tool"),
-                    "inputSchema": tool.get("parameters") or {"type": "object", "properties": {}},
+                    "inputSchema": _sanitize_schema(
+                        tool.get("parameters") or {"type": "object", "properties": {}}),
                 }
             )
         return dynamic

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable
+from typing import Any, Callable
 
 from ..constants import MAX_PARALLEL_TOOLS
 from ..tools.base import ToolContext, ToolResult
-from ..types import Message, ToolCall
+from ..types import Message, ToolCall, new_id
 from . import compaction, governance
 
 OnEvent = Callable[[dict], None]
@@ -37,6 +38,189 @@ def _provider_complete(provider, messages, *, tools=None, **kwargs):
         return provider.complete(messages, tools=tools, **kwargs)
     filtered = {k: v for k, v in kwargs.items() if k in params}
     return provider.complete(messages, tools=tools, **filtered)
+
+
+def _preview(text: str, limit: int = 500) -> str:
+    one_line = (text or "").replace("\r", "").strip()
+    if len(one_line) <= limit:
+        return one_line
+    return one_line[:limit].rstrip() + " …"
+
+
+def _artifact_ref(data) -> str:
+    if isinstance(data, str):
+        return data
+    if isinstance(data, dict):
+        for key in ("artifact_ref", "artifact", "path", "file", "url"):
+            value = data.get(key)
+            if value:
+                return str(value)
+    return ""
+
+
+def _prompt_trace_meta(session) -> dict:
+    meta = getattr(session, "meta", {}) or {}
+    return {
+        "system_prompt_hash": meta.get("system_prompt_hash", ""),
+        "system_prompt_tokens": meta.get("system_prompt_tokens", 0),
+        "system_prompt_chars": meta.get("system_prompt_chars", 0),
+        "prompt_parts": list(meta.get("prompt_parts") or []),
+    }
+
+
+def _trace_scalar(value) -> str:
+    if value is None:
+        return ""
+    raw = getattr(value, "value", value)
+    return str(raw)
+
+
+def _provider_trace_data(agent, wire_messages, schemas, response_state: dict, prompt_meta: dict) -> dict:
+    api_mode = getattr(agent.provider, "api_mode", "")
+    tool_names = [str(t.get("name") or "") for t in (schemas or []) if isinstance(t, dict)]
+    return {
+        "iteration": agent.budget.api_call_count + 1,
+        "system_prompt_hash": prompt_meta.get("system_prompt_hash", ""),
+        "transport": type(agent.provider).__name__,
+        "api_mode": _trace_scalar(api_mode),
+        "context_length": int(getattr(agent.provider, "context_length", 0) or 0),
+        "message_count": len(wire_messages or []),
+        "tool_schema_count": len(schemas or []),
+        "tool_schema_names": [name for name in tool_names if name],
+        "stream": bool(getattr(agent, "stream", False)),
+        "reasoning": getattr(agent, "reasoning", "off"),
+        "responses_state": {
+            "enabled": bool(response_state.get("enabled")),
+            "store": bool(response_state.get("store")),
+            "send_previous": bool(response_state.get("send_previous", True)),
+            "preserve_items": bool(response_state.get("preserve_items", True)),
+            "context_management": bool(response_state.get("context_management") or response_state.get("compaction")),
+            "previous_response_id": str(response_state.get("previous_response_id") or ""),
+        },
+    }
+
+
+def _hydrate_previous_response_id(session_id: str, response_state: dict) -> dict:
+    state = dict(response_state or {})
+    if not (state.get("enabled") and state.get("store") and state.get("send_previous", True) and session_id):
+        return state
+    if state.get("previous_response_id"):
+        return state
+    try:
+        from ..responses_state import ResponsesStateStore
+
+        prev = ResponsesStateStore().get(session_id)
+        if prev and prev.response_id:
+            state["previous_response_id"] = prev.response_id
+    except Exception:  # noqa: BLE001
+        pass
+    return state
+
+
+def _response_state_for_agent(agent, session_id: str) -> dict:
+    response_state = dict(agent.config.get("responses.state", {}) or {})
+    native_compaction = dict(agent.config.get("responses.compaction", {}) or {})
+    if native_compaction.get("enabled"):
+        response_state["context_management"] = _responses_context_management(agent, native_compaction)
+    return _hydrate_previous_response_id(session_id, response_state)
+
+
+def _responses_context_management(agent, native_compaction: dict) -> list[dict[str, int | str]]:
+    raw = native_compaction.get("compact_threshold_tokens",
+                                native_compaction.get("compact_threshold", 0.85))
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = 0.85
+    if 0 < value < 1:
+        context_length = int(getattr(getattr(agent, "provider", None), "context_length", 0) or 0)
+        threshold = int(context_length * value) if context_length else 1000
+    else:
+        threshold = int(value)
+    threshold = max(1000, threshold)
+    return [{"type": "compaction", "compact_threshold": threshold}]
+
+
+def _provider_metadata(agent) -> dict[str, str]:
+    session = getattr(agent, "session", None)
+    trace_ctx = getattr(agent, "_trace_context", None) or {}
+    data = {
+        "session_id": getattr(session, "id", ""),
+        "trace_id": trace_ctx.get("trace_id", ""),
+        "turn_id": trace_ctx.get("turn_id", ""),
+        "run_id": getattr(agent, "_surface_run_id", ""),
+    }
+    return {key: str(value) for key, value in data.items() if value}
+
+
+def _record_response_request_meta(session, response_state: dict) -> None:
+    if session is None:
+        return
+    meta = {
+        "enabled": bool(response_state.get("enabled")),
+        "store": bool(response_state.get("store")),
+        "send_previous": bool(response_state.get("send_previous", True)),
+        "previous_response_id": str(response_state.get("previous_response_id") or ""),
+    }
+    try:
+        session.meta["response_state_request"] = meta
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _response_trace_data(resp, duration_ms: int) -> dict:
+    raw = resp.raw if isinstance(resp.raw, dict) else {}
+    output = raw.get("output") if isinstance(raw.get("output"), list) else []
+    data: dict[str, Any] = {
+        "finish_reason": resp.finish_reason,
+        "input_tokens": getattr(resp.usage, "input_tokens", 0),
+        "output_tokens": getattr(resp.usage, "output_tokens", 0),
+        "tool_calls": len(resp.tool_calls),
+        "duration_ms": duration_ms,
+    }
+    if raw:
+        data.update({
+            "response_id": raw.get("id", ""),
+            "response_status": raw.get("status", ""),
+            "output_item_count": len(output),
+            "output_item_types": [str(item.get("type") or "") for item in output if isinstance(item, dict)],
+        })
+    return data
+
+
+def _usage_cost_usd(model: str, usage, config) -> float:
+    try:
+        from ..usage_log import _price
+        pin, pout = _price(model, config)
+        cache_read = int(getattr(usage, "cache_read", 0) or 0)
+        input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+        output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+        fresh_in = max(0, input_tokens - cache_read)
+        return round((fresh_in * pin + cache_read * pin * 0.1 + output_tokens * pout) / 1_000_000, 6)
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def _trace_compaction(agent, session, rec: dict) -> None:
+    trace_store = getattr(agent, "_trace_store", None)
+    trace_ctx = getattr(agent, "_trace_context", None) or {}
+    if not (trace_store and trace_ctx):
+        return
+    try:
+        summarizer = _summarizer(agent)
+        span = trace_store.start_span(
+            trace_id=trace_ctx.get("trace_id"),
+            session_id=trace_ctx.get("session_id", getattr(session, "id", "")),
+            turn_id=trace_ctx.get("turn_id", ""),
+            parent_span_id=trace_ctx.get("turn_span_id", ""),
+            kind="compaction",
+            provider=getattr(summarizer, "name", ""),
+            model=getattr(summarizer, "model", ""),
+            data=dict(rec),
+        )
+        trace_store.finish_span(span["span_id"], status="ok", data=dict(rec))
+    except Exception:  # noqa: BLE001
+        pass
 
 
 class ToolExecutor:
@@ -94,7 +278,25 @@ class ToolExecutor:
             pass
 
     def execute_one_raw(self, call: ToolCall) -> ToolResult:
+        import time
+        started = time.perf_counter()
         self.emit({"type": "tool_start", "id": call.id, "name": call.name, "args": call.arguments})
+        trace_span = None
+        trace_store = getattr(getattr(self.ctx, "agent", None), "_trace_store", None)
+        trace_ctx = getattr(getattr(self.ctx, "agent", None), "_trace_context", None) or {}
+        if trace_store and trace_ctx:
+            try:
+                trace_span = trace_store.start_span(
+                    trace_id=trace_ctx.get("trace_id"),
+                    session_id=trace_ctx.get("session_id", ""),
+                    turn_id=trace_ctx.get("turn_id", ""),
+                    parent_span_id=trace_ctx.get("turn_span_id", ""),
+                    kind="tool",
+                    tool_name=call.name,
+                    data={"args": call.arguments},
+                )
+            except Exception:  # noqa: BLE001
+                trace_span = None
         self._run_hooks("pre_tool", {"tool": call.name, "args": str(call.arguments)[:300]})
         self._maybe_checkpoint(call)
         blocked = self.guard.check(call.name, call.arguments) if self.guard else None
@@ -116,9 +318,35 @@ class ToolExecutor:
             warn = self.guard.record(call.name, call.arguments, res.content, res.is_error)
             if warn:
                 res.content = (res.content or "") + "\n\n" + warn
+        duration_ms = int((time.perf_counter() - started) * 1000)
+        artifact_ref = _artifact_ref(res.data)
         self.emit({"type": "tool_result", "id": call.id, "name": call.name,
                    "summary": res.summary, "is_error": res.is_error,
-                   "classification": res.classification})
+                   "classification": res.classification,
+                   "preview": _preview(res.content),
+                   "duration_ms": duration_ms,
+                   "artifact_ref": artifact_ref,
+                   "data": res.data if isinstance(res.data, dict) else None})
+        if trace_store and trace_span:
+            try:
+                span_data = {
+                    "summary": res.summary,
+                    "classification": res.classification,
+                    "preview": _preview(res.content),
+                    "is_error": bool(res.is_error),
+                    "duration_ms": duration_ms,
+                    "artifact_ref": artifact_ref,
+                }
+                if isinstance(res.data, dict):
+                    span_data["result"] = res.data
+                trace_store.finish_span(
+                    trace_span["span_id"],
+                    status="error" if res.is_error else "ok",
+                    data=span_data,
+                    artifact_ref=artifact_ref,
+                )
+            except Exception:  # noqa: BLE001
+                pass
         self._run_hooks("post_tool", {"tool": call.name, "is_error": str(res.is_error)})
         return res
 
@@ -191,15 +419,11 @@ def _next_in_lineage(title: str) -> str:
 def _summarizer(agent):
     """Provider used for compaction summaries — the cheap auxiliary model when configured,
     else the main provider. Built once and cached on the agent."""
-    s = getattr(agent, "_aux_provider", None)
-    if s is None:
-        try:
-            from ..providers.registry import build_aux_provider
-            s = build_aux_provider(agent.config)
-        except Exception:  # noqa: BLE001 - never block compaction on aux setup
-            s = agent.provider
-        agent._aux_provider = s
-    return s
+    try:
+        from ..auxiliary import router_for
+        return router_for(agent).provider_for("compaction")
+    except Exception:  # noqa: BLE001 - never block compaction on aux setup
+        return agent.provider
 
 
 def _drain_steering(agent, session) -> None:
@@ -239,12 +463,26 @@ def _force_compact(agent, session):
     """Compress unconditionally — recovery from a provider context_overflow. Tighter tail than
     the proactive path so the request actually shrinks below the window."""
     comp = agent.config.get("agent.compression", {}) or {}
+    before_n = len(session.messages)
+    before_tok = compaction.estimated_tokens(session.messages)
     session.messages = governance.normalize(_engine(agent).compress(
         session.messages, _summarizer(agent),
         preserve_first=comp.get("preserve_first", 3),
         tail_tokens=_tail_token_budget(agent, comp, tight=True),
         max_tool_tokens=min(400, comp.get("max_tool_tokens", 600)),
     ))
+    after_tok = compaction.estimated_tokens(session.messages)
+    from ..util import now_iso
+    _trace_compaction(agent, session, {
+        "at": now_iso(),
+        "iteration": getattr(agent.budget, "api_call_count", 0),
+        "messages_before": before_n,
+        "messages_after": len(session.messages),
+        "tokens_before": before_tok,
+        "tokens_after": after_tok,
+        "reason": "context_overflow",
+        "recovery": True,
+    })
     agent.refresh_volatile()
     return session
 
@@ -277,6 +515,11 @@ def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
             agent.memory.refresh_snapshot()
         except Exception:  # noqa: BLE001
             pass
+    try:
+        from .context_engine import call_hook
+        call_hook(engine, "on_pre_compress", agent, session)
+    except Exception:  # noqa: BLE001
+        pass
     before_n = len(session.messages)
     before_tok = compaction.estimated_tokens(session.messages)
     compressed = engine.compress(
@@ -303,22 +546,129 @@ def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
             and len(compressed) < before_n:
         from ..session import Session
         parent = session
-        try:
-            agent.store.save(parent)                    # preserve full parent history
-        except Exception:  # noqa: BLE001
-            pass
         child = Session.create(title=_next_in_lineage(parent.title), parent_id=parent.id)
         child.messages = compressed
+        depth = int(parent.meta.get("lineage_depth", 0) or 0) + 1
+        root = parent.meta.get("lineage_root") or parent.parent_id or parent.id
+        parent.meta["end_reason"] = "compression"
+        parent.meta.setdefault("child_sessions", []).append(child.id)
         child.meta["forked_from"] = parent.id
+        child.meta["lineage_root"] = root
+        child.meta["lineage_depth"] = depth
+        child.meta["creator_kind"] = "compression"
+        child.meta["reason"] = "context_compaction"
+        child.meta["compression_depth"] = depth
+        child.meta["parent_end_reason"] = "compression"
         child.meta["summary"] = parent.meta.get("summary", "")
         child.meta.setdefault("compactions", []).append(rec)
+        try:
+            agent.store.save(parent)                    # preserve full parent history + end reason
+            agent.store.save(child)                     # make continuation visible immediately
+        except Exception:  # noqa: BLE001
+            pass
         agent.session = child
         agent.tool_context.session = child
         session = child
         rec = {**rec, "split": True, "child_session": child.id, "parent_session": parent.id}
+        try:
+            from .context_engine import call_hook
+            call_hook(engine, "on_session_switch", agent, parent, child, reason="compression")
+        except Exception:  # noqa: BLE001
+            pass
     else:
         session.messages = compressed
         session.meta.setdefault("compactions", []).append(rec)
+    _trace_compaction(agent, session, rec)
+    emit({"type": "compacted", **rec})
+    agent.refresh_volatile()
+    return session
+
+
+def compact_now(agent, session=None, emit: OnEvent | None = None, *,
+                reason: str = "manual", focus: str = "", preserve_last: int | None = None):
+    """Force a user-requested compaction through the same context-engine lifecycle
+    used by automatic compaction. Returns the active session, which may be a child
+    session when split compaction is enabled."""
+    emit = emit or (lambda _e: None)
+    session = session or agent.session
+    engine = _engine(agent)
+    emit({"type": "compacting", "reason": reason})
+    comp = agent.config.get("agent.compression", {}) or {}
+    if agent.memory:
+        try:
+            agent.memory.refresh_snapshot()
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        from .context_engine import call_hook
+        call_hook(engine, "on_pre_compress", agent, session)
+    except Exception:  # noqa: BLE001
+        pass
+
+    before_n = len(session.messages)
+    before_tok = compaction.estimated_tokens(session.messages)
+    kwargs = {
+        "preserve_first": comp.get("preserve_first", 3),
+        "max_tool_tokens": comp.get("max_tool_tokens", 600),
+    }
+    if preserve_last is not None:
+        kwargs["preserve_last"] = preserve_last
+    else:
+        kwargs["tail_tokens"] = _tail_token_budget(agent, comp)
+    if focus:
+        kwargs["focus"] = focus
+    compressed = governance.normalize(engine.compress(session.messages, _summarizer(agent), **kwargs))
+    after_tok = compaction.estimated_tokens(compressed)
+
+    from ..util import now_iso
+    rec = {"at": now_iso(), "iteration": getattr(agent.budget, "api_call_count", 0),
+           "messages_before": before_n, "messages_after": len(compressed),
+           "tokens_before": before_tok, "tokens_after": after_tok,
+           "reason": reason, "manual": True}
+    if focus:
+        rec["focus"] = focus
+
+    if comp.get("split_sessions", True) and agent.store is not None and len(compressed) < before_n:
+        from ..session import Session
+        parent = session
+        child = Session.create(title=_next_in_lineage(parent.title), parent_id=parent.id)
+        child.messages = compressed
+        depth = int(parent.meta.get("lineage_depth", 0) or 0) + 1
+        root = parent.meta.get("lineage_root") or parent.parent_id or parent.id
+        parent.meta["end_reason"] = "manual_compression"
+        parent.meta.setdefault("child_sessions", []).append(child.id)
+        child.meta["forked_from"] = parent.id
+        child.meta["lineage_root"] = root
+        child.meta["lineage_depth"] = depth
+        child.meta["creator_kind"] = "manual_compression"
+        child.meta["reason"] = reason
+        child.meta["compression_depth"] = depth
+        child.meta["parent_end_reason"] = "manual_compression"
+        child.meta["summary"] = parent.meta.get("summary", "")
+        child.meta.setdefault("compactions", []).append(rec)
+        try:
+            agent.store.save(parent)
+            agent.store.save(child)
+        except Exception:  # noqa: BLE001
+            pass
+        agent.session = child
+        agent.tool_context.session = child
+        session = child
+        rec = {**rec, "split": True, "child_session": child.id, "parent_session": parent.id}
+        try:
+            from .context_engine import call_hook
+            call_hook(engine, "on_session_switch", agent, parent, child, reason="manual_compression")
+        except Exception:  # noqa: BLE001
+            pass
+    else:
+        session.messages = compressed
+        session.meta.setdefault("compactions", []).append(rec)
+        if agent.store is not None:
+            try:
+                agent.store.save(session)
+            except Exception:  # noqa: BLE001
+                pass
+    _trace_compaction(agent, session, rec)
     emit({"type": "compacted", **rec})
     agent.refresh_volatile()
     return session
@@ -344,6 +694,45 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
     session = agent.session
     budget = agent.budget
     budget.reset()
+    trace_store = None
+    turn_span = None
+    trace_id = new_id("trace")
+    turn_id = new_id("turn")
+    prompt_meta = _prompt_trace_meta(session)
+    from ..tracing import should_trace
+    if should_trace(agent.config, trace_id):
+        try:
+            from ..tracing import TraceStore
+            trace_store = TraceStore.from_config(agent.config)
+            turn_span = trace_store.start_span(
+                trace_id=trace_id,
+                session_id=session.id,
+                turn_id=turn_id,
+                kind="turn",
+                provider=getattr(agent.provider, "name", ""),
+                model=getattr(agent.provider, "model", ""),
+                data={"prompt": prompt_meta},
+            )
+            agent._trace_store = trace_store
+            agent._trace_context = {
+                "trace_id": trace_id,
+                "turn_id": turn_id,
+                "session_id": session.id,
+                "turn_span_id": turn_span["span_id"],
+            }
+        except Exception:  # noqa: BLE001
+            trace_store = None
+    else:
+        trace_id = ""
+        agent._trace_store = None
+        agent._trace_context = {}
+
+    def _finish_turn(status: str = "ok", **updates) -> None:
+        if trace_store and turn_span:
+            try:
+                trace_store.finish_span(turn_span["span_id"], status=status, **updates)
+            except Exception:  # noqa: BLE001
+                pass
 
     available = agent.registry.available(agent.config.get("tools.toolsets", ["core"]))
 
@@ -375,6 +764,7 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
             emit({"type": "cancelled"})
             stop = Message.assistant("[interrupted by user]")
             session.messages.append(stop)
+            _finish_turn("cancelled")
             return stop
         emit({"type": "iteration", "n": budget.api_call_count + 1, "max": budget.max_iterations})
         _drain_steering(agent, session)        # fold in any mid-run /steer guidance
@@ -385,6 +775,7 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
         # then normalize AFTER so a compaction boundary can never ship a broken tool pair.
         session = _maybe_compact(agent, session, schema_tokens, budget, emit)
         session.messages = governance.normalize(session.messages)
+        prompt_meta = _prompt_trace_meta(session)
         from ..plugins import fire_hook
         rewritten = fire_hook("pre_llm_call", session.messages, agent)   # in-process Python hook
         if isinstance(rewritten, list):
@@ -406,7 +797,27 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
         wire_messages = session.messages
         if getattr(agent, "_strip_thinking", False):
             wire_messages = [_without_thinking(m) for m in session.messages]
+        provider_span = None
+        response_state = _response_state_for_agent(agent, getattr(agent.session, "id", ""))
+        _record_response_request_meta(session, response_state)
+        if trace_store and turn_span:
+            try:
+                provider_span = trace_store.start_span(
+                    trace_id=trace_id,
+                    session_id=session.id,
+                    turn_id=turn_id,
+                    parent_span_id=turn_span["span_id"],
+                    kind="provider_call",
+                    provider=getattr(agent.provider, "name", ""),
+                    model=getattr(agent.provider, "model", ""),
+                    data=_provider_trace_data(agent, wire_messages, schemas, response_state, prompt_meta),
+                )
+            except Exception:  # noqa: BLE001
+                provider_span = None
+        provider_started = time.perf_counter()
         try:
+            agent._active_response_id = ""
+            agent._active_response_cancelled = ""
             resp = _provider_complete(
                 agent.provider, wire_messages, tools=schemas, stream=agent.stream, on_delta=delta_cb,
                 reasoning=getattr(agent, "reasoning", "off"),
@@ -414,22 +825,69 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                 tool_runner=executor.execute_one_raw,
                 approver=getattr(agent.tool_context, "approver", None),
                 cwd=agent.cwd,
+                session_id=getattr(agent.session, "id", None),
+                response_state=response_state,
+                metadata=_provider_metadata(agent),
+                on_response_id=lambda rid: setattr(agent, "_active_response_id", str(rid or "")),
             )
+            agent._active_response_id = ""
         except Exception as e:  # noqa: BLE001
+            agent._active_response_id = ""
             from .._log import log_exc
             from ..providers.fallback import classify_provider_error, recovery_action
             action = recovery_action(classify_provider_error(e))
             # Signed thinking blocks were invalidated upstream -> resend without them (once).
             if action == "strip_thinking" and not getattr(agent, "_strip_thinking", False):
+                if trace_store and provider_span:
+                    try:
+                        trace_store.finish_span(
+                            provider_span["span_id"],
+                            status="retrying",
+                            data={
+                                "error": f"{type(e).__name__}: {e}",
+                                "error_type": type(e).__name__,
+                                "recovery": "strip_thinking",
+                                "duration_ms": int((time.perf_counter() - provider_started) * 1000),
+                            },
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
                 agent._strip_thinking = True
                 emit({"type": "thinking_strip_retry"})
                 continue
             # context_overflow -> compact the session and retry once, instead of failing the turn.
             if (action == "compress" and not getattr(agent, "_overflow_retried", False)):
+                if trace_store and provider_span:
+                    try:
+                        trace_store.finish_span(
+                            provider_span["span_id"],
+                            status="retrying",
+                            data={
+                                "error": f"{type(e).__name__}: {e}",
+                                "error_type": type(e).__name__,
+                                "recovery": "compress",
+                                "duration_ms": int((time.perf_counter() - provider_started) * 1000),
+                            },
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
                 agent._overflow_retried = True
                 emit({"type": "compacting", "reason": "context_overflow"})
                 session = _force_compact(agent, session)
                 continue
+            if trace_store and provider_span:
+                try:
+                    trace_store.finish_span(
+                        provider_span["span_id"],
+                        status="error",
+                        data={
+                            "error": f"{type(e).__name__}: {e}",
+                            "error_type": type(e).__name__,
+                            "duration_ms": int((time.perf_counter() - provider_started) * 1000),
+                        },
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
             log_exc("provider.complete failed")
             msg = f"{type(e).__name__}: {e}"
             low = str(e).lower()
@@ -441,10 +899,24 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
             emit({"type": "error", "message": msg})
             err = Message.assistant(f"[provider error] {msg}")
             session.messages.append(err)
+            _finish_turn("error", data={"error": msg})
             return err
 
         budget.api_call_count += 1
         budget.usage.add(resp.usage)
+        if trace_store and provider_span:
+            try:
+                provider_duration_ms = int((time.perf_counter() - provider_started) * 1000)
+                trace_store.finish_span(
+                    provider_span["span_id"],
+                    status="ok",
+                    cost=_usage_cost_usd(getattr(agent.provider, "model", ""), resp.usage, agent.config),
+                    cache_read=getattr(resp.usage, "cache_read", 0),
+                    cache_write=getattr(resp.usage, "cache_write", 0),
+                    data=_response_trace_data(resp, provider_duration_ms),
+                )
+            except Exception:  # noqa: BLE001
+                pass
         from .governance import strip_reasoning
         resp.text = strip_reasoning(resp.text)   # drop any inlined <think>…</think> blocks
         assistant_msg = resp.to_message()
@@ -481,6 +953,7 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                 agent.session.meta["_last_skill_nudge"] = agent.tools_used
                 emit({"type": "skill_nudge"})
             emit({"type": "final", "text": resp.text})
+            _finish_turn("ok", data={"text": resp.text})
             return assistant_msg
 
         results = executor.execute(resp.tool_calls)
@@ -515,6 +988,37 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
         Message.user("You've reached the step limit. Stop and summarize what you accomplished "
                      "and what remains.")
     )
+    grace_span = None
+    grace_response_state = _response_state_for_agent(agent, getattr(agent.session, "id", ""))
+    _record_response_request_meta(session, grace_response_state)
+    if trace_store and turn_span:
+        try:
+            grace_data = _provider_trace_data(
+                agent,
+                session.messages,
+                [],
+                grace_response_state,
+                _prompt_trace_meta(session),
+            )
+            grace_data.update({
+                "grace": True,
+                "reason": "budget_exhausted",
+                "tools_enabled": False,
+                "budget_calls": budget.api_call_count,
+            })
+            grace_span = trace_store.start_span(
+                trace_id=trace_id,
+                session_id=session.id,
+                turn_id=turn_id,
+                parent_span_id=turn_span["span_id"],
+                kind="provider_call",
+                provider=getattr(agent.provider, "name", ""),
+                model=getattr(agent.provider, "model", ""),
+                data=grace_data,
+            )
+        except Exception:  # noqa: BLE001
+            grace_span = None
+    grace_started = time.perf_counter()
     try:
         grace = _provider_complete(
             agent.provider,
@@ -522,10 +1026,45 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
             tools=None,
             stream=agent.stream,
             on_delta=lambda t: emit({"type": "assistant_delta", "text": t}),
+            reasoning=getattr(agent, "reasoning", "off"),
+            session_id=getattr(agent.session, "id", None),
+            response_state=grace_response_state,
+            metadata=_provider_metadata(agent),
+            on_response_id=lambda rid: setattr(agent, "_active_response_id", str(rid or "")),
         )
+        agent._active_response_id = ""
+        budget.usage.add(grace.usage)
+        if trace_store and grace_span:
+            try:
+                grace_duration_ms = int((time.perf_counter() - grace_started) * 1000)
+                trace_store.finish_span(
+                    grace_span["span_id"],
+                    status="ok",
+                    cost=_usage_cost_usd(getattr(agent.provider, "model", ""), grace.usage, agent.config),
+                    cache_read=getattr(grace.usage, "cache_read", 0),
+                    cache_write=getattr(grace.usage, "cache_write", 0),
+                    data=_response_trace_data(grace, grace_duration_ms),
+                )
+            except Exception:  # noqa: BLE001
+                pass
         gm = grace.to_message()
     except Exception as e:  # noqa: BLE001
+        agent._active_response_id = ""
+        if trace_store and grace_span:
+            try:
+                trace_store.finish_span(
+                    grace_span["span_id"],
+                    status="error",
+                    data={
+                        "error": f"{type(e).__name__}: {e}",
+                        "error_type": type(e).__name__,
+                        "duration_ms": int((time.perf_counter() - grace_started) * 1000),
+                    },
+                )
+            except Exception:  # noqa: BLE001
+                pass
         gm = Message.assistant(f"[step limit reached; summary failed: {e}]")
     session.messages.append(gm)
     emit({"type": "final", "text": gm.content})
+    _finish_turn("budget_exhausted", data={"text": gm.content})
     return gm

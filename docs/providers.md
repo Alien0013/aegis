@@ -48,3 +48,50 @@ routing:
 fallback_providers:
   - {provider: openrouter, model: anthropic/claude-sonnet-4.5}
 ```
+
+AEGIS normalizes tool schemas before sending them to Chat Completions, Responses,
+and Codex app-server dynamic tools. This keeps MCP/plugin schemas portable across
+providers that reject annotation-only JSON Schema keywords or nullable type
+unions.
+
+When `responses.state.enabled` and `responses.state.store` are both true, the
+OpenAI Responses transport records the latest provider response id per AEGIS
+session and sends `previous_response_id` on later turns. Stored Responses calls
+also receive local metadata (`session_id`, `trace_id`, `turn_id`, and `run_id`
+when a surface run is active) so provider-side records can be correlated with
+dashboard runs and traces. With `responses.state.truncate_previous_input` on,
+AEGIS sends only the new local input after the stored response id, falling back
+to full local history for older state rows that do not have a recorded message
+offset.
+During streaming Responses calls, AEGIS captures the active response id when
+the provider emits it; terminal/TUI/gateway interrupts then issue a best-effort
+provider-side cancel while still stopping locally.
+
+If `responses.compaction.enabled` is true, AEGIS sends Responses
+`context_management` as a provider-native compaction entry. The legacy
+`compact_threshold` ratio is accepted as a shorthand and converted to a token
+threshold; `compact_threshold_tokens` can be set directly when you want an exact
+provider threshold.
+
+## Auxiliary Routing
+
+Internal summarization work uses `AuxRouter`, not ad hoc provider calls. Set a
+small/cheap auxiliary model for compaction, session summaries, and trajectory
+compression:
+
+```yaml
+auxiliary:
+  provider: openai
+  model: gpt-5.4-mini
+  compaction:
+    provider: openrouter
+    model: google/gemini-2.5-flash
+  session_summary:
+    model: gpt-5.4-mini
+```
+
+Purpose overrides are optional. Supported keys are `provider`, `model`, and
+`context_length` under `auxiliary.compaction`, `auxiliary.session_summary`, and
+`auxiliary.trajectory_compression`. If no auxiliary route is configured, AEGIS
+uses the live main provider selected for that turn; if an auxiliary route fails
+to build, it falls back to that live provider.

@@ -71,3 +71,8 @@ def test_loop_strips_thinking_on_signature_400_then_succeeds(monkeypatch):
     # canonical session still has the signed block for future turns
     asst = next(m for m in agent.session.messages if m.role == "assistant" and m.content == "a1")
     assert asst.thinking_blocks and asst.reasoning == "why"
+    from aegis.tracing import TraceStore
+
+    trace = TraceStore.from_config(agent.config).get_trace(agent._trace_context["trace_id"])
+    assert trace["status"] == "ok"
+    assert [s["status"] for s in trace["spans"] if s["kind"] == "provider_call"] == ["retrying", "ok"]

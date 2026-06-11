@@ -33,6 +33,7 @@ class NtfyAdapter(BasePlatformAdapter):
         self._headers = {"Authorization": f"Bearer {token}"} if token else {}
 
     def start(self, dispatch: Dispatch) -> None:
+        self._init_inbound_queue(dispatch)
         url = f"{self.server}/{self.topic}/json"
         # read=None keeps the long-lived subscription stream open between messages.
         timeout = httpx.Timeout(connect=15.0, read=None, write=30.0, pool=15.0)
@@ -51,9 +52,7 @@ class NtfyAdapter(BasePlatformAdapter):
                             continue
                         me = MessageEvent(platform="ntfy", chat_id=self.topic,
                                           text=ev["message"], user_id="ntfy")
-                        reply = dispatch(me)
-                        if reply:
-                            self.deliver(self.topic, reply)
+                        self._submit_inbound(me)
             except Exception:  # noqa: BLE001 - keep the subscriber alive across drops
                 continue
 

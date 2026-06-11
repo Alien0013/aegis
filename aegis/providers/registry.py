@@ -228,6 +228,7 @@ PROVIDERS: dict[str, ProviderSpec] = {
 
 # Runtime plugin registrations
 _PLUGINS: dict[str, ProviderSpec] = {}
+_PLUGIN_BOOTSTRAPPING = False
 
 
 def register_provider(spec: ProviderSpec) -> None:
@@ -235,11 +236,39 @@ def register_provider(spec: ProviderSpec) -> None:
     _PLUGINS[spec.name] = spec
 
 
+def unregister_provider(name: str) -> None:
+    """Remove a runtime plugin provider registration."""
+    _PLUGINS.pop(name, None)
+
+
+def ensure_plugin_providers(config: cfg.Config | None = None) -> None:
+    """Load plugins once for provider discovery before resolving providers/models.
+
+    Plugins can register providers, context engines, tools, and channels. Provider
+    resolution happens early in the agent lifecycle, so this bootstrap makes
+    plugin providers first-class instead of depending on tool registry loading.
+    """
+    global _PLUGIN_BOOTSTRAPPING
+    if _PLUGIN_BOOTSTRAPPING:
+        return
+    _PLUGIN_BOOTSTRAPPING = True
+    try:
+        from ..plugins import load_plugins
+        if config is None:
+            config = cfg.Config.load()
+        load_plugins(quiet=True, config=config)
+    except Exception:  # noqa: BLE001
+        pass
+    finally:
+        _PLUGIN_BOOTSTRAPPING = False
+
+
 def _all_specs() -> dict[str, ProviderSpec]:
     return {**PROVIDERS, **_PLUGINS}
 
 
 def list_providers() -> list[str]:
+    ensure_plugin_providers()
     return sorted(_all_specs().keys())
 
 
@@ -296,6 +325,7 @@ def _resolve_auth(spec: ProviderSpec, prefer: str | None = None) -> AuthProvider
 
 def build_provider(config: cfg.Config, *, model: str | None = None, name: str | None = None) -> Provider:
     """Resolve a concrete Provider from config (+ optional overrides)."""
+    ensure_plugin_providers(config)
     name = name or config.get("model.provider", "anthropic")
     specs = {**_all_specs(), **_custom_specs(config)}
 
@@ -349,26 +379,47 @@ def build_provider(config: cfg.Config, *, model: str | None = None, name: str | 
     )
 
 
-def build_aux_provider(config: cfg.Config) -> Provider:
-    """Build the auxiliary (small/cheap) provider for compaction/vision/smart-approval.
+def build_aux_provider(
+    config: cfg.Config,
+    *,
+    purpose: str | None = None,
+    fallback_provider: Provider | None = None,
+) -> Provider:
+    """Build the auxiliary provider for an internal purpose.
 
-    Falls back to the main provider when ``auxiliary.*`` is unset.
+    Purpose-specific keys such as ``auxiliary.compaction.provider`` override
+    global ``auxiliary.provider``. When no auxiliary route is configured, callers
+    can pass the live main provider as ``fallback_provider`` so internal work
+    follows per-prompt routing instead of rebuilding the default main provider.
     """
-    aux_provider = config.get("auxiliary.provider") or None
-    aux_model = config.get("auxiliary.model") or None
-    if aux_provider or aux_model:
+    purpose = purpose or ""
+    prefix = f"auxiliary.{purpose}." if purpose else ""
+    aux_provider = (config.get(prefix + "provider") if purpose else None) or config.get("auxiliary.provider") or None
+    aux_model = (config.get(prefix + "model") if purpose else None) or config.get("auxiliary.model") or None
+    ctx_length = (config.get(prefix + "context_length") if purpose else None) or None
+    if aux_provider or aux_model or ctx_length:
         try:
+            if ctx_length:
+                import copy
+
+                data = copy.deepcopy(getattr(config, "data", {}))
+                data.setdefault("model", {})["context_length"] = int(ctx_length)
+                config = type(config)(data)
             return build_provider(config, model=aux_model, name=aux_provider)
         except Exception:  # noqa: BLE001
             pass
+    if fallback_provider is not None:
+        return fallback_provider
     return build_provider(config)
 
 
 def get_spec(name: str) -> ProviderSpec | None:
+    ensure_plugin_providers()
     return _all_specs().get(name)
 
 
 def auth_for(name: str, prefer: str | None = None) -> AuthProvider:
+    ensure_plugin_providers()
     spec = _all_specs().get(name)
     if not spec:
         raise ValueError(f"Unknown provider '{name}'.")

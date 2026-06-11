@@ -28,6 +28,32 @@ def test_chat_completions_tools_wire():
     assert out[0]["type"] == "function" and out[0]["function"]["name"] == "x"
 
 
+def test_tool_schema_sanitized_across_provider_transports():
+    from aegis.providers.chat_completions import ChatCompletionsTransport
+    from aegis.providers.codex_app_server import CodexAppServerTransport
+    from aegis.providers.responses import ResponsesTransport
+
+    schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+            "path": {"type": ["string", "null"], "examples": ["README.md"]},
+            "count": {"type": "integer", "exclusiveMinimum": 0},
+        },
+    }
+    tool = {"name": "inspect", "description": "Inspect a thing", "parameters": schema}
+
+    chat_params = ChatCompletionsTransport()._to_wire_tools([tool])[0]["function"]["parameters"]
+    response_params = ResponsesTransport()._to_wire_tools([tool])[0]["parameters"]
+    dynamic_params = CodexAppServerTransport()._to_dynamic_tools([tool])[0]["inputSchema"]
+
+    for params in (chat_params, response_params, dynamic_params):
+        assert "$schema" not in params
+        assert params["properties"]["path"]["type"] == "string"
+        assert "examples" not in params["properties"]["path"]
+        assert "exclusiveMinimum" not in params["properties"]["count"]
+
+
 def test_responses_wire_and_parse():
     from aegis.providers.responses import DEFAULT_INSTRUCTIONS, ResponsesTransport
     from aegis.types import Message, ToolCall
@@ -100,12 +126,462 @@ def test_responses_payload_includes_instructions(monkeypatch):
         messages=[Message.user("Reply with OK.")],
         tools=None,
         stream=False,
+        metadata={"session_id": "sess_meta", "trace_id": "trace_meta", "empty": ""},
     )
 
     assert resp.text == "ok"
     assert captured["url"] == "https://api.openai.com/v1/responses"
     assert captured["json"]["instructions"] == DEFAULT_INSTRUCTIONS
     assert captured["json"]["store"] is False
+    assert captured["json"]["metadata"] == {"session_id": "sess_meta", "trace_id": "trace_meta"}
+
+
+def test_responses_retrieve_and_cancel_helpers(monkeypatch):
+    from aegis.providers.responses import ResponsesTransport
+
+    calls: list[tuple[str, str, dict]] = []
+
+    class FakeAuth:
+        def headers(self):
+            return {"Authorization": "Bearer test"}
+
+    class FakeResponse:
+        status_code = 200
+
+        def __init__(self, body):
+            self._body = body
+
+        def json(self):
+            return self._body
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get(self, url, headers):
+            calls.append(("GET", url, headers))
+            return FakeResponse({"id": "resp_123", "status": "completed"})
+
+        def post(self, url, headers, json):
+            calls.append(("POST", url, headers))
+            assert json == {}
+            return FakeResponse({"id": "resp_123", "status": "cancelled"})
+
+    monkeypatch.setattr("aegis.providers.responses.httpx.Client", FakeClient)
+    transport = ResponsesTransport()
+
+    retrieved = transport.retrieve_response(
+        base_url="https://api.openai.com/v1/",
+        auth=FakeAuth(),
+        response_id="resp_123",
+    )
+    cancelled = transport.cancel_response(
+        base_url="https://api.openai.com/v1/",
+        auth=FakeAuth(),
+        response_id="resp_123",
+    )
+
+    assert retrieved["status"] == "completed"
+    assert cancelled["status"] == "cancelled"
+    assert calls == [
+        (
+            "GET",
+            "https://api.openai.com/v1/responses/resp_123",
+            {"Content-Type": "application/json", "Authorization": "Bearer test"},
+        ),
+        (
+            "POST",
+            "https://api.openai.com/v1/responses/resp_123/cancel",
+            {"Content-Type": "application/json", "Authorization": "Bearer test"},
+        ),
+    ]
+
+
+def test_responses_state_previous_id_and_cache_metrics(monkeypatch):
+    from aegis.providers.responses import ResponsesTransport
+    from aegis.responses_state import ResponsesStateStore
+    from aegis.types import Message
+
+    captured: dict = {}
+    ResponsesStateStore().set("sess_state", "resp_prev", provider="openai", model="gpt-5")
+
+    class FakeAuth:
+        def headers(self):
+            return {}
+
+    class FakeResponse:
+        status_code = 200
+        def json(self):
+            return {
+                "id": "resp_next",
+                "status": "completed",
+                "output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}],
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 20,
+                    "input_tokens_details": {"cached_tokens": 40, "cache_creation_tokens": 8},
+                },
+            }
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            return None
+        def post(self, url, headers, json):
+            captured["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr("aegis.providers.responses.httpx.Client", FakeClient)
+    resp = ResponsesTransport().complete(
+        base_url="https://api.openai.com/v1",
+        auth=FakeAuth(),
+        model="gpt-5.5",
+        messages=[Message.user("hi")],
+        tools=None,
+        stream=False,
+        session_id="sess_state",
+        response_state={"enabled": True, "store": True, "send_previous": True},
+    )
+
+    assert captured["json"]["store"] is True
+    assert captured["json"]["previous_response_id"] == "resp_prev"
+    assert (resp.usage.input_tokens, resp.usage.output_tokens) == (100, 20)
+    assert (resp.usage.cache_read, resp.usage.cache_write) == (40, 8)
+    assert ResponsesStateStore().get("sess_state").response_id == "resp_next"
+
+
+def test_responses_state_truncates_input_after_previous_response(monkeypatch):
+    from aegis.providers.responses import ResponsesTransport
+    from aegis.responses_state import ResponsesStateStore
+    from aegis.types import Message
+
+    captured: dict = {}
+    ResponsesStateStore().set(
+        "sess_tail",
+        "resp_prev",
+        provider="openai",
+        model="gpt-5",
+        input_message_count=2,
+    )
+
+    class FakeAuth:
+        def headers(self):
+            return {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "id": "resp_next",
+                "status": "completed",
+                "output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}],
+            }
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, url, headers, json):
+            captured["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr("aegis.providers.responses.httpx.Client", FakeClient)
+    ResponsesTransport().complete(
+        base_url="https://api.openai.com/v1",
+        auth=FakeAuth(),
+        model="gpt-5.5",
+        messages=[
+            Message.system("sys"),
+            Message.user("old user"),
+            Message.assistant("old answer"),
+            Message.user("new user"),
+        ],
+        tools=None,
+        stream=False,
+        session_id="sess_tail",
+        response_state={"enabled": True, "store": True, "send_previous": True},
+    )
+
+    assert captured["json"]["previous_response_id"] == "resp_prev"
+    assert [item["role"] for item in captured["json"]["input"]] == ["user"]
+    assert captured["json"]["input"][0]["content"][0]["text"] == "new user"
+    assert ResponsesStateStore().get("sess_tail").input_message_count == 4
+
+
+def test_responses_state_truncation_keeps_tool_outputs(monkeypatch):
+    from aegis.providers.responses import ResponsesTransport
+    from aegis.responses_state import ResponsesStateStore
+    from aegis.types import Message, ToolCall
+
+    captured: dict = {}
+    ResponsesStateStore().set(
+        "sess_tool_tail",
+        "resp_tool",
+        provider="openai",
+        model="gpt-5",
+        input_message_count=2,
+    )
+
+    class FakeAuth:
+        def headers(self):
+            return {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "id": "resp_next_tool",
+                "status": "completed",
+                "output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}],
+            }
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, url, headers, json):
+            captured["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr("aegis.providers.responses.httpx.Client", FakeClient)
+    ResponsesTransport().complete(
+        base_url="https://api.openai.com/v1",
+        auth=FakeAuth(),
+        model="gpt-5.5",
+        messages=[
+            Message.system("sys"),
+            Message.user("old user"),
+            Message.assistant("", [ToolCall("call_1", "read_file", {"path": "README.md"})]),
+            Message.tool("call_1", "read_file", "file contents"),
+        ],
+        tools=None,
+        stream=False,
+        session_id="sess_tool_tail",
+        response_state={"enabled": True, "store": True, "send_previous": True},
+    )
+
+    assert captured["json"]["input"] == [
+        {"type": "function_call_output", "call_id": "call_1", "output": "file contents"}
+    ]
+
+
+def test_responses_state_store_false_is_stateless(monkeypatch):
+    from aegis.providers.responses import ResponsesTransport
+    from aegis.responses_state import ResponsesStateStore
+    from aegis.types import Message
+
+    captured: dict = {}
+    ResponsesStateStore().set("sess_stateless", "resp_old", provider="openai", model="gpt-5")
+
+    class FakeAuth:
+        def headers(self):
+            return {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "id": "resp_new",
+                "status": "completed",
+                "output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}],
+            }
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, url, headers, json):
+            captured["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr("aegis.providers.responses.httpx.Client", FakeClient)
+    ResponsesTransport().complete(
+        base_url="https://api.openai.com/v1",
+        auth=FakeAuth(),
+        model="gpt-5.5",
+        messages=[Message.user("hi")],
+        tools=None,
+        stream=False,
+        session_id="sess_stateless",
+        response_state={"enabled": True, "store": False, "send_previous": True},
+    )
+
+    assert captured["json"]["store"] is False
+    assert "previous_response_id" not in captured["json"]
+    assert ResponsesStateStore().get("sess_stateless").response_id == "resp_old"
+
+
+def test_responses_state_previous_id_is_trace_metadata():
+    from types import SimpleNamespace
+
+    from aegis.agent.loop import _hydrate_previous_response_id, _provider_trace_data
+    from aegis.responses_state import ResponsesStateStore
+
+    ResponsesStateStore().set("sess_trace_state", "resp_trace_prev", provider="openai", model="gpt-5")
+    state = _hydrate_previous_response_id(
+        "sess_trace_state",
+        {"enabled": True, "store": True, "send_previous": True},
+    )
+    agent = SimpleNamespace(
+        provider=SimpleNamespace(api_mode="responses", context_length=128),
+        budget=SimpleNamespace(api_call_count=0),
+        stream=False,
+        reasoning="off",
+    )
+
+    data = _provider_trace_data(agent, [], [], state, {})
+
+    assert data["responses_state"]["previous_response_id"] == "resp_trace_prev"
+
+
+def test_responses_context_management_uses_compaction_array(monkeypatch):
+    from types import SimpleNamespace
+
+    from aegis.agent.loop import _response_state_for_agent
+    from aegis.config import Config
+    from aegis.providers.responses import ResponsesTransport
+    from aegis.types import Message
+
+    cfg = Config.load()
+    cfg.data.setdefault("responses", {})["state"] = {"enabled": True, "store": True}
+    cfg.data.setdefault("responses", {})["compaction"] = {
+        "enabled": True,
+        "compact_threshold": 0.5,
+    }
+    state = _response_state_for_agent(
+        SimpleNamespace(
+            config=cfg,
+            provider=SimpleNamespace(context_length=8000),
+        ),
+        "sess_context",
+    )
+    assert state["context_management"] == [{"type": "compaction", "compact_threshold": 4000}]
+
+    captured: dict = {}
+
+    class FakeAuth:
+        def headers(self):
+            return {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}]}
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, url, headers, json):
+            captured["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr("aegis.providers.responses.httpx.Client", FakeClient)
+    ResponsesTransport().complete(
+        base_url="https://api.openai.com/v1",
+        auth=FakeAuth(),
+        model="gpt-5.5",
+        messages=[Message.user("hi")],
+        tools=None,
+        stream=False,
+        session_id="sess_context",
+        response_state=state,
+    )
+    assert captured["json"]["context_management"] == [
+        {"type": "compaction", "compact_threshold": 4000}
+    ]
+
+
+def test_responses_stream_reports_active_response_id(monkeypatch):
+    from aegis.providers.responses import ResponsesTransport
+    from aegis.types import Message
+
+    seen: list[str] = []
+
+    class FakeAuth:
+        def headers(self):
+            return {}
+
+    class FakeStream:
+        status_code = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def iter_lines(self):
+            return iter([
+                'data: {"type":"response.created","response":{"id":"resp_stream"}}',
+                'data: {"type":"response.output_text.delta","delta":"hi"}',
+                'data: {"type":"response.completed","response":{"id":"resp_stream","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"done"}]}]}}',
+                "data: [DONE]",
+            ])
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def stream(self, method, url, headers, json):
+            return FakeStream()
+
+    monkeypatch.setattr("aegis.providers.responses.httpx.Client", FakeClient)
+    resp = ResponsesTransport().complete(
+        base_url="https://api.openai.com/v1",
+        auth=FakeAuth(),
+        model="gpt-5.5",
+        messages=[Message.user("hi")],
+        tools=None,
+        stream=True,
+        on_response_id=seen.append,
+    )
+
+    assert resp.text == "done"
+    assert seen == ["resp_stream"]
 
 
 def test_codex_responses_forces_stream(monkeypatch):
@@ -118,7 +594,7 @@ def test_codex_responses_forces_stream(monkeypatch):
         def headers(self):
             return {}
 
-    def fake_stream(self, url, headers, payload, on_delta, timeout):
+    def fake_stream(self, url, headers, payload, on_delta, timeout, on_response_id=None):
         captured["url"] = url
         captured["payload"] = payload
         return LLMResponse(text="ok")

@@ -37,6 +37,33 @@ def test_cost_report_and_log():
     assert r["cache_read_tokens"] == 500
 
 
+def test_agent_usage_log_records_cache_deltas(monkeypatch, tmp_path):
+    from aegis import usage_log
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.session import Session
+    from aegis.types import LLMResponse, Usage
+    from conftest import FakeProvider
+
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = False
+    logged: list[Usage] = []
+    monkeypatch.setattr(usage_log, "log", lambda _provider, _model, usage: logged.append(usage))
+    provider = FakeProvider([
+        LLMResponse(text="one", usage=Usage(10, 3, 4, 2)),
+        LLMResponse(text="two", usage=Usage(7, 2, 1, 1)),
+    ])
+    agent = Agent(config=cfg, provider=provider, session=Session.create(), cwd=tmp_path)
+
+    agent.run("first")
+    agent.run("second")
+
+    assert [(u.input_tokens, u.output_tokens, u.cache_read, u.cache_write) for u in logged] == [
+        (10, 3, 4, 2),
+        (7, 2, 1, 1),
+    ]
+
+
 def test_cost_pricing_prefix_match():
     from aegis.usage_log import _price
     assert _price("claude-opus-4-8")[1] == 25.0      # output price (Opus 4.5+ tier)

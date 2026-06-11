@@ -130,9 +130,14 @@ def continuation_prompt(g: dict, reason: str) -> str:
             "Take the next concrete step now. When the goal is fully met, state so explicitly.")
 
 
-def run_loop(agent, last_text: str, notify, on_event=None) -> str:
+def run_loop(agent, last_text: str, notify, on_event=None, run_turn=None) -> str:
     """After a normal turn: judge and auto-continue until done/paused/budget.
-    ``notify(line)`` surfaces progress; returns the final assistant text."""
+    ``notify(line)`` surfaces progress; returns the final assistant text.
+
+    ``run_turn`` may be supplied by entry surfaces that need each automatic
+    continuation to flow through their shared runner/run log instead of calling
+    ``agent.run`` directly.
+    """
     session = agent.session
     g = get(session)
     if g is None or g.get("status") != "active":
@@ -150,7 +155,8 @@ def run_loop(agent, last_text: str, notify, on_event=None) -> str:
             return last_text
         g["turns_used"] += 1
         notify(f"↻ Continuing toward goal ({g['turns_used']}/{g['max_turns']}): {reason}")
-        result = agent.run(continuation_prompt(g, reason), on_event)
+        prompt = continuation_prompt(g, reason)
+        result = run_turn(prompt) if run_turn is not None else agent.run(prompt, on_event)
         last_text = result.content or ""
         g = get(session)                      # re-read: the turn may have cleared/changed it
         if g is None or g.get("status") != "active" or agent.cancel_event.is_set():

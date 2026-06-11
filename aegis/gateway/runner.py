@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 from ..agent.agent import Agent
 from ..config import Config
 from ..session import Session, SessionStore
 from .base import BasePlatformAdapter, MessageEvent
+
+
+def _sync_control_session(proxy, session: Session, reply: str) -> str:
+    proxy.session = session
+    return reply
 
 
 class GatewayRunner:
@@ -20,6 +26,9 @@ class GatewayRunner:
         self.store = SessionStore()
         self.adapters: list[BasePlatformAdapter] = []
         self._sessions: dict[str, Session] = {}
+        from ..surface import SurfaceRunner
+        self._surface_runner = SurfaceRunner(config, store=self.store, cwd=self.cwd, include_mcp=True)
+        self._cron_runner = SurfaceRunner(config, store=self.store, cwd=self.cwd, include_mcp=True)
         self._lock = threading.Lock()
         self._key_locks: dict[str, threading.Lock] = {}   # per-session serialization
         self._agents: dict[str, object] = {}              # LRU agent cache (prefix-cache reuse)
@@ -80,6 +89,47 @@ class GatewayRunner:
             self._sessions[key] = self.store.load(key) or Session(id=key, title=key)
         return self._sessions[key]
 
+    def _control_reply(
+        self,
+        ev: MessageEvent,
+        key: str,
+        command: str,
+        action,
+        *,
+        data: dict | None = None,
+    ) -> str:
+        with self._lock:
+            session = self._session(key)
+        proxy = SimpleNamespace(
+            config=self.config,
+            session=session,
+            cwd=self.cwd,
+            provider=None,
+        )
+        from ..surface import run_control_action
+
+        run = run_control_action(
+            proxy,
+            lambda _emit: action(proxy),
+            config=self.config,
+            session=session,
+            surface="gateway",
+            kind="control",
+            title=f"gateway {command}",
+            prompt=ev.text.strip(),
+            data={
+                "command": command,
+                "platform": ev.platform,
+                "chat_id": ev.chat_id,
+                "user_id": ev.user_id or "",
+                "user_name": ev.user_name or "",
+                **(data or {}),
+            },
+        )
+        self._sessions[key] = run.session
+        self.store.save(run.session)
+        return run.text
+
     def dispatch(self, ev: MessageEvent) -> str:
         text = ev.text.strip()
         key = self._key(ev)
@@ -98,54 +148,106 @@ class GatewayRunner:
                     + ", ".join(self._user_commands()))
         # Intercept control commands before the agent.
         if text in ("/stop", "/new", "/reset"):
-            with self._lock:
-                self._sessions[key] = Session(id=key, title=key)
-                self.store.save(self._sessions[key])
-            return "🔄 Started a fresh session."
+            def action(proxy):
+                fresh = Session(id=key, title=key)
+                self._sessions[key] = fresh
+                proxy.session = fresh
+                self.store.save(fresh)
+                return "🔄 Started a fresh session."
+
+            return self._control_reply(ev, key, text.split()[0], action)
         if text in ("/status", "/help"):
-            return (f"AEGIS gateway · provider={self.config.get('model.provider')} · "
+            return self._control_reply(
+                ev,
+                key,
+                text.split()[0],
+                lambda _proxy: (
+                    f"AEGIS gateway · provider={self.config.get('model.provider')} · "
                     f"model={self.config.get('model.default')} · session={key}\n"
                     "Commands: /new · /status · /whoami · /model [id] · /compress · "
-                    "/busy [mode] · /goal <text> · /subgoal <text> · /steer <text> · stop")
+                    "/busy [mode] · /goal <text> · /subgoal <text> · /steer <text> · stop"
+                ),
+            )
         if text == "/whoami":
-            return (f"platform: {ev.platform}\nuser: {ev.user_id or '?'}"
+            return self._control_reply(
+                ev,
+                key,
+                "/whoami",
+                lambda _proxy: (
+                    f"platform: {ev.platform}\nuser: {ev.user_id or '?'}"
                     f"{f' (@{ev.user_name})' if ev.user_name else ''}\nchat: {ev.chat_id}\n"
-                    f"session: {key}\nbusy_mode: {self.config.get('gateway.busy_mode', 'queue')}")
+                    f"session: {key}\nbusy_mode: {self.config.get('gateway.busy_mode', 'queue')}"
+                ),
+            )
         if text == "/model" or text.startswith("/model "):
             arg = text[len("/model"):].strip()
-            with self._lock:
-                session = self._session(key)
-            if not arg:
-                cur = session.meta.get("model") or self.config.get("model.default")
-                return f"model: {cur}\nSwitch for this session with /model <id>."
-            session.meta["model"] = arg
-            self.store.save(session)
-            self._agents.pop(key, None)        # rebuild with the new model next turn
-            return f"✓ model for this session → {arg}"
+            def action(proxy):
+                session = proxy.session
+                if not arg:
+                    controls = session.meta.get("runtime_controls") or {}
+                    cur = controls.get("model") or session.meta.get("model") or self.config.get("model.default")
+                    return f"model: {cur}\nSwitch for this session with /model <id>."
+                from ..surface import remember_session_runtime
+                remember_session_runtime(type("A", (), {"session": session})(), model=arg)
+                self.store.save(session)
+                self._agents.pop(key, None)        # rebuild with the new model next turn
+                return f"✓ model for this session → {arg}"
+
+            return self._control_reply(ev, key, "/model", action, data={"model": arg})
         if text == "/busy" or text.startswith("/busy "):
             arg = text[len("/busy"):].strip()
-            if not arg:
-                return (f"busy_mode: {self.config.get('gateway.busy_mode', 'queue')} "
-                        "(queue | steer | interrupt)")
-            if arg not in ("queue", "steer", "interrupt"):
-                return "usage: /busy queue|steer|interrupt"
-            self.config.set("gateway.busy_mode", arg)
-            self.config.save()
-            return f"✓ busy_mode → {arg}"
+            def action(_proxy):
+                if not arg:
+                    return (f"busy_mode: {self.config.get('gateway.busy_mode', 'queue')} "
+                            "(queue | steer | interrupt)")
+                if arg not in ("queue", "steer", "interrupt"):
+                    return "usage: /busy queue|steer|interrupt"
+                self.config.set("gateway.busy_mode", arg)
+                self.config.save()
+                return f"✓ busy_mode → {arg}"
+
+            return self._control_reply(ev, key, "/busy", action, data={"mode": arg})
         if text == "/compress":
             with self._lock:
                 session = self._session(key)
             agent = self._agents.get(key) or Agent.create(
                 self.config, session=session, cwd=self.cwd, store=self.store,
                 model=session.meta.get("model"))
-            from ..agent.loop import _force_compact
             before = len(session.messages)
+
+            def _compact(emit):
+                from ..agent.loop import compact_now
+
+                compact_now(
+                    agent,
+                    session,
+                    emit,
+                    reason="manual_context_compression",
+                )
+                after = len(agent.session.messages)
+                return f"🗜 compressed: {before} → {after} messages"
+
             try:
-                _force_compact(agent, session)
+                from ..surface import run_control_action
+
+                run = run_control_action(
+                    agent,
+                    _compact,
+                    config=self.config,
+                    session=session,
+                    surface="gateway",
+                    kind="compaction",
+                    title="gateway context compression",
+                    prompt=text,
+                    data={"platform": ev.platform, "chat_id": ev.chat_id,
+                          "user_id": ev.user_id or ""},
+                )
             except Exception as e:  # noqa: BLE001
                 return f"⚠ compress failed: {type(e).__name__}: {e}"
-            self.store.save(session)
-            return f"🗜 compressed: {before} → {len(session.messages)} messages"
+            self._sessions[key] = run.session
+            self._agents[key] = agent
+            self.store.save(run.session)
+            return run.text
         if text.startswith(("/goal", "/subgoal")):
             from .. import goals
             # Replacing the goal mid-run would race the active continuation loop — reject
@@ -154,13 +256,25 @@ class GatewayRunner:
             arg = text.split(None, 1)[1].strip().lower() if " " in text else ""
             if (running and text.startswith("/goal")
                     and arg not in ("", "status", "pause", "resume", "clear")):
-                return "⚠ a turn is running — send 'stop' first, then set the new goal."
+                return self._control_reply(
+                    ev,
+                    key,
+                    "/goal",
+                    lambda _proxy: "⚠ a turn is running — send 'stop' first, then set the new goal.",
+                    data={"rejected": True, "reason": "turn_running"},
+                )
             with self._lock:
                 session = self._session(key)
             reply, start_turn = goals.handle_command(session, text, self.config)
             self.store.save(session)
             if not start_turn:
-                return reply or ""
+                return self._control_reply(
+                    ev,
+                    key,
+                    text.split()[0],
+                    lambda proxy: _sync_control_session(proxy, session, reply or ""),
+                    data={"start_turn": False},
+                )
             text = goals.get(session)["text"]   # fall through: run the new goal as this turn
 
         # Mention gating: in shared channels only respond when a trigger is present.
@@ -202,12 +316,19 @@ class GatewayRunner:
                     import copy
                     run_cfg = type(self.config)(copy.deepcopy(self.config.data))
                     run_cfg.data.setdefault("agent", {})["personality"] = prof["personality"]
+                from ..surface import apply_session_runtime, session_runtime_controls
+                controls = session_runtime_controls(session)
                 agent = Agent.create(run_cfg, session=session, cwd=self.cwd, store=self.store,
-                                     model=session.meta.get("model") or prof.get("model"),
-                                     provider_name=prof.get("provider"))   # /model > profile
+                                     model=controls.get("model") or prof.get("model"),
+                                     provider_name=controls.get("provider") or prof.get("provider"),
+                                     include_mcp=True)   # /model > profile
+                apply_session_runtime(agent)
                 self._agents[key] = agent
                 if len(self._agents) > self._agent_cap:
                     del self._agents[next(iter(self._agents))]
+            else:
+                from ..surface import apply_session_runtime
+                apply_session_runtime(agent)
             agent.platform = ev.platform   # channel-specific prompt behavior
             agent.chat_id = ev.chat_id     # current conversation (for the send_message tool)
             try:
@@ -230,7 +351,17 @@ class GatewayRunner:
                         for a in ev_.get("actions") or []:
                             learned.append(f"🧠 {a}")
 
-                final = agent.run(text, _collect)
+                run = self._surface_runner.run_prompt(
+                    text,
+                    session=session,
+                    agent=agent,
+                    surface="gateway",
+                    meta={"platform": ev.platform, "chat_id": ev.chat_id, "user_id": ev.user_id or ""},
+                    platform=ev.platform,
+                    chat_id=ev.chat_id,
+                    on_event=_collect,
+                )
+                final = run.message
                 final_text = final.content or ""
                 goal_notes: list[str] = []
                 try:                       # standing /goal: judge + auto-continue (Ralph loop)
@@ -299,7 +430,7 @@ class GatewayRunner:
         from .. import cron
         while True:
             try:
-                cron.tick(self.config, sink=self._cron_sink, verbose=False)
+                cron.tick(self.config, sink=self._cron_sink, verbose=False, runner=self._cron_runner)
             except Exception:  # noqa: BLE001 - a bad job must not kill the ticker
                 pass
             _time.sleep(interval)

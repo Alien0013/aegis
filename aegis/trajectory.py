@@ -17,7 +17,11 @@ def traj_from_session(sess) -> dict:
     for m in sess.messages:
         step = {"role": m.role, "content": m.content}
         if m.tool_calls:
-            step["tool_calls"] = [{"name": tc.name, "arguments": tc.arguments} for tc in m.tool_calls]
+            step["tool_calls"] = [
+                tc.to_dict() if hasattr(tc, "to_dict")
+                else {"id": getattr(tc, "id", ""), "name": tc.name, "arguments": tc.arguments}
+                for tc in m.tool_calls
+            ]
         if m.tool_call_id:
             step["tool_call_id"] = m.tool_call_id
         if getattr(m, "reasoning", ""):
@@ -43,7 +47,7 @@ def _openai_finetune(traj: dict) -> dict:
         if s.get("tool_calls"):
             m["content"] = s.get("content") or None
             m["tool_calls"] = [
-                {"id": f"call_{i}", "type": "function",
+                {"id": tc.get("id") or f"call_{i}", "type": "function",
                  "function": {"name": tc.get("name", ""),
                               "arguments": json.dumps(tc.get("arguments", {}))}}
                 for i, tc in enumerate(s["tool_calls"])]
@@ -217,8 +221,8 @@ def cmd_trajectory(args, config) -> int:
         provider = None
         if getattr(args, "summarize", False):
             try:
-                from .providers.registry import build_aux_provider
-                provider = build_aux_provider(config)
+                from .auxiliary import AuxRouter
+                provider = AuxRouter(config).provider_for("trajectory_compression")
             except Exception:  # noqa: BLE001
                 provider = None
         ids = [s["id"] for s in SessionStore().list(limit=1000)]

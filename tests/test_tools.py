@@ -96,5 +96,5 @@ def test_registry_has_full_surface():
     names = {t.name for t in default_registry().all()}
     for expected in ("read_file", "write_file", "edit_file", "bash", "web_search", "web_fetch",
                      "memory", "skill", "execute_code", "browser", "lsp", "session_search",
-                     "apply_patch", "spawn_subagent", "generate_image"):
+                     "agent_state", "apply_patch", "spawn_subagent", "generate_image"):
         assert expected in names, expected

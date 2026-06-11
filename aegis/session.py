@@ -149,7 +149,7 @@ class SessionStore:
     def list(self, limit: int = 50) -> list[dict]:
         with self._conn() as c:
             rows = c.execute(
-                "SELECT id, title, created_at, updated_at FROM sessions ORDER BY updated_at DESC LIMIT ?",
+                "SELECT id, title, created_at, updated_at, parent_id FROM sessions ORDER BY updated_at DESC LIMIT ?",
                 (limit,),
             ).fetchall()
             return [dict(r) for r in rows]
@@ -172,6 +172,10 @@ class SessionStore:
         if carry_summary:
             child.meta["forked_from"] = parent.id
             child.meta["summary"] = parent.meta.get("summary", "")
+        for key in ("runtime", "runtime_controls", "model", "provider"):
+            if key in parent.meta:
+                value = parent.meta[key]
+                child.meta[key] = dict(value) if isinstance(value, dict) else value
         self.save(parent)
         self.save(child)
         return child
@@ -244,7 +248,7 @@ class SessionStore:
                 break
         return out
 
-    def summarize(self, sid: str, provider) -> str:
+    def summarize(self, sid: str, provider=None, config=None) -> str:
         """Generate + store a 1-2 sentence summary of a session via the provider."""
         sess = self.load(sid)
         if not sess:
@@ -255,6 +259,9 @@ class SessionStore:
         if not transcript.strip():
             return ""
         try:
+            if provider is None:
+                from .auxiliary import AuxRouter
+                provider = AuxRouter(config).provider_for("session_summary")
             resp = provider.complete([
                 Message.system("Summarize this conversation in 1-2 sentences: what the user wanted "
                                "and what was decided/done. Be specific and factual."),

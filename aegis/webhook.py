@@ -122,8 +122,9 @@ class _SafeDict(dict):
 # server
 # --------------------------------------------------------------------------- #
 def make_handler(config, store: WebhookStore):
-    from .agent.agent import Agent
-    from .session import Session
+    from .surface import SurfaceRunner
+
+    runner = SurfaceRunner(config, include_mcp=True)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):  # quiet
@@ -163,15 +164,26 @@ def make_handler(config, store: WebhookStore):
 
             from .automation import build_prompt, delivery_targets, enqueue_delivery, is_silent
             prompt = build_prompt(render_prompt(hook.prompt, name, body), skills=hook.skills)
+            targets = delivery_targets(hook.deliver)
+            first_target = targets[0] if targets else ""
+            platform, _, chat_id = first_target.partition(":")
             try:
-                agent = Agent.create(config, session=Session.create())
-                reply = agent.run(prompt).content
+                result = runner.run_prompt(
+                    prompt,
+                    session_id=f"webhook:{name}",
+                    title=f"webhook {name}",
+                    surface="webhook",
+                    meta={"webhook": name},
+                    platform=platform if platform and chat_id else None,
+                    chat_id=chat_id if platform and chat_id else None,
+                )
+                reply = result.text
             except Exception as e:  # noqa: BLE001
                 return self._json(500, {"error": str(e)})
 
             # Deliver to configured channels via the durable outbox, honoring [SILENT].
             if hook.deliver and not is_silent(reply):
-                for target in delivery_targets(hook.deliver):
+                for target in targets:
                     enqueue_delivery(target, reply)
             return self._json(200, {"ok": True, "reply": reply})
 

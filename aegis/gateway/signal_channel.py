@@ -46,6 +46,7 @@ class SignalAdapter(BasePlatformAdapter):
         return proc.stdout
 
     def start(self, dispatch: Dispatch) -> None:
+        self._init_inbound_queue(dispatch)
         while True:
             try:
                 # --timeout blocks up to N seconds waiting for messages, then returns.
@@ -58,9 +59,7 @@ class SignalAdapter(BasePlatformAdapter):
                 if self.allowed and ev.user_id not in self.allowed:
                     self.send(ev.chat_id, "not authorized.")
                     continue
-                reply = dispatch(ev)
-                if reply:
-                    self.deliver(ev.chat_id, reply)
+                self._submit_inbound(ev)
 
     def _parse(self, out: str) -> list[MessageEvent]:
         """signal-cli emits one JSON object per line (JSON-RPC envelope)."""

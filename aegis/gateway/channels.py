@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import os
 import sys
-import threading
 
 import httpx
 
-from .base import BasePlatformAdapter, Dispatch, MessageEvent, is_control_interrupt
+from .base import BasePlatformAdapter, Dispatch, MessageEvent
 
 
 class CLIChannel(BasePlatformAdapter):
@@ -57,10 +56,7 @@ class TelegramAdapter(BasePlatformAdapter):
     def start(self, dispatch: Dispatch) -> None:
         # Poll on this thread; run each turn on a per-chat worker so the poller keeps reading —
         # that's what lets a 'stop' message interrupt a run already in progress.
-        self._dispatch = dispatch
-        self._queues: dict[str, list[MessageEvent]] = {}
-        self._workers: dict[str, threading.Thread] = {}
-        self._qlock = threading.Lock()
+        self._init_inbound_queue(dispatch)
         offset = 0
         while True:
             try:
@@ -87,76 +83,14 @@ class TelegramAdapter(BasePlatformAdapter):
                     user_id=user_id,
                     user_name=username,
                 )
-                # A bare 'stop' while this chat has a turn running cancels it (no new turn).
-                if is_control_interrupt(msg["text"]):
-                    cb = getattr(self, "_interrupt_cb", None)
-                    w = self._workers.get(ev.chat_id)
-                    if cb and w and w.is_alive() and cb(ev):
-                        self.send(ev.chat_id, "🛑 stopped.")
-                        continue
-                # '/steer <text>' while a turn is running injects guidance without restarting it.
-                if msg["text"].startswith("/steer "):
-                    scb = getattr(self, "_steer_cb", None)
-                    w = self._workers.get(ev.chat_id)
-                    if scb and w and w.is_alive() and scb(ev, msg["text"][len("/steer "):].strip()):
-                        self.send(ev.chat_id, "🧭 steering noted.")
-                        continue
-                self._enqueue(ev)
+                self._submit_inbound(ev, raw_text=msg["text"])
 
-    def _enqueue(self, ev: MessageEvent) -> None:
-        with self._qlock:
-            w = self._workers.get(ev.chat_id)
-            busy = bool(w and w.is_alive())
-        if busy:
-            handled, note = self._apply_busy_mode(ev)
-            if note:
-                self.send(ev.chat_id, note)
-            if handled:
-                return
-        with self._qlock:
-            self._queues.setdefault(ev.chat_id, []).append(ev)
-            w = self._workers.get(ev.chat_id)
-            if not (w and w.is_alive()):     # one worker per chat -> turns stay ordered
-                w = threading.Thread(target=self._drain, args=(ev.chat_id,), daemon=True)
-                self._workers[ev.chat_id] = w
-                w.start()
+    def _before_dispatch(self, ev: MessageEvent):
+        self._typing(ev.chat_id)
+        return self._send_status(ev.chat_id, "🤔 working…")
 
-    def _apply_busy_mode(self, ev: MessageEvent) -> tuple[bool, str]:
-        """A normal message arrived while this chat has a turn running. Apply
-        gateway.busy_mode: queue (default — run it next), steer (fold it into the
-        running turn), interrupt (cancel the turn, then run it). Returns
-        (handled, first_touch_note); handled=True means don't enqueue."""
-        config = getattr(self, "_config", None)
-        mode = str(config.get("gateway.busy_mode", "queue")) if config else "queue"
-        handled = False
-        applied = "queue"
-        if mode == "steer":
-            scb = getattr(self, "_steer_cb", None)
-            if scb and scb(ev, ev.text):     # falls back to queue if the run just ended
-                handled, applied = True, "steer"
-        elif mode == "interrupt":
-            cb = getattr(self, "_interrupt_cb", None)
-            if cb and cb(ev):                # cancel now; the message still runs next
-                applied = "interrupt"
-        note = ""
-        if config is not None:
-            from ..firstrun import BUSY_FLAG, busy_hint, is_seen, mark_seen
-            if not is_seen(config, BUSY_FLAG):
-                mark_seen(config, BUSY_FLAG)
-                note = busy_hint(applied)
-        return handled, note
-
-    def _drain(self, chat_id: str) -> None:
-        while True:
-            with self._qlock:
-                q = self._queues.get(chat_id) or []
-                ev = q.pop(0) if q else None
-                if ev is None:
-                    return
-            self._typing(chat_id)
-            status_id = self._send_status(chat_id, "🤔 working…")
-            reply = self._dispatch(ev)
-            self._finish(chat_id, status_id, reply)
+    def _deliver_reply(self, ev: MessageEvent, reply: str, state=None) -> None:
+        self._finish(ev.chat_id, state, reply)
 
     def _typing(self, chat_id: str) -> None:
         try:
@@ -266,5 +200,19 @@ def build_adapter(name: str) -> BasePlatformAdapter:
     if name == "ntfy":
         from .ntfy_channel import NtfyAdapter
         return NtfyAdapter()
+    try:
+        from ..plugins import load_plugins
+        api = load_plugins(quiet=True)
+        factory = api.channels.get(name)
+        if factory:
+            adapter = factory() if callable(factory) else factory
+            if not isinstance(adapter, BasePlatformAdapter):
+                # Keep duck-typed plugin channels usable while giving them the
+                # same delivery helpers if they subclass BasePlatformAdapter.
+                if not (hasattr(adapter, "start") and hasattr(adapter, "send")):
+                    raise TypeError("plugin channel must expose start(dispatch) and send(chat_id, text)")
+            return adapter
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"Plugin channel '{name}' failed to load: {exc}") from exc
     raise ValueError(f"Unknown channel '{name}'. Available: cli, telegram, discord, slack, "
-                     "signal, matrix, email, webhook, ntfy.")
+                     "signal, matrix, email, webhook, ntfy, or a plugin channel.")

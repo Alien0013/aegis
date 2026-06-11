@@ -4,9 +4,26 @@ Run any command with `-h` for details. `aegis` alone opens the REPL.
 
 ## Chat
 - `aegis [chat]` — interactive REPL
+- `aegis tui` — full-screen terminal cockpit with transcript, activity stream,
+  composer, status footer, slash commands, and REPL fallback (`--resume`,
+  `--continue`, `--model`, `--provider`)
 - `aegis chat -q "…"` — one-shot (`--model`, `--provider`, `--image`, `--resume`,
   `--continue`, `--worktree/-w`, `--yolo`)
 - `aegis batch FILE` — run a prompt per line
+
+Prompt references work in REPL, one-shot, TUI-backed surfaces, SDK/API/gateway,
+and automation: `@file:path[:10-20]`, `@folder:path`, `@diff`, `@staged`,
+`@git:<ref>`, `@url:https://...`, and `@mcp:<server>:<resource-uri>`. Each
+expansion records metadata on the session for replay/debugging.
+
+REPL and one-shot CLI turns use the same shared surface runner as TUI, SDK,
+dashboard chat, gateway, cron, webhooks, and `aegis serve`, so terminal turns
+also write durable run rows, trace ids, surface metadata, and prompt-part
+debugging metadata.
+
+The REPL and TUI share the same terminal turn lifecycle: `/goal` startup,
+automatic goal continuations, `/retry`, manual `/compress`, run history,
+context-reference expansion, and persistence all go through the shared runner.
 
 ## Persistent goals (`/goal`)
 
@@ -40,19 +57,31 @@ preempts the loop; `/status` shows the active goal plus a local session recap.
 - `aegis curator [status|review|prune|archive|restore]`
 
 ## Sessions & recall
-- `aegis sessions [list|show|rm|summarize|search]`
+- `aegis sessions [list|show|rm|summarize|search]` — `show` prints runtime
+  metadata, trace id, prompt hash/token estimate, prompt part count, and the
+  transcript for debug/replay.
 - `aegis checkpoints [list|diff|rollback|clear]` — each turn's edit batch is
   auto-checkpointed as one unit; `diff` previews it, `rollback` undoes it
   (files the batch created are removed). In the REPL: `/diff`, `/rollback`.
 - `aegis trajectory [stats|export|compress]`
+- `aegis trace [list|show|export] [--session ID] [--status ok|error] [--json]` — inspect/export traces
+  for turns, provider calls, tool calls, compaction, and related run activity
+- `aegis eval [list|run SUITE.jsonl|show RUN_ID] [--json]` — run provider-free replay evals
+  against stored sessions or traces
 
 ## Services
 - `aegis gateway --channels …`
 - `aegis daemon [status|install|start|stop|restart|remove]` — user systemd services
 - `aegis serve [--port]` — OpenAI-compatible API
-- `aegis mcp [list|add|remove|test|serve]`
+- `aegis rpc` — local JSON-RPC agent surface over stdio for IDE/platform bridges
+- `aegis mcp [list|add|remove|test|serve|catalog|install|tools]`
 - `aegis cron [list|add|rm|run]`, `aegis webhook [list|add|remove|serve]`
 - `aegis dashboard`, `aegis acp`, `aegis pairing`, `aegis background`
+- `aegis plugins [list|doctor|path|install|enable|disable|remove]`
+
+`aegis batch FILE` runs one prompt per non-comment line. Each prompt records a
+separate `batch` run with `batch_source`, `batch_index`, and `batch_total`
+metadata for dashboard filtering and replay.
 
 ## Ops & security
 - `aegis security audit`, `aegis debug share`, `aegis secrets bitwarden`
@@ -63,3 +92,16 @@ preempts the loop; `/status` shows the active goal plus a local session recap.
 `/handoff <platform> <chat_id>` (REPL) moves the current session — full history —
 to a messaging channel. The gateway adopts it the next time that chat sends a
 message (the chat gets a ping immediately if the gateway is running).
+
+## Cockpit slash commands
+
+The REPL includes the product-facing shortcuts used by the terminal and dashboard
+cockpit:
+
+- `/reasoning off|summary|live|minimal|low|medium|high|xhigh`
+- `/busy queue|steer|interrupt`
+- `/resume <session-id-or-title>`
+- `/branch`
+- `/agents`
+- `/trace [trace-id]`
+- `/evals [run-id]`

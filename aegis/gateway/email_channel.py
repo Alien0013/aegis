@@ -41,6 +41,7 @@ class EmailAdapter(BasePlatformAdapter):
         return msg.get_payload(decode=True).decode("utf-8", "replace")
 
     def start(self, dispatch: Dispatch) -> None:
+        self._init_inbound_queue(dispatch)
         while True:
             try:
                 imap = imaplib.IMAP4_SSL(self.imap_host, self.imap_port)
@@ -56,9 +57,7 @@ class EmailAdapter(BasePlatformAdapter):
                     imap.store(num, "+FLAGS", "\\Seen")
                     ev = MessageEvent(platform="email", chat_id=sender, text=text,
                                       user_id=sender, thread_id=subject)
-                    reply = dispatch(ev)
-                    if reply:
-                        self.send(sender, reply, subject=f"Re: {subject}")
+                    self._submit_inbound(ev)
                 imap.logout()
             except Exception:  # noqa: BLE001 — keep the poller alive
                 pass
@@ -76,3 +75,7 @@ class EmailAdapter(BasePlatformAdapter):
                 s.send_message(msg)
         except Exception:  # noqa: BLE001
             pass
+
+    def _deliver_reply(self, ev: MessageEvent, reply: str, state=None) -> None:  # noqa: ANN001
+        if reply:
+            self.send(ev.chat_id, reply, subject=f"Re: {ev.thread_id or 'Message from AEGIS'}")

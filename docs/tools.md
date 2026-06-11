@@ -1,12 +1,15 @@
 # Tools & Permissions
 
-34 built-ins: `read_file`, `write_file`, `edit_file`, `apply_patch`, `list_dir`, `glob`,
+35 built-ins: `read_file`, `write_file`, `edit_file`, `apply_patch`, `list_dir`, `glob`,
 `search`, `bash`, `process`, `download`, `http_request`, `web_fetch`, `web_search`,
 `browser`, `cloud_browser`, `computer`, `generate_image`, `cloud_image`, `transcribe`,
 `speak`, `execute_code`, `spawn_subagent`, `mixture_of_agents`, `lsp`, `github`,
 `tool_search`, `memory`, `skill`, `session_search`, `todo_write`, `schedule_task`,
-`clarify`, `dependency_audit`, `system_status` — plus every connected MCP and plugin
+`clarify`, `agent_state`, `dependency_audit`, `system_status` — plus every connected MCP and plugin
 tool. Group them with `tools.toolsets` (add `browser`, `computer`, `voice`, `lsp`).
+
+`agent_state` exposes shared runtime state to every surface: current session,
+recent sessions, session branching, traces, eval runs, and background task status.
 
 ## Deferred schemas (context economy)
 
@@ -19,6 +22,16 @@ tools:
   defer_schemas: true
   deferred: [generate_image, cloud_image, computer, github, mixture_of_agents, …]
 ```
+
+Deferred entries can be exact names or selectors:
+
+- `mcp:*` or `source:mcp` defers connected MCP tools and resource/prompt helpers.
+- `plugin:*` or `source:plugin` defers plugin-registered tools.
+- `toolset:mcp` defers every tool in a toolset.
+- `glob:mcp__filesystem__*` or `mcp__filesystem__*` defers by name pattern.
+
+`tool_search` activates matching deferred tools for the current session and
+prints the schema that was loaded.
 
 ## Typed subagents
 

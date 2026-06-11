@@ -28,6 +28,8 @@ class WebhookChannel(BasePlatformAdapter):
 
     def start(self, dispatch: Dispatch) -> None:
         secret = self.secret
+        adapter = self
+        self._init_inbound_queue(dispatch)
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *a):  # quiet
@@ -47,7 +49,7 @@ class WebhookChannel(BasePlatformAdapter):
                     text=body.get("text", ""),
                     user_id=str(body.get("user_id")) if body.get("user_id") else None,
                 )
-                reply = dispatch(ev)
+                reply = adapter._submit_inbound(ev, wait=True) or ""
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()

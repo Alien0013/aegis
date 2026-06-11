@@ -54,6 +54,7 @@ def default_registry(*, include_plugins: bool = True) -> ToolRegistry:
     from .lsp import lsp_tools
     from .process import process_tools
     from .recall import recall_tools
+    from .state import state_tools
     from .voice import voice_tools
 
     reg = ToolRegistry()
@@ -65,6 +66,7 @@ def default_registry(*, include_plugins: bool = True) -> ToolRegistry:
     reg.register_all(voice_tools())
     reg.register_all(lsp_tools())
     reg.register_all(recall_tools())
+    reg.register_all(state_tools())
     reg.register_all(process_tools())
     reg.register_all(dev_tools())
     reg.register_all(cloud_tools())

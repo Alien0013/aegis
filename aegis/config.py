@@ -181,6 +181,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "auxiliary": {                   # small/cheap model for compaction, vision, smart-approval
         "provider": "",              # "" = reuse main provider
         "model": "",
+        "compaction": {},            # optional purpose overrides: {provider, model, context_length}
+        "session_summary": {},
+        "trajectory_compression": {},
     },
     "security": {
         "scan_enabled": True,        # Tirith-style pre-execution command scanning
@@ -205,6 +208,42 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "include_reasoning": False,  # include model reasoning/thinking
         "compress": False,           # prune/summarize large tool outputs before writing
     },
+    "display": {
+        "reasoning": "summary",      # off | summary | live
+        "status_footer": True,
+        "tool_progress": "compact",  # compact | detailed
+        "theme": "system",
+    },
+    "responses": {
+        "state": {
+            "enabled": False,        # opt-in provider-native response chaining
+            "store": False,          # keep OpenAI Responses stateless/ZDR-compatible by default
+            "send_previous": True,
+            "truncate_previous_input": True,
+            "preserve_items": True,  # keep provider output item metadata for replay/debugging
+        },
+        "compaction": {
+            "enabled": False,        # provider-native compaction hook where available
+            "compact_threshold": 0.85,  # ratio shorthand; sent as a token threshold
+            "compact_threshold_tokens": None,
+        },
+    },
+    "tracing": {
+        "enabled": True,
+        "path": "traces.db",
+        "sample_rate": 1.0,
+    },
+    "evals": {
+        "path": "evals",
+        "default_grader": "exact_or_contains",
+    },
+    "plugins": {
+        "manifests": True,
+        "enabled": [],
+        "disabled": [],
+        "allowlist": [],             # optional strict loader allowlist; enable/disable uses disabled list
+        "registry": [],
+    },
     "learn": {
         "auto": True,                # auto-review sessions on exit to propose memory/skill candidates
         "background": True,           # forked self-improvement review after substantial turns (on by default)
@@ -216,6 +255,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "mcp": {
         "enabled": True,
         "servers": {},               # name -> {command,args,env} | {url,headers}
+        "catalog": [],               # [{name, command|url, args, description, tool_filter}]
     },
     "browser": {
         "headless": True,
@@ -224,6 +264,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "search_backend": "auto",    # auto | duckduckgo | brave | tavily | serper
         "allow_domains": [],         # if non-empty, web_fetch is allowlist-only (suffix match)
         "deny_domains": [],          # never fetch these domains (always wins)
+    },
+    "context_references": {
+        "enabled": True,              # expand @file/@folder/@diff/@staged/@git/@url in prompts
+        "max_chars": 50_000,          # total attached context per user prompt
+        "max_file_chars": 20_000,
+        "max_git_chars": 20_000,
+        "max_url_chars": 20_000,
+        "max_folder_entries": 200,
+        "include_warnings": True,
     },
     "server": {
         "host": "127.0.0.1",
@@ -247,6 +296,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "user_commands": [],                  # extra slash commands non-admins may run
         "profiles": {},                       # per-platform agent overlay, e.g.
                                               #   telegram: {personality: tg, model: ..., provider: ...}
+    },
+    "credential_pools": {},
+    "dashboard": {
+        "frontend": "static",         # static | packaged
+        "cockpit": True,
     },
     "goals": {
         "max_turns": 20,        # /goal auto-continuation budget before pausing

@@ -8,4 +8,6 @@ system, persistent memory, a SKILL.md skills engine, and a multi-channel gateway
 __version__ = "0.1.0"
 APP_NAME = "aegis"
 
-__all__ = ["__version__", "APP_NAME"]
+from .sdk import AegisClient, AegisResult, run
+
+__all__ = ["__version__", "APP_NAME", "AegisClient", "AegisResult", "run"]

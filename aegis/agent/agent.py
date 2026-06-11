@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -42,6 +43,43 @@ class IterationBudget:
         return self.remaining > 0
 
 
+def _tool_source(tool) -> str:
+    source = str(getattr(tool, "source", "") or getattr(tool, "_aegis_source", "") or "")
+    if source:
+        return source
+    name = str(getattr(tool, "name", "") or "")
+    if name.startswith("mcp__"):
+        return "mcp"
+    if getattr(tool, "_aegis_plugin", None):
+        return "plugin"
+    return ""
+
+
+def _matches_deferred_selector(tool, selectors) -> bool:
+    name = str(getattr(tool, "name", "") or "")
+    toolset = str(getattr(tool, "toolset", "") or "")
+    source = _tool_source(tool)
+    for raw in selectors:
+        selector = str(raw or "").strip()
+        if not selector:
+            continue
+        if selector == name:
+            return True
+        if selector.startswith("source:") and source == selector.split(":", 1)[1]:
+            return True
+        if selector.startswith("toolset:") and toolset == selector.split(":", 1)[1]:
+            return True
+        if selector.startswith("glob:") and fnmatch.fnmatchcase(name, selector.split(":", 1)[1]):
+            return True
+        if selector.endswith(":*"):
+            prefix = selector[:-2]
+            if prefix in {source, toolset} or name.startswith(prefix + "__"):
+                return True
+        if any(ch in selector for ch in "*?[") and fnmatch.fnmatchcase(name, selector):
+            return True
+    return False
+
+
 class Agent:
     def __init__(
         self,
@@ -61,9 +99,11 @@ class Agent:
         self.session = session
         self.cwd = cwd or Path.cwd()
         self.registry = registry or default_registry()
+        self._context_engine = None
         try:                                   # a custom context engine may expose its own tools
             from .context_engine import get_engine
-            for t in get_engine(config).tools():
+            self._context_engine = get_engine(config)
+            for t in self._context_engine.tools():
                 self.registry.register(t)
         except Exception:  # noqa: BLE001
             pass
@@ -91,6 +131,12 @@ class Agent:
             cwd=self.cwd, config=config, memory=self.memory, skills=self.skills,
             session=self.session, agent=self, approver=approver,
         )
+        if self._context_engine is not None:
+            try:
+                from .context_engine import call_hook
+                call_hook(self._context_engine, "on_session_start", self)
+            except Exception:  # noqa: BLE001
+                pass
 
     # -- convenience constructor -------------------------------------------
     @classmethod
@@ -169,10 +215,10 @@ class Agent:
         Config-driven (tools.deferred); activation via tool_search is session-sticky."""
         if not self.config.get("tools.defer_schemas", True):
             return set()
-        conf = set(self.config.get("tools.deferred", []) or [])
-        if available is not None:
-            conf &= {t.name for t in available}
-        return conf - self.activated_tools - {"tool_search"}
+        selectors = self.config.get("tools.deferred", []) or []
+        tools = list(available) if available is not None else self.registry.all()
+        names = {t.name for t in tools if _matches_deferred_selector(t, selectors)}
+        return names - self.activated_tools - {"tool_search"}
 
     def _deferred_index_block(self) -> str:
         """Stable system-prompt index of deferred tools. Lists ALL configured deferred
@@ -180,8 +226,8 @@ class Agent:
         keeping the prompt byte-stable for prefix caching."""
         if not self.config.get("tools.defer_schemas", True):
             return ""
-        conf = set(self.config.get("tools.deferred", []) or [])
-        tools = [t for t in self.registry.all() if t.name in conf]
+        selectors = self.config.get("tools.deferred", []) or []
+        tools = [t for t in self.registry.all() if _matches_deferred_selector(t, selectors)]
         if not tools:
             return ""
         lines = "\n".join(f"- {t.name} — {t.description.splitlines()[0]}"
@@ -198,12 +244,14 @@ class Agent:
         deferred = self._deferred_index_block()
         if deferred:
             runtime = f"{runtime}\n\n{deferred}"
-        return self.context_builder.build(
+        built = self.context_builder.build_with_metadata(
             skills_index=skills_index,
             memory_block=memory_block,
             runtime_block=runtime,
             platform=getattr(self, "platform", None),
         )
+        self._last_prompt_metadata = built.metadata()
+        return built.text
 
     def ensure_system_prompt(self, force: bool = False) -> None:
         prompt = self._build_system_prompt()
@@ -211,8 +259,36 @@ class Agent:
         if msgs and msgs[0].role == "system":
             if force:
                 msgs[0] = Message.system(prompt)
+                self._record_prompt_metadata(prompt)
+            else:
+                self._record_prompt_metadata(msgs[0].content, current_build=False)
         else:
             msgs.insert(0, Message.system(prompt))
+            self._record_prompt_metadata(prompt)
+
+    def _record_prompt_metadata(self, prompt_text: str | None = None, *, current_build: bool = True) -> None:
+        import hashlib
+        from ..util import estimate_tokens
+
+        prompt_text = prompt_text if prompt_text is not None else (
+            self.session.messages[0].content
+            if self.session.messages and self.session.messages[0].role == "system" else ""
+        )
+        actual = {
+            "hash": hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()[:16],
+            "chars": len(prompt_text),
+            "tokens": estimate_tokens(prompt_text),
+        }
+        meta = getattr(self, "_last_prompt_metadata", None)
+        parts = []
+        if current_build and isinstance(meta, dict) and meta.get("hash") == actual["hash"]:
+            parts = meta.get("parts", []) or []
+        elif self.session.meta.get("system_prompt_hash") == actual["hash"]:
+            parts = self.session.meta.get("prompt_parts", []) or []
+        self.session.meta["system_prompt_hash"] = actual["hash"]
+        self.session.meta["system_prompt_chars"] = actual["chars"]
+        self.session.meta["system_prompt_tokens"] = actual["tokens"]
+        self.session.meta["prompt_parts"] = parts
 
     def refresh_volatile(self) -> None:
         if self.memory:
@@ -237,6 +313,19 @@ class Agent:
     def cancel(self) -> None:
         """Request the current run to stop at the next safe point (interrupt-aware loop)."""
         self.cancel_event.set()
+        response_id = str(getattr(self, "_active_response_id", "") or "")
+        provider = getattr(self, "provider", None)
+        cancel_response = getattr(provider, "cancel_response", None)
+        if not (response_id and callable(cancel_response)):
+            return
+        if getattr(self, "_active_response_cancelled", "") == response_id:
+            return
+        self._active_response_cancelled = response_id
+        try:
+            import threading
+            threading.Thread(target=lambda: cancel_response(response_id), daemon=True).start()
+        except Exception:  # noqa: BLE001
+            pass
 
     def steer(self, text: str) -> bool:
         """Inject guidance into a run in progress; the loop folds it into the next model call
@@ -274,10 +363,16 @@ class Agent:
         if self.memory:
             self.memory.history.append("user", msg.content, self.session.id)
 
-        before = (self.budget.usage.input_tokens, self.budget.usage.output_tokens)
+        before = (
+            self.budget.usage.input_tokens,
+            self.budget.usage.output_tokens,
+            self.budget.usage.cache_read,
+            self.budget.usage.cache_write,
+        )
         tools_before = self.tools_used
         result = run_conversation(self, on_event)
         tools_this_turn = self.tools_used - tools_before
+        self._update_runtime_meta(tools_this_turn)
 
         # Log this turn's token usage (for `aegis cost` / insights).
         try:
@@ -285,7 +380,8 @@ class Agent:
             from .. import usage_log
             turn = Usage(self.budget.usage.input_tokens - before[0],
                          self.budget.usage.output_tokens - before[1],
-                         self.budget.usage.cache_read, self.budget.usage.cache_write)
+                         self.budget.usage.cache_read - before[2],
+                         self.budget.usage.cache_write - before[3])
             usage_log.log(self.provider.name, self.provider.model, turn)
         except Exception:  # noqa: BLE001
             pass
@@ -312,3 +408,55 @@ class Agent:
         except Exception:  # noqa: BLE001
             pass
         return result
+
+    def _update_runtime_meta(self, tools_this_turn: int = 0) -> None:
+        api_mode = getattr(self.provider, "api_mode", "")
+        api_mode_value = getattr(api_mode, "value", str(api_mode) if api_mode else "")
+        usage = self.budget.usage
+        trace_ctx = getattr(self, "_trace_context", {}) or {}
+        controls = self.session.meta.get("runtime_controls")
+        controls = controls if isinstance(controls, dict) else {}
+        runtime = dict(self.session.meta.get("runtime") or {})
+        runtime.update({
+            "provider": getattr(self.provider, "name", ""),
+            "model": getattr(self.provider, "model", ""),
+            "transport": api_mode_value,
+            "base_url": getattr(self.provider, "base_url", ""),
+            "context_length": getattr(self.provider, "context_length", 0),
+            "reasoning_effort": getattr(self, "reasoning", ""),
+            "reasoning_display": self.config.get("display.reasoning", "summary"),
+            "busy_mode": self.config.get("gateway.busy_mode", "queue"),
+        })
+        runtime.update({k: v for k, v in controls.items()
+                        if k in {"reasoning_effort", "reasoning_display", "busy_mode"}})
+        self.session.meta["runtime"] = runtime
+        self.session.meta["usage"] = {
+            "input_tokens": int(getattr(usage, "input_tokens", 0) or 0),
+            "output_tokens": int(getattr(usage, "output_tokens", 0) or 0),
+            "cache_read": int(getattr(usage, "cache_read", 0) or 0),
+            "cache_write": int(getattr(usage, "cache_write", 0) or 0),
+        }
+        if trace_ctx:
+            self.session.meta["trace_id"] = str(trace_ctx.get("trace_id", ""))
+            self.session.meta["turn_id"] = str(trace_ctx.get("turn_id", ""))
+        self.session.meta["tool_call_count"] = int(self.tools_used)
+        self.session.meta["last_turn_tool_count"] = int(tools_this_turn)
+        try:
+            from ..responses_state import ResponsesStateStore
+            request_state = self.session.meta.get("response_state_request")
+            request_state = request_state if isinstance(request_state, dict) else {}
+            state = ResponsesStateStore().get(self.session.id)
+            if state is not None:
+                self.session.meta["response_state"] = {
+                    "response_id": state.response_id,
+                    "provider": state.provider,
+                    "model": state.model,
+                    "updated_at": state.updated_at,
+                    "previous_response_id": request_state.get("previous_response_id", ""),
+                    "store": bool(request_state.get("store", True)),
+                    "send_previous": bool(request_state.get("send_previous", True)),
+                }
+            elif request_state:
+                self.session.meta.pop("response_state", None)
+        except Exception:  # noqa: BLE001
+            pass

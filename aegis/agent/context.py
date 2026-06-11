@@ -9,12 +9,14 @@ Built once per session (and after compaction) to maximize prefix-cache reuse.
 
 from __future__ import annotations
 
+import hashlib
 import platform
+from dataclasses import dataclass
 from pathlib import Path
 
 from .. import __version__
 from ..config import Config, Workspace
-from ..util import now_local
+from ..util import estimate_tokens, now_local
 
 DEFAULT_IDENTITY = f"""\
 You are AEGIS, a capable, self-improving terminal agent (v{__version__}).
@@ -121,6 +123,36 @@ PLATFORM_HINTS = {
 }
 
 
+@dataclass(frozen=True)
+class PromptPart:
+    tier: str
+    name: str
+    text: str
+
+    def metadata(self) -> dict:
+        return {
+            "tier": self.tier,
+            "name": self.name,
+            "hash": hashlib.sha256(self.text.encode("utf-8")).hexdigest()[:16],
+            "chars": len(self.text),
+            "tokens": estimate_tokens(self.text),
+        }
+
+
+@dataclass(frozen=True)
+class PromptBuild:
+    text: str
+    parts: list[PromptPart]
+
+    def metadata(self) -> dict:
+        return {
+            "hash": hashlib.sha256(self.text.encode("utf-8")).hexdigest()[:16],
+            "chars": len(self.text),
+            "tokens": estimate_tokens(self.text),
+            "parts": [p.metadata() for p in self.parts],
+        }
+
+
 class ContextBuilder:
     def __init__(self, config: Config, workspace: Workspace | None = None, cwd: Path | None = None):
         self.config = config
@@ -157,30 +189,51 @@ class ContextBuilder:
         identity: str | None = None,
         platform: str | None = None,
     ) -> str:
+        return self.build_with_metadata(
+            skills_index=skills_index,
+            memory_block=memory_block,
+            runtime_block=runtime_block,
+            identity=identity,
+            platform=platform,
+        ).text
+
+    def build_with_metadata(
+        self,
+        *,
+        skills_index: str = "",
+        memory_block: str = "",
+        runtime_block: str = "",
+        identity: str | None = None,
+        platform: str | None = None,
+    ) -> PromptBuild:
         # --- stable tier ---
-        stable = [identity or DEFAULT_IDENTITY, AGENTIC_GUIDANCE, AEGIS_CAPABILITIES, TOOL_GUIDANCE]
+        parts = [
+            PromptPart("stable", "identity", identity or DEFAULT_IDENTITY),
+            PromptPart("stable", "agentic_guidance", AGENTIC_GUIDANCE),
+            PromptPart("stable", "aegis_capabilities", AEGIS_CAPABILITIES),
+            PromptPart("stable", "tool_guidance", TOOL_GUIDANCE),
+        ]
         hint = PLATFORM_HINTS.get((platform or "").lower())
         if hint:                                  # channel-specific behavior (gateway mode)
-            stable.append(hint)
+            parts.append(PromptPart("stable", f"platform:{platform}", hint))
         if skills_index:
-            stable.append(skills_index)
+            parts.append(PromptPart("stable", "skills_index", skills_index))
         if runtime_block:
-            stable.append(runtime_block)
+            parts.append(PromptPart("stable", "runtime", runtime_block))
 
         # --- context tier ---
-        context: list[str] = []
         soul = self._persona()
         if soul:
-            context.append("# Persona\n" + soul)
+            parts.append(PromptPart("context", "persona", "# Persona\n" + soul))
         rules = self.workspace.rules()
         if rules:
-            context.append("# Project & global rules\n" + rules)
+            parts.append(PromptPart("context", "project_rules", "# Project & global rules\n" + rules))
 
         # --- volatile tier ---
-        volatile: list[str] = []
         if memory_block:
-            volatile.append(memory_block)
-        volatile.append(self._env_block())
+            parts.append(PromptPart("volatile", "memory", memory_block))
+        parts.append(PromptPart("volatile", "environment", self._env_block()))
 
-        sections = stable + context + volatile
-        return "\n\n---\n\n".join(s.strip() for s in sections if s.strip())
+        kept = [p for p in parts if p.text.strip()]
+        text = "\n\n---\n\n".join(p.text.strip() for p in kept)
+        return PromptBuild(text=text, parts=kept)

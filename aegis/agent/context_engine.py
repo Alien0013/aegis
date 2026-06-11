@@ -8,6 +8,7 @@ compacted history). Select via ``agent.context_engine`` in config.
 
 from __future__ import annotations
 
+import inspect
 from typing import Any, Protocol, runtime_checkable
 
 
@@ -23,6 +24,15 @@ class ContextEngine(Protocol):
 
     def tools(self) -> list:
         """Optional tools this engine exposes to the agent (e.g. query compacted history)."""
+        ...
+
+    def on_session_start(self, agent: Any) -> None:
+        ...
+
+    def on_pre_compress(self, agent: Any, session: Any) -> None:
+        ...
+
+    def on_session_switch(self, agent: Any, old_session: Any, new_session: Any, reason: str = "") -> None:
         ...
 
 
@@ -42,6 +52,15 @@ class DefaultContextEngine:
     def tools(self) -> list:
         return []
 
+    def on_session_start(self, agent: Any) -> None:
+        return None
+
+    def on_pre_compress(self, agent: Any, session: Any) -> None:
+        return None
+
+    def on_session_switch(self, agent: Any, old_session: Any, new_session: Any, reason: str = "") -> None:
+        return None
+
 
 _ENGINES: dict[str, type] = {"default": DefaultContextEngine}
 
@@ -55,3 +74,21 @@ def get_engine(config) -> "ContextEngine":
     """Resolve the configured context engine (falls back to the default)."""
     name = (config.get("agent.context_engine", "default") if config else "default") or "default"
     return _ENGINES.get(name, DefaultContextEngine)()
+
+
+def call_hook(engine: Any, name: str, *args: Any, **kwargs: Any) -> None:
+    """Best-effort optional lifecycle hook call for context engines."""
+
+    fn = getattr(engine, name, None)
+    if not callable(fn):
+        return
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        fn(*args, **kwargs)
+        return
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        fn(*args, **kwargs)
+        return
+    allowed = {k: v for k, v in kwargs.items() if k in params}
+    fn(*args[:len(params)], **allowed)

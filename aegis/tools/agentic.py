@@ -106,7 +106,30 @@ class SubagentTool(Tool):
                 return ToolResult.error(f"no continuable subagent '{args['continue_id']}' "
                                         "(it may have been evicted)")
             try:
-                out = child.run(tasks[0]).content or "(no output)"
+                from ..surface import SurfaceRunner
+
+                runner = SurfaceRunner(config, cwd=ctx.cwd, include_mcp=True)
+                result = runner.run_prompt(
+                    tasks[0],
+                    session=getattr(child, "session", None),
+                    agent=child,
+                    surface="subagent",
+                    meta={
+                        "subagent_id": args["continue_id"],
+                        "agent_type": entry.get("type", atype),
+                        "continuation": True,
+                    },
+                    expand_refs=False,
+                )
+                _register(
+                    args["continue_id"],
+                    status="done",
+                    run_id=result.run_id,
+                    session_id=result.session.id,
+                    trace_id=result.trace_id,
+                    turn_id=result.turn_id,
+                )
+                out = result.text or "(no output)"
                 return ToolResult.ok(out, display=f"continued {args['continue_id']}")
             except Exception as e:  # noqa: BLE001
                 return ToolResult.error(f"subagent continuation failed: {e}")
@@ -134,8 +157,31 @@ class SubagentTool(Tool):
                 child._depth = depth  # type: ignore[attr-defined]
                 if toolsets:
                     child.config.data.setdefault("tools", {})["toolsets"] = toolsets
-                out = (child.run(spec["preamble"] + task).content or "(no output)")
-                _register(sid, status="done", agent=child)   # kept for continue_id follow-ups
+                from ..surface import SurfaceRunner
+
+                runner = SurfaceRunner(config, cwd=ctx.cwd, include_mcp=True)
+                result = runner.run_prompt(
+                    spec["preamble"] + task,
+                    session=getattr(child, "session", None),
+                    agent=child,
+                    surface="subagent",
+                    meta={
+                        "subagent_id": sid,
+                        "agent_type": atype,
+                        "parent_session_id": getattr(getattr(parent, "session", None), "id", ""),
+                    },
+                    expand_refs=False,
+                )
+                out = result.text or "(no output)"
+                _register(
+                    sid,
+                    status="done",
+                    agent=child,   # kept for continue_id follow-ups
+                    run_id=result.run_id,
+                    session_id=result.session.id,
+                    trace_id=result.trace_id,
+                    turn_id=result.turn_id,
+                )
                 ctx.emit_event(type="subagent_done", id=sid, status="done")
                 return sid, out
             except Exception as e:  # noqa: BLE001 - isolate one child's failure

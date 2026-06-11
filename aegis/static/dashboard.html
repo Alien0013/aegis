@@ -129,6 +129,14 @@ table.tbl{width:100%;border-collapse:collapse;font-size:13px}
   text-align:left;padding:6px 10px;border-bottom:1px solid var(--line2)}
 .tbl td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
 .tbl tr:last-child td{border-bottom:0}
+.tbl tr.click{cursor:pointer}
+.tbl tr.click:hover td{background:var(--panel2)}
+.detail-meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.detail-block{background:var(--bg2);border:1px solid var(--line);border-radius:var(--r-sm);
+  padding:10px 12px;max-height:220px;overflow:auto;margin:6px 0 0}
+.detail-block pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.message-card .pill{margin-bottom:8px}
+.message-card .mut{overflow-wrap:anywhere}
 
 /* ---------- chat ---------- */
 .chatwrap{display:flex;flex-direction:column;height:calc(100vh - 130px);max-width:880px;margin:0 auto}
@@ -243,10 +251,24 @@ if(tok)localStorage.aegisToken=tok;
 const withTok=p=>'/api/'+p+(tok?(p.includes('?')?'&':'?')+'token='+encodeURIComponent(tok):'');
 async function api(p){const r=await fetch(withTok(p));if(!r.ok)throw new Error(r.status);return r.json()}
 async function post(p,b){const r=await fetch(withTok(p),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)});return r.json()}
+async function postStream(p,b,onMsg){
+  const r=await fetch(withTok(p),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)});
+  if(!r.ok||!r.body)throw new Error(r.status||'stream');
+  const rd=r.body.getReader(),dec=new TextDecoder();let buf='';
+  while(true){
+    const x=await rd.read();if(x.done)break;buf+=dec.decode(x.value,{stream:true});
+    let i;while((i=buf.indexOf('\n\n'))>=0){const chunk=buf.slice(0,i);buf=buf.slice(i+2);
+      chunk.split(/\n/).filter(l=>l.startsWith('data:')).forEach(l=>{try{onMsg(JSON.parse(l.slice(5).trim()))}catch(_){}});
+    }
+  }
+}
 const esc=s=>(''+(s??'')).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function toast(msg,kind){const t=document.createElement('div');t.className='toast '+(kind||'');t.textContent=msg;
   $('#toasts').appendChild(t);setTimeout(()=>{t.style.opacity=0;setTimeout(()=>t.remove(),300)},3200)}
 function fmt$(n){return '$'+(+n||0).toFixed(n>=1?2:4)}
+function clip(s,n){s=''+(s??'');n=n||1800;return s.length>n?s.slice(0,n)+' ...[truncated]':s}
+function jtxt(v){try{return JSON.stringify(v??{},null,2)}catch(_){return ''+(v??'')}}
+function statusPill(s){s=''+(s||'recorded');const low=s.toLowerCase();const k=/error|fail/.test(low)?' err':/ok|pass|complete|done|recorded/.test(low)?' ok':' acc';return '<span class="pill'+k+'">'+esc(s)+'</span>'}
 /* tiny markdown (headings, bold, italic, inline/blocks code, lists, links) */
 function md(src){
   let s=esc(src||'');
@@ -261,6 +283,10 @@ function md(src){
 }
 const ICONS={
   overview:'<rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/>',
+  cockpit:'<rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/>',
+  traces:'<path d="M4 19c4 0 4-14 8-14s4 14 8 14M4 12h16M6 7h2m8 10h2"/>',
+  runs:'<circle cx="12" cy="12" r="9"/><path d="m10 8 6 4-6 4V8z"/>',
+  agents:'<circle cx="8" cy="8" r="3"/><circle cx="16" cy="8" r="3"/><path d="M3 20c.7-3.2 2.6-5 5-5s4.3 1.8 5 5m-2-4c1-.7 2-1 3-1 2.4 0 4.3 1.8 5 5"/>',
   chat:'<path d="M21 12a8 8 0 0 1-8 8H4l2.4-2.4A8 8 0 1 1 21 12z"/>',
   live:'<path d="M22 12h-4l-3 8L9 4l-3 8H2"/>',
   sessions:'<path d="M8 6h13M8 12h13M8 18h13M3.5 6h0m0 6h0m0 6h0" stroke-linecap="round"/>',
@@ -277,6 +303,9 @@ const ICONS={
   pairing:'<path d="M16 11c1.7 0 3-1.3 3-3s-1.3-3-3-3m-5 3a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM2 20c0-3 2.7-5 6-5s6 2 6 5m2-5c2.8.3 5 2.2 5 5"/>',
   personas:'<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/>',
   analytics:'<path d="M3 21h18M7 17V9m5 8V5m5 12v-6"/>',
+  projects:'<path d="M3 6h7l2 2h9v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z"/>',
+  worktrees:'<circle cx="6" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><circle cx="6" cy="18" r="3"/><path d="M6 9v6m3-9h3a6 6 0 0 1 6 6v3"/>',
+  evals:'<path d="M4 4h16v16H4zM8 12l2.5 2.5L16 9M8 17h8"/>',
   curator:'<path d="m3 6 9-4 9 4-9 4-9-4zm0 6 9 4 9-4M3 18l9 4 9-4"/>',
   logs:'<path d="M4 4h16v16H4zM8 9h8M8 13h8M8 17h5"/>',
   system:'<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8m-4-4v4"/>',
@@ -286,13 +315,13 @@ const ic=n=>'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-w
 
 /* ============ navigation ============ */
 const NAVMAP=[
-  ['', [['overview','Overview'],['chat','Chat'],['live','Live activity']]],
+  ['', [['cockpit','Cockpit'],['traces','Traces'],['runs','Runs'],['agents','Agents'],['chat','Chat'],['live','Live activity']]],
   ['Agent', [['sessions','Sessions'],['memory','Memory'],['skills','Skills'],['tools','Tools']]],
   ['Automation', [['kanban','Kanban'],['cron','Schedules'],['webhooks','Webhooks']]],
   ['Platform', [['models','Models'],['keys','API keys'],['mcp','MCP servers'],['plugins','Plugins'],['pairing','Pairing'],['personas','Personas']]],
-  ['Operations', [['analytics','Analytics'],['curator','Curator'],['logs','Logs'],['system','System'],['config','Config']]],
+  ['Operations', [['projects','Projects'],['worktrees','Worktrees'],['evals','Evals'],['analytics','Analytics'],['curator','Curator'],['logs','Logs'],['system','System'],['config','Config']]],
 ];
-const PAGES={};let current='overview',_es=null;
+const PAGES={};let current='cockpit',_es=null;
 const NAV=$('#nav');
 NAVMAP.forEach(([g,items])=>{
   if(g){const h=document.createElement('div');h.className='ngroup';h.textContent=g;NAV.appendChild(h)}
@@ -313,20 +342,21 @@ function go(id){
 $('#burger').onclick=()=>$('#side').classList.toggle('open');
 
 /* ============ pages ============ */
-PAGES.overview=async()=>{
+PAGES.cockpit=async()=>{
   V.innerHTML='<div class="grid c4" id="tiles"></div><div class="grid c2" style="margin-top:12px">'+
    '<div class="card"><h3 style="margin-top:0">Spend — last 30 days</h3><div id="chart" class="mut">loading…</div></div>'+
    '<div class="card"><h3 style="margin-top:0">Recent sessions</h3><div id="recent">…</div></div></div>';
-  const [s,a,sess]=await Promise.all([api('status'),api('analytics?days=30'),api('sessions')]);
+  const [s,a,sess,runs,agents]=await Promise.all([api('status'),api('analytics?days=30'),api('sessions'),api('runs?limit=20'),api('agents')]);
   $('#tiles').innerHTML=[
-    ['Sessions',s.sessions,''],['Skills',s.skills,'self-improving library'],
-    ['Tools',s.tools,'exec: '+esc(s.exec_mode||'?')],
+    ['Sessions',s.sessions,''],['Runs',(runs.runs||[]).length,'recent activity'],
+    ['Agents',(agents.agents||[]).length,'configured + active'],
     ['Spend / 30d',fmt$(a.total_cost_usd),a.calls+' calls'],
   ].map(([l,v,sub])=>'<div class="card stat"><div class="lbl">'+l+'</div><div class="val">'+v+'</div><div class="sub">'+sub+'</div></div>').join('');
   $('#chart').innerHTML=chartSVG(a.series||[]);
   $('#recent').innerHTML=(sess.slice(0,8).map(x=>'<div class="row click" data-id="'+esc(x.id)+'"><span>'+esc(x.title||x.id)+'</span><span class="pill">'+esc((x.updated_at||'').slice(0,16))+'</span></div>').join(''))||'<div class="empty">no sessions yet — say hello in Chat</div>';
   $('#recent').querySelectorAll('[data-id]').forEach(r=>r.onclick=()=>{go('sessions');setTimeout(()=>openSession(r.dataset.id),60)});
 };
+PAGES.overview=PAGES.cockpit;
 function chartSVG(series){
   if(!series.length)return '<div class="empty">no usage yet</div>';
   const W=460,H=150,P=24,n=series.length,bw=Math.max(2,(W-P)/n-2);
@@ -339,6 +369,89 @@ function chartSVG(series){
     '<text x="'+(W-44)+'" y="12">max '+fmt$(mx)+'</text></svg>';
 }
 
+let traceFilters={session_id:'',status:'',source:''};
+PAGES.traces=async()=>{
+  const q=new URLSearchParams({limit:'80'});
+  if(traceFilters.session_id)q.set('session_id',traceFilters.session_id);
+  if(traceFilters.status)q.set('status',traceFilters.status);
+  if(traceFilters.source)q.set('source',traceFilters.source);
+  const d=await api('traces?'+q.toString()),rows=d.traces||[],filters=(d.summary&&d.summary.filters)||traceFilters;$('#pstat').textContent=(d.source||'')+' · '+rows.length;
+  const sum=fn=>rows.reduce((a,x)=>a+(+fn(x)||0),0);
+  const providers=[...new Set(rows.flatMap(x=>x.providers||[]).filter(Boolean))];
+  const models=[...new Set(rows.flatMap(x=>x.models||[]).filter(Boolean))];
+  V.innerHTML='<div class="grid c4">'+
+    [['Traces',rows.length,d.source||'fallback'],['Provider calls',sum(x=>(x.spans||{}).provider_calls),''],['Tool calls',sum(x=>(x.spans||{}).tool_calls),''],['Compactions',sum(x=>(x.spans||{}).compactions),''],
+     ['Errors',sum(x=>(x.spans||{}).errors),'spans'],['Cache reads',sum(x=>x.cache_read).toLocaleString(),'tokens'],['Cost',fmt$(sum(x=>x.cost)),'estimated'],['Models',models.length,providers.slice(0,2).join(', ')]]
+    .map(([l,v,s])=>'<div class="card stat"><div class="lbl">'+esc(l)+'</div><div class="val">'+esc(v)+'</div><div class="sub">'+esc(s)+'</div></div>').join('')+'</div>'+
+    '<div class="bar" style="margin-top:12px"><input id="tsess" placeholder="session id" value="'+esc(filters.session_id||'')+'"><input id="tstat" placeholder="status" value="'+esc(filters.status||'')+'" style="flex:0 0 140px"><input id="tsrc" placeholder="source" value="'+esc(filters.source||'')+'" style="flex:0 0 160px"><button class="btn" id="tfilter">Filter</button><button class="btn" id="tclear">Clear</button></div>'+
+    '<div class="card" style="margin-top:12px"><table class="tbl"><tr><th>trace</th><th>status</th><th>activity</th><th>provider</th><th>cost/cache</th><th>updated</th></tr>'+
+    (rows.map(x=>{const sp=x.spans||{},id=x.id||x.trace_id||'',mods=(x.models||[]).join(', '),provs=(x.providers||[]).join(', ');return '<tr class="click" data-trace="'+esc(id)+'"><td><b>'+esc(x.title||id||'trace')+'</b><div class="mono mut">'+esc(id)+'</div></td><td>'+statusPill(x.status||x.source||'recorded')+'</td><td>'+esc(sp.span_count||sp.messages||0)+' spans · '+esc(sp.provider_calls||0)+' model · '+esc(sp.tool_calls||0)+' tool · '+esc(sp.compactions||0)+' comp</td><td><div>'+esc(provs||'')+'</div><div class="mono mut">'+esc(mods||'')+'</div></td><td>'+fmt$(x.cost||0)+'<div class="mono mut">'+esc((x.cache_read||0).toLocaleString())+' / '+esc((x.cache_write||0).toLocaleString())+' cache</div></td><td class="mono mut">'+esc((x.updated_at||x.started_at||'').slice(0,16))+'</td></tr>'}).join('')||'<tr><td colspan="6" class="empty">'+esc(d.note||'no traces yet')+'</td></tr>')+
+    '</table></div>';
+  $('#tfilter').onclick=()=>{traceFilters={session_id:$('#tsess').value.trim(),status:$('#tstat').value.trim(),source:$('#tsrc').value.trim()};PAGES.traces()};
+  $('#tclear').onclick=()=>{traceFilters={session_id:'',status:'',source:''};PAGES.traces()};
+  V.querySelectorAll('[data-trace]').forEach(r=>r.onclick=()=>openTrace(r.dataset.trace));
+};
+
+let runFilters={surface:'',status:'',session_id:''};
+PAGES.runs=async()=>{
+  const q=new URLSearchParams({limit:'100'});
+  Object.entries(runFilters).forEach(([k,v])=>{if(v)q.set(k,v)});
+  const d=await api('runs?'+q.toString()),rows=d.runs||[],filters=(d.summary&&d.summary.filters)||runFilters;$('#pstat').textContent=rows.length+' listed';
+  V.innerHTML='<div class="bar"><input id="rsurf" placeholder="surface" value="'+esc(filters.surface||'')+'" style="flex:0 0 160px"><input id="rstat" placeholder="status" value="'+esc(filters.status||'')+'" style="flex:0 0 140px"><input id="rsess" placeholder="session id" value="'+esc(filters.session_id||'')+'"><button class="btn" id="rfilter">Filter</button><button class="btn" id="rclear">Clear</button></div>'+
+  '<div class="card"><table class="tbl"><tr><th>run</th><th>kind</th><th>status</th><th>turns</th><th>tools</th><th>updated</th></tr>'+
+    (rows.map(x=>'<tr class="click" data-run="'+esc(x.id||'')+'"><td><b>'+esc(x.title||x.id)+'</b><div class="mono mut">'+esc(x.id||'')+'</div>'+(x.preview?'<div class="mut">'+esc(x.preview)+'</div>':'')+'</td><td>'+esc(x.kind||'run')+'</td><td>'+statusPill(x.status||'unknown')+'</td><td>'+esc(x.turns||0)+'</td><td>'+esc(x.tool_calls||0)+'</td><td class="mono mut">'+esc((x.updated_at||x.started_at||'').slice(0,16))+'</td></tr>').join('')||'<tr><td colspan="6" class="empty">no runs yet</td></tr>')+
+    '</table></div>';
+  $('#rfilter').onclick=()=>{runFilters={surface:$('#rsurf').value.trim(),status:$('#rstat').value.trim(),session_id:$('#rsess').value.trim()};PAGES.runs()};
+  $('#rclear').onclick=()=>{runFilters={surface:'',status:'',session_id:''};PAGES.runs()};
+  V.querySelectorAll('[data-run]').forEach(r=>r.onclick=()=>openRun(r.dataset.run));
+};
+
+PAGES.agents=async()=>{
+  const d=await api('agents'),agents=d.agents||[],types=d.types||[];$('#pstat').textContent=agents.length+' visible';
+  V.innerHTML='<div class="grid c2">'+
+    '<div class="card"><h3 style="margin-top:0">Agents</h3><table class="tbl"><tr><th>id</th><th>type</th><th>status</th><th>task</th></tr>'+
+    (agents.map(a=>'<tr class="click" data-agent="'+esc(a.id)+'"><td class="mono">'+esc(a.id)+(a.run_id?'<div class="mut">run '+esc(a.run_id)+'</div>':'')+'</td><td>'+esc(a.type||a.kind||'agent')+'</td><td><span class="pill '+(a.status==='error'?'err':a.status==='done'||a.status==='configured'?'ok':'acc')+'">'+esc(a.status||'unknown')+'</span></td><td class="mut">'+esc(a.task||a.preview||a.model||'')+'</td></tr>').join('')||'<tr><td colspan="4" class="empty">no agents visible</td></tr>')+
+    '</table></div><div class="card"><h3 style="margin-top:0">Types</h3>'+
+    (types.map(t=>'<div class="row"><span><b>'+esc(t.name)+'</b> <span class="mut">'+(t.readonly?'read-only':'full')+'</span></span><span class="pill">'+esc(Array.isArray(t.tools)?t.tools.length+' tools':t.tools)+'</span></div>').join('')||'<div class="empty">agent types unavailable</div>')+
+    '</div></div>';
+  V.querySelectorAll('[data-agent]').forEach(r=>r.onclick=()=>openAgent(r.dataset.agent));
+};
+
+async function openAgent(id){
+  if(!id)return;
+  const d=await api('agent?id='+encodeURIComponent(id));
+  if(!d.found){toast(d.error||'agent not found','err');return}
+  const a=d.agent||{},r=d.run||{},trace=d.trace||{},tr=trace.trace||{},sp=trace.spans||[],messages=d.messages||[];
+  const mix=tr.spans||{};
+  $('#ptitle').textContent='Agent detail';$('#pstat').textContent=a.kind||'';
+  V.innerHTML='<div class="phead"><a href="#" id="back">← agents</a></div>'+
+    '<div class="card"><h2>'+esc(a.id||id)+'</h2><div class="detail-meta">'+
+    statusPill(a.status||'recorded')+'<span class="pill">'+esc(a.type||a.kind||'agent')+'</span>'+
+    (a.continuable?'<span class="pill ok">continuable</span>':'')+
+    (a.run_id?'<span class="pill mono">run '+esc(a.run_id)+'</span>':'')+
+    (a.session_id?'<span class="pill mono">session '+esc(a.session_id)+'</span>':'')+
+    (a.trace_id?'<span class="pill mono">trace '+esc(a.trace_id)+'</span>':'')+'</div>'+
+    (a.task?'<h3>Task</h3><div class="detail-block"><pre>'+esc(clip(a.task,1600))+'</pre></div>':'')+
+    (a.preview?'<h3>Preview</h3><div class="detail-block"><pre>'+esc(clip(a.preview,1600))+'</pre></div>':'')+
+    '<div class="detail-meta">'+
+    (a.run_id?'<a href="#" data-run="'+esc(a.run_id)+'">open run</a>':'')+
+    (a.session_id?'<a href="#" data-session="'+esc(a.session_id)+'">open session</a>':'')+
+    (a.trace_id?'<a href="#" data-trace="'+esc(a.trace_id)+'">open trace</a>':'')+
+    '</div></div>'+
+    (r&&r.id?'<div class="card"><h3 style="margin-top:0">Run</h3><div class="detail-meta">'+statusPill(r.status||'recorded')+'<span class="pill">'+esc(r.surface||r.kind||'run')+'</span><span class="pill mono">'+esc(r.id)+'</span></div>'+
+      (r.preview?'<div class="detail-block"><pre>'+esc(clip(r.preview,1200))+'</pre></div>':'')+
+      (r.summary?'<div class="detail-block"><pre>'+esc(clip(r.summary,1200))+'</pre></div>':'')+'</div>':'')+
+    (trace&&trace.found?'<div class="grid c4">'+
+      [['Spans',mix.span_count||sp.length,esc((mix.provider_calls||0)+' model · '+(mix.tool_calls||0)+' tool')],['Latency',esc(tr.duration_ms||tr.latency_ms||0)+' ms',''],['Cost',fmt$(tr.cost||0),'estimated'],['Cache',esc((tr.cache_read||0).toLocaleString())+' / '+esc((tr.cache_write||0).toLocaleString()),'read/write']]
+      .map(([l,v,s])=>'<div class="card stat"><div class="lbl">'+esc(l)+'</div><div class="val">'+esc(v)+'</div><div class="sub">'+esc(s)+'</div></div>').join('')+'</div>'+
+      '<h3>Trace spans</h3>'+spanTable(sp):'')+
+    '<h3>Messages</h3>'+messageCards(messages);
+  $('#back').onclick=e=>{e.preventDefault();PAGES.agents()};
+  V.querySelectorAll('[data-run]').forEach(a=>a.onclick=e=>{e.preventDefault();openRun(a.dataset.run)});
+  V.querySelectorAll('[data-session]').forEach(a=>a.onclick=e=>{e.preventDefault();openSession(a.dataset.session)});
+  V.querySelectorAll('[data-trace]').forEach(a=>a.onclick=e=>{e.preventDefault();openTrace(a.dataset.trace)});
+}
+
 PAGES.chat=()=>{
   V.innerHTML='<div class="chatwrap"><div id="clog"></div>'+
     '<div class="chatbar"><textarea id="cin" rows="1" placeholder="Message AEGIS…  (Enter to send · Shift+Enter for newline)"></textarea>'+
@@ -347,12 +460,36 @@ PAGES.chat=()=>{
   function add(role,text,raw){const w=document.createElement('div');w.className='msg '+role;
     w.innerHTML='<div class="av">'+(role==='user'?'You':'Æ')+'</div><div class="bub">'+(raw?text:md(text))+'</div>';
     log.appendChild(w);log.scrollTop=log.scrollHeight;return w}
+  function chatMeta(r){
+    const links=[];
+    if(r.run_id)links.push('<a href="#" data-run="'+esc(r.run_id)+'">run '+esc(r.run_id.slice(0,12))+'</a>');
+    if(r.trace_id)links.push('<a href="#" data-trace="'+esc(r.trace_id)+'">trace '+esc(r.trace_id.slice(0,12))+'</a>');
+    if(r.session_id)links.push('<a href="#" data-session="'+esc(r.session_id)+'">session '+esc(r.session_id.slice(0,12))+'</a>');
+    const ev=(r.events||[]).filter(e=>['iteration','tool_start','tool_result','compacting','compacted','reasoning_delta','error'].includes(e.type)).slice(-8);
+    const rows=ev.map(e=>'<span class="pill">'+esc(e.type)+(e.name?': '+esc(e.name):'')+(e.summary?': '+esc(e.summary):'')+(e.target?' · '+esc(clip(e.target,80)):'')+'</span>').join('');
+    return (links.length||rows)?'<div class="detail-meta chatmeta">'+links.join(' · ')+(rows?'<div>'+rows+'</div>':'')+'</div>':'';
+  }
+  function bindChatLinks(w){
+    w.querySelectorAll('[data-run]').forEach(a=>a.onclick=e=>{e.preventDefault();openRun(a.dataset.run)});
+    w.querySelectorAll('[data-trace]').forEach(a=>a.onclick=e=>{e.preventDefault();openTrace(a.dataset.trace)});
+    w.querySelectorAll('[data-session]').forEach(a=>a.onclick=e=>{e.preventDefault();openSession(a.dataset.session)});
+  }
+  function renderChatBubble(w,state,busy){
+    const body=busy?'<span class="typing"><i></i><i></i><i></i></span>':md(state.reply||'(no response)');
+    w.querySelector('.bub').innerHTML=body+chatMeta(state);bindChatLinks(w);
+  }
   async function send(){
     const m=inp.value.trim();if(!m)return;inp.value='';inp.style.height='auto';
     add('user',m);
     const w=add('assistant','<span class="typing"><i></i><i></i><i></i></span>',true);
-    try{const r=await post('chat',{message:m,session_id:sid});sid=r.session_id;sessionStorage.aegisChatSid=sid;
-      w.querySelector('.bub').innerHTML=md(r.reply)}catch(e){w.querySelector('.bub').innerHTML='<span class="err">request failed — is a provider configured?</span>'}
+    const state={events:[],reply:'',session_id:sid||'',trace_id:'',turn_id:'',run_id:''};
+    try{await postStream('chat/stream',{message:m,session_id:sid},ev=>{
+      if(ev.type==='start'){state.session_id=ev.session_id||state.session_id}
+      else if(ev.type==='event'&&ev.event){state.events.push(ev.event);renderChatBubble(w,state,true)}
+      else if(ev.type==='final'||ev.type==='error'){Object.assign(state,ev)}
+    });sid=state.session_id;sessionStorage.aegisChatSid=sid;renderChatBubble(w,state,false);
+    }catch(e){try{const r=await post('chat',{message:m,session_id:sid});Object.assign(state,r);sid=r.session_id;sessionStorage.aegisChatSid=sid;renderChatBubble(w,state,false)}
+      catch(_){w.querySelector('.bub').innerHTML='<span class="err">request failed — is a provider configured?</span>'}}
     log.scrollTop=log.scrollHeight;
   }
   $('#csend').onclick=send;
@@ -375,14 +512,81 @@ PAGES.live=()=>{
 
 PAGES.sessions=async()=>{
   const s=await api('sessions');$('#pstat').textContent=s.length+' total';
-  V.innerHTML='<div class="card">'+(s.map(x=>'<div class="row click" data-id="'+esc(x.id)+'"><span>'+esc(x.title||x.id)+'</span><span class="pill">'+esc((x.updated_at||'').slice(0,16))+'</span></div>').join('')||'<div class="empty">no sessions yet</div>')+'</div>';
+  V.innerHTML='<div class="card">'+(s.map(x=>'<div class="row click" data-id="'+esc(x.id)+'"><span>'+esc(x.title||x.id)+' '+(x.parent_id?'<span class="pill">branch</span>':'')+'<div class="mono mut">'+esc(x.id)+'</div></span><span class="pill">'+esc((x.updated_at||'').slice(0,16))+'</span></div>').join('')||'<div class="empty">no sessions yet</div>')+'</div>';
   V.querySelectorAll('[data-id]').forEach(r=>r.onclick=()=>openSession(r.dataset.id));
 };
 async function openSession(id){
   const s=await api('session?id='+encodeURIComponent(id));
-  V.innerHTML='<div class="phead"><a href="#" id="back">← all sessions</a></div>'+
-    s.messages.map(m=>'<div class="card"><div class="pill '+(m.role==='user'?'acc':'')+'" style="margin-bottom:8px">'+esc(m.role)+'</div><div>'+md(m.content)+'</div></div>').join('');
+  const d=s.detail||{},m=d.messages||s.messages||[],kids=d.children||[],met=d.metrics||{},prompt=d.prompt||{};
+  V.innerHTML='<div class="phead"><a href="#" id="back">← all sessions</a><div class="detail-meta"><button class="btn" id="branch">Branch</button><span class="pill mono">'+esc(d.id||id)+'</span></div></div>'+
+    '<div class="card"><h2>'+esc(d.title||id)+'</h2><div class="detail-meta">'+
+    '<span class="pill">'+esc(met.messages||m.length||0)+' messages</span><span class="pill">'+esc(met.tool_calls||0)+' tool calls</span>'+
+    (d.parent?'<a href="#" class="pill" id="parent">parent '+esc(d.parent.title||d.parent.id)+'</a>':'')+
+    '</div></div>'+
+    (kids.length?'<div class="card"><h3 style="margin-top:0">Branches</h3>'+kids.map(c=>'<div class="row click" data-child="'+esc(c.id)+'"><span>'+esc(c.title||c.id)+'</span><span class="pill">'+esc((c.created_at||'').slice(0,16))+'</span></div>').join('')+'</div>':'')+
+    promptAssembly(prompt)+
+    messageCards(m);
   $('#back').onclick=e=>{e.preventDefault();go('sessions')};
+  const p=$('#parent'); if(p)p.onclick=e=>{e.preventDefault();openSession(d.parent.id)};
+  V.querySelectorAll('[data-child]').forEach(r=>r.onclick=()=>openSession(r.dataset.child));
+  $('#branch').onclick=async()=>{const title=(d.title||'session')+' branch';const r=await post('session',{action:'branch',id:d.id||id,title,reason:'dashboard'});if(r.ok){toast('branch created','ok');openSession(r.session_id)}else toast(r.error||'branch failed','err')};
+}
+
+function promptAssembly(prompt){
+  if(!prompt||(!prompt.part_count&&!prompt.hash&&!prompt.preview&&!(prompt.context_references||{}).count))return '';
+  const controls=prompt.runtime_controls||{},runtime=prompt.runtime||{},parts=prompt.parts||[],refs=prompt.context_references||{};
+  const ctrl=Object.keys(controls).map(k=>'<span class="pill">'+esc(k)+': '+esc(controls[k])+'</span>').join('');
+  const run=['provider','model','transport','reasoning_effort','reasoning_display','busy_mode'].filter(k=>runtime[k]).map(k=>'<span class="pill">'+esc(k)+': '+esc(runtime[k])+'</span>').join('');
+  const rows=parts.map(p=>'<tr><td>'+esc(p.tier||'')+'</td><td><b>'+esc(p.name||'')+'</b></td><td class="mono">'+esc(p.hash||'')+'</td><td>'+esc((p.tokens||0).toLocaleString())+'</td><td>'+esc((p.chars||0).toLocaleString())+'</td></tr>').join('');
+  const refRows=(refs.references||[]).map(r=>'<tr><td>'+esc(r.kind||'')+'</td><td class="mono">'+esc(r.raw||'')+'</td><td>'+esc(r.target||'')+'</td><td>'+esc((r.chars||0).toLocaleString())+'</td><td>'+esc(r.warning||'')+'</td></tr>').join('');
+  const refBox=refs.count?'<h4>Context References</h4><div class="detail-meta"><span class="pill">'+esc(refs.count)+' reference(s)</span><span class="pill">'+esc((refs.injected_chars||0).toLocaleString())+' chars injected</span>'+((refs.warnings||[]).length?'<span class="pill err">'+esc((refs.warnings||[]).length)+' warning(s)</span>':'')+'</div><table class="tbl"><tr><th>kind</th><th>raw</th><th>target</th><th>chars</th><th>warning</th></tr>'+(refRows||'<tr><td colspan="5" class="empty">no expanded references</td></tr>')+'</table>':'';
+  return '<h3>Prompt Assembly</h3><div class="grid c4">'+
+    [['Hash',prompt.hash||'',''],['Tokens',(prompt.tokens||0).toLocaleString(),'system prompt'],['Parts',prompt.part_count||parts.length,'layers'],['Chars',(prompt.chars||0).toLocaleString(),'']]
+    .map(([l,v,s])=>'<div class="card stat"><div class="lbl">'+esc(l)+'</div><div class="val">'+esc(v)+'</div><div class="sub">'+esc(s)+'</div></div>').join('')+'</div>'+
+    '<div class="card"><div class="detail-meta">'+(ctrl||run||'<span class="mut">no stored runtime controls</span>')+'</div>'+(ctrl&&run?'<div class="detail-meta">'+run+'</div>':'')+
+    '<table class="tbl"><tr><th>tier</th><th>part</th><th>hash</th><th>tokens</th><th>chars</th></tr>'+(rows||'<tr><td colspan="5" class="empty">no prompt parts recorded</td></tr>')+'</table>'+
+    refBox+
+    (prompt.preview?'<div class="detail-block"><pre>'+esc(clip(prompt.preview,1200))+'</pre></div>':'')+'</div>';
+}
+
+function messageCards(messages){
+  return (messages||[]).map(m=>{
+    const tools=(m.tool_calls||[]).length?'<div class="detail-block"><pre>'+esc(clip(jtxt(m.tool_calls),1200))+'</pre></div>':'';
+    const toolOut=m.name?'<div class="detail-meta"><span class="pill">'+esc(m.name)+'</span>'+(m.tool_call_id?'<span class="pill mono">'+esc(m.tool_call_id)+'</span>':'')+'</div>':'';
+    const reasoning=m.reasoning?'<div class="detail-block"><pre>'+esc(clip(m.reasoning,1200))+'</pre></div>':'';
+    return '<div class="card message-card"><div class="pill '+(m.role==='user'?'acc':m.role==='tool'?'ok':'')+'">'+esc(m.role||'message')+'</div>'+toolOut+
+      '<div class="mut">'+md(m.content||'')+'</div>'+tools+reasoning+'</div>';
+  }).join('')||'<div class="empty">no messages</div>';
+}
+
+function gradeCards(grades){
+  return (grades||[]).map(g=>'<div class="card"><div class="row"><span><b>'+esc(g.name||'grade')+'</b></span><span>'+statusPill(g.passed?'passed':'failed')+'</span></div>'+
+    '<div class="detail-meta"><span class="pill">score '+esc(g.score??'')+'</span>'+(g.reason?'<span class="mut">'+esc(g.reason)+'</span>':'')+'</div>'+
+    (g.details&&Object.keys(g.details).length?'<div class="detail-block"><pre>'+esc(clip(jtxt(g.details),1200))+'</pre></div>':'')+'</div>').join('')||'<div class="empty">no grades</div>';
+}
+
+function spanTable(spans){
+  return '<div class="card"><table class="tbl"><tr><th>span</th><th>status</th><th>target</th><th>parent</th><th>latency</th><th>cache/cost</th><th>data</th></tr>'+
+    ((spans||[]).map(s=>{const d=s.data||{},target=s.tool_name||s.model||s.provider||s.role||'',dur=s.duration_ms||s.latency_ms||d.duration_ms||0;return '<tr><td><b>'+esc(s.kind||'span')+'</b><div class="mono mut">'+esc(s.span_id||'')+'</div></td><td>'+statusPill(s.status||'recorded')+'</td><td>'+esc(target)+'</td><td class="mono mut">'+esc(s.parent_span_id||'')+'</td><td>'+esc(dur)+' ms</td><td>'+fmt$(s.cost||0)+'<div class="mono mut">'+esc(s.cache_read||0)+' / '+esc(s.cache_write||0)+'</div></td><td><div class="detail-block"><pre>'+esc(clip(jtxt(d),1100))+'</pre></div>'+(s.artifact_ref?'<div class="mono mut">'+esc(s.artifact_ref)+'</div>':'')+'</td></tr>'}).join('')||'<tr><td colspan="7" class="empty">no spans</td></tr>')+
+    '</table></div>';
+}
+
+function resultCards(results){
+  return (results||[]).map((r,i)=>'<div class="card"><div class="row"><span><b>'+esc(r.case||r.name||r.id||('result '+(i+1)))+'</b><div class="mono mut">'+esc(r.source||'')+' '+esc(r.id||'')+'</div></span><span>'+statusPill(r.passed?'passed':'failed')+'</span></div>'+
+    '<div class="detail-meta"><span class="pill">score '+esc(r.score??'')+'</span></div>'+
+    ((r.grades||[]).length?'<div class="detail-block"><pre>'+esc(clip(jtxt(r.grades),1600))+'</pre></div>':'')+'</div>').join('')||'<div class="empty">no results</div>';
+}
+
+async function openEval(id){
+  const d=await api('eval?id='+encodeURIComponent(id));
+  if(!d.found){toast(d.error||'eval not found','err');return}
+  const e=d.eval||{},s=d.summary||{},results=d.results||[];
+  V.innerHTML='<div class="phead"><a href="#" id="back">← all evals</a><div class="detail-meta"><span class="pill">'+esc(d.source||'eval')+'</span><span class="pill mono">'+esc(id)+'</span></div></div>'+
+    '<div class="grid c4">'+
+    [['Suite',e.name||e.suite||'eval',''],['Passed',s.passed??e.passed??0,'of '+esc(s.total??e.total??results.length)],['Failed',s.failed??0,''],['Score',s.score??e.score??'','']]
+    .map(([l,v,sub])=>'<div class="card stat"><div class="lbl">'+esc(l)+'</div><div class="val">'+esc(v)+'</div><div class="sub">'+esc(sub)+'</div></div>').join('')+'</div>'+
+    '<h3>Results</h3>'+resultCards(results);
+  $('#back').onclick=e=>{e.preventDefault();go('evals')};
 }
 
 PAGES.memory=async()=>{
@@ -431,7 +635,12 @@ PAGES.cron=async()=>{
   const j=await api('cron');
   V.innerHTML='<div class="phead"><p>Natural schedules (<span class="mono">every 2h</span>, <span class="mono">at 17:00</span>) or cron syntax (<span class="mono">0 9 * * 1</span>).</p></div>'+
     '<div class="bar"><input id="cs" placeholder="schedule" style="flex:0 0 220px"><input id="cp" placeholder="prompt to run…"><button class="btn" id="cadd">Add</button></div><div class="card" id="clist"></div>';
-  $('#clist').innerHTML=j.map(x=>'<div class="row"><span>'+(x.enabled?'▶':'⏸')+' <b class="mono">'+esc(x.schedule)+'</b> — '+esc(x.prompt)+(x.one_shot?' <span class="pill">once</span>':'')+'</span><span><a href="#" data-t="'+x.id+'">toggle</a> · <a href="#" data-r="'+x.id+'" class="err">delete</a></span></div>').join('')||'<div class="empty">no scheduled tasks</div>';
+  $('#clist').innerHTML=j.map(x=>{
+    const hist=(x.history||[]).slice(0,3).map(r=>'<div class="mono mut">run '+esc(r.id)+' · '+esc(r.status||'')+' · '+esc((r.updated_at||r.started_at||'').slice(0,16))+(r.trace_id?' · trace '+esc(r.trace_id):'')+'</div>').join('');
+    return '<div class="row"><span>'+(x.enabled?'▶':'⏸')+' <b class="mono">'+esc(x.schedule)+'</b> — '+esc(x.prompt)+(x.one_shot?' <span class="pill">once</span>':'')+(x.last_status?' <span class="pill">'+esc(x.last_status)+'</span>':'')+
+      '<div class="mut">'+esc(x.run_count||0)+' run(s)'+(x.last_run_id?' <span class="mono">last '+esc(x.last_run_id)+'</span>':'')+'</div>'+hist+'</span><span><a href="#" data-run="'+x.id+'">run now</a> · <a href="#" data-t="'+x.id+'">'+(x.enabled?'pause':'resume')+'</a> · <a href="#" data-r="'+x.id+'" class="err">delete</a></span></div>';
+  }).join('')||'<div class="empty">no scheduled tasks</div>';
+  V.querySelectorAll('a[data-run]').forEach(a=>a.onclick=async e=>{e.preventDefault();const r=await post('cron',{action:'run',id:a.dataset.run});toast(r.ok?('cron run '+(r.run_id||'complete')):(r.error||'cron run failed'),r.ok?'ok':'err');PAGES.cron()});
   V.querySelectorAll('a[data-t]').forEach(a=>a.onclick=async e=>{e.preventDefault();const cur=j.find(x=>x.id===a.dataset.t);await post('cron',{action:'toggle',id:a.dataset.t,enabled:!cur.enabled});PAGES.cron()});
   V.querySelectorAll('a[data-r]').forEach(a=>a.onclick=async e=>{e.preventDefault();await post('cron',{action:'remove',id:a.dataset.r});PAGES.cron()});
   $('#cadd').onclick=async()=>{const s=$('#cs').value.trim(),p=$('#cp').value.trim();if(!s||!p)return;await post('cron',{action:'add',schedule:s,prompt:p});toast('schedule added','ok');PAGES.cron()};
@@ -468,19 +677,54 @@ PAGES.keys=async()=>{
 };
 
 PAGES.mcp=async()=>{
-  const d=await api('mcp');
-  V.innerHTML='<div class="phead"><p>Stdio MCP servers are bridged as <span class="mono">mcp__server__tool</span>. HTTP servers can be added in config.</p></div>'+
+  const [d,cat]=await Promise.all([api('mcp'),api('mcp/catalog')]);
+  const table=c=>'<div class="card"><table class="tbl"><tr><th>server</th><th>transport</th><th>target</th><th>status</th><th>live inventory</th></tr>'+
+    ((c.servers||[]).map(x=>'<tr><td><b>'+esc(x.name)+'</b></td><td>'+esc(x.transport)+'</td><td class="mono mut">'+esc(x.url||((x.command||'')+' '+((x.args||[]).join(' '))))+'</td><td><span class="pill '+(x.status==='error'?'err':'ok')+'">'+esc(x.status||'configured')+'</span></td><td>'+mcpInv(x)+'</td></tr>').join('')||'<tr><td colspan="5" class="empty">no catalog entries</td></tr>')+
+    '</table></div>';
+  const recipes=c=>'<div class="card"><table class="tbl"><tr><th>recipe</th><th>transport</th><th>target</th><th></th></tr>'+
+    ((c.catalog||[]).map(x=>'<tr><td><b>'+esc(x.name)+'</b><div class="mut">'+esc(x.description||'')+'</div></td><td>'+esc(x.transport||'')+'</td><td class="mono mut">'+esc(x.target||'')+'</td><td>'+(x.installed?'<span class="pill ok">installed</span>':'<a href="#" data-i="'+esc(x.name)+'">install</a>')+'</td></tr>').join('')||'<tr><td colspan="4" class="empty">no MCP catalog recipes configured</td></tr>')+
+    '</table></div>';
+  const render=c=>{V.innerHTML='<div class="phead"><p>Stdio MCP servers are bridged as <span class="mono">mcp__server__tool</span>. HTTP servers can be added in config.</p></div>'+
     '<div class="bar"><input id="mn" placeholder="name" style="flex:0 0 170px"><input id="mc" placeholder="command, e.g. npx -y @modelcontextprotocol/server-filesystem /path"><button class="btn" id="madd">Add</button></div><div class="card">'+
-    (d.length?d.map(x=>'<div class="row"><span><b>'+esc(x.name)+'</b> <span class="mono mut">'+esc(x.command)+' '+esc((x.args||[]).join(' '))+'</span></span><a href="#" data-r="'+esc(x.name)+'" class="err">remove</a></div>').join(''):'<div class="empty">no MCP servers configured</div>')+'</div>';
-  V.querySelectorAll('a[data-r]').forEach(a=>a.onclick=async e=>{e.preventDefault();await post('mcp',{action:'remove',name:a.dataset.r});PAGES.mcp()});
-  $('#madd').onclick=async()=>{const n=$('#mn').value.trim(),c=$('#mc').value.trim();if(!n||!c)return;await post('mcp',{action:'add',name:n,command:c});PAGES.mcp()};
+    (d.length?d.map(x=>'<div class="row"><span><b>'+esc(x.name)+'</b> <span class="mono mut">'+esc(x.command)+' '+esc((x.args||[]).join(' '))+'</span></span><a href="#" data-r="'+esc(x.name)+'" class="err">remove</a></div>').join(''):'<div class="empty">no MCP servers configured</div>')+'</div>'+
+    '<h3>Catalog Recipes</h3>'+recipes(c)+
+    '<h3>Configured Inventory</h3><div class="bar"><button class="btn" id="mprobe">Probe live inventory</button><span class="mut">Lists tools, resources, and prompts from running MCP servers.</span></div>'+table(c);
+    V.querySelectorAll('a[data-r]').forEach(a=>a.onclick=async e=>{e.preventDefault();await post('mcp',{action:'remove',name:a.dataset.r});PAGES.mcp()});
+    V.querySelectorAll('a[data-i]').forEach(a=>a.onclick=async e=>{e.preventDefault();const r=await post('mcp',{action:'install',name:a.dataset.i});toast(r.ok?'installed '+a.dataset.i:(r.error||'install failed'),r.ok?'ok':'err');PAGES.mcp()});
+    $('#madd').onclick=async()=>{const n=$('#mn').value.trim(),c=$('#mc').value.trim();if(!n||!c)return;await post('mcp',{action:'add',name:n,command:c});PAGES.mcp()};
+    $('#mprobe').onclick=async()=>{toast('probing MCP servers…');render(await api('mcp/catalog?live=1'))};
+  };
+  render(cat);
 };
+
+function mcpInv(x){
+  if(x.error)return '<span class="err">'+esc(x.error)+'</span>';
+  const tools=(x.tools||[]).map(t=>t.name).filter(Boolean),res=(x.resources||[]).map(r=>r.uri).filter(Boolean),prompts=(x.prompts||[]).map(p=>p.name).filter(Boolean);
+  if(!tools.length&&!res.length&&!prompts.length)return '<span class="mut">not probed</span>';
+  return '<div class="mut">tools '+tools.length+': <span class="mono">'+esc(tools.slice(0,4).join(', '))+'</span></div>'+
+    '<div class="mut">resources '+res.length+': <span class="mono">'+esc(res.slice(0,3).join(', '))+'</span></div>'+
+    '<div class="mut">prompts '+prompts.length+': <span class="mono">'+esc(prompts.slice(0,3).join(', '))+'</span></div>';
+}
 
 PAGES.plugins=async()=>{
   const d=await api('plugins');
-  V.innerHTML='<div class="phead"><p>Drop <span class="mono">*.py</span> exposing <span class="mono">register(api)</span> into <span class="mono">~/.aegis/plugins/</span> — '+d.tools+' tool(s), '+(d.channels||[]).length+' channel(s) registered.</p></div><div class="card">'+
+  const list=(xs)=>((xs||[]).length?'<span class="mono">'+esc(xs.join(', '))+'</span>':'<span class="mut">none</span>');
+  V.innerHTML='<div class="phead"><p>Drop <span class="mono">*.py</span> or manifest plugins exposing <span class="mono">register(api)</span> into <span class="mono">~/.aegis/plugins/</span>.</p></div>'+
+    '<div class="bar"><input id="plsrc" placeholder="local plugin file or directory"><button class="btn" id="plinstall">Install</button></div>'+
+    '<div class="grid cols4"><div class="card stat"><div class="lbl">Tools</div><div class="val">'+d.tools+'</div></div><div class="card stat"><div class="lbl">Channels</div><div class="val">'+(d.channels||[]).length+'</div></div><div class="card stat"><div class="lbl">Providers</div><div class="val">'+(d.providers||[]).length+'</div></div><div class="card stat"><div class="lbl">Errors</div><div class="val">'+(d.errors||[]).length+'</div></div></div>'+
+    '<h3>Extensions</h3><div class="card">'+
+    '<div class="row"><span>tools</span><span>'+list(d.tool_names||[])+'</span></div>'+
+    '<div class="row"><span>channels</span><span>'+list(d.channels||[])+'</span></div>'+
+    '<div class="row"><span>providers</span><span>'+list(d.providers||[])+'</span></div></div>'+
+    '<h3>Manifests</h3><div class="card">'+
+    ((d.manifests||[]).map(m=>'<div class="row"><span><b>'+esc(m.name)+'</b> <span class="mut">'+esc(m.version||'')+'</span><div class="mut">'+esc(m.description||'')+'</div></span><span><span class="pill '+(m.enabled?'ok':'')+'">'+(m.enabled?'enabled':'disabled')+'</span> '+(m.enabled?'<a href="#" data-pdis="'+esc(m.name)+'">disable</a>':'<a href="#" data-pen="'+esc(m.name)+'">enable</a>')+' <a href="#" data-prem="'+esc(m.name)+'" class="err">remove</a></span></div>').join('')||'<div class="empty">no manifest plugins</div>')+'</div>'+
+    '<h3>Loaded files</h3><div class="card">'+
     ((d.loaded||[]).map(f=>'<div class="row"><span class="mono">'+esc(f)+'</span><span class="pill ok">loaded</span></div>').join('')||'<div class="empty">no plugins installed</div>')+
     (d.errors||[]).map(e=>'<div class="row"><span class="mono">'+esc(e.file)+'</span><span class="pill err">'+esc(e.error)+'</span></div>').join('')+'</div>';
+  $('#plinstall').onclick=async()=>{const src=$('#plsrc').value.trim();if(!src)return;const r=await post('plugins',{action:'install',source:src});toast(r.ok?'installed '+r.name:(r.error||'install failed'),r.ok?'ok':'err');PAGES.plugins()};
+  V.querySelectorAll('[data-pen]').forEach(a=>a.onclick=async e=>{e.preventDefault();const r=await post('plugins',{action:'enable',name:a.dataset.pen});toast(r.ok?'enabled':'not found',r.ok?'ok':'err');PAGES.plugins()});
+  V.querySelectorAll('[data-pdis]').forEach(a=>a.onclick=async e=>{e.preventDefault();const r=await post('plugins',{action:'disable',name:a.dataset.pdis});toast(r.ok?'disabled':'not found',r.ok?'ok':'err');PAGES.plugins()});
+  V.querySelectorAll('[data-prem]').forEach(a=>a.onclick=async e=>{e.preventDefault();const r=await post('plugins',{action:'remove',name:a.dataset.prem});toast(r.ok?'removed':'not found',r.ok?'ok':'err');PAGES.plugins()});
 };
 
 PAGES.pairing=async()=>{
@@ -503,6 +747,33 @@ PAGES.personas=async()=>{
     ((d.available||[]).map(n=>'<div class="row"><span>'+esc(n)+'</span><a href="#" data-p="'+esc(n)+'">activate</a></div>').join('')||'<div class="empty">no persona files</div>')+'</div>';
   V.querySelectorAll('a[data-p]').forEach(a=>a.onclick=async e=>{e.preventDefault();await post('profiles',{name:a.dataset.p});toast('persona: '+a.dataset.p,'ok');PAGES.personas()});
   const c=$('#pclr');if(c)c.onclick=async e=>{e.preventDefault();await post('profiles',{name:''});PAGES.personas()};
+};
+
+PAGES.projects=async()=>{
+  const d=await api('projects'),rows=d.projects||[];$('#pstat').textContent=rows.length+' found';
+  V.innerHTML='<div class="card"><table class="tbl"><tr><th>project</th><th>kind</th><th>branch</th><th>activity</th><th>marker</th></tr>'+
+    (rows.map(x=>'<tr><td><b>'+esc(x.name)+'</b><div class="mono mut">'+esc(x.path)+'</div></td><td>'+esc(x.kind||'project')+(x.current?' <span class="pill acc">current</span>':'')+'</td><td class="mono">'+esc(x.branch||'')+'</td><td>'+esc(x.run_count||0)+' runs<div class="mono mut">'+esc((x.surfaces||[]).join(', '))+' '+esc((x.last_run_at||'').slice(0,16))+'</div></td><td>'+esc(x.marker||'')+'</td></tr>').join('')||'<tr><td colspan="5" class="empty">no projects</td></tr>')+
+    '</table></div>';
+};
+
+PAGES.worktrees=async()=>{
+  const d=await api('worktrees'),rows=d.worktrees||[];$('#pstat').textContent=d.available?rows.length+' worktree(s)':'not a git worktree';
+  V.innerHTML='<div class="card"><table class="tbl"><tr><th>path</th><th>branch</th><th>head</th><th>state</th><th>activity</th></tr>'+
+    (rows.map(x=>'<tr><td class="mono">'+esc(x.path)+'</td><td>'+esc(x.branch||'(detached)')+'</td><td class="mono mut">'+esc((x.head||'').slice(0,12))+'</td><td>'+(x.dirty?'<span class="pill err">dirty</span>':'<span class="pill ok">clean</span>')+(x.detached?' <span class="pill">detached</span>':'')+'</td><td>'+esc(x.run_count||0)+' runs<div class="mono mut">'+esc((x.surfaces||[]).join(', '))+' '+esc((x.last_run_at||'').slice(0,16))+'</div></td></tr>').join('')||'<tr><td colspan="5" class="empty">'+esc(d.note||'no worktrees')+'</td></tr>')+
+    '</table></div>';
+};
+
+PAGES.evals=async()=>{
+  const d=await api('evals'),rows=d.evals||[],tr=(d.summary&&d.summary.trajectory)||{};$('#pstat').textContent=d.available?rows.length+' records':'no eval store';
+  V.innerHTML='<div class="bar"><input id="evpath" placeholder="eval suite JSONL path"><button class="btn" id="evrun">Run suite</button></div>'+
+    '<div class="grid c4">'+
+    [['Eval records',(d.summary&&d.summary.records)||0,''],['Trajectories',tr.trajectories||0,''],['Steps',tr.total_steps||0,''],['Tokens',tr.approx_total_tokens||0,'approx']]
+    .map(([l,v,s])=>'<div class="card stat"><div class="lbl">'+esc(l)+'</div><div class="val">'+esc(v)+'</div><div class="sub">'+esc(s)+'</div></div>').join('')+'</div>'+
+    '<div class="card" style="margin-top:12px"><table class="tbl"><tr><th>eval</th><th>status</th><th>score</th><th>source</th></tr>'+
+    (rows.map(x=>{const id=x.id||x.run_id||x.name||x.case||x.task||'';return '<tr class="click" data-eval="'+esc(id)+'"><td><b>'+esc(x.name||x.suite||x.id||x.task||'eval')+'</b><div class="mono mut">'+esc(x.id||'')+'</div></td><td>'+statusPill(x.status||x.result||'recorded')+'</td><td>'+esc(x.score??x.pass_rate??'')+'</td><td class="mono mut">'+esc(x.source||'')+'</td></tr>'}).join('')||'<tr><td colspan="4" class="empty">'+esc(d.note||'no eval records')+'</td></tr>')+
+    '</table></div>';
+  V.querySelectorAll('[data-eval]').forEach(r=>r.onclick=()=>openEval(r.dataset.eval));
+  $('#evrun').onclick=async()=>{const path=$('#evpath').value.trim();if(!path)return;const r=await post('eval',{action:'run',path});if(r.ok){toast('eval '+r.eval.id+' complete','ok');openEval(r.eval.id)}else toast(r.error||'eval failed','err')};
 };
 
 PAGES.analytics=async()=>{
@@ -548,6 +819,65 @@ PAGES.config=async()=>{
   $('#cset').onclick=async()=>{const k=$('#ck').value.trim();if(!k)return;await post('config',{key:k,value:$('#cv').value});toast(k+' set','ok');PAGES.config()};
 };
 
+async function openTrace(id){
+  if(!id)return;
+  const d=await api('trace?id='+encodeURIComponent(id));
+  if(!d.found){toast(d.error||'trace not found','err');return}
+  const t=d.trace||{},sp=d.spans||[],grades=d.grades||[],replay=d.replay||{},steps=replay.steps||[];
+  const mix=t.spans||{};
+  $('#ptitle').textContent='Trace detail';$('#pstat').textContent=d.source||'';
+  V.innerHTML='<div class="phead"><a href="#" id="back">← traces</a></div>'+
+    '<div class="card"><h2>'+esc(t.title||t.trace_id||t.id||id)+'</h2><div class="detail-meta">'+
+    statusPill(t.status||'recorded')+'<span class="pill mono">'+esc(id)+'</span>'+
+    ((t.providers||[]).map(x=>'<span class="pill">'+esc(x)+'</span>').join(''))+
+    ((t.models||[]).map(x=>'<span class="pill mono">'+esc(x)+'</span>').join(''))+
+    (d.evaluation&&'score' in d.evaluation?'<span class="pill">score '+esc(d.evaluation.score)+'</span>':'')+
+    '</div></div>'+
+    '<div class="grid c4">'+
+    [['Status',t.status||'recorded',''],['Spans',mix.span_count||sp.length,esc((mix.provider_calls||0)+' model · '+(mix.tool_calls||0)+' tool')],['Compactions',mix.compactions||0,(mix.errors||0)+' errors'],['Latency',esc(t.duration_ms||t.latency_ms||0)+' ms',''],
+     ['Input',esc((t.input_tokens||0).toLocaleString()),'tokens'],['Output',esc((t.output_tokens||0).toLocaleString()),'tokens'],['Cost',fmt$(t.cost||0),'estimated'],['Cache',esc((t.cache_read||0).toLocaleString())+' / '+esc((t.cache_write||0).toLocaleString()),'read/write']]
+    .map(([l,v,s])=>'<div class="card stat"><div class="lbl">'+esc(l)+'</div><div class="val">'+esc(v)+'</div><div class="sub">'+esc(s)+'</div></div>').join('')+'</div>'+
+    '<h3>Spans</h3>'+spanTable(sp)+
+    (steps.length?'<h3>Replay</h3><div class="card"><table class="tbl"><tr><th>#</th><th>kind</th><th>status</th><th>target</th><th>data</th></tr>'+
+      steps.slice(0,80).map(s=>'<tr><td class="mono mut">'+esc(s.index)+'</td><td>'+esc(s.kind||'step')+'</td><td>'+statusPill(s.status||'recorded')+'</td><td>'+esc(s.tool_name||s.model||s.provider||s.role||'')+'</td><td><div class="detail-block"><pre>'+esc(clip(jtxt(s.data||s),900))+'</pre></div></td></tr>').join('')+'</table></div>':'')+
+    '<h3>Grades</h3>'+gradeCards(grades)+
+    ((d.messages||[]).length?'<h3>Messages</h3>'+messageCards(d.messages):'');
+  $('#back').onclick=e=>{e.preventDefault();PAGES.traces()};
+}
+
+async function openRun(id){
+  if(!id)return;
+  const d=await api('run?id='+encodeURIComponent(id));
+  if(!d.found){toast(d.error||'run not found','err');return}
+  const r=d.run||{},messages=d.messages||[],session=d.session||{},trace=d.trace||{},tr=trace.trace||{},sp=trace.spans||[],grades=trace.grades||[];
+  const mix=tr.spans||{};
+  $('#ptitle').textContent='Run detail';$('#pstat').textContent=r.kind||'';
+  V.innerHTML='<div class="phead"><a href="#" id="back">← runs</a></div>'+
+    '<div class="card"><h2>'+esc(r.title||r.id||id)+'</h2><div class="detail-meta">'+
+    statusPill(r.status||'recorded')+'<span class="pill">'+esc(r.surface||r.kind||'run')+'</span>'+
+    '<span class="pill mono">'+esc(r.id||id)+'</span>'+
+    (r.session_id?'<span class="pill mono">session '+esc(r.session_id)+'</span>':'')+
+    (r.trace_id?'<span class="pill mono">trace '+esc(r.trace_id)+'</span>':'')+
+    '<span class="pill">'+esc(messages.length||0)+' messages</span></div>'+
+    '<div class="detail-meta">'+
+    (r.session_id?'<a href="#" data-session="'+esc(r.session_id)+'">open session</a>':'')+
+    (r.trace_id?'<a href="#" data-trace="'+esc(r.trace_id)+'">open trace</a>':'')+
+    '</div>'+
+    (r.preview?'<h3>Prompt</h3><div class="detail-block"><pre>'+esc(clip(r.preview,1600))+'</pre></div>':'')+
+    (r.summary?'<h3>Result</h3><div class="detail-block"><pre>'+esc(clip(r.summary,1600))+'</pre></div>':'')+
+    (r.error?'<h3>Error</h3><div class="detail-block"><pre class="err">'+esc(clip(r.error,1600))+'</pre></div>':'')+'</div>'+
+    (trace&&trace.found?'<div class="grid c4">'+
+      [['Trace status',tr.status||'recorded',''],['Spans',mix.span_count||sp.length,esc((mix.provider_calls||0)+' model · '+(mix.tool_calls||0)+' tool')],['Latency',esc(tr.duration_ms||tr.latency_ms||0)+' ms',''],['Cost',fmt$(tr.cost||0),'estimated'],
+       ['Cache',esc((tr.cache_read||0).toLocaleString())+' / '+esc((tr.cache_write||0).toLocaleString()),'read/write'],['Input',esc((tr.input_tokens||0).toLocaleString()),'tokens'],['Output',esc((tr.output_tokens||0).toLocaleString()),'tokens'],['Score',(trace.evaluation&&'score' in trace.evaluation)?esc(trace.evaluation.score):'',esc(((tr.models||[])[0])||'')]]
+      .map(([l,v,s])=>'<div class="card stat"><div class="lbl">'+esc(l)+'</div><div class="val">'+esc(v)+'</div><div class="sub">'+esc(s)+'</div></div>').join('')+'</div>'+
+      '<h3>Trace spans</h3>'+spanTable(sp)+
+      '<h3>Grades</h3>'+gradeCards(grades):'')+
+    '<h3>Messages</h3>'+messageCards(messages);
+  $('#back').onclick=e=>{e.preventDefault();PAGES.runs()};
+  V.querySelectorAll('[data-session]').forEach(a=>a.onclick=e=>{e.preventDefault();openSession(a.dataset.session)});
+  V.querySelectorAll('[data-trace]').forEach(a=>a.onclick=e=>{e.preventDefault();openTrace(a.dataset.trace)});
+}
+
 /* ============ command palette ============ */
 const ACTIONS=NAVMAP.flatMap(([g,items])=>items.map(([id,label])=>({id,label,grp:g||'General'})));
 let palSel=0;
@@ -586,7 +916,7 @@ applyTheme(localStorage.aegisTheme||'aegis');
     $('#fmodel').textContent=s.provider+' / '+s.model;
   }catch(e){$('#fver').textContent='API unreachable';toast('cannot reach AEGIS API — check token','err')}
   const want=(location.hash||'').slice(1);
-  go(PAGES[want]?want:'overview');
+  go(PAGES[want]?want:'cockpit');
 })();
 </script>
 </body>

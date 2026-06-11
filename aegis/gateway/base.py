@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import threading
+import time
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -33,6 +35,226 @@ class BasePlatformAdapter:
 
     def send(self, chat_id: str, text: str) -> None:  # pragma: no cover - interface
         raise NotImplementedError
+
+    def _init_inbound_queue(self, dispatch: Dispatch) -> None:
+        self._dispatch = dispatch
+        self._queues: dict[str, list[MessageEvent]] = {}
+        self._workers: dict[str, threading.Thread] = {}
+        self._active: set[str] = set()
+        self._qlock = threading.Lock()
+
+    def _ensure_inbound_queue(self, dispatch: Dispatch | None = None) -> None:
+        if dispatch is not None or not hasattr(self, "_dispatch"):
+            self._dispatch = dispatch or (lambda _ev: "")
+        if not hasattr(self, "_queues"):
+            self._queues = {}
+        if not hasattr(self, "_workers"):
+            self._workers = {}
+        if not hasattr(self, "_active"):
+            self._active = set()
+        if not hasattr(self, "_qlock"):
+            self._qlock = threading.Lock()
+
+    def _conversation_key(self, ev: MessageEvent) -> str:
+        return ev.chat_id
+
+    def _submit_inbound(
+        self,
+        ev: MessageEvent,
+        *,
+        wait: bool = False,
+        raw_text: str | None = None,
+    ) -> str | None:
+        self._ensure_inbound_queue(getattr(self, "_dispatch", None))
+        if self._handle_inbound_control(ev, raw_text=raw_text):
+            return ""
+        done: threading.Event | None = None
+        if wait:
+            done = threading.Event()
+            setattr(ev, "_reply_event", done)
+            setattr(ev, "_reply_inline", True)
+        self._enqueue(ev)
+        if done is None:
+            return None
+        done.wait()
+        return str(getattr(ev, "_reply_text", "") or "")
+
+    def _handle_inbound_control(self, ev: MessageEvent, *, raw_text: str | None = None) -> bool:
+        self._ensure_inbound_queue()
+        text = raw_text if raw_text is not None else ev.text
+        key = self._conversation_key(ev)
+        with self._qlock:
+            worker = self._workers.get(key)
+            busy = bool(worker and worker.is_alive() and key in self._active)
+        if not busy:
+            return False
+        if is_control_interrupt(text):
+            cb = getattr(self, "_interrupt_cb", None)
+            if cb and cb(ev):
+                self._deliver_reply(ev, "🛑 stopped.", None)
+                return True
+        if (text or "").startswith("/steer "):
+            scb = getattr(self, "_steer_cb", None)
+            guidance = (text or "")[len("/steer "):].strip()
+            if scb and scb(ev, guidance):
+                self._deliver_reply(ev, "🧭 steering noted.", None)
+                return True
+        return False
+
+    def _enqueue(self, ev: MessageEvent) -> None:
+        self._ensure_inbound_queue()
+        key = self._conversation_key(ev)
+        if not hasattr(ev, "_queued_at"):
+            setattr(ev, "_queued_at", time.monotonic())
+        with self._qlock:
+            worker = self._workers.get(key)
+            busy = bool(worker and worker.is_alive() and key in self._active)
+        if busy:
+            handled, note = self._apply_busy_mode(ev)
+            if note:
+                self._deliver_reply(ev, note, None)
+            if handled:
+                done = getattr(ev, "_reply_event", None)
+                if done is not None:
+                    setattr(ev, "_reply_text", "")
+                    done.set()
+                return
+        with self._qlock:
+            self._queues.setdefault(key, []).append(ev)
+            worker = self._workers.get(key)
+            if not (worker and worker.is_alive()):
+                worker = threading.Thread(target=self._drain, args=(key,), daemon=True)
+                self._workers[key] = worker
+                worker.start()
+
+    def _apply_busy_mode(self, ev: MessageEvent) -> tuple[bool, str]:
+        config = getattr(self, "_config", None)
+        mode = str(config.get("gateway.busy_mode", "queue")) if config else "queue"
+        handled = False
+        applied = "queue"
+        if mode == "steer":
+            scb = getattr(self, "_steer_cb", None)
+            if scb and scb(ev, ev.text):
+                handled, applied = True, "steer"
+        elif mode == "interrupt":
+            cb = getattr(self, "_interrupt_cb", None)
+            if cb and cb(ev):
+                applied = "interrupt"
+        note = ""
+        if config is not None:
+            from ..firstrun import BUSY_FLAG, busy_hint, is_seen, mark_seen
+            if not is_seen(config, BUSY_FLAG):
+                mark_seen(config, BUSY_FLAG)
+                note = busy_hint(applied)
+        return handled, note
+
+    def _drain(self, key: str) -> None:
+        self._ensure_inbound_queue()
+        while True:
+            with self._qlock:
+                queue = self._queues.get(key) or []
+                ev = queue.pop(0) if queue else None
+                if ev is None:
+                    if self._workers.get(key) is threading.current_thread():
+                        self._workers.pop(key, None)
+                    return
+            state = self._before_dispatch(ev)
+            run_id = self._record_delivery_start(ev)
+            status = "ok"
+            error = ""
+            started = time.monotonic()
+            with self._qlock:
+                self._active.add(key)
+            try:
+                reply = self._dispatch(ev)
+            except Exception as exc:  # noqa: BLE001
+                reply = f"⚠ dispatch failed: {type(exc).__name__}: {exc}"
+                status = "error"
+                error = f"{type(exc).__name__}: {exc}"
+            finally:
+                with self._qlock:
+                    self._active.discard(key)
+            setattr(ev, "_reply_text", reply or "")
+            if not getattr(ev, "_reply_inline", False):
+                try:
+                    self._deliver_reply(ev, reply, state)
+                except Exception as exc:  # noqa: BLE001
+                    status = "error"
+                    error = f"deliver {type(exc).__name__}: {exc}"
+            done = getattr(ev, "_reply_event", None)
+            if done is not None:
+                done.set()
+            self._record_delivery_finish(
+                run_id,
+                status=status,
+                reply=reply or "",
+                error=error,
+                dispatch_ms=int((time.monotonic() - started) * 1000),
+                inline=bool(getattr(ev, "_reply_inline", False)),
+            )
+
+    def _before_dispatch(self, ev: MessageEvent):  # noqa: ANN001
+        return None
+
+    def _deliver_reply(self, ev: MessageEvent, reply: str, state=None) -> None:  # noqa: ANN001
+        if reply:
+            self.deliver(ev.chat_id, reply)
+
+    def _record_delivery_start(self, ev: MessageEvent) -> str:
+        try:
+            from ..runs import RunStore
+
+            queued_at = float(getattr(ev, "_queued_at", time.monotonic()) or time.monotonic())
+            run = RunStore().start(
+                surface="gateway",
+                kind="delivery",
+                title=f"{ev.platform}:{ev.chat_id}",
+                session_id=self._conversation_key(ev),
+                prompt=ev.text,
+                data={
+                    "platform": ev.platform,
+                    "chat_id": ev.chat_id,
+                    "user_id": ev.user_id or "",
+                    "user_name": ev.user_name or "",
+                    "thread_id": ev.thread_id or "",
+                    "attachment_count": len(ev.attachments or []),
+                    "queue_wait_ms": int((time.monotonic() - queued_at) * 1000),
+                    "inline_reply": bool(getattr(ev, "_reply_inline", False)),
+                },
+            )
+            return str(run.get("id") or "")
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def _record_delivery_finish(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        reply: str,
+        error: str,
+        dispatch_ms: int,
+        inline: bool,
+    ) -> None:
+        if not run_id:
+            return
+        try:
+            from ..runs import RunStore
+
+            RunStore().finish(
+                run_id,
+                status=status,
+                result=reply,
+                error=error,
+                data={
+                    "dispatch_ms": dispatch_ms,
+                    "reply_chars": len(reply or ""),
+                    "inline_reply": inline,
+                    "delivery_status": status,
+                },
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     def send_media(self, chat_id: str, path: str, caption: str = "") -> None:
         """Send a file as a native attachment. Default: mention it as text (adapters that

@@ -2,7 +2,8 @@
 
 Implements the lifecycle: initialize -> notifications/initialized -> tools/list ->
 tools/call. Each remote tool is wrapped as an AEGIS ``Tool`` (namespaced
-``mcp__<server>__<tool>``) and registered like any built-in.
+``mcp__<server>__<tool>``) and registered like any built-in. Resource and prompt
+capabilities are exposed as utility tools when a server advertises them.
 
 Config (config.yaml ``mcp.servers`` or ``~/.aegis/mcp.json`` Claude-Desktop format):
 
@@ -36,7 +37,7 @@ class MCPError(RuntimeError):
 class MCPClient:
     def __init__(self, name: str, *, command: str | None = None, args: list[str] | None = None,
                  env: dict | None = None, url: str | None = None, headers: dict | None = None,
-                 cwd: str | None = None):
+                 cwd: str | None = None, tool_filter: dict | None = None):
         self.name = name
         self.command = command
         self.args = args or []
@@ -44,6 +45,7 @@ class MCPClient:
         self.url = url
         self.headers = headers or {}
         self.cwd = cwd
+        self.tool_filter = tool_filter or {}
         self._proc: subprocess.Popen | None = None
         self._id = 0
         self._session_id: str | None = None
@@ -151,7 +153,54 @@ class MCPClient:
 
     def list_tools(self) -> list[dict]:
         resp = self._request("tools/list", {})
-        return (resp or {}).get("result", {}).get("tools", [])
+        tools = (resp or {}).get("result", {}).get("tools", [])
+        return _filter_tools(tools, self.tool_filter)
+
+    def list_resources(self) -> list[dict]:
+        resp = self._request("resources/list", {})
+        return (resp or {}).get("result", {}).get("resources", [])
+
+    def read_resource(self, uri: str) -> str:
+        resp = self._request("resources/read", {"uri": uri})
+        result = (resp or {}).get("result", {})
+        parts: list[str] = []
+        for item in result.get("contents", []):
+            label = item.get("uri") or uri
+            mime = item.get("mimeType") or item.get("mime_type") or ""
+            if "text" in item:
+                header = f'<resource uri="{label}"' + (f' mime="{mime}"' if mime else "") + ">"
+                parts.append(f"{header}\n{item.get('text') or ''}\n</resource>")
+            elif item.get("blob"):
+                size = len(str(item.get("blob") or ""))
+                detail = f"base64 blob, {size} chars"
+                if mime:
+                    detail += f", {mime}"
+                parts.append(f"[resource {label}: {detail}]")
+        return "\n\n".join(parts) or "(empty resource)"
+
+    def list_prompts(self) -> list[dict]:
+        resp = self._request("prompts/list", {})
+        return (resp or {}).get("result", {}).get("prompts", [])
+
+    def get_prompt(self, name: str, arguments: dict | None = None) -> str:
+        resp = self._request("prompts/get", {"name": name, "arguments": arguments or {}})
+        result = (resp or {}).get("result", {})
+        parts: list[str] = []
+        if result.get("description"):
+            parts.append(f"# {result['description']}")
+        for msg in result.get("messages", []):
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                text = content
+            elif isinstance(content, dict):
+                text = _render_prompt_content(content)
+            elif isinstance(content, list):
+                text = "\n".join(_render_prompt_content(block) for block in content)
+            else:
+                text = str(content)
+            parts.append(f"<{role}>\n{text}\n</{role}>")
+        return "\n\n".join(parts) or "(empty prompt)"
 
     def call_tool(self, name: str, arguments: dict) -> tuple[str, bool]:
         resp = self._request("tools/call", {"name": name, "arguments": arguments}, )
@@ -190,6 +239,8 @@ class MCPTool(Tool):
         self._client = client
         self._remote = tool_def["name"]
         self.name = f"mcp__{client.name}__{tool_def['name']}"
+        self.source = "mcp"
+        self.server_name = client.name
         self.description = tool_def.get("description", "") or f"MCP tool {self._remote}"
         self.parameters = tool_def.get("inputSchema") or {"type": "object", "properties": {}}
 
@@ -200,6 +251,82 @@ class MCPTool(Tool):
             return ToolResult.error(f"mcp call failed: {e}")
         return ToolResult(content=truncate(content, 30_000), is_error=is_err,
                           display=f"mcp:{self._client.name}/{self._remote}")
+
+
+class MCPReadResourceTool(Tool):
+    groups = ["network"]
+    toolset = "mcp"
+
+    def __init__(self, client: MCPClient, resources: list[dict]):
+        self._client = client
+        self.name = f"mcp__{client.name}__read_resource"
+        self.source = "mcp"
+        self.server_name = client.name
+        preview = _capability_preview(resources, "uri")
+        self.description = (
+            f"Read an MCP resource from server '{client.name}' by URI."
+            + (f" Available resources include: {preview}." if preview else "")
+        )
+        self.parameters = {
+            "type": "object",
+            "properties": {
+                "uri": {"type": "string", "description": "Resource URI from resources/list."},
+            },
+            "required": ["uri"],
+        }
+
+    def run(self, args, ctx: ToolContext) -> ToolResult:
+        try:
+            content = self._client.read_resource(str(args.get("uri", "")))
+        except Exception as e:  # noqa: BLE001
+            return ToolResult.error(f"mcp resource read failed: {e}")
+        return ToolResult.ok(
+            truncate(content, 30_000),
+            display=f"mcp:{self._client.name}/resource",
+            data={"artifact_ref": str(args.get("uri", "")), "server": self._client.name},
+        )
+
+
+class MCPGetPromptTool(Tool):
+    groups = ["network"]
+    toolset = "mcp"
+
+    def __init__(self, client: MCPClient, prompts: list[dict]):
+        self._client = client
+        self.name = f"mcp__{client.name}__get_prompt"
+        self.source = "mcp"
+        self.server_name = client.name
+        preview = _capability_preview(prompts, "name")
+        self.description = (
+            f"Render an MCP prompt template from server '{client.name}' by name."
+            + (f" Available prompts include: {preview}." if preview else "")
+        )
+        self.parameters = {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Prompt name from prompts/list."},
+                "arguments": {
+                    "type": "object",
+                    "description": "Prompt arguments keyed by argument name.",
+                    "additionalProperties": True,
+                },
+            },
+            "required": ["name"],
+        }
+
+    def run(self, args, ctx: ToolContext) -> ToolResult:
+        try:
+            content = self._client.get_prompt(
+                str(args.get("name", "")),
+                args.get("arguments") if isinstance(args.get("arguments"), dict) else {},
+            )
+        except Exception as e:  # noqa: BLE001
+            return ToolResult.error(f"mcp prompt render failed: {e}")
+        return ToolResult.ok(
+            truncate(content, 30_000),
+            display=f"mcp:{self._client.name}/prompt",
+            data={"server": self._client.name, "prompt": str(args.get("name", ""))},
+        )
 
 
 class MCPManager:
@@ -216,6 +343,18 @@ class MCPManager:
                 client.connect()
                 for td in client.list_tools():
                     tools.append(MCPTool(client, td))
+                try:
+                    resources = client.list_resources()
+                except Exception:  # noqa: BLE001
+                    resources = []
+                if resources:
+                    tools.append(MCPReadResourceTool(client, resources))
+                try:
+                    prompts = client.list_prompts()
+                except Exception:  # noqa: BLE001
+                    prompts = []
+                if prompts:
+                    tools.append(MCPGetPromptTool(client, prompts))
             except Exception as e:  # noqa: BLE001
                 print(f"  ! MCP server '{client.name}' failed: {e}")
         return tools
@@ -236,6 +375,75 @@ def _server_configs(config) -> dict:
         except json.JSONDecodeError:
             pass
     return servers
+
+
+def catalog(config) -> list[dict]:
+    """Configured MCP catalog entries.
+
+    The catalog is intentionally local/config-backed: users and distributions can
+    ship known server recipes without requiring a network marketplace.
+    """
+    out = []
+    for entry in config.get("mcp.catalog", []) or []:
+        if isinstance(entry, dict) and entry.get("name") and (entry.get("command") or entry.get("url")):
+            out.append(dict(entry))
+    return out
+
+
+def install_from_catalog(config, name: str) -> dict:
+    entries = {e["name"]: e for e in catalog(config)}
+    entry = entries.get(name)
+    if not entry:
+        raise KeyError(name)
+    servers = dict(config.get("mcp.servers", {}) or {})
+    spec = {k: v for k, v in entry.items()
+            if k in {"command", "args", "env", "url", "headers", "cwd", "tool_filter"}}
+    servers[name] = spec
+    config.data.setdefault("mcp", {})["servers"] = servers
+    config.save()
+    return spec
+
+
+def _filter_tools(tools: list[dict], tool_filter: dict | None) -> list[dict]:
+    filt = tool_filter or {}
+    include = set(filt.get("include") or [])
+    exclude = set(filt.get("exclude") or [])
+    if not include and not exclude:
+        return tools
+    out = []
+    for tool in tools:
+        name = tool.get("name", "")
+        if include and name not in include:
+            continue
+        if exclude and name in exclude:
+            continue
+        out.append(tool)
+    return out
+
+
+def _capability_preview(items: list[dict], key: str, limit: int = 8) -> str:
+    values = [str(item.get(key, "")).strip() for item in items if item.get(key)]
+    shown = values[:limit]
+    suffix = " ..." if len(values) > limit else ""
+    return ", ".join(shown) + suffix
+
+
+def _render_prompt_content(content) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, dict):
+        return str(content)
+    ctype = content.get("type", "")
+    if ctype == "text":
+        return str(content.get("text", ""))
+    if ctype == "resource":
+        res = content.get("resource") or {}
+        return res.get("text") or f"[resource {res.get('uri', '')}]"
+    if ctype == "image":
+        return "[image content]"
+    if ctype == "audio":
+        return "[audio content]"
+    return f"[{ctype or 'unknown'} content]"
 
 
 def _looks_like_server_spec(value: object) -> bool:
@@ -264,7 +472,7 @@ def build_manager(config) -> MCPManager:
         mgr.add(MCPClient(
             name, command=spec.get("command"), args=spec.get("args"),
             env=spec.get("env"), url=spec.get("url"), headers=spec.get("headers"),
-            cwd=spec.get("cwd"),
+            cwd=spec.get("cwd"), tool_filter=spec.get("tool_filter"),
         ))
     return mgr
 

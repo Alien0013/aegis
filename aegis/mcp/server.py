@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
+from types import SimpleNamespace
 
 PROTOCOL_VERSION = "2025-06-18"
 
@@ -21,10 +23,40 @@ def run_mcp_server(config) -> None:
     from ..tools.base import ToolContext
     from ..tools.permissions import PermissionEngine
     from ..tools.registry import default_registry
+    from ..memory import MemoryManager
+    from ..session import Session, SessionStore
+    from ..skills import SkillsLoader
 
     registry = default_registry()
     permissions = PermissionEngine(config)
-    ctx = ToolContext(config=config)
+    cwd = Path.cwd()
+    store = SessionStore()
+    session = store.load("mcp:stdio") or Session(id="mcp:stdio", title="MCP stdio")
+    skills = SkillsLoader(config, cwd=cwd)
+    memory = MemoryManager(config) if config.get("memory.enabled", True) else None
+    toolsets = list(config.get("tools.toolsets", []) or ["core"])
+    visible_tools = {tool.name: tool for tool in registry.available(toolsets)}
+    agent = SimpleNamespace(
+        config=config,
+        session=session,
+        registry=registry,
+        memory=memory,
+        skills=skills,
+        cwd=cwd,
+        provider=None,
+        tools_used=0,
+        _trace_context={},
+        deferred_tool_names=lambda available=None: set(),
+        activated_tools=set(),
+    )
+    ctx = ToolContext(
+        cwd=cwd,
+        config=config,
+        memory=memory,
+        skills=skills,
+        session=session,
+        agent=agent,
+    )
 
     for line in sys.stdin:
         line = line.strip()
@@ -45,7 +77,7 @@ def run_mcp_server(config) -> None:
             continue
         elif method == "tools/list":
             tools = [{"name": t.name, "description": t.description.strip(),
-                      "inputSchema": t.parameters} for t in registry.all()]
+                      "inputSchema": t.parameters} for t in visible_tools.values()]
             _send({"jsonrpc": "2.0", "id": mid, "result": {"tools": tools}})
         elif method == "resources/list":
             # expose skills + memory as readable resources
@@ -77,7 +109,7 @@ def run_mcp_server(config) -> None:
                 {"role": "user", "content": {"type": "text", "text": body}}]}})
         elif method == "tools/call":
             params = msg.get("params", {})
-            tool = registry.get(params.get("name", ""))
+            tool = visible_tools.get(params.get("name", ""))
             if tool is None:
                 _send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32602, "message": "unknown tool"}})
                 continue
@@ -89,6 +121,7 @@ def run_mcp_server(config) -> None:
                 continue
             try:
                 res = tool.run(params.get("arguments", {}), ctx)
+                store.save(session)
                 _send({"jsonrpc": "2.0", "id": mid, "result": {
                     "content": [{"type": "text", "text": res.content}], "isError": res.is_error}})
             except Exception as e:  # noqa: BLE001

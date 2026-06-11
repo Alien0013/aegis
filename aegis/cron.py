@@ -117,6 +117,12 @@ class CronStore:
     def list(self) -> list[CronJob]:
         return [CronJob(**j) for j in self._load()]
 
+    def get(self, job_id: str) -> CronJob | None:
+        for job in self.list():
+            if job.id == job_id or job.id.startswith(job_id):
+                return job
+        return None
+
     def add(self, schedule: str, prompt: str, channel: str = "", script: str = "",
             skills: list[str] | None = None, deliver: str = "") -> CronJob:
         run_at = _parse_oneshot(schedule, time.time()) or 0.0
@@ -153,43 +159,93 @@ class CronStore:
         self._save(jobs)
 
 
-def tick(config, sink=None, store: "CronStore | None" = None, verbose: bool = True) -> int:
+def run_job(config, job: CronJob | str, *, sink=None, store: "CronStore | None" = None,
+            runner=None, verbose: bool = True, mark: bool = True) -> dict:
+    """Run one cron job immediately using the same path as the scheduler."""
+    from .surface import SurfaceRunner
+
+    store = store or CronStore()
+    if isinstance(job, str):
+        found = store.get(job)
+        if found is None:
+            return {"ok": False, "error": f"cron job not found: {job}"}
+        job = found
+    runner = runner or SurfaceRunner(config, include_mcp=True)
+    now = time.time()
+    if verbose:
+        print(f"  ▸ running cron {job.id}: {job.prompt[:60]}")
+    from .automation import build_prompt, delivery_targets, is_silent
+    targets = delivery_targets(job.deliver) or ([job.channel] if job.channel else [])
+    first_target = targets[0] if targets else ""
+    platform, _, chat_id = first_target.partition(":")
+    session = runner.load_or_create_session(
+        f"cron:{job.id}",
+        title=f"cron {job.id}",
+        surface="cron",
+        meta={"cron_job_id": job.id, "cron_schedule": job.schedule},
+    )
+    agent = runner.make_agent(
+        session=session,
+        platform=platform if platform and chat_id else None,
+        chat_id=chat_id if platform and chat_id else None,
+        include_mcp=True,
+    )
+    # Headless approval policy for scheduled jobs (à la cron_mode): 'deny' (default, safe —
+    # dangerous tools blocked since nobody can approve) or 'approve' (auto-run, for trusted jobs).
+    if config and config.get("cron.approval", "deny") == "approve":
+        agent.permissions._mode_override = "auto"
+    prompt = build_prompt(job.prompt, skills=job.skills, script=job.script)
+    try:
+        result = runner.run_prompt(
+            prompt,
+            session=session,
+            agent=agent,
+            surface="cron",
+            meta={"cron_job_id": job.id, "cron_schedule": job.schedule},
+            platform=platform if platform and chat_id else None,
+            chat_id=chat_id if platform and chat_id else None,
+        )
+        reply = result.text
+        delivered = 0
+        if sink and not is_silent(reply):
+            for target in targets:
+                sink(target, reply)
+                delivered += 1
+        out = {
+            "ok": True,
+            "job_id": job.id,
+            "run_id": result.run_id,
+            "session_id": result.session.id,
+            "trace_id": result.trace_id,
+            "turn_id": result.turn_id,
+            "reply": reply,
+            "delivered": delivered,
+            "targets": targets,
+        }
+    except Exception as e:  # noqa: BLE001
+        if verbose:
+            print(f"    cron error: {e}")
+        out = {"ok": False, "job_id": job.id, "error": str(e), "targets": targets}
+    if mark:
+        store.mark_run(job.id, now)
+    return out
+
+
+def tick(config, sink=None, store: "CronStore | None" = None, verbose: bool = True,
+         runner=None) -> int:
     """Run every due job once. ``sink(channel, text)`` delivers output. Returns jobs run.
 
     Shared by the standalone scheduler and the in-gateway ticker so cron fires whether or not
     a separate daemon is running."""
-    from .agent.agent import Agent
-    from .session import Session
+    from .surface import SurfaceRunner
 
     store = store or CronStore()
+    runner = runner or SurfaceRunner(config, include_mcp=True)
     now = time.time()
     ran = 0
     for job in store.list():
         if is_due(job, now):
-            if verbose:
-                print(f"  ▸ running cron {job.id}: {job.prompt[:60]}")
-            agent = Agent.create(config, session=Session.create())
-            from .automation import build_prompt, delivery_targets, is_silent
-            targets = delivery_targets(job.deliver) or ([job.channel] if job.channel else [])
-            first_target = targets[0] if targets else ""
-            platform, _, chat_id = first_target.partition(":")
-            if platform and chat_id:
-                agent.platform = platform
-                agent.chat_id = chat_id
-            # Headless approval policy for scheduled jobs (à la cron_mode): 'deny' (default, safe —
-            # dangerous tools blocked since nobody can approve) or 'approve' (auto-run, for trusted jobs).
-            if config and config.get("cron.approval", "deny") == "approve":
-                agent.permissions._mode_override = "auto"
-            prompt = build_prompt(job.prompt, skills=job.skills, script=job.script)
-            try:
-                reply = agent.run(prompt).content
-                # [SILENT]/empty -> deliver nothing (monitors only notify on real change).
-                if sink and not is_silent(reply):
-                    for target in targets:
-                        sink(target, reply)
-            except Exception as e:  # noqa: BLE001
-                print(f"    cron error: {e}")
-            store.mark_run(job.id, now)
+            run_job(config, job, sink=sink, store=store, runner=runner, verbose=verbose)
             ran += 1
     return ran
 
@@ -239,12 +295,14 @@ def build_delivery_sink(config, *, verbose: bool = True):
 def run_scheduler(config, sink=None, poll: int = 30) -> None:
     """Blocking loop that runs due jobs. ``sink(channel, text)`` delivers output."""
     store = CronStore()
+    from .surface import SurfaceRunner
+    runner = SurfaceRunner(config, include_mcp=True)
     if sink is None:
         sink = build_delivery_sink(config)
     print(f"AEGIS cron scheduler running (poll {poll}s, {len(store.list())} jobs). Ctrl+C to stop.")
     try:
         while True:
-            tick(config, sink=sink, store=store)
+            tick(config, sink=sink, store=store, runner=runner)
             time.sleep(poll)
     except KeyboardInterrupt:
         print("\nscheduler stopped.")

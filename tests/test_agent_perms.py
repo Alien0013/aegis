@@ -30,15 +30,120 @@ def test_loop_multi_tool_then_final(tmp_path):
 
 
 def test_loop_budget_exhaustion_grace(tmp_path):
-    from aegis.types import LLMResponse, ToolCall
+    from aegis.tracing import TraceStore
+    from aegis.types import LLMResponse, ToolCall, Usage
     # always returns a tool call -> never finishes -> grace call
-    forever = [LLMResponse(text="", tool_calls=[ToolCall(f"c{i}", "list_dir", {"path": "."})])
-               for i in range(60)]
-    agent = _agent(tmp_path, forever)
+    script = [
+        LLMResponse(text="", tool_calls=[ToolCall(f"c{i}", "list_dir", {"path": "."})])
+        for i in range(3)
+    ] + [LLMResponse(text="summary", usage=Usage(input_tokens=5, output_tokens=2, cache_read=1))]
+    agent = _agent(tmp_path, script)
     agent.budget.max_iterations = 3
     events = []
-    agent.run("loop", events.append)
+    out = agent.run("loop", events.append)
     assert any(e["type"] == "budget_exhausted" for e in events)
+    assert out.content == "summary"
+    assert agent.budget.usage.input_tokens == 5
+    trace = TraceStore.from_config(agent.config).get_trace(agent._trace_context["trace_id"])
+    providers = [s for s in trace["spans"] if s["kind"] == "provider_call"]
+    assert trace["provider_calls"] == 4
+    assert providers[-1]["data"]["grace"] is True
+    assert providers[-1]["data"]["reason"] == "budget_exhausted"
+    assert providers[-1]["data"]["tool_schema_count"] == 0
+    assert providers[-1]["cache_read"] == 1
+
+
+def test_budget_grace_preserves_responses_state(tmp_path):
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.responses_state import ResponsesStateStore
+    from aegis.session import Session
+    from aegis.types import LLMResponse, ToolCall
+
+    class CapturingProvider:
+        name = "fake"
+        model = "fake-model"
+        api_mode = "responses"
+        context_length = 200_000
+
+        def __init__(self):
+            self.calls = []
+
+        def describe(self):
+            return "fake"
+
+        def complete(self, messages, tools=None, stream=False, on_delta=None,
+                     session_id=None, response_state=None, reasoning="off", metadata=None):
+            self.calls.append({
+                "tools": tools,
+                "session_id": session_id,
+                "response_state": dict(response_state or {}),
+                "reasoning": reasoning,
+                "metadata": dict(metadata or {}),
+            })
+            if len(self.calls) == 1:
+                return LLMResponse(text="", tool_calls=[ToolCall("c1", "list_dir", {"path": "."})])
+            return LLMResponse(text="summary")
+
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = False
+    cfg.data.setdefault("responses", {})["state"] = {
+        "enabled": True,
+        "store": True,
+        "send_previous": True,
+    }
+    session = Session.create()
+    ResponsesStateStore().set(session.id, "resp_before", provider="openai", model="gpt-5")
+    provider = CapturingProvider()
+    agent = Agent(config=cfg, provider=provider, session=session, cwd=tmp_path)
+    agent.budget.max_iterations = 1
+
+    out = agent.run("loop")
+
+    assert out.content == "summary"
+    grace = provider.calls[-1]
+    assert grace["tools"] is None
+    assert grace["session_id"] == session.id
+    assert grace["response_state"]["previous_response_id"] == "resp_before"
+    assert grace["metadata"]["session_id"] == session.id
+    assert grace["metadata"]["trace_id"].startswith("trace_")
+    assert grace["metadata"]["turn_id"].startswith("turn_")
+
+
+def test_agent_cancel_best_effort_cancels_active_provider_response(tmp_path):
+    import threading
+
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.session import Session
+
+    class Provider:
+        name = "fake"
+        model = "fake-model"
+        api_mode = "responses"
+        context_length = 200_000
+
+        def __init__(self):
+            self.cancelled = []
+            self.event = threading.Event()
+
+        def describe(self):
+            return "fake"
+
+        def cancel_response(self, response_id):
+            self.cancelled.append(response_id)
+            self.event.set()
+            return {"id": response_id, "status": "cancelled"}
+
+    provider = Provider()
+    agent = Agent(config=Config.load(), provider=provider, session=Session.create(), cwd=tmp_path)
+    agent._active_response_id = "resp_active"
+
+    agent.cancel()
+
+    assert agent.cancel_event.is_set()
+    assert provider.event.wait(2)
+    assert provider.cancelled == ["resp_active"]
 
 
 def test_governance_normalizes():

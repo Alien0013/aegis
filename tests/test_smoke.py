@@ -145,6 +145,7 @@ def test_agent_loop_runs(tmp_path, monkeypatch):
     from aegis.agent.agent import Agent
     from aegis.config import Config
     from aegis.session import Session
+    from aegis.tracing import TraceStore
 
     cfg = Config.load()
     agent = Agent(config=cfg, provider=_FakeProvider(), session=Session.create(), cwd=tmp_path)
@@ -152,7 +153,20 @@ def test_agent_loop_runs(tmp_path, monkeypatch):
     result = agent.run("list the directory", on_event=events.append)
     assert result.content == "done."
     assert any(e["type"] == "tool_result" for e in events)
+    tool_event = next(e for e in events if e["type"] == "tool_result")
+    assert {"preview", "duration_ms", "artifact_ref", "classification"} <= set(tool_event)
+    assert isinstance(tool_event["duration_ms"], int)
     assert any(e["type"] == "final" for e in events)
+    trace = TraceStore.from_config(cfg).get_trace(agent._trace_context["trace_id"])
+    provider_span = next(s for s in trace["spans"] if s["kind"] == "provider_call")
+    tool_span = next(s for s in trace["spans"] if s["kind"] == "tool")
+    assert provider_span["data"]["tool_schema_count"] > 0
+    assert provider_span["data"]["context_length"] == _FakeProvider.context_length
+    assert "list_dir" in provider_span["data"]["tool_schema_names"]
+    assert tool_span["tool_name"] == "list_dir"
+    assert tool_span["data"]["preview"]
+    assert tool_span["data"]["is_error"] is False
+    assert isinstance(tool_span["data"]["duration_ms"], int)
 
 
 def test_agent_system_prompt_includes_runtime_auth(tmp_path):
@@ -170,6 +184,37 @@ def test_agent_system_prompt_includes_runtime_auth(tmp_path):
     assert "transport: responses" in prompt
     assert "auth: oauth (openai-codex: logged in) (ready)" in prompt
     assert "system_status" in prompt
+    agent.ensure_system_prompt()
+    meta = agent.session.meta
+    assert meta["system_prompt_hash"] and meta["system_prompt_chars"] == len(agent.session.messages[0].content)
+    parts = meta["prompt_parts"]
+    names = {p["name"] for p in parts}
+    assert {"identity", "agentic_guidance", "aegis_capabilities", "tool_guidance", "runtime", "environment"} <= names
+    assert all({"tier", "name", "hash", "chars", "tokens"} <= set(p) for p in parts)
+
+
+def test_system_prompt_metadata_matches_stored_prompt_on_nonforced_ensure(tmp_path):
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.session import Session
+
+    cfg = Config.load()
+    agent = Agent(config=cfg, provider=_RuntimeProvider(), session=Session.create(), cwd=tmp_path)
+    agent.platform = "telegram"
+    agent.ensure_system_prompt()
+    original = agent.session.messages[0].content
+    original_hash = agent.session.meta["system_prompt_hash"]
+    original_parts = list(agent.session.meta["prompt_parts"])
+    assert any(p["name"] == "platform:telegram" for p in original_parts)
+
+    agent.platform = "discord"
+    agent.ensure_system_prompt(force=False)
+
+    assert agent.session.messages[0].content == original
+    assert agent.session.meta["system_prompt_hash"] == original_hash
+    assert agent.session.meta["system_prompt_chars"] == len(original)
+    assert agent.session.meta["prompt_parts"] == original_parts
+    assert not any(p["name"] == "platform:discord" for p in agent.session.meta["prompt_parts"])
 
 
 def test_system_status_tool_reports_runtime_without_tokens(tmp_path, monkeypatch):
@@ -378,11 +423,34 @@ def test_mcp_client_roundtrip(tmp_path):
         "    if meth=='initialize': s({'jsonrpc':'2.0','id':mid,'result':{'protocolVersion':'2025-06-18','capabilities':{'tools':{}},'serverInfo':{'name':'t','version':'1'}}})\n"
         "    elif meth=='tools/list': s({'jsonrpc':'2.0','id':mid,'result':{'tools':[{'name':'ping','description':'p','inputSchema':{'type':'object','properties':{}}}]}})\n"
         "    elif meth=='tools/call': s({'jsonrpc':'2.0','id':mid,'result':{'content':[{'type':'text','text':'pong'}],'isError':False}})\n"
+        "    elif meth=='resources/list': s({'jsonrpc':'2.0','id':mid,'result':{'resources':[{'uri':'note://a','name':'Note A'}]}})\n"
+        "    elif meth=='resources/read': s({'jsonrpc':'2.0','id':mid,'result':{'contents':[{'uri':m['params']['uri'],'mimeType':'text/plain','text':'resource body'}]}})\n"
+        "    elif meth=='prompts/list': s({'jsonrpc':'2.0','id':mid,'result':{'prompts':[{'name':'review','description':'Review prompt'}]}})\n"
+        "    elif meth=='prompts/get': s({'jsonrpc':'2.0','id':mid,'result':{'description':'Review prompt','messages':[{'role':'user','content':{'type':'text','text':'review '+m['params'].get('arguments',{}).get('topic','')}}]}})\n"
     )
-    from aegis.mcp.client import MCPClient
+    from aegis.mcp.client import MCPClient, MCPManager
+    from aegis.tools.base import ToolContext
+
     c = MCPClient("t", command=sys.executable, args=[str(server)])
     c.connect()
     assert any(t["name"] == "ping" for t in c.list_tools())
     text, err = c.call_tool("ping", {})
     assert text == "pong" and not err
+    assert c.list_resources()[0]["uri"] == "note://a"
+    assert "resource body" in c.read_resource("note://a")
+    assert c.list_prompts()[0]["name"] == "review"
+    assert "review code" in c.get_prompt("review", {"topic": "code"})
     c.close()
+
+    mgr = MCPManager()
+    mgr.add(MCPClient("t", command=sys.executable, args=[str(server)]))
+    tools = mgr.connect_all()
+    by_name = {t.name: t for t in tools}
+    assert {"mcp__t__ping", "mcp__t__read_resource", "mcp__t__get_prompt"} <= set(by_name)
+    assert "resource body" in by_name["mcp__t__read_resource"].run(
+        {"uri": "note://a"}, ToolContext()
+    ).content
+    assert "review tests" in by_name["mcp__t__get_prompt"].run(
+        {"name": "review", "arguments": {"topic": "tests"}}, ToolContext()
+    ).content
+    mgr.close_all()

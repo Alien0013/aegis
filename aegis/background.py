@@ -16,6 +16,7 @@ class BgTask:
     status: str = "running"     # running | done | error
     result: str = ""
     error: str = ""
+    run_id: str = ""
 
 
 class BackgroundManager:
@@ -26,8 +27,7 @@ class BackgroundManager:
     def spawn(self, config: Any, prompt: str, *, cwd=None, on_done=None) -> str:
         """Run ``prompt`` in a background agent. ``on_done(task)`` (if given) fires
         when it finishes — used to announce the result back into a chat."""
-        from .agent.agent import Agent
-        from .session import Session
+        from .surface import SurfaceRunner
 
         task = BgTask(id=new_id("bg"), prompt=prompt)
         with self._lock:
@@ -35,11 +35,18 @@ class BackgroundManager:
 
         def _work():
             try:
-                agent = Agent.create(config, session=Session.create(), cwd=cwd)
-                result = agent.run(prompt)
+                runner = SurfaceRunner(config, cwd=cwd, include_mcp=True)
+                result = runner.run_prompt(
+                    prompt,
+                    session_id=f"background:{task.id}",
+                    title=f"background {task.id}",
+                    surface="background",
+                    meta={"background_task_id": task.id},
+                )
                 with self._lock:
-                    task.result = result.content or ""
+                    task.result = result.text or ""
                     task.status = "done"
+                    task.run_id = result.run_id
             except Exception as e:  # noqa: BLE001
                 with self._lock:
                     task.error = f"{type(e).__name__}: {e}"
@@ -56,7 +63,7 @@ class BackgroundManager:
     def list(self) -> list[dict]:
         with self._lock:
             return [{"id": t.id, "status": t.status, "prompt": t.prompt[:60],
-                     "result_preview": (t.result or t.error)[:80]}
+                     "result_preview": (t.result or t.error)[:80], "run_id": t.run_id}
                     for t in self._tasks.values()]
 
     def get(self, task_id: str) -> BgTask | None:
