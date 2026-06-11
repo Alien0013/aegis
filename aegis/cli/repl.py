@@ -656,6 +656,13 @@ def handle_slash(
             if not model:
                 _out("usage: /model <model> or /model <provider>/<model>")
             else:
+                from ..providers import registry
+                target_provider = provider or agent.config.get("model.provider", "")
+                validation = registry.validate_model_choice(target_provider, model, agent.config)
+                warning = registry.model_validation_message(validation)
+                if not validation.get("ok", True):
+                    _out(warning, style="yellow")
+                    return ""
                 remember_session_runtime(
                     agent,
                     provider=provider or None,
@@ -670,6 +677,8 @@ def handle_slash(
                     store.save(agent.session)
                 label = f"{provider}/" if provider else ""
                 _out(f"model for this session → {label}{model}", style="green")
+                if warning and validation.get("warning"):
+                    _out(f"warning: {warning}", style="yellow")
     elif name == "/status":
         _out(f"provider: {agent.provider.describe()}")
         _out(f"session: {agent.session.id} ({len(agent.session.messages)} msgs)")

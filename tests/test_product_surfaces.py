@@ -431,6 +431,13 @@ def test_terminal_runtime_controls_persist_and_resume(monkeypatch):
     monkeypatch.setattr(registry, "build_provider", fake_build)
     cfg = Config.load()
     cfg.data["memory"]["enabled"] = False
+    cfg.data["custom_providers"] = [{
+        "name": "tuned",
+        "base_url": "http://tuned.local/v1",
+        "api_mode": "chat_completions",
+        "default_model": "test-model",
+        "context_length": 70_000,
+    }]
     store = SessionStore()
     runner = SurfaceRunner(cfg, store=store, include_mcp=False)
     session = Session.create("runtime controls")
@@ -466,6 +473,29 @@ def test_terminal_runtime_controls_persist_and_resume(monkeypatch):
     assert resumed.reasoning == "high"
     assert resumed.config.get("display.reasoning") == "live"
     assert resumed.config.get("gateway.busy_mode") == "interrupt"
+
+
+def test_terminal_model_override_rejects_unknown_provider(monkeypatch, tmp_path):
+    from aegis.agent.agent import Agent
+    from aegis.cli import repl
+    from aegis.config import Config
+    from aegis.session import Session, SessionStore
+    from conftest import FakeProvider
+
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = False
+    provider = FakeProvider()
+    agent = Agent(config=cfg, provider=provider, session=Session.create(), cwd=tmp_path)
+    out = []
+    monkeypatch.setattr(repl, "_out", lambda text="", style=None: out.append(str(text)))
+
+    repl.handle_slash("/model anthropc/claude-sonnet-4-6", agent, store=SessionStore())
+
+    joined = "\n".join(out)
+    assert "Unknown provider 'anthropc'" in joined
+    assert "anthropic" in joined
+    assert "runtime_controls" not in agent.session.meta
+    assert agent.provider is provider
 
 
 def test_terminal_resume_reapplies_session_runtime(monkeypatch):

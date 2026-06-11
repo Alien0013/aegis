@@ -220,6 +220,12 @@ class GatewayRunner:
                 provider, model = self._parse_model_override(arg)
                 if not model:
                     return "usage: /model <model> or /model <provider>/<model>"
+                from ..providers import registry
+                target_provider = provider or self.config.get("model.provider", "")
+                validation = registry.validate_model_choice(target_provider, model, self.config)
+                warning = registry.model_validation_message(validation)
+                if not validation.get("ok", True):
+                    return warning
                 remember_session_runtime(
                     type("A", (), {"session": session})(),
                     provider=provider or None,
@@ -228,7 +234,10 @@ class GatewayRunner:
                 self.store.save(session)
                 self._agents.pop(key, None)        # rebuild with the new model next turn
                 label = f"{provider}/" if provider else ""
-                return f"✓ model for this session → {label}{model}"
+                reply = f"✓ model for this session → {label}{model}"
+                if warning and validation.get("warning"):
+                    reply += f"\nwarning: {warning}"
+                return reply
 
             return self._control_reply(ev, key, "/model", action, data={"model": arg})
         if text == "/provider" or text.startswith("/provider "):
@@ -240,10 +249,20 @@ class GatewayRunner:
                     controls = session_runtime_controls(session)
                     cur = controls.get("provider") or self.config.get("model.provider")
                     return f"provider: {cur}\nSwitch for this session with /provider <name>."
+                from ..providers import registry
+                controls = session_runtime_controls(session)
+                model = controls.get("model") or self.config.get("model.default", "")
+                validation = registry.validate_model_choice(arg, model, self.config)
+                warning = registry.model_validation_message(validation)
+                if not validation.get("ok", True):
+                    return warning
                 remember_session_runtime(type("A", (), {"session": session})(), provider=arg)
                 self.store.save(session)
                 self._agents.pop(key, None)
-                return f"✓ provider for this session → {arg}"
+                reply = f"✓ provider for this session → {arg}"
+                if warning and validation.get("warning"):
+                    reply += f"\nwarning: {warning}"
+                return reply
 
             return self._control_reply(ev, key, "/provider", action, data={"provider": arg})
         if text == "/reasoning" or text.startswith("/reasoning "):

@@ -90,6 +90,20 @@ def test_model_provider_session_override(tmp_path, monkeypatch):
     assert "anthropic/claude-sonnet-4-6" in r.dispatch(_ev("/model"))
 
 
+def test_model_provider_override_rejects_unknown_provider(tmp_path, monkeypatch):
+    r = _runner(tmp_path, monkeypatch)
+    key = r._key(_ev("x"))
+    cached = object()
+    r._agents[key] = cached
+
+    out = r.dispatch(_ev("/model anthropc/claude-sonnet-4-6"))
+
+    assert "Unknown provider 'anthropc'" in out
+    assert "anthropic" in out
+    assert "runtime_controls" not in r._session(key).meta
+    assert r._agents[key] is cached
+
+
 def test_provider_and_reasoning_runtime_controls_are_session_scoped(tmp_path, monkeypatch):
     r = _runner(tmp_path, monkeypatch)
     key = r._key(_ev("x"))
@@ -109,6 +123,20 @@ def test_provider_and_reasoning_runtime_controls_are_session_scoped(tmp_path, mo
     who = r.dispatch(_ev("/whoami"))
     assert "provider: openrouter" in who
     assert "reasoning: display=live · effort=high" in who
+
+
+def test_provider_override_rejects_unknown_provider(tmp_path, monkeypatch):
+    r = _runner(tmp_path, monkeypatch)
+    key = r._key(_ev("x"))
+    cached = object()
+    r._agents[key] = cached
+
+    out = r.dispatch(_ev("/provider anthropc"))
+
+    assert "Unknown provider 'anthropc'" in out
+    assert "anthropic" in out
+    assert "runtime_controls" not in r._session(key).meta
+    assert r._agents[key] is cached
 
 
 def test_busy_mode_set_and_validate(tmp_path, monkeypatch):
