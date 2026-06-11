@@ -226,6 +226,43 @@ def test_sdk_respects_session_runtime_controls():
     assert cfg.get("gateway.busy_mode") == "interrupt"
 
 
+def test_sdk_run_metadata_updates_to_final_provider(tmp_path):
+    from aegis.config import Config
+    from aegis.runs import RunStore
+    from aegis.sdk import AegisClient
+    from aegis.types import LLMResponse
+
+    class Provider:
+        context_length = 200_000
+        name = "initial-provider"
+        model = "initial-model"
+        api_mode = None
+        auth = None
+
+        def complete(self, messages, **_kwargs):
+            self.name = "final-provider"
+            self.model = "final-model"
+            return LLMResponse(text="routed")
+
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = False
+    provider = Provider()
+    client = AegisClient(
+        config=cfg,
+        provider_factory=lambda **_: provider,
+        cwd=tmp_path,
+        include_mcp=False,
+    )
+
+    result = client.run("route me")
+
+    assert result.provider == "final-provider"
+    assert result.model == "final-model"
+    run = RunStore().get(result.run_id)
+    assert run["data"]["provider"] == "final-provider"
+    assert run["data"]["model"] == "final-model"
+
+
 def test_sdk_expands_context_references_and_records_metadata(tmp_path):
     from aegis.config import Config
     from aegis.sdk import AegisClient

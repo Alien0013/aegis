@@ -14,7 +14,7 @@ from typing import Any, Callable, Iterable
 from .agent.agent import Agent
 from .config import Config
 from .session import Session, SessionStore
-from .surface import _workspace_run_meta, apply_session_runtime
+from .surface import _effective_runtime_data, _workspace_run_meta, apply_session_runtime
 from .types import Message, Usage
 
 EventHandler = Callable[[dict[str, Any]], None]
@@ -240,7 +240,13 @@ class AegisClient:
                     status="ok",
                     trace_id=result.trace_id,
                     result=result.text,
-                    data={"turn_id": result.turn_id, "event_count": len(result.events)},
+                    data={
+                        "turn_id": result.turn_id,
+                        "event_count": len(result.events),
+                        **_effective_runtime_data(
+                            self.config, agent.session, agent, prefer_agent=True
+                        ),
+                    },
                 )
             except Exception:  # noqa: BLE001
                 pass

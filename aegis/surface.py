@@ -250,20 +250,8 @@ class SurfaceRunner:
                 effective_prompt = prompt
         run_store = None
         run_id = ""
-        controls = session_runtime_controls(session)
-        agent_provider = getattr(agent, "provider", None)
-        cfg_get = getattr(self.config, "get", lambda _key, default="": default)
-        effective_model = (
-            model
-            or controls.get("model")
-            or str(getattr(agent_provider, "model", "") or "")
-            or str(cfg_get("model.default", "") or "")
-        )
-        effective_provider = (
-            provider_name
-            or controls.get("provider")
-            or str(getattr(agent_provider, "name", "") or "")
-            or str(cfg_get("model.provider", "") or "")
+        runtime_data = _effective_runtime_data(
+            self.config, session, agent, model=model, provider_name=provider_name
         )
         try:
             from .runs import RunStore
@@ -278,8 +266,7 @@ class SurfaceRunner:
                 data={
                     **(meta or {}),
                     "context_references": reference_meta,
-                    "model": effective_model,
-                    "provider": effective_provider,
+                    **runtime_data,
                     "platform": platform or "",
                     "chat_id": chat_id or "",
                     **_workspace_run_meta(run_cwd),
@@ -348,7 +335,13 @@ class SurfaceRunner:
                     status="ok",
                     trace_id=result.trace_id,
                     result=result.text,
-                    data={"turn_id": result.turn_id, "event_count": len(result.events)},
+                    data={
+                        "turn_id": result.turn_id,
+                        "event_count": len(result.events),
+                        **_effective_runtime_data(
+                            self.config, result.session, result.agent, prefer_agent=True
+                        ),
+                    },
                 )
             except Exception:  # noqa: BLE001
                 pass
@@ -526,6 +519,39 @@ def _prompt_text(prompt: str | Message) -> str:
             text += "\n" + "\n".join(f"[image: {p}]" for p in prompt.images)
         return text
     return str(prompt)
+
+
+def _effective_runtime_data(
+    config: Config | None,
+    session: Session | None,
+    agent: Any | None = None,
+    *,
+    model: str | None = None,
+    provider_name: str | None = None,
+    prefer_agent: bool = False,
+) -> dict[str, str]:
+    controls = session_runtime_controls(session)
+    agent_provider = getattr(agent, "provider", None)
+    cfg_get = getattr(config, "get", lambda _key, default="": default)
+    agent_model = str(getattr(agent_provider, "model", "") or "")
+    agent_provider_name = str(getattr(agent_provider, "name", "") or "")
+    if prefer_agent:
+        effective_model = model or agent_model or controls.get("model") or str(cfg_get("model.default", "") or "")
+        effective_provider = (
+            provider_name
+            or agent_provider_name
+            or controls.get("provider")
+            or str(cfg_get("model.provider", "") or "")
+        )
+    else:
+        effective_model = model or controls.get("model") or agent_model or str(cfg_get("model.default", "") or "")
+        effective_provider = (
+            provider_name
+            or controls.get("provider")
+            or agent_provider_name
+            or str(cfg_get("model.provider", "") or "")
+        )
+    return {"model": str(effective_model or ""), "provider": str(effective_provider or "")}
 
 
 def _workspace_run_meta(cwd: Path) -> dict[str, str]:
@@ -717,6 +743,7 @@ def run_control_action(
     start_session_id = getattr(session, "id", "")
     run_cwd = Path(getattr(agent, "cwd", Path.cwd())).expanduser()
     events: list[dict[str, Any]] = []
+    runtime_data = _effective_runtime_data(cfg, session, agent)
 
     def emit(event: dict[str, Any]) -> None:
         events.append(dict(event))
@@ -735,7 +762,7 @@ def run_control_action(
             title=title or kind,
             session_id=start_session_id,
             prompt=prompt,
-            data={**(data or {}), **_workspace_run_meta(run_cwd)},
+            data={**(data or {}), **runtime_data, **_workspace_run_meta(run_cwd)},
         )
         run_id = run["id"]
     except Exception:  # noqa: BLE001
@@ -757,8 +784,8 @@ def run_control_action(
                 session_id=start_session_id,
                 turn_id=turn_id,
                 kind="turn",
-                provider=getattr(provider, "name", ""),
-                model=getattr(provider, "model", ""),
+                provider=getattr(provider, "name", "") or runtime_data.get("provider", ""),
+                model=getattr(provider, "model", "") or runtime_data.get("model", ""),
                 data={"control": {"kind": kind, "surface": surface, "title": title},
                       "prompt": prompt, **(data or {})},
             )
@@ -825,9 +852,13 @@ def run_control_action(
                 status="ok",
                 trace_id=trace_id,
                 result=text,
-                data={"turn_id": turn_id, "event_count": len(events),
-                      "session_id_before": start_session_id,
-                      "session_id_after": final_session_id},
+                data={
+                    "turn_id": turn_id,
+                    "event_count": len(events),
+                    "session_id_before": start_session_id,
+                    "session_id_after": final_session_id,
+                    **_effective_runtime_data(cfg, final_session, agent, prefer_agent=True),
+                },
             )
         except Exception:  # noqa: BLE001
             pass

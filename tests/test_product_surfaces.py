@@ -1491,6 +1491,42 @@ def test_surface_runner_run_metadata_uses_session_runtime_controls(monkeypatch, 
     assert run["data"]["model"] == "runtime-model"
 
 
+def test_surface_runner_run_metadata_updates_to_final_provider(tmp_path):
+    from types import SimpleNamespace
+
+    from aegis.config import Config
+    from aegis.runs import RunStore
+    from aegis.session import Session
+    from aegis.surface import SurfaceRunner
+    from aegis.types import Message
+
+    class FakeAgent:
+        def __init__(self, session):
+            self.session = session
+            self.provider = SimpleNamespace(name="initial-provider", model="initial-model")
+            self.tool_context = SimpleNamespace(session=session)
+
+        def run(self, prompt, on_event=None):
+            self.provider = SimpleNamespace(name="final-provider", model="final-model")
+            self._trace_context = {"trace_id": "trace_final_run", "turn_id": "turn_final_run"}
+            return Message.assistant("ok")
+
+    cfg = Config.load()
+    session = Session.create("final run metadata")
+    agent = FakeAgent(session)
+
+    result = SurfaceRunner(cfg, cwd=tmp_path, include_mcp=False).run_prompt(
+        "hello",
+        session=session,
+        agent=agent,
+        surface="cli",
+    )
+
+    run = RunStore().get(result.run_id)
+    assert run["data"]["provider"] == "final-provider"
+    assert run["data"]["model"] == "final-model"
+
+
 def test_renderer_reasoning_display_modes(monkeypatch):
     import contextlib
     import io

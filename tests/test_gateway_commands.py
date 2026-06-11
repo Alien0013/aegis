@@ -28,6 +28,8 @@ def test_whoami_and_help(tmp_path, monkeypatch):
     runs = [row for row in RunStore().list(session_id=key, limit=10)
             if row["surface"] == "gateway" and row["kind"] == "control"]
     assert {row["data"]["command"] for row in runs} >= {"/whoami", "/help"}
+    assert all(row["data"]["provider"] == r.config.get("model.provider") for row in runs)
+    assert all(row["data"]["model"] == r.config.get("model.default") for row in runs)
     assert all(row["trace_id"].startswith("trace_") for row in runs)
 
 
@@ -134,6 +136,8 @@ def test_model_session_override(tmp_path, monkeypatch):
     run = next(row for row in RunStore().list(session_id=key, limit=10)
                if row["kind"] == "control" and row["data"].get("model") == "gpt-5.5-pro")
     assert run["surface"] == "gateway"
+    assert run["data"]["provider"] == r.config.get("model.provider")
+    assert run["data"]["model"] == "gpt-5.5-pro"
     assert r._session(key).meta["last_run_id"] == RunStore().list(session_id=key, limit=1)[0]["id"]
 
 
@@ -150,6 +154,11 @@ def test_model_provider_session_override(tmp_path, monkeypatch):
     assert r._session(key).meta["runtime_controls"]["provider"] == "anthropic"
     assert key not in r._agents
     assert "anthropic/claude-sonnet-4-6" in r.dispatch(_ev("/model"))
+    from aegis.runs import RunStore
+    run = next(row for row in RunStore().list(session_id=key, limit=10)
+               if row["kind"] == "control" and row["data"].get("model") == "claude-sonnet-4-6")
+    assert run["data"]["provider"] == "anthropic"
+    assert run["data"]["model"] == "claude-sonnet-4-6"
 
 
 def test_model_only_override_preserves_gateway_session_provider(tmp_path, monkeypatch):
@@ -213,6 +222,11 @@ def test_provider_and_reasoning_runtime_controls_are_session_scoped(tmp_path, mo
     who = r.dispatch(_ev("/whoami"))
     assert "provider: openrouter" in who
     assert "reasoning: display=live · effort=high" in who
+    from aegis.runs import RunStore
+    run = next(row for row in RunStore().list(session_id=key, limit=10)
+               if row["kind"] == "control" and row["data"].get("command") == "/provider")
+    assert run["data"]["provider"] == "openrouter"
+    assert run["data"]["model"] == r.config.get("model.default")
 
 
 def test_provider_override_rejects_unknown_provider(tmp_path, monkeypatch):
