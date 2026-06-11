@@ -56,6 +56,7 @@ SLASH_COMMANDS = (
     SlashCommand("/help", "discover", "show or search slash commands", "/help [term]"),
     SlashCommand("/status", "discover", "show runtime, session, recap, and trace status"),
     SlashCommand("/model", "discover", "show the active provider and model"),
+    SlashCommand("/provider", "discover", "show or switch the active provider", "/provider [name]"),
     SlashCommand("/tools", "discover", "list enabled tools"),
     SlashCommand("/skills", "discover", "list loaded skills"),
     SlashCommand("/trace", "observability", "list traces for this session or inspect one", "/trace [id]"),
@@ -680,6 +681,32 @@ def handle_slash(
                 _out(f"model for this session → {label}{model}", style="green")
                 if warning and validation.get("warning"):
                     _out(f"warning: {warning}", style="yellow")
+    elif name == "/provider":
+        controls = session_runtime_controls(agent.session)
+        if not arg:
+            current = controls.get("provider") or getattr(agent.provider, "name", "") \
+                or agent.config.get("model.provider", "")
+            _out(f"provider: {current}\nSwitch for this session with /provider <name>.")
+        else:
+            from ..providers import registry
+            model = controls.get("model") or getattr(agent.provider, "model", "") \
+                or agent.config.get("model.default", "")
+            validation = registry.validate_model_choice(arg, model, agent.config)
+            warning = registry.model_validation_message(validation)
+            if not validation.get("ok", True):
+                _out(warning, style="yellow")
+                return ""
+            remember_session_runtime(agent, provider=arg)
+            apply_session_runtime(agent)
+            try:
+                agent.refresh_volatile()
+            except Exception:  # noqa: BLE001
+                pass
+            if store is not None:
+                store.save(agent.session)
+            _out(f"provider for this session → {arg}", style="green")
+            if warning and validation.get("warning"):
+                _out(f"warning: {warning}", style="yellow")
     elif name == "/status":
         _out(f"provider: {agent.provider.describe()}")
         _out(f"session: {agent.session.id} ({len(agent.session.messages)} msgs)")

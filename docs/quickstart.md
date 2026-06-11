@@ -23,7 +23,7 @@ aegis batch prompts.txt     # one prompt per line
 
 ## Slash commands (REPL)
 
-`/help /status /model /think <level> /tools /skills /memory /usage /compress`
+`/help /status /model /provider /think <level> /tools /skills /memory /usage /compress`
 `/retry /undo /learn /background <prompt> /tasks /rollback /personality /save`
 `/sessions /new /quit`. Reference a file with `@path`.
 

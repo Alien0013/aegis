@@ -572,6 +572,50 @@ def test_terminal_model_only_override_preserves_session_provider(monkeypatch):
     assert "model for this session → newer-model" in "\n".join(out)
 
 
+def test_terminal_provider_override_preserves_session_model(monkeypatch):
+    from types import SimpleNamespace
+
+    from aegis.cli import repl
+    from aegis.config import Config
+    from aegis.providers import registry
+    from aegis.session import Session, SessionStore
+
+    cfg = Config.load()
+    session = Session.create("terminal provider")
+    session.meta["runtime_controls"] = {"provider": "old-provider", "model": "session-model"}
+    captured = {}
+
+    def fake_validate(provider, model, config):
+        captured.update({"provider": provider, "model": model, "config": config})
+        return {"ok": True, "provider": provider, "model": model}
+
+    monkeypatch.setattr(registry, "validate_model_choice", fake_validate)
+    monkeypatch.setattr(registry, "model_validation_message", lambda _validation: "")
+    monkeypatch.setattr(
+        "aegis.providers.fallback.build_with_fallbacks",
+        lambda config, model=None, name=None: SimpleNamespace(name=name, model=model),
+    )
+    agent = SimpleNamespace(
+        config=cfg,
+        session=session,
+        provider=SimpleNamespace(name="old-provider", model="session-model"),
+        refresh_volatile=lambda: None,
+    )
+    out = []
+    store = SessionStore()
+    monkeypatch.setattr(repl, "_out", lambda text="", style=None: out.append(str(text)))
+
+    repl.handle_slash("/provider openrouter", agent, store=store)
+
+    assert captured == {"provider": "openrouter", "model": "session-model", "config": cfg}
+    assert session.meta["runtime_controls"]["provider"] == "openrouter"
+    assert session.meta["runtime_controls"]["model"] == "session-model"
+    assert agent.provider.name == "openrouter"
+    assert agent.provider.model == "session-model"
+    assert store.load(session.id).meta["runtime_controls"]["provider"] == "openrouter"
+    assert "provider for this session → openrouter" in "\n".join(out)
+
+
 def test_terminal_background_inherits_agent_cwd(monkeypatch, tmp_path):
     from types import SimpleNamespace
 
