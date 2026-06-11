@@ -49,6 +49,42 @@ def test_model_session_override(tmp_path, monkeypatch):
     assert r._session(key).meta["last_run_id"] == RunStore().list(session_id=key, limit=1)[0]["id"]
 
 
+def test_model_provider_session_override(tmp_path, monkeypatch):
+    r = _runner(tmp_path, monkeypatch)
+    key = r._key(_ev("x"))
+    r._agents[key] = object()
+
+    out = r.dispatch(_ev("/model anthropic/claude-sonnet-4-6"))
+
+    assert "→ anthropic/claude-sonnet-4-6" in out
+    assert r._session(key).meta["provider"] == "anthropic"
+    assert r._session(key).meta["model"] == "claude-sonnet-4-6"
+    assert r._session(key).meta["runtime_controls"]["provider"] == "anthropic"
+    assert key not in r._agents
+    assert "anthropic/claude-sonnet-4-6" in r.dispatch(_ev("/model"))
+
+
+def test_provider_and_reasoning_runtime_controls_are_session_scoped(tmp_path, monkeypatch):
+    r = _runner(tmp_path, monkeypatch)
+    key = r._key(_ev("x"))
+
+    assert "provider:" in r.dispatch(_ev("/provider"))
+    assert "→ openrouter" in r.dispatch(_ev("/provider openrouter"))
+    assert r._session(key).meta["runtime_controls"]["provider"] == "openrouter"
+    assert "display=summary" in r.dispatch(_ev("/reasoning"))
+    assert "display → live" in r.dispatch(_ev("/reasoning live"))
+    assert "effort → high" in r.dispatch(_ev("/reasoning high"))
+    assert "usage" in r.dispatch(_ev("/reasoning chaos"))
+
+    controls = r._session(key).meta["runtime_controls"]
+    assert controls["provider"] == "openrouter"
+    assert controls["reasoning_display"] == "live"
+    assert controls["reasoning_effort"] == "high"
+    who = r.dispatch(_ev("/whoami"))
+    assert "provider: openrouter" in who
+    assert "reasoning: display=live · effort=high" in who
+
+
 def test_busy_mode_set_and_validate(tmp_path, monkeypatch):
     r = _runner(tmp_path, monkeypatch)
     assert "queue" in r.dispatch(_ev("/busy"))
@@ -56,8 +92,9 @@ def test_busy_mode_set_and_validate(tmp_path, monkeypatch):
     assert "→ steer" in r.dispatch(_ev("/busy steer"))
     from aegis.config import Config
     assert Config.load().get("gateway.busy_mode") == "steer"   # persisted
-    from aegis.runs import RunStore
     key = r._key(_ev("x"))
+    assert r._session(key).meta["runtime_controls"]["busy_mode"] == "steer"
+    from aegis.runs import RunStore
     modes = [row["data"].get("mode") for row in RunStore().list(session_id=key, limit=10)
              if row["kind"] == "control" and row["data"].get("command") == "/busy"]
     assert {"", "chaos", "steer"} <= set(modes)
@@ -69,11 +106,18 @@ def test_compress_command(tmp_path, monkeypatch):
     from aegis.types import Message
     s = r._session(key)
     s.messages = [Message.system("sys")] + [Message.user(f"m{i}") for i in range(30)]
+    s.meta["runtime_controls"] = {"provider": "p-compress", "model": "m-compress"}
 
     class FakeAgent:
         session = s
+    seen = {}
     import aegis.gateway.runner as rmod
-    monkeypatch.setattr(rmod.Agent, "create", staticmethod(lambda *a, **k: FakeAgent()))
+
+    def fake_create(*args, **kwargs):
+        seen["kwargs"] = kwargs
+        return FakeAgent()
+
+    monkeypatch.setattr(rmod.Agent, "create", staticmethod(fake_create))
 
     def fake_compact(agent, session, emit=None, **_kwargs):
         if emit:
@@ -86,6 +130,8 @@ def test_compress_command(tmp_path, monkeypatch):
     monkeypatch.setattr(loop, "compact_now", fake_compact)
     out = r.dispatch(_ev("/compress"))
     assert "31 → 3" in out
+    assert seen["kwargs"]["provider_name"] == "p-compress"
+    assert seen["kwargs"]["model"] == "m-compress"
     from aegis.runs import RunStore
     from aegis.tracing import TraceStore
     run = next(r for r in RunStore().list(session_id=key, limit=10)

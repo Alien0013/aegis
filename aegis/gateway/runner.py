@@ -89,6 +89,30 @@ class GatewayRunner:
             self._sessions[key] = self.store.load(key) or Session(id=key, title=key)
         return self._sessions[key]
 
+    @staticmethod
+    def _parse_model_override(arg: str) -> tuple[str, str]:
+        raw = arg.strip()
+        if "/" in raw:
+            provider, model = raw.split("/", 1)
+            return provider.strip(), model.strip()
+        return "", raw
+
+    def _gateway_identity(self, ev: MessageEvent, key: str, session: Session) -> str:
+        from ..surface import session_runtime_controls
+
+        controls = session_runtime_controls(session)
+        provider = controls.get("provider") or self.config.get("model.provider")
+        model = controls.get("model") or self.config.get("model.default")
+        busy_mode = controls.get("busy_mode") or self.config.get("gateway.busy_mode", "queue")
+        reasoning_display = controls.get("reasoning_display") or self.config.get("display.reasoning", "summary")
+        reasoning_effort = controls.get("reasoning_effort") or self.config.get("agent.reasoning_effort", "off")
+        return (
+            f"platform: {ev.platform}\nuser: {ev.user_id or '?'}"
+            f"{f' (@{ev.user_name})' if ev.user_name else ''}\nchat: {ev.chat_id}\n"
+            f"session: {key}\nprovider: {provider}\nmodel: {model}\n"
+            f"busy_mode: {busy_mode}\nreasoning: display={reasoning_display} · effort={reasoning_effort}"
+        )
+
     def _control_reply(
         self,
         ev: MessageEvent,
@@ -164,8 +188,9 @@ class GatewayRunner:
                 lambda _proxy: (
                     f"AEGIS gateway · provider={self.config.get('model.provider')} · "
                     f"model={self.config.get('model.default')} · session={key}\n"
-                    "Commands: /new · /status · /whoami · /model [id] · /compress · "
-                    "/busy [mode] · /goal <text> · /subgoal <text> · /steer <text> · stop"
+                    "Commands: /new · /status · /whoami · /model [provider/model] · "
+                    "/provider [name] · /reasoning [mode] · /compress · /busy [mode] · "
+                    "/goal <text> · /subgoal <text> · /steer <text> · stop"
                 ),
             )
         if text == "/whoami":
@@ -173,46 +198,118 @@ class GatewayRunner:
                 ev,
                 key,
                 "/whoami",
-                lambda _proxy: (
-                    f"platform: {ev.platform}\nuser: {ev.user_id or '?'}"
-                    f"{f' (@{ev.user_name})' if ev.user_name else ''}\nchat: {ev.chat_id}\n"
-                    f"session: {key}\nbusy_mode: {self.config.get('gateway.busy_mode', 'queue')}"
-                ),
+                lambda proxy: self._gateway_identity(ev, key, proxy.session),
             )
         if text == "/model" or text.startswith("/model "):
             arg = text[len("/model"):].strip()
             def action(proxy):
                 session = proxy.session
+                from ..surface import remember_session_runtime, session_runtime_controls
                 if not arg:
-                    controls = session.meta.get("runtime_controls") or {}
-                    cur = controls.get("model") or session.meta.get("model") or self.config.get("model.default")
-                    return f"model: {cur}\nSwitch for this session with /model <id>."
-                from ..surface import remember_session_runtime
-                remember_session_runtime(type("A", (), {"session": session})(), model=arg)
+                    controls = session_runtime_controls(session)
+                    provider = controls.get("provider") or self.config.get("model.provider")
+                    model = controls.get("model") or self.config.get("model.default")
+                    return f"model: {provider}/{model}\nSwitch for this session with /model <id> or /model <provider>/<id>."
+                provider, model = self._parse_model_override(arg)
+                if not model:
+                    return "usage: /model <model> or /model <provider>/<model>"
+                remember_session_runtime(
+                    type("A", (), {"session": session})(),
+                    provider=provider or None,
+                    model=model,
+                )
                 self.store.save(session)
                 self._agents.pop(key, None)        # rebuild with the new model next turn
-                return f"✓ model for this session → {arg}"
+                label = f"{provider}/" if provider else ""
+                return f"✓ model for this session → {label}{model}"
 
             return self._control_reply(ev, key, "/model", action, data={"model": arg})
+        if text == "/provider" or text.startswith("/provider "):
+            arg = text[len("/provider"):].strip()
+            def action(proxy):
+                session = proxy.session
+                from ..surface import remember_session_runtime, session_runtime_controls
+                if not arg:
+                    controls = session_runtime_controls(session)
+                    cur = controls.get("provider") or self.config.get("model.provider")
+                    return f"provider: {cur}\nSwitch for this session with /provider <name>."
+                remember_session_runtime(type("A", (), {"session": session})(), provider=arg)
+                self.store.save(session)
+                self._agents.pop(key, None)
+                return f"✓ provider for this session → {arg}"
+
+            return self._control_reply(ev, key, "/provider", action, data={"provider": arg})
+        if text == "/reasoning" or text.startswith("/reasoning "):
+            arg = text[len("/reasoning"):].strip()
+            modes = {"off", "summary", "live"}
+            efforts = {"minimal", "low", "medium", "high", "xhigh"}
+
+            def action(proxy):
+                session = proxy.session
+                from ..surface import remember_session_runtime, session_runtime_controls
+                controls = session_runtime_controls(session)
+                if not arg:
+                    display = controls.get("reasoning_display") or self.config.get("display.reasoning", "summary")
+                    effort = controls.get("reasoning_effort") or self.config.get("agent.reasoning_effort", "off")
+                    return f"reasoning: display={display} · effort={effort}"
+                if arg in modes:
+                    remember_session_runtime(type("A", (), {"session": session})(), reasoning_display=arg)
+                    self.store.save(session)
+                    agent = self._agents.get(key)
+                    if agent is not None:
+                        from ..surface import apply_session_runtime
+                        apply_session_runtime(agent, rebuild_provider=False)
+                    return f"✓ reasoning display → {arg}"
+                if arg in efforts or arg == "off":
+                    remember_session_runtime(type("A", (), {"session": session})(), reasoning_effort=arg)
+                    self.store.save(session)
+                    agent = self._agents.get(key)
+                    if agent is not None:
+                        from ..surface import apply_session_runtime
+                        apply_session_runtime(agent, rebuild_provider=False)
+                    return f"✓ reasoning effort → {arg}"
+                return "usage: /reasoning off|summary|live|minimal|low|medium|high|xhigh"
+
+            return self._control_reply(ev, key, "/reasoning", action, data={"mode": arg})
         if text == "/busy" or text.startswith("/busy "):
             arg = text[len("/busy"):].strip()
-            def action(_proxy):
+            def action(proxy):
+                session = proxy.session
+                from ..surface import remember_session_runtime, session_runtime_controls
                 if not arg:
-                    return (f"busy_mode: {self.config.get('gateway.busy_mode', 'queue')} "
+                    controls = session_runtime_controls(session)
+                    mode = controls.get("busy_mode") or self.config.get("gateway.busy_mode", "queue")
+                    return (f"busy_mode: {mode} "
                             "(queue | steer | interrupt)")
                 if arg not in ("queue", "steer", "interrupt"):
                     return "usage: /busy queue|steer|interrupt"
                 self.config.set("gateway.busy_mode", arg)
                 self.config.save()
+                remember_session_runtime(type("A", (), {"session": session})(), busy_mode=arg)
+                self.store.save(session)
+                agent = self._agents.get(key)
+                if agent is not None:
+                    from ..surface import apply_session_runtime
+                    apply_session_runtime(agent, rebuild_provider=False)
                 return f"✓ busy_mode → {arg}"
 
             return self._control_reply(ev, key, "/busy", action, data={"mode": arg})
         if text == "/compress":
             with self._lock:
                 session = self._session(key)
-            agent = self._agents.get(key) or Agent.create(
-                self.config, session=session, cwd=self.cwd, store=self.store,
-                model=session.meta.get("model"))
+            from ..surface import apply_session_runtime, session_runtime_controls
+            controls = session_runtime_controls(session)
+            agent = self._agents.get(key)
+            if agent is None:
+                agent = Agent.create(
+                    self.config,
+                    session=session,
+                    cwd=self.cwd,
+                    store=self.store,
+                    model=controls.get("model"),
+                    provider_name=controls.get("provider"),
+                )
+            apply_session_runtime(agent)
             before = len(session.messages)
 
             def _compact(emit):

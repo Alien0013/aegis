@@ -30,9 +30,11 @@ aegis gateway --channels telegram,discord,slack,signal,matrix,email,webhook
   `queue` (default — runs next), `steer` (folds into the running turn), or
   `interrupt` (cancels the turn, then runs). A bare `stop` always cancels;
   `/steer <text>` always folds. A one-time tip explains this the first time it fires.
-- **In-chat commands** — `/new` · `/status` · `/whoami` · `/model [id]` (switch the
-  model for this session) · `/compress` (force-compact) · `/busy [mode]` ·
-  `/goal <text>` / `/subgoal <text>` (persistent goals) · `/steer <text>` · `stop`.
+- **In-chat commands** — `/new` · `/status` · `/whoami` ·
+  `/model [id|provider/id]` · `/provider [name]` · `/reasoning [mode]`
+  (session-scoped runtime controls) · `/compress` (force-compact with the
+  session runtime) · `/busy [mode]` · `/goal <text>` / `/subgoal <text>`
+  (persistent goals) · `/steer <text>` · `stop`.
 - **Restart notifications** — if the previous gateway run died without a clean
   shutdown, admins (`gateway.admins`) get a DM explaining when and what crashed
   (forensics in `logs/shutdowns.jsonl`).
