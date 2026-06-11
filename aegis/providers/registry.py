@@ -424,3 +424,147 @@ def auth_for(name: str, prefer: str | None = None) -> AuthProvider:
     if not spec:
         raise ValueError(f"Unknown provider '{name}'.")
     return _resolve_auth(spec, prefer)
+
+
+def _auth_status(auth: AuthProvider) -> dict:
+    if auth is None:
+        return {"description": "unknown", "available": False}
+    try:
+        description = auth.describe()
+    except Exception as exc:  # noqa: BLE001
+        description = f"unknown ({type(exc).__name__})"
+    try:
+        available = bool(auth.available())
+    except Exception:  # noqa: BLE001
+        available = False
+    return {"description": description, "available": available}
+
+
+def _provider_status(provider: Provider, *, role: str, configured: dict | None = None) -> dict:
+    api_mode = getattr(provider, "api_mode", "")
+    return {
+        "role": role,
+        "name": getattr(provider, "name", ""),
+        "model": getattr(provider, "model", ""),
+        "api_mode": getattr(api_mode, "value", str(api_mode) if api_mode else ""),
+        "base_url": getattr(provider, "base_url", ""),
+        "context_length": int(getattr(provider, "context_length", 0) or 0),
+        "auth": _auth_status(getattr(provider, "auth", None)),
+        "configured": configured or {},
+    }
+
+
+def _spec_status(name: str, spec: ProviderSpec, *, origin: str) -> dict:
+    auth = _resolve_auth(spec)
+    return {
+        "name": name,
+        "origin": origin,
+        "default_model": spec.default_model,
+        "api_mode": spec.api_mode.value,
+        "base_url": spec.base_url,
+        "context_length": spec.context_length,
+        "auth_scheme": spec.auth_scheme,
+        "env_vars": list(spec.env_vars),
+        "oauth": bool(spec.oauth),
+        "auth": _auth_status(auth),
+    }
+
+
+def provider_report(config: cfg.Config) -> dict:
+    """Describe provider resolution without exposing secret values.
+
+    This is the shared "provider resolver" surface for CLI/dashboard/API views:
+    primary route, fallback chain, prompt-routing rules, custom providers, and
+    auth readiness. It intentionally reports only env var names and auth state,
+    never credential material.
+    """
+
+    ensure_plugin_providers(config)
+    builtins = dict(PROVIDERS)
+    plugins = dict(_PLUGINS)
+    custom = _custom_specs(config)
+    specs = {**builtins, **plugins, **custom}
+    configured_provider = config.get("model.provider", "anthropic")
+    configured_model = config.get("model.default")
+
+    active: dict
+    chain: list[dict] = []
+    try:
+        primary = build_provider(config, model=configured_model, name=configured_provider)
+        active = _provider_status(
+            primary,
+            role="primary",
+            configured={"provider": configured_provider, "model": configured_model or ""},
+        )
+        chain.append(active)
+    except Exception as exc:  # noqa: BLE001
+        active = {
+            "role": "primary",
+            "name": configured_provider,
+            "model": configured_model or "",
+            "error": f"{type(exc).__name__}: {exc}",
+            "configured": {"provider": configured_provider, "model": configured_model or ""},
+        }
+
+    fallbacks: list[dict] = []
+    for index, item in enumerate(config.get("fallback_providers", []) or [], start=1):
+        configured = item if isinstance(item, dict) else {}
+        provider_name = configured.get("provider") or ""
+        model = configured.get("model") or ""
+        try:
+            resolved = build_provider(config, model=model or None, name=provider_name or None)
+            row = _provider_status(
+                resolved,
+                role=f"fallback:{index}",
+                configured={"provider": provider_name, "model": model},
+            )
+            fallbacks.append(row)
+            chain.append(row)
+        except Exception as exc:  # noqa: BLE001
+            fallbacks.append({
+                "role": f"fallback:{index}",
+                "name": provider_name,
+                "model": model,
+                "error": f"{type(exc).__name__}: {exc}",
+                "configured": {"provider": provider_name, "model": model},
+            })
+
+    routing: list[dict] = []
+    for index, rule in enumerate(config.get("routing", []) or [], start=1):
+        if not isinstance(rule, dict):
+            continue
+        provider_name = rule.get("provider") or configured_provider
+        model = rule.get("model") or configured_model or ""
+        row = {
+            "index": index,
+            "match": rule.get("match", ""),
+            "provider": provider_name,
+            "model": model,
+            "known_provider": provider_name in specs,
+        }
+        if provider_name not in specs and not config.get("model.base_url"):
+            row["warning"] = "unknown provider"
+        routing.append(row)
+
+    provider_catalog = []
+    for name, spec in sorted(builtins.items()):
+        provider_catalog.append(_spec_status(name, spec, origin="built-in"))
+    for name, spec in sorted(plugins.items()):
+        provider_catalog.append(_spec_status(name, spec, origin="plugin"))
+    for name, spec in sorted(custom.items()):
+        provider_catalog.append(_spec_status(name, spec, origin="custom"))
+
+    return {
+        "active": active,
+        "chain": chain,
+        "fallbacks": fallbacks,
+        "routing": routing,
+        "provider_catalog": provider_catalog,
+        "custom_providers": [_spec_status(name, spec, origin="custom")
+                             for name, spec in sorted(custom.items())],
+        "provider": configured_provider,
+        "model": configured_model,
+        "base_url_override": config.get("model.base_url", "") or "",
+        "api_mode_override": config.get("model.api_mode", "") or "",
+        "context_length_override": config.get("model.context_length", "") or "",
+    }

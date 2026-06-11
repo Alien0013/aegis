@@ -9,9 +9,15 @@
 ```bash
 aegis model list
 aegis model set codex gpt-5.5
+aegis model doctor
 aegis model set openai gpt-4o
 aegis auth status
 ```
+
+`aegis model` and `aegis model doctor` print the resolved provider, transport,
+context window, auth readiness, fallback chain, and prompt-routing rules. The
+dashboard Models page uses the same provider resolver report, including custom
+and plugin provider catalog rows.
 
 ## Auth
 

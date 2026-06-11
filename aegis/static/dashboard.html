@@ -658,10 +658,21 @@ PAGES.webhooks=async()=>{
 PAGES.models=async()=>{
   const d=await api('models');
   const opts=(d.presets[d.provider]||[]).map(m=>'<option '+(m===d.model?'selected':'')+'>'+esc(m)+'</option>').join('');
-  V.innerHTML='<div class="card stat"><div class="lbl">Active model</div><div class="val" style="font-size:18px" class="mono">'+esc(d.provider)+' / '+esc(d.model)+'</div></div>'+
-    '<div class="bar"><select id="mprov" style="flex:0 0 220px">'+d.providers.map(p=>'<option '+(p===d.provider?'selected':'')+'>'+esc(p)+'</option>').join('')+'</select>'+
+  const active=d.active||{},chain=d.chain||[],routes=d.routing||[],providerNames=d.providers||[],providers=d.provider_catalog||[];
+  const auth=x=>{const a=(x&&x.auth)||{};return '<span class="pill '+(a.available?'ok':'')+'">'+esc(a.available?'ready':'missing')+'</span><div class="mono mut">'+esc(a.description||'')+'</div>'};
+  V.innerHTML='<div class="card stat"><div class="lbl">Active model</div><div class="val mono" style="font-size:18px">'+esc(d.provider)+' / '+esc(d.model)+'</div><div class="sub">'+esc(active.api_mode||'')+' · '+esc((active.context_length||0).toLocaleString())+' ctx</div></div>'+
+    '<div class="bar"><select id="mprov" style="flex:0 0 220px">'+providerNames.map(p=>'<option '+(p===d.provider?'selected':'')+'>'+esc(p)+'</option>').join('')+'</select>'+
     '<select id="mmodel" style="flex:1">'+opts+'</select><button class="btn" id="mset">Apply</button></div>'+
-    '<p class="mut">Switching provider refreshes its preset list. Custom model ids can be set on the Config page (<span class="mono">model.default</span>).</p>';
+    '<p class="mut">Switching provider refreshes its preset list. Custom model ids can be set on the Config page (<span class="mono">model.default</span>).</p>'+
+    '<h3>Resolver chain</h3><div class="card"><table class="tbl"><tr><th>role</th><th>provider</th><th>model</th><th>transport</th><th>auth</th><th>context</th></tr>'+
+    (chain.map(x=>'<tr><td>'+esc(x.role||'')+'</td><td><b>'+esc(x.name||'')+'</b><div class="mono mut">'+esc(x.base_url||'')+'</div></td><td class="mono">'+esc(x.model||'')+'</td><td>'+esc(x.api_mode||'')+'</td><td>'+auth(x)+'</td><td>'+esc((x.context_length||0).toLocaleString())+'</td></tr>').join('')||(active.error?'<tr><td colspan="6" class="err">'+esc(active.error)+'</td></tr>':'<tr><td colspan="6" class="empty">no provider resolved</td></tr>'))+
+    '</table></div>'+
+    '<h3>Prompt routing</h3><div class="card"><table class="tbl"><tr><th>match</th><th>provider</th><th>model</th><th>status</th></tr>'+
+    (routes.map(r=>'<tr><td class="mono">'+esc(r.match||'')+'</td><td>'+esc(r.provider||'')+'</td><td class="mono">'+esc(r.model||'')+'</td><td>'+(r.known_provider?'<span class="pill ok">known</span>':'<span class="pill err">'+esc(r.warning||'unknown')+'</span>')+'</td></tr>').join('')||'<tr><td colspan="4" class="empty">no prompt routing rules</td></tr>')+
+    '</table></div>'+
+    '<h3>Provider catalog</h3><div class="card"><table class="tbl"><tr><th>provider</th><th>origin</th><th>default model</th><th>transport</th><th>auth</th><th>context</th></tr>'+
+    providers.map(p=>'<tr><td><b>'+esc(p.name)+'</b></td><td>'+esc(p.origin||'')+'</td><td class="mono">'+esc(p.default_model||'')+'</td><td>'+esc(p.api_mode||'')+'</td><td>'+auth(p)+'</td><td>'+esc((p.context_length||0).toLocaleString())+'</td></tr>').join('')+
+    '</table></div>';
   const psel=$('#mprov'),msel=$('#mmodel');
   psel.onchange=()=>{const ms=d.presets[psel.value]||[];msel.innerHTML=ms.map(m=>'<option>'+esc(m)+'</option>').join('')||'<option>(set in Config)</option>'};
   $('#mset').onclick=async()=>{await post('models',{provider:psel.value,model:msel.value});toast('model updated','ok');PAGES.models()};

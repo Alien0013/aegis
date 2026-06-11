@@ -35,6 +35,9 @@ The dashboard exposes read-only cockpit APIs used by the no-build frontend:
 - `/api/evals` — eval run store, JSONL eval records, and replay summaries
 - `/api/mcp/catalog` — configured MCP servers/catalog metadata; add `?live=1`
   to probe advertised tools, resources, and prompts
+- `/api/models` — active provider/model plus the resolver report: transport,
+  context window, auth readiness, fallback chain, prompt-routing rules, and
+  custom/plugin provider catalog rows
 - `POST /api/chat` — cockpit chat turn runner. Responses include `run_id`,
   `trace_id`, `turn_id`, `session_id`, the final `reply`, and a compact event
   summary so the Chat page can link directly into the run, trace, and session

@@ -679,6 +679,36 @@ def test_provider_count_and_oauth():
     assert all(registry.get_spec(p).oauth for p in ("anthropic", "openai", "openai-codex", "google"))
 
 
+def test_provider_report_exposes_chain_routing_and_catalog():
+    from aegis.config import Config
+    from aegis.providers.registry import provider_report
+
+    cfg = Config.load()
+    cfg.data["model"] = {"provider": "localtest", "default": "local-model"}
+    cfg.data["custom_providers"] = [
+        {
+            "name": "localtest",
+            "base_url": "http://local.test/v1",
+            "api_mode": "chat_completions",
+            "context_length": 70_000,
+        }
+    ]
+    cfg.data["fallback_providers"] = [{"provider": "ollama", "model": "llama3.1"}]
+    cfg.data["routing"] = [{"match": "deploy", "provider": "localtest", "model": "local-routed"}]
+
+    report = provider_report(cfg)
+
+    assert report["active"]["name"] == "localtest"
+    assert report["active"]["auth"]["available"] is True
+    assert report["active"]["context_length"] == 70_000
+    assert [row["name"] for row in report["chain"]] == ["localtest", "ollama"]
+    assert report["fallbacks"][0]["role"] == "fallback:1"
+    assert report["routing"][0]["known_provider"] is True
+    custom = next(row for row in report["provider_catalog"] if row["name"] == "localtest")
+    assert custom["origin"] == "custom"
+    assert custom["base_url"] == "http://local.test/v1"
+
+
 def test_openai_codex_builds_oauth_responses_provider():
     from aegis.config import Config
     from aegis.providers import build_provider

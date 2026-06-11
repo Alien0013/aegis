@@ -488,6 +488,24 @@ def _dashboard_chat_stream(body: dict, chat_runner, send) -> dict:
         return final
 
 
+def _dashboard_models(config: Config) -> dict:
+    from .onboarding import MODEL_PRESETS
+    from .providers.registry import provider_report
+
+    report = provider_report(config)
+    provider_names = sorted({
+        str(row.get("name")) for row in report.get("provider_catalog", [])
+        if row.get("name")
+    })
+    report.update({
+        "provider": config.get("model.provider"),
+        "model": config.get("model.default"),
+        "providers": provider_names,
+        "presets": {p: [m for m, _ in MODEL_PRESETS.get(p, [])] for p in MODEL_PRESETS},
+    })
+    return report
+
+
 def _message_detail(message, index: int) -> dict:
     row = {
         "index": index,
@@ -1316,14 +1334,7 @@ def make_handler(config: Config):
             elif path == "/api/config":
                 self._json(_redacted_config(config))
             elif path == "/api/models":
-                from .onboarding import MODEL_PRESETS
-                from .providers.registry import list_providers
-                self._json({
-                    "provider": config.get("model.provider"),
-                    "model": config.get("model.default"),
-                    "providers": sorted(list_providers()),
-                    "presets": {p: [m for m, _ in MODEL_PRESETS.get(p, [])] for p in MODEL_PRESETS},
-                })
+                self._json(_dashboard_models(config))
             elif path == "/api/analytics":
                 from .usage_log import cost_report, daily_series
                 days = int((q.get("days", ["30"])[0]) or 30)

@@ -107,10 +107,34 @@ def cmd_model(args, config: Config) -> int:
         _print(f"model -> {config.get('model.provider')}/{config.get('model.default')}")
         return 0
     # show
+    report = registry.provider_report(config)
+    active = report.get("active", {})
     _print(f"provider: {config.get('model.provider')}")
     _print(f"model:    {config.get('model.default')}")
-    if config.get("model.base_url"):
-        _print(f"base_url: {config.get('model.base_url')}")
+    if active.get("error"):
+        _print(f"resolver: ERROR {active['error']}")
+    else:
+        _print(f"transport: {active.get('api_mode', '')}")
+        _print(f"context:   {int(active.get('context_length') or 0):,}")
+        auth = active.get("auth") or {}
+        _print(f"auth:      {auth.get('description', '')} ({'ready' if auth.get('available') else 'missing'})")
+        if active.get("base_url"):
+            _print(f"base_url:  {active.get('base_url')}")
+    fallbacks = report.get("fallbacks") or []
+    if fallbacks:
+        _print("fallbacks:")
+        for row in fallbacks:
+            if row.get("error"):
+                _print(f"  - {row.get('name') or '(default)'}: ERROR {row['error']}")
+            else:
+                _print(f"  - {row.get('name')} / {row.get('model')} "
+                       f"({row.get('api_mode')}, {int(row.get('context_length') or 0):,} ctx)")
+    routes = report.get("routing") or []
+    if routes:
+        _print("routing:")
+        for row in routes:
+            status = "known" if row.get("known_provider") else row.get("warning", "unknown")
+            _print(f"  - /{row.get('match', '')}/ -> {row.get('provider')} / {row.get('model')} ({status})")
     return 0
 
 
@@ -1199,7 +1223,7 @@ def build_parser() -> argparse.ArgumentParser:
     tui.set_defaults(func=cmd_tui)
 
     m = sub.add_parser("model", help="show/set the model")
-    m.add_argument("action", nargs="?", choices=["list", "set"])
+    m.add_argument("action", nargs="?", choices=["list", "set", "doctor"])
     m.add_argument("provider", nargs="?")
     m.add_argument("model", nargs="?")
     m.set_defaults(func=cmd_model)

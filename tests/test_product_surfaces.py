@@ -19,6 +19,7 @@ def test_cli_parser_exposes_upgrade_commands():
     assert parser.parse_args(["trace", "list", "--status", "error"]).status == "error"
     assert parser.parse_args(["eval", "show", "eval_1"]).action == "show"
     assert parser.parse_args(["rpc"]).command == "rpc"
+    assert parser.parse_args(["model", "doctor"]).action == "doctor"
 
 
 def test_tui_command_invokes_fullscreen_surface(monkeypatch):
@@ -46,6 +47,34 @@ def test_tui_command_invokes_fullscreen_surface(monkeypatch):
     assert seen["provider_name"] == "p1"
     assert seen["auto"] is True
     assert seen["session"].id
+
+
+def test_model_doctor_prints_resolver_report(capsys):
+    from argparse import Namespace
+
+    from aegis.cli import main
+    from aegis.config import Config
+
+    cfg = Config.load()
+    cfg.data["model"] = {"provider": "localtest", "default": "local-model"}
+    cfg.data["custom_providers"] = [
+        {
+            "name": "localtest",
+            "base_url": "http://local.test/v1",
+            "api_mode": "chat_completions",
+            "context_length": 70_000,
+        }
+    ]
+    cfg.data["fallback_providers"] = [{"provider": "ollama", "model": "llama3.1"}]
+    cfg.data["routing"] = [{"match": "deploy", "provider": "localtest", "model": "local-routed"}]
+
+    assert main.cmd_model(Namespace(action="doctor", provider=None, model=None), cfg) == 0
+
+    out = capsys.readouterr().out
+    assert "transport: chat_completions" in out
+    assert "auth:      no-auth (local) (ready)" in out
+    assert "fallbacks:" in out and "ollama / llama3.1" in out
+    assert "routing:" in out and "/deploy/ -> localtest / local-routed (known)" in out
 
 
 def test_batch_command_records_batch_surface(monkeypatch, tmp_path):
@@ -566,6 +595,34 @@ def test_dashboard_chat_stream_emits_progress_and_final():
     assert final["session_id"] == "sess_streamchat"
     assert final["trace_id"] == "trace_streamchat"
     assert final["run_id"] == "run_streamchat"
+
+
+def test_dashboard_models_exposes_resolver_report():
+    from aegis.config import Config
+    from aegis.dashboard import _dashboard_models
+
+    cfg = Config.load()
+    cfg.data["model"] = {"provider": "localtest", "default": "local-model"}
+    cfg.data["custom_providers"] = [
+        {
+            "name": "localtest",
+            "base_url": "http://local.test/v1",
+            "api_mode": "chat_completions",
+            "context_length": 70_000,
+        }
+    ]
+    cfg.data["fallback_providers"] = [{"provider": "ollama", "model": "llama3.1"}]
+    cfg.data["routing"] = [{"match": "deploy", "provider": "localtest", "model": "local-routed"}]
+
+    data = _dashboard_models(cfg)
+
+    assert data["provider"] == "localtest"
+    assert data["active"]["context_length"] == 70_000
+    assert data["chain"][1]["name"] == "ollama"
+    assert data["routing"][0]["provider"] == "localtest"
+    assert "localtest" in data["providers"]
+    assert any(row["name"] == "localtest" and row["origin"] == "custom"
+               for row in data["provider_catalog"])
 
 
 def test_tui_retry_uses_shared_surface_runner(monkeypatch):

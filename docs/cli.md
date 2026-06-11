@@ -41,7 +41,7 @@ preempts the loop; `/status` shows the active goal plus a local session recap.
 
 ## Setup & config
 - `aegis setup` / `aegis onboard` — wizard
-- `aegis model [list|set <provider> [<model>]]`
+- `aegis model [list|doctor|set <provider> [<model>]]`
 - `aegis auth [status|login <p>|logout <p>]`
 - `aegis config [get|set|path|dump|check|migrate]`
 - `aegis doctor [--fix] [--probe]` — `--probe` makes a live one-token provider call
