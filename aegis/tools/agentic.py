@@ -119,7 +119,6 @@ class SubagentTool(Tool):
                         "agent_type": entry.get("type", atype),
                         "continuation": True,
                     },
-                    expand_refs=False,
                 )
                 _register(
                     args["continue_id"],
@@ -170,7 +169,6 @@ class SubagentTool(Tool):
                         "agent_type": atype,
                         "parent_session_id": getattr(getattr(parent, "session", None), "id", ""),
                     },
-                    expand_refs=False,
                 )
                 out = result.text or "(no output)"
                 _register(

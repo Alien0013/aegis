@@ -46,6 +46,9 @@ prints the schema that was loaded.
 
 `continue_id` sends a follow-up to a previous subagent with its context intact;
 `background: true` runs async and wakes the parent agent when done.
+Subagent tasks use the shared context-reference expander, so prompts like
+`review @file:src/app.py` attach the same file context as CLI, dashboard, RPC,
+gateway, and SDK turns.
 
 ## Background completion wakeups
 

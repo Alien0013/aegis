@@ -37,6 +37,35 @@ def test_subagent_parallel_and_registry(tmp_path, monkeypatch):
     assert SubagentTool().run({}, ctx).is_error
 
 
+def test_subagent_tasks_expand_context_references(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.agent.agent as am
+    from aegis.config import Config
+    from aegis.tools.agentic import SubagentTool, _REGISTRY
+    from aegis.tools.base import ToolContext
+
+    (tmp_path / "brief.md").write_text("subagent attached context", encoding="utf-8")
+    seen = {}
+
+    class Child:
+        def __init__(self):
+            self._depth = 0
+
+        def run(self, task, on_event=None):
+            seen["task"] = task
+            return type("R", (), {"content": "done"})()
+
+    monkeypatch.setattr(am.Agent, "create", staticmethod(lambda cfg, session=None, cwd=None: Child()))
+
+    _REGISTRY.clear()
+    ctx = ToolContext(cwd=tmp_path, config=Config.load())
+    result = SubagentTool().run({"task": "review @file:brief.md"}, ctx)
+
+    assert not result.is_error
+    assert "subagent attached context" in seen["task"]
+    assert "<file path=" in seen["task"]
+
+
 # --- iteration-budget refund ------------------------------------------------
 def test_iteration_budget_refund():
     from aegis.agent.agent import IterationBudget
