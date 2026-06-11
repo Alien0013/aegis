@@ -666,14 +666,18 @@ def test_dashboard_models_and_analytics(tmp_path, monkeypatch):
     from http.server import ThreadingHTTPServer
     from aegis.config import Config
     from aegis.dashboard import make_handler
+    from aegis import ratelimit
     from aegis import usage_log
     from aegis.types import Usage
     usage_log.log("anthropic", "claude-opus-4-8", Usage(2000, 1000, 500))
+    ratelimit._latest.clear()
+    ratelimit.record({"x-account-balance": "12.34"}, provider="openrouter")
 
     cfg = Config.load()
     cfg.set("dashboard.token", "")
     cfg.set("model.provider", "openai")
     cfg.set("model.default", "gpt-5.5")
+    cfg.data["pricing"] = {"claude-opus-4-8": [100.0, 200.0]}
     srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(cfg))
     port = srv.server_address[1]
     threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -689,6 +693,10 @@ def test_dashboard_models_and_analytics(tmp_path, monkeypatch):
         assert req("GET", "/api/models")["provider"] == "anthropic"
         an = req("GET", "/api/analytics?days=30")
         assert an["calls"] >= 1 and an["total_cost_usd"] > 0 and "claude-opus-4-8" in an["by_model"]
+        assert an["total_cost_usd"] == usage_log.cost_report(30, cfg)["total_cost_usd"]
+        assert an["series"] == usage_log.daily_series(30, cfg)
+        assert an["balance"]["provider"] == "openrouter"
+        assert an["balance"]["balance"] == "12.34"
     finally:
         srv.shutdown()
 

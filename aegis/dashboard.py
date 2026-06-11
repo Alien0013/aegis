@@ -1536,10 +1536,12 @@ def make_handler(config: Config):
             elif path == "/api/models":
                 self._json(_dashboard_models(config))
             elif path == "/api/analytics":
+                from . import ratelimit
                 from .usage_log import cost_report, daily_series
                 days = int((q.get("days", ["30"])[0]) or 30)
-                rep = cost_report(days)
-                rep["series"] = daily_series(days)
+                rep = cost_report(days, config)
+                rep["series"] = daily_series(days, config)
+                rep["balance"] = ratelimit.balance()
                 self._json(rep)
             elif path == "/api/keys":
                 self._json(_env_keys())
