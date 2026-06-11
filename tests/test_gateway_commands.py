@@ -152,6 +152,34 @@ def test_model_provider_session_override(tmp_path, monkeypatch):
     assert "anthropic/claude-sonnet-4-6" in r.dispatch(_ev("/model"))
 
 
+def test_model_only_override_preserves_gateway_session_provider(tmp_path, monkeypatch):
+    from aegis.providers import registry
+
+    r = _runner(tmp_path, monkeypatch)
+    key = r._key(_ev("x"))
+    r._session(key).meta["runtime_controls"] = {
+        "provider": "openrouter",
+        "model": "old-model",
+    }
+    captured = {}
+
+    def fake_validate(provider, model, config):
+        captured.update({"provider": provider, "model": model, "config": config})
+        return {"ok": True, "provider": provider, "model": model}
+
+    monkeypatch.setattr(registry, "validate_model_choice", fake_validate)
+    monkeypatch.setattr(registry, "model_validation_message", lambda _validation: "")
+
+    out = r.dispatch(_ev("/model newer-model"))
+
+    assert "→ newer-model" in out
+    assert captured == {"provider": "openrouter", "model": "newer-model", "config": r.config}
+    controls = r._session(key).meta["runtime_controls"]
+    assert controls["provider"] == "openrouter"
+    assert controls["model"] == "newer-model"
+    assert "openrouter/newer-model" in r.dispatch(_ev("/model"))
+
+
 def test_model_provider_override_rejects_unknown_provider(tmp_path, monkeypatch):
     r = _runner(tmp_path, monkeypatch)
     key = r._key(_ev("x"))

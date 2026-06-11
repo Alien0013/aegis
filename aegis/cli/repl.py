@@ -23,6 +23,7 @@ from ..surface import (
     apply_session_runtime,
     remember_session_runtime,
     run_control_action,
+    session_runtime_controls,
 )
 
 # --- optional pretty deps ---------------------------------------------------
@@ -657,17 +658,17 @@ def handle_slash(
                 _out("usage: /model <model> or /model <provider>/<model>")
             else:
                 from ..providers import registry
-                target_provider = provider or agent.config.get("model.provider", "")
+                controls = session_runtime_controls(agent.session)
+                target_provider = provider or controls.get("provider") or agent.config.get("model.provider", "")
                 validation = registry.validate_model_choice(target_provider, model, agent.config)
                 warning = registry.model_validation_message(validation)
                 if not validation.get("ok", True):
                     _out(warning, style="yellow")
                     return ""
-                remember_session_runtime(
-                    agent,
-                    provider=provider or None,
-                    model=model,
-                )
+                updates = {"model": model}
+                if provider:
+                    updates["provider"] = provider
+                remember_session_runtime(agent, **updates)
                 apply_session_runtime(agent)
                 try:
                     agent.refresh_volatile()

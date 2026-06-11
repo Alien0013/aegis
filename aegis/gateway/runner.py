@@ -222,16 +222,16 @@ class GatewayRunner:
                 if not model:
                     return "usage: /model <model> or /model <provider>/<model>"
                 from ..providers import registry
-                target_provider = provider or self.config.get("model.provider", "")
+                controls = session_runtime_controls(session)
+                target_provider = provider or controls.get("provider") or self.config.get("model.provider", "")
                 validation = registry.validate_model_choice(target_provider, model, self.config)
                 warning = registry.model_validation_message(validation)
                 if not validation.get("ok", True):
                     return warning
-                remember_session_runtime(
-                    type("A", (), {"session": session})(),
-                    provider=provider or None,
-                    model=model,
-                )
+                updates = {"model": model}
+                if provider:
+                    updates["provider"] = provider
+                remember_session_runtime(type("A", (), {"session": session})(), **updates)
                 self.store.save(session)
                 self._drop_agent(key)        # rebuild with the new model next turn
                 label = f"{provider}/" if provider else ""
