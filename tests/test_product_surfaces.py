@@ -543,15 +543,41 @@ def test_terminal_background_inherits_agent_cwd(monkeypatch, tmp_path):
                 "config": config,
                 "prompt": prompt,
                 "cwd": cwd,
+                "on_done": on_done,
                 "parent_session": parent_session,
             })
+            task = SimpleNamespace(
+                id="bg_test",
+                prompt=prompt,
+                status="done",
+                result="done bg",
+                error="",
+            )
+            if on_done is not None:
+                on_done(task)
             return "bg_test"
 
     out = []
+    delegations = []
+    wakeups = []
+    events = []
+
+    class Memory:
+        def on_delegation(self, task, result):
+            delegations.append((task, result))
+
     cfg = Config.load()
     session = Session.create("terminal bg")
-    agent = SimpleNamespace(config=cfg, session=session, cwd=tmp_path / "project")
+    agent = SimpleNamespace(
+        config=cfg,
+        session=session,
+        cwd=tmp_path / "project",
+        memory=Memory(),
+    )
     monkeypatch.setattr("aegis.background.get_manager", lambda: Manager())
+    monkeypatch.setattr("aegis.agent.wakeups.add_wakeup",
+                        lambda source, title, text: wakeups.append((source, title, text)))
+    monkeypatch.setattr("aegis.eventbus.BUS.publish", lambda event: events.append(event))
     monkeypatch.setattr(repl, "_out", lambda text="", style=None: out.append(str(text)))
 
     repl.handle_slash("/background inspect later", agent)
@@ -560,7 +586,16 @@ def test_terminal_background_inherits_agent_cwd(monkeypatch, tmp_path):
     assert captured["config"] is cfg
     assert captured["prompt"] == "inspect later"
     assert captured["cwd"] == tmp_path / "project"
+    assert callable(captured["on_done"])
     assert captured["parent_session"] is session
+    assert delegations == [("inspect later", "done bg")]
+    assert wakeups == [("background", "bg_test: inspect later", "done bg")]
+    assert events == [{
+        "type": "background_done",
+        "platform": "cli",
+        "chat_id": None,
+        "text": "background task done:\ndone bg",
+    }]
 
 
 def test_terminal_resume_reapplies_session_runtime(monkeypatch):

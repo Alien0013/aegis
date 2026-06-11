@@ -851,10 +851,32 @@ def handle_slash(
     elif name == "/background":
         if arg:
             from ..background import get_manager
+
+            def _announce(task) -> None:
+                try:
+                    from ..tools.agentic import _notify_delegation
+                    _notify_delegation(agent, task.prompt, task.result or task.error)
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    from ..agent.wakeups import add_wakeup
+                    add_wakeup("background", f"{task.id}: {task.prompt[:80]}",
+                               task.result or task.error)
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    text = (f"background task done:\n{task.result}" if task.status == "done"
+                            else f"background task failed: {task.error}")
+                    from ..eventbus import BUS
+                    BUS.publish({"type": "background_done", "platform": "cli",
+                                 "chat_id": None, "text": text[:2000]})
+                except Exception:  # noqa: BLE001
+                    pass
             tid = get_manager().spawn(
                 agent.config,
                 arg,
                 cwd=getattr(agent, "cwd", None),
+                on_done=_announce,
                 parent_session=agent.session,
             )
             _out(f"started background task {tid}", style="green")
