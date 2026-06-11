@@ -16,6 +16,11 @@ curl -s http://127.0.0.1:8790/v1/chat/completions \
 Optional bearer auth via `server.api_key` (or `AEGIS_SERVER_KEY`). Streaming is
 supported (`"stream": true`). Requests run through `SurfaceRunner`, so configured
 MCP tools, tracing, sessions, skills, and memory are the same as the CLI.
+`GET /v1/models` returns actual model ids from active config, presets, provider
+defaults, and custom providers. Streaming chunks include normal assistant deltas
+plus metadata-only chunks for agent progress events such as iteration and tool
+activity, followed by a final metadata chunk with `session_id`, `trace_id`, and
+`run_id`.
 
 ## JSON-RPC Stdio
 
@@ -44,8 +49,9 @@ Pass a stable session id with `metadata.session_id`, top-level `session_id`, or 
 }
 ```
 
-Responses include `metadata.session_id`, `metadata.trace_id`, and OpenAI-style
-`usage` fields with prompt/completion/cache accounting when the provider reports it.
+Responses include `metadata.session_id`, `metadata.trace_id`, `metadata.run_id`,
+and OpenAI-style `usage` fields with prompt/completion/cache accounting when the
+provider reports it.
 OpenAI content arrays are accepted for text and image inputs; `system` and
 `developer` messages are preserved as request context before the final user turn.
 

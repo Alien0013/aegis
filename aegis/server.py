@@ -13,7 +13,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 from .config import Config
-from .providers import list_providers
 from .surface import SurfaceRunner
 from .types import Message, new_id
 
@@ -85,6 +84,42 @@ def _usage(agent) -> dict[str, Any]:
     }
 
 
+def _models(config: Config) -> list[dict[str, Any]]:
+    from .onboarding import MODEL_PRESETS
+    from .providers import registry
+
+    seen: set[str] = set()
+    rows: list[dict[str, Any]] = []
+
+    def add(model: str | None, provider: str = "") -> None:
+        mid = str(model or "").strip()
+        if not mid or mid in seen:
+            return
+        seen.add(mid)
+        row = {"id": mid, "object": "model", "owned_by": provider or "aegis"}
+        if provider:
+            row["provider"] = provider
+        rows.append(row)
+
+    add(config.get("model.default"), config.get("model.provider", ""))
+    for provider, presets in MODEL_PRESETS.items():
+        for model, _label in presets:
+            add(model, provider)
+    for provider in registry.list_providers():
+        spec = registry.get_spec(provider)
+        if spec is not None:
+            add(spec.default_model, provider)
+    for item in config.get("custom_providers", []) or []:
+        if isinstance(item, dict):
+            add(item.get("default_model") or item.get("model"), item.get("name", ""))
+    return rows
+
+
+def _event_metadata(event: dict[str, Any]) -> dict[str, Any]:
+    keys = ("type", "name", "tool_name", "status", "summary", "preview", "is_error", "duration_ms")
+    return {key: event[key] for key in keys if key in event}
+
+
 def make_handler(config: Config):
     api_key = config.get("server.api_key") or os.environ.get("AEGIS_SERVER_KEY")
     runner = SurfaceRunner(config, include_mcp=True)
@@ -106,8 +141,7 @@ def make_handler(config: Config):
 
         def do_GET(self):  # noqa: N802
             if self.path.rstrip("/") == "/v1/models":
-                models = [{"id": p, "object": "model", "owned_by": "aegis"} for p in list_providers()]
-                return self._json(200, {"object": "list", "data": models})
+                return self._json(200, {"object": "list", "data": _models(config)})
             return self._json(404, {"error": "not found"})
 
         def do_POST(self):  # noqa: N802
@@ -163,11 +197,19 @@ def make_handler(config: Config):
                     chunk = {"id": cid, "object": "chat.completion.chunk", "created": int(time.time()),
                              "model": model or config.get("model.default", ""),
                              "choices": [{"index": 0, "delta": {"content": e["text"]}}]}
-                    try:
-                        self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
-                        self.wfile.flush()
-                    except (BrokenPipeError, ConnectionResetError):
-                        pass
+                else:
+                    meta = _event_metadata(e)
+                    if not meta:
+                        return
+                    chunk = {"id": cid, "object": "chat.completion.chunk", "created": int(time.time()),
+                             "model": model or config.get("model.default", ""),
+                             "choices": [{"index": 0, "delta": {}}],
+                             "metadata": {"event": meta}}
+                try:
+                    self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
 
             result = runner.run_prompt(
                 last_user,
