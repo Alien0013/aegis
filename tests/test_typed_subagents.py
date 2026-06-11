@@ -72,6 +72,95 @@ def test_continuation_reuses_child(tmp_path, capture):
     assert r3.is_error
 
 
+def test_continuation_notifies_parent_memory(tmp_path, capture):
+    from aegis.session import Session
+
+    calls = []
+
+    class Memory:
+        def on_delegation(self, task, result):
+            calls.append((task, result))
+
+    class Parent:
+        session = Session.create()
+        memory = Memory()
+
+    ctx = ToolContext(cwd=tmp_path, config=Config.load(), agent=Parent())
+    tool = SubagentTool()
+    r1 = tool.run({"task": "step one", "agent_type": "plan"}, ctx)
+    sid = re.search(r"subagent id: (\S+) ", r1.content).group(1)
+    calls.clear()
+
+    r2 = tool.run({"task": "refine step 3", "continue_id": sid}, ctx)
+
+    assert not r2.is_error
+    assert calls == [("refine step 3", "child answer")]
+
+
+def test_subagent_error_notifies_parent_memory(tmp_path, monkeypatch):
+    from aegis.session import Session
+
+    calls = []
+
+    class Memory:
+        def on_delegation(self, task, result):
+            calls.append((task, result))
+
+    class Parent:
+        session = Session.create()
+        memory = Memory()
+
+    def boom(self, task, on_event=None):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(Agent, "run", boom)
+    ctx = ToolContext(cwd=tmp_path, config=Config.load(), agent=Parent())
+
+    r = SubagentTool().run({"task": "explode"}, ctx)
+
+    assert not r.is_error
+    assert "[subagent error] boom" in r.content
+    assert calls == [("explode", "[subagent error] boom")]
+
+
+def test_background_subagent_notifies_parent_memory(tmp_path, monkeypatch):
+    from aegis.session import Session
+
+    calls = []
+
+    class Memory:
+        def on_delegation(self, task, result):
+            calls.append((task, result))
+
+    class Parent:
+        session = Session.create()
+        memory = Memory()
+        platform = None
+        chat_id = None
+
+    class Manager:
+        def spawn(self, config, prompt, *, cwd=None, on_done=None, parent_session=None):
+            task = type("Task", (), {
+                "id": "bg_test",
+                "prompt": prompt,
+                "status": "done",
+                "result": "done bg",
+                "error": "",
+                "run_id": "run_bg",
+            })()
+            if on_done is not None:
+                on_done(task)
+            return task.id
+
+    monkeypatch.setattr("aegis.background.get_manager", lambda: Manager())
+    ctx = ToolContext(cwd=tmp_path, config=Config.load(), agent=Parent())
+
+    r = SubagentTool().run({"task": "bg task", "background": True}, ctx)
+
+    assert not r.is_error
+    assert calls == [("bg task", "done bg")]
+
+
 def test_subagent_inherits_parent_runtime_controls(tmp_path, capture):
     from aegis.session import Session
 

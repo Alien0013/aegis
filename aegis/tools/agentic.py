@@ -26,6 +26,16 @@ def _register(sid: str, **fields) -> None:
                 _REGISTRY.pop(k, None)
 
 
+def _notify_delegation(parent, task: str, result: str) -> None:
+    parent_mem = getattr(parent, "memory", None)
+    if parent_mem is None:
+        return
+    try:
+        parent_mem.on_delegation(task, result)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 # Typed subagents: a named type = a tool whitelist + a role preamble. Read-only types
 # can fan out aggressively because they cannot modify anything.
 _READONLY_TOOLS = {
@@ -156,8 +166,10 @@ class SubagentTool(Tool):
                     turn_id=result.turn_id,
                 )
                 out = result.text or "(no output)"
+                _notify_delegation(parent, tasks[0], out)
                 return ToolResult.ok(out, display=f"continued {args['continue_id']}")
             except Exception as e:  # noqa: BLE001
+                _notify_delegation(parent, tasks[0], f"[subagent error] {e}")
                 return ToolResult.error(f"subagent continuation failed: {e}")
 
         if args.get("background") and depth == 1:
@@ -215,17 +227,14 @@ class SubagentTool(Tool):
                     turn_id=result.turn_id,
                 )
                 ctx.emit_event(type="subagent_done", id=sid, status="done")
-                parent_mem = getattr(parent, "memory", None)   # delegation hook on the parent
-                if parent_mem is not None:
-                    try:
-                        parent_mem.on_delegation(task, out)
-                    except Exception:  # noqa: BLE001
-                        pass
+                _notify_delegation(parent, task, out)
                 return sid, out
             except Exception as e:  # noqa: BLE001 - isolate one child's failure
                 _register(sid, status="error")
                 ctx.emit_event(type="subagent_done", id=sid, status="error")
-                return sid, f"[subagent error] {e}"
+                out = f"[subagent error] {e}"
+                _notify_delegation(parent, task, out)
+                return sid, out
 
         if len(tasks) == 1:
             sid, out = _one(tasks[0])
@@ -246,6 +255,7 @@ class SubagentTool(Tool):
         chat_id = getattr(ctx.agent, "chat_id", None)
 
         def _announce(task) -> None:
+            _notify_delegation(ctx.agent, task.prompt, task.result or task.error)
             text = (f"✅ background task done:\n{task.result}" if task.status == "done"
                     else f"⚠ background task failed: {task.error}")
             from ..agent.wakeups import add_wakeup     # parent agent learns it next turn
