@@ -160,16 +160,21 @@ class ContextBuilder:
         self.workspace = workspace or Workspace(self.cwd)
 
     def _persona(self) -> str:
-        """Active personality file overrides SOUL.md when set."""
+        """Layer SOUL.md with the active personality, when one is set."""
         from ..config import workspace_dir
+        from ..util import read_text
+
+        blocks: list[str] = []
+        soul = self.workspace.soul()
+        if soul:
+            blocks.append(f"<!-- SOUL.md -->\n{soul}")
         name = self.config.get("agent.personality")
         if name:
             p = workspace_dir() / "personalities" / f"{name}.md"
-            from ..util import read_text
             body = read_text(p).strip()
             if body:
-                return body
-        return self.workspace.soul()
+                blocks.append(f"<!-- personality:{name} -->\n{body}")
+        return "\n\n".join(blocks).strip()
 
     def _env_block(self) -> str:
         return (

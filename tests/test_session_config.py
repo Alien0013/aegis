@@ -86,6 +86,40 @@ def test_workspace_rules_merge(tmp_path):
     assert "use ruff" in rules
 
 
+def test_workspace_rules_layer_root_and_subdir(tmp_path):
+    from aegis.config import Workspace
+
+    (tmp_path / "AGENTS.md").write_text("ROOT RULES")
+    sub = tmp_path / "packages" / "foo"
+    sub.mkdir(parents=True)
+    (sub / "AGENTS.md").write_text("SUBPKG RULES")
+
+    rules = Workspace(cwd=sub).rules()
+
+    assert "ROOT RULES" in rules
+    assert "SUBPKG RULES" in rules
+    assert rules.index("ROOT RULES") < rules.index("SUBPKG RULES")
+
+
+def test_personality_layers_with_soul(tmp_path):
+    from aegis.agent.context import ContextBuilder
+    from aegis.config import Config, workspace_dir
+
+    workspace = workspace_dir()
+    (workspace / "SOUL.md").write_text("core soul voice", encoding="utf-8")
+    pdir = workspace / "personalities"
+    pdir.mkdir(parents=True, exist_ok=True)
+    (pdir / "pilot.md").write_text("pilot surface tone", encoding="utf-8")
+    cfg = Config.load()
+    cfg.data.setdefault("agent", {})["personality"] = "pilot"
+
+    prompt = ContextBuilder(cfg, cwd=tmp_path).build()
+
+    assert "core soul voice" in prompt
+    assert "pilot surface tone" in prompt
+    assert prompt.index("core soul voice") < prompt.index("pilot surface tone")
+
+
 def test_get_home_honors_env(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path / "custom"))
     from aegis import config as cfg

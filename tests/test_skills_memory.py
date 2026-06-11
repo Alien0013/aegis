@@ -52,6 +52,26 @@ def test_skill_tier_precedence(tmp_path, monkeypatch):
     assert sl.discover()["dup"].description == "workspace."
 
 
+def test_skill_discovery_refreshes_when_files_change(tmp_path):
+    from aegis.config import Config
+    from aegis.skills import SkillsLoader
+
+    cfg = Config.load()
+    cfg.data["skills"]["paths"] = [str(tmp_path)]
+    sl = SkillsLoader(cfg)
+
+    assert "fresh" not in sl.discover()
+
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    (fresh / "SKILL.md").write_text(
+        "---\nname: fresh\ndescription: discovered after cache.\n---\nbody",
+        encoding="utf-8",
+    )
+
+    assert sl.discover()["fresh"].description == "discovered after cache."
+
+
 def test_index_block_progressive():
     from aegis.config import Config
     from aegis.skills import SkillsLoader

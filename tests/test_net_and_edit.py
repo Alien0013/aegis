@@ -56,16 +56,17 @@ def test_edit_file_hint_when_no_fuzzy_match(tmp_path):
     assert r.is_error and "not found" in r.content
 
 
-# --- nearest AGENTS.md (monorepo) ------------------------------------------
-def test_nearest_agents_md_walks_up(tmp_path):
+# --- layered AGENTS.md (monorepo) ------------------------------------------
+def test_agents_md_layers_root_and_subdir(tmp_path):
     from aegis.config import Workspace
     (tmp_path / "AGENTS.md").write_text("ROOT RULES")
     sub = tmp_path / "packages" / "foo"
     sub.mkdir(parents=True)
     assert "ROOT RULES" in Workspace(cwd=sub).rules()
-    # a closer rule file wins
     (sub / "AGENTS.md").write_text("SUBPKG RULES")
-    assert "SUBPKG RULES" in Workspace(cwd=sub).rules()
+    rules = Workspace(cwd=sub).rules()
+    assert "ROOT RULES" in rules and "SUBPKG RULES" in rules
+    assert rules.index("ROOT RULES") < rules.index("SUBPKG RULES")
 
 
 # --- model metadata ---------------------------------------------------------

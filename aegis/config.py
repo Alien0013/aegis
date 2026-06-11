@@ -430,19 +430,20 @@ class Workspace:
             if g:
                 blocks.append(f"<!-- global:{name} -->\n{g}")
                 break
-        # Project rules: the NEAREST rule file walking up from cwd (so a subdir of a monorepo
-        # picks up the repo-root AGENTS.md when it has none of its own). Stops at $HOME / root.
+        # Project rules: layer rule files walking from the broadest ancestor down
+        # to cwd, so monorepo root guidance and package-local guidance both apply.
         d = self.cwd.resolve()
         home = Path.home().resolve()
+        project_blocks: list[tuple[Path, str, str]] = []
         for _ in range(40):
-            found = False
             for name in self.RULE_FILES:
                 p = read_text(d / name).strip()
                 if p:
-                    blocks.append(f"<!-- project:{name} ({d}) -->\n{p}")
-                    found = True
+                    project_blocks.append((d, name, p))
                     break
-            if found or d == d.parent or d == home:
+            if d == d.parent or d == home:
                 break
             d = d.parent
+        for path, name, body in reversed(project_blocks):
+            blocks.append(f"<!-- project:{name} ({path}) -->\n{body}")
         return "\n\n".join(blocks).strip()

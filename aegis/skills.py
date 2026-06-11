@@ -107,6 +107,7 @@ class SkillsLoader:
         self.config = config
         self.cwd = cwd or Path.cwd()
         self._cache: dict[str, Skill] | None = None
+        self._cache_signature: tuple | None = None
 
     def _search_paths(self) -> list[tuple[int, Path]]:
         paths: list[tuple[int, Path]] = [
@@ -120,7 +121,8 @@ class SkillsLoader:
         return paths
 
     def discover(self) -> dict[str, Skill]:
-        if self._cache is not None:
+        signature = self._discovery_signature()
+        if self._cache is not None and self._cache_signature == signature:
             return self._cache
         found: dict[str, Skill] = {}
         for tier, base in self._search_paths():
@@ -148,7 +150,25 @@ class SkillsLoader:
                     tier=tier,
                 )
         self._cache = found
+        self._cache_signature = signature
         return found
+
+    def _discovery_signature(self) -> tuple:
+        entries: list[tuple[str, int, int]] = []
+        for _tier, base in self._search_paths():
+            try:
+                stat = base.stat()
+                entries.append((str(base), int(stat.st_mtime_ns), int(stat.st_size)))
+            except OSError:
+                entries.append((str(base), 0, 0))
+                continue
+            for skill_md in sorted(base.glob("*/SKILL.md")):
+                try:
+                    stat = skill_md.stat()
+                except OSError:
+                    continue
+                entries.append((str(skill_md), int(stat.st_mtime_ns), int(stat.st_size)))
+        return tuple(entries)
 
     def available(self) -> list[Skill]:
         return [s for s in self.discover().values() if s.satisfied()[0]]
@@ -240,3 +260,4 @@ class SkillsLoader:
 
     def invalidate(self) -> None:
         self._cache = None
+        self._cache_signature = None
