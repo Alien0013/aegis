@@ -43,7 +43,7 @@ class AgentStateTool(Tool):
 
             return _json(SessionStore().list(limit), f"{limit} session(s)")
         if action == "session":
-            return self._session(str(args.get("id") or ""), limit)
+            return self._session(str(args.get("id") or ""), limit, ctx)
         if action == "branch":
             return self._branch(str(args.get("id") or ""), str(args.get("title") or ""), ctx)
         if action == "runs":
@@ -64,22 +64,26 @@ class AgentStateTool(Tool):
         session = ctx.session
         agent = ctx.agent
         trace_ctx = getattr(agent, "_trace_context", {}) or {}
+        meta = getattr(session, "meta", {}) or {}
+        meta = meta if isinstance(meta, dict) else {}
         data = {
             "session_id": getattr(session, "id", ""),
             "title": getattr(session, "title", ""),
             "parent_id": getattr(session, "parent_id", None),
             "messages": len(getattr(session, "messages", []) or []),
             "todos": getattr(session, "todos", []) or [],
-            "meta": getattr(session, "meta", {}) or {},
-            "trace_id": trace_ctx.get("trace_id", ""),
-            "turn_id": trace_ctx.get("turn_id", ""),
+            "meta": meta,
+            "trace_id": str(trace_ctx.get("trace_id") or meta.get("last_trace_id")
+                            or meta.get("trace_id") or ""),
+            "turn_id": str(trace_ctx.get("turn_id") or meta.get("turn_id") or ""),
+            "run_id": str(getattr(agent, "_surface_run_id", "") or meta.get("last_run_id", "")),
             "provider": getattr(getattr(agent, "provider", None), "name", ""),
             "model": getattr(getattr(agent, "provider", None), "model", ""),
             "tools_used": getattr(agent, "tools_used", 0),
         }
         return _json(data, "current state")
 
-    def _session(self, session_id: str, limit: int) -> ToolResult:
+    def _session(self, session_id: str, limit: int, ctx: ToolContext) -> ToolResult:
         if not session_id:
             return ToolResult.error("session action requires id")
         from ..session import SessionStore
@@ -95,6 +99,7 @@ class AgentStateTool(Tool):
                 "content": _clip(message.content),
                 "tool_calls": [tc.to_dict() for tc in message.tool_calls],
             })
+        linked = _session_links(session.id, limit, ctx)
         data = {
             "id": session.id,
             "title": session.title,
@@ -104,6 +109,9 @@ class AgentStateTool(Tool):
             "meta": session.meta,
             "todos": session.todos,
             "recent_messages": messages,
+            "runs": linked["runs"],
+            "traces": linked["traces"],
+            "links": linked["links"],
         }
         return _json(data, f"session {session.id[:12]}")
 
@@ -188,6 +196,42 @@ class AgentStateTool(Tool):
 
 def _clip(text: str, limit: int = 1200) -> str:
     return text if len(text) <= limit else text[:limit].rstrip() + "\n...[truncated]"
+
+
+def _session_links(session_id: str, limit: int, ctx: ToolContext) -> dict:
+    from ..config import Config
+    from ..runs import RunStore
+    from ..tracing import TraceStore
+
+    try:
+        runs = RunStore().list(session_id=session_id, limit=limit)
+    except Exception:  # noqa: BLE001
+        runs = []
+    try:
+        traces = TraceStore.from_config(ctx.config or Config.load()).list_traces(
+            session_id=session_id,
+            limit=limit,
+        )
+    except Exception:  # noqa: BLE001
+        traces = []
+
+    run_ids = [str(row.get("id") or "") for row in runs if row.get("id")]
+    trace_ids: list[str] = []
+    for value in [row.get("trace_id", "") for row in runs] + \
+            [row.get("trace_id") or row.get("id", "") for row in traces]:
+        value = str(value or "")
+        if value and value not in trace_ids:
+            trace_ids.append(value)
+    return {
+        "runs": runs,
+        "traces": traces,
+        "links": {
+            "run_ids": run_ids,
+            "trace_ids": trace_ids,
+            "latest_run_id": run_ids[0] if run_ids else "",
+            "latest_trace_id": trace_ids[0] if trace_ids else "",
+        },
+    }
 
 
 def _json(data: Any, display: str) -> ToolResult:

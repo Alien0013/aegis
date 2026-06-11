@@ -95,8 +95,9 @@ local/docker/ssh backends (fail-closed).
 ## Sessions (`session.py`)
 SQLite store with FTS5 full-text search across messages, summaries, and resume.
 `session_search` gives the agent cross-session recall. `agent_state` exposes
-current/session state, branching, traces, eval runs, and background work as a
-model-visible tool so every surface can inspect the same runtime state.
+current/session state, branching, linked run/trace breadcrumbs, eval runs, and
+background work as a model-visible tool so every surface can inspect the same
+runtime state.
 After each turn, `session.meta` includes runtime provider/model/transport/context
 length, usage/cache counters, trace/turn ids, response-state pointers when
 available, prompt-part metadata, and tool-call counts.

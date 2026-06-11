@@ -1587,6 +1587,7 @@ def test_agent_state_tool_sessions_traces_evals_and_background():
     agent = SimpleNamespace(
         provider=SimpleNamespace(name="fake", model="fake-model"),
         tools_used=3,
+        _surface_run_id=run["id"],
         _trace_context={"trace_id": "trace_state", "turn_id": "turn_state"},
     )
     ctx = ToolContext(config=cfg, session=session, agent=agent)
@@ -1595,6 +1596,21 @@ def test_agent_state_tool_sessions_traces_evals_and_background():
     current = json.loads(tool.run({"action": "current"}, ctx).content)
     assert current["session_id"] == session.id
     assert current["trace_id"] == "trace_state"
+    assert current["run_id"] == run["id"]
+    session.meta["last_run_id"] = run["id"]
+    session.meta["last_trace_id"] = "trace_state"
+    fallback_current = json.loads(tool.run(
+        {"action": "current"},
+        ToolContext(config=cfg, session=session, agent=SimpleNamespace(provider=None, tools_used=0)),
+    ).content)
+    assert fallback_current["run_id"] == run["id"]
+    assert fallback_current["trace_id"] == "trace_state"
+
+    session_detail = json.loads(tool.run({"action": "session", "id": session.id}, ctx).content)
+    assert session_detail["runs"][0]["id"] == run["id"]
+    assert session_detail["traces"][0]["trace_id"] == "trace_state"
+    assert session_detail["links"]["run_ids"] == [run["id"]]
+    assert session_detail["links"]["latest_trace_id"] == "trace_state"
 
     branch = json.loads(tool.run({"action": "branch", "title": "state branch"}, ctx).content)
     assert branch["parent_id"] == session.id

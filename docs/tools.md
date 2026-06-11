@@ -9,7 +9,8 @@
 tool. Group them with `tools.toolsets` (add `browser`, `computer`, `voice`, `lsp`).
 
 `agent_state` exposes shared runtime state to every surface: current session,
-recent sessions, session branching, traces, eval runs, and background task status.
+recent sessions, session branching, linked run/trace breadcrumbs, eval runs, and
+background task status.
 
 ## Deferred schemas (context economy)
 
