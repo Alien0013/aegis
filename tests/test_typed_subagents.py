@@ -18,8 +18,12 @@ def capture(monkeypatch):
     seen = {}
 
     def fake_run(self, task, on_event=None):
+        self.ensure_system_prompt(force=True)
         seen["tools"] = {t.name for t in self.registry.all()}
         seen.setdefault("tasks", []).append(task if isinstance(task, str) else task.content)
+        seen["system_prompt"] = self.session.messages[0].content
+        seen["prompt_parts"] = list(self.session.meta.get("prompt_parts") or [])
+        seen["session_meta"] = dict(self.session.meta)
         return Message.assistant("child answer")
 
     monkeypatch.setattr(Agent, "run", fake_run)
@@ -36,7 +40,10 @@ def test_explore_type_is_readonly(tmp_path, capture):
     assert not r.is_error
     assert capture["tools"] <= _READONLY_TOOLS          # whitelist enforced
     assert "write_file" not in capture["tools"] and "bash" not in capture["tools"]
-    assert capture["tasks"][0].startswith("You are a READ-ONLY explore agent")
+    assert capture["tasks"][0] == "find the config loader"
+    assert not capture["tasks"][0].startswith("You are a READ-ONLY explore agent")
+    assert "You are a READ-ONLY explore agent" in capture["system_prompt"]
+    assert any(p["name"] == "subagent_role:explore" for p in capture["prompt_parts"])
 
 
 def test_general_type_keeps_full_tools(tmp_path, capture):
@@ -57,5 +64,8 @@ def test_continuation_reuses_child(tmp_path, capture):
     r2 = tool.run({"task": "refine step 3", "continue_id": sid}, _ctx(tmp_path))
     assert not r2.is_error and "child answer" in r2.content
     assert capture["tasks"][-1] == "refine step 3"      # follow-up went to the same child
+    assert capture["session_meta"]["agent_type"] == "plan"
+    assert "READ-ONLY planning architect" in capture["system_prompt"]
+    assert any(p["name"] == "subagent_role:plan" for p in capture["prompt_parts"])
     r3 = tool.run({"task": "x", "continue_id": "sub_nope"}, _ctx(tmp_path))
     assert r3.is_error

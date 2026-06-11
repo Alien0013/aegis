@@ -47,6 +47,21 @@ AGENT_TYPES: dict[str, dict] = {
 }
 
 
+def _role_prompt(agent_type: str, spec: dict) -> str:
+    return str(spec.get("preamble") or "").strip()
+
+
+def _seed_role_prompt(session, agent_type: str, role_prompt: str) -> bool:
+    changed = False
+    if agent_type and session.meta.get("agent_type") != agent_type:
+        session.meta["agent_type"] = agent_type
+        changed = True
+    if role_prompt and session.meta.get("subagent_role_prompt") != role_prompt:
+        session.meta["subagent_role_prompt"] = role_prompt
+        changed = True
+    return changed
+
+
 class SubagentTool(Tool):
     name = "spawn_subagent"
     description = (
@@ -108,15 +123,25 @@ class SubagentTool(Tool):
             try:
                 from ..surface import SurfaceRunner
 
+                role_type = str(entry.get("type") or atype)
+                role_spec = AGENT_TYPES.get(role_type, spec)
+                child_session = getattr(child, "session", None)
+                if child_session is not None and _seed_role_prompt(
+                    child_session, role_type, _role_prompt(role_type, role_spec)
+                ):
+                    try:
+                        child.refresh_volatile()
+                    except Exception:  # noqa: BLE001
+                        pass
                 runner = SurfaceRunner(config, cwd=ctx.cwd, include_mcp=True)
                 result = runner.run_prompt(
                     tasks[0],
-                    session=getattr(child, "session", None),
+                    session=child_session,
                     agent=child,
                     surface="subagent",
                     meta={
                         "subagent_id": args["continue_id"],
-                        "agent_type": entry.get("type", atype),
+                        "agent_type": role_type,
                         "continuation": True,
                     },
                 )
@@ -146,13 +171,17 @@ class SubagentTool(Tool):
 
         def _one(task: str) -> tuple[str, str]:
             sid = new_id("sub")
-            _register(sid, status="running", task=task[:80], type=atype)
+            role_prompt = _role_prompt(atype, spec)
+            _register(sid, status="running", task=task[:80], type=atype,
+                      role_prompt=role_prompt)
             ctx.emit_event(type="subagent_start", id=sid, task=task[:80])
             try:
                 kwargs = {}
                 if spec["tools"] is not None:
                     kwargs["registry"] = _restricted_registry(spec["tools"])
-                child = Agent.create(config, session=Session.create(), cwd=ctx.cwd, **kwargs)
+                child_session = Session.create()
+                _seed_role_prompt(child_session, atype, role_prompt)
+                child = Agent.create(config, session=child_session, cwd=ctx.cwd, **kwargs)
                 child._depth = depth  # type: ignore[attr-defined]
                 if toolsets:
                     child.config.data.setdefault("tools", {})["toolsets"] = toolsets
@@ -160,8 +189,8 @@ class SubagentTool(Tool):
 
                 runner = SurfaceRunner(config, cwd=ctx.cwd, include_mcp=True)
                 result = runner.run_prompt(
-                    spec["preamble"] + task,
-                    session=getattr(child, "session", None),
+                    task,
+                    session=child_session,
                     agent=child,
                     surface="subagent",
                     meta={

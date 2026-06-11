@@ -17,7 +17,7 @@ from ..tools.base import ToolContext
 from ..tools.permissions import PermissionEngine
 from ..tools.registry import ToolRegistry, default_registry
 from ..types import Message, Usage
-from .context import ContextBuilder
+from .context import ContextBuilder, PromptBuild, PromptPart
 from .loop import OnEvent, run_conversation
 
 
@@ -259,8 +259,29 @@ class Agent:
             runtime_block=runtime,
             platform=getattr(self, "platform", None),
         )
+        role_part = self._subagent_role_prompt_part()
+        if role_part:
+            parts = list(built.parts)
+            insert_at = next(
+                (i + 1 for i, part in enumerate(parts) if part.name == "agentic_guidance"),
+                1,
+            )
+            parts.insert(insert_at, role_part)
+            text = "\n\n---\n\n".join(part.text.strip() for part in parts if part.text.strip())
+            built = PromptBuild(text=text, parts=parts)
         self._last_prompt_metadata = built.metadata()
         return built.text
+
+    def _subagent_role_prompt_part(self) -> PromptPart | None:
+        role_prompt = str(self.session.meta.get("subagent_role_prompt") or "").strip()
+        if not role_prompt:
+            return None
+        agent_type = str(self.session.meta.get("agent_type") or "subagent").strip() or "subagent"
+        return PromptPart(
+            "stable",
+            f"subagent_role:{agent_type}",
+            f"# Subagent role ({agent_type})\n{role_prompt}",
+        )
 
     def ensure_system_prompt(self, force: bool = False) -> None:
         prompt = self._build_system_prompt()
