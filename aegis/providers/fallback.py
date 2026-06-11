@@ -112,9 +112,16 @@ class FallbackProvider:
         extra = f" (+{len(self.fallbacks)} fallback)" if self.fallbacks else ""
         return self.primary.describe() + extra
 
+    def _chain(self) -> list[Provider]:
+        chain: list[Provider] = []
+        for provider in [self.active, self.primary, *self.fallbacks]:
+            if all(provider is not existing for existing in chain):
+                chain.append(provider)
+        return chain
+
     def complete(self, messages: list[Message], tools: list[ToolSchema] | None = None,
                  **kw) -> LLMResponse:
-        chain = [self.primary, *self.fallbacks]
+        chain = self._chain()
         last_err: Exception | None = None
         for prov in chain:
             try:
@@ -135,6 +142,12 @@ class FallbackProvider:
                      + ("trying next provider" if prov is not chain[-1] else "chain exhausted"))
                 continue
         raise last_err or RuntimeError("all providers failed")
+
+    def cancel_response(self, response_id: str) -> dict | None:
+        cancel = getattr(self.active, "cancel_response", None)
+        if not callable(cancel) or not response_id:
+            return None
+        return cancel(response_id)
 
 
 def build_with_fallbacks(config, *, model=None, name=None) -> Provider | FallbackProvider:

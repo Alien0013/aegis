@@ -55,6 +55,11 @@ fallback_providers:
   - {provider: openrouter, model: anthropic/claude-sonnet-4.5}
 ```
 
+After a fallback succeeds, AEGIS tries that active provider first on the next
+model call. This keeps cache/state warm and avoids repeatedly hitting a known
+failing primary during a degraded run. Provider-side response cancellation is
+also delegated through the active provider.
+
 AEGIS normalizes tool schemas before sending them to Chat Completions, Responses,
 and Codex app-server dynamic tools. This keeps MCP/plugin schemas portable across
 providers that reject annotation-only JSON Schema keywords or nullable type
@@ -68,7 +73,9 @@ when a surface run is active) so provider-side records can be correlated with
 dashboard runs and traces. With `responses.state.truncate_previous_input` on,
 AEGIS sends only the new local input after the stored response id, falling back
 to full local history for older state rows that do not have a recorded message
-offset.
+offset. AEGIS only reuses a stored response id when the active provider and
+model still match the stored state, so prompt routing or model switches start a
+fresh provider-native chain instead of cross-wiring incompatible state.
 During streaming Responses calls, AEGIS captures the active response id when
 the provider emits it; terminal/TUI/gateway interrupts then issue a best-effort
 provider-side cancel while still stopping locally.

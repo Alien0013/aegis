@@ -209,7 +209,7 @@ def test_responses_state_previous_id_and_cache_metrics(monkeypatch):
     from aegis.types import Message
 
     captured: dict = {}
-    ResponsesStateStore().set("sess_state", "resp_prev", provider="openai", model="gpt-5")
+    ResponsesStateStore().set("sess_state", "resp_prev", provider="openai", model="gpt-5.5")
 
     class FakeAuth:
         def headers(self):
@@ -259,6 +259,93 @@ def test_responses_state_previous_id_and_cache_metrics(monkeypatch):
     assert ResponsesStateStore().get("sess_state").response_id == "resp_next"
 
 
+def test_responses_state_not_reused_after_model_or_provider_change(monkeypatch):
+    from aegis.agent.loop import _hydrate_previous_response_id
+    from aegis.providers.responses import ResponsesTransport
+    from aegis.responses_state import ResponsesStateStore
+    from aegis.types import Message
+
+    ResponsesStateStore().set("sess_scope", "resp_old", provider="openai", model="gpt-5")
+
+    same = _hydrate_previous_response_id(
+        "sess_scope",
+        {"enabled": True, "store": True, "send_previous": True},
+        provider="openai",
+        model="gpt-5",
+    )
+    changed_model = _hydrate_previous_response_id(
+        "sess_scope",
+        {"enabled": True, "store": True, "send_previous": True},
+        provider="openai",
+        model="gpt-5.5",
+    )
+    changed_provider = _hydrate_previous_response_id(
+        "sess_scope",
+        {"enabled": True, "store": True, "send_previous": True},
+        provider="openai-codex",
+        model="gpt-5",
+    )
+
+    assert same["previous_response_id"] == "resp_old"
+    assert "previous_response_id" not in changed_model
+    assert changed_model["previous_response_skipped"] == "provider_or_model_changed"
+    assert "previous_response_id" not in changed_provider
+
+    captured: dict = {}
+
+    class FakeAuth:
+        def headers(self):
+            return {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "id": "resp_new",
+                "status": "completed",
+                "output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}],
+            }
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, url, headers, json):
+            captured["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr("aegis.providers.responses.httpx.Client", FakeClient)
+    ResponsesTransport().complete(
+        base_url="https://api.openai.com/v1",
+        auth=FakeAuth(),
+        model="gpt-5.5",
+        messages=[Message.user("hi")],
+        tools=None,
+        stream=False,
+        session_id="sess_scope",
+        response_state={
+            "enabled": True,
+            "store": True,
+            "send_previous": True,
+            "provider": "openai",
+            "model": "gpt-5.5",
+        },
+    )
+
+    assert "previous_response_id" not in captured["json"]
+    state = ResponsesStateStore().get("sess_scope")
+    assert state.response_id == "resp_new"
+    assert state.provider == "openai"
+    assert state.model == "gpt-5.5"
+
+
 def test_responses_state_truncates_input_after_previous_response(monkeypatch):
     from aegis.providers.responses import ResponsesTransport
     from aegis.responses_state import ResponsesStateStore
@@ -269,7 +356,7 @@ def test_responses_state_truncates_input_after_previous_response(monkeypatch):
         "sess_tail",
         "resp_prev",
         provider="openai",
-        model="gpt-5",
+        model="gpt-5.5",
         input_message_count=2,
     )
 
@@ -334,7 +421,7 @@ def test_responses_state_truncation_keeps_tool_outputs(monkeypatch):
         "sess_tool_tail",
         "resp_tool",
         provider="openai",
-        model="gpt-5",
+        model="gpt-5.5",
         input_message_count=2,
     )
 
@@ -914,6 +1001,76 @@ def test_fallback_provider_retries():
         def complete(self, *a, **k): return LLMResponse(text="ok")
 
     assert FallbackProvider(Down(), [Up()]).complete([]).text == "ok"
+
+
+def test_fallback_provider_uses_active_first_after_failover():
+    from aegis.providers.fallback import FallbackProvider
+    from aegis.types import LLMResponse
+
+    class Provider:
+        context_length = 64_000
+        model = "m"
+        api_mode = None
+        auth = None
+
+        def __init__(self, name, *, fail=False):
+            self.name = name
+            self.fail = fail
+            self.calls = 0
+
+        def describe(self):
+            return self.name
+
+        def complete(self, *a, **k):
+            self.calls += 1
+            if self.fail:
+                raise RuntimeError("down")
+            return LLMResponse(text=self.name)
+
+    primary = Provider("primary", fail=True)
+    fallback = Provider("fallback")
+    provider = FallbackProvider(primary, [fallback])
+
+    assert provider.complete([]).text == "fallback"
+    assert provider.complete([]).text == "fallback"
+    assert primary.calls == 1
+    assert fallback.calls == 2
+
+
+def test_fallback_provider_delegates_cancel_to_active_provider():
+    from aegis.providers.fallback import FallbackProvider
+
+    class Provider:
+        context_length = 64_000
+        model = "m"
+        api_mode = None
+        auth = None
+
+        def __init__(self, name):
+            self.name = name
+            self.cancelled = []
+
+        def describe(self):
+            return self.name
+
+        def complete(self, *a, **k):
+            raise RuntimeError("not used")
+
+        def cancel_response(self, response_id):
+            self.cancelled.append(response_id)
+            return {"cancelled": response_id, "provider": self.name}
+
+    primary = Provider("primary")
+    fallback = Provider("fallback")
+    provider = FallbackProvider(primary, [fallback])
+    provider.active = fallback
+
+    assert provider.cancel_response("resp_active") == {
+        "cancelled": "resp_active",
+        "provider": "fallback",
+    }
+    assert primary.cancelled == []
+    assert fallback.cancelled == ["resp_active"]
 
 
 def test_reasoning_threads_to_provider():

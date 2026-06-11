@@ -96,11 +96,32 @@ def _provider_trace_data(agent, wire_messages, schemas, response_state: dict, pr
             "preserve_items": bool(response_state.get("preserve_items", True)),
             "context_management": bool(response_state.get("context_management") or response_state.get("compaction")),
             "previous_response_id": str(response_state.get("previous_response_id") or ""),
+            "provider": str(response_state.get("provider") or ""),
+            "model": str(response_state.get("model") or ""),
+            "previous_response_skipped": str(response_state.get("previous_response_skipped") or ""),
         },
     }
 
 
-def _hydrate_previous_response_id(session_id: str, response_state: dict) -> dict:
+def _responses_state_matches(prev, *, provider: str = "", model: str = "") -> bool:
+    prev_provider = str(getattr(prev, "provider", "") or "")
+    prev_model = str(getattr(prev, "model", "") or "")
+    provider = str(provider or "")
+    model = str(model or "")
+    if prev_provider and provider and prev_provider != provider:
+        return False
+    if prev_model and model and prev_model != model:
+        return False
+    return True
+
+
+def _hydrate_previous_response_id(
+    session_id: str,
+    response_state: dict,
+    *,
+    provider: str = "",
+    model: str = "",
+) -> dict:
     state = dict(response_state or {})
     if not (state.get("enabled") and state.get("store") and state.get("send_previous", True) and session_id):
         return state
@@ -110,8 +131,10 @@ def _hydrate_previous_response_id(session_id: str, response_state: dict) -> dict
         from ..responses_state import ResponsesStateStore
 
         prev = ResponsesStateStore().get(session_id)
-        if prev and prev.response_id:
+        if prev and prev.response_id and _responses_state_matches(prev, provider=provider, model=model):
             state["previous_response_id"] = prev.response_id
+        elif prev and prev.response_id:
+            state["previous_response_skipped"] = "provider_or_model_changed"
     except Exception:  # noqa: BLE001
         pass
     return state
@@ -119,10 +142,17 @@ def _hydrate_previous_response_id(session_id: str, response_state: dict) -> dict
 
 def _response_state_for_agent(agent, session_id: str) -> dict:
     response_state = dict(agent.config.get("responses.state", {}) or {})
+    response_state["provider"] = str(getattr(agent.provider, "name", "") or "")
+    response_state["model"] = str(getattr(agent.provider, "model", "") or "")
     native_compaction = dict(agent.config.get("responses.compaction", {}) or {})
     if native_compaction.get("enabled"):
         response_state["context_management"] = _responses_context_management(agent, native_compaction)
-    return _hydrate_previous_response_id(session_id, response_state)
+    return _hydrate_previous_response_id(
+        session_id,
+        response_state,
+        provider=response_state.get("provider", ""),
+        model=response_state.get("model", ""),
+    )
 
 
 def _responses_context_management(agent, native_compaction: dict) -> list[dict[str, int | str]]:

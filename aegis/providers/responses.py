@@ -138,6 +138,9 @@ class ResponsesTransport(ProviderTransport):
                 previous_state = ResponsesStateStore().get(session_id)
             except Exception:  # noqa: BLE001
                 previous_state = None
+            if previous_state and not self._state_matches_current(previous_state, state, model):
+                previous_state = None
+                previous_response_id = ""
             if not previous_response_id and previous_state and previous_state.response_id:
                 previous_response_id = previous_state.response_id
             if previous_response_id:
@@ -196,6 +199,17 @@ class ResponsesTransport(ProviderTransport):
             return [dict(value)]
         return []
 
+    def _state_matches_current(self, previous_state: Any, state: dict[str, Any], model: str) -> bool:
+        provider = str(state.get("provider") or "")
+        expected_model = str(state.get("model") or model or "")
+        previous_provider = str(getattr(previous_state, "provider", "") or "")
+        previous_model = str(getattr(previous_state, "model", "") or "")
+        if provider and previous_provider and provider != previous_provider:
+            return False
+        if expected_model and previous_model and expected_model != previous_model:
+            return False
+        return True
+
     def _tail_after_previous_response(
         self,
         messages: list[Message],
@@ -232,8 +246,8 @@ class ResponsesTransport(ProviderTransport):
             ResponsesStateStore().set(
                 session_id,
                 rid,
-                provider="openai-responses",
-                model=model,
+                provider=str(state.get("provider") or "responses"),
+                model=str(state.get("model") or model or ""),
                 output_items=output_items if isinstance(output_items, list) else [],
                 input_message_count=input_message_count,
             )

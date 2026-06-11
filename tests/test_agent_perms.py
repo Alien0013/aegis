@@ -93,7 +93,7 @@ def test_budget_grace_preserves_responses_state(tmp_path):
         "send_previous": True,
     }
     session = Session.create()
-    ResponsesStateStore().set(session.id, "resp_before", provider="openai", model="gpt-5")
+    ResponsesStateStore().set(session.id, "resp_before", provider="fake", model="fake-model")
     provider = CapturingProvider()
     agent = Agent(config=cfg, provider=provider, session=session, cwd=tmp_path)
     agent.budget.max_iterations = 1
