@@ -47,11 +47,23 @@ def scan_entry(text: str) -> str | None:
 
 
 class MemoryStore:
-    def __init__(self, base: Path | None = None):
+    """Bounded curated memory, Hermes-matched: §-delimited entries, whole-store char
+    budgets, exact-dup rejection, multi-match ambiguity guards, and external-drift
+    detection (a file the tool couldn't round-trip is backed up and the write refused
+    instead of silently clobbering hand-added content)."""
+
+    def __init__(self, base: Path | None = None,
+                 memory_char_limit: int | None = None,
+                 user_char_limit: int | None = None):
         self.base = base or cfg.memories_dir()
+        self.memory_char_limit = memory_char_limit or MEMORY_CHAR_LIMIT
+        self.user_char_limit = user_char_limit or USER_CHAR_LIMIT
 
     def _path(self, target: str) -> Path:
         return self.base / _FILES[target]
+
+    def _limit(self, target: str) -> int:
+        return self.user_char_limit if target == "user" else self.memory_char_limit
 
     def ensure_files(self) -> None:
         """Create empty MEMORY.md / USER.md if missing so the store is always present
@@ -70,25 +82,68 @@ class MemoryStore:
         return read_text(self._path(target)).strip()
 
     def entries(self, target: str) -> list[str]:
+        """Parse entries: split on the FULL delimiter (a bare '§' inside an entry's
+        content must not split it — Hermes semantics), deduplicate preserving order."""
         raw = self.raw(target)
-        return [e.strip() for e in raw.split("§") if e.strip()] if raw else []
+        if not raw:
+            return []
+        parsed = [e.strip() for e in raw.split(MEMORY_DELIM) if e.strip()]
+        return list(dict.fromkeys(parsed))
+
+    def usage(self, target: str) -> str:
+        """'42% — 920/2,200 chars' usage line (shown in tool responses + prompt header)."""
+        current = len(MEMORY_DELIM.join(self.entries(target)))
+        limit = self._limit(target)
+        pct = min(100, int(current / limit * 100)) if limit > 0 else 0
+        return f"{pct}% — {current:,}/{limit:,} chars"
 
     def _write_entries(self, target: str, entries: list[str]) -> None:
         atomic_write(self._path(target), MEMORY_DELIM.join(entries) + "\n" if entries else "")
 
-    def _over_limit(self, target: str, entries: list[str]) -> str:
-        """'' if the entries fit, else a consolidation directive. Old facts are never
-        silently dropped — the model is told to merge/remove instead (refusing beats
-        quietly forgetting)."""
-        limit = _LIMITS[target]
+    def _detect_drift(self, target: str) -> str | None:
+        """Backup path if the on-disk file wouldn't round-trip through this parser
+        (external append/manual edit) or holds a single entry above the whole-store
+        limit. The caller must then refuse the mutation — flushing would discard the
+        externally-added bytes. Returns None when the file looks tool-shaped."""
+        path = self._path(target)
+        raw = read_text(path)
+        if not raw.strip():
+            return None
+        parsed = [e.strip() for e in raw.split(MEMORY_DELIM) if e.strip()]
+        roundtrip = MEMORY_DELIM.join(parsed)
+        too_big = max((len(e) for e in parsed), default=0) > self._limit(target)
+        if raw.strip() == roundtrip and not too_big:
+            return None
+        import time
+        bak = path.with_suffix(path.suffix + f".bak.{int(time.time())}")
+        try:
+            bak.write_text(raw, encoding="utf-8")
+        except OSError:
+            return f"{bak} (BACKUP FAILED — file unchanged on disk)"
+        return str(bak)
+
+    @staticmethod
+    def _drift_message(name: str, bak: str) -> str:
+        return (f"refused: {name} on disk has content that wouldn't round-trip through "
+                f"the memory tool (external edit/append or an oversized entry). A snapshot "
+                f"was saved to {bak}. Integrate the extra content via action=add one entry "
+                "at a time (or clean the file to §-delimited entries), then retry.")
+
+    def _over_limit(self, target: str, entries: list[str], adding: int = 0) -> str:
+        """'' if the entries fit, else a consolidation directive listing current
+        entries. Old facts are never silently dropped — the model is told to
+        merge/remove instead (refusing beats quietly forgetting)."""
+        limit = self._limit(target)
         total = len(MEMORY_DELIM.join(entries))
         if total <= limit:
             return ""
-        listing = "\n".join(f"  - {e[:90]}" for e in entries[:-1])
-        return (f"memory full ({total:,}/{limit:,} chars): this write would exceed the limit. "
-                "Nothing was dropped. Consolidate NOW in this turn: use action=replace to merge "
-                "overlapping entries into shorter ones, or action=remove for stale ones, then "
-                f"retry. Current entries:\n{listing}")
+        current = total - adding
+        listing = "\n".join(f"  - {e[:90]}" for e in entries[:-1] if e)
+        return (f"memory full ({current:,}/{limit:,} chars): this write would put it at "
+                f"{total:,}. Nothing was dropped. Consolidate NOW in this turn: use "
+                "action=replace to merge overlapping entries into shorter ones, or "
+                "action=remove for stale or less important ones, then retry the add — "
+                f"all in this turn. Current entries:\n{listing}")
 
     @staticmethod
     def _norm(text: str) -> str:
@@ -100,9 +155,20 @@ class MemoryStore:
         stop = {"the", "a", "an", "is", "are", "was", "were"}
         return " ".join(w for w in words if w not in stop)
 
+    @staticmethod
+    def _ambiguous(matches: list[tuple[int, str]]) -> str:
+        """Hermes guard: multiple DIFFERENT entries matching a substring is an error
+        (be more specific); identical duplicates are safe to act on (first one)."""
+        if len(matches) <= 1 or len({e for _, e in matches}) == 1:
+            return ""
+        previews = "; ".join(e[:80] + ("…" if len(e) > 80 else "") for _, e in matches)
+        return f"multiple entries matched — be more specific. Matches: {previews}"
+
     def add(self, target: str, content: str) -> str:
         from ._locks import STORE_LOCK, file_lock
         content = content.strip()
+        if not content:
+            return "refused: content cannot be empty."
         why = scan_entry(content)
         if why:
             return (f"refused: content matches a prompt-injection pattern ({why}) and must "
@@ -111,44 +177,70 @@ class MemoryStore:
         # cron share these files). entries() re-reads from disk inside the locks, so we
         # always append to the other writer's latest state instead of clobbering it.
         with STORE_LOCK, file_lock(self._path(target)):
+            bak = self._detect_drift(target)
+            if bak:
+                return self._drift_message(_FILES[target], bak)
             entries = self.entries(target)
+            if content in entries:
+                return "already remembered"          # exact duplicate (Hermes parity)
             norm = self._norm(content)
             if norm and norm in {self._norm(e) for e in entries}:
-                return "already remembered"
+                return "already remembered"          # near-duplicate (AEGIS extra guard)
             entries.append(content)
-            over = self._over_limit(target, entries)
+            over = self._over_limit(target, entries, adding=len(content))
             if over:
                 return over
             self._write_entries(target, entries)
-        return f"remembered in {_FILES[target]}"
+        return f"remembered in {_FILES[target]} ({self.usage(target)})"
 
     def replace(self, target: str, match: str, content: str) -> str:
         from ._locks import STORE_LOCK, file_lock
+        match, content = match.strip(), content.strip()
+        if not match:
+            return "refused: match text cannot be empty."
+        if not content:
+            return "refused: new content cannot be empty — use action=remove to delete."
         why = scan_entry(content)
         if why:
             return (f"refused: replacement matches a prompt-injection pattern ({why}) and "
                     "must not enter persistent memory.")
         with STORE_LOCK, file_lock(self._path(target)):
+            bak = self._detect_drift(target)
+            if bak:
+                return self._drift_message(_FILES[target], bak)
             entries = self.entries(target)
-            for i, e in enumerate(entries):
-                if match in e:
-                    entries[i] = content.strip()
-                    over = self._over_limit(target, entries)
-                    if over:
-                        return over
-                    self._write_entries(target, entries)
-                    return f"updated entry in {_FILES[target]}"
-        return f"no entry matching '{match}'"
+            matches = [(i, e) for i, e in enumerate(entries) if match in e]
+            if not matches:
+                return f"no entry matching '{match}'"
+            amb = self._ambiguous(matches)
+            if amb:
+                return amb
+            entries[matches[0][0]] = content
+            over = self._over_limit(target, entries)
+            if over:
+                return over
+            self._write_entries(target, entries)
+        return f"updated entry in {_FILES[target]} ({self.usage(target)})"
 
     def remove(self, target: str, match: str) -> str:
         from ._locks import STORE_LOCK, file_lock
+        match = match.strip()
+        if not match:
+            return "refused: match text cannot be empty."
         with STORE_LOCK, file_lock(self._path(target)):
+            bak = self._detect_drift(target)
+            if bak:
+                return self._drift_message(_FILES[target], bak)
             entries = self.entries(target)
-            kept = [e for e in entries if match not in e]
-            if len(kept) == len(entries):
+            matches = [(i, e) for i, e in enumerate(entries) if match in e]
+            if not matches:
                 return f"no entry matching '{match}'"
-            self._write_entries(target, kept)
-        return f"removed {len(entries) - len(kept)} entry(ies) from {_FILES[target]}"
+            amb = self._ambiguous(matches)
+            if amb:
+                return amb
+            entries.pop(matches[0][0])
+            self._write_entries(target, entries)
+        return f"removed 1 entry from {_FILES[target]} ({self.usage(target)})"
 
 
 class History:
@@ -204,7 +296,10 @@ class MemoryManager:
 
     def __init__(self, config: cfg.Config, external: MemoryProvider | None = None):
         self.config = config
-        self.store = MemoryStore()
+        self.store = MemoryStore(
+            memory_char_limit=int(config.get("memory.memory_char_limit", 0) or 0) or None,
+            user_char_limit=int(config.get("memory.user_char_limit", 0) or 0) or None,
+        )
         self.history = History()
         if external is None and config.get("memory.provider"):
             try:
@@ -225,15 +320,25 @@ class MemoryManager:
         self._snapshot_mtimes = self._memory_mtimes()
 
     def _sanitized(self, target: str) -> str:
-        """Entries for the system-prompt snapshot, with any injection-matching entry
-        masked. Disk state is untouched — the memory tool still shows the original so
-        the user can inspect and remove it (silently hiding it would hide the attack)."""
+        """Hermes-rendered snapshot block: ═ separators + a header with the usage gauge,
+        entries §-joined. Injection-matching entries are masked in the SNAPSHOT only —
+        disk state is untouched, so the memory tool still shows the original and the
+        user can inspect and remove it (silently hiding it would hide the attack)."""
         out = []
         for e in self.store.entries(target):
             why = scan_entry(e)
             out.append(f"[BLOCKED: stored entry matched a prompt-injection pattern ({why}); "
                        "inspect with the memory tool and remove it]" if why else e)
-        return MEMORY_DELIM.join(out)
+        if not out:
+            return ""
+        content = MEMORY_DELIM.join(out)
+        limit = self.store._limit(target)
+        pct = min(100, int(len(content) / limit * 100)) if limit > 0 else 0
+        gauge = f"[{pct}% — {len(content):,}/{limit:,} chars]"
+        header = (f"USER PROFILE (who the user is) {gauge}" if target == "user"
+                  else f"MEMORY (your personal notes) {gauge}")
+        sep = "═" * 46
+        return f"{sep}\n{header}\n{sep}\n{content}"
 
     def _memory_files(self) -> list:
         # workspace/USER.md is watched ONLY so that if someone drops a legacy file
@@ -294,10 +399,10 @@ class MemoryManager:
             return ""
         parts: list[str] = []
         mem = self._snapshot.get("memory", "")
-        if mem:
-            parts.append("# Long-term memory (facts)\n" + mem)
+        if mem:                                   # blocks carry their own Hermes headers
+            parts.append(mem)
         if self.user_enabled and self._snapshot.get("user"):
-            parts.append("# About the user\n" + self._snapshot["user"])
+            parts.append(self._snapshot["user"])
         if self.external:
             ext = self.external.system_prompt_block().strip()
             if ext:
@@ -311,31 +416,39 @@ class MemoryManager:
 
         action = args.get("action")
         target = args.get("target", "memory")
+        match = args.get("old_text") or args.get("match")    # Hermes name + legacy alias
         if target not in _FILES:
             return ToolResult.error("target must be 'memory' or 'user'")
         if action == "add":
             if not args.get("content"):
                 return ToolResult.error("content is required for add")
             result = self.store.add(target, args["content"])
-            if result.startswith(("memory full", "refused")):
+            if result.startswith(("memory full", "refused", "multiple entries")):
                 return ToolResult.error(result)      # the model must consolidate / rephrase
             if (self.config.get("memory.refresh", "session") or "session") == "message":
                 note = "now in context from your next message on."
-            else:                                    # session mode: durable now, loads later
+            else:                                    # session mode (Hermes): durable now,
                 note = ("saved durably — it enters the prompt on the next session "
                         "(or at the next compaction). Keep using it from this "
                         "conversation's own context meanwhile.")
             return ToolResult.ok(f"{result} — {note}",
                                  display=f"remembered in memories/{_FILES[target]}")
         if action == "replace":
-            if not args.get("match") or not args.get("content"):
-                return ToolResult.error("replace needs match and content")
-            result = self.store.replace(target, args["match"], args["content"])
-            if result.startswith(("memory full", "refused")):
+            if not match or not args.get("content"):
+                return ToolResult.error("replace needs old_text and content")
+            result = self.store.replace(target, match, args["content"])
+            if result.startswith(("memory full", "refused", "multiple entries")):
                 return ToolResult.error(result)
             return ToolResult.ok(result)
         if action == "remove":
-            if not args.get("match"):
-                return ToolResult.error("remove needs match")
-            return ToolResult.ok(self.store.remove(target, args["match"]))
+            if not match:
+                return ToolResult.error("remove needs old_text")
+            result = self.store.remove(target, match)
+            if result.startswith(("refused", "multiple entries")):
+                return ToolResult.error(result)
+            return ToolResult.ok(result)
+        if action == "read":                         # live state (snapshot may be older)
+            ents = self.store.entries(target)
+            body = "\n".join(f"  {i + 1}. {e}" for i, e in enumerate(ents)) or "  (empty)"
+            return ToolResult.ok(f"{_FILES[target]} ({self.store.usage(target)}):\n{body}")
         return ToolResult.error(f"unknown action '{action}'")

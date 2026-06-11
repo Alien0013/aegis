@@ -21,7 +21,7 @@ def test_saved_user_facts_reach_prompt_after_refresh(tmp_path, monkeypatch):
     # ... and thaws on refresh — this is what /new and new processes rely on
     mm.refresh_snapshot()
     block = mm.build_context_block()
-    assert "About the user" in block and "TJ" in block
+    assert "USER PROFILE (who the user is)" in block and "TJ" in block
 
 
 def test_memory_rejects_injection_at_write(tmp_path, monkeypatch):

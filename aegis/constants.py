@@ -19,8 +19,10 @@ DEFAULT_CONTEXT_LENGTH = 128_000
 COMPACT_THRESHOLD = 0.75
 
 # --- Memory -----------------------------------------------------------------
-MEMORY_CHAR_LIMIT = 4_000
-USER_CHAR_LIMIT = 2_000
+# Hermes-matched defaults: char limits (not tokens — model-independent), overridable
+# via memory.memory_char_limit / memory.user_char_limit in config.
+MEMORY_CHAR_LIMIT = 2_200
+USER_CHAR_LIMIT = 1_375
 MEMORY_DELIM = "\n§\n"
 
 # --- Skills -----------------------------------------------------------------

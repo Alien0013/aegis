@@ -148,6 +148,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "enabled": True,
         "user_profile_enabled": True,
         "provider": "",              # "" builtin only; or "mem0" | "jsonl"
+        "memory_char_limit": 2200,   # whole-store budget for MEMORY.md (Hermes default)
+        "user_char_limit": 1375,     # whole-store budget for USER.md (Hermes default)
         "refresh": "session",        # session = snapshot frozen per session (cache-stable,
                                      #   Hermes-style; new facts load next session/compaction)
                                      # message = rebuild prompt when memory files change
