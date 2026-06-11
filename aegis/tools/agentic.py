@@ -26,13 +26,35 @@ def _register(sid: str, **fields) -> None:
                 _REGISTRY.pop(k, None)
 
 
+# Typed subagents: a named type = a tool whitelist + a role preamble. Read-only types
+# can fan out aggressively because they cannot modify anything.
+_READONLY_TOOLS = {
+    "read_file", "list_dir", "glob", "search", "web_fetch", "web_search",
+    "session_search", "tool_search", "skill", "system_status", "lsp",
+}
+AGENT_TYPES: dict[str, dict] = {
+    "general": {"tools": None, "preamble": ""},
+    "explore": {"tools": _READONLY_TOOLS, "preamble":
+                "You are a READ-ONLY explore agent. Locate and report — never modify. "
+                "Return only the conclusions (paths, names, facts), not file dumps.\n\n"},
+    "plan":    {"tools": _READONLY_TOOLS, "preamble":
+                "You are a READ-ONLY planning architect. Investigate, then return a concrete "
+                "step-by-step implementation plan: files to touch, order of changes, risks, "
+                "and how to verify each step. Do NOT make any change yourself.\n\n"},
+    "review":  {"tools": _READONLY_TOOLS, "preamble":
+                "You are a READ-ONLY code reviewer. Report every issue you find with "
+                "file:line, severity, and a one-line fix suggestion. Do not edit anything.\n\n"},
+}
+
+
 class SubagentTool(Tool):
     name = "spawn_subagent"
     description = (
         "Delegate self-contained sub-task(s) to fresh child agents, each with its own context. "
-        "Pass `task` for one, or `tasks` (array) to run several IN PARALLEL (bounded). Returns "
-        "each child's final answer. Use for research/exploration/fan-out that would otherwise "
-        "flood the main context."
+        "Pass `task` for one, or `tasks` (array) to run several IN PARALLEL (bounded). "
+        "agent_type picks a specialist: explore/plan/review are READ-ONLY (safe to fan out), "
+        "general (default) has full tools. Pass continue_id to follow up with a previous "
+        "subagent (it keeps its context). Returns each child's final answer."
     )
     groups = ["automation"]
     parameters = {
@@ -41,6 +63,11 @@ class SubagentTool(Tool):
             "task": {"type": "string", "description": "One complete, self-contained instruction."},
             "tasks": {"type": "array", "items": {"type": "string"},
                       "description": "Several self-contained instructions, run in parallel."},
+            "agent_type": {"type": "string", "enum": ["general", "explore", "plan", "review"],
+                           "description": "Specialist type (explore/plan/review are read-only)."},
+            "continue_id": {"type": "string",
+                            "description": "id of a previous subagent — sends `task` to it as a "
+                                           "follow-up with its context intact."},
             "toolsets": {"type": "array", "items": {"type": "string"},
                          "description": "Toolsets the children may use (default: core)."},
             "background": {"type": "boolean",
@@ -65,36 +92,67 @@ class SubagentTool(Tool):
         if not tasks:
             return ToolResult.error("provide `task` (string) or `tasks` (array of strings).")
         toolsets = args.get("toolsets")
+        atype = args.get("agent_type") or "general"
+        spec = AGENT_TYPES.get(atype)
+        if spec is None:
+            return ToolResult.error(f"unknown agent_type '{atype}' "
+                                    f"(use {', '.join(AGENT_TYPES)})")
+
+        if args.get("continue_id"):                       # follow-up to a previous child
+            with _REG_LOCK:
+                entry = _REGISTRY.get(args["continue_id"], {})
+                child = entry.get("agent")
+            if child is None:
+                return ToolResult.error(f"no continuable subagent '{args['continue_id']}' "
+                                        "(it may have been evicted)")
+            try:
+                out = child.run(tasks[0]).content or "(no output)"
+                return ToolResult.ok(out, display=f"continued {args['continue_id']}")
+            except Exception as e:  # noqa: BLE001
+                return ToolResult.error(f"subagent continuation failed: {e}")
 
         if args.get("background") and depth == 1:
             return self._spawn_background(tasks, ctx, config)
 
-        def _one(task: str) -> str:
+        def _restricted_registry(allowed: set[str]):
+            from .registry import ToolRegistry, default_registry
+            reg = ToolRegistry()
+            for t in default_registry().all():
+                if t.name in allowed:
+                    reg.register(t)
+            return reg
+
+        def _one(task: str) -> tuple[str, str]:
             sid = new_id("sub")
-            _register(sid, status="running", task=task[:80])
+            _register(sid, status="running", task=task[:80], type=atype)
             ctx.emit_event(type="subagent_start", id=sid, task=task[:80])
             try:
-                child = Agent.create(config, session=Session.create(), cwd=ctx.cwd)
+                kwargs = {}
+                if spec["tools"] is not None:
+                    kwargs["registry"] = _restricted_registry(spec["tools"])
+                child = Agent.create(config, session=Session.create(), cwd=ctx.cwd, **kwargs)
                 child._depth = depth  # type: ignore[attr-defined]
                 if toolsets:
                     child.config.data.setdefault("tools", {})["toolsets"] = toolsets
-                out = (child.run(task).content or "(no output)")
-                _register(sid, status="done")
+                out = (child.run(spec["preamble"] + task).content or "(no output)")
+                _register(sid, status="done", agent=child)   # kept for continue_id follow-ups
                 ctx.emit_event(type="subagent_done", id=sid, status="done")
-                return out
+                return sid, out
             except Exception as e:  # noqa: BLE001 - isolate one child's failure
                 _register(sid, status="error")
                 ctx.emit_event(type="subagent_done", id=sid, status="error")
-                return f"[subagent error] {e}"
+                return sid, f"[subagent error] {e}"
 
         if len(tasks) == 1:
-            return ToolResult.ok(_one(tasks[0]), display="subagent finished")
+            sid, out = _one(tasks[0])
+            return ToolResult.ok(f"{out}\n\n(subagent id: {sid} — pass continue_id to follow up)",
+                                 display=f"{atype} subagent finished")
         cap = max(1, int(config.get("agent.subagent_concurrency", 4) or 1))
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=min(cap, len(tasks))) as ex:
             results = list(ex.map(_one, tasks))
-        body = "\n\n".join(f"## subagent {i + 1}\n{r}" for i, r in enumerate(results))
-        return ToolResult.ok(body, display=f"{len(tasks)} subagents finished")
+        body = "\n\n".join(f"## subagent {i + 1} ({sid})\n{r}" for i, (sid, r) in enumerate(results))
+        return ToolResult.ok(body, display=f"{len(tasks)} {atype} subagents finished")
 
     def _spawn_background(self, tasks, ctx, config) -> ToolResult:
         """Fire-and-forget delegation: the child runs after this turn ends and its
@@ -106,6 +164,9 @@ class SubagentTool(Tool):
         def _announce(task) -> None:
             text = (f"✅ background task done:\n{task.result}" if task.status == "done"
                     else f"⚠ background task failed: {task.error}")
+            from ..agent.wakeups import add_wakeup     # parent agent learns it next turn
+            add_wakeup("subagent", f"{task.id}: {task.prompt[:80]}",
+                       task.result or task.error)
             if platform and chat_id:                 # announce back into the chat via the outbox
                 try:
                     from ..gateway.queue import DeliveryQueue
@@ -170,5 +231,72 @@ class ImageGenTool(Tool):
         return ToolResult.ok(f"saved image to {path}", display=f"image -> {path.name}")
 
 
+class MixtureTool(Tool):
+    name = "mixture_of_agents"
+    description = (
+        "Fan ONE prompt across SEVERAL models in parallel and synthesize their answers into "
+        "one. Use for high-stakes questions where cross-model agreement matters (design "
+        "decisions, tricky bugs, fact checks). models: list like ['gpt-5.5', "
+        "'openrouter/google/gemini-2.5-pro'] — a bare model id uses the current provider; "
+        "'provider/model' picks the provider. Costs one call per model plus a synthesis call."
+    )
+    groups = ["automation"]
+    parameters = {
+        "type": "object",
+        "properties": {
+            "prompt": {"type": "string", "description": "The question to put to every model."},
+            "models": {"type": "array", "items": {"type": "string"},
+                       "description": "2–5 model specs ('model' or 'provider/model')."},
+            "synthesize": {"type": "boolean",
+                           "description": "Merge answers into one (default true)."},
+        },
+        "required": ["prompt", "models"],
+    }
+
+    def run(self, args, ctx: ToolContext) -> ToolResult:
+        from concurrent.futures import ThreadPoolExecutor
+        from ..providers.fallback import build_with_fallbacks
+        from ..types import Message
+        config = ctx.config
+        if config is None:
+            return ToolResult.error("no config available")
+        specs = [m for m in (args.get("models") or []) if isinstance(m, str) and m.strip()][:5]
+        if len(specs) < 2:
+            return ToolResult.error("provide at least 2 model specs")
+        prompt = args["prompt"]
+
+        def _ask(spec: str) -> tuple[str, str]:
+            try:
+                prov_name, model = None, spec
+                if "/" in spec:
+                    head, rest = spec.split("/", 1)
+                    from ..providers.registry import list_providers
+                    if head in list_providers() and head != "openrouter":
+                        prov_name, model = head, rest
+                    elif head == "openrouter":
+                        prov_name, model = head, rest
+                p = build_with_fallbacks(config, model=model, name=prov_name)
+                resp = p.complete([Message.user(prompt)], tools=None, stream=False)
+                return spec, (resp.text or "").strip() or "(empty)"
+            except Exception as e:  # noqa: BLE001 - one model failing must not sink the mix
+                return spec, f"[error] {e}"
+
+        with ThreadPoolExecutor(max_workers=len(specs)) as ex:
+            answers = list(ex.map(_ask, specs))
+        body = "\n\n".join(f"## {spec}\n{ans}" for spec, ans in answers)
+        if args.get("synthesize", True):
+            try:
+                p = build_with_fallbacks(config)
+                syn = p.complete(
+                    [Message.system("You are synthesizing several models' answers to the same "
+                                    "question. Produce ONE best answer; note real disagreements."),
+                     Message.user(f"QUESTION:\n{prompt}\n\nANSWERS:\n{body}")],
+                    tools=None, stream=False).text or ""
+                body = f"# Synthesis\n{syn.strip()}\n\n# Individual answers\n{body}"
+            except Exception as e:  # noqa: BLE001
+                body = f"(synthesis failed: {e})\n\n{body}"
+        return ToolResult.ok(body, display=f"mixture of {len(specs)} models")
+
+
 def agentic_tools() -> list[Tool]:
-    return [SubagentTool(), ImageGenTool()]
+    return [SubagentTool(), ImageGenTool(), MixtureTool()]

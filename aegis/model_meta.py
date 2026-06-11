@@ -21,7 +21,9 @@ from .util import read_text
 # Current lineups lead; older families kept as fallbacks (prefix match covers point releases,
 # e.g. "gpt-5" matches gpt-5.5/5.4/5.3, "claude-sonnet-4" matches sonnet-4.6).
 _BUNDLED: dict[str, int] = {
-    # Anthropic — Claude 4.x
+    # Anthropic — Fable 5 + Claude 4.x (Opus 4.6+ have a 1M window; 4.5 and earlier 200K)
+    "claude-fable": 1_000_000,
+    "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000, "claude-opus-4-6": 1_000_000,
     "claude-opus-4": 200_000, "claude-sonnet-4": 1_000_000, "claude-haiku-4": 200_000,
     "claude-3-7": 200_000, "claude-3-5": 200_000, "claude": 200_000,
     # OpenAI — GPT-5.x + reasoning

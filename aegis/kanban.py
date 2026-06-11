@@ -138,15 +138,19 @@ class KanbanStore:
             )
             return cur.rowcount > 0
 
-    def claim_next(self, worker: str) -> Task | None:
-        """Atomically claim the highest-priority, oldest ready task, if any."""
+    def claim_next(self, worker: str, lane: str = "") -> Task | None:
+        """Atomically claim the highest-priority, oldest ready task, if any.
+        With ``lane``, cards pre-assigned to another lane are skipped — a card whose
+        assignee is set while still ready belongs to that lane's worker only."""
         with self._conn() as c:
             # IMMEDIATE takes a write lock up front so the select+update is atomic
             # against other claimers sharing this database.
             c.execute("BEGIN IMMEDIATE")
             row = c.execute(
                 """SELECT * FROM tasks WHERE status='ready'
-                   ORDER BY priority DESC, created_at ASC LIMIT 1"""
+                     AND (assignee='' OR assignee IS NULL OR assignee=?)
+                   ORDER BY priority DESC, created_at ASC LIMIT 1""",
+                (lane or worker,)
             ).fetchone()
             if row is None:
                 c.execute("COMMIT")

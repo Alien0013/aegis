@@ -54,8 +54,11 @@ class ProcessTool(Tool):
                                         start_new_session=True)
             reg[pid_id] = {"pid": proc.pid, "command": args["command"], "log": str(log)}
             _save_registry(reg)
-            return ToolResult.ok(f"started {pid_id} (pid {proc.pid}): {args['command']}",
-                                 display=f"started {pid_id}")
+            _watch_completion(pid_id, proc, args["command"], log, ctx)
+            return ToolResult.ok(
+                f"started {pid_id} (pid {proc.pid}): {args['command']} — "
+                "you'll be notified on your next turn when it exits.",
+                display=f"started {pid_id}")
         if action == "list":
             if not reg:
                 return ToolResult.ok("(no background processes)")
@@ -82,6 +85,36 @@ class ProcessTool(Tool):
             _save_registry(reg)
             return ToolResult.ok(f"stopped {args['id']}", display="stopped")
         return ToolResult.error(f"unknown action {action}")
+
+
+def _watch_completion(pid_id: str, proc, command: str, log, ctx: ToolContext) -> None:
+    """Daemon thread: when the process exits, queue a wakeup for the next agent turn
+    and (in a gateway chat) announce into the chat so a fresh turn fires immediately."""
+    import threading
+    platform = getattr(getattr(ctx, "agent", None), "platform", None)
+    chat_id = getattr(getattr(ctx, "agent", None), "chat_id", None)
+
+    def _wait():
+        code = proc.wait()
+        tail = "\n".join(read_text(log).splitlines()[-15:])
+        title = f"{pid_id} exited (code {code}): {command[:80]}"
+        from ..agent.wakeups import add_wakeup
+        add_wakeup("process", title, tail)
+        if platform and chat_id:
+            try:
+                from ..gateway.queue import DeliveryQueue
+                DeliveryQueue().enqueue(platform, chat_id,
+                                        f"⏺ background process finished — {title}")
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            from ..eventbus import BUS
+            BUS.publish({"type": "process_done", "platform": platform or "cli",
+                         "text": title})
+        except Exception:  # noqa: BLE001
+            pass
+
+    threading.Thread(target=_wait, daemon=True, name=f"watch-{pid_id}").start()
 
 
 def _alive(pid: int) -> bool:

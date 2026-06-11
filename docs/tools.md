@@ -1,11 +1,44 @@
 # Tools & Permissions
 
-30 built-ins: `read_file`, `write_file`, `edit_file`, `apply_patch`, `list_dir`, `glob`,
+34 built-ins: `read_file`, `write_file`, `edit_file`, `apply_patch`, `list_dir`, `glob`,
 `search`, `bash`, `process`, `download`, `http_request`, `web_fetch`, `web_search`,
 `browser`, `cloud_browser`, `computer`, `generate_image`, `cloud_image`, `transcribe`,
-`speak`, `execute_code`, `spawn_subagent`, `lsp`, `github`, `tool_search`, `memory`,
-`skill`, `session_search`, `todo_write`, `schedule_task` — plus every connected MCP and
-plugin tool. Group them with `tools.toolsets` (add `browser`, `computer`, `voice`, `lsp`).
+`speak`, `execute_code`, `spawn_subagent`, `mixture_of_agents`, `lsp`, `github`,
+`tool_search`, `memory`, `skill`, `session_search`, `todo_write`, `schedule_task`,
+`clarify`, `dependency_audit`, `system_status` — plus every connected MCP and plugin
+tool. Group them with `tools.toolsets` (add `browser`, `computer`, `voice`, `lsp`).
+
+## Deferred schemas (context economy)
+
+Rarely-used tools ship **name-only**: a stable index in the system prompt lists them,
+and their full parameter schemas stay off the wire until the model activates one with
+`tool_search` (activation is session-sticky). Configure with:
+
+```yaml
+tools:
+  defer_schemas: true
+  deferred: [generate_image, cloud_image, computer, github, mixture_of_agents, …]
+```
+
+## Typed subagents
+
+`spawn_subagent` takes `agent_type`:
+
+| type | tools | use for |
+|---|---|---|
+| `general` (default) | full | anything |
+| `explore` | read-only | fan-out search/research |
+| `plan` | read-only | step-by-step implementation plans |
+| `review` | read-only | code review with file:line findings |
+
+`continue_id` sends a follow-up to a previous subagent with its context intact;
+`background: true` runs async and wakes the parent agent when done.
+
+## Background completion wakeups
+
+`process start` (and background subagents) notify the agent when they finish — the
+next turn begins with a `<background_completions>` block (results treated as
+untrusted data), and gateway chats get an announce-back message.
 
 ```bash
 aegis tools            # list

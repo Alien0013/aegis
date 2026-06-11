@@ -19,6 +19,7 @@ nav:
   - Tools & Permissions: tools.md
   - Memory, Skills & Learning: memory-skills.md
   - Gateway & Channels: gateway.md
+  - Web Dashboard: dashboard.md
   - MCP: mcp.md
   - Serve API: serve.md
   - Security: security.md

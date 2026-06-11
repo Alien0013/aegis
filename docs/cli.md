@@ -27,7 +27,9 @@ preempts the loop; `/status` shows the active goal plus a local session recap.
 - `aegis model [list|set <provider> [<model>]]`
 - `aegis auth [status|login <p>|logout <p>]`
 - `aegis config [get|set|path|dump|check|migrate]`
-- `aegis doctor [--fix]`, `aegis update [--check|--branch]`, `aegis uninstall [--purge]`
+- `aegis doctor [--fix] [--probe]` — `--probe` makes a live one-token provider call
+  (reports latency) and validates channel tokens (Telegram/Discord/Slack)
+- `aegis update [--check|--branch]`, `aegis uninstall [--purge]`
 - `aegis completion bash|zsh|fish`
 
 ## Tools, skills, memory, learning
@@ -39,7 +41,9 @@ preempts the loop; `/status` shows the active goal plus a local session recap.
 
 ## Sessions & recall
 - `aegis sessions [list|show|rm|summarize|search]`
-- `aegis checkpoints [list|rollback|clear]`
+- `aegis checkpoints [list|diff|rollback|clear]` — each turn's edit batch is
+  auto-checkpointed as one unit; `diff` previews it, `rollback` undoes it
+  (files the batch created are removed). In the REPL: `/diff`, `/rollback`.
 - `aegis trajectory [stats|export|compress]`
 
 ## Services
@@ -53,3 +57,9 @@ preempts the loop; `/status` shows the active goal plus a local session recap.
 ## Ops & security
 - `aegis security audit`, `aegis debug share`, `aegis secrets bitwarden`
 - `aegis hooks [list|test]`, `aegis kanban …`
+
+## Session handoff
+
+`/handoff <platform> <chat_id>` (REPL) moves the current session — full history —
+to a messaging channel. The gateway adopts it the next time that chat sends a
+message (the chat gets a ping immediately if the gateway is running).

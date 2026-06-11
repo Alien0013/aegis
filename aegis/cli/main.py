@@ -663,6 +663,11 @@ def cmd_doctor(args, config: Config) -> int:
         _print(f"  auth available: {p.auth.available()}")
     except Exception as e:  # noqa: BLE001
         _print(f"provider: ERROR {e}")
+    if getattr(args, "probe", False):
+        from ..doctor import run_probes
+        failures = run_probes(config, out=_print)
+        if failures:
+            _print(f"✗ {failures} probe(s) failed")
     if getattr(args, "fix", False):
         from ..util import ensure_dir
         for d in (cfg.memories_dir(), cfg.skills_dir(), cfg.workspace_dir(), cfg.logs_dir(),
@@ -810,6 +815,10 @@ def cmd_checkpoints(args, config: Config) -> int:
     if args.action == "rollback":
         restored = store.rollback(args.id)
         _print(f"rolled back {len(restored)} file(s): {', '.join(restored) or '(none)'}")
+        return 0
+    if args.action == "diff":
+        d = store.diff(args.id)
+        _print(d or "(no changes since checkpoint)")
         return 0
     if args.action == "clear":
         _print(f"cleared {store.clear()} checkpoint(s)")
@@ -1065,8 +1074,8 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("platform", nargs="?"); pr.add_argument("code", nargs="?")
     pr.set_defaults(func=_cmd_pairing)
 
-    ck = sub.add_parser("checkpoints", help="list/rollback/clear file checkpoints")
-    ck.add_argument("action", nargs="?", choices=["list", "rollback", "clear"], default="list")
+    ck = sub.add_parser("checkpoints", help="list/diff/rollback/clear file checkpoints")
+    ck.add_argument("action", nargs="?", choices=["list", "diff", "rollback", "clear"], default="list")
     ck.add_argument("id", nargs="?")
     ck.set_defaults(func=cmd_checkpoints)
 
@@ -1164,6 +1173,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     d = sub.add_parser("doctor", help="diagnose (and optionally repair) the installation")
     d.add_argument("--fix", action="store_true", help="create missing dirs + tighten secret perms")
+    d.add_argument("--probe", action="store_true",
+                   help="live checks: one-token provider call + channel token validation")
     d.set_defaults(func=cmd_doctor)
 
     return p

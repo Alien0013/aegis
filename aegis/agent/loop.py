@@ -39,6 +39,7 @@ class ToolExecutor:
         self.ctx = ctx
         self.emit = on_event
         self.guard = guard          # per-turn ToolLoopGuard (None in bare/test usage)
+        self._turn_checkpoint: str | None = None   # one checkpoint per turn's edit batch
 
     def _run_hooks(self, event: str, context: dict) -> None:
         cfg = getattr(self.ctx, "config", None)
@@ -50,18 +51,35 @@ class ToolExecutor:
         except Exception:  # noqa: BLE001
             pass
 
+    @staticmethod
+    def _edit_paths(call: ToolCall) -> list[str]:
+        """File paths a mutating tool call is about to touch ([] for non-edits)."""
+        if call.name in ("write_file", "edit_file"):
+            p = call.arguments.get("path")
+            return [p] if p else []
+        if call.name == "apply_patch":
+            import re
+            return re.findall(r"^\+\+\+ (?:b/)?(\S+)", call.arguments.get("patch", "") or "",
+                              re.MULTILINE)
+        return []
+
     def _maybe_checkpoint(self, call: ToolCall) -> None:
+        """Auto-checkpoint each turn's edit batch: the first edit of the turn opens a
+        checkpoint (pre-turn state); later edits join it. /rollback undoes the batch,
+        `aegis checkpoints diff` previews it."""
         cfg = getattr(self.ctx, "config", None)
-        if cfg is None or not cfg.get("checkpoints.enabled", False):
+        if cfg is None or not cfg.get("checkpoints.enabled", True):
             return
-        if call.name not in ("write_file", "edit_file"):
-            return
-        path = call.arguments.get("path")
-        if not path:
+        paths = self._edit_paths(call)
+        if not paths:
             return
         try:
             from ..checkpoints import CheckpointStore
-            CheckpointStore(self.ctx.cwd).snapshot([path], label=call.name)
+            store = CheckpointStore(self.ctx.cwd)
+            if self._turn_checkpoint:
+                store.add_to(self._turn_checkpoint, paths)
+            else:
+                self._turn_checkpoint = store.snapshot(paths, label=f"turn edits ({call.name})")
         except Exception:  # noqa: BLE001
             pass
 
@@ -312,7 +330,14 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
     budget.reset()
 
     available = agent.registry.available(agent.config.get("tools.toolsets", ["core"]))
-    schemas = agent.registry.schemas(available)
+
+    def _live_schemas():
+        """Schemas for this iteration — deferred tools ship name-only (system-prompt
+        index) until tool_search activates them, then their schemas join the wire."""
+        deferred = agent.deferred_tool_names(available) if hasattr(agent, "deferred_tool_names") else set()
+        return agent.registry.schemas([t for t in available if t.name not in deferred])
+
+    schemas = _live_schemas()
     from .guardrails import ToolLoopGuard
     guard = ToolLoopGuard(
         warn_after=int(agent.config.get("tools.loop_warn_after", 3)),
@@ -337,6 +362,9 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
             return stop
         emit({"type": "iteration", "n": budget.api_call_count + 1, "max": budget.max_iterations})
         _drain_steering(agent, session)        # fold in any mid-run /steer guidance
+        if len(fresh := _live_schemas()) != len(schemas):   # tool_search activated a deferred tool
+            schemas = fresh
+            schema_tokens = estimate_tokens(json.dumps(schemas))
         # Compact BEFORE the model call so an over-full window never reaches the provider,
         # then normalize AFTER so a compaction boundary can never ship a broken tool pair.
         session = _maybe_compact(agent, session, schema_tokens, budget, emit)

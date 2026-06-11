@@ -39,7 +39,9 @@ def test_cost_report_and_log():
 
 def test_cost_pricing_prefix_match():
     from aegis.usage_log import _price
-    assert _price("claude-opus-4-8")[1] == 75.0      # output price
+    assert _price("claude-opus-4-8")[1] == 25.0      # output price (Opus 4.5+ tier)
+    assert _price("claude-opus-4-1")[1] == 75.0      # legacy Opus tier fallback
+    assert _price("claude-fable-5") == (10.0, 50.0)
     assert _price("gpt-4o-mini")[0] == 0.15
     assert _price("totally-unknown-model") == (0.0, 0.0)
 

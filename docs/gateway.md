@@ -33,6 +33,20 @@ aegis gateway --channels telegram,discord,slack,signal,matrix,email,webhook
 - **In-chat commands** — `/new` · `/status` · `/whoami` · `/model [id]` (switch the
   model for this session) · `/compress` (force-compact) · `/busy [mode]` ·
   `/goal <text>` / `/subgoal <text>` (persistent goals) · `/steer <text>` · `stop`.
+- **Restart notifications** — if the previous gateway run died without a clean
+  shutdown, admins (`gateway.admins`) get a DM explaining when and what crashed
+  (forensics in `logs/shutdowns.jsonl`).
+- **Session handoff** — `/handoff <platform> <chat_id>` in the CLI REPL queues the
+  session; the gateway adopts it (full history) on the chat's next message.
+- **Multi-profile gateways** — give each platform its own persona/model/provider on
+  one gateway process:
+
+```yaml
+gateway:
+  profiles:
+    telegram: {personality: casual, model: claude-haiku-4-5}
+    slack:    {personality: work,   provider: openai, model: gpt-5.5}
+```
 
 ## Scheduled delivery
 

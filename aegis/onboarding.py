@@ -55,15 +55,42 @@ def _hdr(out: Output, title: str) -> None:
     out(_paint(f"━━ {line} " + "━" * max(0, 53 - len(line)), "1;36", out))
 
 
+def _truecolor(out: Output) -> bool:
+    return _tty_color(out) and os.environ.get("COLORTERM", "") in ("truecolor", "24bit")
+
+
+def _gradient_line(line: str, out: Output) -> str:
+    """Paint one banner line with a horizontal violet→cyan gradient (AEGIS brand).
+    Truecolor terminals get the real gradient; others get the flat accent."""
+    if not _truecolor(out):
+        return _paint(line, "1;36", out)
+    a, b = (160, 107, 255), (107, 224, 255)
+    n = max(1, len(line) - 1)
+    chars = []
+    for i, ch in enumerate(line):
+        t = i / n
+        r, g, bl = (round(a[k] + (b[k] - a[k]) * t) for k in range(3))
+        chars.append(f"\x1b[1;38;2;{r};{g};{bl}m{ch}")
+    return "".join(chars) + "\x1b[0m"
+
+
+_LOGO = (
+    "   ▗▄▄▄▖ ▗▄▄▄▖ ▗▄▄▖ ▗▄▄▄▖ ▗▄▄▖",
+    "   ▐▌ ▐▌ ▐▌    ▐▌     █   ▐▌   ",
+    "   ▐▛▀▜▌ ▐▛▀▀▘ ▐▌▝▜▌  █    ▝▀▚▖",
+    "   ▐▌ ▐▌ ▐▙▄▄▖ ▝▚▄▞▘▗▄█▄▖▗▄▄▞▘",
+)
+
+
 def _banner(out: Output) -> None:
     from . import __version__
-    logo = (
-        "  ▄▀█ █▀▀ █▀▀ █ █▀\n"
-        "  █▀█ ██▄ █▄█ █ ▄█"
-    )
     out("")
-    out(_paint(logo, "1;36", out))
-    out(_paint(f"  v{__version__} — your personal agent harness", "2", out))
+    for line in _LOGO:
+        out(_gradient_line(line, out))
+    out(_paint("   ─────────────────────────────────", "2", out))
+    out("   " + _paint(f"v{__version__}", "1", out)
+        + _paint("  ·  your personal agent harness", "2", out)
+        + _paint("  ·  28 providers · 30+ tools · 8 channels", "2", out))
     out("")
 
 
@@ -1216,7 +1243,9 @@ def _summary_data(config: Config, state: OnboardingState, *, ok: bool = True) ->
 
 def _summary(config: Config, state: OnboardingState, out: Output) -> None:
     out("")
-    out(_paint("━━ ✓ Setup complete " + "━" * 36, "1;32", out))
+    out(_paint("   ┌─────────────────────────────────────┐", "1;32", out))
+    out(_paint("   │   ✓  AEGIS is ready to fly           │", "1;32", out))
+    out(_paint("   └─────────────────────────────────────┘", "1;32", out))
     out(f"Config:          {cfg.config_path()}")
     out(f"Primary brain:   {config.get('model.provider')} {config.get('model.default')}")
     out(f"Web search:      {config.get('web.search_backend')}")

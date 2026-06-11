@@ -79,6 +79,7 @@ class Agent:
         self.reasoning = config.get("agent.reasoning_effort", "off")
         self.budget = IterationBudget(int(config.get("agent.max_iterations", DEFAULT_MAX_ITERATIONS)))
         self.tools_used = 0
+        self.activated_tools: set[str] = set()   # deferred tools loaded via tool_search this session
         self.platform: str | None = None   # set by the gateway to the active channel (telegram, …)
         self.chat_id: str | None = None     # set by the gateway to the active conversation id
         import queue
@@ -104,12 +105,13 @@ class Agent:
         approver: Callable[[str], bool] | None = None,
         store: SessionStore | None = None,
         include_mcp: bool = False,
+        registry: ToolRegistry | None = None,
     ) -> "Agent":
         from ..providers.fallback import build_with_fallbacks
         provider = build_with_fallbacks(config, model=model, name=provider_name)
         session = session or Session.create()
         agent = cls(config=config, provider=provider, session=session, cwd=cwd,
-                    approver=approver, store=store)
+                    approver=approver, store=store, registry=registry)
         if include_mcp:
             agent.load_mcp()
         return agent
@@ -162,13 +164,44 @@ class Agent:
             "call the `system_status` tool first, then inspect with focused tools if needed."
         )
 
+    def deferred_tool_names(self, available=None) -> set[str]:
+        """Tools shipped name-only this turn (schema withheld until tool_search loads it).
+        Config-driven (tools.deferred); activation via tool_search is session-sticky."""
+        if not self.config.get("tools.defer_schemas", True):
+            return set()
+        conf = set(self.config.get("tools.deferred", []) or [])
+        if available is not None:
+            conf &= {t.name for t in available}
+        return conf - self.activated_tools - {"tool_search"}
+
+    def _deferred_index_block(self) -> str:
+        """Stable system-prompt index of deferred tools. Lists ALL configured deferred
+        tools (not just inactive ones) so the block never changes mid-session —
+        keeping the prompt byte-stable for prefix caching."""
+        if not self.config.get("tools.defer_schemas", True):
+            return ""
+        conf = set(self.config.get("tools.deferred", []) or [])
+        tools = [t for t in self.registry.all() if t.name in conf]
+        if not tools:
+            return ""
+        lines = "\n".join(f"- {t.name} — {t.description.splitlines()[0]}"
+                          for t in sorted(tools, key=lambda t: t.name))
+        return ("# Deferred tools (schemas not loaded)\n"
+                "These tools exist but their parameter schemas are not loaded yet. To use one, "
+                "first call `tool_search` with its name — that loads the schema; then call the "
+                "tool normally:\n" + lines)
+
     def _build_system_prompt(self) -> str:
         skills_index = self.skills.index_block() if self.skills else ""
         memory_block = self.memory.build_context_block() if self.memory else ""
+        runtime = self._build_runtime_block()
+        deferred = self._deferred_index_block()
+        if deferred:
+            runtime = f"{runtime}\n\n{deferred}"
         return self.context_builder.build(
             skills_index=skills_index,
             memory_block=memory_block,
-            runtime_block=self._build_runtime_block(),
+            runtime_block=runtime,
             platform=getattr(self, "platform", None),
         )
 
@@ -223,6 +256,13 @@ class Agent:
         msg = user_input if isinstance(user_input, Message) else Message.user(user_input)
         self._apply_routing(msg.content)
         self.session.maybe_title_from(msg.content)
+        try:                               # background work that finished since the last turn
+            from .wakeups import wakeup_block
+            wb = wakeup_block()
+            if wb:
+                msg.content = f"{wb}\n\n{msg.content}"
+        except Exception:  # noqa: BLE001
+            pass
         self.session.messages.append(msg)
         self.tool_context.emit = on_event
         try:

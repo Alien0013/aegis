@@ -46,14 +46,31 @@ def decompose(goal: str, config, store: KanbanStore | None = None) -> list:
 
 
 def run_board(config, worker: str = "auto", max_tasks: int = 20,
-              store: KanbanStore | None = None, on_event=None) -> list[str]:
-    """Claim and complete ready cards one at a time until the board drains (or max_tasks)."""
+              store: KanbanStore | None = None, on_event=None,
+              workers: int | None = None) -> list[str]:
+    """Claim and complete ready cards until the board drains (or max_tasks).
+
+    With ``workers`` > 1 (or config ``kanban.workers``), that many lane workers run in
+    parallel: each claims unassigned cards, plus cards whose assignee was pre-set to
+    its lane name (``lane-1`` … ``lane-N``) — so you can pin related cards to one lane
+    to keep them serialized while everything else fans out."""
+    n = workers if workers is not None else int((config.get("kanban.workers", 1) if config is not None else 1) or 1)
+    if n > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        store = store or KanbanStore()
+        lanes = [f"lane-{i + 1}" for i in range(n)]
+        per = max(1, max_tasks // n)
+        with ThreadPoolExecutor(max_workers=n) as ex:
+            results = ex.map(lambda lane: run_board(config, worker=lane, max_tasks=per,
+                                                    store=store, on_event=on_event, workers=1),
+                             lanes)
+        return [tid for r in results for tid in r]
     from .agent.agent import Agent
     from .session import Session
     store = store or KanbanStore()
     done: list[str] = []
     for _ in range(max_tasks):
-        task = store.claim_next(worker)
+        task = store.claim_next(worker, lane=worker)
         if task is None:
             break
         if on_event:

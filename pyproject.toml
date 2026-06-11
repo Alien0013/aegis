@@ -45,4 +45,4 @@ aegis = "aegis.cli.main:main"
 include = ["aegis*"]
 
 [tool.setuptools.package-data]
-aegis = ["builtin_skills/**/*"]
+aegis = ["builtin_skills/**/*", "static/*"]

@@ -182,13 +182,29 @@ class GatewayRunner:
             lock = self._key_locks.setdefault(key, threading.Lock())
         with lock:
             with self._lock:
+                # A pending /handoff from the CLI adopts that session (full history) here.
+                try:
+                    from ..handoff import pop_handoff
+                    ho = pop_handoff(ev.platform, ev.chat_id)
+                    if ho and (adopted := self.store.load(ho)) is not None:
+                        self._sessions[key] = adopted
+                        self._agents.pop(key, None)
+                except Exception:  # noqa: BLE001
+                    pass
                 session = self._session(key)
             # Reuse a cached agent for this session (keeps the provider object warm so the
             # model's prompt prefix stays cached); rebuild if the session was reset.
             agent = self._agents.get(key)
             if agent is None or agent.session is not session:
-                agent = Agent.create(self.config, session=session, cwd=self.cwd, store=self.store,
-                                     model=session.meta.get("model"))   # /model override
+                prof = (self.config.get("gateway.profiles", {}) or {}).get(ev.platform, {}) or {}
+                run_cfg = self.config
+                if prof.get("personality"):       # isolated copy — must not leak across platforms
+                    import copy
+                    run_cfg = type(self.config)(copy.deepcopy(self.config.data))
+                    run_cfg.data.setdefault("agent", {})["personality"] = prof["personality"]
+                agent = Agent.create(run_cfg, session=session, cwd=self.cwd, store=self.store,
+                                     model=session.meta.get("model") or prof.get("model"),
+                                     provider_name=prof.get("provider"))   # /model > profile
                 self._agents[key] = agent
                 if len(self._agents) > self._agent_cap:
                     del self._agents[next(iter(self._agents))]
@@ -317,6 +333,21 @@ class GatewayRunner:
                 signal.signal(sig, self._on_shutdown_signal)
             except (ValueError, OSError):     # not on the main thread / unsupported
                 pass
+        # Restart forensics: tell the operator when the PREVIOUS run died uncleanly.
+        try:
+            from ..doctor import crash_report, record_start
+            report = crash_report()
+            record_start()
+            if report:
+                print(f"  ! {report} (see logs/shutdowns.jsonl)")
+                admins = [str(a) for a in (self.config.get("gateway.admins", []) or [])]
+                for adapter in self.adapters:        # best-effort DM to admins
+                    for admin in admins:
+                        q.enqueue(adapter.name, admin, f"⚠️ AEGIS restarted: {report}")
+                from ..eventbus import BUS
+                BUS.publish({"type": "restart_notice", "text": report})
+        except Exception:  # noqa: BLE001
+            pass
         print("Gateway running. Ctrl+C to stop.")
         try:
             for t in threads:

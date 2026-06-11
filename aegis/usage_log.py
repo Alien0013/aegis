@@ -15,8 +15,14 @@ from .util import append_line, now_iso, read_text
 
 # Approximate USD per 1M tokens (input, output). Prefix-matched on model id.
 PRICING: dict[str, tuple[float, float]] = {
+    "claude-fable": (10.0, 50.0),
+    "claude-opus-4-5": (5.0, 25.0),
+    "claude-opus-4-6": (5.0, 25.0),
+    "claude-opus-4-7": (5.0, 25.0),
+    "claude-opus-4-8": (5.0, 25.0),
     "claude-opus": (15.0, 75.0),
     "claude-sonnet": (3.0, 15.0),
+    "claude-haiku-4": (1.0, 5.0),
     "claude-haiku": (0.80, 4.0),
     "gpt-4o-mini": (0.15, 0.60),
     "gpt-4o": (2.50, 10.0),
@@ -97,6 +103,31 @@ def cost_report(days: int = 30, config=None) -> dict:
         m["cost_usd"] = round(m["cost_usd"] + cost, 4)
     return {"days": days, "calls": calls, "total_cost_usd": round(total, 4),
             "cache_read_tokens": cache_read_total, "by_model": by_model}
+
+
+def daily_series(days: int = 30, config=None) -> list[dict]:
+    """Per-day [{date, calls, cost_usd}] for the last ``days`` days (dashboard chart).
+    Days with no usage are included as zeros so the chart axis is continuous."""
+    today = datetime.now(timezone.utc).date()
+    series = {str(today - timedelta(days=i)): {"calls": 0, "cost_usd": 0.0}
+              for i in range(days - 1, -1, -1)}
+    raw = read_text(_path())
+    for line in raw.strip().splitlines() if raw.strip() else []:
+        try:
+            e = json.loads(line)
+            day = str(datetime.fromisoformat(e["ts"]).date())
+        except Exception:  # noqa: BLE001
+            continue
+        if day not in series:
+            continue
+        pin, pout = _price(e.get("model", "?"), config)
+        cr = e.get("cache_read", 0)
+        fresh_in = max(0, e["input"] - cr)
+        series[day]["calls"] += 1
+        series[day]["cost_usd"] = round(
+            series[day]["cost_usd"]
+            + (fresh_in * pin + cr * pin * 0.1 + e["output"] * pout) / 1_000_000, 6)
+    return [{"date": d, **v} for d, v in series.items()]
 
 
 def cmd_cost(args, config) -> int:

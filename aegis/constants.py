@@ -29,7 +29,7 @@ SKILL_AUTOGEN_THRESHOLD = 6
 
 # --- Defaults ---------------------------------------------------------------
 DEFAULT_PROVIDER = "anthropic"
-DEFAULT_MODEL = "claude-sonnet-4-5"
+DEFAULT_MODEL = "claude-sonnet-4-6"
 
 # Rough token estimate: ~4 chars per token.
 CHARS_PER_TOKEN = 4

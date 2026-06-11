@@ -125,7 +125,7 @@ def set_env_var(key: str, value: str) -> None:
 DEFAULT_CONFIG: dict[str, Any] = {
     "model": {
         "provider": "anthropic",
-        "default": "claude-sonnet-4-5",
+        "default": "claude-sonnet-4-6",
         "base_url": None,
         "api_mode": None,
         "context_length": None,
@@ -166,6 +166,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "loop_block_after": 5,       # hard-block an identical failing call after N repeats
         "todo_nudge_after": 15,      # remind to update the todo list after N tool uses
         "sensitive_write_allow": [], # absolute paths exempt from file-write safety gating
+        "defer_schemas": True,       # ship rarely-used tools name-only; tool_search loads them
+        "deferred": [                # schemas withheld until tool_search activates them
+            "generate_image", "cloud_image", "cloud_browser", "dependency_audit",
+            "transcribe", "speak", "computer", "download", "github", "mixture_of_agents",
+        ],
     },
     "auxiliary": {                   # small/cheap model for compaction, vision, smart-approval
         "provider": "",              # "" = reuse main provider
@@ -176,7 +181,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "allow_private_urls": False, # SSRF: allow fetches to private/internal IPs (metadata still blocked)
     },
     "checkpoints": {
-        "enabled": False,            # snapshot files before edits for /rollback
+        "enabled": True,             # auto-checkpoint each turn's edit batch (/rollback, /diff)
     },
     "hooks": {},                     # event -> [shell commands]: session_start, pre_tool, ...
     "skills": {
@@ -234,6 +239,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "admins": [],                         # user ids/@handles with full command access
                                               #   (empty = single-user; everyone is admin)
         "user_commands": [],                  # extra slash commands non-admins may run
+        "profiles": {},                       # per-platform agent overlay, e.g.
+                                              #   telegram: {personality: tg, model: ..., provider: ...}
     },
     "goals": {
         "max_turns": 20,        # /goal auto-continuation budget before pausing

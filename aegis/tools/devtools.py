@@ -59,13 +59,26 @@ class ToolSearchTool(Tool):
     }
 
     def run(self, args, ctx: ToolContext) -> ToolResult:
+        import json
         q = args["query"].lower()
-        tools = ctx.agent.registry.all() if ctx.agent and ctx.agent.registry else []
+        agent = ctx.agent
+        tools = agent.registry.all() if agent and agent.registry else []
         hits = [t for t in tools if q in t.name.lower() or q in t.description.lower()]
         if not hits:
             return ToolResult.ok("(no matching tools)", display="tool_search")
-        return ToolResult.ok("\n".join(f"{t.name}: {t.description.splitlines()[0]}" for t in hits),
-                             display=f"{len(hits)} tool(s)")
+        # Activate any deferred hits: their full schemas join the request from the next
+        # model call on (session-sticky), so the model can call them immediately after.
+        deferred = agent.deferred_tool_names() if agent and hasattr(agent, "deferred_tool_names") else set()
+        activated = [t for t in hits if t.name in deferred]
+        if agent is not None and activated:
+            agent.activated_tools.update(t.name for t in activated)
+        lines = [f"{t.name}: {t.description.splitlines()[0]}" for t in hits]
+        for t in activated:
+            lines.append(f"\nactivated `{t.name}` — schema now loaded:\n"
+                         + json.dumps({"name": t.name, "parameters": t.parameters}, indent=1))
+        return ToolResult.ok("\n".join(lines),
+                             display=f"{len(hits)} tool(s)"
+                                     + (f", {len(activated)} activated" if activated else ""))
 
 
 def dev_tools() -> list[Tool]:

@@ -24,12 +24,13 @@ Each item is small enough to land with tests in one sitting unless marked (L).
 - [x] **Pre-update state snapshot** — auto before `aegis update`;
   `aegis snapshot create|restore|prune|list`. (`backup.py`)
 
-## Phase 2 — Context economy & safety depth
+## Phase 2 — Context economy & safety depth ✅ (one item open)
 
 - [x] **Out-of-band tool-result storage** — oversized outputs spill to disk
   with a pointer (already present; pruned after 7 days). (`agent/loop.py`)
-- [ ] **Deferred tool schemas** — rarely-used tools ship name-only; `tool_search`
-  activates the full schema on demand (cuts per-call token overhead).
+- [x] **Deferred tool schemas** — rarely-used tools ship name-only in a stable
+  system-prompt index; `tool_search` activates the full schema on demand
+  (`tools.defer_schemas`, `tools.deferred`). (`agent/agent.py`, `tools/devtools.py`)
 - [x] **Rich `@references`** — `@file:path:10-20`, `@folder:`, `@git:`, `@url:`,
   `@diff`, `@staged`, sensitive-path blocklist. (`cli/repl.py`)
 - [ ] **Subdirectory hints** — when the agent starts working in a new directory,
@@ -41,37 +42,41 @@ Each item is small enough to land with tests in one sitting unless marked (L).
 - [x] **Rate-limit telemetry** — `x-ratelimit-*` captured, shown in `/usage`. (`ratelimit.py`)
 - [x] **`/compress here [N] | focus <topic>`** — user-chosen boundary + focus. (`cli/repl.py`)
 
-## Phase 3 — Agentic depth
+## Phase 3 — Agentic depth ✅ DONE
 
 - [x] **Async delegation with announce-back** — `spawn_subagent background:true`
   runs in the background and posts the result into the chat (gateway) or the
   live feed (CLI). (`tools/agentic.py`, `background.py`)
-- [ ] **Typed subagents** — named agent types (explore = read-only fan-out,
-  plan = architect, general) with per-type toolsets and prompts; continue a
-  previous subagent with its context intact.
-- [ ] **Background task re-invocation** — long-running bash/process completion
-  re-enters the agent loop with the output (event-driven, not polled).
-- [ ] **Mixture-of-agents tool** — fan one prompt across several models,
-  synthesize the answers.
-- [ ] **Checkpoint depth** — auto-checkpoint before each edit batch with diff
-  preview and selective restore. (L)
-- [ ] **Kanban worker lanes** — parallel kanban workers with lane assignment
-  and a swarm mode. (L)
+- [x] **Typed subagents** — `agent_type: explore|plan|review` (read-only tool
+  whitelists + role preambles) and `continue_id` follow-ups with context intact.
+  (`tools/agentic.py`)
+- [x] **Background task re-invocation** — `process start` and background
+  subagents queue completion wakeups; the next turn folds them in, and gateway
+  chats get an announce-back. (`agent/wakeups.py`, `tools/process.py`)
+- [x] **Mixture-of-agents tool** — `mixture_of_agents` fans one prompt across
+  2–5 models in parallel and synthesizes one answer. (`tools/agentic.py`)
+- [x] **Checkpoint depth** — each turn's edit batch auto-checkpoints as ONE
+  unit (new files tracked, rollback deletes them); `/diff` + `aegis checkpoints
+  diff` preview. On by default. (`checkpoints.py`, `agent/loop.py`)
+- [x] **Kanban worker lanes** — `kanban.workers` N parallel lane workers;
+  pre-assigning a ready card to `lane-K` pins it to that worker. (`kanban_auto.py`)
 
-## Phase 4 — Gateway & ops polish
+## Phase 4 — Gateway & ops polish ✅ DONE
 
 - [x] **Admin/user command tiers** — `gateway.admins` + `gateway.user_commands`;
   empty admins = single-user (everyone admin). (`gateway/runner.py`)
 - [x] **Shutdown forensics** — SIGTERM/SIGINT logged to `logs/shutdowns.jsonl`. (`gateway/runner.py`)
-- [ ] **Restart notifications** — after an update/crash restart, tell the
-  last-active chats the gateway is back.
-- [ ] **Cross-platform `/handoff`** — move a CLI session to a messaging
-  platform (and back) with history replay. (L)
+- [x] **Restart notifications** — unclean previous run detected at gateway
+  start (START/shutdown pairing in `logs/shutdowns.jsonl`) and DM'd to admins.
+  (`doctor.py`, `gateway/runner.py`)
+- [x] **Cross-platform `/handoff`** — `/handoff <platform> <chat_id>` queues
+  the session; the gateway adopts it (full history) on the chat's next message.
+  (`handoff.py`)
 - [x] **Tips engine** — one-time contextual feature hints. (`firstrun.py`)
-- [ ] **Doctor depth** — provider probes, channel token validation, service
-  health, disk/db integrity in `aegis doctor`.
-- [ ] **Multi-profile gateways** — several isolated agent profiles served by
-  one gateway process. (L)
+- [x] **Doctor depth** — `aegis doctor --probe`: live one-token provider call
+  with latency + Telegram/Discord/Slack token validation. (`doctor.py`)
+- [x] **Multi-profile gateways** — `gateway.profiles` per-platform overlay
+  (personality / model / provider) on one gateway process. (`gateway/runner.py`)
 
 ## Todo staleness nudge ✅
 - [x] System-reminder when the todo list goes stale mid-task. (`agent/loop.py`)

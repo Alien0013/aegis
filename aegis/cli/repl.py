@@ -34,7 +34,7 @@ except Exception:  # noqa: BLE001
 _approve_lock = threading.Lock()
 
 SLASH = ["/help", "/model", "/status", "/tools", "/skills", "/skill", "/memory", "/usage",
-         "/compress", "/think", "/retry", "/undo", "/learn", "/background", "/tasks", "/rollback",
+         "/compress", "/think", "/retry", "/undo", "/learn", "/background", "/tasks", "/rollback", "/diff", "/handoff",
          "/personality", "/save", "/sessions", "/new", "/clear", "/yolo", "/goal", "/subgoal",
          "/quit", "/exit"]
 
@@ -395,6 +395,29 @@ def handle_slash(cmd: str, agent: Agent) -> str:
             _out("(no background tasks)")
         for t in tasks:
             _out(f"  {t['id']}  [{t['status']}]  {t['prompt']}  {t['result_preview']}")
+    elif name == "/handoff":
+        parts = (arg or "").split()
+        if len(parts) < 2:
+            _out("usage: /handoff <platform> <chat_id>  (e.g. /handoff telegram 123456789)")
+        else:
+            platform, chat_id = parts[0], parts[1]
+            from ..session import SessionStore
+            SessionStore().save(agent.session)              # make history adoptable
+            from ..handoff import set_handoff
+            set_handoff(platform, chat_id, agent.session.id)
+            try:
+                from ..gateway.queue import DeliveryQueue
+                DeliveryQueue().enqueue(platform, chat_id,
+                    f"\u25b6 Session '{agent.session.title or agent.session.id}' handed off "
+                    "from the CLI \u2014 send a message here to continue it.")
+            except Exception:  # noqa: BLE001
+                pass
+            _out(f"\u2713 handoff queued: the next message from {platform}:{chat_id} continues "
+                 "this session (gateway must be running).", style="green")
+    elif name == "/diff":
+        from ..checkpoints import CheckpointStore
+        d = CheckpointStore(agent.cwd).diff(arg or None)
+        _out(d or "(no changes since the last checkpoint)")
     elif name == "/rollback":
         from ..checkpoints import CheckpointStore
         restored = CheckpointStore(agent.cwd).rollback(arg or None)
