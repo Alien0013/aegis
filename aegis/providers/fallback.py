@@ -25,6 +25,7 @@ RECOVERY_ACTION = {
     "transient": "retry",
     "client": "abort",
     "invalid_response": "retry",
+    "thinking_signature": "strip_thinking",
 }
 
 _OVERFLOW_HINTS = ("context length", "maximum context", "context_length_exceeded", "too long",
@@ -32,6 +33,10 @@ _OVERFLOW_HINTS = ("context length", "maximum context", "context_length_exceeded
 _POLICY_HINTS = ("content policy", "content_policy", "content_filter", "moderation", "safety",
                  "flagged", "responsibleai")
 _QUOTA_HINTS = ("insufficient_quota", "quota exceeded", "exceeded your current quota", "billing")
+# Anthropic rejects a request whose signed thinking/redacted_thinking blocks were mutated
+# upstream (compaction, normalization, reload). Recovery: resend without thinking blocks.
+_THINKING_SIG_HINTS = ("thinking or redacted_thinking", "thinking blocks", "cannot be modified",
+                       "invalid signature", "signature is invalid")
 
 
 def classify_provider_error(exc: Exception) -> str:
@@ -49,6 +54,8 @@ def classify_provider_error(exc: Exception) -> str:
         if s in (402, 403):
             return "billing"
         if 400 <= s < 500:
+            if any(h in body for h in _THINKING_SIG_HINTS):
+                return "thinking_signature"    # resend without thinking blocks
             if any(h in body for h in _OVERFLOW_HINTS):
                 return "context_overflow"      # compress, don't failover
             if any(h in body for h in _POLICY_HINTS):

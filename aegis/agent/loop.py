@@ -14,6 +14,16 @@ from . import compaction, governance
 OnEvent = Callable[[dict], None]
 
 
+def _without_thinking(m: Message) -> Message:
+    """A shallow copy of ``m`` with thinking blocks/reasoning removed — for the
+    thinking-signature 400 retry. Non-assistant or block-free messages pass through
+    unchanged (identity) so unaffected turns aren't needlessly copied."""
+    if m.role != "assistant" or not (getattr(m, "thinking_blocks", None) or m.reasoning):
+        return m
+    import dataclasses
+    return dataclasses.replace(m, thinking_blocks=[], reasoning="")
+
+
 def _provider_complete(provider, messages, *, tools=None, **kwargs):
     """Call provider.complete without breaking older Provider-compatible fakes/plugins."""
     import inspect
@@ -389,9 +399,16 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
             reasoned_live["v"] = True
             emit({"type": "reasoning_delta", "text": text})
 
+        # Thinking-signature recovery (one-shot, this turn): when set, send the wire a
+        # COPY of the messages with thinking blocks removed. The canonical session is
+        # never mutated — persisting a stripped message would permanently corrupt the
+        # stored thinking signatures and 400 on every future turn (Hermes #24107).
+        wire_messages = session.messages
+        if getattr(agent, "_strip_thinking", False):
+            wire_messages = [_without_thinking(m) for m in session.messages]
         try:
             resp = _provider_complete(
-                agent.provider, session.messages, tools=schemas, stream=agent.stream, on_delta=delta_cb,
+                agent.provider, wire_messages, tools=schemas, stream=agent.stream, on_delta=delta_cb,
                 reasoning=getattr(agent, "reasoning", "off"),
                 on_reasoning=reasoning_cb,
                 tool_runner=executor.execute_one_raw,
@@ -401,9 +418,14 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
         except Exception as e:  # noqa: BLE001
             from .._log import log_exc
             from ..providers.fallback import classify_provider_error, recovery_action
+            action = recovery_action(classify_provider_error(e))
+            # Signed thinking blocks were invalidated upstream -> resend without them (once).
+            if action == "strip_thinking" and not getattr(agent, "_strip_thinking", False):
+                agent._strip_thinking = True
+                emit({"type": "thinking_strip_retry"})
+                continue
             # context_overflow -> compact the session and retry once, instead of failing the turn.
-            if (recovery_action(classify_provider_error(e)) == "compress"
-                    and not getattr(agent, "_overflow_retried", False)):
+            if (action == "compress" and not getattr(agent, "_overflow_retried", False)):
                 agent._overflow_retried = True
                 emit({"type": "compacting", "reason": "context_overflow"})
                 session = _force_compact(agent, session)

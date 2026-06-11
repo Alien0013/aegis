@@ -39,9 +39,24 @@ _INJECTION_PATTERNS: tuple[tuple[_re.Pattern, str], ...] = (
 
 
 def scan_entry(text: str) -> str | None:
-    """Return why this content must not enter memory, or None if clean."""
+    """Return why this content must not enter memory, or None if clean.
+
+    Memory enters the system prompt on every future session, so it gets the BROADEST
+    scan: the shared security_scan text scanner (invisible/bidi unicode, exfil via
+    curl/wget/cat-of-secrets, SSH-backdoor/persistence, HTML-comment injection) PLUS the
+    memory-specific phrase patterns below. This is AEGIS's equivalent of Hermes's
+    'strict' threat-pattern scope used for memory + skills."""
+    if not text:
+        return None
+    try:
+        from .security_scan import scan_text_findings
+        findings = scan_text_findings(text)
+        if findings:
+            return findings[0]
+    except Exception:  # noqa: BLE001 - never let the scanner crash a legit write
+        pass
     for pat, why in _INJECTION_PATTERNS:
-        if pat.search(text or ""):
+        if pat.search(text):
             return why
     return None
 
@@ -327,8 +342,14 @@ class MemoryManager:
         out = []
         for e in self.store.entries(target):
             why = scan_entry(e)
-            out.append(f"[BLOCKED: stored entry matched a prompt-injection pattern ({why}); "
-                       "inspect with the memory tool and remove it]" if why else e)
+            if why:
+                # Use only the category, never the matched text — echoing the matched
+                # phrase into the placeholder would re-inject it into the prompt.
+                category = why.split(":", 1)[0].strip()
+                out.append(f"[BLOCKED: stored entry matched a threat pattern ({category}); "
+                           "inspect with memory(action=read) and remove it]")
+            else:
+                out.append(e)
         if not out:
             return ""
         content = MEMORY_DELIM.join(out)

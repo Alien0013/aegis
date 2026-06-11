@@ -250,6 +250,7 @@ class Agent:
         self.cancel_event.clear()
         self._compact_stuck = False        # reset the no-progress-compaction guard each turn
         self._overflow_retried = False     # one-shot context_overflow -> compress guard, per turn
+        self._strip_thinking = False       # one-shot thinking-signature 400 -> resend w/o blocks
         if not self.session.messages:      # first turn of a session
             from ..plugins import fire_hook
             fire_hook("on_session_start", self)
