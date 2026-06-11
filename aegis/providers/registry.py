@@ -440,8 +440,67 @@ def _auth_status(auth: AuthProvider) -> dict:
     return {"description": description, "available": available}
 
 
+def _model_capabilities(model: str, api_mode: ApiMode | str) -> dict:
+    mode = api_mode.value if isinstance(api_mode, ApiMode) else str(api_mode or "")
+    m = (model or "").lower()
+    openai_reasoning = m.startswith(("gpt-5", "o1", "o3", "o4"))
+    anthropic_reasoning = mode == ApiMode.ANTHROPIC_MESSAGES.value and "claude" in m
+    chat_vision = any(
+        marker in m
+        for marker in (
+            "claude", "gemini", "gpt-4o", "gpt-4.1", "gpt-5", "llava",
+            "pixtral", "qwen-vl", "vision", "vl-",
+        )
+    )
+    native_images = mode in {
+        ApiMode.ANTHROPIC_MESSAGES.value,
+        ApiMode.CHAT_COMPLETIONS.value,
+        ApiMode.RESPONSES.value,
+    }
+    return {
+        "tool_calls": mode in {
+            ApiMode.ANTHROPIC_MESSAGES.value,
+            ApiMode.CHAT_COMPLETIONS.value,
+            ApiMode.RESPONSES.value,
+            ApiMode.CODEX_APP_SERVER.value,
+        },
+        "streaming": mode in {
+            ApiMode.ANTHROPIC_MESSAGES.value,
+            ApiMode.CHAT_COMPLETIONS.value,
+            ApiMode.RESPONSES.value,
+            ApiMode.CODEX_APP_SERVER.value,
+        },
+        "images": bool(native_images and chat_vision),
+        "reasoning_effort": bool(anthropic_reasoning or (
+            openai_reasoning and mode in {ApiMode.CHAT_COMPLETIONS.value, ApiMode.RESPONSES.value}
+        )),
+        "reasoning_stream": bool(anthropic_reasoning or (
+            openai_reasoning and mode == ApiMode.CHAT_COMPLETIONS.value
+        )),
+        "response_state": mode == ApiMode.RESPONSES.value,
+        "response_cancel": mode == ApiMode.RESPONSES.value,
+        "dynamic_tools": mode == ApiMode.CODEX_APP_SERVER.value,
+    }
+
+
+def _capability_summary(capabilities: dict) -> str:
+    labels = [
+        ("tool_calls", "tools"),
+        ("streaming", "stream"),
+        ("images", "images"),
+        ("reasoning_effort", "reasoning"),
+        ("reasoning_stream", "reasoning-stream"),
+        ("response_state", "response-state"),
+        ("response_cancel", "cancel"),
+        ("dynamic_tools", "dynamic-tools"),
+    ]
+    enabled = [label for key, label in labels if capabilities.get(key)]
+    return ", ".join(enabled) if enabled else "none"
+
+
 def _provider_status(provider: Provider, *, role: str, configured: dict | None = None) -> dict:
     api_mode = getattr(provider, "api_mode", "")
+    capabilities = _model_capabilities(getattr(provider, "model", ""), api_mode)
     return {
         "role": role,
         "name": getattr(provider, "name", ""),
@@ -451,11 +510,14 @@ def _provider_status(provider: Provider, *, role: str, configured: dict | None =
         "context_length": int(getattr(provider, "context_length", 0) or 0),
         "auth": _auth_status(getattr(provider, "auth", None)),
         "configured": configured or {},
+        "capabilities": capabilities,
+        "capability_summary": _capability_summary(capabilities),
     }
 
 
 def _spec_status(name: str, spec: ProviderSpec, *, origin: str) -> dict:
     auth = _resolve_auth(spec)
+    capabilities = _model_capabilities(spec.default_model, spec.api_mode)
     return {
         "name": name,
         "origin": origin,
@@ -467,6 +529,8 @@ def _spec_status(name: str, spec: ProviderSpec, *, origin: str) -> dict:
         "env_vars": list(spec.env_vars),
         "oauth": bool(spec.oauth),
         "auth": _auth_status(auth),
+        "capabilities": capabilities,
+        "capability_summary": _capability_summary(capabilities),
     }
 
 
@@ -542,6 +606,11 @@ def provider_report(config: cfg.Config) -> dict:
             "model": model,
             "known_provider": provider_name in specs,
         }
+        spec = specs.get(provider_name)
+        if spec is not None:
+            capabilities = _model_capabilities(model, spec.api_mode)
+            row["capabilities"] = capabilities
+            row["capability_summary"] = _capability_summary(capabilities)
         if provider_name not in specs and not config.get("model.base_url"):
             row["warning"] = "unknown provider"
         routing.append(row)

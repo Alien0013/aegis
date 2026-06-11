@@ -72,6 +72,7 @@ def test_model_doctor_prints_resolver_report(capsys):
 
     out = capsys.readouterr().out
     assert "transport: chat_completions" in out
+    assert "capabilities: tools, stream" in out
     assert "auth:      no-auth (local) (ready)" in out
     assert "fallbacks:" in out and "ollama / llama3.1" in out
     assert "routing:" in out and "/deploy/ -> localtest / local-routed (known)" in out
@@ -719,8 +720,11 @@ def test_dashboard_models_exposes_resolver_report():
 
     assert data["provider"] == "localtest"
     assert data["active"]["context_length"] == 70_000
+    assert data["active"]["capabilities"]["tool_calls"] is True
+    assert data["active"]["capabilities"]["images"] is False
     assert data["chain"][1]["name"] == "ollama"
     assert data["routing"][0]["provider"] == "localtest"
+    assert data["routing"][0]["capabilities"]["tool_calls"] is True
     assert "localtest" in data["providers"]
     assert any(row["name"] == "localtest" and row["origin"] == "custom"
                for row in data["provider_catalog"])

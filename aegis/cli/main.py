@@ -116,6 +116,8 @@ def cmd_model(args, config: Config) -> int:
     else:
         _print(f"transport: {active.get('api_mode', '')}")
         _print(f"context:   {int(active.get('context_length') or 0):,}")
+        if active.get("capability_summary"):
+            _print(f"capabilities: {active.get('capability_summary')}")
         auth = active.get("auth") or {}
         _print(f"auth:      {auth.get('description', '')} ({'ready' if auth.get('available') else 'missing'})")
         if active.get("base_url"):

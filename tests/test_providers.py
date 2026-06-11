@@ -788,12 +788,19 @@ def test_provider_report_exposes_chain_routing_and_catalog():
     assert report["active"]["name"] == "localtest"
     assert report["active"]["auth"]["available"] is True
     assert report["active"]["context_length"] == 70_000
+    assert report["active"]["capabilities"]["tool_calls"] is True
+    assert report["active"]["capabilities"]["images"] is False
     assert [row["name"] for row in report["chain"]] == ["localtest", "ollama"]
     assert report["fallbacks"][0]["role"] == "fallback:1"
+    assert report["fallbacks"][0]["capabilities"]["tool_calls"] is True
     assert report["routing"][0]["known_provider"] is True
+    assert report["routing"][0]["capability_summary"]
     custom = next(row for row in report["provider_catalog"] if row["name"] == "localtest")
     assert custom["origin"] == "custom"
     assert custom["base_url"] == "http://local.test/v1"
+    openai = next(row for row in report["provider_catalog"] if row["name"] == "openai")
+    assert openai["capabilities"]["reasoning_effort"] is True
+    assert openai["capabilities"]["images"] is True
 
 
 def test_openai_codex_builds_oauth_responses_provider():

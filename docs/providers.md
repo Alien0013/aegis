@@ -15,9 +15,11 @@ aegis auth status
 ```
 
 `aegis model` and `aegis model doctor` print the resolved provider, transport,
-context window, auth readiness, fallback chain, and prompt-routing rules. The
-dashboard Models page uses the same provider resolver report, including custom
-and plugin provider catalog rows.
+context window, capability summary, auth readiness, fallback chain, and
+prompt-routing rules. The dashboard Models page uses the same provider resolver
+report, including custom and plugin provider catalog rows with per-model
+capability flags for tools, streaming, images, reasoning, response state, and
+dynamic tools.
 
 ## Auth
 
