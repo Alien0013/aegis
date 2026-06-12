@@ -28,6 +28,107 @@ def test_chat_completions_tools_wire():
     assert out[0]["type"] == "function" and out[0]["function"]["name"] == "x"
 
 
+def test_chat_completions_records_rate_and_balance_headers(monkeypatch):
+    from aegis import ratelimit
+    from aegis.providers.chat_completions import ChatCompletionsTransport
+    from aegis.types import Message
+
+    class FakeAuth:
+        def headers(self):
+            return {}
+
+    class FakeResponse:
+        status_code = 200
+        headers = {"x-account-balance": "12.34", "x-ratelimit-remaining-tokens": "900"}
+
+        def json(self):
+            return {"choices": [{"message": {"content": "ok"}}], "usage": {}}
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, url, headers, json):
+            return FakeResponse()
+
+    ratelimit._latest.clear()
+    monkeypatch.setattr("aegis.providers.chat_completions.httpx.Client", FakeClient)
+
+    ChatCompletionsTransport().complete(
+        base_url="https://openrouter.ai/api/v1",
+        auth=FakeAuth(),
+        model="openrouter/test",
+        messages=[Message.user("hi")],
+        tools=None,
+        stream=False,
+    )
+
+    assert ratelimit.balance()["provider"] == "openrouter"
+    assert ratelimit.balance()["balance"] == "12.34"
+    assert "tokens left (min): 900" in ratelimit.summary()
+
+
+def test_chat_completions_stream_records_rate_and_balance_headers(monkeypatch):
+    from aegis import ratelimit
+    from aegis.providers.chat_completions import ChatCompletionsTransport
+    from aegis.types import Message
+
+    class FakeAuth:
+        def headers(self):
+            return {}
+
+    class FakeStream:
+        status_code = 200
+        headers = {"x-ratelimit-remaining-credits": "8.50"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def iter_lines(self):
+            return iter([
+                'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}',
+                "data: [DONE]",
+            ])
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def stream(self, method, url, headers, json):
+            return FakeStream()
+
+    ratelimit._latest.clear()
+    monkeypatch.setattr("aegis.providers.chat_completions.httpx.Client", FakeClient)
+
+    resp = ChatCompletionsTransport().complete(
+        base_url="https://openrouter.ai/api/v1",
+        auth=FakeAuth(),
+        model="openrouter/test",
+        messages=[Message.user("hi")],
+        tools=None,
+        stream=True,
+    )
+
+    assert resp.text == "ok"
+    assert ratelimit.balance()["provider"] == "openrouter"
+    assert ratelimit.balance()["credits left"] == "8.50"
+
+
 def test_tool_schema_sanitized_across_provider_transports():
     from aegis.providers.chat_completions import ChatCompletionsTransport
     from aegis.providers.codex_app_server import CodexAppServerTransport
@@ -134,6 +235,113 @@ def test_responses_payload_includes_instructions(monkeypatch):
     assert captured["json"]["instructions"] == DEFAULT_INSTRUCTIONS
     assert captured["json"]["store"] is False
     assert captured["json"]["metadata"] == {"session_id": "sess_meta", "trace_id": "trace_meta"}
+
+
+def test_responses_records_rate_and_balance_headers(monkeypatch):
+    from aegis import ratelimit
+    from aegis.providers.responses import ResponsesTransport
+    from aegis.types import Message
+
+    class FakeAuth:
+        def headers(self):
+            return {}
+
+    class FakeResponse:
+        status_code = 200
+        headers = {"x-balance": "6.25", "x-ratelimit-remaining-requests": "42"}
+
+        def json(self):
+            return {
+                "status": "completed",
+                "output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}],
+            }
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, url, headers, json):
+            return FakeResponse()
+
+    ratelimit._latest.clear()
+    monkeypatch.setattr("aegis.providers.responses.httpx.Client", FakeClient)
+
+    resp = ResponsesTransport().complete(
+        base_url="https://api.openai.com/v1",
+        auth=FakeAuth(),
+        model="gpt-5.5",
+        messages=[Message.user("hi")],
+        tools=None,
+        stream=False,
+    )
+
+    assert resp.text == "ok"
+    assert ratelimit.balance()["provider"] == "openai"
+    assert ratelimit.balance()["balance"] == "6.25"
+    assert "requests left (min): 42" in ratelimit.summary()
+
+
+def test_responses_stream_records_rate_and_balance_headers(monkeypatch):
+    from aegis import ratelimit
+    from aegis.providers.responses import ResponsesTransport
+    from aegis.types import Message
+
+    class FakeAuth:
+        def headers(self):
+            return {}
+
+    class FakeStream:
+        status_code = 200
+        headers = {"openai-organization-credit-remaining": "5.00"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def iter_lines(self):
+            return iter([
+                'data: {"type":"response.output_text.delta","delta":"o"}',
+                'data: {"type":"response.output_text.delta","delta":"k"}',
+                'data: {"type":"response.completed","response":{"status":"completed","output":[]}}',
+                "data: [DONE]",
+            ])
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def stream(self, method, url, headers, json):
+            return FakeStream()
+
+    ratelimit._latest.clear()
+    monkeypatch.setattr("aegis.providers.responses.httpx.Client", FakeClient)
+
+    resp = ResponsesTransport().complete(
+        base_url="https://api.openai.com/v1",
+        auth=FakeAuth(),
+        model="gpt-5.5",
+        messages=[Message.user("hi")],
+        tools=None,
+        stream=True,
+    )
+
+    assert resp.text == "ok"
+    assert ratelimit.balance()["provider"] == "openai"
+    assert ratelimit.balance()["credits left"] == "5.00"
 
 
 def test_responses_retrieve_and_cancel_helpers(monkeypatch):

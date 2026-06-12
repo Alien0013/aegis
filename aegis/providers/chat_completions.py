@@ -113,6 +113,8 @@ class ChatCompletionsTransport(ProviderTransport):
         with httpx.Client(timeout=timeout) as client:
             r = client.post(url, headers=headers, json=payload)
         _raise_for_status(r)
+        from .. import ratelimit
+        ratelimit.record_response_headers(getattr(r, "headers", {}), base_url=url)
         data = r.json()
         choice = (data.get("choices") or [{}])[0]
         msg = choice.get("message", {})
@@ -148,6 +150,8 @@ class ChatCompletionsTransport(ProviderTransport):
         with httpx.Client(timeout=stream_timeout) as client:
             with client.stream("POST", url, headers=headers, json=payload) as r:
                 _raise_for_status(r)
+                from .. import ratelimit
+                ratelimit.record_response_headers(getattr(r, "headers", {}), base_url=url)
                 for line in r.iter_lines():
                     if not line or not line.startswith("data:"):
                         continue

@@ -10,6 +10,7 @@ provider returns it (OpenRouter and several OpenAI-compatible gateways do)."""
 from __future__ import annotations
 
 import threading
+from urllib.parse import urlparse
 
 _lock = threading.Lock()
 _latest: dict = {}
@@ -52,6 +53,31 @@ def record(headers, provider: str = "") -> None:
         _latest["_recent"] = {"provider": provider or "?", **snap}
         if credit:
             _latest["_credit"] = {"provider": provider or "?", "at": now_iso(), **credit}
+
+
+def record_response_headers(headers, *, base_url: str = "", provider: str = "") -> None:
+    """Capture telemetry from a provider HTTP response."""
+    record(headers, provider or _provider_from_base_url(base_url))
+
+
+def _provider_from_base_url(base_url: str) -> str:
+    host = (urlparse(base_url).hostname or "").lower()
+    known = (
+        ("openrouter", "openrouter"),
+        ("openai", "openai"),
+        ("groq", "groq"),
+        ("deepseek", "deepseek"),
+        ("x.ai", "xai"),
+        ("mistral", "mistral"),
+        ("together", "together"),
+        ("ollama", "ollama"),
+        ("google", "google"),
+        ("gemini", "gemini"),
+    )
+    for needle, label in known:
+        if needle in host:
+            return label
+    return host or "?"
 
 
 def latest() -> dict:
