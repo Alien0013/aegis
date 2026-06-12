@@ -69,6 +69,7 @@ def test_process_tool_lifecycle(tmp_path):
     import time
     from aegis.tools.base import ToolContext
     from aegis.tools.process import ProcessTool
+    from aegis.tools.process_registry import process_registry
     ctx = ToolContext(cwd=tmp_path)
     t = ProcessTool()
     res = t.run({"action": "start", "command": "sleep 5"}, ctx)
@@ -77,7 +78,9 @@ def test_process_tool_lifecycle(tmp_path):
     assert pid_id in t.run({"action": "list"}, ctx).content
     time.sleep(0.2)
     t.run({"action": "stop", "id": pid_id}, ctx)
-    assert pid_id not in t.run({"action": "list"}, ctx).content
+    poll = t.run({"action": "poll", "id": pid_id}, ctx)
+    assert '"status": "exited"' in poll.content or '"status": "already_exited"' in poll.content
+    process_registry._finished.pop(pid_id, None)
 
 
 def test_tools_status():

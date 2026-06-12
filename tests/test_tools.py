@@ -189,6 +189,29 @@ def test_daytona_backend_fails_closed(tmp_path):
     assert "daytona backend is not configured" in out
 
 
+def test_process_tool_submit_and_wait(tmp_path):
+    from aegis.tools.base import ToolContext
+    from aegis.tools.process import ProcessTool
+    from aegis.tools.process_registry import process_registry
+
+    ctx = ToolContext(cwd=tmp_path)
+    ctx.task_id = "proc_submit_task"
+    tool = ProcessTool()
+    start = tool.run({"action": "start", "command": "read line; echo got:$line"}, ctx)
+    sid = start.data["session_id"]
+    try:
+        submit = tool.run({"action": "submit", "session_id": sid, "data": "hello"}, ctx)
+        assert not submit.is_error
+        waited = tool.run({"action": "wait", "session_id": sid, "timeout": 5}, ctx)
+        assert not waited.is_error
+        logs = tool.run({"action": "log", "session_id": sid}, ctx)
+        assert "got:hello" in logs.content
+        assert process_registry.list_sessions(task_id="proc_submit_task")
+    finally:
+        process_registry.kill_process(sid)
+        process_registry._finished.pop(sid, None)
+
+
 def test_task_env_override_updates_live_local_cwd(tmp_path):
     from aegis.tools.backends import (
         cleanup_task_environment,
