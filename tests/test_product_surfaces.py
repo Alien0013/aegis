@@ -1679,6 +1679,39 @@ def test_surface_runner_run_metadata_updates_to_final_provider(tmp_path):
     assert run["data"]["model"] == "final-model"
 
 
+def test_surface_runner_records_turn_usage(tmp_path):
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.session import Session
+    from aegis.surface import SurfaceRunner
+    from aegis.types import LLMResponse, Usage
+    from conftest import FakeProvider
+
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = False
+    session = Session.create("turn usage")
+    provider = FakeProvider([
+        LLMResponse(text="one", usage=Usage(input_tokens=5, output_tokens=2, cache_read=1)),
+        LLMResponse(text="two", usage=Usage(input_tokens=7, output_tokens=3, cache_read=0)),
+    ])
+    agent = Agent(config=cfg, provider=provider, session=session, cwd=tmp_path)
+    runner = SurfaceRunner(cfg, cwd=tmp_path, include_mcp=False)
+
+    first = runner.run_prompt("first", session=session, agent=agent, surface="cli")
+    second = runner.run_prompt("second", session=session, agent=agent, surface="cli")
+
+    assert first.usage is not None
+    assert first.usage.input_tokens == 5
+    assert first.usage.output_tokens == 2
+    assert first.usage.cache_read == 1
+    assert second.usage is not None
+    assert second.usage.input_tokens == 7
+    assert second.usage.output_tokens == 3
+    assert second.usage.cache_read == 0
+    assert agent.budget.usage.input_tokens == 12
+    assert agent.budget.usage.output_tokens == 5
+
+
 def test_renderer_reasoning_display_modes(monkeypatch):
     import contextlib
     import io

@@ -16,7 +16,7 @@ from typing import Any, Callable, Iterable
 
 from .config import Config
 from .session import Session, SessionStore
-from .types import Message, new_id
+from .types import Message, Usage, new_id
 
 OnEvent = Callable[[dict[str, Any]], None]
 Approver = Callable[[str], bool | str]
@@ -59,6 +59,7 @@ class SurfaceRun:
     message: Message
     session: Session
     agent: Any
+    usage: Usage | None = None
     trace_id: str = ""
     turn_id: str = ""
     run_id: str = ""
@@ -392,6 +393,7 @@ class SurfaceRunner:
             message=message,
             session=getattr(agent, "session", session),
             agent=agent,
+            usage=getattr(agent, "_last_turn_usage", None),
             trace_id=str(trace_ctx.get("trace_id", "")),
             turn_id=str(trace_ctx.get("turn_id", "")),
             events=events,

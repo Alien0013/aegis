@@ -560,14 +560,16 @@ class Agent:
         tools_this_turn = self.tools_used - tools_before
         self._update_runtime_meta(tools_this_turn)
 
+        from ..types import Usage
+        turn = Usage(self.budget.usage.input_tokens - before[0],
+                     self.budget.usage.output_tokens - before[1],
+                     self.budget.usage.cache_read - before[2],
+                     self.budget.usage.cache_write - before[3])
+        self._last_turn_usage = turn
+
         # Log this turn's token usage (for `aegis cost` / insights).
         try:
-            from ..types import Usage
             from .. import usage_log
-            turn = Usage(self.budget.usage.input_tokens - before[0],
-                         self.budget.usage.output_tokens - before[1],
-                         self.budget.usage.cache_read - before[2],
-                         self.budget.usage.cache_write - before[3])
             usage_log.log(self.provider.name, self.provider.model, turn)
         except Exception:  # noqa: BLE001
             pass

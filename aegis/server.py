@@ -69,8 +69,10 @@ def _convert(messages: list[dict]) -> tuple[list[Message], Message]:
     return internal, last_user
 
 
-def _usage(agent) -> dict[str, Any]:
-    usage = getattr(getattr(agent, "budget", None), "usage", None)
+def _usage(source) -> dict[str, Any]:
+    usage = source
+    if not all(hasattr(usage, key) for key in ("input_tokens", "output_tokens")):
+        usage = getattr(getattr(source, "budget", None), "usage", None)
     if usage is None:
         return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     prompt = int(getattr(usage, "input_tokens", 0) or 0)
@@ -185,7 +187,7 @@ def make_handler(config: Config):
                     "model": result.agent.provider.model,
                     "choices": [{"index": 0, "message": {"role": "assistant", "content": result.text},
                                  "finish_reason": "stop"}],
-                    "usage": _usage(result.agent),
+                    "usage": _usage(getattr(result, "usage", None) or result.agent),
                     "metadata": {
                         "session_id": result.session.id,
                         "trace_id": result.trace_id,

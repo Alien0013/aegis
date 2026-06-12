@@ -28,9 +28,11 @@ def _request(port: int, method: str, path: str, body: dict | None = None):
 
 
 class _Usage:
-    input_tokens = 11
-    output_tokens = 7
-    cache_read = 3
+    def __init__(self, input_tokens=11, output_tokens=7, cache_read=3, cache_write=0):
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+        self.cache_read = cache_read
+        self.cache_write = cache_write
 
 
 class _FakeRunner:
@@ -146,6 +148,64 @@ def test_openai_chat_completions_http_nonstream_records_run_metadata(monkeypatch
     assert call["model"] == "served-model"
     assert call["provider_name"] == "served-provider"
     assert call["cwd"] == str(tmp_path / "project")
+
+
+def test_openai_chat_completions_usage_is_per_response(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    class CumulativeRunner:
+        def __init__(self, config, include_mcp=True):
+            self.total = _Usage(0, 0, 0)
+            self.turns = [
+                _Usage(5, 2, 1),
+                _Usage(7, 3, 0),
+            ]
+
+        def run_prompt(self, prompt, **kwargs):
+            turn = self.turns.pop(0)
+            self.total = _Usage(
+                self.total.input_tokens + turn.input_tokens,
+                self.total.output_tokens + turn.output_tokens,
+                self.total.cache_read + turn.cache_read,
+            )
+            return SimpleNamespace(
+                text="hello",
+                usage=turn,
+                session=SimpleNamespace(id=kwargs.get("session_id") or "serve:usage"),
+                trace_id="trace_usage",
+                turn_id="turn_usage",
+                run_id="run_usage",
+                agent=SimpleNamespace(
+                    provider=SimpleNamespace(model="served-model"),
+                    budget=SimpleNamespace(usage=self.total),
+                ),
+            )
+
+    monkeypatch.setattr(server, "SurfaceRunner", CumulativeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        first_status, first_data = _request(port, "POST", "/v1/chat/completions", {
+            "session_id": "serve:usage",
+            "messages": [{"role": "user", "content": "first"}],
+        })
+        second_status, second_data = _request(port, "POST", "/v1/chat/completions", {
+            "session_id": "serve:usage",
+            "messages": [{"role": "user", "content": "second"}],
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    first = json.loads(first_data)
+    second = json.loads(second_data)
+    assert first_status == 200
+    assert second_status == 200
+    assert first["usage"]["prompt_tokens"] == 5
+    assert first["usage"]["completion_tokens"] == 2
+    assert second["usage"]["prompt_tokens"] == 7
+    assert second["usage"]["completion_tokens"] == 3
 
 
 def test_openai_chat_completions_stream_sse_contract(monkeypatch, tmp_path):
