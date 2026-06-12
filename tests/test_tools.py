@@ -390,7 +390,7 @@ def test_process_registry_env_background_polls_log_and_exit(tmp_path, monkeypatc
             return "/tmp"
 
         def execute(self, command, cwd="", timeout=None):
-            if "nohup bash -lc" in command:
+            if "bash -lc" in command and ".pid" in command and ".exit" in command:
                 return {"output": "4242\n", "returncode": 0}
             if command.startswith("cat ") and ".log" in command:
                 self.log_reads += 1
@@ -423,6 +423,46 @@ def test_process_registry_env_background_polls_log_and_exit(tmp_path, monkeypatc
         assert events and events[0][0]["type"] == "watch_match"
     finally:
         process_registry.kill_process(session.id)
+        process_registry._running.pop(session.id, None)
+        process_registry._finished.pop(session.id, None)
+
+
+def test_process_registry_env_background_kills_process_group(tmp_path, monkeypatch):
+    from aegis.tools import process_registry as registry_mod
+    from aegis.tools.process_registry import process_registry
+
+    class FakeEnv:
+        cwd = str(tmp_path)
+
+        def __init__(self):
+            self.commands = []
+
+        def get_temp_dir(self):
+            return "/tmp"
+
+        def execute(self, command, cwd="", timeout=None):
+            self.commands.append(command)
+            if "bash -lc" in command and ".pid" in command and ".exit" in command:
+                return {"output": "4242\n", "returncode": 0}
+            return {"output": "", "returncode": 0}
+
+    fake = FakeEnv()
+    monkeypatch.setattr(registry_mod, "ENV_POLL_INTERVAL_SECONDS", 10)
+    session = process_registry.spawn_via_env(
+        fake,
+        "sleep 999",
+        cwd=str(tmp_path),
+        task_id="env_kill_task",
+    )
+    try:
+        result = process_registry.kill_process(session.id)
+
+        assert result["status"] == "killed"
+        kill_commands = [cmd for cmd in fake.commands if "kill -TERM" in cmd]
+        assert kill_commands
+        assert 'kill -TERM -"$pid"' in kill_commands[-1]
+        assert 'kill -TERM "$pid"' in kill_commands[-1]
+    finally:
         process_registry._running.pop(session.id, None)
         process_registry._finished.pop(session.id, None)
 
@@ -576,21 +616,25 @@ def test_docker_environment_injects_task_id(tmp_path, monkeypatch):
     monkeypatch.setattr(docker_env.subprocess, "run", fake_run)
     monkeypatch.setattr(docker_env.subprocess, "Popen", FakePopen)
 
-    result = DockerEnvironment(
+    env = DockerEnvironment(
         image="python:3.12-slim",
         cwd=str(tmp_path),
         timeout=10,
         task_id="sub_test",
-    ).execute("echo hi")
+    )
+    result = env.execute("echo hi")
+    env.cleanup()
 
     assert "ok" in result["output"]
     assert result["returncode"] == 0
     docker_run = next(argv for argv in calls["run"] if argv[:2] == ["docker", "run"])
     assert "-d" in docker_run and "--name" in docker_run
+    container_name = docker_run[docker_run.index("--name") + 1]
     assert "AEGIS_TASK_ID=sub_test" in docker_run
     assert calls["popen"]
     assert all("exec" in argv for argv in calls["popen"])
     assert all("AEGIS_TASK_ID=sub_test" in argv for argv in calls["popen"])
+    assert ["docker", "rm", "-f", container_name] in calls["run"]
 
 
 def test_daytona_backend_fails_closed(tmp_path):

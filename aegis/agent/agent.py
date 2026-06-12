@@ -373,9 +373,10 @@ class Agent:
             except Exception:  # noqa: BLE001
                 pass
             try:
-                from ..tools.backends import cleanup_task_environment
+                from ..tools.backends import cleanup_task_environment, clear_task_env_overrides
 
                 cleanup_task_environment(task_id)
+                clear_task_env_overrides(task_id)
             except Exception:  # noqa: BLE001
                 pass
 

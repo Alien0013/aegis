@@ -173,8 +173,10 @@ def test_continuation_notifies_parent_memory(tmp_path, capture):
 
 def test_subagent_error_notifies_parent_memory(tmp_path, monkeypatch):
     from aegis.session import Session
+    from aegis.tools import backends
 
     calls = []
+    closed = []
 
     class Memory:
         def on_delegation(self, task, result):
@@ -188,13 +190,19 @@ def test_subagent_error_notifies_parent_memory(tmp_path, monkeypatch):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(Agent, "run", boom)
-    ctx = ToolContext(cwd=tmp_path, config=Config.load(), agent=Parent())
+    monkeypatch.setattr("aegis.surface._close_agent", lambda agent: closed.append(agent.session.id))
+    config = Config.load()
+    config.data["tools"]["subagent_terminal_backend"] = "docker"
+    ctx = ToolContext(cwd=tmp_path, config=config, agent=Parent())
 
     r = SubagentTool().run({"task": "explode"}, ctx)
+    sid = re.search(r"subagent id: (\S+) ", r.content).group(1)
 
     assert not r.is_error
     assert "[subagent error] boom" in r.content
     assert calls == [("explode", "[subagent error] boom")]
+    assert closed
+    assert backends.effective_backend("local", sid) == "local"
 
 
 def test_background_subagent_notifies_parent_memory(tmp_path, monkeypatch):
@@ -311,6 +319,9 @@ def test_subagent_registry_eviction_closes_child_lifecycle():
     with agentic._REG_LOCK:
         agentic._REGISTRY.clear()
     try:
+        from aegis.tools import backends
+
+        backends.register_task_env_overrides("old", {"terminal_backend": "docker"})
         agentic._register("old", status="done", agent=Child())
         for i in range(199):
             agentic._register(f"keep-{i}", status="done")
@@ -318,6 +329,7 @@ def test_subagent_registry_eviction_closes_child_lifecycle():
 
         assert "old" not in agentic._REGISTRY
         assert closed == ["end_session", "memory", "transport"]
+        assert backends.effective_backend("local", "old") == "local"
     finally:
         with agentic._REG_LOCK:
             agentic._REGISTRY.clear()

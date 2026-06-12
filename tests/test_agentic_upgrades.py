@@ -147,7 +147,8 @@ def test_background_spawn_registers_subagent_terminal_backend(tmp_path, monkeypa
             if task and task.status != "running":
                 break
             time.sleep(0.01)
-        assert backends.effective_backend("local", tid) == "docker"
+        assert task is not None and task.status == "done"
+        assert backends.effective_backend("local", tid) == "local"
     finally:
         backends.clear_task_env_overrides(tid)
 

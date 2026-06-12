@@ -1199,11 +1199,11 @@ def _process_notification_meta(event: dict) -> dict:
     }
 
 
-def drain_process_notification_events() -> list[tuple[dict, str]]:
+def drain_process_notification_events(max_events: int | None = None) -> list[tuple[dict, str]]:
     try:
         from ..tools.process_registry import process_registry
 
-        events = process_registry.drain_notifications()
+        events = process_registry.drain_notifications(max_events=max_events)
     except Exception:  # noqa: BLE001
         return []
     if events:
@@ -1227,7 +1227,7 @@ def drain_process_notifications(
     max_turns: int = 10,
 ) -> int:
     count = 0
-    for event, text in drain_process_notification_events()[:max_turns]:
+    for event, text in drain_process_notification_events(max_events=max_turns):
         if notify is not None:
             notify(f"background process notification: {event.get('session_id', '')}")
         run_terminal_turn(

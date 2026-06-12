@@ -689,11 +689,24 @@ class ProcessRegistry:
         for session in sessions:
             self._refresh_detached_session(session)
 
-    def drain_notifications(self) -> list[tuple[dict[str, Any], str]]:
+    def requeue_notification(self, event: dict[str, Any]) -> None:
+        session_id = str(event.get("session_id") or "")
+        if event.get("type") == "completion" and session_id:
+            self._completion_consumed.discard(session_id)
+            self._pending_completion_notifications.add(session_id)
+            self._write_checkpoint()
+        self.completion_queue.put(dict(event))
+
+    def drain_notifications(
+        self,
+        max_events: int | None = None,
+    ) -> list[tuple[dict[str, Any], str]]:
         self._refresh_detached_notifications()
         out: list[tuple[dict[str, Any], str]] = []
         changed = False
         while not self.completion_queue.empty():
+            if max_events is not None and len(out) >= max(0, int(max_events)):
+                break
             try:
                 event = self.completion_queue.get_nowait()
             except Exception:
@@ -830,7 +843,7 @@ class ProcessRegistry:
                         os.kill(session.pid, signal.SIGTERM)
             elif session.env_ref is not None and session.pid:
                 session.env_ref.execute(
-                    f"kill {int(session.pid)} 2>/dev/null || true",
+                    _env_kill_command(int(session.pid)),
                     cwd=session.cwd,
                     timeout=5,
                 )
@@ -1178,9 +1191,14 @@ def _env_background_command(
     quoted_exit = shlex.quote(exit_path)
     return (
         f"mkdir -p {quoted_temp} && rm -f {quoted_log} {quoted_pid} {quoted_exit} && "
-        f"( nohup bash -lc {quoted_command} > {quoted_log} 2>&1 < /dev/null; "
-        f"rc=$?; printf '%s\\n' \"$rc\" > {quoted_exit} ) & "
-        f"echo $! > {quoted_pid} && cat {quoted_pid}"
+        f"( if command -v setsid >/dev/null 2>&1; then "
+        f"setsid bash -lc {quoted_command} > {quoted_log} 2>&1 < /dev/null & "
+        f"else bash -lc {quoted_command} > {quoted_log} 2>&1 < /dev/null & "
+        f"fi; child=$!; printf '%s\\n' \"$child\" > {quoted_pid}; "
+        f"wait \"$child\"; rc=$?; printf '%s\\n' \"$rc\" > {quoted_exit} ) "
+        f">/dev/null 2>&1 & "
+        f"for i in $(seq 1 50); do [ -s {quoted_pid} ] && break; sleep 0.1; done; "
+        f"cat {quoted_pid} 2>/dev/null"
     )
 
 
@@ -1193,6 +1211,16 @@ def _env_status_command(pid_path: str, exit_path: str) -> str:
         f"elif [ -f {quoted_pid} ] && kill -0 \"$(cat {quoted_pid})\" 2>/dev/null; then "
         "echo running; "
         "else echo gone; fi"
+    )
+
+
+def _env_kill_command(pid: int) -> str:
+    quoted_pid = shlex.quote(str(int(pid)))
+    return (
+        f"pid={quoted_pid}; "
+        'kill -TERM -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true; '
+        "sleep 0.2; "
+        'kill -KILL -"$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true'
     )
 
 

@@ -80,11 +80,6 @@ class DockerEnvironment(BaseEnvironment):
         return proc
 
     def cleanup(self) -> None:
-        if self.persist_across_processes:
-            self._container_id = ""
-            return
-        if not self._container_id:
-            return
         subprocess.run(
             ["docker", "rm", "-f", self._container_name],
             capture_output=True,

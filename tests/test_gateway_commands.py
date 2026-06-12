@@ -552,6 +552,33 @@ def test_gateway_process_notification_injects_internal_turn(tmp_path, monkeypatc
     assert runner._session("telegram:c1:u1").messages[0].content == text
 
 
+def test_gateway_process_notification_requeues_when_adapter_missing(tmp_path, monkeypatch):
+    from aegis.config import Config
+    from aegis.gateway.runner import GatewayRunner
+    from aegis.tools.process_registry import process_registry
+
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    process_registry.drain_notifications()
+    process_registry.completion_queue.put({
+        "type": "completion",
+        "session_id": "proc_missing_adapter",
+        "session_key": "telegram:c1:u1",
+        "platform": "telegram",
+        "chat_id": "c1",
+        "command": "echo done",
+        "exit_code": 0,
+        "output": "done",
+    })
+    runner = GatewayRunner(Config.load(), cwd=tmp_path)
+
+    assert runner._drain_process_notifications() == 0
+    events = process_registry.drain_notifications(max_events=1)
+
+    assert len(events) == 1
+    assert events[0][0]["session_id"] == "proc_missing_adapter"
+    process_registry.drain_notifications()
+
+
 def test_gateway_tracks_child_session_after_run_split(tmp_path, monkeypatch):
     import threading
     from types import SimpleNamespace

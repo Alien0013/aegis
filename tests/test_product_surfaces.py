@@ -619,6 +619,72 @@ def test_terminal_process_notification_routes_to_session_key(tmp_path):
     assert saved_target.messages[0].content.startswith("[IMPORTANT: Background process proc_target")
 
 
+def test_terminal_process_notification_max_turns_preserves_extra_events(tmp_path):
+    from types import SimpleNamespace
+
+    from aegis.agent import wakeups
+    from aegis.cli import repl
+    from aegis.config import Config
+    from aegis.session import Session, SessionStore
+    from aegis.tools.process_registry import process_registry
+    from aegis.types import Message
+
+    wakeups.drain_wakeups()
+    process_registry.drain_notifications()
+    for sid in ("proc_one", "proc_two"):
+        process_registry.completion_queue.put({
+            "type": "completion",
+            "session_id": sid,
+            "session_key": "sess_terminal_process_limit",
+            "command": f"echo {sid}",
+            "exit_code": 0,
+            "output": sid,
+        })
+
+    session = Session(id="sess_terminal_process_limit", title="terminal")
+    agent = SimpleNamespace(config=Config.load(), session=session, tools_used=0)
+    calls = []
+
+    class Runner:
+        def run_prompt(self, prompt, **kwargs):
+            calls.append(str(prompt))
+            session.messages.append(Message.user(str(prompt)))
+            message = Message.assistant("ack")
+            session.messages.append(message)
+            return SimpleNamespace(
+                message=message,
+                session=session,
+                agent=agent,
+                text="ack",
+                trace_id="trace_limit",
+                turn_id="turn_limit",
+                run_id="run_limit",
+                events=[],
+            )
+
+    first = repl.drain_process_notifications(
+        agent,
+        Runner(),
+        SessionStore(),
+        surface="repl",
+        on_event=lambda _event: None,
+        max_turns=1,
+    )
+    second = repl.drain_process_notifications(
+        agent,
+        Runner(),
+        SessionStore(),
+        surface="repl",
+        on_event=lambda _event: None,
+        max_turns=1,
+    )
+
+    assert first == 1
+    assert second == 1
+    assert any("proc_one" in call for call in calls)
+    assert any("proc_two" in call for call in calls)
+
+
 def test_terminal_goal_command_returns_start_prompt(monkeypatch):
     from aegis.cli import repl
     from aegis.config import Config

@@ -4,15 +4,14 @@ A small abstraction over *where* a shell command actually runs. ``BashTool``
 delegates to :func:`run_command`, which dispatches on a backend name:
 
     local   subprocess in the host shell (default)
-    docker  ``docker run --rm`` against a throwaway container, cwd bind-mounted
-            at ``/work``; Linux capabilities dropped for a tighter sandbox
+    docker  a persistent per-task container, cwd bind-mounted at ``/work``;
+            Linux capabilities dropped for a tighter sandbox
     ssh     ``ssh user@host`` running the command on a remote box
 
 If the docker or ssh backend is requested but its prerequisites are missing
 (no ``docker``/``ssh`` binary, or ``TERMINAL_SSH_HOST`` unset), the call
-transparently degrades to ``local`` and prepends a one-line note explaining
-the fallback, so the agent always gets *some* output rather than an opaque
-error.
+fails closed unless ``tools.allow_local_fallback`` is enabled; with explicit
+fallback, AEGIS prepends a one-line note before running locally.
 
 The backend is normally chosen via ``config.tools.terminal_backend`` and the
 docker image via ``config.tools.docker_image``. SSH target is read from the

@@ -21,28 +21,39 @@ _REGISTRY: dict[str, dict] = {}
 _REG_LOCK = threading.Lock()
 
 
-def _close_registry_entry(entry: dict | None) -> None:
-    if not entry:
-        return
-    agent = entry.get("agent")
-    if agent is None:
+def _clear_terminal_backend_override(sid: str) -> None:
+    if not sid:
         return
     try:
-        from ..surface import _close_agent
-        _close_agent(agent)
+        from .backends import clear_task_env_overrides
+
+        clear_task_env_overrides(sid)
     except Exception:  # noqa: BLE001
         pass
 
 
+def _close_registry_entry(sid: str, entry: dict | None) -> None:
+    if not entry:
+        return
+    agent = entry.get("agent")
+    if agent is not None:
+        try:
+            from ..surface import _close_agent
+            _close_agent(agent)
+        except Exception:  # noqa: BLE001
+            pass
+    _clear_terminal_backend_override(sid)
+
+
 def _register(sid: str, **fields) -> None:
-    evicted: list[dict] = []
+    evicted: list[tuple[str, dict]] = []
     with _REG_LOCK:
         _REGISTRY.setdefault(sid, {}).update(fields)
         if len(_REGISTRY) > 200:                       # drop oldest
             for k in list(_REGISTRY)[:len(_REGISTRY) - 200]:
-                evicted.append(_REGISTRY.pop(k, None) or {})
-    for entry in evicted:
-        _close_registry_entry(entry)
+                evicted.append((k, _REGISTRY.pop(k, None) or {}))
+    for evicted_sid, entry in evicted:
+        _close_registry_entry(evicted_sid, entry)
 
 
 def _notify_delegation(parent, task: str, result: str) -> None:
@@ -285,6 +296,7 @@ class SubagentTool(Tool):
             _register(sid, status="running", task=task[:80], type=atype,
                       role_prompt=role_prompt, terminal_backend=terminal_backend)
             ctx.emit_event(type="subagent_start", id=sid, task=task[:80])
+            child = None
             try:
                 allow_delegation = role == "orchestrator" and depth < max_depth
                 kwargs = {}
@@ -335,6 +347,13 @@ class SubagentTool(Tool):
                 return sid, out
             except Exception as e:  # noqa: BLE001 - isolate one child's failure
                 _register(sid, status="error")
+                if child is not None:
+                    try:
+                        from ..surface import _close_agent
+                        _close_agent(child)
+                    except Exception:  # noqa: BLE001
+                        pass
+                _clear_terminal_backend_override(sid)
                 ctx.emit_event(type="subagent_done", id=sid, status="error")
                 out = f"[subagent error] {e}"
                 _notify_delegation(parent, task, out)

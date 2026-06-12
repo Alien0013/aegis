@@ -73,6 +73,12 @@ class BackgroundManager:
                         close()
                     except Exception:  # noqa: BLE001
                         pass
+                try:
+                    from .tools.backends import clear_task_env_overrides
+
+                    clear_task_env_overrides(task.id)
+                except Exception:  # noqa: BLE001
+                    pass
             if on_done is not None:
                 try:
                     on_done(task)

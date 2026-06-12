@@ -634,6 +634,11 @@ class GatewayRunner:
         for event, text in events:
             if self._submit_process_notification(event, text):
                 submitted += 1
+            else:
+                try:
+                    process_registry.requeue_notification(event)
+                except Exception:  # noqa: BLE001
+                    pass
         return submitted
 
     def _process_notification_loop(self, interval: float = 0.5) -> None:
