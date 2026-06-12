@@ -130,6 +130,18 @@ class AcpServer:
             # close cached agents so memory/MCP/provider lifecycle hooks fire.
             for w in list(self._waiters.values()):
                 w["event"].set()
+            try:
+                from .surface import _close_agent
+
+                seen: set[int] = set()
+                for entry in list(self.sessions.values()):
+                    agent = entry.agent
+                    if agent is None or id(agent) in seen:
+                        continue
+                    seen.add(id(agent))
+                    _close_agent(agent)
+            except Exception:  # noqa: BLE001
+                pass
             self.runner.close()
 
     def _handle(self, msg: dict[str, Any]) -> None:
@@ -303,6 +315,12 @@ class AcpServer:
                 meta={"acp_session_id": sid},
                 on_event=on_event,
             )
+            result_session = getattr(result, "session", None)
+            result_sid = str(getattr(result_session, "id", "") or "")
+            if result_session is not None and result_sid:
+                entry.session = result_session
+                self.sessions[result_sid] = entry
+                entry.agent = getattr(result, "agent", agent)
             if agent.cancel_event.is_set():
                 self._result(req_id, _prompt_result("cancelled", result))
                 return

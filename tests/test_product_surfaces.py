@@ -113,12 +113,15 @@ def test_surface_runner_retargets_run_after_session_switch(tmp_path):
     from aegis.runs import RunStore
     from aegis.session import Session
     from aegis.surface import SurfaceRunner
+    from aegis.tracing import TraceStore
     from aegis.types import Message
 
     cfg = Config.load()
     cfg.data["memory"]["enabled"] = False
     parent = Session.create("parent")
     child = Session.create("child", parent_id=parent.id)
+    trace_id = "trace_surface_child"
+    turn_id = "turn_surface_child"
 
     class FakeAgent:
         def __init__(self):
@@ -129,7 +132,16 @@ def test_surface_runner_retargets_run_after_session_switch(tmp_path):
             self.stream = False
 
         def run(self, prompt, on_event=None):
+            store = TraceStore.from_config(cfg)
+            span = store.start_span(
+                trace_id=trace_id,
+                session_id=parent.id,
+                turn_id=turn_id,
+                kind="turn",
+            )
+            store.finish_span(span["span_id"], status="ok")
             self.session = child
+            self._trace_context = {"trace_id": trace_id, "turn_id": turn_id}
             return Message.assistant(f"child:{prompt}")
 
     runner = SurfaceRunner(cfg, cwd=tmp_path, include_mcp=False)
@@ -137,6 +149,7 @@ def test_surface_runner_retargets_run_after_session_switch(tmp_path):
 
     assert result.session.id == child.id
     assert RunStore().get(result.run_id)["session_id"] == child.id
+    assert TraceStore.from_config(cfg).get_trace(result.trace_id)["session_id"] == child.id
 
 
 def test_manual_compress_child_inherits_runtime_controls(monkeypatch, tmp_path):

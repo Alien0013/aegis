@@ -331,8 +331,20 @@ class SurfaceRunner:
         result.run_id = run_id
         if run_store is not None and run_id:
             try:
+                start_session_id = getattr(session, "id", "")
+                final_session_id = getattr(getattr(result, "session", None), "id", "")
+                if result.trace_id and final_session_id and final_session_id != start_session_id:
+                    try:
+                        from .tracing import TraceStore
+
+                        TraceStore.from_config(self.config).retarget_session(
+                            result.trace_id,
+                            final_session_id,
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
                 _retarget_run_session(
-                    run_store, run_id, getattr(getattr(result, "session", None), "id", "")
+                    run_store, run_id, final_session_id
                 )
                 run_store.finish(
                     run_id,

@@ -48,7 +48,11 @@ def test_acp_server_instantiates_and_initializes(monkeypatch, tmp_path):
 
 
 def test_acp_serve_closes_runner_on_eof(monkeypatch, tmp_path):
+    from pathlib import Path
     import threading
+
+    from aegis.acp import _SessionEntry
+    from aegis.session import Session
 
     server, _out = _server(monkeypatch, tmp_path, "")
     waiter = {"event": threading.Event(), "result": {}}
@@ -61,10 +65,31 @@ def test_acp_serve_closes_runner_on_eof(monkeypatch, tmp_path):
 
     server.runner = Runner()
 
+    class Memory:
+        def shutdown(self):
+            closed.append("memory")
+
+    class Transport:
+        def close(self):
+            closed.append("transport")
+
+    class Agent:
+        memory = Memory()
+        provider = type("Provider", (), {"transport": Transport()})()
+
+        def end_session(self):
+            closed.append("agent")
+
+    server.sessions["sid"] = _SessionEntry(
+        session=Session(id="sid", title="sid"),
+        cwd=Path(tmp_path),
+        agent=Agent(),
+    )
+
     server.serve()
 
     assert waiter["event"].is_set()
-    assert closed == ["closed"]
+    assert closed == ["agent", "memory", "transport", "closed"]
 
 
 def test_acp_lists_details_searches_and_forks_sessions(monkeypatch, tmp_path):
@@ -209,6 +234,63 @@ def test_acp_prompt_returns_run_trace_turn_metadata(monkeypatch, tmp_path):
     assert saved.meta["last_run_id"] == result["runId"]
     assert saved.meta["last_trace_id"] == "trace_acp"
     assert saved.meta["last_turn_id"] == "turn_acp"
+
+
+def test_acp_prompt_rekeys_entry_after_session_switch(monkeypatch, tmp_path):
+    from pathlib import Path
+    from types import SimpleNamespace
+    import threading
+
+    from aegis.acp import _SessionEntry
+    from aegis.session import Session
+
+    server, out = _server(monkeypatch, tmp_path, "")
+    parent = Session.create("acp parent")
+    child = Session.create("acp child", parent_id=parent.id)
+
+    class FakeAgent:
+        stream = True
+        tool_context = type("TC", (), {})()
+
+        def __init__(self):
+            self.session = parent
+            self.cancel_event = threading.Event()
+
+    agent = FakeAgent()
+    entry = _SessionEntry(session=parent, cwd=Path(tmp_path), agent=agent)
+    server.sessions[parent.id] = entry
+    calls = []
+
+    def run_prompt(prompt, **kwargs):
+        calls.append(kwargs["session"].id)
+        session = child if len(calls) == 1 else kwargs["session"]
+        agent.session = session
+        return SimpleNamespace(
+            text="",
+            session=session,
+            trace_id=f"trace_acp_move_{len(calls)}",
+            turn_id=f"turn_acp_move_{len(calls)}",
+            run_id=f"run_acp_move_{len(calls)}",
+            agent=agent,
+            events=[],
+        )
+
+    server.runner.run_prompt = run_prompt
+
+    server._handle({"jsonrpc": "2.0", "id": 1, "method": "session/prompt",
+                    "params": {"sessionId": parent.id, "prompt": "split"}})
+    first = _wait_for(out, lambda m: m.get("id") == 1)
+
+    assert first["result"]["sessionId"] == child.id
+    assert server.sessions[child.id] is entry
+    assert entry.session is child
+
+    server._handle({"jsonrpc": "2.0", "id": 2, "method": "session/prompt",
+                    "params": {"sessionId": child.id, "prompt": "continue"}})
+    second = _wait_for(out, lambda m: m.get("id") == 2)
+
+    assert second["result"]["sessionId"] == child.id
+    assert calls == [parent.id, child.id]
 
 
 def test_acp_prompt_preserves_image_blocks(monkeypatch, tmp_path):
