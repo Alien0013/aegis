@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import copy
+import logging
 import threading
 import time
 
@@ -13,7 +14,11 @@ from ..types import new_id
 from ..util import slugify
 from .base import Tool, ToolContext, ToolResult
 
+logger = logging.getLogger(__name__)
+
 _NO_TOOLSETS = ["__none__"]
+_CHILD_BLOCKED_TOOLS = {"clarify", "memory", "send_message", "execute_code"}
+_LEAF_BLOCKED_TOOLS = _CHILD_BLOCKED_TOOLS | {"spawn_subagent"}
 
 # Process-global registry of spawned subagents (id -> {status, task}) for observability and a
 # bounded view of recent children. Capped so it can't grow without bound.
@@ -121,6 +126,44 @@ def _max_spawn_depth(config) -> int:
         return 1
 
 
+def _truthy(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _subagent_auto_approve(config) -> bool:
+    """Hermes-compatible child approval knob: safe auto-deny by default."""
+    try:
+        val = config.get("delegation.subagent_auto_approve", None)
+    except Exception:  # noqa: BLE001
+        val = None
+    if val is None:
+        try:
+            val = config.get("agent.subagent_auto_approve", False)
+        except Exception:  # noqa: BLE001
+            val = False
+    return _truthy(val)
+
+
+def _subagent_approver(config, sid: str):
+    auto_approve = _subagent_auto_approve(config)
+
+    def _approve(prompt: str) -> bool:
+        action = "approved" if auto_approve else "denied"
+        logger.warning(
+            "Subagent %s auto-%s permission prompt: %s",
+            sid or "unknown",
+            action,
+            str(prompt or "")[:300],
+        )
+        return auto_approve
+
+    return _approve
+
+
 # Typed subagents: a named type = a tool whitelist + a role preamble. Read-only types
 # can fan out aggressively because they cannot modify anything.
 _READONLY_TOOLS = {
@@ -199,8 +242,10 @@ class SubagentTool(Tool):
         "Delegate self-contained sub-task(s) to fresh child agents, each with its own context. "
         "Pass `task` for one, or `tasks` (array) to run several IN PARALLEL (bounded). "
         "agent_type picks a specialist: explore/plan/review are READ-ONLY (safe to fan out), "
-        "general (default) has full tools. Pass continue_id to follow up with a previous "
-        "subagent (it keeps its context). Returns each child's final answer."
+        "general (default) has normal child tools except shared side-effect/recurse tools "
+        "(clarify, memory, send_message, execute_code, and nested spawn unless orchestrator). "
+        "Pass continue_id to follow up with a previous subagent (it keeps its context). "
+        "Returns each child's final answer."
     )
     groups = ["automation"]
     parameters = {
@@ -267,6 +312,10 @@ class SubagentTool(Tool):
                 child_session = getattr(child, "session", None)
                 inherit_session_runtime(getattr(parent, "session", None), child_session)
                 apply_session_runtime(child)
+                try:
+                    child.tool_context.approver = _subagent_approver(config, args["continue_id"])
+                except Exception:  # noqa: BLE001
+                    pass
                 if child_session is not None and _seed_role_prompt(
                     child_session, role_type, _role_prompt(role_type, role_spec)
                 ):
@@ -313,11 +362,10 @@ class SubagentTool(Tool):
             from .registry import ToolRegistry, default_registry
             if spec["tools"] is not None:
                 return _restricted_registry(spec["tools"], allow_delegation=allow_delegation)
-            if allow_delegation:
-                return None
+            blocked = set(_CHILD_BLOCKED_TOOLS if allow_delegation else _LEAF_BLOCKED_TOOLS)
             reg = ToolRegistry()
             for tool in default_registry().all():
-                if tool.name != "spawn_subagent":
+                if tool.name not in blocked:
                     reg.register(tool)
             return reg
 
@@ -359,6 +407,7 @@ class SubagentTool(Tool):
                     child_config,
                     session=child_session,
                     cwd=ctx.cwd,
+                    approver=_subagent_approver(config, sid),
                     **kwargs,
                 )
                 if spec["tools"] is None:
@@ -463,6 +512,7 @@ class SubagentTool(Tool):
                 child_config, t, cwd=ctx.cwd, on_done=_announce,
                 parent_session=parent_session, registry=registry,
                 include_mcp=include_mcp, session_meta=session_meta,
+                approver=_subagent_approver(config, "background"),
             )
             for t in tasks
         ]

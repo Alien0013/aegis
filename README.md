@@ -293,8 +293,11 @@ aegis gateway --channels telegram,discord,slack
 
 ### Agentic depth
 - **Typed subagents** — `spawn_subagent` with `agent_type: explore | plan | review`
-  (read-only tool whitelists, safe to fan out in parallel) and `continue_id`
-  follow-ups that keep the child's context.
+  (read-only tool whitelists, safe to fan out in parallel) and `general`
+  children that match Hermes leaf safety: no recursion, `clarify`, memory writes,
+  outbound messages, or `execute_code`; child permission prompts auto-deny unless
+  `delegation.subagent_auto_approve` is enabled. `continue_id` follow-ups keep
+  the child's context.
 - **Background re-invocation** — `process start` and background subagents wake the
   agent with their result on the next turn (and announce into the chat on a gateway).
 - **Auto-checkpoints with diff** — each turn's edit batch is snapshotted as one unit;

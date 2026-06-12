@@ -254,6 +254,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "cron": {
         "approval": "deny",          # headless approval for scheduled jobs: deny (safe) | approve (auto-run)
     },
+    "delegation": {
+        "subagent_auto_approve": False,  # Hermes parity: child approval prompts auto-deny unless opted in
+    },
     "trajectory": {
         "enabled": False,            # auto-record each turn during agent runs
         "path": "trajectories.jsonl", # output file (relative to AEGIS_HOME unless absolute)

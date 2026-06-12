@@ -8,7 +8,12 @@ import pytest
 
 from aegis.agent.agent import Agent
 from aegis.config import Config
-from aegis.tools.agentic import _READONLY_TOOLS, SubagentTool
+from aegis.tools.agentic import (
+    _CHILD_BLOCKED_TOOLS,
+    _LEAF_BLOCKED_TOOLS,
+    _READONLY_TOOLS,
+    SubagentTool,
+)
 from aegis.tools.base import ToolContext
 from aegis.types import Message
 
@@ -69,6 +74,7 @@ def test_general_type_keeps_full_tools(tmp_path, capture):
     r = SubagentTool().run({"task": "do it"}, _ctx(tmp_path))
     assert not r.is_error
     assert "write_file" in capture["tools"] and "bash" in capture["tools"]
+    assert not (_LEAF_BLOCKED_TOOLS & capture["tools"])
 
 
 def test_general_subagent_loads_mcp_tools(tmp_path, capture, monkeypatch):
@@ -101,6 +107,42 @@ def test_orchestrator_role_keeps_delegation_when_depth_allows(tmp_path, capture)
 
     assert not r.is_error
     assert "spawn_subagent" in capture["tools"]
+    assert not (_CHILD_BLOCKED_TOOLS & capture["tools"])
+
+
+def test_subagent_permission_prompts_auto_deny_by_default(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_run(self, task, on_event=None):
+        seen["approval"] = self.tool_context.approver("Allow bash(ls)?")
+        return Message.assistant("ok")
+
+    monkeypatch.setattr(Agent, "run", fake_run)
+    config = Config.load()
+    config.data["tools"]["exec_mode"] = "ask"
+
+    r = SubagentTool().run({"task": "try a command"}, ToolContext(cwd=tmp_path, config=config))
+
+    assert not r.is_error
+    assert seen["approval"] is False
+
+
+def test_subagent_permission_prompts_can_auto_approve(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_run(self, task, on_event=None):
+        seen["approval"] = self.tool_context.approver("Allow bash(ls)?")
+        return Message.assistant("ok")
+
+    monkeypatch.setattr(Agent, "run", fake_run)
+    config = Config.load()
+    config.data.setdefault("delegation", {})["subagent_auto_approve"] = True
+    config.data["tools"]["exec_mode"] = "ask"
+
+    r = SubagentTool().run({"task": "try a command"}, ToolContext(cwd=tmp_path, config=config))
+
+    assert not r.is_error
+    assert seen["approval"] is True
 
 
 def test_subagent_depth_limit_blocks_grandchildren_by_default(tmp_path):
@@ -253,7 +295,7 @@ def test_background_subagent_notifies_parent_memory(tmp_path, monkeypatch):
 
     class Manager:
         def spawn(self, config, prompt, *, cwd=None, on_done=None, parent_session=None,
-                  registry=None, include_mcp=True, session_meta=None):
+                  registry=None, include_mcp=True, session_meta=None, approver=None):
             task = type("Task", (), {
                 "id": "bg_test",
                 "prompt": prompt,
@@ -265,6 +307,7 @@ def test_background_subagent_notifies_parent_memory(tmp_path, monkeypatch):
             self.registry = registry
             self.include_mcp = include_mcp
             self.session_meta = session_meta or {}
+            self.approver = approver
             if on_done is not None:
                 on_done(task)
             return task.id
@@ -281,6 +324,7 @@ def test_background_subagent_notifies_parent_memory(tmp_path, monkeypatch):
     assert manager.session_meta["agent_type"] == "review"
     assert "READ-ONLY code reviewer" in manager.session_meta["subagent_role_prompt"]
     assert {t.name for t in manager.registry.all()} <= _READONLY_TOOLS
+    assert manager.approver("Allow bash(ls)?") is False
 
 
 def test_subagent_inherits_parent_runtime_controls(tmp_path, capture):

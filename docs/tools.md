@@ -40,10 +40,17 @@ prints the schema that was loaded.
 
 | type | tools | use for |
 |---|---|---|
-| `general` (default) | full | anything |
+| `general` (default) | normal child tools | implementation work |
 | `explore` | read-only | fan-out search/research |
 | `plan` | read-only | step-by-step implementation plans |
 | `review` | read-only | code review with file:line findings |
+
+Like Hermes, leaf subagents cannot recurse or touch shared side-effect tools:
+`spawn_subagent`, `clarify`, `memory`, `send_message`, and `execute_code` are
+withheld. `role: orchestrator` can regain `spawn_subagent` when
+`agent.max_spawn_depth` allows it; the other shared side-effect tools remain
+blocked. Permission prompts inside child work auto-deny by default, or
+auto-approve when `delegation.subagent_auto_approve: true`.
 
 `continue_id` sends a follow-up to a previous subagent with its context intact;
 `background: true` runs async and wakes the parent agent when done.

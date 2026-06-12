@@ -505,6 +505,8 @@ class SurfaceRunner:
         else:
             _retarget_agent(agent, session=session)
             apply_session_runtime(agent)
+            if hasattr(agent, "tool_context"):
+                agent.tool_context.approver = kwargs.get("approver")
             asker = kwargs.get("asker")
             if asker is not None:
                 agent.tool_context.asker = asker

@@ -77,6 +77,7 @@ def test_config_deep_merge_keeps_user_and_defaults():
     # user value preserved, default keys still present
     assert "memory" in c.data and "tools" in c.data
     assert c.get("agent.reasoning_effort") == DEFAULT_CONFIG["agent"]["reasoning_effort"]
+    assert c.get("delegation.subagent_auto_approve") is False
 
 
 def test_workspace_rules_merge(tmp_path):

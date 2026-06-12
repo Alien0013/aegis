@@ -26,7 +26,7 @@ class BackgroundManager:
 
     def spawn(self, config: Any, prompt: str, *, cwd=None, on_done=None,
               parent_session=None, registry=None, include_mcp: bool = True,
-              session_meta: dict | None = None) -> str:
+              session_meta: dict | None = None, approver=None) -> str:
         """Run ``prompt`` in a background agent. ``on_done(task)`` (if given) fires
         when it finishes — used to announce the result back into a chat."""
         from .surface import SurfaceRunner, runtime_controls_meta, session_runtime_controls
@@ -66,6 +66,7 @@ class BackgroundManager:
                     cwd=cwd,
                     include_mcp=include_mcp,
                     registry=registry,
+                    approver=approver,
                 )
                 result = runner.run_prompt(
                     prompt,
