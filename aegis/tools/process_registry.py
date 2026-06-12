@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import queue
+import re
 import signal
 import shlex
 import subprocess
@@ -37,6 +38,27 @@ SANDBOX_RECOVERY_NOTE = (
     "Process used a sandbox-local PID and cannot be recovered after restart; "
     "output history may be incomplete."
 )
+SHELL_NOISE_SUBSTRINGS = (
+    "bash: cannot set terminal process group",
+    "bash: no job control in this shell",
+    "no job control in this shell",
+    "cannot set terminal process group",
+    "tcsetattr: Inappropriate ioctl for device",
+)
+ANSI_ESCAPE_RE = re.compile(
+    r"\x1b(?:"
+    r"\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]"
+    r"|\][\s\S]*?(?:\x07|\x1b\\)"
+    r"|[PX^_][\s\S]*?(?:\x1b\\)"
+    r"|[\x20-\x2f]+[\x30-\x7e]"
+    r"|[\x30-\x7e]"
+    r")"
+    r"|\x9b[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]"
+    r"|\x9d[\s\S]*?(?:\x07|\x9c)"
+    r"|[\x80-\x9f]",
+    re.DOTALL,
+)
+HAS_ESCAPE_RE = re.compile(r"[\x1b\x80-\x9f]")
 
 
 @dataclass
@@ -427,7 +449,7 @@ class ProcessRegistry:
                 self._queue_watch_disabled(session, suppressed)
             return
 
-        output = "\n".join(matched_lines[:20])
+        output = _clean_process_output("\n".join(matched_lines[:20]))
         if len(output) > 2000:
             output = output[:2000] + "\n...(truncated)"
         if self._global_watch_admit(now):
@@ -564,7 +586,7 @@ class ProcessRegistry:
 
     def _queue_completion(self, session: ProcessSession) -> None:
         title = f"{session.id} exited (code {session.exit_code}): {session.command[:80]}"
-        output_tail = truncate(session.output_buffer[-2000:], 2000)
+        output_tail = truncate(_clean_process_output(session.output_buffer[-2000:]), 2000)
         try:
             from ..agent.wakeups import add_wakeup
 
@@ -636,7 +658,7 @@ class ProcessRegistry:
         if session is None:
             return {"status": "not_found", "error": f"No process with ID {session_id}"}
         with session._lock:
-            output_preview = session.output_buffer[-1000:]
+            output_preview = _clean_process_output(session.output_buffer[-1000:])
             exited = session.exited
             exit_code = session.exit_code
         result: dict[str, Any] = {
@@ -673,7 +695,7 @@ class ProcessRegistry:
         if session is None:
             return {"status": "not_found", "error": f"No process with ID {session_id}"}
         with session._lock:
-            output = session.output_buffer
+            output = _clean_process_output(session.output_buffer)
             exited = session.exited
         lines = output.splitlines()
         selected = lines[-limit:] if offset == 0 and limit > 0 else lines[offset:offset + limit]
@@ -699,12 +721,12 @@ class ProcessRegistry:
                 return {
                     "status": "exited",
                     "exit_code": session.exit_code,
-                    "output": truncate(session.output_buffer[-2000:], 2000),
+                    "output": truncate(_clean_process_output(session.output_buffer[-2000:]), 2000),
                 }
             time.sleep(0.1)
         return {
             "status": "timeout",
-            "output": truncate(session.output_buffer[-1000:], 1000),
+            "output": truncate(_clean_process_output(session.output_buffer[-1000:]), 1000),
         }
 
     def kill_process(self, session_id: str) -> dict[str, Any]:
@@ -814,7 +836,7 @@ class ProcessRegistry:
                 "pid": session.pid,
                 "uptime_seconds": int(time.time() - session.started_at),
                 "status": "exited" if session.exited else "running",
-                "output_preview": session.output_buffer[-200:],
+                "output_preview": _clean_process_output(session.output_buffer[-200:]),
                 "exit_code": session.exit_code if session.exited else None,
                 "pid_scope": session.pid_scope,
                 "pty": session.pty,
@@ -1080,6 +1102,17 @@ def _normalize_watch_patterns(raw: Any) -> list[str]:
         if pattern:
             patterns.append(pattern)
     return patterns
+
+
+def _clean_process_output(text: str) -> str:
+    if not text:
+        return text
+    if HAS_ESCAPE_RE.search(text):
+        text = ANSI_ESCAPE_RE.sub("", text)
+    lines = text.split("\n")
+    while lines and any(noise in lines[0] for noise in SHELL_NOISE_SUBSTRINGS):
+        lines.pop(0)
+    return "\n".join(lines)
 
 
 def format_process_notification(event: dict[str, Any]) -> str | None:

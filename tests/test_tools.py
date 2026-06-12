@@ -536,6 +536,42 @@ def test_process_tool_submit_and_wait(tmp_path):
         process_registry._finished.pop(sid, None)
 
 
+def test_process_registry_cleans_ansi_and_shell_noise(tmp_path):
+    import time
+
+    from aegis.tools.process_registry import ProcessRegistry, ProcessSession
+
+    registry = ProcessRegistry()
+    sid = "proc_clean"
+    session = ProcessSession(
+        id=sid,
+        command="fake",
+        cwd=str(tmp_path),
+        started_at=time.time(),
+        exited=True,
+        exit_code=0,
+        output_buffer=(
+            "bash: cannot set terminal process group (123): Inappropriate ioctl for device\n"
+            "\x1b[31mREADY\x1b[0m\n"
+        ),
+        notify_on_complete=True,
+    )
+    try:
+        registry._finished[sid] = session
+        registry._queue_completion(session)
+        event, _text = registry.drain_notifications()[0]
+        poll = registry.poll(sid)
+        log = registry.read_log(sid)
+        waited = registry.wait(sid, timeout=1)
+
+        for output in (poll["output_preview"], log["output"], waited["output"], event["output"]):
+            assert "READY" in output
+            assert "\x1b" not in output
+            assert "cannot set terminal process group" not in output
+    finally:
+        registry._finished.pop(sid, None)
+
+
 def test_process_registry_recovers_running_checkpoint(tmp_path, monkeypatch):
     from aegis.tools.process_registry import ProcessRegistry
 
