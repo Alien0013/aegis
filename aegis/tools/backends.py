@@ -24,13 +24,18 @@ from __future__ import annotations
 import atexit
 import os
 import shutil
-import subprocess
 import threading
 import time
 from pathlib import Path
 from typing import Any
 
-from .environments import LocalEnvironment
+from .environments import (
+    DockerEnvironment,
+    LocalEnvironment,
+    ModalEnvironment,
+    SSHEnvironment,
+    SingularityEnvironment,
+)
 
 __all__ = [
     "cleanup_all_environments",
@@ -74,6 +79,8 @@ def run_command(
         return _run_singularity(command, cwd, timeout, config, task_id)
     if backend == "modal":
         return _run_modal(command, cwd, timeout, config, task_id)
+    if backend == "daytona":
+        return _run_daytona(command, cwd, timeout, config, task_id)
     if backend != "local":
         out, code = _run_local(command, cwd, timeout, config, task_id)
         return _note(f"unknown backend {backend!r}; ran locally", out), code
@@ -310,32 +317,25 @@ def _run_docker(command: str, cwd: str, timeout: int, config: Any,
         except Exception:  # noqa: BLE001 — config may be a bare dict or None
             image = DEFAULT_DOCKER_IMAGE
 
-    argv = [
-        "docker", "run", "--rm",
-        "--network", "none",                 # no outbound network by default
-        "--cap-drop", "ALL",                 # drop all Linux capabilities
-        "--security-opt", "no-new-privileges",
-        "--pids-limit", "256",
-        "-e", f"AEGIS_TASK_ID={task_id or 'default'}",
-        "-v", f"{cwd}:/work",
-        "-w", "/work",
-        image, "bash", "-c", command,
-    ]
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return f"docker command timed out after {timeout}s", 124
+        result = DockerEnvironment(
+            image=image,
+            cwd=cwd,
+            timeout=timeout,
+            task_id=task_id or "default",
+        ).execute(command, timeout=timeout)
     except OSError as e:
         return _degraded(config, f"docker failed to start ({e})", command, cwd, timeout, task_id)
 
     # Distinguish "image missing / daemon down" from the program's own failure.
-    out = _merge(proc.stdout, proc.stderr)
+    out = str(result.get("output", ""))
+    code = int(result.get("returncode", 0) or 0)
     if failure := _outer_sandbox_failure(out):
         return failure
-    if proc.returncode == 125 and "Unable to find image" not in out and "/work" not in out:
+    if code == 125 and "Unable to find image" not in out and "/work" not in out:
         return _degraded(config, f"docker run failed: {out.strip() or 'unknown error'}",
                          command, cwd, timeout, task_id)
-    return out, proc.returncode
+    return out, code
 
 
 # --------------------------------------------------------------------------- #
@@ -352,32 +352,28 @@ def _run_ssh(command: str, cwd: str, timeout: int, config: Any = None,
     if not host:
         return _degraded(config, "TERMINAL_SSH_HOST not set", command, cwd, timeout, task_id)
 
-    target = f"{user}@{host}" if user else host
-    # `cd` into cwd on the remote when present, then run the command in bash.
-    remote = (
-        f"export AEGIS_TASK_ID={_sh_quote(task_id or 'default')}; "
-        f"cd {_sh_quote(cwd)} 2>/dev/null; bash -c {_sh_quote(command)}"
-    )
-    argv = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
-    if port:
-        argv += ["-p", port]
-    argv += [target, remote]
-
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return f"ssh command timed out after {timeout}s", 124
+        env = SSHEnvironment(
+            host=host,
+            user=user,
+            port=port,
+            cwd=cwd,
+            timeout=timeout,
+            task_id=task_id or "default",
+        )
+        result = env.execute(command, timeout=timeout)
     except OSError as e:
         return _degraded(config, f"ssh failed to start ({e})", command, cwd, timeout, task_id)
 
-    out = _merge(proc.stdout, proc.stderr)
+    out = str(result.get("output", ""))
+    code = int(result.get("returncode", 0) or 0)
     if failure := _outer_sandbox_failure(out):
         return failure
     # 255 is ssh's own "connection failed" code (auth/network), not the remote program's exit.
-    if proc.returncode == 255:
-        return _degraded(config, f"ssh connection to {target} failed: {out.strip() or 'unknown error'}",
+    if code == 255:
+        return _degraded(config, f"ssh connection to {env.target} failed: {out.strip() or 'unknown error'}",
                          command, cwd, timeout, task_id)
-    return out, proc.returncode
+    return out, code
 
 
 # --------------------------------------------------------------------------- #
@@ -394,21 +390,23 @@ def _run_singularity(command: str, cwd: str, timeout: int, config: Any,
             image = config.get("tools.singularity_image", image) or image
         except Exception:  # noqa: BLE001
             pass
-    argv = [binp, "exec", "--containall", "--writable-tmpfs",
-            "--env", f"AEGIS_TASK_ID={task_id or 'default'}",
-            "--bind", f"{cwd}:/work", "--pwd", "/work", image, "bash", "-c", command]
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return f"singularity command timed out after {timeout}s", 124
+        result = SingularityEnvironment(
+            binary=binp,
+            image=image,
+            cwd=cwd,
+            timeout=timeout,
+            task_id=task_id or "default",
+        ).execute(command, timeout=timeout)
     except OSError as e:
         return _degraded(config, f"singularity failed to start ({e})", command, cwd, timeout, task_id)
-    out = _merge(proc.stdout, proc.stderr)
+    out = str(result.get("output", ""))
+    code = int(result.get("returncode", 0) or 0)
     if failure := _outer_sandbox_failure(out):
         return failure
-    if proc.returncode == 255 and "/work" not in out:
+    if code == 255 and "/work" not in out:
         return _degraded(config, f"singularity run failed: {out.strip() or 'unknown'}", command, cwd, timeout, task_id)
-    return out, proc.returncode
+    return out, code
 
 
 # --------------------------------------------------------------------------- #
@@ -431,29 +429,32 @@ def _run_modal(command: str, cwd: str, timeout: int, config: Any,
                     image = image.pip_install(*pkgs)
             except Exception:  # noqa: BLE001
                 pass
-        sb = modal.Sandbox.create(app=app, image=image, timeout=timeout)
-        try:
-            p = sb.exec("bash", "-c", f"export AEGIS_TASK_ID={_sh_quote(task_id or 'default')}; {command}")
-            out = p.stdout.read()
-            err = p.stderr.read()
-            code = p.wait()
-        finally:
-            sb.terminate()
-        return _merge(out, err), code
+        result = ModalEnvironment(
+            app=app,
+            image=image,
+            timeout=timeout,
+            task_id=task_id or "default",
+        ).execute(command, cwd=cwd, timeout=timeout)
+        return str(result.get("output", "")), int(result.get("returncode", 0) or 0)
     except Exception as e:  # noqa: BLE001
         return _degraded(config, f"modal sandbox error ({e})", command, cwd, timeout, task_id)
+
+
+def _run_daytona(command: str, cwd: str, timeout: int, config: Any,
+                 task_id: str | None = None) -> tuple[str, int]:
+    return _degraded(
+        config,
+        "daytona backend is not configured in AEGIS",
+        command,
+        cwd,
+        timeout,
+        task_id,
+    )
 
 
 # --------------------------------------------------------------------------- #
 # helpers
 # --------------------------------------------------------------------------- #
-def _merge(stdout: str, stderr: str) -> str:
-    out = stdout or ""
-    if stderr:
-        out += ("\n[stderr]\n" + stderr) if out else stderr
-    return out
-
-
 def _note(message: str, output: str) -> str:
     prefix = f"[backend: {message}]"
     return f"{prefix}\n{output}" if output else prefix
@@ -475,11 +476,6 @@ def _outer_sandbox_failure(output: str) -> tuple[str, int] | None:
         "is configured from a host that can start subprocesses.",
         126,
     )
-
-
-def _sh_quote(s: str) -> str:
-    """POSIX single-quote a string for safe embedding in a remote shell line."""
-    return "'" + s.replace("'", "'\\''") + "'"
 
 
 atexit.register(lambda: (_stop_cleanup_thread(), cleanup_all_environments()))

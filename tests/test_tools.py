@@ -151,6 +151,44 @@ def test_bash_tool_explains_outer_bwrap_loopback_failure(tmp_path, monkeypatch):
     assert "[exit 126]" in res.content
 
 
+def test_docker_environment_injects_task_id(tmp_path, monkeypatch):
+    import aegis.tools.environments.docker as docker_env
+    from aegis.tools.environments.docker import DockerEnvironment
+
+    seen = {}
+
+    class Proc:
+        stdout = "ok"
+        stderr = ""
+        returncode = 0
+
+    def fake_run(argv, **_kwargs):
+        seen["argv"] = argv
+        return Proc()
+
+    monkeypatch.setattr(docker_env.subprocess, "run", fake_run)
+
+    result = DockerEnvironment(
+        image="python:3.12-slim",
+        cwd=str(tmp_path),
+        timeout=10,
+        task_id="sub_test",
+    ).execute("echo hi")
+
+    assert result == {"output": "ok", "returncode": 0}
+    assert "AEGIS_TASK_ID=sub_test" in seen["argv"]
+
+
+def test_daytona_backend_fails_closed(tmp_path):
+    from aegis.config import Config
+    from aegis.tools.backends import run_command
+
+    out, code = run_command("echo hi", str(tmp_path), 10, "daytona", Config.load())
+
+    assert code == 126
+    assert "daytona backend is not configured" in out
+
+
 def test_registry_has_full_surface():
     from aegis.tools.registry import default_registry
     names = {t.name for t in default_registry().all()}
