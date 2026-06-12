@@ -108,10 +108,14 @@ def test_tool_old_text_alias_and_no_match_errors(tmp_path, monkeypatch):
                                "old_text": "fact one", "content": "fact 1"}).is_error
     assert not mm.handle_tool({"action": "remove", "target": "memory",
                                "match": "fact 1"}).is_error
-    assert mm.handle_tool({"action": "replace", "target": "memory",
-                           "old_text": "missing", "content": "nope"}).is_error
-    assert mm.handle_tool({"action": "remove", "target": "memory",
-                           "old_text": "missing"}).is_error
+    before = mm.store.raw("memory")
+    replace = mm.handle_tool({"action": "replace", "target": "memory",
+                              "old_text": "missing", "content": "nope"})
+    remove = mm.handle_tool({"action": "remove", "target": "memory",
+                             "old_text": "missing"})
+    assert replace.is_error and "no entry matching 'missing'" in replace.content
+    assert remove.is_error and "no entry matching 'missing'" in remove.content
+    assert mm.store.raw("memory") == before
 
 
 def test_memory_tool_schema_exposes_only_hermes_actions():

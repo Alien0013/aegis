@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0,<9"]
+dev = ["pytest>=8.0,<9", "ruff>=0.8,<1"]
 browser = ["playwright>=1.46,<2"]
 computer = ["pyautogui>=0.9.54,<1", "Pillow>=10,<12"]
 discord = ["discord.py>=2.4,<3"]

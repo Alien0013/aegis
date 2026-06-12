@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import os
-import select
+import selectors
 import subprocess
 
 import httpx
@@ -76,25 +76,28 @@ class MCPClient:
             return None
         wanted = payload["id"]
         deadline_loops = 0
-        while True:
-            r, _, _ = select.select([self._proc.stdout], [], [], timeout)
-            if not r:
-                raise MCPError(f"{self.name}: timed out waiting for response to {payload.get('method')}")
-            line = self._proc.stdout.readline()
-            if not line:
-                raise MCPError(f"{self.name}: server closed the connection")
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                msg = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if msg.get("id") == wanted:
-                return msg
-            deadline_loops += 1
-            if deadline_loops > 1000:
-                raise MCPError(f"{self.name}: too many unrelated messages")
+        with selectors.DefaultSelector() as selector:
+            selector.register(self._proc.stdout, selectors.EVENT_READ)
+            while True:
+                events = selector.select(timeout)
+                if not events:
+                    raise MCPError(
+                        f"{self.name}: timed out waiting for response to {payload.get('method')}")
+                line = self._proc.stdout.readline()
+                if not line:
+                    raise MCPError(f"{self.name}: server closed the connection")
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    msg = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if msg.get("id") == wanted:
+                    return msg
+                deadline_loops += 1
+                if deadline_loops > 1000:
+                    raise MCPError(f"{self.name}: too many unrelated messages")
 
     def _http_request(self, payload: dict, timeout: float = 60.0) -> dict | None:
         headers = {

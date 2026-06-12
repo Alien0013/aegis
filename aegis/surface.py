@@ -330,6 +330,9 @@ class SurfaceRunner:
         result.run_id = run_id
         if run_store is not None and run_id:
             try:
+                _retarget_run_session(
+                    run_store, run_id, getattr(getattr(result, "session", None), "id", "")
+                )
                 run_store.finish(
                     run_id,
                     status="ok",
@@ -580,6 +583,18 @@ def _workspace_run_meta(cwd: Path) -> dict[str, str]:
         "worktree": root,
         "branch": branch,
     }
+
+
+def _retarget_run_session(run_store: Any, run_id: str, session_id: str) -> None:
+    if run_store is None or not run_id or not session_id:
+        return
+    try:
+        run = run_store.get(run_id)
+        if run is not None and run.get("session_id") != session_id:
+            run["session_id"] = session_id
+            run_store.write(run)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _retarget_agent(agent: Any, *, session: Session) -> None:

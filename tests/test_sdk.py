@@ -185,6 +185,13 @@ def test_sdk_respects_session_runtime_controls():
         "reasoning_display": "live",
         "busy_mode": "interrupt",
     }
+    session.meta["runtime"] = {
+        "provider": "stale-provider",
+        "model": "stale-model",
+        "reasoning_effort": "low",
+        "reasoning_display": "summary",
+        "busy_mode": "queue",
+    }
     SessionStore().save(session)
     captured = {}
 
@@ -316,6 +323,43 @@ def test_sdk_run_metadata_updates_to_final_provider(tmp_path):
     run = RunStore().get(result.run_id)
     assert run["data"]["provider"] == "final-provider"
     assert run["data"]["model"] == "final-model"
+
+
+def test_sdk_retargets_run_after_session_switch(monkeypatch, tmp_path):
+    from aegis.config import Config
+    from aegis.runs import RunStore
+    from aegis.sdk import AegisClient
+    from aegis.session import Session, SessionStore
+    from aegis.types import LLMResponse, Message
+    from conftest import FakeProvider
+
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = False
+    store = SessionStore()
+    parent = Session.create("sdk parent")
+    child = Session.create("sdk child", parent_id=parent.id)
+    store.save(parent)
+
+    def fake_run(self, _user_input, _emit=None):
+        self.session = child
+        self.tool_context.session = child
+        self.store.save(child)
+        self._trace_context = {"trace_id": "trace_sdk_child", "turn_id": "turn_sdk_child"}
+        return Message.assistant("child reply")
+
+    monkeypatch.setattr("aegis.sdk.Agent.run", fake_run)
+    client = AegisClient(
+        config=cfg,
+        store=store,
+        provider_factory=lambda **_kwargs: FakeProvider([LLMResponse(text="unused")]),
+        cwd=tmp_path,
+        include_mcp=False,
+    )
+
+    result = client.run("split", session_id=parent.id)
+
+    assert result.session_id == child.id
+    assert RunStore().get(result.run_id)["session_id"] == child.id
 
 
 def test_sdk_expands_context_references_and_records_metadata(tmp_path):

@@ -2,7 +2,7 @@
 
 A stdlib :class:`~http.server.ThreadingHTTPServer` accepts ``POST /hook/<name>``.
 The JSON (or raw) request body is rendered into a per-subscription prompt
-template and executed through ``Agent.create(config).run(...)``; the agent's
+template and executed through the shared ``SurfaceRunner`` path; the agent's
 reply is returned in the HTTP response.
 
 Subscriptions live in ``cfg.sub("webhooks.json")`` as a list of

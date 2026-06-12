@@ -163,6 +163,7 @@ class GatewayRunner:
 
     def dispatch(self, ev: MessageEvent) -> str:
         text = ev.text.strip()
+        command_started_turn = False
         key = self._key(ev)
         # Authorization: unknown users must pair first.
         from .pairing import PairingStore
@@ -399,10 +400,12 @@ class GatewayRunner:
                     lambda proxy: _sync_control_session(proxy, session, reply or ""),
                     data={"start_turn": False},
                 )
+            command_started_turn = True
             text = goals.get(session)["text"]   # fall through: run the new goal as this turn
 
         # Mention gating: in shared channels only respond when a trigger is present.
-        if self.require_mention and self.mention_triggers and not text.startswith("/"):
+        if (self.require_mention and self.mention_triggers
+                and not text.startswith("/") and not command_started_turn):
             if not any(trig in text.lower() for trig in self.mention_triggers):
                 return ""  # ignored — not addressed to the bot
             for trig in self.mention_triggers:
@@ -486,6 +489,8 @@ class GatewayRunner:
                     chat_id=ev.chat_id,
                     on_event=_collect,
                 )
+                session = getattr(run, "session", getattr(agent, "session", session))
+                self._sessions[key] = session
                 final = run.message
                 final_text = final.content or ""
                 goal_notes: list[str] = []
@@ -508,14 +513,18 @@ class GatewayRunner:
                             chat_id=ev.chat_id,
                             on_event=_collect,
                         )
-                        self.store.save(cont.session)
+                        cont_session = getattr(cont, "session", getattr(agent, "session", session))
+                        self._sessions[key] = cont_session
+                        self.store.save(cont_session)
                         return cont.message
 
                     final_text = goals.run_loop(
                         agent, final_text, goal_notes.append, _collect, run_turn=_run_goal_turn
                     )
                     if goal_notes:
-                        self.store.save(session)
+                        session = agent.session
+                        self._sessions[key] = agent.session
+                        self.store.save(agent.session)
                 except Exception:  # noqa: BLE001  (goal machinery must never eat the reply)
                     pass
                 from ..redact import redact_secrets

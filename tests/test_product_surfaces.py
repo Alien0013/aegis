@@ -106,6 +106,75 @@ def test_batch_command_records_batch_surface(monkeypatch, tmp_path):
     assert by_prompt["second"]["data"]["batch_index"] == 2
 
 
+def test_surface_runner_retargets_run_after_session_switch(tmp_path):
+    from types import SimpleNamespace
+
+    from aegis.config import Config
+    from aegis.runs import RunStore
+    from aegis.session import Session
+    from aegis.surface import SurfaceRunner
+    from aegis.types import Message
+
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = False
+    parent = Session.create("parent")
+    child = Session.create("child", parent_id=parent.id)
+
+    class FakeAgent:
+        def __init__(self):
+            self.config = cfg
+            self.session = parent
+            self.cwd = tmp_path
+            self.provider = SimpleNamespace(name="fake", model="fake-model")
+            self.stream = False
+
+        def run(self, prompt, on_event=None):
+            self.session = child
+            return Message.assistant(f"child:{prompt}")
+
+    runner = SurfaceRunner(cfg, cwd=tmp_path, include_mcp=False)
+    result = runner.run_prompt("split", session=parent, agent=FakeAgent(), surface="dashboard")
+
+    assert result.session.id == child.id
+    assert RunStore().get(result.run_id)["session_id"] == child.id
+
+
+def test_manual_compress_child_inherits_runtime_controls(monkeypatch, tmp_path):
+    from aegis.agent.agent import Agent
+    from aegis.agent import loop
+    from aegis.config import Config
+    from aegis.session import Session, SessionStore
+    from aegis.types import Message
+    from conftest import FakeProvider
+
+    class Engine:
+        def compress(self, messages, _summarizer, **_kwargs):
+            return messages[:2]
+
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = False
+    cfg.data.setdefault("agent", {}).setdefault("compression", {})["split_sessions"] = True
+    store = SessionStore()
+    session = Session.create("compress parent")
+    session.messages = [Message.system("sys")] + [Message.user(f"u{i}") for i in range(6)]
+    session.meta["runtime_controls"] = {
+        "provider": "openrouter",
+        "model": "session-model",
+        "reasoning_effort": "high",
+        "reasoning_display": "live",
+        "busy_mode": "interrupt",
+    }
+    store.save(session)
+    agent = Agent(config=cfg, provider=FakeProvider(), session=session, cwd=tmp_path, store=store)
+    monkeypatch.setattr(loop, "_engine", lambda _agent: Engine())
+
+    child = loop.compact_now(agent, session, reason="manual_context_compression")
+
+    assert child.id != session.id
+    assert child.meta["runtime_controls"] == session.meta["runtime_controls"]
+    assert store.load(child.id).meta["runtime_controls"]["provider"] == "openrouter"
+
+
 def test_model_set_rejects_unknown_provider_with_suggestion(capsys):
     from argparse import Namespace
 
@@ -1336,6 +1405,7 @@ def test_mcp_server_initializes_provider_tools_and_shutdown(monkeypatch, tmp_pat
     from aegis.mcp.server import run_mcp_server
     from aegis.tools.base import Tool, ToolResult
     from aegis.tools.registry import ToolRegistry
+    from aegis.types import Message
 
     calls = []
 
@@ -1347,6 +1417,7 @@ def test_mcp_server_initializes_provider_tools_and_shutdown(monkeypatch, tmp_pat
 
         def run(self, args, ctx):
             calls.append(("tool", ctx.session.id, ctx.memory is not None))
+            ctx.session.messages.append(Message.tool("provider_recall", "provider_recall", "provider ok"))
             return ToolResult.ok("provider ok")
 
     class Provider:
@@ -1378,7 +1449,8 @@ def test_mcp_server_initializes_provider_tools_and_shutdown(monkeypatch, tmp_pat
                         lambda _name, _config: Provider())
     monkeypatch.setattr("aegis.hooks.run_hooks",
                         lambda _config, event, context=None:
-                        calls.append(("hook", event, context.get("session_id"))))
+                        calls.append(("hook", event, context.get("session_id"),
+                                      context.get("message_count"))))
 
     cfg = Config.load()
     cfg.data.setdefault("memory", {})["provider"] = "fake"
@@ -1400,9 +1472,11 @@ def test_mcp_server_initializes_provider_tools_and_shutdown(monkeypatch, tmp_pat
     assert ("initialize", "mcp:stdio") in calls
     assert ("tools",) in calls
     assert ("tool", "mcp:stdio", True) in calls
-    assert ("on_session_end", 0) in calls
-    assert ("hook", "session_stop", "mcp:stdio") in calls
-    assert calls.index(("on_session_end", 0)) < calls.index(("shutdown",))
+    assert ("on_session_end", 1) in calls
+    assert ("hook", "session_stop", "mcp:stdio", 1) in calls
+    assert calls.index(("on_session_end", 1)) < calls.index(
+        ("hook", "session_stop", "mcp:stdio", 1))
+    assert calls.index(("hook", "session_stop", "mcp:stdio", 1)) < calls.index(("shutdown",))
     assert calls[-1] == ("shutdown",)
 
 

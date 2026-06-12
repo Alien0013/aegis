@@ -381,3 +381,115 @@ def test_gateway_goal_continuation_uses_surface_runner(tmp_path, monkeypatch):
     assert any(row["data"].get("goal_continuation") is True for row in gateway_runs)
     assert any("[Continuing toward your standing goal]" in row["prompt_preview"]
                for row in gateway_runs)
+
+
+def test_gateway_goal_command_bypasses_mention_gate(tmp_path, monkeypatch):
+    import threading
+    from types import SimpleNamespace
+
+    from aegis import goals
+    from aegis.runs import RunStore
+    from aegis.types import Message
+
+    import aegis.gateway.runner as rmod
+
+    r = _runner(tmp_path, monkeypatch)
+    r.config.data["memory"]["enabled"] = False
+    r.require_mention = True
+    r.mention_triggers = ["@aegis"]
+    monkeypatch.setattr(goals, "judge", lambda *_args, **_kwargs: (True, "done"))
+    seen = []
+
+    class FakeAgent:
+        def __init__(self, session):
+            self.config = r.config
+            self.session = session
+            self.cwd = tmp_path
+            self.provider = SimpleNamespace(name="fake", model="fake-model")
+            self.tool_context = SimpleNamespace(session=session)
+            self.budget = SimpleNamespace(api_call_count=0)
+            self.cancel_event = threading.Event()
+            self.tools_used = 0
+
+        def run(self, prompt, on_event=None):
+            seen.append(str(prompt))
+            self._trace_context = {"trace_id": "trace_goal_gate", "turn_id": "turn_goal_gate"}
+            self.session.messages.append(Message.user(str(prompt)))
+            message = Message.assistant("goal response")
+            self.session.messages.append(message)
+            return message
+
+    monkeypatch.setattr(
+        rmod.Agent,
+        "create",
+        staticmethod(lambda _config, **kwargs: FakeAgent(kwargs["session"])),
+    )
+
+    out = r.dispatch(_ev("/goal ship it"))
+
+    assert "goal response" in out
+    assert len(seen) == 1 and seen[0].startswith("ship it")
+    key = r._key(_ev("x"))
+    run = next(row for row in RunStore().list(session_id=key, limit=5)
+               if row["surface"] == "gateway")
+    assert run["prompt_preview"].startswith("ship it")
+
+
+def test_gateway_tracks_child_session_after_run_split(tmp_path, monkeypatch):
+    import threading
+    from types import SimpleNamespace
+
+    from aegis.session import Session
+    from aegis.types import Message
+
+    import aegis.gateway.runner as rmod
+
+    r = _runner(tmp_path, monkeypatch)
+    r.config.data["memory"]["enabled"] = False
+    seen_sessions = []
+
+    class FakeAgent:
+        def __init__(self, session):
+            self.config = r.config
+            self.session = session
+            self.cwd = tmp_path
+            self.provider = SimpleNamespace(name="fake", model="fake-model")
+            self.tool_context = SimpleNamespace(session=session)
+            self.budget = SimpleNamespace(api_call_count=0)
+            self.cancel_event = threading.Event()
+            self.tools_used = 0
+            self.calls = 0
+
+        def run(self, prompt, on_event=None):
+            self.calls += 1
+            seen_sessions.append(self.session.id)
+            self._trace_context = {
+                "trace_id": f"trace_gateway_split_{self.calls}",
+                "turn_id": f"turn_gateway_split_{self.calls}",
+            }
+            if self.calls == 1:
+                child = Session.create("gateway child", parent_id=self.session.id)
+                child.messages = [Message.user(str(prompt))]
+                self.session = child
+                self.tool_context.session = child
+                r.store.save(child)
+            else:
+                self.session.messages.append(Message.user(str(prompt)))
+            message = Message.assistant(f"reply {self.calls}")
+            self.session.messages.append(message)
+            return message
+
+    monkeypatch.setattr(
+        rmod.Agent,
+        "create",
+        staticmethod(lambda _config, **kwargs: FakeAgent(kwargs["session"])),
+    )
+
+    key = r._key(_ev("x"))
+    parent_id = r._session(key).id
+    assert r.dispatch(_ev("first")) == "reply 1"
+    child_id = r._session(key).id
+    assert child_id != parent_id
+
+    assert r.dispatch(_ev("second")) == "reply 2"
+    assert seen_sessions == [parent_id, child_id]

@@ -16,6 +16,7 @@ from .config import Config
 from .session import Session, SessionStore
 from .surface import (
     _effective_runtime_data,
+    _retarget_run_session,
     _workspace_run_meta,
     apply_session_runtime,
     session_runtime_controls,
@@ -228,6 +229,7 @@ class AegisClient:
             pass
         if run_store is not None and run_id:
             try:
+                _retarget_run_session(run_store, run_id, result.session_id)
                 run_store.finish(
                     run_id,
                     status="ok",

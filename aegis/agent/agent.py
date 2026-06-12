@@ -355,19 +355,115 @@ class Agent:
             pass
 
     # -- run ----------------------------------------------------------------
+    def _provider_target(self, provider) -> tuple[str, str]:
+        return (
+            str(getattr(provider, "name", "") or ""),
+            str(getattr(provider, "model", "") or ""),
+        )
+
+    def _provider_matches(self, provider_name: str, model: str) -> bool:
+        targets = [self.provider, getattr(self.provider, "primary", None)]
+        for provider in targets:
+            if provider is None:
+                continue
+            cur_provider, cur_model = self._provider_target(provider)
+            if (not provider_name or cur_provider == provider_name) and (
+                    not model or cur_model == model):
+                return True
+        return False
+
+    def _routing_base_target(self) -> tuple[str, str]:
+        meta = self.session.meta if isinstance(self.session.meta, dict) else {}
+        controls = meta.get("runtime_controls") if isinstance(meta.get("runtime_controls"), dict) else {}
+        marker = meta.get("_prompt_route_runtime") if isinstance(
+            meta.get("_prompt_route_runtime"), dict) else {}
+        runtime = meta.get("runtime") if isinstance(meta.get("runtime"), dict) else {}
+        runtime_is_route = bool(
+            marker
+            and runtime.get("provider") == marker.get("provider")
+            and runtime.get("model") == marker.get("model")
+        )
+        current_provider, current_model = self._provider_target(self.provider)
+        provider_name = (
+            controls.get("provider")
+            or meta.get("provider")
+            or marker.get("base_provider")
+            or ("" if runtime_is_route else runtime.get("provider", ""))
+            or current_provider
+            or self.config.get("model.provider", "")
+        )
+        model = (
+            controls.get("model")
+            or meta.get("model")
+            or marker.get("base_model")
+            or ("" if runtime_is_route else runtime.get("model", ""))
+            or current_model
+            or self.config.get("model.default", "")
+        )
+        return str(provider_name or ""), str(model or "")
+
+    def _restore_prompt_route_base(self) -> None:
+        meta = self.session.meta if isinstance(self.session.meta, dict) else {}
+        marker = meta.get("_prompt_route_runtime") if isinstance(
+            meta.get("_prompt_route_runtime"), dict) else {}
+        base_provider = getattr(self, "_prompt_route_base_provider", None)
+        if base_provider is not None:
+            self.provider = base_provider
+            self._prompt_route_base_provider = None
+            meta.pop("_prompt_route_runtime", None)
+            return
+        if not marker:
+            return
+        provider_name, model = self._routing_base_target()
+        if not self._provider_matches(provider_name, model):
+            try:
+                from ..providers.fallback import build_with_fallbacks
+                self.provider = build_with_fallbacks(
+                    self.config, model=model or None, name=provider_name or None)
+            except Exception:  # noqa: BLE001
+                pass
+        meta.pop("_prompt_route_runtime", None)
+
     def _apply_routing(self, text: str) -> None:
         """Per-prompt provider routing: swap provider/model when a rule matches."""
         import re
         rules = self.config.get("routing", []) or []
+        if not rules:
+            self._restore_prompt_route_base()
+            return
+        base_provider, base_model = self._routing_base_target()
         for rule in rules:
             try:
-                if re.search(rule.get("match", ""), text, re.I):
+                if not re.search(rule.get("match", ""), text, re.I):
+                    continue
+                target_provider = str(rule.get("provider") or base_provider or "")
+                target_model = str(rule.get("model") or base_model or "")
+                replacement = None
+                if not self._provider_matches(target_provider, target_model):
                     from ..providers.fallback import build_with_fallbacks
-                    self.provider = build_with_fallbacks(
-                        self.config, model=rule.get("model"), name=rule.get("provider"))
-                    return
+                    replacement = build_with_fallbacks(
+                        self.config, model=target_model or None, name=target_provider or None)
+                if (target_provider, target_model) != (base_provider, base_model):
+                    existing_marker = isinstance(
+                        self.session.meta.get("_prompt_route_runtime"), dict)
+                    if (getattr(self, "_prompt_route_base_provider", None) is None
+                            and not existing_marker):
+                        self._prompt_route_base_provider = self.provider
+                    self.session.meta["_prompt_route_runtime"] = {
+                        "provider": target_provider,
+                        "model": target_model,
+                        "base_provider": base_provider,
+                        "base_model": base_model,
+                    }
+                else:
+                    self.session.meta.pop("_prompt_route_runtime", None)
+                    self._prompt_route_base_provider = None
+                if replacement is not None:
+                    self.provider = replacement
+                return
             except (re.error, Exception):  # noqa: BLE001
                 continue
+        self._restore_prompt_route_base()
 
     def cancel(self) -> None:
         """Request the current run to stop at the next safe point (interrupt-aware loop)."""

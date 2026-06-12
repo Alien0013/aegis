@@ -110,6 +110,73 @@ def test_budget_grace_preserves_responses_state(tmp_path):
     assert grace["metadata"]["turn_id"].startswith("turn_")
 
 
+def test_prompt_routing_is_per_prompt_across_resume(monkeypatch, tmp_path):
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.session import Session
+    from aegis.types import LLMResponse
+
+    class Provider:
+        api_mode = None
+        auth = None
+        context_length = 200_000
+
+        def __init__(self, name, model, text):
+            self.name = name
+            self.model = model
+            self.text = text
+            self.calls = 0
+
+        def describe(self):
+            return f"{self.name}/{self.model}"
+
+        def complete(self, *_args, **_kwargs):
+            self.calls += 1
+            return LLMResponse(text=self.text)
+
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = False
+    cfg.data["model"] = {"provider": "base-provider", "default": "base-model"}
+    cfg.data["routing"] = [{
+        "match": "deploy",
+        "provider": "route-provider",
+        "model": "route-model",
+    }]
+    route_provider = Provider("route-provider", "route-model", "routed")
+    resumed_base = Provider("base-provider", "base-model", "base again")
+
+    def fake_build(_config, model=None, name=None):
+        if name == "route-provider" and model == "route-model":
+            return route_provider
+        if name == "base-provider" and model == "base-model":
+            return resumed_base
+        raise AssertionError(f"unexpected provider build: {name}/{model}")
+
+    monkeypatch.setattr("aegis.providers.fallback.build_with_fallbacks", fake_build)
+
+    session = Session.create()
+    first = Agent(
+        config=cfg,
+        provider=Provider("base-provider", "base-model", "base"),
+        session=session,
+        cwd=tmp_path,
+    )
+
+    assert first.run("deploy this").content == "routed"
+    assert session.meta["runtime"]["provider"] == "route-provider"
+
+    resumed = Agent(
+        config=cfg,
+        provider=Provider("route-provider", "route-model", "still routed"),
+        session=session,
+        cwd=tmp_path,
+    )
+
+    assert resumed.run("ordinary follow-up").content == "base again"
+    assert session.meta["runtime"]["provider"] == "base-provider"
+    assert "_prompt_route_runtime" not in session.meta
+
+
 def test_agent_cancel_best_effort_cancels_active_provider_response(tmp_path):
     import threading
 

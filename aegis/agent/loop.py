@@ -102,6 +102,18 @@ def _trace_scalar(value) -> str:
     return str(raw)
 
 
+def _inherit_child_session_meta(parent, child) -> None:
+    meta = getattr(parent, "meta", {}) or {}
+    child_meta = getattr(child, "meta", None)
+    if not isinstance(meta, dict) or not isinstance(child_meta, dict):
+        return
+    for key in ("runtime", "runtime_controls", "model", "provider"):
+        if key not in meta:
+            continue
+        value = meta[key]
+        child_meta[key] = dict(value) if isinstance(value, dict) else value
+
+
 def _provider_trace_data(agent, wire_messages, schemas, response_state: dict, prompt_meta: dict) -> dict:
     api_mode = getattr(agent.provider, "api_mode", "")
     tool_names = [str(t.get("name") or "") for t in (schemas or []) if isinstance(t, dict)]
@@ -694,6 +706,7 @@ def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
         parent = session
         child = Session.create(title=_next_in_lineage(parent.title), parent_id=parent.id)
         child.messages = compressed
+        _inherit_child_session_meta(parent, child)
         depth = int(parent.meta.get("lineage_depth", 0) or 0) + 1
         root = parent.meta.get("lineage_root") or parent.parent_id or parent.id
         parent.meta["end_reason"] = "compression"
@@ -776,6 +789,7 @@ def compact_now(agent, session=None, emit: OnEvent | None = None, *,
         parent = session
         child = Session.create(title=_next_in_lineage(parent.title), parent_id=parent.id)
         child.messages = compressed
+        _inherit_child_session_meta(parent, child)
         depth = int(parent.meta.get("lineage_depth", 0) or 0) + 1
         root = parent.meta.get("lineage_root") or parent.parent_id or parent.id
         parent.meta["end_reason"] = "manual_compression"
