@@ -40,6 +40,9 @@ from .environments import (
 __all__ = [
     "cleanup_all_environments",
     "cleanup_task_environment",
+    "clear_task_env_overrides",
+    "get_active_environment",
+    "register_task_env_overrides",
     "run_command",
 ]
 
@@ -53,6 +56,7 @@ _creation_locks: dict[tuple[str, str], threading.Lock] = {}
 _creation_locks_lock = threading.Lock()
 _cleanup_thread: threading.Thread | None = None
 _cleanup_running = False
+_task_env_overrides: dict[str, dict[str, Any]] = {}
 
 
 def run_command(
@@ -93,6 +97,8 @@ def run_command(
 def _run_local(command: str, cwd: str, timeout: int, config: Any = None,
                task_id: str | None = None) -> tuple[str, int]:
     task_key = task_id or "default"
+    overrides = _task_overrides(task_key)
+    cwd = str(overrides.get("cwd") or cwd)
     _start_cleanup_thread(config)
     try:
         env = _get_or_create_local_environment(
@@ -149,6 +155,39 @@ def _get_or_create_local_environment(
             _active_environments[key] = env
             _last_activity[key] = time.time()
         return env
+
+
+def register_task_env_overrides(task_id: str, overrides: dict[str, Any]) -> None:
+    """Register per-task terminal environment overrides.
+
+    Supported keys are intentionally small and Hermes-compatible:
+    ``cwd``, ``docker_image``, ``singularity_image``, and ``modal_pip``.
+    """
+    if not task_id:
+        return
+    _task_env_overrides[task_id] = dict(overrides or {})
+    new_cwd = _task_env_overrides[task_id].get("cwd")
+    if isinstance(new_cwd, str) and new_cwd.strip():
+        with _env_lock:
+            env = _active_environments.get(("local", task_id))
+        if env is not None and getattr(env, "cwd", None) is not None:
+            env.cwd = new_cwd
+
+
+def clear_task_env_overrides(task_id: str) -> None:
+    if task_id:
+        _task_env_overrides.pop(task_id, None)
+
+
+def get_active_environment(task_id: str, backend: str = "local") -> Any:
+    with _env_lock:
+        return _active_environments.get((backend, task_id))
+
+
+def _task_overrides(task_id: str | None) -> dict[str, Any]:
+    if not task_id:
+        return {}
+    return dict(_task_env_overrides.get(task_id) or {})
 
 
 def _environment_state_dir(config: Any, *, backend: str, task_id: str) -> Path:
@@ -310,12 +349,15 @@ def _run_docker(command: str, cwd: str, timeout: int, config: Any,
     if shutil.which("docker") is None:
         return _degraded(config, "docker not found on PATH", command, cwd, timeout, task_id)
 
+    overrides = _task_overrides(task_id)
+    cwd = str(overrides.get("cwd") or cwd)
     image = DEFAULT_DOCKER_IMAGE
     if config is not None:
         try:
             image = config.get("tools.docker_image", DEFAULT_DOCKER_IMAGE) or DEFAULT_DOCKER_IMAGE
         except Exception:  # noqa: BLE001 — config may be a bare dict or None
             image = DEFAULT_DOCKER_IMAGE
+    image = str(overrides.get("docker_image") or image)
 
     try:
         result = DockerEnvironment(
@@ -343,6 +385,8 @@ def _run_docker(command: str, cwd: str, timeout: int, config: Any,
 # --------------------------------------------------------------------------- #
 def _run_ssh(command: str, cwd: str, timeout: int, config: Any = None,
              task_id: str | None = None) -> tuple[str, int]:
+    overrides = _task_overrides(task_id)
+    cwd = str(overrides.get("cwd") or cwd)
     host = os.environ.get("TERMINAL_SSH_HOST", "").strip()
     user = os.environ.get("TERMINAL_SSH_USER", "").strip()
     port = os.environ.get("TERMINAL_SSH_PORT", "").strip()
@@ -384,12 +428,15 @@ def _run_singularity(command: str, cwd: str, timeout: int, config: Any,
     binp = shutil.which("apptainer") or shutil.which("singularity")
     if binp is None:
         return _degraded(config, "apptainer/singularity not found", command, cwd, timeout, task_id)
+    overrides = _task_overrides(task_id)
+    cwd = str(overrides.get("cwd") or cwd)
     image = "docker://python:3.12-slim"
     if config is not None:
         try:
             image = config.get("tools.singularity_image", image) or image
         except Exception:  # noqa: BLE001
             pass
+    image = str(overrides.get("singularity_image") or image)
     try:
         result = SingularityEnvironment(
             binary=binp,
@@ -414,6 +461,8 @@ def _run_singularity(command: str, cwd: str, timeout: int, config: Any,
 # --------------------------------------------------------------------------- #
 def _run_modal(command: str, cwd: str, timeout: int, config: Any,
                task_id: str | None = None) -> tuple[str, int]:
+    overrides = _task_overrides(task_id)
+    cwd = str(overrides.get("cwd") or cwd)
     try:
         import modal
     except ImportError:
@@ -424,7 +473,7 @@ def _run_modal(command: str, cwd: str, timeout: int, config: Any,
         image = modal.Image.debian_slim()
         if config is not None:
             try:
-                pkgs = config.get("tools.modal_pip", []) or []
+                pkgs = overrides.get("modal_pip") or config.get("tools.modal_pip", []) or []
                 if pkgs:
                     image = image.pip_install(*pkgs)
             except Exception:  # noqa: BLE001

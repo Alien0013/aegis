@@ -189,6 +189,64 @@ def test_daytona_backend_fails_closed(tmp_path):
     assert "daytona backend is not configured" in out
 
 
+def test_task_env_override_updates_live_local_cwd(tmp_path):
+    from aegis.tools.backends import (
+        cleanup_task_environment,
+        clear_task_env_overrides,
+        register_task_env_overrides,
+    )
+    from aegis.tools.builtin import BashTool
+
+    task_id = f"override_{tmp_path.name}"
+    ctx = _ctx(tmp_path)
+    ctx.task_id = task_id
+    next_dir = tmp_path / "next"
+    next_dir.mkdir()
+    try:
+        assert not BashTool().run({"command": "pwd -P"}, ctx).is_error
+        register_task_env_overrides(task_id, {"cwd": str(next_dir)})
+        res = BashTool().run({"command": "pwd -P"}, ctx)
+        assert not res.is_error
+        assert str(next_dir) in res.content
+    finally:
+        clear_task_env_overrides(task_id)
+        cleanup_task_environment(task_id)
+
+
+def test_docker_backend_uses_task_image_override(tmp_path, monkeypatch):
+    import aegis.tools.backends as backends
+    from aegis.config import Config
+
+    seen = {}
+
+    class FakeDockerEnvironment:
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+
+        def execute(self, command, **_kwargs):
+            seen["command"] = command
+            return {"output": "ok", "returncode": 0}
+
+    monkeypatch.setattr(backends.shutil, "which", lambda *_args: "/usr/bin/docker")
+    monkeypatch.setattr(backends, "DockerEnvironment", FakeDockerEnvironment)
+    backends.register_task_env_overrides("sub_img", {"docker_image": "custom:latest"})
+    try:
+        out, code = backends.run_command(
+            "echo hi",
+            str(tmp_path),
+            10,
+            "docker",
+            Config.load(),
+            task_id="sub_img",
+        )
+    finally:
+        backends.clear_task_env_overrides("sub_img")
+
+    assert (out, code) == ("ok", 0)
+    assert seen["image"] == "custom:latest"
+    assert seen["task_id"] == "sub_img"
+
+
 def test_registry_has_full_surface():
     from aegis.tools.registry import default_registry
     names = {t.name for t in default_registry().all()}
