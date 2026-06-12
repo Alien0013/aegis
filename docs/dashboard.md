@@ -4,8 +4,12 @@
 aegis ui          # alias: aegis dashboard — opens the browser automatically
 ```
 
-A zero-build, single-file control panel served from the package (no node, no CDN —
-works fully offline) at `http://127.0.0.1:9119`.
+A **React + Vite + TypeScript** control panel (source in `web/`, built to
+`aegis/static/web_dist/` and served from the package) at `http://127.0.0.1:9119`.
+The built bundle ships with the package, so installs don't need Node — only
+developing the frontend does (`cd web && npm run dev`, or `scripts/build_web.sh`
+to rebuild). It speaks the same token-gated JSON API as every other surface;
+chat streams over SSE, and the Cron / Models / API-Keys pages are full editors.
 
 ## Pages
 

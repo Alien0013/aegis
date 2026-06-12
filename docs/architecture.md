@@ -1,6 +1,6 @@
 # AEGIS Architecture
 
-A lean (~10k LOC) terminal agent harness. One bounded synchronous loop, pluggable
+A lean (~35k LOC) terminal agent harness. One bounded synchronous loop, pluggable
 providers, a capability-gated tool system, persistent memory + a learning loop, a
 SKILL.md skills engine, and a multi-channel gateway.
 

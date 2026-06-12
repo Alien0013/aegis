@@ -1,27 +1,28 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="900" height="220" viewBox="0 0 900 220" role="img" aria-label="AEGIS — terminal agent harness">
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="320" viewBox="0 0 1280 320" role="img" aria-label="AEGIS — open, self-hostable agent harness">
   <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#a06bff"/>
-      <stop offset="1" stop-color="#6be0ff"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0a0b10"/><stop offset="1" stop-color="#12101c"/>
     </linearGradient>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#16131f"/>
-      <stop offset="1" stop-color="#0d0b14"/>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8b5cff"/><stop offset=".55" stop-color="#5b8cff"/><stop offset="1" stop-color="#22d3ee"/>
     </linearGradient>
+    <radialGradient id="halo" cx="20%" cy="40%" r="60%">
+      <stop offset="0" stop-color="#5b8cff" stop-opacity=".18"/><stop offset="1" stop-color="#5b8cff" stop-opacity="0"/>
+    </radialGradient>
   </defs>
-  <rect width="900" height="220" fill="url(#bg)"/>
-  <!-- shield mark -->
-  <g transform="translate(60,38)">
-    <path d="M72 4 L132 26 V84 C132 118 105 140 72 152 C39 140 12 118 12 84 V26 Z"
-          fill="none" stroke="url(#g)" stroke-width="6" stroke-linejoin="round"/>
-    <path d="M72 48 L96 78 L72 108 L48 78 Z" fill="url(#g)"/>
-    <path d="M72 64 L82 78 L72 92 L62 78 Z" fill="#0d0b14"/>
+  <rect width="1280" height="320" fill="url(#bg)"/>
+  <rect width="1280" height="320" fill="url(#halo)"/>
+  <!-- grid hint -->
+  <g stroke="#ffffff" stroke-opacity=".03">
+    <path d="M0 80 H1280 M0 160 H1280 M0 240 H1280"/>
   </g>
-  <!-- wordmark -->
-  <text x="240" y="108" font-family="ui-sans-serif,Segoe UI,Roboto,Arial" font-size="72"
-        font-weight="800" letter-spacing="14" fill="url(#g)">AEGIS</text>
-  <text x="244" y="146" font-family="ui-monospace,Menlo,monospace" font-size="19"
-        fill="#9a93b8">a self-improving, multi-provider terminal agent harness</text>
-  <text x="244" y="176" font-family="ui-monospace,Menlo,monospace" font-size="15"
-        fill="#6be0ff">curl -fsSL .../install.sh | bash</text>
+  <!-- shield -->
+  <g transform="translate(120,72)">
+    <path d="M88 8 L150 30 V84 C150 120 124 146 88 162 C52 146 26 120 26 84 V30 Z" fill="none" stroke="url(#g)" stroke-width="7" stroke-linejoin="round"/>
+    <path d="M88 44 L116 124 H104 L99 108 H77 L72 124 H60 Z M84 96 H92 L88 80 Z" fill="url(#g)"/>
+    <circle cx="88" cy="60" r="5" fill="#fff"/>
+  </g>
+  <text x="330" y="158" font-family="ui-sans-serif,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="96" font-weight="800" letter-spacing="3" fill="url(#g)">AEGIS</text>
+  <text x="334" y="206" font-family="ui-sans-serif,Segoe UI,Roboto,Helvetica,Arial,sans-serif" font-size="26" font-weight="500" fill="#aab2c5">An open, self-hostable terminal agent harness — one core, every surface.</text>
+  <text x="334" y="244" font-family="ui-monospace,Menlo,monospace" font-size="18" fill="#6b7488">CLI · TUI · Web · Gateway (8 channels) · OpenAI-compatible API · SDK</text>
 </svg>

@@ -18,7 +18,7 @@ aegis              # chat after onboarding
   shared agent state, MCP tools, and a capability-gated permission cascade with a hardline blocklist.
 - **Memory & a closed learning loop** — file memory + Honcho/Mem0/JSONL/HTTP backends,
   FTS5 session recall, and `aegis learn` (review → extract → redact → approve → promote).
-- **Skills** — 26 bundled `SKILL.md` skills, progressive disclosure, a marketplace
+- **Skills** — 29 bundled `SKILL.md` skills, progressive disclosure, a marketplace
   (`aegis skills hub`), and self-improvement (`skill create/improve`).
 - **Cockpit and observability** — dashboard traces/runs/agents pages, local span
   storage, and provider-free replay evals with `aegis trace` and `aegis eval`.

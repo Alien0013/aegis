@@ -1,17 +1,20 @@
 <p align="center"><img src="assets/banner.svg" alt="AEGIS" width="760"></p>
 
 <p align="center"><b>The terminal AI agent you actually own.</b><br>
-Any model · any channel · runs on your machine · learns as it goes — in ~20k auditable lines.</p>
+Any model · any channel · runs on your machine · learns as it goes — in ~35k auditable lines.</p>
 
 <p align="center">
   <a href="https://github.com/Alien0013/aegis/actions"><img src="https://github.com/Alien0013/aegis/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="python">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
-  <img src="https://img.shields.io/badge/tests-389%20passing-brightgreen" alt="tests">
+  <img src="https://img.shields.io/badge/tests-608%20passing-brightgreen" alt="tests">
   <img src="https://img.shields.io/badge/providers-29-blueviolet" alt="providers">
-  <img src="https://img.shields.io/badge/tools-35-blueviolet" alt="tools">
-  <img src="https://img.shields.io/badge/skills-26-orange" alt="skills">
+  <img src="https://img.shields.io/badge/tools-37-blueviolet" alt="tools">
+  <img src="https://img.shields.io/badge/skills-29-orange" alt="skills">
+  <img src="https://img.shields.io/badge/UI-React%20%2B%20Vite-06b6d4" alt="react">
 </p>
+
+<p align="center"><img src="assets/wordmark.svg" alt="AEGIS" width="380"></p>
 
 <p align="center">
   <a href="#-install-one-line">Install</a> ·
@@ -37,18 +40,18 @@ aegis            # start chatting   ·   aegis ui   # …or a clickable browser 
 <p align="center"><img src="assets/screenshot.svg" alt="AEGIS session" width="720"></p>
 
 <p align="center"><img src="assets/dashboard.svg" alt="AEGIS web dashboard" width="760"><br>
-<sub><code>aegis ui</code> — cockpit, traces, runs, agents, chat, kanban, schedules, models, MCP · Ctrl-K palette · 5 themes</sub></p>
+<sub><code>aegis ui</code> — React control panel: streaming chat, cron/model/keys editors, sessions, skills, memory, tools, logs · 3 themes · token-gated</sub></p>
 
 ## ✨ Why AEGIS is different
 
 |  | What it means |
 |---|---|
-| 🪶 **Tiny, auditable core** | ~20k lines across 115 modules — small enough to read and trust end to end. Full-platform capability, none of the sprawl. |
+| 🪶 **Tiny, auditable core** | ~35k lines across ~95 modules — small enough to read and trust end to end. Full-platform capability, none of the sprawl. |
 | 🔌 **Truly model-agnostic** | **29 provider presets** (Claude, GPT, Gemini, Llama, DeepSeek, Qwen, Grok, local Ollama…) behind one interface, with **API-key *and* OAuth** auth, fallback chains, credential pools, and per-prompt routing. |
 | 🧠 **It actually learns** | **Autonomous memory** — saves your preferences, facts, and corrections as it works (no asking). Plus a background self-improvement loop that reviews finished sessions, auto-applies memory, and proposes new skills (secret-redacted; skills human-gated by default, fully autonomous with one flag). FTS5 cross-session recall. |
 | 🛡️ **Safe by default** | Permission cascade with a **hardline blocklist** (refuses `rm -rf /` even in yolo), pre-exec scanning, **fail-closed** docker/ssh/singularity/modal sandboxes, and untrusted-tool-result wrapping against prompt injection. |
 | 📡 **Everywhere you are** | One agent serving CLI, Telegram, Discord, Slack, Signal, Matrix, Email, and webhooks — with voice-memo transcription and a durable, retrying delivery queue. |
-| 🧰 **Batteries included** | **35 tools, 26 skills** + hub import, MCP (client **and** server), an OpenAI-compatible API, a web dashboard, cron, trajectory export, cost analytics, and OSV vulnerability auditing. |
+| 🧰 **Batteries included** | **37 tools, 29 skills** + hub import, MCP (client **and** server), an OpenAI-compatible API, a web dashboard, cron, trajectory export, cost analytics, and OSV vulnerability auditing. |
 | 🔓 **Yours** | MIT, self-hosted, no subscription, no lock-in. Your keys, your data, your machine. |
 
 > Design principle: do everything a full agent platform does, but keep the whole thing
@@ -56,35 +59,43 @@ aegis            # start chatting   ·   aegis ui   # …or a clickable browser 
 
 ## 🏗 Architecture
 
+**One agent core, every surface.** Each entry point — terminal, full-screen TUI, React
+web UI, an 8-channel gateway, an OpenAI-compatible API, a Python SDK and a JSON-RPC bridge —
+routes through the *same* `SurfaceRunner → Agent.run` loop, the same providers, the same
+permission cascade, and the same durable state.
+
 ```mermaid
 flowchart TB
-    subgraph Surfaces["Entry surfaces"]
+    subgraph Surfaces["Entry surfaces — all share one loop"]
         CLI["CLI / REPL"]
-        UI["Web dashboard<br/>(aegis ui)"]
-        GW["Gateway<br/>Telegram · Discord · Slack<br/>Signal · Matrix · Email · Webhook"]
-        API["OpenAI-compatible API<br/>(aegis serve)"]
+        TUI["Full-screen TUI<br/>(aegis tui)"]
+        UI["Web dashboard<br/>React + Vite (aegis ui)"]
+        GW["Gateway · 8 channels<br/>Telegram · Discord · Slack · Signal<br/>Matrix · Email · Webhook · ntfy"]
+        API["OpenAI-compatible API<br/>· SDK · JSON-RPC"]
     end
 
+    SR["SurfaceRunner<br/>session · runs · tracing · context-refs"]
+
     subgraph Core["Agent core"]
-        LOOP["Bounded agent loop<br/>governance · compaction · budget"]
-        PERM["Permission cascade<br/>hardline · groups · exec-mode · scan"]
-        REG["Tool registry<br/>35 tools + MCP + plugins"]
+        LOOP["Bounded agent loop<br/>governance · compaction · loop-guard · budget"]
+        PERM["Permission cascade<br/>hardline · groups · exec-mode · scan · sandbox"]
+        REG["Tool registry · 37 tools<br/>+ deferred schemas + MCP + plugins"]
     end
 
     subgraph Providers["Provider layer"]
-        TRANS["Transports<br/>chat_completions · anthropic"]
-        AUTH["Auth<br/>API key · OAuth PKCE · Codex CLI"]
-        FB["Fallback chains · credential pools · routing"]
+        TRANS["Transports<br/>chat_completions · anthropic · responses · codex"]
+        AUTH["Auth<br/>API key · OAuth PKCE · Codex CLI · credential pools"]
+        FB["Fallback chains · per-prompt routing · /model switch"]
     end
 
     subgraph State["Durable state (~/.aegis)"]
-        MEM["Memory<br/>MEMORY.md · USER.md · history"]
-        SK["Skills (SKILL.md)"]
-        SESS["Sessions (SQLite + FTS5)"]
-        LEARN["Learning loop · trajectories · usage/cost"]
+        MEM["Memory<br/>MEMORY.md · USER.md · history · provider hooks"]
+        SK["Skills (SKILL.md) · marketplace"]
+        SESS["Sessions · SQLite + FTS5 · lineage"]
+        OBS["Observability<br/>runs · traces · evals · usage/cost"]
     end
 
-    Surfaces --> LOOP
+    Surfaces --> SR --> LOOP
     LOOP --> PERM --> REG
     LOOP --> Providers
     LOOP --> State
@@ -97,22 +108,23 @@ flowchart TB
 sequenceDiagram
     participant U as User / channel
     participant A as Agent loop
+    participant M as Memory
     participant P as Provider
     participant T as Tools (≤8 concurrent)
     U->>A: message
+    A->>M: prefetch relevant memory (wire-only)
     loop until final answer or budget
-        A->>A: normalize messages (governance)
-        A->>P: complete(messages, tool schemas)
-        P-->>A: text + tool calls
+        A->>A: refresh memory if changed · normalize · compact if near window
+        A->>P: complete(messages, tool schemas) — cached prefix
+        P-->>A: text + tool calls (+ thinking)
         alt has tool calls
-            A->>T: authorize → run (permission cascade)
-            T-->>A: results (classified, untrusted-wrapped)
-            A->>A: compact if near context window
+            A->>T: loop-guard → authorize → run (permission cascade)
+            T-->>A: results · classified · untrusted-wrapped · subdir hints
         else final
             A-->>U: answer
         end
     end
-    A->>A: persist · usage/cost log · background learn · trajectory capture
+    A->>A: persist · usage/cost · trace spans · background learn · trajectory
 ```
 
 ### Multi-channel gateway
@@ -123,12 +135,13 @@ flowchart LR
         TG[Telegram]; DC[Discord]; SL[Slack]; SG[Signal]
         MX[Matrix]; EM[Email]; WH[Webhook]; NT[ntfy]
     end
-    Channels -->|normalized MessageEvent| HUB["Gateway hub<br/>session routing · pairing · typing"]
-    HUB -->|per-conversation| AG["Agent<br/>(redaction · friendly errors · PLATFORM_HINTS)"]
-    AG -->|reply / MEDIA / status edit| OUT["Delivery queue<br/>(durable · retrying)"]
+    Channels -->|normalized MessageEvent| HUB["Gateway hub<br/>routing · pairing · admin tiers<br/>busy-mode (queue·steer·interrupt)"]
+    HUB -->|per-conversation agent| AG["Agent<br/>redaction · friendly errors · PLATFORM_HINTS"]
+    AG -->|reply / MEDIA / status edit| OUT["Delivery queue<br/>durable · retrying"]
     OUT --> Channels
-    CRON["Cron ticker<br/>recurring + one-shot"] -->|send_message| OUT
+    CRON["Cron ticker<br/>recurring + one-shot + scripts"] -->|send_message| OUT
     AG -->|live events| DASH["Dashboard (SSE)"]
+    CLI2["CLI /handoff"] -.->|adopt session| HUB
 ```
 
 ### The learning loop
@@ -136,12 +149,24 @@ flowchart LR
 ```mermaid
 flowchart LR
     S["Finished turn / session"] --> R["Forked review agent<br/>(memory + skill tools only)"]
-    R --> C["Candidates<br/>(secret-redacted)"]
-    C -->|auto_apply or /learn approve| M["MEMORY.md · USER.md"]
+    R --> C["Candidates<br/>secret-redacted · injection-scanned"]
+    C -->|auto_apply or /learn approve| M["MEMORY.md · USER.md<br/>refuse-don't-drop · fcntl locks"]
     C -->|promote| K["Skills (SKILL.md)<br/>provenance-tracked"]
-    M --> P["Next session's system prompt"]
+    M --> P["Next turn's system prompt<br/>(mtime-refreshed mid-chat)"]
     K --> P
     K --> CUR["Curator<br/>active → stale → archived"]
+```
+
+### Memory & state flow
+
+```mermaid
+flowchart TB
+    W["Write — memory tool · /learn · background review"] -->|fcntl lock · injection scan · dedup| F["memories/USER.md · MEMORY.md"]
+    F -->|frozen snapshot at turn start| SNAP["System-prompt snapshot<br/>(cache-stable)"]
+    F -.->|mtime change| RE["is_stale() → rebuild next turn"]
+    RE --> SNAP
+    EXT["External provider<br/>(mem0 · honcho · jsonl · http)"] -->|prefetch · sync_turn · lifecycle hooks| SNAP
+    SNAP --> PROMPT["Layered system prompt<br/>identity · rules · memory · skills"]
 ```
 
 ## 📦 Install (one line)
@@ -216,7 +241,7 @@ OAuth** (API keys win because some OAuth tokens are identity-only). OAuth is ful
 with localhost-callback **and** manual-paste, auto-refresh, and `auth.json` at `0600`.
 → [docs/providers.md](docs/providers.md)
 
-### Tools & permissions (35 tools)
+### Tools & permissions (37 tools)
 `read_file` · `write_file` · `edit_file` · `apply_patch` · `list_dir` · `glob` · `search` ·
 `bash` · `process` (with completion wakeups) · `web_fetch` · `web_search` · `http_request` ·
 `download` · `todo_write` · `memory` · `skill` · `clarify` (ask the user) ·
@@ -232,7 +257,7 @@ Every dangerous tool flows through:
 hardline blocklist  →  deny_groups  →  exec_mode (deny|allowlist|ask|smart|auto|full)  →  allowlist  →  approval
 ```
 
-### Skills (26 bundled) & the learning loop
+### Skills (29 bundled) & the learning loop
 `SKILL.md` packages (agentskills.io-compatible) with progressive disclosure and tiered
 precedence (workspace > personal > configured > bundled). Bundled set includes
 `code-review`, `debugging`, `write-tests`, `refactor`, `commit`, `dockerize`, `kubernetes`,
@@ -308,7 +333,7 @@ use the normal AEGIS stores.
 
 | Capability | AEGIS |
 |---|---|
-| Core size | **~20k LOC**, 115 modules — auditable end to end |
+| Core size | **~35k LOC**, ~95 modules — auditable end to end |
 | Providers | **29 presets**, API key **+ OAuth** (full PKCE for Anthropic/OpenAI/Google/Codex) |
 | Safety | hardline blocklist (even in yolo) · pre-exec scanning · fail-closed docker/ssh/singularity/modal sandboxes |
 | MCP | client **and** server |
@@ -321,19 +346,23 @@ use the normal AEGIS stores.
 ## 🗂 Repository layout
 
 ```
-aegis/
-├─ agent/            context · governance · compaction · loop · agent
-├─ providers/        transports (chat_completions, anthropic) · auth · registry · codex_app_server
-├─ tools/            base · permissions · registry · builtin · browser · code_exec · lsp · process …
-├─ gateway/          runner · 7 channel adapters · pairing · delivery queue
+aegis/                          the Python package (~35k LOC, ~95 modules)
+├─ agent/            loop · context · governance · compaction · guardrails · subdir_hints · review
+├─ providers/        transports (chat_completions · anthropic · responses · codex) · auth · registry · fallback
+├─ tools/            registry · permissions · builtin · browser · code_exec · lsp · process · kanban · environments/ (6 sandboxes)
+├─ gateway/          runner · 8 channel adapters · pairing · delivery queue · service
 ├─ mcp/              client (stdio+HTTP) · server
-├─ cli/              main (40 subcommands) · repl (TUI)
-├─ builtin_skills/   26 SKILL.md packages
-├─ memory.py  skills.py  session.py  learn.py  curator.py  trajectory.py
-├─ usage_log.py  insights.py  dashboard.py  serve.py  cron.py  onboarding.py …
-docs/                architecture · providers · gateway · mcp · memory-skills · security …
-scripts/run_tests.sh install.sh install.ps1 uninstall.sh
-tests/               349 offline tests (fake provider, isolated home)
+├─ lsp/              persistent client · 13-language servers · edit diagnostics
+├─ cli/              main (47 subcommands) · repl · tui (full-screen) · menu
+├─ builtin_skills/   29 SKILL.md packages
+├─ static/web_dist/  built React dashboard (served at /)
+├─ memory.py · session.py · skills.py · learn.py · curator.py · surface.py
+├─ dashboard.py · server.py · sdk.py · rpc.py · runs.py · tracing.py · evals.py · cron.py …
+web/                 React + Vite + TypeScript dashboard source (build → aegis/static/web_dist)
+docs/                architecture · providers · gateway · mcp · memory-skills · sdk · tracing-evals · security …
+assets/              logo · wordmark · banner · diagrams · one-pager
+scripts/             run_tests.sh · build_web.sh · verify_e2e.py (18-subsystem live check)
+tests/               608 offline tests (fake provider, isolated home) + the live E2E harness
 ```
 
 ## 🧷 Identity & rules
