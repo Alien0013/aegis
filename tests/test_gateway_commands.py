@@ -33,6 +33,33 @@ def test_whoami_and_help(tmp_path, monkeypatch):
     assert all(row["trace_id"].startswith("trace_") for row in runs)
 
 
+def test_handoff_is_adopted_before_control_commands(tmp_path, monkeypatch):
+    from aegis import handoff
+    from aegis.session import Session
+
+    r = _runner(tmp_path, monkeypatch)
+    handed = Session.create("terminal session")
+    handed.meta["runtime_controls"] = {
+        "provider": "openrouter",
+        "model": "handoff-model",
+    }
+    r.store.save(handed)
+    handoff.set_handoff("telegram", "c1", handed.id)
+
+    out = r.dispatch(_ev("/status"))
+    key = r._key(_ev("x"))
+
+    assert "provider=openrouter" in out
+    assert "model=handoff-model" in out
+    assert r._session(key).id == handed.id
+    assert handoff.pop_handoff("telegram", "c1") is None
+    from aegis.runs import RunStore
+    run = next(row for row in RunStore().list(session_id=handed.id, limit=5)
+               if row["kind"] == "control" and row["data"].get("command") == "/status")
+    assert run["data"]["provider"] == "openrouter"
+    assert run["data"]["model"] == "handoff-model"
+
+
 def test_new_closes_cached_agent_before_reset(tmp_path, monkeypatch):
     from aegis.types import Message
 

@@ -134,6 +134,20 @@ class GatewayRunner:
             "/goal <text> · /subgoal <text> · /steer <text> · stop"
         )
 
+    def _adopt_handoff(self, ev: MessageEvent, key: str) -> None:
+        # A pending CLI handoff should affect the very next gateway message,
+        # including control-plane commands like /status and /whoami.
+        try:
+            from ..handoff import pop_handoff
+
+            ho = pop_handoff(ev.platform, ev.chat_id)
+            if ho and (adopted := self.store.load(ho)) is not None:
+                with self._lock:
+                    self._sessions[key] = adopted
+                self._drop_agent(key)
+        except Exception:  # noqa: BLE001
+            pass
+
     def _control_reply(
         self,
         ev: MessageEvent,
@@ -186,6 +200,7 @@ class GatewayRunner:
             code = pairing.request_code(ev.platform, ev.user_id or "?")
             return (f"⛔ Not authorized. Ask the operator to run:\n"
                     f"  aegis pairing approve {ev.platform} {code}")
+        self._adopt_handoff(ev, key)
         # Command tiers: admins get every command; regular users only an allowlisted
         # subset (+ the always-allowed floor). Unset admin list => everyone is admin
         # (backward-compatible single-user default).
@@ -431,15 +446,6 @@ class GatewayRunner:
             lock = self._key_locks.setdefault(key, threading.Lock())
         with lock:
             with self._lock:
-                # A pending /handoff from the CLI adopts that session (full history) here.
-                try:
-                    from ..handoff import pop_handoff
-                    ho = pop_handoff(ev.platform, ev.chat_id)
-                    if ho and (adopted := self.store.load(ho)) is not None:
-                        self._sessions[key] = adopted
-                        self._drop_agent(key)
-                except Exception:  # noqa: BLE001
-                    pass
                 session = self._session(key)
             # Reuse a cached agent for this session (keeps the provider object warm so the
             # model's prompt prefix stays cached); rebuild if the session was reset.
