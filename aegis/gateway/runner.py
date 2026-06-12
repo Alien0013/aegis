@@ -38,6 +38,7 @@ class GatewayRunner:
         self.mention_triggers = [t.lower() for t in config.get("gateway.mention_triggers", []) or []]
 
     def add(self, adapter: BasePlatformAdapter) -> None:
+        adapter._conversation_key_cb = self._key
         self.adapters.append(adapter)
 
     def _key(self, ev: MessageEvent) -> str:

@@ -171,6 +171,34 @@ def test_shared_inbound_records_delivery_runs(monkeypatch, tmp_path):
     assert run["data"]["delivery_status"] == "ok"
 
 
+def test_gateway_delivery_runs_use_runner_session_key(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.config import Config
+    from aegis.gateway.runner import GatewayRunner
+    from aegis.runs import RunStore
+
+    runner = GatewayRunner(Config.load(), cwd=tmp_path)
+    adapter = _adapter()
+    runner.add(adapter)
+    adapter._init_inbound_queue(lambda ev: f"reply:{ev.text}")
+    ev = _ev("telemetry", chat="room1")
+
+    adapter._submit_inbound(ev)
+
+    key = runner._key(ev)
+
+    def delivery_runs():
+        return [r for r in RunStore().list(session_id=key, limit=10)
+                if r["kind"] == "delivery" and r["status"] == "ok"]
+
+    _wait_for(lambda: delivery_runs())
+    run = delivery_runs()[0]
+    assert run["session_id"] == "fake:room1:u1"
+    assert run["session_id"] == key
+    assert run["data"]["chat_id"] == "room1"
+    assert run["result_preview"] == "reply:telemetry"
+
+
 def test_shared_inbound_records_delivery_errors(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     from aegis.gateway.base import BasePlatformAdapter

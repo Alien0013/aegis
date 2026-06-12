@@ -56,6 +56,14 @@ class BasePlatformAdapter:
             self._qlock = threading.Lock()
 
     def _conversation_key(self, ev: MessageEvent) -> str:
+        cb = getattr(self, "_conversation_key_cb", None)
+        if cb is not None:
+            try:
+                key = cb(ev)
+                if key:
+                    return str(key)
+            except Exception:  # noqa: BLE001
+                pass
         return ev.chat_id
 
     def _submit_inbound(
