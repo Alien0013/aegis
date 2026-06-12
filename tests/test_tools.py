@@ -653,6 +653,98 @@ def test_process_registry_recovers_running_checkpoint(tmp_path, monkeypatch):
         ProcessRegistry().kill_process(session.id)
 
 
+def test_process_registry_recovers_pending_completion_notification(tmp_path, monkeypatch):
+    import json
+    import time
+
+    from aegis.tools.process_registry import ProcessRegistry
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("AEGIS_HOME", str(home))
+    home.mkdir()
+    (home / "processes.json").write_text(
+        json.dumps({
+            "running": [],
+            "finished": [{
+                "id": "proc_done",
+                "command": "echo done",
+                "task_id": "recover_notify_task",
+                "session_key": "telegram:c1:u1",
+                "cwd": str(tmp_path),
+                "started_at": time.time(),
+                "exited": True,
+                "exit_code": 0,
+                "output_buffer": "done\n",
+                "notify_on_complete": True,
+                "watcher_platform": "telegram",
+                "watcher_chat_id": "c1",
+                "watcher_user_id": "u1",
+                "watcher_user_name": "alien",
+                "watcher_thread_id": "topic",
+                "watcher_message_id": "msg1",
+            }],
+        }),
+        encoding="utf-8",
+    )
+
+    recovered = ProcessRegistry()
+    events = recovered.drain_notifications()
+
+    assert len(events) == 1
+    event, text = events[0]
+    assert event["type"] == "completion"
+    assert event["session_key"] == "telegram:c1:u1"
+    assert event["platform"] == "telegram"
+    assert "Background process proc_done completed" in text
+    assert ProcessRegistry().drain_notifications() == []
+
+
+def test_process_registry_drain_detects_recovered_process_exit(tmp_path, monkeypatch):
+    import json
+    import time
+
+    from aegis.tools import process_registry as registry_mod
+    from aegis.tools.process_registry import ProcessRegistry
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("AEGIS_HOME", str(home))
+    home.mkdir()
+    alive = {"value": True}
+    monkeypatch.setattr(registry_mod, "_pid_alive", lambda _pid: alive["value"])
+    (home / "processes.json").write_text(
+        json.dumps({
+            "running": [{
+                "id": "proc_later_done",
+                "command": "sleep 1",
+                "task_id": "recover_running_notify_task",
+                "session_key": "telegram:c1:u1",
+                "pid": 4242,
+                "pid_scope": "host",
+                "cwd": str(tmp_path),
+                "started_at": time.time(),
+                "exited": False,
+                "notify_on_complete": True,
+                "watcher_platform": "telegram",
+                "watcher_chat_id": "c1",
+                "watcher_user_id": "u1",
+            }],
+            "finished": [],
+        }),
+        encoding="utf-8",
+    )
+
+    recovered = ProcessRegistry()
+    alive["value"] = False
+    events = recovered.drain_notifications()
+
+    assert len(events) == 1
+    event, text = events[0]
+    assert event["type"] == "completion"
+    assert event["session_id"] == "proc_later_done"
+    assert event["session_key"] == "telegram:c1:u1"
+    assert "Background process proc_later_done completed" in text
+
+
 def test_process_registry_does_not_recover_sandbox_pid_as_host(tmp_path, monkeypatch):
     import json
     import os

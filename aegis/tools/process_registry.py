@@ -112,6 +112,7 @@ class ProcessRegistry:
         self._lock = threading.Lock()
         self.completion_queue: queue.Queue[dict[str, Any]] = queue.Queue()
         self._completion_consumed: set[str] = set()
+        self._pending_completion_notifications: set[str] = set()
         self._global_watch_lock = threading.Lock()
         self._global_watch_window_start: float = 0.0
         self._global_watch_window_hits: int = 0
@@ -613,8 +614,12 @@ class ProcessRegistry:
             pass
 
     def _queue_completion(self, session: ProcessSession) -> None:
+        if session.id in self._completion_consumed:
+            return
         title = f"{session.id} exited (code {session.exit_code}): {session.command[:80]}"
         output_tail = truncate(_clean_process_output(session.output_buffer[-2000:]), 2000)
+        self._pending_completion_notifications.add(session.id)
+        self._write_checkpoint()
         try:
             from ..agent.wakeups import add_wakeup
 
@@ -642,23 +647,47 @@ class ProcessRegistry:
             })
         except Exception:
             pass
-        self.completion_queue.put({
+        self.completion_queue.put(self._completion_event(session, output_tail=output_tail))
+
+    @staticmethod
+    def _completion_event(
+        session: ProcessSession,
+        *,
+        output_tail: str | None = None,
+    ) -> dict[str, Any]:
+        return {
             "type": "completion",
             "session_id": session.id,
             "session_key": session.session_key,
             "command": session.command,
             "exit_code": session.exit_code,
-            "output": output_tail,
+            "output": output_tail
+            if output_tail is not None
+            else truncate(_clean_process_output(session.output_buffer[-2000:]), 2000),
             "platform": session.watcher_platform,
             "chat_id": session.watcher_chat_id,
             "user_id": session.watcher_user_id,
             "user_name": session.watcher_user_name,
             "thread_id": session.watcher_thread_id,
             "message_id": session.watcher_message_id,
-        })
+        }
+
+    def _requeue_pending_completion(self, session: ProcessSession) -> None:
+        if not session.notify_on_complete or session.id in self._completion_consumed:
+            return
+        self._pending_completion_notifications.add(session.id)
+        self.completion_queue.put(self._completion_event(session))
+
+    def _refresh_detached_notifications(self) -> None:
+        with self._lock:
+            sessions = [s for s in self._running.values() if s.detached]
+        for session in sessions:
+            self._refresh_detached_session(session)
 
     def drain_notifications(self) -> list[tuple[dict[str, Any], str]]:
+        self._refresh_detached_notifications()
         out: list[tuple[dict[str, Any], str]] = []
+        changed = False
         while not self.completion_queue.empty():
             try:
                 event = self.completion_queue.get_nowait()
@@ -666,10 +695,18 @@ class ProcessRegistry:
                 break
             session_id = str(event.get("session_id", ""))
             if event.get("type") == "completion" and session_id in self._completion_consumed:
+                self._pending_completion_notifications.discard(session_id)
+                changed = True
                 continue
             text = format_process_notification(event)
             if text:
                 out.append((event, text))
+                if event.get("type") == "completion" and session_id:
+                    self._completion_consumed.add(session_id)
+                    self._pending_completion_notifications.discard(session_id)
+                    changed = True
+        if changed:
+            self._write_checkpoint()
         return out
 
     def get(self, session_id: str) -> ProcessSession | None:
@@ -703,7 +740,7 @@ class ProcessRegistry:
         }
         if exited:
             result["exit_code"] = exit_code
-            self._completion_consumed.add(session.id)
+            self._mark_completion_consumed(session.id)
         if session.detached:
             result["detached"] = True
             result["note"] = (
@@ -732,7 +769,7 @@ class ProcessRegistry:
         lines = output.splitlines()
         selected = lines[-limit:] if offset == 0 and limit > 0 else lines[offset:offset + limit]
         if exited:
-            self._completion_consumed.add(session.id)
+            self._mark_completion_consumed(session.id)
         return {
             "session_id": session.id,
             "status": "exited" if exited else "running",
@@ -749,7 +786,7 @@ class ProcessRegistry:
         while time.monotonic() < deadline:
             self._reconcile_local_exit(session)
             if session.exited:
-                self._completion_consumed.add(session.id)
+                self._mark_completion_consumed(session.id)
                 return {
                     "status": "exited",
                     "exit_code": session.exit_code,
@@ -940,11 +977,13 @@ class ProcessRegistry:
         for sid in expired:
             self._finished.pop(sid, None)
             self._completion_consumed.discard(sid)
+            self._pending_completion_notifications.discard(sid)
         total = len(self._running) + len(self._finished)
         while total >= MAX_PROCESSES and self._finished:
             oldest = min(self._finished, key=lambda sid: self._finished[sid].started_at)
             self._finished.pop(oldest, None)
             self._completion_consumed.discard(oldest)
+            self._pending_completion_notifications.discard(oldest)
             total = len(self._running) + len(self._finished)
         self._write_checkpoint()
 
@@ -953,6 +992,8 @@ class ProcessRegistry:
             data = {
                 "running": [self._session_to_json(s) for s in self._running.values()],
                 "finished": [self._session_to_json(s) for s in self._finished.values()],
+                "completion_consumed": sorted(self._completion_consumed),
+                "pending_completion_notifications": sorted(self._pending_completion_notifications),
             }
             path = _checkpoint_path()
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -969,6 +1010,16 @@ class ProcessRegistry:
         now = time.time()
         running = data.get("running") if isinstance(data, dict) else []
         finished = data.get("finished") if isinstance(data, dict) else []
+        if isinstance(data, dict):
+            self._completion_consumed = {
+                str(sid) for sid in data.get("completion_consumed", [])
+                if sid
+            }
+            self._pending_completion_notifications = {
+                str(sid) for sid in data.get("pending_completion_notifications", [])
+                if sid
+            }
+        recovered_notifications: list[ProcessSession] = []
         for entry in running or []:
             session = self._session_from_json(entry, detached=True)
             if session is None:
@@ -979,6 +1030,7 @@ class ProcessRegistry:
                 if not session.output_buffer:
                     session.output_buffer = SANDBOX_RECOVERY_NOTE
                 self._finished[session.id] = session
+                recovered_notifications.append(session)
                 continue
             if session.pid and _pid_alive(session.pid):
                 self._running[session.id] = session
@@ -986,12 +1038,28 @@ class ProcessRegistry:
                 session.exited = True
                 session.exit_code = None
                 self._finished[session.id] = session
+                recovered_notifications.append(session)
         for entry in finished or []:
             session = self._session_from_json(entry, detached=True)
             if session is None:
                 continue
             if now - session.started_at <= FINISHED_TTL_SECONDS:
                 self._finished[session.id] = session
+                recovered_notifications.append(session)
+        for session in recovered_notifications:
+            self._requeue_pending_completion(session)
+        if recovered_notifications:
+            self._write_checkpoint()
+
+    def _mark_completion_consumed(self, session_id: str) -> None:
+        if not session_id:
+            return
+        before_consumed = session_id in self._completion_consumed
+        before_pending = session_id in self._pending_completion_notifications
+        self._completion_consumed.add(session_id)
+        self._pending_completion_notifications.discard(session_id)
+        if not before_consumed or before_pending:
+            self._write_checkpoint()
 
     @staticmethod
     def _session_to_json(session: ProcessSession) -> dict[str, Any]:
