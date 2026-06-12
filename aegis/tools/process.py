@@ -31,6 +31,8 @@ class ProcessTool(Tool):
             "timeout": {"type": "integer"},
             "offset": {"type": "integer"},
             "limit": {"type": "integer"},
+            "notify_on_complete": {"type": "boolean"},
+            "watch_patterns": {"type": "array", "items": {"type": "string"}},
         },
         "required": ["action"],
     }
@@ -41,19 +43,44 @@ class ProcessTool(Tool):
             if not args.get("command"):
                 return ToolResult.error("start needs a command")
             agent = getattr(ctx, "agent", None)
+            watch_patterns = _watch_patterns(args.get("watch_patterns"))
+            notify_on_complete = bool(args.get("notify_on_complete", not watch_patterns))
+            ignored_note = ""
+            if notify_on_complete and watch_patterns:
+                ignored_note = (
+                    "watch_patterns ignored because notify_on_complete=True; "
+                    "these two flags produce duplicate notifications when combined"
+                )
+                watch_patterns = []
             proc = process_registry.spawn_local(
                 args["command"],
                 cwd=ctx.cwd,
                 task_id=getattr(ctx, "task_id", "") or "",
-                notify_on_complete=True,
+                notify_on_complete=notify_on_complete,
                 watcher_platform=getattr(agent, "platform", "") or "",
                 watcher_chat_id=getattr(agent, "chat_id", "") or "",
+                watch_patterns=watch_patterns,
             )
+            lines = [f"started {proc.id} (pid {proc.pid}): {args['command']}"]
+            if notify_on_complete:
+                lines.append("you'll be notified on your next turn when it exits.")
+            if watch_patterns:
+                lines.append(f"watching for: {', '.join(watch_patterns)}")
+            if ignored_note:
+                lines.append(ignored_note)
+            data = {
+                "session_id": proc.id,
+                "pid": proc.pid,
+                "notify_on_complete": notify_on_complete,
+            }
+            if watch_patterns:
+                data["watch_patterns"] = watch_patterns
+            if ignored_note:
+                data["watch_patterns_ignored"] = ignored_note
             return ToolResult.ok(
-                f"started {proc.id} (pid {proc.pid}): {args['command']} — "
-                "you'll be notified on your next turn when it exits.",
+                "\n".join(lines),
                 display=f"started {proc.id}",
-                data={"session_id": proc.id, "pid": proc.pid},
+                data=data,
             )
         if action == "list":
             rows = process_registry.list_sessions(task_id=getattr(ctx, "task_id", "") or None)
@@ -113,6 +140,18 @@ def _json_result(result: dict, *, display: str) -> ToolResult:
         display=display,
         data=result,
     )
+
+
+def _watch_patterns(raw) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        values = [raw]
+    elif isinstance(raw, (list, tuple, set)):
+        values = list(raw)
+    else:
+        return []
+    return [str(value) for value in values if str(value)]
 
 
 def process_tools() -> list[Tool]:

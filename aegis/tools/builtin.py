@@ -313,7 +313,19 @@ class BashTool(Tool):
             },
             "notify_on_complete": {
                 "type": "boolean",
-                "description": "Queue a wakeup when a background process exits (default true).",
+                "description": (
+                    "Queue a wakeup when a background process exits (default true unless "
+                    "watch_patterns is set). Mutually exclusive with watch_patterns."
+                ),
+            },
+            "watch_patterns": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Strings to watch for in background output. At most one notification is "
+                    "emitted per 15 seconds per process; noisy patterns are disabled after "
+                    "three strike windows and promoted to notify_on_complete."
+                ),
             },
         },
         "required": ["command"],
@@ -332,24 +344,52 @@ class BashTool(Tool):
             from .process_registry import process_registry
 
             agent = getattr(ctx, "agent", None)
+            watch_patterns = _watch_patterns(args.get("watch_patterns"))
+            notify_on_complete = bool(args.get("notify_on_complete", not watch_patterns))
+            ignored_note = ""
+            if notify_on_complete and watch_patterns:
+                ignored_note = (
+                    "watch_patterns ignored because notify_on_complete=True; "
+                    "these two flags produce duplicate notifications when combined"
+                )
+                watch_patterns = []
             proc = process_registry.spawn_local(
                 args["command"],
                 cwd=ctx.cwd,
                 task_id=getattr(ctx, "task_id", "") or "",
-                notify_on_complete=bool(args.get("notify_on_complete", True)),
+                notify_on_complete=notify_on_complete,
                 watcher_platform=getattr(agent, "platform", "") or "",
                 watcher_chat_id=getattr(agent, "chat_id", "") or "",
+                watch_patterns=watch_patterns,
             )
+            lines = [
+                "Background process started",
+                f"session_id: {proc.id}",
+                f"pid: {proc.pid}",
+            ]
+            if notify_on_complete:
+                lines.append("notify_on_complete: true")
+            if watch_patterns:
+                lines.append(f"watch_patterns: {', '.join(watch_patterns)}")
+            if ignored_note:
+                lines.append(ignored_note)
+            lines.append(
+                "Use process(action='poll'|'log'|'wait'|'kill', session_id=...) "
+                "to inspect or control it."
+            )
+            data = {
+                "session_id": proc.id,
+                "pid": proc.pid,
+                "notify_on_complete": notify_on_complete,
+            }
+            if watch_patterns:
+                data["watch_patterns"] = watch_patterns
+            if ignored_note:
+                data["watch_patterns_ignored"] = ignored_note
             return ToolResult.ok(
-                (
-                    "Background process started\n"
-                    f"session_id: {proc.id}\n"
-                    f"pid: {proc.pid}\n"
-                    "Use process(action='poll'|'log'|'wait'|'kill', session_id=...) "
-                    "to inspect or control it."
-                ),
+                "\n".join(lines),
                 display=f"background {proc.id}",
-                data={"session_id": proc.id, "pid": proc.pid},
+                data=data,
             )
         out, code = run_command(
             args["command"],
@@ -366,6 +406,18 @@ class BashTool(Tool):
             is_error=code != 0,
             display=f"$ {args['command'][:60]} (exit {code})",
         )
+
+
+def _watch_patterns(raw) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        values = [raw]
+    elif isinstance(raw, (list, tuple, set)):
+        values = list(raw)
+    else:
+        return []
+    return [str(value) for value in values if str(value)]
 
 
 # --------------------------------------------------------------------------- #

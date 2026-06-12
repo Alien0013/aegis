@@ -177,6 +177,50 @@ def test_bash_tool_background_uses_process_registry(tmp_path):
         process_registry._finished.pop(sid, None)
 
 
+def test_bash_tool_background_watch_pattern_queues_wakeup(tmp_path):
+    import time
+
+    from aegis.agent import wakeups
+    from aegis.tools.builtin import BashTool
+    from aegis.tools.process_registry import process_registry
+
+    wakeups.drain_wakeups()
+    process_registry.drain_notifications()
+    ctx = _ctx(tmp_path)
+    ctx.task_id = "bash_watch_task"
+    res = BashTool().run(
+        {
+            "command": "printf 'boot\\nREADY\\n'; sleep 0.2",
+            "background": True,
+            "watch_patterns": ["READY"],
+        },
+        ctx,
+    )
+    sid = res.data["session_id"]
+    try:
+        assert not res.is_error
+        assert res.data["notify_on_complete"] is False
+        assert res.data["watch_patterns"] == ["READY"]
+        events = []
+        notes = []
+        for _ in range(50):
+            events.extend(process_registry.drain_notifications())
+            notes = wakeups.drain_wakeups()
+            if events and notes:
+                break
+            time.sleep(0.1)
+        assert events
+        event, text = events[0]
+        assert event["type"] == "watch_match"
+        assert event["pattern"] == "READY"
+        assert "READY" in text
+        assert notes and notes[0]["source"] == "process"
+        assert "READY" in notes[0]["text"] or "READY" in notes[0]["title"]
+    finally:
+        process_registry.kill_process(sid)
+        process_registry._finished.pop(sid, None)
+
+
 def test_bash_tool_background_rejects_nonlocal_backend(tmp_path):
     from aegis.config import Config
     from aegis.tools.base import ToolContext
@@ -259,12 +303,18 @@ def test_process_registry_recovers_running_checkpoint(tmp_path, monkeypatch):
     home = tmp_path / "home"
     monkeypatch.setenv("AEGIS_HOME", str(home))
     registry = ProcessRegistry()
-    session = registry.spawn_local("sleep 5", cwd=tmp_path, task_id="recover_task")
+    session = registry.spawn_local(
+        "sleep 5",
+        cwd=tmp_path,
+        task_id="recover_task",
+        watch_patterns=["READY"],
+    )
     try:
         recovered = ProcessRegistry()
         poll = recovered.poll(session.id)
         assert poll["status"] == "running"
         assert poll["detached"] is True
+        assert poll["watch_patterns"] == ["READY"]
         assert recovered.has_active_processes("recover_task")
     finally:
         registry.kill_process(session.id)

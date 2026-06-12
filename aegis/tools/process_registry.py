@@ -26,6 +26,11 @@ from ..util import atomic_write, read_text, truncate
 MAX_OUTPUT_CHARS = 200_000
 FINISHED_TTL_SECONDS = 1800
 MAX_PROCESSES = 64
+WATCH_MIN_INTERVAL_SECONDS = 15
+WATCH_STRIKE_LIMIT = 3
+WATCH_GLOBAL_MAX_PER_WINDOW = 15
+WATCH_GLOBAL_WINDOW_SECONDS = 10
+WATCH_GLOBAL_COOLDOWN_SECONDS = 30
 
 
 @dataclass
@@ -47,6 +52,14 @@ class ProcessSession:
     watcher_platform: str = ""
     watcher_chat_id: str = ""
     detached: bool = False
+    watch_patterns: list[str] = field(default_factory=list)
+    _watch_hits: int = field(default=0, repr=False)
+    _watch_suppressed: int = field(default=0, repr=False)
+    _watch_disabled: bool = field(default=False, repr=False)
+    _watch_last_emit_at: float = field(default=0.0, repr=False)
+    _watch_cooldown_until: float = field(default=0.0, repr=False)
+    _watch_strike_candidate: bool = field(default=False, repr=False)
+    _watch_consecutive_strikes: int = field(default=0, repr=False)
     _reader_thread: threading.Thread | None = field(default=None, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -60,6 +73,11 @@ class ProcessRegistry:
         self._lock = threading.Lock()
         self.completion_queue: queue.Queue[dict[str, Any]] = queue.Queue()
         self._completion_consumed: set[str] = set()
+        self._global_watch_lock = threading.Lock()
+        self._global_watch_window_start: float = 0.0
+        self._global_watch_window_hits: int = 0
+        self._global_watch_tripped_until: float = 0.0
+        self._global_watch_suppressed_during_trip: int = 0
         self._load_checkpoint()
 
     def spawn_local(
@@ -73,6 +91,7 @@ class ProcessRegistry:
         notify_on_complete: bool = False,
         watcher_platform: str = "",
         watcher_chat_id: str = "",
+        watch_patterns: list[str] | None = None,
     ) -> ProcessSession:
         session = ProcessSession(
             id=new_id("proc"),
@@ -84,6 +103,7 @@ class ProcessRegistry:
             notify_on_complete=notify_on_complete,
             watcher_platform=watcher_platform,
             watcher_chat_id=watcher_chat_id,
+            watch_patterns=_normalize_watch_patterns(watch_patterns),
         )
         shell = _find_shell()
         run_env = dict(os.environ)
@@ -130,6 +150,7 @@ class ProcessRegistry:
         task_id: str = "",
         session_key: str = "",
         notify_on_complete: bool = False,
+        watch_patterns: list[str] | None = None,
     ) -> ProcessSession:
         session = ProcessSession(
             id=new_id("proc"),
@@ -140,9 +161,11 @@ class ProcessRegistry:
             started_at=time.time(),
             env_ref=env,
             notify_on_complete=notify_on_complete,
+            watch_patterns=_normalize_watch_patterns(watch_patterns),
         )
         result = env.execute(command, cwd=session.cwd, timeout=10)
         session.output_buffer = str(result.get("output", ""))
+        self._check_watch_patterns(session, session.output_buffer)
         session.exit_code = int(result.get("returncode", 0) or 0)
         session.exited = True
         with self._lock:
@@ -166,6 +189,7 @@ class ProcessRegistry:
                     session.output_buffer += chunk
                     if len(session.output_buffer) > session.max_output_chars:
                         session.output_buffer = session.output_buffer[-session.max_output_chars:]
+                self._check_watch_patterns(session, chunk)
         finally:
             try:
                 proc.wait(timeout=5)
@@ -183,6 +207,189 @@ class ProcessRegistry:
         self._write_checkpoint()
         if was_running and session.notify_on_complete:
             self._queue_completion(session)
+
+    def _check_watch_patterns(self, session: ProcessSession, new_text: str) -> None:
+        """Scan freshly streamed output for Hermes-style watch pattern notifications."""
+        if not session.watch_patterns or session._watch_disabled or session.exited:
+            return
+        matched_lines: list[str] = []
+        matched_pattern = ""
+        for line in new_text.splitlines():
+            for pattern in session.watch_patterns:
+                if pattern and pattern in line:
+                    matched_lines.append(line.rstrip())
+                    if not matched_pattern:
+                        matched_pattern = pattern
+                    break
+        if not matched_lines:
+            return
+
+        now = time.time()
+        return_early = False
+        should_disable = False
+        suppressed = 0
+        with session._lock:
+            if session._watch_cooldown_until and now < session._watch_cooldown_until:
+                session._watch_suppressed += len(matched_lines)
+                if not session._watch_strike_candidate:
+                    session._watch_strike_candidate = True
+                    session._watch_consecutive_strikes += 1
+                    if session._watch_consecutive_strikes >= WATCH_STRIKE_LIMIT:
+                        session._watch_disabled = True
+                        session.notify_on_complete = True
+                        should_disable = True
+                        suppressed = session._watch_suppressed
+                return_early = True
+            else:
+                if session._watch_cooldown_until and not session._watch_strike_candidate:
+                    session._watch_consecutive_strikes = 0
+                session._watch_strike_candidate = False
+                session._watch_last_emit_at = now
+                session._watch_cooldown_until = now + WATCH_MIN_INTERVAL_SECONDS
+                session._watch_hits += 1
+                suppressed = session._watch_suppressed
+                session._watch_suppressed = 0
+
+        if return_early:
+            if should_disable:
+                self._write_checkpoint()
+                self._queue_watch_disabled(session, suppressed)
+            return
+
+        output = "\n".join(matched_lines[:20])
+        if len(output) > 2000:
+            output = output[:2000] + "\n...(truncated)"
+        if self._global_watch_admit(now):
+            self._queue_watch_match(session, matched_pattern, output, suppressed)
+
+    def _global_watch_admit(self, now: float) -> bool:
+        release_msg: dict[str, Any] | None = None
+        trip_msg: dict[str, Any] | None = None
+        with self._global_watch_lock:
+            if self._global_watch_tripped_until and now >= self._global_watch_tripped_until:
+                suppressed = self._global_watch_suppressed_during_trip
+                self._global_watch_tripped_until = 0.0
+                self._global_watch_suppressed_during_trip = 0
+                self._global_watch_window_start = now
+                self._global_watch_window_hits = 0
+                if suppressed > 0:
+                    release_msg = {
+                        "type": "watch_overflow_released",
+                        "session_id": "",
+                        "session_key": "",
+                        "command": "",
+                        "suppressed": suppressed,
+                        "message": (
+                            "Watch-pattern notifications resumed. "
+                            f"{suppressed} match event(s) were suppressed during the flood."
+                        ),
+                    }
+
+            if self._global_watch_tripped_until and now < self._global_watch_tripped_until:
+                self._global_watch_suppressed_during_trip += 1
+                admit = False
+            else:
+                if now - self._global_watch_window_start >= WATCH_GLOBAL_WINDOW_SECONDS:
+                    self._global_watch_window_start = now
+                    self._global_watch_window_hits = 0
+                if self._global_watch_window_hits >= WATCH_GLOBAL_MAX_PER_WINDOW:
+                    self._global_watch_tripped_until = now + WATCH_GLOBAL_COOLDOWN_SECONDS
+                    self._global_watch_suppressed_during_trip += 1
+                    trip_msg = {
+                        "type": "watch_overflow_tripped",
+                        "session_id": "",
+                        "session_key": "",
+                        "command": "",
+                        "message": (
+                            f"Watch-pattern overflow: >{WATCH_GLOBAL_MAX_PER_WINDOW} "
+                            f"notifications in {WATCH_GLOBAL_WINDOW_SECONDS}s across all processes. "
+                            f"Suppressing further watch_match events for "
+                            f"{WATCH_GLOBAL_COOLDOWN_SECONDS}s."
+                        ),
+                    }
+                    admit = False
+                else:
+                    self._global_watch_window_hits += 1
+                    admit = True
+
+        if release_msg is not None:
+            self.completion_queue.put(release_msg)
+            self._queue_wakeup_event(release_msg)
+        if trip_msg is not None:
+            self.completion_queue.put(trip_msg)
+            self._queue_wakeup_event(trip_msg)
+        return admit
+
+    def _queue_watch_match(
+        self,
+        session: ProcessSession,
+        pattern: str,
+        output: str,
+        suppressed: int,
+    ) -> None:
+        event = {
+            "type": "watch_match",
+            "session_id": session.id,
+            "session_key": session.session_key,
+            "command": session.command,
+            "pattern": pattern,
+            "output": output,
+            "suppressed": suppressed,
+            "platform": session.watcher_platform,
+            "chat_id": session.watcher_chat_id,
+        }
+        self.completion_queue.put(event)
+        self._queue_wakeup_event(event)
+
+    def _queue_watch_disabled(self, session: ProcessSession, suppressed: int) -> None:
+        event = {
+            "type": "watch_disabled",
+            "session_id": session.id,
+            "session_key": session.session_key,
+            "command": session.command,
+            "suppressed": suppressed,
+            "platform": session.watcher_platform,
+            "chat_id": session.watcher_chat_id,
+            "message": (
+                f"Watch patterns disabled for process {session.id} — "
+                f"{WATCH_STRIKE_LIMIT} consecutive rate-limit windows triggered "
+                f"(min spacing {WATCH_MIN_INTERVAL_SECONDS}s). Falling back to "
+                "notify_on_complete semantics; you'll get exactly one notification "
+                "when the process exits."
+            ),
+        }
+        self.completion_queue.put(event)
+        self._queue_wakeup_event(event)
+
+    def _queue_wakeup_event(self, event: dict[str, Any]) -> None:
+        text = format_process_notification(event)
+        if not text:
+            return
+        try:
+            from ..agent.wakeups import add_wakeup
+
+            add_wakeup("process", text[:200], str(event.get("output") or event.get("message") or ""))
+        except Exception:
+            pass
+        platform = str(event.get("platform") or "")
+        chat_id = str(event.get("chat_id") or "")
+        if platform and chat_id:
+            try:
+                from ..gateway.queue import DeliveryQueue
+
+                DeliveryQueue().enqueue(platform, chat_id, text)
+            except Exception:
+                pass
+        try:
+            from ..eventbus import BUS
+
+            BUS.publish({
+                "type": event.get("type", "process"),
+                "platform": platform or "cli",
+                "text": text,
+            })
+        except Exception:
+            pass
 
     def _queue_completion(self, session: ProcessSession) -> None:
         title = f"{session.id} exited (code {session.exit_code}): {session.command[:80]}"
@@ -235,11 +442,9 @@ class ProcessRegistry:
             session_id = str(event.get("session_id", ""))
             if event.get("type") == "completion" and session_id in self._completion_consumed:
                 continue
-            text = (
-                f"background process {session_id} exited "
-                f"(code {event.get('exit_code')}): {event.get('command', '')}"
-            )
-            out.append((event, text))
+            text = format_process_notification(event)
+            if text:
+                out.append((event, text))
         return out
 
     def get(self, session_id: str) -> ProcessSession | None:
@@ -277,6 +482,9 @@ class ProcessRegistry:
         if session.detached:
             result["detached"] = True
             result["note"] = "Process recovered after restart; output history may be incomplete"
+        if session.watch_patterns:
+            result["watch_patterns"] = session.watch_patterns
+            result["watch_disabled"] = session._watch_disabled
         return result
 
     def read_log(self, session_id: str, offset: int = 0, limit: int = 200) -> dict[str, Any]:
@@ -405,6 +613,8 @@ class ProcessRegistry:
                 "status": "exited" if session.exited else "running",
                 "output_preview": session.output_buffer[-200:],
                 "exit_code": session.exit_code if session.exited else None,
+                "watch_patterns": session.watch_patterns,
+                "watch_disabled": session._watch_disabled,
             })
         return out
 
@@ -524,6 +734,7 @@ class ProcessRegistry:
             "notify_on_complete": session.notify_on_complete,
             "watcher_platform": session.watcher_platform,
             "watcher_chat_id": session.watcher_chat_id,
+            "watch_patterns": session.watch_patterns,
         }
 
     @staticmethod
@@ -544,6 +755,7 @@ class ProcessRegistry:
             notify_on_complete=bool(entry.get("notify_on_complete", False)),
             watcher_platform=str(entry.get("watcher_platform") or ""),
             watcher_chat_id=str(entry.get("watcher_chat_id") or ""),
+            watch_patterns=_normalize_watch_patterns(entry.get("watch_patterns")),
             detached=detached,
         )
 
@@ -564,6 +776,59 @@ def _pid_alive(pid: int) -> bool:
 
 def _checkpoint_path() -> Path:
     return cfg.sub("processes.json")
+
+
+def _normalize_watch_patterns(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        values = [raw]
+    elif isinstance(raw, (list, tuple, set)):
+        values = list(raw)
+    else:
+        return []
+    patterns: list[str] = []
+    for value in values:
+        pattern = str(value)
+        if pattern:
+            patterns.append(pattern)
+    return patterns
+
+
+def format_process_notification(event: dict[str, Any]) -> str | None:
+    evt_type = event.get("type", "completion")
+    sid = event.get("session_id", "unknown")
+    command = event.get("command", "unknown")
+
+    if evt_type == "watch_disabled":
+        return f"[IMPORTANT: {event.get('message', '')}]"
+
+    if evt_type == "watch_match":
+        pattern = event.get("pattern", "?")
+        output = event.get("output", "")
+        suppressed = int(event.get("suppressed", 0) or 0)
+        text = (
+            f"[IMPORTANT: Background process {sid} matched "
+            f"watch pattern \"{pattern}\".\n"
+            f"Command: {command}\n"
+            f"Matched output:\n{output}"
+        )
+        if suppressed:
+            text += f"\n({suppressed} earlier matches were suppressed by rate limit)"
+        text += "]"
+        return text
+
+    if evt_type in {"watch_overflow_released", "watch_overflow_tripped"}:
+        return f"[IMPORTANT: {event.get('message', '')}]"
+
+    exit_code = event.get("exit_code", "?")
+    output = event.get("output", "")
+    return (
+        f"[IMPORTANT: Background process {sid} completed "
+        f"(exit code {exit_code}).\n"
+        f"Command: {command}\n"
+        f"Output:\n{output}]"
+    )
 
 
 process_registry = ProcessRegistry()
