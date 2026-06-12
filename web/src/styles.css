@@ -38,10 +38,37 @@ code,kbd{font-family:ui-monospace,"SF Mono",Menlo,monospace;background:var(--pan
 .btn:hover{filter:brightness(1.1)}.btn.ghost{background:var(--panel2);color:var(--text);border:1px solid var(--line)}
 .empty{color:var(--mut);padding:20px;text-align:center}
 input,select,textarea{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:8px 10px;font:inherit;width:100%}
-.chatlog{height:60vh;overflow:auto;display:flex;flex-direction:column;gap:10px;padding:4px}
-.msg{max-width:80%;padding:10px 13px;border-radius:12px;white-space:pre-wrap}
+.chatcard{display:flex;flex-direction:column}
+.chatlog{height:62vh;overflow:auto;display:flex;flex-direction:column;gap:12px;padding:4px 2px}
+.msg{max-width:82%;padding:10px 13px;border-radius:13px;white-space:pre-wrap;word-break:break-word}
 .msg.user{align-self:flex-end;background:var(--accent);color:#fff}
 .msg.bot{align-self:flex-start;background:var(--panel2);border:1px solid var(--line)}
-.composer{display:flex;gap:8px;margin-top:10px}
-.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:s .7s linear infinite}
+.botwrap{align-self:flex-start;max-width:88%;display:flex;flex-direction:column;gap:8px}
+.composer{display:flex;gap:8px;margin-top:12px}
+.composer .btn{align-self:stretch;min-width:64px;display:flex;align-items:center;justify-content:center}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:s .7s linear infinite;vertical-align:middle}
+.spin.sm{width:12px;height:12px;border-width:2px}
 @keyframes s{to{transform:rotate(360deg)}}
+/* thinking panel */
+.think{border:1px dashed var(--line);border-radius:10px;background:color-mix(in srgb,var(--panel2) 70%,transparent);overflow:hidden}
+.think-h{display:flex;align-items:center;gap:6px;padding:7px 11px;cursor:pointer;font-size:12.5px;color:var(--mut);font-weight:500}
+.think-h:hover{color:var(--text)}
+.think-dot{width:7px;height:7px;border-radius:50%;background:var(--accent2);animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.4}50%{opacity:1}}
+.think-body{padding:0 12px 11px;font-size:12.5px;color:var(--mut);white-space:pre-wrap;line-height:1.55;border-top:1px solid var(--line);padding-top:9px;font-family:ui-monospace,monospace}
+/* tool activity cards */
+.tcard{display:flex;gap:10px;padding:9px 11px;border:1px solid var(--line);border-radius:10px;background:var(--panel2);align-items:flex-start}
+.tcard.running{border-color:color-mix(in srgb,var(--accent) 50%,var(--line))}
+.tcard.error{border-color:color-mix(in srgb,var(--err) 55%,var(--line))}
+.tcard-ico{font-size:15px;line-height:1.3;flex:0 0 auto}
+.tcard-main{flex:1;min-width:0}
+.tcard-top{display:flex;align-items:center;gap:8px;font-size:13px}
+.tcard-badge{font-weight:700}.tcard-badge.ok{color:var(--ok)}.tcard-badge.error{color:var(--err)}
+.tcard-target{display:block;margin-top:3px;font-size:11.5px;color:var(--mut);background:transparent;border:0;padding:0;white-space:pre-wrap;word-break:break-all}
+.tcard-out{margin-top:5px;font-size:11.5px;color:var(--mut);max-height:80px;overflow:auto;white-space:pre-wrap;border-top:1px solid var(--line);padding-top:5px}
+/* live status + typing */
+.statusline{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--mut);padding-left:2px}
+.typing{display:inline-flex;gap:4px;align-items:center;height:14px}
+.typing i{width:6px;height:6px;border-radius:50%;background:var(--mut);animation:blink 1.2s infinite}
+.typing i:nth-child(2){animation-delay:.2s}.typing i:nth-child(3){animation-delay:.4s}
+@keyframes blink{0%,80%,100%{opacity:.25}40%{opacity:1}}

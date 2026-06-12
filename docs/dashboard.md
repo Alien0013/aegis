@@ -17,9 +17,24 @@ are full editors.
 
 | Group | Pages |
 |---|---|
-| — | **Overview** (stat tiles, spend, recent sessions) · **Chat** (streaming) |
-| Edit | **Config** (edit any setting) · **Models** (pick + set active) · **API Keys** (set secrets) · **Cron** (add/remove/toggle jobs) · **Memory** (add/remove facts) · **Channels** (approve/revoke pairings) |
+| — | **Overview** (stat tiles, spend, recent sessions) · **Chat** (transparent streaming — see below) |
+| Edit | **Config** (edit any setting) · **Models** (pick + set active) · **API Keys** (set secrets) · **Cron** (add/remove/toggle jobs) · **Memory** (add/remove facts) · **Channels** (approve/revoke pairings) · **MCP** (connect/remove servers) · **Webhooks** (add/remove) · **Plugins** (install/enable/disable/remove) |
 | View | Sessions · Skills · Tools · Logs · System |
+
+### Transparent Chat
+
+The Chat page is built so a non-technical user can **watch the agent work** without
+a terminal. Each turn streams live over SSE and renders:
+
+- the assistant's words **as they are typed**, token by token;
+- a collapsible **Thinking** panel that fills with the model's reasoning;
+- a **tool activity card** for every tool call — icon, what it's doing (command /
+  path / url), a live spinner, then ✓ / ✗ with a short result preview;
+- a **step N/M** status line, plus a "compacting context…" note when it folds.
+
+This is powered by `_chat_event_row`, which forwards the loop's `assistant_delta`,
+`reasoning_delta`, and paired `tool_start` / `tool_result` events (correlated by
+call `id`) to the browser.
 
 The dashboard is a **control panel, not a viewer** — most pages write back through
 the token-gated JSON API (`POST /api/config`, `/api/cron`, `/api/models`,

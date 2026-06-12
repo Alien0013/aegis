@@ -10,6 +10,9 @@ import { ModelsPage } from "./pages/ModelsPage";
 import { KeysPage } from "./pages/KeysPage";
 import { MemoryPage } from "./pages/MemoryPage";
 import { ChannelsPage } from "./pages/ChannelsPage";
+import { McpPage } from "./pages/McpPage";
+import { WebhooksPage } from "./pages/WebhooksPage";
+import { PluginsPage } from "./pages/PluginsPage";
 
 type NavItem = { id: string; label: string; icon: string };
 const NAV: NavItem[] = [
@@ -58,12 +61,9 @@ function pageFor(id: string, go: (id: string) => void) {
     case "memory": return <MemoryPage />;
     case "channels": return <ChannelsPage />;
     case "system": return <SystemPage />;
-    case "mcp": return <ListPage key="mcp" endpoint="mcp" title="MCP Servers"
-      cols={[["name", "Server"], ["command", "Command"]]} />;
-    case "webhooks": return <ListPage key="webhooks" endpoint="webhooks" title="Webhooks"
-      cols={[["name", "Webhook"], ["prompt", "Prompt"]]} />;
-    case "plugins": return <ListPage key="plugins" endpoint="plugins" arrayKey="manifests" title="Plugins"
-      cols={[["name", "Plugin"], ["version", "Version"], ["description", "Description"]]} />;
+    case "mcp": return <McpPage />;
+    case "webhooks": return <WebhooksPage />;
+    case "plugins": return <PluginsPage />;
     case "projects": return <ListPage key="projects" endpoint="projects" arrayKey="projects" title="Projects"
       cols={[["name", "Project"], ["kind", "Kind"], ["path", "Path"]]} />;
     case "worktrees": return <ListPage key="worktrees" endpoint="worktrees" arrayKey="worktrees" title="Worktrees"

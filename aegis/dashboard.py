@@ -473,25 +473,43 @@ def _dashboard_active_run_agents(config: Config) -> list[dict]:
     return [_dashboard_agent_from_run(row, config) for row in rows]
 
 
+def _tool_target(args: dict) -> str:
+    """Human-readable one-liner for what a tool call is about to do."""
+    if not isinstance(args, dict):
+        return ""
+    for key in ("command", "path", "file_path", "url", "query", "pattern", "prompt", "name"):
+        val = args.get(key)
+        if val:
+            return str(val)[:240]
+    return ""
+
+
 def _chat_event_row(event: dict) -> dict:
+    """Project a raw loop event into the compact, JSON-safe row the dashboard
+    Chat page renders. Carries the streaming text and thinking so the bubble can
+    show the agent's words and reasoning as they arrive, and a stable ``id`` so
+    tool_start/tool_result can be paired into a single live activity card."""
     etype = str(event.get("type") or "")
     row = {
         "type": etype,
+        "id": str(event.get("id") or ""),
         "name": str(event.get("name") or event.get("tool_name") or ""),
         "summary": str(event.get("summary") or event.get("message") or event.get("reason") or ""),
         "status": "error" if event.get("is_error") else str(event.get("status") or ""),
     }
-    if etype == "tool_start":
+    if etype in ("assistant_delta", "reasoning_delta", "assistant_message"):
+        row["text"] = str(event.get("text") or "")
+    elif etype == "tool_start":
         args = event.get("args") if isinstance(event.get("args"), dict) else {}
-        row["target"] = str(
-            args.get("command") or args.get("path") or args.get("url") or args.get("query") or ""
-        )[:240]
+        row["target"] = _tool_target(args)
     elif etype == "tool_result":
         row["target"] = str(event.get("preview") or event.get("summary") or "")[:240]
+        if not row["status"]:
+            row["status"] = "ok"
     elif etype == "iteration":
+        row["n"] = event.get("n")
+        row["max"] = event.get("max")
         row["summary"] = f"{event.get('n', '')}/{event.get('max', '')}".strip("/")
-    elif etype == "reasoning_delta":
-        row["summary"] = "thinking"
     return row
 
 

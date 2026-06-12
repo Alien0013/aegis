@@ -38,6 +38,23 @@ def test_env_token_gates_dashboard(tmp_path, monkeypatch):
         srv.shutdown()
 
 
+def test_chat_event_row_carries_text_and_tool_id():
+    """The Chat page needs streamed text, thinking, and paired tool ids to render
+    the agent's words and live tool cards — _chat_event_row must preserve them."""
+    from aegis.dashboard import _chat_event_row
+    assert _chat_event_row({"type": "assistant_delta", "text": "hel"})["text"] == "hel"
+    assert _chat_event_row({"type": "reasoning_delta", "text": "hmm"})["text"] == "hmm"
+    start = _chat_event_row({"type": "tool_start", "id": "c1", "name": "bash",
+                             "args": {"command": "ls -la"}})
+    assert start["id"] == "c1" and start["target"] == "ls -la"
+    res = _chat_event_row({"type": "tool_result", "id": "c1", "name": "bash", "preview": "ok"})
+    assert res["id"] == "c1" and res["status"] == "ok" and res["target"] == "ok"
+    err = _chat_event_row({"type": "tool_result", "id": "c2", "is_error": True})
+    assert err["status"] == "error"
+    it = _chat_event_row({"type": "iteration", "n": 2, "max": 30})
+    assert it["n"] == 2 and it["max"] == 30
+
+
 def test_memory_post_add_and_remove(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     monkeypatch.setenv("AEGIS_DASHBOARD_TOKEN", "t")
