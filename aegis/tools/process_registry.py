@@ -52,6 +52,8 @@ class ProcessSession:
     watcher_platform: str = ""
     watcher_chat_id: str = ""
     detached: bool = False
+    pty: bool = False
+    pty_fallback: str = ""
     watch_patterns: list[str] = field(default_factory=list)
     _watch_hits: int = field(default=0, repr=False)
     _watch_suppressed: int = field(default=0, repr=False)
@@ -60,6 +62,7 @@ class ProcessSession:
     _watch_cooldown_until: float = field(default=0.0, repr=False)
     _watch_strike_candidate: bool = field(default=False, repr=False)
     _watch_consecutive_strikes: int = field(default=0, repr=False)
+    _pty: Any = field(default=None, repr=False)
     _reader_thread: threading.Thread | None = field(default=None, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -92,6 +95,7 @@ class ProcessRegistry:
         watcher_platform: str = "",
         watcher_chat_id: str = "",
         watch_patterns: list[str] | None = None,
+        use_pty: bool = False,
     ) -> ProcessSession:
         session = ProcessSession(
             id=new_id("proc"),
@@ -112,6 +116,34 @@ class ProcessRegistry:
         run_env["PYTHONUNBUFFERED"] = "1"
         if task_id:
             run_env["AEGIS_TASK_ID"] = task_id
+
+        if use_pty:
+            try:
+                pty_proc = _spawn_pty_process(
+                    [shell, "-lic", f"set +m; {command}"],
+                    cwd=session.cwd,
+                    env=run_env,
+                )
+                session.pid = int(getattr(pty_proc, "pid", 0) or 0) or None
+                session.pty = True
+                session._pty = pty_proc
+                with self._lock:
+                    self._prune_if_needed()
+                    self._running[session.id] = session
+                reader = threading.Thread(
+                    target=self._pty_reader_loop,
+                    args=(session,),
+                    daemon=True,
+                    name=f"proc-pty-reader-{session.id}",
+                )
+                session._reader_thread = reader
+                reader.start()
+                self._write_checkpoint()
+                return session
+            except ImportError:
+                session.pty_fallback = "ptyprocess is not installed; fell back to pipe mode"
+            except Exception as e:  # noqa: BLE001
+                session.pty_fallback = f"PTY spawn failed ({e}); fell back to pipe mode"
 
         proc = subprocess.Popen(
             [shell, "-lc", f"set +m; {command}"],
@@ -198,6 +230,34 @@ class ProcessRegistry:
             with session._lock:
                 session.exited = True
                 session.exit_code = proc.returncode
+            self._move_to_finished(session)
+
+    def _pty_reader_loop(self, session: ProcessSession) -> None:
+        pty = session._pty
+        if pty is None:
+            return
+        try:
+            while pty.isalive():
+                try:
+                    chunk = pty.read(4096)
+                except EOFError:
+                    break
+                if not chunk:
+                    continue
+                text = chunk if isinstance(chunk, str) else chunk.decode("utf-8", errors="replace")
+                with session._lock:
+                    session.output_buffer += text
+                    if len(session.output_buffer) > session.max_output_chars:
+                        session.output_buffer = session.output_buffer[-session.max_output_chars:]
+                self._check_watch_patterns(session, text)
+        finally:
+            try:
+                pty.wait()
+            except Exception:
+                pass
+            with session._lock:
+                session.exited = True
+                session.exit_code = int(getattr(pty, "exitstatus", -1) or 0)
             self._move_to_finished(session)
 
     def _move_to_finished(self, session: ProcessSession) -> None:
@@ -482,6 +542,10 @@ class ProcessRegistry:
         if session.detached:
             result["detached"] = True
             result["note"] = "Process recovered after restart; output history may be incomplete"
+        if session.pty:
+            result["pty"] = True
+        if session.pty_fallback:
+            result["pty_fallback"] = session.pty_fallback
         if session.watch_patterns:
             result["watch_patterns"] = session.watch_patterns
             result["watch_disabled"] = session._watch_disabled
@@ -533,7 +597,12 @@ class ProcessRegistry:
         if session.exited:
             return {"status": "already_exited", "exit_code": session.exit_code}
         try:
-            if session.process is not None and session.pid is not None:
+            if session._pty is not None:
+                try:
+                    session._pty.terminate(force=True)
+                except TypeError:
+                    session._pty.terminate()
+            elif session.process is not None and session.pid is not None:
                 if os.name == "nt":
                     session.process.terminate()
                 else:
@@ -565,6 +634,13 @@ class ProcessRegistry:
             return {"status": "not_found", "error": f"No process with ID {session_id}"}
         if session.exited:
             return {"status": "already_exited", "error": "Process has already finished"}
+        if session._pty is not None:
+            try:
+                pty_data = data if os.name == "nt" else data.encode("utf-8")
+                session._pty.write(pty_data)
+                return {"status": "ok", "bytes_written": len(data)}
+            except Exception as e:  # noqa: BLE001
+                return {"status": "error", "error": str(e)}
         proc = session.process
         if proc is None or proc.stdin is None:
             return {"status": "error", "error": "Process stdin is unavailable"}
@@ -584,6 +660,12 @@ class ProcessRegistry:
             return {"status": "not_found", "error": f"No process with ID {session_id}"}
         if session.exited:
             return {"status": "already_exited", "error": "Process has already finished"}
+        if session._pty is not None:
+            try:
+                session._pty.sendeof()
+                return {"status": "ok", "message": "EOF sent"}
+            except Exception as e:  # noqa: BLE001
+                return {"status": "error", "error": str(e)}
         proc = session.process
         if proc is None or proc.stdin is None:
             return {"status": "error", "error": "Process stdin is unavailable"}
@@ -613,6 +695,8 @@ class ProcessRegistry:
                 "status": "exited" if session.exited else "running",
                 "output_preview": session.output_buffer[-200:],
                 "exit_code": session.exit_code if session.exited else None,
+                "pty": session.pty,
+                "pty_fallback": session.pty_fallback,
                 "watch_patterns": session.watch_patterns,
                 "watch_disabled": session._watch_disabled,
             })
@@ -735,6 +819,8 @@ class ProcessRegistry:
             "watcher_platform": session.watcher_platform,
             "watcher_chat_id": session.watcher_chat_id,
             "watch_patterns": session.watch_patterns,
+            "pty": session.pty,
+            "pty_fallback": session.pty_fallback,
         }
 
     @staticmethod
@@ -756,6 +842,8 @@ class ProcessRegistry:
             watcher_platform=str(entry.get("watcher_platform") or ""),
             watcher_chat_id=str(entry.get("watcher_chat_id") or ""),
             watch_patterns=_normalize_watch_patterns(entry.get("watch_patterns")),
+            pty=bool(entry.get("pty", False)),
+            pty_fallback=str(entry.get("pty_fallback") or ""),
             detached=detached,
         )
 
@@ -772,6 +860,15 @@ def _pid_alive(pid: int) -> bool:
         return True
     except OSError:
         return False
+
+
+def _spawn_pty_process(argv: list[str], *, cwd: str, env: dict[str, str]) -> Any:
+    if os.name == "nt":
+        from winpty import PtyProcess as PtyProcess
+    else:
+        from ptyprocess import PtyProcess
+
+    return PtyProcess.spawn(argv, cwd=cwd, env=env, dimensions=(30, 120))
 
 
 def _checkpoint_path() -> Path:

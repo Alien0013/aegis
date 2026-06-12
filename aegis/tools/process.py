@@ -33,6 +33,7 @@ class ProcessTool(Tool):
             "limit": {"type": "integer"},
             "notify_on_complete": {"type": "boolean"},
             "watch_patterns": {"type": "array", "items": {"type": "string"}},
+            "pty": {"type": "boolean"},
         },
         "required": ["action"],
     }
@@ -60,8 +61,13 @@ class ProcessTool(Tool):
                 watcher_platform=getattr(agent, "platform", "") or "",
                 watcher_chat_id=getattr(agent, "chat_id", "") or "",
                 watch_patterns=watch_patterns,
+                use_pty=bool(args.get("pty", False)),
             )
             lines = [f"started {proc.id} (pid {proc.pid}): {args['command']}"]
+            if proc.pty:
+                lines.append("pty: true")
+            if proc.pty_fallback:
+                lines.append(f"pty_fallback: {proc.pty_fallback}")
             if notify_on_complete:
                 lines.append("you'll be notified on your next turn when it exits.")
             if watch_patterns:
@@ -73,6 +79,10 @@ class ProcessTool(Tool):
                 "pid": proc.pid,
                 "notify_on_complete": notify_on_complete,
             }
+            if proc.pty:
+                data["pty"] = True
+            if proc.pty_fallback:
+                data["pty_fallback"] = proc.pty_fallback
             if watch_patterns:
                 data["watch_patterns"] = watch_patterns
             if ignored_note:

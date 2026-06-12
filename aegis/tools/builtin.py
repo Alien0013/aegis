@@ -311,6 +311,13 @@ class BashTool(Tool):
                 "type": "boolean",
                 "description": "Start the command as a managed background process and return a session_id.",
             },
+            "pty": {
+                "type": "boolean",
+                "description": (
+                    "Use a pseudo-terminal for a local background process, useful for "
+                    "interactive CLIs. Falls back to pipe mode if PTY support is unavailable."
+                ),
+            },
             "notify_on_complete": {
                 "type": "boolean",
                 "description": (
@@ -361,12 +368,17 @@ class BashTool(Tool):
                 watcher_platform=getattr(agent, "platform", "") or "",
                 watcher_chat_id=getattr(agent, "chat_id", "") or "",
                 watch_patterns=watch_patterns,
+                use_pty=bool(args.get("pty", False)),
             )
             lines = [
                 "Background process started",
                 f"session_id: {proc.id}",
                 f"pid: {proc.pid}",
             ]
+            if proc.pty:
+                lines.append("pty: true")
+            if proc.pty_fallback:
+                lines.append(f"pty_fallback: {proc.pty_fallback}")
             if notify_on_complete:
                 lines.append("notify_on_complete: true")
             if watch_patterns:
@@ -382,6 +394,10 @@ class BashTool(Tool):
                 "pid": proc.pid,
                 "notify_on_complete": notify_on_complete,
             }
+            if proc.pty:
+                data["pty"] = True
+            if proc.pty_fallback:
+                data["pty_fallback"] = proc.pty_fallback
             if watch_patterns:
                 data["watch_patterns"] = watch_patterns
             if ignored_note:

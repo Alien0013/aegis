@@ -221,6 +221,101 @@ def test_bash_tool_background_watch_pattern_queues_wakeup(tmp_path):
         process_registry._finished.pop(sid, None)
 
 
+def test_bash_tool_background_pty_uses_pty_reader(tmp_path, monkeypatch):
+    import time
+
+    from aegis.agent import wakeups
+    from aegis.tools import process_registry as registry_mod
+    from aegis.tools.builtin import BashTool
+    from aegis.tools.process_registry import process_registry
+
+    class FakePty:
+        pid = 43210
+        exitstatus = 0
+
+        def __init__(self):
+            self._alive = True
+
+        def isalive(self):
+            return self._alive
+
+        def read(self, _size):
+            self._alive = False
+            return "PTY READY\n"
+
+        def wait(self):
+            return self.exitstatus
+
+        def terminate(self, force=False):
+            self._alive = False
+            self.exitstatus = -15
+
+        def write(self, _data):
+            return None
+
+        def sendeof(self):
+            return None
+
+    monkeypatch.setattr(registry_mod, "_spawn_pty_process", lambda *_a, **_k: FakePty())
+    wakeups.drain_wakeups()
+    process_registry.drain_notifications()
+    res = BashTool().run(
+        {
+            "command": "python -i",
+            "background": True,
+            "pty": True,
+            "watch_patterns": ["READY"],
+        },
+        _ctx(tmp_path),
+    )
+    sid = res.data["session_id"]
+    try:
+        assert not res.is_error
+        assert res.data["pty"] is True
+        events = []
+        for _ in range(50):
+            events.extend(process_registry.drain_notifications())
+            if events:
+                break
+            time.sleep(0.1)
+        assert events and events[0][0]["type"] == "watch_match"
+        assert "PTY READY" in process_registry.read_log(sid)["output"]
+    finally:
+        process_registry.kill_process(sid)
+        process_registry._running.pop(sid, None)
+        process_registry._finished.pop(sid, None)
+
+
+def test_bash_tool_background_pty_falls_back_to_pipes(tmp_path, monkeypatch):
+    from aegis.tools import process_registry as registry_mod
+    from aegis.tools.builtin import BashTool
+    from aegis.tools.process_registry import process_registry
+
+    def no_pty(*_args, **_kwargs):
+        raise ImportError("no pty")
+
+    monkeypatch.setattr(registry_mod, "_spawn_pty_process", no_pty)
+    res = BashTool().run(
+        {
+            "command": "echo pipe-fallback",
+            "background": True,
+            "pty": True,
+            "notify_on_complete": False,
+        },
+        _ctx(tmp_path),
+    )
+    sid = res.data["session_id"]
+    try:
+        assert not res.is_error
+        assert "ptyprocess is not installed" in res.data["pty_fallback"]
+        waited = process_registry.wait(sid, timeout=5)
+        assert waited["status"] == "exited"
+        assert "pipe-fallback" in waited["output"]
+    finally:
+        process_registry.kill_process(sid)
+        process_registry._finished.pop(sid, None)
+
+
 def test_bash_tool_background_rejects_nonlocal_backend(tmp_path):
     from aegis.config import Config
     from aegis.tools.base import ToolContext
