@@ -100,6 +100,7 @@ print_success() {
   kv "Browser engine" "$BROWSER_STATUS"
   printf '\n\033[1;35mCommands\033[0m\n'
   kv "Start" "aegis"
+  kv "Desktop" "aegis desktop"
   kv "Setup" "aegis setup"
   kv "Status" "aegis status"
   kv "Doctor" "aegis doctor"
@@ -378,10 +379,11 @@ if [ "$RUN_ONBOARD" != "0" ] && { has_tty || [ "$NONINTERACTIVE_ONBOARD" = "1" ]
   fi
   if [ "$onboard_rc" = "0" ]; then
     ok "Onboarding complete."
-    echo "  Three ways to use AEGIS:"
+    echo "  Ways to use AEGIS:"
     echo "    aegis                       # chat in the terminal"
     echo "    aegis tui                   # full-screen terminal app"
     echo "    aegis ui                    # clickable web control panel"
+    echo "    aegis desktop               # native desktop app"
   else
     ONBOARD_FAILED=1
     ONBOARD_RC="$onboard_rc"
@@ -394,6 +396,7 @@ else
   echo "    aegis                       # start chatting (terminal)"
   echo "    aegis tui                   # full-screen terminal app"
   echo "    aegis ui                    # clickable control panel in your browser"
+  echo "    aegis desktop               # native desktop app"
   echo "    aegis doctor                # verify the install"
   if wants_browser && [ "$BROWSER_STATUS" != "installed" ]; then
     echo "    playwright install chromium # if you installed the 'browser'/'all' extra"

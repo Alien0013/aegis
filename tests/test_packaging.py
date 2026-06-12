@@ -10,6 +10,7 @@ def test_pyproject_packages_bundled_skills():
     txt = pathlib.Path("pyproject.toml").read_text()
     assert "[tool.setuptools.package-data]" in txt
     assert "builtin_skills/**/*" in txt, "package-data glob missing — skills won't ship in the wheel"
+    assert "desktop_app/*" in txt, "desktop app template won't ship in the wheel"
 
 
 def test_bundled_skills_resolve_and_discover():

@@ -2,6 +2,7 @@ include README.md RELEASING.md
 recursive-include docs *
 recursive-include assets *
 recursive-include scripts *.py *.sh
+recursive-include aegis/desktop_app *
 recursive-include web *
 recursive-exclude web/node_modules *
 recursive-exclude web/dist *

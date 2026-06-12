@@ -1099,7 +1099,7 @@ def cmd_batch(args, config: Config) -> int:
     return 0
 
 
-_CMDS = ("chat tui model auth setup onboard status update skills plugins mcp serve rpc cron tools memory "
+_CMDS = ("chat tui desktop model auth setup onboard status update skills plugins mcp serve rpc cron tools memory "
          "config sessions gateway doctor completion backup import insights webhook "
          "hooks kanban curator dashboard daemon acp pairing checkpoints background trace eval")
 
@@ -1287,6 +1287,7 @@ def build_parser() -> argparse.ArgumentParser:
     from .. import backup as _backup
     from .. import curator as _curator
     from .. import dashboard as _dash
+    from .. import desktop as _desktop
     from .. import hooks as _hooks
     from .. import insights as _insights
     from .. import kanban as _kanban
@@ -1359,6 +1360,19 @@ def build_parser() -> argparse.ArgumentParser:
         db.add_argument("--host"); db.add_argument("--port", type=int)
         db.add_argument("--no-open", action="store_true", help="don't auto-open the browser")
         db.set_defaults(func=_dash.cmd_dashboard)
+
+    for _name in ("desktop", "deksktop"):
+        help_text = "install/update and launch the native desktop app"
+        if _name == "deksktop":
+            help_text = argparse.SUPPRESS
+        ds = sub.add_parser(_name, help=help_text)
+        ds.add_argument("--install-only", action="store_true",
+                        help="install/update desktop dependencies without launching")
+        ds.add_argument("--reinstall", action="store_true",
+                        help="run npm install even if dependencies already exist")
+        ds.add_argument("--sandbox", action="store_true",
+                        help="opt into Electron's Chromium sandbox on Linux")
+        ds.set_defaults(func=_desktop.cmd_desktop)
 
     from ..daemon import cmd_daemon as _cmd_daemon
     dm = sub.add_parser("daemon", help="install/control user services")

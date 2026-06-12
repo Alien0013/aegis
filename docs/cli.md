@@ -49,6 +49,14 @@ preempts the loop; `/status` shows the active goal plus a local session recap.
 - `aegis update [--check|--branch]`, `aegis uninstall [--purge]`
 - `aegis completion bash|zsh|fish`
 
+## Desktop
+- `aegis desktop` — copy the bundled Electron app to `~/.aegis/desktop`, run
+  `npm install` when needed, and launch the native window
+- `aegis desktop --install-only` — prepare/update the desktop app without launching
+- `aegis desktop --reinstall` — force `npm install` before launching
+- `aegis desktop --sandbox` — opt into Chromium's Linux sandbox when your
+  `chrome-sandbox` helper is configured
+
 ## Tools, skills, memory, learning
 - `aegis tools [list|status]`
 - `aegis skills [list|view|new|install|search|remove|hub] …`

@@ -219,6 +219,7 @@ aegis tui                                     # full-screen terminal cockpit
 aegis chat -q "summarize the files here"      # one-shot
 aegis chat --continue                         # resume last session
 aegis ui                                      # ← clickable browser UI (great for beginners)
+aegis desktop                                 # native Electron app (installs itself on first run)
 aegis trace list                              # inspect trace spans/runs
 aegis eval run suite.jsonl                    # replay offline eval cases
 ```

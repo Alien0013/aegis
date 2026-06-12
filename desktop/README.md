@@ -12,6 +12,12 @@ npm start            # launches the app (requires `aegis` installed / on PATH)
 npm run start:sandbox  # opt into Chromium's sandbox if your chrome-sandbox is configured
 ```
 
+## Run from an AEGIS install
+```bash
+aegis desktop          # installs/updates ~/.aegis/desktop, then launches
+aegis desktop --install-only
+```
+
 ## Build installers
 ```bash
 npm run dist         # → dist/  (.dmg on macOS, .exe on Windows, .AppImage/.deb on Linux)
