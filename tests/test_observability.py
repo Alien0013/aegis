@@ -142,6 +142,57 @@ def test_provider_attempt_hooks_fire_for_success_and_error(tmp_path):
         _HOOKS.update(original_hooks)
 
 
+def test_budget_exhausted_grace_fires_provider_hooks(tmp_path):
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.plugins import PluginAPI, _HOOKS
+    from aegis.session import Session
+    from aegis.types import LLMResponse, ToolCall, Usage
+    from conftest import FakeProvider
+
+    original_hooks = {event: list(hooks) for event, hooks in _HOOKS.items()}
+    _HOOKS.clear()
+    events: list[tuple[str, dict]] = []
+    api = PluginAPI()
+
+    try:
+        for event in ("pre_api_request", "post_api_request", "api_request_error"):
+            api.register_hook(event, lambda payload, _agent, event=event: events.append((event, payload)))
+
+        cfg = Config.load()
+        cfg.data["memory"]["enabled"] = False
+        cfg.data["hooks"] = {}
+        provider = FakeProvider([
+            LLMResponse(text="", tool_calls=[ToolCall("c1", "list_dir", {"path": "."})]),
+            LLMResponse(text="summary", usage=Usage(input_tokens=5, output_tokens=2, cache_read=1)),
+        ])
+        agent = Agent(config=cfg, provider=provider, session=Session.create(), cwd=tmp_path)
+        agent.budget.max_iterations = 1
+
+        out = agent.run("loop forever")
+
+        assert out.content == "summary"
+        assert [event for event, _payload in events] == [
+            "pre_api_request",
+            "post_api_request",
+            "pre_api_request",
+            "post_api_request",
+        ]
+        grace_pre = events[2][1]
+        grace_post = events[3][1]
+        assert grace_pre["request"]["grace"] is True
+        assert grace_pre["request"]["reason"] == "budget_exhausted"
+        assert grace_pre["request"]["tools_enabled"] is False
+        assert grace_pre["request"]["tool_schema_count"] == 0
+        assert grace_post["status"] == "ok"
+        assert grace_post["response"]["input_tokens"] == 5
+        assert grace_post["response"]["output_tokens"] == 2
+        assert grace_post["response"]["duration_ms"] >= 0
+    finally:
+        _HOOKS.clear()
+        _HOOKS.update(original_hooks)
+
+
 def test_cost_pricing_prefix_match():
     from aegis.usage_log import _price
     assert _price("claude-opus-4-8")[1] == 25.0      # output price (Opus 4.5+ tier)

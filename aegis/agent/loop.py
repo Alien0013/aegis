@@ -1199,21 +1199,21 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
     grace_span = None
     grace_response_state = _response_state_for_agent(agent, getattr(agent.session, "id", ""))
     _record_response_request_meta(session, grace_response_state)
+    grace_request = _provider_trace_data(
+        agent,
+        session.messages,
+        [],
+        grace_response_state,
+        _prompt_trace_meta(session),
+    )
+    grace_request.update({
+        "grace": True,
+        "reason": "budget_exhausted",
+        "tools_enabled": False,
+        "budget_calls": budget.api_call_count,
+    })
     if trace_store and turn_span:
         try:
-            grace_data = _provider_trace_data(
-                agent,
-                session.messages,
-                [],
-                grace_response_state,
-                _prompt_trace_meta(session),
-            )
-            grace_data.update({
-                "grace": True,
-                "reason": "budget_exhausted",
-                "tools_enabled": False,
-                "budget_calls": budget.api_call_count,
-            })
             grace_span = trace_store.start_span(
                 trace_id=trace_id,
                 session_id=session.id,
@@ -1222,10 +1222,20 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                 kind="provider_call",
                 provider=getattr(agent.provider, "name", ""),
                 model=getattr(agent.provider, "model", ""),
-                data=grace_data,
+                data=grace_request,
             )
         except Exception:  # noqa: BLE001
             grace_span = None
+    grace_observer = _provider_observer_base(
+        agent,
+        api_request_id=new_id("api"),
+        session=session,
+        trace_id=trace_id,
+        turn_id=turn_id,
+        provider_span=grace_span,
+        request=grace_request,
+    )
+    _fire_provider_observer(agent, "pre_api_request", grace_observer)
     grace_started = time.perf_counter()
     try:
         grace = _provider_complete(
@@ -1242,22 +1252,46 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
         )
         agent._active_response_id = ""
         budget.usage.add(grace.usage)
+        grace_duration_ms = int((time.perf_counter() - grace_started) * 1000)
+        grace_response = _response_trace_data(grace, grace_duration_ms)
         if trace_store and grace_span:
             try:
-                grace_duration_ms = int((time.perf_counter() - grace_started) * 1000)
                 trace_store.finish_span(
                     grace_span["span_id"],
                     status="ok",
                     cost=_usage_cost_usd(getattr(agent.provider, "model", ""), grace.usage, agent.config),
                     cache_read=getattr(grace.usage, "cache_read", 0),
                     cache_write=getattr(grace.usage, "cache_write", 0),
-                    data=_response_trace_data(grace, grace_duration_ms),
+                    data=grace_response,
                 )
             except Exception:  # noqa: BLE001
                 pass
+        success_payload = dict(grace_observer)
+        success_payload.update({
+            "status": "ok",
+            "duration_ms": grace_duration_ms,
+            "response": grace_response,
+        })
+        _fire_provider_observer(agent, "post_api_request", success_payload)
         gm = grace.to_message()
     except Exception as e:  # noqa: BLE001
         agent._active_response_id = ""
+        from ..providers.fallback import classify_provider_error, recovery_action
+        grace_duration_ms = int((time.perf_counter() - grace_started) * 1000)
+        action = recovery_action(classify_provider_error(e))
+        error_data = {
+            "type": type(e).__name__,
+            "message": str(e),
+            "recovery": action,
+            "duration_ms": grace_duration_ms,
+        }
+        error_payload = dict(grace_observer)
+        error_payload.update({
+            "status": "error",
+            "duration_ms": grace_duration_ms,
+            "error": error_data,
+        })
+        _fire_provider_observer(agent, "api_request_error", error_payload)
         if trace_store and grace_span:
             try:
                 trace_store.finish_span(
@@ -1266,7 +1300,8 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                     data={
                         "error": f"{type(e).__name__}: {e}",
                         "error_type": type(e).__name__,
-                        "duration_ms": int((time.perf_counter() - grace_started) * 1000),
+                        "recovery": action,
+                        "duration_ms": grace_duration_ms,
                     },
                 )
             except Exception:  # noqa: BLE001
