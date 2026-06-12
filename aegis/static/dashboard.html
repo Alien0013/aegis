@@ -343,7 +343,19 @@ $('#burger').onclick=()=>$('#side').classList.toggle('open');
 
 /* ============ pages ============ */
 PAGES.cockpit=async()=>{
-  V.innerHTML='<div class="grid c4" id="tiles"></div><div class="grid c2" style="margin-top:12px">'+
+  const welcome=localStorage.getItem('aegis_welcomed')?'':
+   '<div class="card" id="welcome" style="margin-bottom:12px;border-color:var(--accent)">'+
+   '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">'+
+   '<div><h3 style="margin:0 0 6px">👋 Welcome to AEGIS</h3>'+
+   '<div class="mut" style="margin-bottom:8px">This panel controls your agent. Three ways to use it:</div>'+
+   '<div class="mut" style="line-height:1.85">'+
+   '• <b>Chat</b> here in the browser — or <code>aegis</code> in a terminal, or <code>aegis tui</code> for a full-screen app.<br>'+
+   '• <b>Models</b> → pick provider/model · <b>Channels</b> → connect Telegram/Discord/Slack.<br>'+
+   '• <b>Skills</b> &amp; <b>Memory</b> → what the agent knows · <b>Cron</b> → schedule tasks · '+
+   'press <kbd>Ctrl-K</kbd> to jump anywhere.</div></div>'+
+   '<button class="btn" onclick="localStorage.setItem(\'aegis_welcomed\',\'1\');var w=document.getElementById(\'welcome\');if(w)w.remove()">Got it</button>'+
+   '</div></div>';
+  V.innerHTML=welcome+'<div class="grid c4" id="tiles"></div><div class="grid c2" style="margin-top:12px">'+
    '<div class="card"><h3 style="margin-top:0">Spend — last 30 days</h3><div id="chart" class="mut">loading…</div></div>'+
    '<div class="card"><h3 style="margin-top:0">Recent sessions</h3><div id="recent">…</div></div></div>';
   const [s,a,sess,runs,agents]=await Promise.all([api('status'),api('analytics?days=30'),api('sessions'),api('runs?limit=20'),api('agents')]);

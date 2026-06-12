@@ -1262,7 +1262,8 @@ def _summary(config: Config, state: OnboardingState, out: Output) -> None:
     if state.service_errors:
         out(f"Service issues:  {', '.join(state.service_errors)}")
     out("")
-    out(_paint("Next steps:", "1", out))
-    out(f"  {_paint('aegis ui', '1;36', out)}      → web control panel ({state.dashboard_url})")
+    out(_paint("Next steps — three ways to use AEGIS:", "1", out))
     out(f"  {_paint('aegis', '1;36', out)}         → chat in the terminal")
+    out(f"  {_paint('aegis tui', '1;36', out)}     → full-screen terminal app (panes + live activity)")
+    out(f"  {_paint('aegis ui', '1;36', out)}      → web control panel ({state.dashboard_url})")
     out(f"  {_paint('aegis doctor', '1;36', out)}  → verify the install end to end")

@@ -380,15 +380,32 @@ def _status_line(agent: Agent, progress: TerminalStatusState | None = None) -> s
 
 
 def banner(agent: Agent) -> None:
-    text = (f"AEGIS v{__version__}\n"
-            f"provider: {agent.provider.describe()}\n"
-            f"cwd: {agent.cwd}\n"
-            f"session: {agent.session.id}\n"
-            f"type /help for commands, /quit to exit")
+    model = getattr(agent.provider, "model", "?")
     if _console:
-        _console.print(Panel.fit(text, title="agent harness", border_style="magenta"))
+        from rich.text import Text
+        body = Text()
+        body.append("  ▟▛ AEGIS ", style="bold magenta")
+        body.append(f"v{__version__}\n\n", style="dim")
+        body.append("  model    ", style="dim"); body.append(f"{model}\n", style="cyan")
+        body.append("  cwd      ", style="dim"); body.append(f"{agent.cwd}\n", style="white")
+        body.append("  session  ", style="dim"); body.append(f"{agent.session.id}\n\n", style="white")
+        body.append("  Other ways in:\n", style="bold")
+        body.append("    aegis tui", style="cyan"); body.append("   full-screen terminal app\n", style="dim")
+        body.append("    aegis ui", style="cyan");  body.append("    web control panel in your browser\n\n", style="dim")
+        body.append("  Try:  ", style="dim")
+        body.append("/help", style="green"); body.append(" commands · ", style="dim")
+        body.append("@file.py", style="green"); body.append(" attach a file · ", style="dim")
+        body.append("/goal", style="green"); body.append(" run to completion · ", style="dim")
+        body.append("/quit", style="green"); body.append(" exit", style="dim")
+        _console.print(Panel(body, title="[bold magenta]your agent harness[/]",
+                             border_style="magenta", padding=(0, 1)))
     else:
-        print("=" * 60 + f"\n{text}\n" + "=" * 60)
+        print("=" * 60)
+        print(f"AEGIS v{__version__}  ·  {model}  ·  session {agent.session.id}")
+        print(f"cwd: {agent.cwd}")
+        print("Other ways in:  aegis tui (full-screen)  ·  aegis ui (web panel)")
+        print("Try: /help · @file · /goal · /quit")
+        print("=" * 60)
 
 
 def handle_goal_command(

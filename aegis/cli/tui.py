@@ -322,10 +322,13 @@ def run_fullscreen(
         events.text = ""
 
     root = HSplit([
-        Window(FormattedTextControl(lambda: [("class:title", " AEGIS Cockpit ")]), height=1),
+        Window(FormattedTextControl(
+            lambda: [("class:title", " ▟▛ AEGIS  "),
+                     ("class:title.dim", "full-screen agent  ·  type /help for commands ")]),
+            height=1),
         Frame(transcript, title="Session"),
         Frame(events, title="Activity"),
-        Frame(composer, title="Composer"),
+        Frame(composer, title="Composer  ·  Enter send · Ctrl-J newline · Ctrl-L clear · Ctrl-C quit/stop"),
         Window(FormattedTextControl(set_status), height=1),
     ])
     app = Application(
