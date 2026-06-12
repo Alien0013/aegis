@@ -47,6 +47,26 @@ def test_acp_server_instantiates_and_initializes(monkeypatch, tmp_path):
     assert resp["result"]["agentCapabilities"]["promptCapabilities"]["image"] is True
 
 
+def test_acp_serve_closes_runner_on_eof(monkeypatch, tmp_path):
+    import threading
+
+    server, _out = _server(monkeypatch, tmp_path, "")
+    waiter = {"event": threading.Event(), "result": {}}
+    server._waiters["req-1"] = waiter
+    closed = []
+
+    class Runner:
+        def close(self):
+            closed.append("closed")
+
+    server.runner = Runner()
+
+    server.serve()
+
+    assert waiter["event"].is_set()
+    assert closed == ["closed"]
+
+
 def test_acp_lists_details_searches_and_forks_sessions(monkeypatch, tmp_path):
     from aegis.session import Session, SessionStore
     from aegis.types import Message

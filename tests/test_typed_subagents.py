@@ -193,3 +193,40 @@ def test_subagent_inherits_parent_runtime_controls(tmp_path, capture):
     assert capture["session_meta"]["runtime"]["reasoning_display"] == "live"
     assert capture["session_meta"]["runtime"]["busy_mode"] == "steer"
     assert capture["reasoning"] == "high"
+
+
+def test_subagent_registry_eviction_closes_child_lifecycle():
+    from types import SimpleNamespace
+
+    from aegis.tools import agentic
+
+    closed = []
+
+    class Memory:
+        def shutdown(self):
+            closed.append("memory")
+
+    class Transport:
+        def close(self):
+            closed.append("transport")
+
+    class Child:
+        memory = Memory()
+        provider = SimpleNamespace(transport=Transport())
+
+        def end_session(self):
+            closed.append("end_session")
+
+    with agentic._REG_LOCK:
+        agentic._REGISTRY.clear()
+    try:
+        agentic._register("old", status="done", agent=Child())
+        for i in range(199):
+            agentic._register(f"keep-{i}", status="done")
+        agentic._register("new", status="done")
+
+        assert "old" not in agentic._REGISTRY
+        assert closed == ["end_session", "memory", "transport"]
+    finally:
+        with agentic._REG_LOCK:
+            agentic._REGISTRY.clear()

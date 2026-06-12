@@ -114,19 +114,23 @@ class AcpServer:
     # -- main loop ----------------------------------------------------------
     def serve(self) -> None:
         """Read JSON-RPC messages line by line until stdin closes."""
-        for raw in self.stdin:
-            line = raw.strip()
-            if not line:
-                continue
-            try:
-                msg = json.loads(line)
-            except json.JSONDecodeError:
-                self._error(None, PARSE_ERROR, "invalid JSON")
-                continue
-            self._handle(msg)
-        # stdin closed: release anything still waiting on a client response
-        for w in list(self._waiters.values()):
-            w["event"].set()
+        try:
+            for raw in self.stdin:
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    msg = json.loads(line)
+                except json.JSONDecodeError:
+                    self._error(None, PARSE_ERROR, "invalid JSON")
+                    continue
+                self._handle(msg)
+        finally:
+            # stdin closed: release anything still waiting on a client response, then
+            # close cached agents so memory/MCP/provider lifecycle hooks fire.
+            for w in list(self._waiters.values()):
+                w["event"].set()
+            self.runner.close()
 
     def _handle(self, msg: dict[str, Any]) -> None:
         req_id = msg.get("id")

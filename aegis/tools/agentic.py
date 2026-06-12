@@ -18,12 +18,28 @@ _REGISTRY: dict[str, dict] = {}
 _REG_LOCK = threading.Lock()
 
 
+def _close_registry_entry(entry: dict | None) -> None:
+    if not entry:
+        return
+    agent = entry.get("agent")
+    if agent is None:
+        return
+    try:
+        from ..surface import _close_agent
+        _close_agent(agent)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _register(sid: str, **fields) -> None:
+    evicted: list[dict] = []
     with _REG_LOCK:
         _REGISTRY.setdefault(sid, {}).update(fields)
         if len(_REGISTRY) > 200:                       # drop oldest
             for k in list(_REGISTRY)[:len(_REGISTRY) - 200]:
-                _REGISTRY.pop(k, None)
+                evicted.append(_REGISTRY.pop(k, None) or {})
+    for entry in evicted:
+        _close_registry_entry(entry)
 
 
 def _notify_delegation(parent, task: str, result: str) -> None:
