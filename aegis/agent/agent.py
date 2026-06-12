@@ -367,6 +367,12 @@ class Agent:
             pass
         if task_id:
             try:
+                from ..tools.process_registry import process_registry
+
+                process_registry.kill_all(task_id=task_id)
+            except Exception:  # noqa: BLE001
+                pass
+            try:
                 from ..tools.backends import cleanup_task_environment
 
                 cleanup_task_environment(task_id)

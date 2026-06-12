@@ -164,6 +164,25 @@ def test_shell_session_lifecycle_hooks_fire(tmp_path, monkeypatch):
     assert stop["message_count"] == len(agent.session.messages)
 
 
+def test_end_session_kills_task_processes(tmp_path, monkeypatch):
+    config = _cfg(tmp_path, monkeypatch)
+    config.data["memory"]["enabled"] = False
+    from aegis.agent.agent import Agent
+    from aegis.session import Session
+    from conftest import FakeProvider
+
+    killed = []
+    monkeypatch.setattr(
+        "aegis.tools.process_registry.process_registry.kill_all",
+        lambda task_id=None: killed.append(task_id) or 0,
+    )
+    agent = Agent(config=config, provider=FakeProvider(), session=Session.create(), cwd=tmp_path)
+
+    agent.end_session()
+
+    assert killed == [agent.tool_context.task_id]
+
+
 def test_provider_tools_registered_on_agent(tmp_path, monkeypatch):
     config = _cfg(tmp_path, monkeypatch)
     from aegis.agent.agent import Agent
