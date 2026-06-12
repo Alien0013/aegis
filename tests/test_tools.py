@@ -316,19 +316,163 @@ def test_bash_tool_background_pty_falls_back_to_pipes(tmp_path, monkeypatch):
         process_registry._finished.pop(sid, None)
 
 
-def test_bash_tool_background_rejects_nonlocal_backend(tmp_path):
+def test_process_registry_env_background_polls_log_and_exit(tmp_path, monkeypatch):
+    from aegis.tools import process_registry as registry_mod
+    from aegis.tools.process_registry import process_registry
+
+    class FakeEnv:
+        cwd = str(tmp_path)
+
+        def __init__(self):
+            self.log_reads = 0
+            self.exit_code = None
+
+        def get_temp_dir(self):
+            return "/tmp"
+
+        def execute(self, command, cwd="", timeout=None):
+            if "nohup bash -lc" in command:
+                return {"output": "4242\n", "returncode": 0}
+            if command.startswith("cat ") and ".log" in command:
+                self.log_reads += 1
+                if self.log_reads >= 2:
+                    self.exit_code = 0
+                    return {"output": "boot\nREADY\n", "returncode": 0}
+                return {"output": "boot\n", "returncode": 0}
+            if "echo exited" in command:
+                if self.exit_code is None:
+                    return {"output": "running\n", "returncode": 0}
+                return {"output": f"exited\n{self.exit_code}\n", "returncode": 0}
+            return {"output": "", "returncode": 0}
+
+    monkeypatch.setattr(registry_mod, "ENV_POLL_INTERVAL_SECONDS", 0.01)
+    process_registry.drain_notifications()
+    session = process_registry.spawn_via_env(
+        FakeEnv(),
+        "printf READY",
+        cwd=str(tmp_path),
+        task_id="env_bg_task",
+        watch_patterns=["READY"],
+    )
+    try:
+        assert session.pid == 4242
+        waited = process_registry.wait(session.id, timeout=5)
+        assert waited["status"] == "exited"
+        assert waited["exit_code"] == 0
+        assert "READY" in waited["output"]
+        events = process_registry.drain_notifications()
+        assert events and events[0][0]["type"] == "watch_match"
+    finally:
+        process_registry.kill_process(session.id)
+        process_registry._running.pop(session.id, None)
+        process_registry._finished.pop(session.id, None)
+
+
+def test_bash_tool_background_uses_nonlocal_env_backend(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
     from aegis.config import Config
+    from aegis.tools import backends
+    from aegis.tools.base import ToolContext
+    from aegis.tools.builtin import BashTool
+    from aegis.tools.process_registry import process_registry
+
+    config = Config.load()
+    config.data["tools"]["terminal_backend"] = "ssh"
+    seen = {}
+    fake_env = object()
+
+    def fake_create_environment(backend, cwd, timeout, config, task_id=None):
+        seen["create"] = (backend, cwd, timeout, task_id)
+        return fake_env, "", "ssh"
+
+    def fake_spawn(env, command, **kwargs):
+        seen["spawn"] = (env, command, kwargs)
+        return SimpleNamespace(
+            id="proc_env",
+            pid=4242,
+            exited=False,
+            pty=False,
+            pty_fallback="",
+        )
+
+    monkeypatch.setattr(backends, "create_environment", fake_create_environment)
+    monkeypatch.setattr(process_registry, "spawn_via_env", fake_spawn)
+    ctx = ToolContext(cwd=tmp_path, config=config)
+    ctx.task_id = "nonlocal_task"
+
+    res = BashTool().run({"command": "sleep 60", "background": True}, ctx)
+
+    assert not res.is_error
+    assert res.data["backend"] == "ssh"
+    assert seen["create"] == ("ssh", str(tmp_path), 120, "nonlocal_task")
+    assert seen["spawn"][0] is fake_env
+    assert seen["spawn"][1] == "sleep 60"
+    assert seen["spawn"][2]["task_id"] == "nonlocal_task"
+
+
+def test_process_tool_start_uses_nonlocal_env_backend(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from aegis.config import Config
+    from aegis.tools import backends
+    from aegis.tools.base import ToolContext
+    from aegis.tools.process import ProcessTool
+    from aegis.tools.process_registry import process_registry
+
+    config = Config.load()
+    config.data["tools"]["terminal_backend"] = "ssh"
+    seen = {}
+    fake_env = object()
+
+    def fake_create_environment(backend, cwd, timeout, config, task_id=None):
+        seen["create"] = (backend, cwd, timeout, task_id)
+        return fake_env, "", "ssh"
+
+    def fake_spawn(env, command, **kwargs):
+        seen["spawn"] = (env, command, kwargs)
+        return SimpleNamespace(
+            id="proc_env",
+            pid=4242,
+            exited=False,
+            pty=False,
+            pty_fallback="",
+        )
+
+    monkeypatch.setattr(backends, "create_environment", fake_create_environment)
+    monkeypatch.setattr(process_registry, "spawn_via_env", fake_spawn)
+    ctx = ToolContext(cwd=tmp_path, config=config)
+    ctx.task_id = "proc_nonlocal_task"
+
+    res = ProcessTool().run({"action": "start", "command": "sleep 60"}, ctx)
+
+    assert not res.is_error
+    assert res.data["backend"] == "ssh"
+    assert seen["create"] == ("ssh", str(tmp_path), 120, "proc_nonlocal_task")
+    assert seen["spawn"][0] is fake_env
+    assert seen["spawn"][1] == "sleep 60"
+    assert seen["spawn"][2]["task_id"] == "proc_nonlocal_task"
+
+
+def test_bash_tool_background_rejects_unavailable_nonlocal_backend(tmp_path, monkeypatch):
+    from aegis.config import Config
+    from aegis.tools import backends
     from aegis.tools.base import ToolContext
     from aegis.tools.builtin import BashTool
 
     config = Config.load()
-    config.data.setdefault("tools", {})["terminal_backend"] = "docker"
+    config.data.setdefault("tools", {})["terminal_backend"] = "ssh"
     ctx = ToolContext(cwd=tmp_path, config=config)
+    monkeypatch.setattr(
+        backends,
+        "create_environment",
+        lambda *_args, **_kwargs: (None, "sandbox unavailable: ssh not configured", "ssh"),
+    )
 
     res = BashTool().run({"command": "echo hi", "background": True}, ctx)
 
     assert res.is_error
-    assert "local terminal backend only" in res.content
+    assert "ssh not configured" in res.content
 
 
 def test_docker_environment_injects_task_id(tmp_path, monkeypatch):

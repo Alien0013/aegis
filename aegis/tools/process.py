@@ -43,6 +43,8 @@ class ProcessTool(Tool):
         if action == "start":
             if not args.get("command"):
                 return ToolResult.error("start needs a command")
+            from .backends import create_environment, effective_backend
+
             agent = getattr(ctx, "agent", None)
             watch_patterns = _watch_patterns(args.get("watch_patterns"))
             notify_on_complete = bool(args.get("notify_on_complete", not watch_patterns))
@@ -53,17 +55,49 @@ class ProcessTool(Tool):
                     "these two flags produce duplicate notifications when combined"
                 )
                 watch_patterns = []
-            proc = process_registry.spawn_local(
-                args["command"],
-                cwd=ctx.cwd,
-                task_id=getattr(ctx, "task_id", "") or "",
-                notify_on_complete=notify_on_complete,
-                watcher_platform=getattr(agent, "platform", "") or "",
-                watcher_chat_id=getattr(agent, "chat_id", "") or "",
-                watch_patterns=watch_patterns,
-                use_pty=bool(args.get("pty", False)),
-            )
+            task_id = getattr(ctx, "task_id", "") or ""
+            config = ctx.config
+            backend = config.get("tools.terminal_backend", "local") if config else "local"
+            backend = effective_backend(backend, task_id)
+            if backend == "local":
+                proc = process_registry.spawn_local(
+                    args["command"],
+                    cwd=ctx.cwd,
+                    task_id=task_id,
+                    notify_on_complete=notify_on_complete,
+                    watcher_platform=getattr(agent, "platform", "") or "",
+                    watcher_chat_id=getattr(agent, "chat_id", "") or "",
+                    watch_patterns=watch_patterns,
+                    use_pty=bool(args.get("pty", False)),
+                )
+            else:
+                env, error, backend = create_environment(
+                    backend,
+                    str(ctx.cwd),
+                    int(args.get("timeout", 120) or 120),
+                    config,
+                    task_id=task_id or None,
+                )
+                if env is None:
+                    return ToolResult.error(error)
+                proc = process_registry.spawn_via_env(
+                    env,
+                    args["command"],
+                    cwd=str(ctx.cwd),
+                    task_id=task_id,
+                    notify_on_complete=notify_on_complete,
+                    watcher_platform=getattr(agent, "platform", "") or "",
+                    watcher_chat_id=getattr(agent, "chat_id", "") or "",
+                    watch_patterns=watch_patterns,
+                    timeout=10,
+                )
+                if proc.exited:
+                    return ToolResult.error(
+                        f"background process failed to start on {backend}: "
+                        f"{proc.output_buffer or proc.exit_code}"
+                    )
             lines = [f"started {proc.id} (pid {proc.pid}): {args['command']}"]
+            lines.append(f"backend: {backend}")
             if proc.pty:
                 lines.append("pty: true")
             if proc.pty_fallback:
@@ -77,6 +111,7 @@ class ProcessTool(Tool):
             data = {
                 "session_id": proc.id,
                 "pid": proc.pid,
+                "backend": backend,
                 "notify_on_complete": notify_on_complete,
             }
             if proc.pty:

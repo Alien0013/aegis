@@ -339,17 +339,13 @@ class BashTool(Tool):
     }
 
     def run(self, args, ctx) -> ToolResult:
-        from .backends import effective_backend, run_command
+        from .backends import create_environment, effective_backend, run_command
 
         timeout = min(int(args.get("timeout", 120)), 600)
         backend = ctx.config.get("tools.terminal_backend", "local") if ctx.config else "local"
         task_id = getattr(ctx, "task_id", "") or ""
         backend = effective_backend(backend, task_id)
         if args.get("background"):
-            if backend != "local":
-                return ToolResult.error(
-                    "background bash is currently supported for the local terminal backend only"
-                )
             from .process_registry import process_registry
 
             agent = getattr(ctx, "agent", None)
@@ -362,20 +358,48 @@ class BashTool(Tool):
                     "these two flags produce duplicate notifications when combined"
                 )
                 watch_patterns = []
-            proc = process_registry.spawn_local(
-                args["command"],
-                cwd=ctx.cwd,
-                task_id=task_id,
-                notify_on_complete=notify_on_complete,
-                watcher_platform=getattr(agent, "platform", "") or "",
-                watcher_chat_id=getattr(agent, "chat_id", "") or "",
-                watch_patterns=watch_patterns,
-                use_pty=bool(args.get("pty", False)),
-            )
+            if backend == "local":
+                proc = process_registry.spawn_local(
+                    args["command"],
+                    cwd=ctx.cwd,
+                    task_id=task_id,
+                    notify_on_complete=notify_on_complete,
+                    watcher_platform=getattr(agent, "platform", "") or "",
+                    watcher_chat_id=getattr(agent, "chat_id", "") or "",
+                    watch_patterns=watch_patterns,
+                    use_pty=bool(args.get("pty", False)),
+                )
+            else:
+                env, error, backend = create_environment(
+                    backend,
+                    str(ctx.cwd),
+                    timeout,
+                    ctx.config,
+                    task_id=task_id or None,
+                )
+                if env is None:
+                    return ToolResult.error(error)
+                proc = process_registry.spawn_via_env(
+                    env,
+                    args["command"],
+                    cwd=str(ctx.cwd),
+                    task_id=task_id,
+                    notify_on_complete=notify_on_complete,
+                    watcher_platform=getattr(agent, "platform", "") or "",
+                    watcher_chat_id=getattr(agent, "chat_id", "") or "",
+                    watch_patterns=watch_patterns,
+                    timeout=10,
+                )
+                if proc.exited:
+                    return ToolResult.error(
+                        f"background process failed to start on {backend}: "
+                        f"{proc.output_buffer or proc.exit_code}"
+                    )
             lines = [
                 "Background process started",
                 f"session_id: {proc.id}",
                 f"pid: {proc.pid}",
+                f"backend: {backend}",
             ]
             if proc.pty:
                 lines.append("pty: true")
@@ -394,6 +418,7 @@ class BashTool(Tool):
             data = {
                 "session_id": proc.id,
                 "pid": proc.pid,
+                "backend": backend,
                 "notify_on_complete": notify_on_complete,
             }
             if proc.pty:

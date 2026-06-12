@@ -41,6 +41,7 @@ __all__ = [
     "cleanup_all_environments",
     "cleanup_task_environment",
     "clear_task_env_overrides",
+    "create_environment",
     "effective_backend",
     "get_active_environment",
     "register_task_env_overrides",
@@ -98,6 +99,109 @@ def effective_backend(backend: str | None, task_id: str | None = None) -> str:
     if isinstance(override, str) and override.strip():
         return override.strip().lower()
     return (backend or "local").strip().lower()
+
+
+def create_environment(
+    backend: str | None,
+    cwd: str,
+    timeout: int,
+    config: Any = None,
+    task_id: str | None = None,
+) -> tuple[Any | None, str, str]:
+    """Create the environment object for ``backend`` without executing a command."""
+    backend = effective_backend(backend, task_id)
+    if backend == "local":
+        try:
+            env = _get_or_create_local_environment(
+                task_id or "default",
+                cwd=str(_task_overrides(task_id).get("cwd") or cwd),
+                timeout=timeout,
+                config=config,
+            )
+            return env, "", backend
+        except Exception as e:  # noqa: BLE001
+            failure = _outer_sandbox_failure(str(e))
+            if failure:
+                return None, failure[0], backend
+            return None, f"local command failed to start ({type(e).__name__}: {e})", backend
+    if backend == "docker":
+        if shutil.which("docker") is None:
+            return None, "sandbox unavailable: docker not found on PATH", backend
+        overrides = _task_overrides(task_id)
+        image = DEFAULT_DOCKER_IMAGE
+        if config is not None:
+            try:
+                image = config.get("tools.docker_image", DEFAULT_DOCKER_IMAGE) or DEFAULT_DOCKER_IMAGE
+            except Exception:  # noqa: BLE001
+                pass
+        return DockerEnvironment(
+            image=str(overrides.get("docker_image") or image),
+            cwd=str(overrides.get("cwd") or cwd),
+            timeout=timeout,
+            task_id=task_id or "default",
+        ), "", backend
+    if backend == "ssh":
+        host = os.environ.get("TERMINAL_SSH_HOST", "").strip()
+        user = os.environ.get("TERMINAL_SSH_USER", "").strip()
+        port = os.environ.get("TERMINAL_SSH_PORT", "").strip()
+        if shutil.which("ssh") is None:
+            return None, "sandbox unavailable: ssh not found on PATH", backend
+        if not host:
+            return None, "sandbox unavailable: TERMINAL_SSH_HOST not set", backend
+        overrides = _task_overrides(task_id)
+        return SSHEnvironment(
+            host=host,
+            user=user,
+            port=port,
+            cwd=str(overrides.get("cwd") or cwd),
+            timeout=timeout,
+            task_id=task_id or "default",
+        ), "", backend
+    if backend in ("singularity", "apptainer"):
+        binp = shutil.which("apptainer") or shutil.which("singularity")
+        if binp is None:
+            return None, "sandbox unavailable: apptainer/singularity not found", backend
+        overrides = _task_overrides(task_id)
+        image = "docker://python:3.12-slim"
+        if config is not None:
+            try:
+                image = config.get("tools.singularity_image", image) or image
+            except Exception:  # noqa: BLE001
+                pass
+        return SingularityEnvironment(
+            binary=binp,
+            image=str(overrides.get("singularity_image") or image),
+            cwd=str(overrides.get("cwd") or cwd),
+            timeout=timeout,
+            task_id=task_id or "default",
+        ), "", backend
+    if backend == "modal":
+        try:
+            import modal
+        except ImportError:
+            return None, "sandbox unavailable: modal SDK not installed", backend
+        try:
+            app = modal.App.lookup("aegis-sandbox", create_if_missing=True)
+            image = modal.Image.debian_slim()
+            pkgs = []
+            if config is not None:
+                try:
+                    pkgs = _task_overrides(task_id).get("modal_pip") or config.get("tools.modal_pip", []) or []
+                except Exception:  # noqa: BLE001
+                    pkgs = []
+            if pkgs:
+                image = image.pip_install(*pkgs)
+            return ModalEnvironment(
+                app=app,
+                image=image,
+                timeout=timeout,
+                task_id=task_id or "default",
+            ), "", backend
+        except Exception as e:  # noqa: BLE001
+            return None, f"sandbox unavailable: modal sandbox error ({e})", backend
+    if backend == "daytona":
+        return None, "sandbox unavailable: daytona backend is not configured in AEGIS", backend
+    return None, f"unknown backend {backend!r}", backend
 
 
 # --------------------------------------------------------------------------- #

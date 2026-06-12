@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import queue
 import signal
+import shlex
 import subprocess
 import threading
 import time
@@ -31,6 +32,7 @@ WATCH_STRIKE_LIMIT = 3
 WATCH_GLOBAL_MAX_PER_WINDOW = 15
 WATCH_GLOBAL_WINDOW_SECONDS = 10
 WATCH_GLOBAL_COOLDOWN_SECONDS = 30
+ENV_POLL_INTERVAL_SECONDS = 2.0
 
 
 @dataclass
@@ -52,6 +54,10 @@ class ProcessSession:
     watcher_platform: str = ""
     watcher_chat_id: str = ""
     detached: bool = False
+    pid_scope: str = "host"
+    log_path: str = ""
+    pid_path: str = ""
+    exit_path: str = ""
     pty: bool = False
     pty_fallback: str = ""
     watch_patterns: list[str] = field(default_factory=list)
@@ -183,6 +189,9 @@ class ProcessRegistry:
         session_key: str = "",
         notify_on_complete: bool = False,
         watch_patterns: list[str] | None = None,
+        watcher_platform: str = "",
+        watcher_chat_id: str = "",
+        timeout: int = 10,
     ) -> ProcessSession:
         session = ProcessSession(
             id=new_id("proc"),
@@ -194,19 +203,117 @@ class ProcessRegistry:
             env_ref=env,
             notify_on_complete=notify_on_complete,
             watch_patterns=_normalize_watch_patterns(watch_patterns),
+            watcher_platform=watcher_platform,
+            watcher_chat_id=watcher_chat_id,
+            pid_scope="sandbox",
         )
-        result = env.execute(command, cwd=session.cwd, timeout=10)
-        session.output_buffer = str(result.get("output", ""))
-        self._check_watch_patterns(session, session.output_buffer)
-        session.exit_code = int(result.get("returncode", 0) or 0)
-        session.exited = True
+        temp_dir = _env_temp_dir(env)
+        session.log_path = f"{temp_dir}/aegis-bg-{session.id}.log"
+        session.pid_path = f"{temp_dir}/aegis-bg-{session.id}.pid"
+        session.exit_path = f"{temp_dir}/aegis-bg-{session.id}.exit"
+        bg_command = _env_background_command(
+            command,
+            temp_dir=temp_dir,
+            log_path=session.log_path,
+            pid_path=session.pid_path,
+            exit_path=session.exit_path,
+        )
+        try:
+            result = env.execute(bg_command, cwd=session.cwd, timeout=timeout)
+            output = str(result.get("output", "") or "")
+            for line in output.splitlines():
+                line = line.strip()
+                if line.isdigit():
+                    session.pid = int(line)
+                    break
+            if session.pid is None:
+                session.output_buffer = output.strip()
+                session.exit_code = int(result.get("returncode", -1) or -1)
+                if session.exit_code == 0:
+                    session.exit_code = -1
+                session.exited = True
+        except Exception as e:  # noqa: BLE001
+            session.output_buffer = f"Failed to start: {e}"
+            session.exit_code = -1
+            session.exited = True
+
         with self._lock:
             self._prune_if_needed()
-            self._finished[session.id] = session
+            if session.exited:
+                self._finished[session.id] = session
+            else:
+                self._running[session.id] = session
+        if not session.exited:
+            reader = threading.Thread(
+                target=self._env_poller_loop,
+                args=(session,),
+                daemon=True,
+                name=f"proc-env-poller-{session.id}",
+            )
+            session._reader_thread = reader
+            reader.start()
         self._write_checkpoint()
-        if notify_on_complete:
+        if session.exited and notify_on_complete:
             self._queue_completion(session)
         return session
+
+    def _env_poller_loop(self, session: ProcessSession) -> None:
+        env = session.env_ref
+        if env is None:
+            return
+        prev_output_len = 0
+        while not session.exited:
+            time.sleep(ENV_POLL_INTERVAL_SECONDS)
+            try:
+                log_result = env.execute(
+                    f"cat {shlex.quote(session.log_path)} 2>/dev/null || true",
+                    cwd=session.cwd,
+                    timeout=10,
+                )
+                output = str(log_result.get("output", "") or "")
+                delta = output[prev_output_len:] if len(output) >= prev_output_len else output
+                prev_output_len = len(output)
+                if output:
+                    with session._lock:
+                        session.output_buffer = output[-session.max_output_chars:]
+                    if delta:
+                        self._check_watch_patterns(session, delta)
+
+                status = env.execute(
+                    _env_status_command(session.pid_path, session.exit_path),
+                    cwd=session.cwd,
+                    timeout=10,
+                )
+                status_text = str(status.get("output", "") or "").strip()
+                lines = [line.strip() for line in status_text.splitlines() if line.strip()]
+                if not lines:
+                    continue
+                marker = lines[0]
+                if marker == "running":
+                    continue
+                code: int | None = None
+                if marker == "exited" and len(lines) > 1:
+                    try:
+                        code = int(lines[1])
+                    except ValueError:
+                        code = -1
+                elif marker == "gone":
+                    code = -1
+                else:
+                    continue
+                with session._lock:
+                    session.exited = True
+                    session.exit_code = code
+                self._move_to_finished(session)
+                return
+            except Exception as e:  # noqa: BLE001
+                with session._lock:
+                    session.exited = True
+                    session.exit_code = -1
+                    if not session.output_buffer:
+                        session.output_buffer = f"environment poll failed: {e}"
+                self._move_to_finished(session)
+                return
 
     def _reader_loop(self, session: ProcessSession) -> None:
         proc = session.process
@@ -616,7 +723,11 @@ class ProcessRegistry:
                     except ProcessLookupError:
                         os.kill(session.pid, signal.SIGTERM)
             elif session.env_ref is not None and session.pid:
-                session.env_ref.execute(f"kill {session.pid} 2>/dev/null", timeout=5)
+                session.env_ref.execute(
+                    f"kill {int(session.pid)} 2>/dev/null || true",
+                    cwd=session.cwd,
+                    timeout=5,
+                )
             else:
                 return {"status": "error", "error": "process handle is unavailable"}
             with session._lock:
@@ -819,6 +930,10 @@ class ProcessRegistry:
             "watcher_platform": session.watcher_platform,
             "watcher_chat_id": session.watcher_chat_id,
             "watch_patterns": session.watch_patterns,
+            "pid_scope": session.pid_scope,
+            "log_path": session.log_path,
+            "pid_path": session.pid_path,
+            "exit_path": session.exit_path,
             "pty": session.pty,
             "pty_fallback": session.pty_fallback,
         }
@@ -842,6 +957,10 @@ class ProcessRegistry:
             watcher_platform=str(entry.get("watcher_platform") or ""),
             watcher_chat_id=str(entry.get("watcher_chat_id") or ""),
             watch_patterns=_normalize_watch_patterns(entry.get("watch_patterns")),
+            pid_scope=str(entry.get("pid_scope") or "host"),
+            log_path=str(entry.get("log_path") or ""),
+            pid_path=str(entry.get("pid_path") or ""),
+            exit_path=str(entry.get("exit_path") or ""),
             pty=bool(entry.get("pty", False)),
             pty_fallback=str(entry.get("pty_fallback") or ""),
             detached=detached,
@@ -869,6 +988,51 @@ def _spawn_pty_process(argv: list[str], *, cwd: str, env: dict[str, str]) -> Any
         from ptyprocess import PtyProcess
 
     return PtyProcess.spawn(argv, cwd=cwd, env=env, dimensions=(30, 120))
+
+
+def _env_temp_dir(env: Any) -> str:
+    get_temp_dir = getattr(env, "get_temp_dir", None)
+    if callable(get_temp_dir):
+        try:
+            temp_dir = str(get_temp_dir())
+            if temp_dir.startswith("/"):
+                return temp_dir.rstrip("/") or "/tmp"
+        except Exception:
+            pass
+    return "/tmp"
+
+
+def _env_background_command(
+    command: str,
+    *,
+    temp_dir: str,
+    log_path: str,
+    pid_path: str,
+    exit_path: str,
+) -> str:
+    quoted_command = shlex.quote(command)
+    quoted_temp = shlex.quote(temp_dir)
+    quoted_log = shlex.quote(log_path)
+    quoted_pid = shlex.quote(pid_path)
+    quoted_exit = shlex.quote(exit_path)
+    return (
+        f"mkdir -p {quoted_temp} && rm -f {quoted_log} {quoted_pid} {quoted_exit} && "
+        f"( nohup bash -lc {quoted_command} > {quoted_log} 2>&1 < /dev/null; "
+        f"rc=$?; printf '%s\\n' \"$rc\" > {quoted_exit} ) & "
+        f"echo $! > {quoted_pid} && cat {quoted_pid}"
+    )
+
+
+def _env_status_command(pid_path: str, exit_path: str) -> str:
+    quoted_pid = shlex.quote(pid_path)
+    quoted_exit = shlex.quote(exit_path)
+    return (
+        f"if [ -f {quoted_exit} ]; then "
+        f"echo exited; cat {quoted_exit}; "
+        f"elif [ -f {quoted_pid} ] && kill -0 \"$(cat {quoted_pid})\" 2>/dev/null; then "
+        "echo running; "
+        "else echo gone; fi"
+    )
 
 
 def _checkpoint_path() -> Path:
