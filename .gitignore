@@ -27,3 +27,7 @@ state.db
 web/node_modules/
 web/dist/
 web/*.tsbuildinfo
+
+# electron desktop app
+desktop/node_modules/
+desktop/dist/

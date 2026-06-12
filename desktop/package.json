@@ -1,0 +1,23 @@
+{
+  "name": "aegis-desktop",
+  "productName": "AEGIS",
+  "version": "0.1.0",
+  "description": "AEGIS — your terminal AI agent, as a desktop app.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.alien0013.aegis",
+    "productName": "AEGIS",
+    "files": ["main.js", "package.json"],
+    "mac": { "category": "public.app-category.developer-tools", "target": ["dmg"] },
+    "win": { "target": ["nsis"] },
+    "linux": { "target": ["AppImage", "deb"], "category": "Development" }
+  }
+}

@@ -17,11 +17,27 @@ are full editors.
 
 | Group | Pages |
 |---|---|
-| — | **Overview** (stat tiles, spend, recent sessions) · **Runs** · **Traces** · **Agents** · **Chat** |
-| Agent | Sessions · Memory · Skills · Tools |
-| Automation | Kanban · Schedules · Webhooks |
-| Platform | Models · API keys · MCP servers · Plugins · Pairing |
-| Operations | Projects · Worktrees · Evals · Logs · System · Config |
+| — | **Overview** (stat tiles, spend, recent sessions) · **Chat** (streaming) |
+| Edit | **Config** (edit any setting) · **Models** (pick + set active) · **API Keys** (set secrets) · **Cron** (add/remove/toggle jobs) · **Memory** (add/remove facts) · **Channels** (approve/revoke pairings) |
+| View | Sessions · Skills · Tools · Logs · System |
+
+The dashboard is a **control panel, not a viewer** — most pages write back through
+the token-gated JSON API (`POST /api/config`, `/api/cron`, `/api/models`,
+`/api/keys`, `/api/memory`, `/api/pairing`, …). Secrets are masked and never echoed.
+
+## Desktop app
+
+`desktop/` is an **Electron** wrapper — a native window that launches the AEGIS
+dashboard server (random free port + random token via `AEGIS_DASHBOARD_TOKEN`)
+and loads it, so you can run the whole harness by double-clicking, no terminal:
+
+```bash
+cd desktop && npm install && npm start     # run from source
+npm run dist                               # build .dmg / .exe / .AppImage / .deb
+```
+
+It only needs `aegis` installed (or `AEGIS_BIN` pointing at the executable). See
+`desktop/README.md`.
 
 ## Cockpit APIs
 

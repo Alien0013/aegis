@@ -1505,6 +1505,14 @@ def _mcp_live_inventory(name: str, spec: dict) -> dict:
         return {"status": "error", "error": str(exc)}
 
 
+def _dashboard_token(config: Config) -> str | None:
+    """Token gating the dashboard. AEGIS_DASHBOARD_TOKEN (env) wins so a launcher
+    like the Electron desktop app can inject a fresh random token per run without
+    writing config; otherwise the persisted server.dashboard_token is used."""
+    import os
+    return os.environ.get("AEGIS_DASHBOARD_TOKEN") or config.get("server.dashboard_token")
+
+
 def make_handler(config: Config):
     from .session import SessionStore
     from .surface import SurfaceRunner
@@ -1517,7 +1525,7 @@ def make_handler(config: Config):
             pass
 
         def _authorized(self) -> bool:
-            token = config.get("server.dashboard_token")
+            token = _dashboard_token(config)
             if not token:
                 return True
             parsed = urlparse(self.path)
@@ -1894,13 +1902,25 @@ def make_handler(config: Config):
                 if act == "remove" and body.get("name"):
                     return self._json({"ok": ws.remove(body["name"])})
                 return self._json({"error": "bad webhook request"})
+            if ppath == "/api/memory":
+                from .memory import MemoryStore
+                ms = MemoryStore()
+                act = body.get("action")
+                target = body.get("target", "memory")
+                if target not in ("memory", "user"):
+                    return self._json({"error": "target must be 'memory' or 'user'"})
+                if act == "add" and body.get("content"):
+                    return self._json({"result": ms.add(target, body["content"])})
+                if act == "remove" and body.get("match"):
+                    return self._json({"result": ms.remove(target, body["match"])})
+                return self._json({"error": "bad memory request"})
             self._json(_dashboard_chat_response(body, chat_runner))
 
     return H
 
 
 def _dashboard_url(config: Config, host: str, port: int) -> str:
-    token = config.get("server.dashboard_token")
+    token = _dashboard_token(config)
     base = f"http://{host}:{port}"
     return f"{base}/?token={token}" if token else base
 

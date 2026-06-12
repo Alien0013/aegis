@@ -8,6 +8,8 @@ import { SystemPage } from "./pages/SystemPage";
 import { CronPage } from "./pages/CronPage";
 import { ModelsPage } from "./pages/ModelsPage";
 import { KeysPage } from "./pages/KeysPage";
+import { MemoryPage } from "./pages/MemoryPage";
+import { ChannelsPage } from "./pages/ChannelsPage";
 
 type NavItem = { id: string; label: string; icon: string };
 const NAV: NavItem[] = [
@@ -53,6 +55,8 @@ function pageFor(id: string, go: (id: string) => void) {
     case "cron": return <CronPage />;
     case "models": return <ModelsPage />;
     case "keys": return <KeysPage />;
+    case "memory": return <MemoryPage />;
+    case "channels": return <ChannelsPage />;
     case "system": return <SystemPage />;
     case "mcp": return <ListPage key="mcp" endpoint="mcp" title="MCP Servers"
       cols={[["name", "Server"], ["command", "Command"]]} />;
@@ -68,14 +72,6 @@ function pageFor(id: string, go: (id: string) => void) {
       cols={[["name", "Eval"], ["status", "Status"], ["source", "Source"]]} />;
     case "sessions": return <ListPage key="sessions" endpoint="sessions" title="Sessions"
       cols={[["title", "Title"], ["updated_at", "Updated"]]} />;
-    case "channels": return <ListPage key="channels" endpoint="pairing" arrayKey="pending" title="Channels & Pairing"
-      cols={[["platform", "Platform"], ["code", "Code"], ["user_id", "User"]]} empty="No pending pairings. Connect a channel with `aegis gateway --channels telegram`." />;
-    case "skills": return <ListPage key="skills" endpoint="skills" arrayKey="skills" title="Skills"
-      cols={[["name", "Skill"], ["description", "Description"]]} />;
-    case "memory": return <ListPage key="memory" endpoint="memory" arrayKey="memory" title="Memory"
-      cols={[["text", "Entry"]]} raw />;
-    case "tools": return <ListPage key="tools" endpoint="tools" arrayKey="tools" title="Tools"
-      cols={[["name", "Tool"], ["description", "Description"]]} />;
     case "logs": return <ListPage key="logs" endpoint="logs" arrayKey="lines" title="Logs" cols={[["line", "Line"]]} raw />;
     default: return <Overview go={go} />;
   }
