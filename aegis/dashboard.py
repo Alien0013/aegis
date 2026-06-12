@@ -1,7 +1,8 @@
 """Local web dashboard — a self-contained single-page app (no build step).
 
 `aegis dashboard` serves a control UI at http://127.0.0.1:9119: chat, sessions,
-memory, skills, tools, and status. The frontend lives in static/dashboard.html
+memory, skills, tools, and status. The frontend is a React+Vite app (web/, built to static/web_dist/);
+the legacy single-file static/dashboard.html is the fallback
 (shipped as package data — a plain file, no node toolchain) and talks to the
 JSON API below. Binds loopback by default and can require the configured
 dashboard token; do not expose it publicly without trusted network controls.
@@ -20,12 +21,38 @@ from .config import Config
 
 
 def _page() -> bytes:
-    """The SPA frontend, read from package data (falls back to a stub if missing)."""
+    """The SPA frontend, read from package data. Prefers the built React app
+    (static/web_dist/index.html); falls back to the legacy single-file vanilla
+    dashboard, then to a stub, so the API stays usable on a broken/partial install."""
+    from importlib import resources
+    for rel in ("static/web_dist/index.html", "static/dashboard.html"):
+        try:
+            return (resources.files("aegis") / rel).read_bytes()
+        except Exception:  # noqa: BLE001
+            continue
+    return b"<h1>AEGIS</h1><p>dashboard frontend missing; API is at /api/*</p>"
+
+
+_ASSET_TYPES = {".js": "text/javascript", ".css": "text/css", ".map": "application/json",
+                ".woff2": "font/woff2", ".woff": "font/woff", ".svg": "image/svg+xml",
+                ".png": "image/png", ".webp": "image/webp", ".ico": "image/x-icon",
+                ".json": "application/json"}
+
+
+def _asset(path: str) -> tuple[bytes, str] | None:
+    """Serve a built React asset under /assets/<file> from the package, with a
+    path-traversal guard. Returns (bytes, content_type) or None."""
+    name = path.split("/assets/", 1)[-1]
+    if not name or "/" in name or "\\" in name or ".." in name:
+        return None
+    import os
+    from importlib import resources
     try:
-        from importlib import resources
-        return (resources.files("aegis") / "static" / "dashboard.html").read_bytes()
-    except Exception:  # noqa: BLE001 - broken install; keep the API usable
-        return b"<h1>AEGIS</h1><p>dashboard.html missing from install; API is at /api/*</p>"
+        data = (resources.files("aegis") / "static" / "web_dist" / "assets" / name).read_bytes()
+    except Exception:  # noqa: BLE001
+        return None
+    ctype = _ASSET_TYPES.get(os.path.splitext(name)[1], "application/octet-stream")
+    return data, ctype
 
 
 
@@ -1520,6 +1547,16 @@ def make_handler(config: Config):
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.end_headers()
                 self.wfile.write(_page())
+            elif path.startswith("/assets/"):       # built React bundle (public static)
+                asset = _asset(path)
+                if asset is None:
+                    self.send_response(404); self.end_headers(); return
+                data, ctype = asset
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+                self.end_headers()
+                self.wfile.write(data)
             elif not self._authorized():
                 self._unauthorized()
             elif path == "/api/status":

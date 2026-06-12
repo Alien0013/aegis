@@ -121,7 +121,9 @@ def test_dashboard_serves(monkeypatch):
     from aegis.dashboard import make_handler, _page
 
     page = _page().decode()
-    assert "AEGIS" in page and "/api/" in page
+    # the served shell is the React app (api calls live in the bundle) — or the
+    # legacy vanilla dashboard.html fallback; both are AEGIS-branded.
+    assert "AEGIS" in page and ('id="root"' in page or "/api/" in page)
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(Config.load()))
     port = httpd.server_address[1]
     threading.Thread(target=httpd.handle_request, daemon=True).start()

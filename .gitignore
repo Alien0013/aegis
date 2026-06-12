@@ -22,3 +22,7 @@ state.db
 # OS / editor
 .DS_Store
 *.swp
+
+# web frontend build
+web/node_modules/
+web/dist/
