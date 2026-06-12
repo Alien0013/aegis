@@ -307,6 +307,14 @@ class BashTool(Tool):
         "properties": {
             "command": {"type": "string"},
             "timeout": {"type": "integer", "description": "Seconds (default 120, max 600)."},
+            "background": {
+                "type": "boolean",
+                "description": "Start the command as a managed background process and return a session_id.",
+            },
+            "notify_on_complete": {
+                "type": "boolean",
+                "description": "Queue a wakeup when a background process exits (default true).",
+            },
         },
         "required": ["command"],
     }
@@ -316,6 +324,33 @@ class BashTool(Tool):
 
         timeout = min(int(args.get("timeout", 120)), 600)
         backend = ctx.config.get("tools.terminal_backend", "local") if ctx.config else "local"
+        if args.get("background"):
+            if str(backend or "local").strip().lower() != "local":
+                return ToolResult.error(
+                    "background bash is currently supported for the local terminal backend only"
+                )
+            from .process_registry import process_registry
+
+            agent = getattr(ctx, "agent", None)
+            proc = process_registry.spawn_local(
+                args["command"],
+                cwd=ctx.cwd,
+                task_id=getattr(ctx, "task_id", "") or "",
+                notify_on_complete=bool(args.get("notify_on_complete", True)),
+                watcher_platform=getattr(agent, "platform", "") or "",
+                watcher_chat_id=getattr(agent, "chat_id", "") or "",
+            )
+            return ToolResult.ok(
+                (
+                    "Background process started\n"
+                    f"session_id: {proc.id}\n"
+                    f"pid: {proc.pid}\n"
+                    "Use process(action='poll'|'log'|'wait'|'kill', session_id=...) "
+                    "to inspect or control it."
+                ),
+                display=f"background {proc.id}",
+                data={"session_id": proc.id, "pid": proc.pid},
+            )
         out, code = run_command(
             args["command"],
             str(ctx.cwd),

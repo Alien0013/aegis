@@ -151,6 +151,47 @@ def test_bash_tool_explains_outer_bwrap_loopback_failure(tmp_path, monkeypatch):
     assert "[exit 126]" in res.content
 
 
+def test_bash_tool_background_uses_process_registry(tmp_path):
+    from aegis.tools.builtin import BashTool
+    from aegis.tools.process_registry import process_registry
+
+    ctx = _ctx(tmp_path)
+    ctx.task_id = "bash_bg_task"
+    res = BashTool().run(
+        {
+            "command": 'printf "task:%s\\n" "$AEGIS_TASK_ID"',
+            "background": True,
+        },
+        ctx,
+    )
+    sid = res.data["session_id"]
+    try:
+        assert not res.is_error
+        assert f"session_id: {sid}" in res.content
+        waited = process_registry.wait(sid, timeout=5)
+        assert waited["status"] == "exited"
+        log = process_registry.read_log(sid)
+        assert "task:bash_bg_task" in log["output"]
+    finally:
+        process_registry.kill_process(sid)
+        process_registry._finished.pop(sid, None)
+
+
+def test_bash_tool_background_rejects_nonlocal_backend(tmp_path):
+    from aegis.config import Config
+    from aegis.tools.base import ToolContext
+    from aegis.tools.builtin import BashTool
+
+    config = Config.load()
+    config.data.setdefault("tools", {})["terminal_backend"] = "docker"
+    ctx = ToolContext(cwd=tmp_path, config=config)
+
+    res = BashTool().run({"command": "echo hi", "background": True}, ctx)
+
+    assert res.is_error
+    assert "local terminal backend only" in res.content
+
+
 def test_docker_environment_injects_task_id(tmp_path, monkeypatch):
     import aegis.tools.environments.docker as docker_env
     from aegis.tools.environments.docker import DockerEnvironment
