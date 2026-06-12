@@ -134,12 +134,15 @@ def create_environment(
                 image = config.get("tools.docker_image", DEFAULT_DOCKER_IMAGE) or DEFAULT_DOCKER_IMAGE
             except Exception:  # noqa: BLE001
                 pass
-        return DockerEnvironment(
-            image=str(overrides.get("docker_image") or image),
-            cwd=str(overrides.get("cwd") or cwd),
-            timeout=timeout,
-            task_id=task_id or "default",
-        ), "", backend
+        try:
+            return DockerEnvironment(
+                image=str(overrides.get("docker_image") or image),
+                cwd=str(overrides.get("cwd") or cwd),
+                timeout=timeout,
+                task_id=task_id or "default",
+            ), "", backend
+        except Exception as e:  # noqa: BLE001
+            return None, f"sandbox unavailable: docker environment error ({e})", backend
     if backend == "ssh":
         host = os.environ.get("TERMINAL_SSH_HOST", "").strip()
         user = os.environ.get("TERMINAL_SSH_USER", "").strip()
@@ -482,6 +485,8 @@ def _run_docker(command: str, cwd: str, timeout: int, config: Any,
         ).execute(command, timeout=timeout)
     except OSError as e:
         return _degraded(config, f"docker failed to start ({e})", command, cwd, timeout, task_id)
+    except Exception as e:  # noqa: BLE001
+        return _degraded(config, f"docker environment error ({e})", command, cwd, timeout, task_id)
 
     # Distinguish "image missing / daemon down" from the program's own failure.
     out = str(result.get("output", ""))

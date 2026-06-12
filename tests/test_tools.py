@@ -497,21 +497,46 @@ def test_bash_tool_background_rejects_unavailable_nonlocal_backend(tmp_path, mon
 
 
 def test_docker_environment_injects_task_id(tmp_path, monkeypatch):
+    import io
+
     import aegis.tools.environments.docker as docker_env
     from aegis.tools.environments.docker import DockerEnvironment
 
-    seen = {}
+    calls = {"run": [], "popen": []}
+    created = {"value": False}
 
     class Proc:
-        stdout = "ok"
-        stderr = ""
-        returncode = 0
+        def __init__(self, stdout="", stderr="", returncode=0):
+            self.stdout = stdout
+            self.stderr = stderr
+            self.returncode = returncode
 
     def fake_run(argv, **_kwargs):
-        seen["argv"] = argv
-        return Proc()
+        calls["run"].append(argv)
+        if argv[:2] == ["docker", "inspect"]:
+            return Proc("true\n" if created["value"] else "", returncode=0 if created["value"] else 1)
+        if argv[:2] == ["docker", "run"]:
+            created["value"] = True
+            return Proc("container-id\n", returncode=0)
+        return Proc(returncode=0)
+
+    class FakePopen:
+        def __init__(self, argv, **_kwargs):
+            calls["popen"].append(argv)
+            self.stdout = io.BytesIO(b"ok\n")
+            self.returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def kill(self):
+            self.returncode = -9
 
     monkeypatch.setattr(docker_env.subprocess, "run", fake_run)
+    monkeypatch.setattr(docker_env.subprocess, "Popen", FakePopen)
 
     result = DockerEnvironment(
         image="python:3.12-slim",
@@ -520,8 +545,14 @@ def test_docker_environment_injects_task_id(tmp_path, monkeypatch):
         task_id="sub_test",
     ).execute("echo hi")
 
-    assert result == {"output": "ok", "returncode": 0}
-    assert "AEGIS_TASK_ID=sub_test" in seen["argv"]
+    assert "ok" in result["output"]
+    assert result["returncode"] == 0
+    docker_run = next(argv for argv in calls["run"] if argv[:2] == ["docker", "run"])
+    assert "-d" in docker_run and "--name" in docker_run
+    assert "AEGIS_TASK_ID=sub_test" in docker_run
+    assert calls["popen"]
+    assert all("exec" in argv for argv in calls["popen"])
+    assert all("AEGIS_TASK_ID=sub_test" in argv for argv in calls["popen"])
 
 
 def test_daytona_backend_fails_closed(tmp_path):
