@@ -522,6 +522,8 @@ class Agent:
         self._strip_thinking = False       # one-shot thinking-signature 400 -> resend w/o blocks
         self._retrieved_memory_for_turn = ""
         self._retrieved_memory_user_content = ""
+        include_wakeups = not bool(getattr(self, "_skip_wakeups_once", False))
+        self._skip_wakeups_once = False
         if not any(m.role != "system" for m in self.session.messages):  # first turn of a session
             from ..plugins import fire_hook
             fire_hook("on_session_start", self)
@@ -542,13 +544,14 @@ class Agent:
         msg = user_input if isinstance(user_input, Message) else Message.user(user_input)
         self._apply_routing(msg.content)
         self.session.maybe_title_from(msg.content)
-        try:                               # background work that finished since the last turn
-            from .wakeups import wakeup_block
-            wb = wakeup_block()
-            if wb:
-                msg.content = f"{wb}\n\n{msg.content}"
-        except Exception:  # noqa: BLE001
-            pass
+        if include_wakeups:
+            try:                           # background work that finished since the last turn
+                from .wakeups import wakeup_block
+                wb = wakeup_block()
+                if wb:
+                    msg.content = f"{wb}\n\n{msg.content}"
+            except Exception:  # noqa: BLE001
+                pass
         if self.memory:                    # provider prefetch relevant to THIS turn (volatile)
             try:
                 fetched = self.memory.prefetch(msg.content)

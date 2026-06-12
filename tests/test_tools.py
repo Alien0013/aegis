@@ -152,11 +152,23 @@ def test_bash_tool_explains_outer_bwrap_loopback_failure(tmp_path, monkeypatch):
 
 
 def test_bash_tool_background_uses_process_registry(tmp_path):
+    from types import SimpleNamespace
+
+    from aegis.session import Session
     from aegis.tools.builtin import BashTool
     from aegis.tools.process_registry import process_registry
 
     ctx = _ctx(tmp_path)
     ctx.task_id = "bash_bg_task"
+    ctx.session = Session(id="gateway:room:u1", title="gateway")
+    ctx.agent = SimpleNamespace(
+        platform="telegram",
+        chat_id="room",
+        user_id="u1",
+        user_name="alien",
+        thread_id="topic",
+        message_id="msg1",
+    )
     res = BashTool().run(
         {
             "command": 'printf "task:%s\\n" "$AEGIS_TASK_ID"',
@@ -168,6 +180,15 @@ def test_bash_tool_background_uses_process_registry(tmp_path):
     try:
         assert not res.is_error
         assert f"session_id: {sid}" in res.content
+        session = process_registry.get(sid)
+        assert session is not None
+        assert session.session_key == "gateway:room:u1"
+        assert session.watcher_platform == "telegram"
+        assert session.watcher_chat_id == "room"
+        assert session.watcher_user_id == "u1"
+        assert session.watcher_user_name == "alien"
+        assert session.watcher_thread_id == "topic"
+        assert session.watcher_message_id == "msg1"
         waited = process_registry.wait(sid, timeout=5)
         assert waited["status"] == "exited"
         log = process_registry.read_log(sid)
@@ -514,16 +535,21 @@ def test_daytona_backend_fails_closed(tmp_path):
 
 
 def test_process_tool_submit_and_wait(tmp_path):
+    from aegis.session import Session
     from aegis.tools.base import ToolContext
     from aegis.tools.process import ProcessTool
     from aegis.tools.process_registry import process_registry
 
     ctx = ToolContext(cwd=tmp_path)
     ctx.task_id = "proc_submit_task"
+    ctx.session = Session(id="terminal:proc-session", title="terminal")
     tool = ProcessTool()
     start = tool.run({"action": "start", "command": "read line; echo got:$line"}, ctx)
     sid = start.data["session_id"]
     try:
+        session = process_registry.get(sid)
+        assert session is not None
+        assert session.session_key == "terminal:proc-session"
         submit = tool.run({"action": "submit", "session_id": sid, "data": "hello"}, ctx)
         assert not submit.is_error
         waited = tool.run({"action": "wait", "session_id": sid, "timeout": 5}, ctx)

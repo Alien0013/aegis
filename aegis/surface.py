@@ -185,6 +185,7 @@ class SurfaceRunner:
         stream: bool | None = None,
         reuse_agent: bool | None = None,
         expand_refs: bool = True,
+        include_wakeups: bool = True,
     ) -> SurfaceRun:
         session = session or self.load_or_create_session(
             session_id, title=title, history=history, surface=surface, meta=meta
@@ -305,7 +306,7 @@ class SurfaceRunner:
                     )
                     result = self._run(agent, effective_prompt, session=session, platform=platform,
                                        chat_id=chat_id, stream=stream, on_event=on_event,
-                                       run_id=run_id)
+                                       run_id=run_id, include_wakeups=include_wakeups)
             else:
                 agent = agent or self.make_agent(
                     session=session,
@@ -320,7 +321,7 @@ class SurfaceRunner:
                 )
                 result = self._run(agent, effective_prompt, session=session, platform=platform,
                                    chat_id=chat_id, stream=stream, on_event=on_event,
-                                   run_id=run_id)
+                                   run_id=run_id, include_wakeups=include_wakeups)
         except Exception as exc:
             if run_store is not None and run_id:
                 try:
@@ -383,6 +384,7 @@ class SurfaceRunner:
         stream: bool | None,
         on_event: OnEvent | None,
         run_id: str = "",
+        include_wakeups: bool = True,
     ) -> SurfaceRun:
         _retarget_agent(agent, session=session)
         agent.platform = platform
@@ -404,7 +406,20 @@ class SurfaceRunner:
             if on_event is not None:
                 on_event(event)
 
-        message = _agent_run(agent, prompt, emit)
+        if not include_wakeups:
+            try:
+                agent._skip_wakeups_once = True
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            message = _agent_run(agent, prompt, emit)
+        finally:
+            if not include_wakeups:
+                try:
+                    if getattr(agent, "_skip_wakeups_once", False):
+                        agent._skip_wakeups_once = False
+                except Exception:  # noqa: BLE001
+                    pass
         trace_ctx = getattr(agent, "_trace_context", {}) or {}
         return SurfaceRun(
             text=getattr(message, "content", ""),

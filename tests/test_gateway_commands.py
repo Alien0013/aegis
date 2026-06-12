@@ -466,6 +466,92 @@ def test_gateway_goal_command_bypasses_mention_gate(tmp_path, monkeypatch):
     assert run["prompt_preview"].startswith("ship it")
 
 
+def test_gateway_process_notification_injects_internal_turn(tmp_path, monkeypatch):
+    import threading
+    import time
+    from types import SimpleNamespace
+
+    import aegis.gateway.pairing as pairing
+    import aegis.gateway.runner as rmod
+    from aegis.config import Config
+    from aegis.gateway.base import BasePlatformAdapter
+    from aegis.gateway.runner import GatewayRunner
+    from aegis.types import Message
+
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        pairing.PairingStore,
+        "is_authorized",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("auth called")),
+    )
+
+    class Adapter(BasePlatformAdapter):
+        name = "telegram"
+
+        def __init__(self):
+            self.sent = []
+
+        def send(self, chat_id: str, text: str) -> None:
+            self.sent.append((chat_id, text))
+
+    seen = []
+
+    class FakeAgent:
+        def __init__(self, session):
+            self.config = cfg
+            self.session = session
+            self.cwd = tmp_path
+            self.provider = SimpleNamespace(name="fake", model="fake-model")
+            self.tool_context = SimpleNamespace(session=session)
+            self.budget = SimpleNamespace(api_call_count=0)
+            self.cancel_event = threading.Event()
+            self.tools_used = 0
+
+        def run(self, prompt, on_event=None):
+            seen.append(str(prompt))
+            self._trace_context = {"trace_id": "trace_process_notify", "turn_id": "turn_process_notify"}
+            self.session.messages.append(Message.user(str(prompt)))
+            message = Message.assistant("processed notification")
+            self.session.messages.append(message)
+            return message
+
+    cfg = Config.load()
+    runner = GatewayRunner(cfg, cwd=tmp_path)
+    adapter = Adapter()
+    runner.add(adapter)
+    adapter._init_inbound_queue(runner.dispatch)
+    monkeypatch.setattr(
+        rmod.Agent,
+        "create",
+        staticmethod(lambda _config, **kwargs: FakeAgent(kwargs["session"])),
+    )
+
+    text = "[IMPORTANT: Background process proc_1 completed (exit code 0).]"
+    submitted = runner._submit_process_notification(
+        {
+            "type": "completion",
+            "session_id": "proc_1",
+            "session_key": "telegram:c1:u1",
+            "platform": "telegram",
+            "chat_id": "c1",
+            "user_id": "u1",
+            "user_name": "alien",
+            "thread_id": "topic",
+            "message_id": "msg1",
+        },
+        text,
+    )
+
+    deadline = time.time() + 2
+    while time.time() < deadline and not adapter.sent:
+        time.sleep(0.01)
+
+    assert submitted is True
+    assert seen == [text]
+    assert adapter.sent == [("c1", "processed notification")]
+    assert runner._session("telegram:c1:u1").messages[0].content == text
+
+
 def test_gateway_tracks_child_session_after_run_split(tmp_path, monkeypatch):
     import threading
     from types import SimpleNamespace

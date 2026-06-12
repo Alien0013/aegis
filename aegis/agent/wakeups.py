@@ -40,21 +40,31 @@ def add_wakeup(source: str, title: str, text: str) -> None:
         pass
 
 
-def drain_wakeups() -> list[dict]:
-    """Return all queued notes and clear the queue (oldest first, capped)."""
+def drain_wakeups(source: str | None = None) -> list[dict]:
+    """Return queued notes and clear them.
+
+    When ``source`` is provided, only notes from that source are consumed; the
+    rest stay queued for a later user turn.
+    """
     try:
         with STORE_LOCK, file_lock(_path()):
             raw = read_text(_path())
             if not raw.strip():
                 return []
-            atomic_write(_path(), "")
-        notes = []
-        for line in raw.strip().splitlines():
-            try:
-                notes.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-        return notes[-_MAX_DRAIN:]
+            notes = []
+            for line in raw.strip().splitlines():
+                try:
+                    notes.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+            if source is None:
+                atomic_write(_path(), "")
+                return notes[-_MAX_DRAIN:]
+            selected = [n for n in notes if n.get("source") == source]
+            remaining = [n for n in notes if n.get("source") != source]
+            body = "".join(json.dumps(n) + "\n" for n in remaining)
+            atomic_write(_path(), body)
+            return selected[-_MAX_DRAIN:]
     except Exception:  # noqa: BLE001
         return []
 

@@ -13,6 +13,18 @@ def test_add_and_drain_roundtrip():
     assert wakeups.drain_wakeups() == []          # drained exactly once
 
 
+def test_drain_wakeups_can_filter_by_source():
+    from aegis.agent import wakeups
+    wakeups.drain_wakeups()
+    wakeups.add_wakeup("process", "proc", "done")
+    wakeups.add_wakeup("subagent", "agent", "done")
+
+    notes = wakeups.drain_wakeups(source="process")
+
+    assert [n["source"] for n in notes] == ["process"]
+    assert [n["source"] for n in wakeups.drain_wakeups()] == ["subagent"]
+
+
 def test_wakeup_block_format_and_cap():
     from aegis.agent import wakeups
     wakeups.drain_wakeups()
@@ -63,3 +75,27 @@ def test_agent_run_folds_wakeups(monkeypatch):
     agent.run("continue please")
     assert "<background_completions>" in seen["user"]
     assert "proc_9" in seen["user"] and "continue please" in seen["user"]
+
+
+def test_agent_run_can_skip_wakeups_once(monkeypatch):
+    from aegis.agent import wakeups
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.session import Session
+    from aegis.types import Message
+    wakeups.drain_wakeups()
+    wakeups.add_wakeup("process", "proc_10 exited", "done")
+    agent = Agent.create(Config.load(), session=Session.create())
+    seen = {}
+
+    def fake_conversation(a, on_event=None):
+        seen["user"] = a.session.messages[-1].content
+        return Message.assistant("ok")
+
+    monkeypatch.setattr("aegis.agent.agent.run_conversation", fake_conversation)
+    agent._skip_wakeups_once = True
+    agent.run("synthetic process event")
+
+    assert "<background_completions>" not in seen["user"]
+    assert "synthetic process event" in seen["user"]
+    assert wakeups.drain_wakeups()[0]["source"] == "process"

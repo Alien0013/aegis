@@ -20,6 +20,9 @@ class MessageEvent:
     user_id: str | None = None
     user_name: str | None = None
     thread_id: str | None = None
+    message_id: str | None = None
+    session_key: str | None = None
+    internal: bool = False
     attachments: list[dict] = field(default_factory=list)
 
 
@@ -90,6 +93,8 @@ class BasePlatformAdapter:
     def _handle_inbound_control(self, ev: MessageEvent, *, raw_text: str | None = None) -> bool:
         self._ensure_inbound_queue()
         text = raw_text if raw_text is not None else ev.text
+        if getattr(ev, "internal", False):
+            return False
         key = self._conversation_key(ev)
         with self._qlock:
             worker = self._workers.get(key)
@@ -117,7 +122,7 @@ class BasePlatformAdapter:
         with self._qlock:
             worker = self._workers.get(key)
             busy = bool(worker and worker.is_alive() and key in self._active)
-        if busy:
+        if busy and not getattr(ev, "internal", False):
             handled, note = self._apply_busy_mode(ev)
             if note:
                 self._deliver_reply(ev, note, None)
@@ -225,6 +230,9 @@ class BasePlatformAdapter:
                     "user_id": ev.user_id or "",
                     "user_name": ev.user_name or "",
                     "thread_id": ev.thread_id or "",
+                    "message_id": ev.message_id or "",
+                    "session_key": ev.session_key or "",
+                    "internal": bool(ev.internal),
                     "attachment_count": len(ev.attachments or []),
                     "queue_wait_ms": int((time.monotonic() - queued_at) * 1000),
                     "inline_reply": bool(getattr(ev, "_reply_inline", False)),

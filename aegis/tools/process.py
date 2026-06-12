@@ -56,6 +56,16 @@ class ProcessTool(Tool):
                 )
                 watch_patterns = []
             task_id = getattr(ctx, "task_id", "") or ""
+            session_key = str(getattr(getattr(ctx, "session", None), "id", "") or task_id)
+            watcher_kwargs = {
+                "session_key": session_key,
+                "watcher_platform": getattr(agent, "platform", "") or "",
+                "watcher_chat_id": getattr(agent, "chat_id", "") or "",
+                "watcher_user_id": getattr(agent, "user_id", "") or "",
+                "watcher_user_name": getattr(agent, "user_name", "") or "",
+                "watcher_thread_id": getattr(agent, "thread_id", "") or "",
+                "watcher_message_id": getattr(agent, "message_id", "") or "",
+            }
             config = ctx.config
             backend = config.get("tools.terminal_backend", "local") if config else "local"
             backend = effective_backend(backend, task_id)
@@ -65,10 +75,9 @@ class ProcessTool(Tool):
                     cwd=ctx.cwd,
                     task_id=task_id,
                     notify_on_complete=notify_on_complete,
-                    watcher_platform=getattr(agent, "platform", "") or "",
-                    watcher_chat_id=getattr(agent, "chat_id", "") or "",
                     watch_patterns=watch_patterns,
                     use_pty=bool(args.get("pty", False)),
+                    **watcher_kwargs,
                 )
             else:
                 env, error, backend = create_environment(
@@ -86,10 +95,9 @@ class ProcessTool(Tool):
                     cwd=str(ctx.cwd),
                     task_id=task_id,
                     notify_on_complete=notify_on_complete,
-                    watcher_platform=getattr(agent, "platform", "") or "",
-                    watcher_chat_id=getattr(agent, "chat_id", "") or "",
                     watch_patterns=watch_patterns,
                     timeout=10,
+                    **watcher_kwargs,
                 )
                 if proc.exited:
                     return ToolResult.error(

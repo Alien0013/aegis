@@ -79,6 +79,10 @@ class ProcessSession:
     notify_on_complete: bool = False
     watcher_platform: str = ""
     watcher_chat_id: str = ""
+    watcher_user_id: str = ""
+    watcher_user_name: str = ""
+    watcher_thread_id: str = ""
+    watcher_message_id: str = ""
     detached: bool = False
     pid_scope: str = "host"
     log_path: str = ""
@@ -126,6 +130,10 @@ class ProcessRegistry:
         notify_on_complete: bool = False,
         watcher_platform: str = "",
         watcher_chat_id: str = "",
+        watcher_user_id: str = "",
+        watcher_user_name: str = "",
+        watcher_thread_id: str = "",
+        watcher_message_id: str = "",
         watch_patterns: list[str] | None = None,
         use_pty: bool = False,
     ) -> ProcessSession:
@@ -139,6 +147,10 @@ class ProcessRegistry:
             notify_on_complete=notify_on_complete,
             watcher_platform=watcher_platform,
             watcher_chat_id=watcher_chat_id,
+            watcher_user_id=watcher_user_id,
+            watcher_user_name=watcher_user_name,
+            watcher_thread_id=watcher_thread_id,
+            watcher_message_id=watcher_message_id,
             watch_patterns=_normalize_watch_patterns(watch_patterns),
         )
         shell = _find_shell()
@@ -217,6 +229,10 @@ class ProcessRegistry:
         watch_patterns: list[str] | None = None,
         watcher_platform: str = "",
         watcher_chat_id: str = "",
+        watcher_user_id: str = "",
+        watcher_user_name: str = "",
+        watcher_thread_id: str = "",
+        watcher_message_id: str = "",
         timeout: int = 10,
     ) -> ProcessSession:
         session = ProcessSession(
@@ -231,6 +247,10 @@ class ProcessRegistry:
             watch_patterns=_normalize_watch_patterns(watch_patterns),
             watcher_platform=watcher_platform,
             watcher_chat_id=watcher_chat_id,
+            watcher_user_id=watcher_user_id,
+            watcher_user_name=watcher_user_name,
+            watcher_thread_id=watcher_thread_id,
+            watcher_message_id=watcher_message_id,
             pid_scope="sandbox",
         )
         temp_dir = _env_temp_dir(env)
@@ -530,6 +550,10 @@ class ProcessRegistry:
             "suppressed": suppressed,
             "platform": session.watcher_platform,
             "chat_id": session.watcher_chat_id,
+            "user_id": session.watcher_user_id,
+            "user_name": session.watcher_user_name,
+            "thread_id": session.watcher_thread_id,
+            "message_id": session.watcher_message_id,
         }
         self.completion_queue.put(event)
         self._queue_wakeup_event(event)
@@ -543,6 +567,10 @@ class ProcessRegistry:
             "suppressed": suppressed,
             "platform": session.watcher_platform,
             "chat_id": session.watcher_chat_id,
+            "user_id": session.watcher_user_id,
+            "user_name": session.watcher_user_name,
+            "thread_id": session.watcher_thread_id,
+            "message_id": session.watcher_message_id,
             "message": (
                 f"Watch patterns disabled for process {session.id} — "
                 f"{WATCH_STRIKE_LIMIT} consecutive rate-limit windows triggered "
@@ -623,6 +651,10 @@ class ProcessRegistry:
             "output": output_tail,
             "platform": session.watcher_platform,
             "chat_id": session.watcher_chat_id,
+            "user_id": session.watcher_user_id,
+            "user_name": session.watcher_user_name,
+            "thread_id": session.watcher_thread_id,
+            "message_id": session.watcher_message_id,
         })
 
     def drain_notifications(self) -> list[tuple[dict[str, Any], str]]:
@@ -977,6 +1009,10 @@ class ProcessRegistry:
             "notify_on_complete": session.notify_on_complete,
             "watcher_platform": session.watcher_platform,
             "watcher_chat_id": session.watcher_chat_id,
+            "watcher_user_id": session.watcher_user_id,
+            "watcher_user_name": session.watcher_user_name,
+            "watcher_thread_id": session.watcher_thread_id,
+            "watcher_message_id": session.watcher_message_id,
             "watch_patterns": session.watch_patterns,
             "pid_scope": session.pid_scope,
             "log_path": session.log_path,
@@ -1004,6 +1040,10 @@ class ProcessRegistry:
             notify_on_complete=bool(entry.get("notify_on_complete", False)),
             watcher_platform=str(entry.get("watcher_platform") or ""),
             watcher_chat_id=str(entry.get("watcher_chat_id") or ""),
+            watcher_user_id=str(entry.get("watcher_user_id") or ""),
+            watcher_user_name=str(entry.get("watcher_user_name") or ""),
+            watcher_thread_id=str(entry.get("watcher_thread_id") or ""),
+            watcher_message_id=str(entry.get("watcher_message_id") or ""),
             watch_patterns=_normalize_watch_patterns(entry.get("watch_patterns")),
             pid_scope=str(entry.get("pid_scope") or "host"),
             log_path=str(entry.get("log_path") or ""),

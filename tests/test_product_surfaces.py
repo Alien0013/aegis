@@ -495,6 +495,65 @@ def test_terminal_goal_continuation_uses_surface_runner(monkeypatch):
     assert agent.session.meta["last_run_id"] in {r["id"] for r in runs}
 
 
+def test_terminal_process_notification_runs_synthetic_turn(tmp_path):
+    from types import SimpleNamespace
+
+    from aegis.agent import wakeups
+    from aegis.cli import repl
+    from aegis.config import Config
+    from aegis.session import Session, SessionStore
+    from aegis.tools.process_registry import process_registry
+    from aegis.types import Message
+
+    wakeups.drain_wakeups()
+    process_registry.drain_notifications()
+    wakeups.add_wakeup("process", "proc_1 exited", "done")
+    wakeups.add_wakeup("subagent", "sub_1 done", "done")
+    process_registry.completion_queue.put({
+        "type": "completion",
+        "session_id": "proc_1",
+        "session_key": "sess_terminal_process",
+        "command": "echo done",
+        "exit_code": 0,
+        "output": "done",
+    })
+
+    session = Session(id="sess_terminal_process", title="terminal")
+    agent = SimpleNamespace(config=Config.load(), session=session, tools_used=0)
+    calls = []
+
+    class Runner:
+        def run_prompt(self, prompt, **kwargs):
+            calls.append((prompt, kwargs))
+            session.messages.append(Message.user(str(prompt)))
+            message = Message.assistant("ack")
+            session.messages.append(message)
+            return SimpleNamespace(
+                message=message,
+                session=session,
+                agent=agent,
+                text="ack",
+                trace_id="trace_terminal_process",
+                turn_id="turn_terminal_process",
+                run_id="run_terminal_process",
+                events=[],
+            )
+
+    count = repl.drain_process_notifications(
+        agent,
+        Runner(),
+        SessionStore(),
+        surface="repl",
+        on_event=lambda _event: None,
+    )
+
+    assert count == 1
+    assert calls[0][0].startswith("[IMPORTANT: Background process proc_1 completed")
+    assert calls[0][1]["include_wakeups"] is False
+    assert calls[0][1]["meta"]["synthetic"] == "process_notification"
+    assert [n["source"] for n in wakeups.drain_wakeups()] == ["subagent"]
+
+
 def test_terminal_goal_command_returns_start_prompt(monkeypatch):
     from aegis.cli import repl
     from aegis.config import Config

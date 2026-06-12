@@ -42,6 +42,8 @@ class GatewayRunner:
         self.adapters.append(adapter)
 
     def _key(self, ev: MessageEvent) -> str:
+        if getattr(ev, "internal", False) and getattr(ev, "session_key", None):
+            return str(ev.session_key)
         uid = ev.user_id or "anon"
         mode = self.session_mode
         if mode == "main":
@@ -195,15 +197,17 @@ class GatewayRunner:
     def dispatch(self, ev: MessageEvent) -> str:
         text = ev.text.strip()
         command_started_turn = False
+        is_internal = bool(getattr(ev, "internal", False))
         key = self._key(ev)
         # Authorization: unknown users must pair first.
-        from .pairing import PairingStore
-        pairing = PairingStore()
-        if not pairing.is_authorized(ev.platform, ev.user_id, ev.user_name):
-            code = pairing.request_code(ev.platform, ev.user_id or "?")
-            return (f"⛔ Not authorized. Ask the operator to run:\n"
-                    f"  aegis pairing approve {ev.platform} {code}")
-        self._adopt_handoff(ev, key)
+        if not is_internal:
+            from .pairing import PairingStore
+            pairing = PairingStore()
+            if not pairing.is_authorized(ev.platform, ev.user_id, ev.user_name):
+                code = pairing.request_code(ev.platform, ev.user_id or "?")
+                return (f"⛔ Not authorized. Ask the operator to run:\n"
+                        f"  aegis pairing approve {ev.platform} {code}")
+            self._adopt_handoff(ev, key)
         # Command tiers: admins get every command; regular users only an allowlisted
         # subset (+ the always-allowed floor). Unset admin list => everyone is admin
         # (backward-compatible single-user default).
@@ -430,7 +434,7 @@ class GatewayRunner:
             text = goals.get(session)["text"]   # fall through: run the new goal as this turn
 
         # Mention gating: in shared channels only respond when a trigger is present.
-        if (self.require_mention and self.mention_triggers
+        if (not is_internal and self.require_mention and self.mention_triggers
                 and not text.startswith("/") and not command_started_turn):
             if not any(trig in text.lower() for trig in self.mention_triggers):
                 return ""  # ignored — not addressed to the bot
@@ -441,8 +445,9 @@ class GatewayRunner:
         text = self._maybe_transcribe(ev, text)
 
         # Very first message ever -> one-shot, consent-gated profile-build offer.
-        from ..firstrun import profile_build_directive
-        text += profile_build_directive(self.config)
+        if not is_internal:
+            from ..firstrun import profile_build_directive
+            text += profile_build_directive(self.config)
 
         # Serialize per session so one session isn't run concurrently (race on messages).
         with self._lock:
@@ -476,12 +481,17 @@ class GatewayRunner:
                 apply_session_runtime(agent)
             agent.platform = ev.platform   # channel-specific prompt behavior
             agent.chat_id = ev.chat_id     # current conversation (for the send_message tool)
+            agent.user_id = ev.user_id or ""
+            agent.user_name = ev.user_name or ""
+            agent.thread_id = ev.thread_id or ""
+            agent.message_id = ev.message_id or ""
             try:
                 learned: list[str] = []
 
                 from ..eventbus import BUS
                 BUS.publish({"platform": ev.platform, "chat_id": ev.chat_id,
-                             "type": "user_message", "text": text})
+                             "type": "internal_message" if is_internal else "user_message",
+                             "text": text})
 
                 def _collect(ev_: dict) -> None:
                     t = ev_.get("type")
@@ -504,6 +514,7 @@ class GatewayRunner:
                     meta={"platform": ev.platform, "chat_id": ev.chat_id, "user_id": ev.user_id or ""},
                     platform=ev.platform,
                     chat_id=ev.chat_id,
+                    include_wakeups=not is_internal,
                     on_event=_collect,
                 )
                 session = getattr(run, "session", getattr(agent, "session", session))
@@ -528,6 +539,7 @@ class GatewayRunner:
                             },
                             platform=ev.platform,
                             chat_id=ev.chat_id,
+                            include_wakeups=not is_internal,
                             on_event=_collect,
                         )
                         cont_session = getattr(cont, "session", getattr(agent, "session", session))
@@ -555,6 +567,8 @@ class GatewayRunner:
                     reply += "\n\n— " + " · ".join(dict.fromkeys(learned))   # dedup, keep order
                 BUS.publish({"platform": ev.platform, "chat_id": ev.chat_id,
                              "type": "assistant_message", "text": reply})
+                if not is_internal:
+                    self._drain_process_notifications()
                 return reply
             except Exception as e:  # noqa: BLE001
                 return f"⚠ error: {type(e).__name__}: {e}"
@@ -575,6 +589,59 @@ class GatewayRunner:
         except Exception:  # noqa: BLE001
             pass
         return text
+
+    def _submit_process_notification(self, event: dict, text: str) -> bool:
+        platform = str(event.get("platform") or "")
+        chat_id = str(event.get("chat_id") or "")
+        if not platform or not chat_id:
+            return False
+        adapter = next((a for a in self.adapters if a.name == platform), None)
+        if adapter is None:
+            return False
+        synth = MessageEvent(
+            platform=platform,
+            chat_id=chat_id,
+            text=text,
+            user_id=str(event.get("user_id") or "") or None,
+            user_name=str(event.get("user_name") or "") or None,
+            thread_id=str(event.get("thread_id") or "") or None,
+            message_id=str(event.get("message_id") or "") or None,
+            session_key=str(event.get("session_key") or "") or None,
+            internal=True,
+        )
+        try:
+            adapter._submit_inbound(synth)
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _drain_process_notifications(self) -> int:
+        try:
+            from ..tools.process_registry import process_registry
+
+            events = process_registry.drain_notifications()
+        except Exception:  # noqa: BLE001
+            return 0
+        if not events:
+            return 0
+        try:
+            from ..agent import wakeups
+
+            wakeups.drain_wakeups(source="process")
+        except Exception:  # noqa: BLE001
+            pass
+        submitted = 0
+        for event, text in events:
+            if self._submit_process_notification(event, text):
+                submitted += 1
+        return submitted
+
+    def _process_notification_loop(self, interval: float = 0.5) -> None:
+        import time
+
+        while True:
+            self._drain_process_notifications()
+            time.sleep(interval)
 
     def enqueue(self, platform: str, chat_id: str, text: str) -> None:
         """Durably queue an outbound message (used by cron + retry on send failure)."""
@@ -629,6 +696,8 @@ class GatewayRunner:
         # in-process cron ticker so scheduled/one-shot jobs fire without a separate daemon
         threading.Thread(target=self._cron_ticker, daemon=True).start()
         print("  ▸ cron ticker up")
+        threading.Thread(target=self._process_notification_loop, daemon=True).start()
+        print("  ▸ process notification watcher up")
         from . import memory_monitor          # periodic RSS log to catch leaks
         memory_monitor.start()
         import signal

@@ -58,7 +58,7 @@ def run_fullscreen(
     composer = TextArea(height=3, prompt=">>> ", multiline=True, wrap_lines=True,
                         completer=repl.make_slash_completer(), complete_while_typing=True)
     busy = threading.Event()
-    queued_inputs: list[str] = []
+    queued_inputs: list[Any] = []
     streaming = {"active": False}
     status_state = repl.TerminalStatusState()
     app_ref: dict[str, Any] = {}
@@ -133,12 +133,26 @@ def run_fullscreen(
     def start_next_queued() -> None:
         if busy.is_set() or not queued_inputs:
             return
-        text = queued_inputs.pop(0)
+        item = queued_inputs.pop(0)
+        if isinstance(item, dict):
+            text = str(item.get("text") or "")
+            append(events, f"\nqueued run> {text}\n")
+            start_turn(
+                text,
+                display_text=str(item.get("display_text") or text),
+                add_profile_directive=bool(item.get("add_profile_directive", True)),
+                meta=item.get("meta") if isinstance(item.get("meta"), dict) else None,
+                include_wakeups=bool(item.get("include_wakeups", True)),
+            )
+            return
+        text = str(item)
         append(events, f"\nqueued run> {text}\n")
         handle_ready_input(text)
 
     def start_turn(text: str, *, display_text: str | None = None,
-                   add_profile_directive: bool = True) -> None:
+                   add_profile_directive: bool = True,
+                   meta: dict | None = None,
+                   include_wakeups: bool = True) -> None:
         append(transcript, f"\nuser> {display_text or text}\nassistant> ")
         busy.set()
 
@@ -153,16 +167,40 @@ def run_fullscreen(
                     on_event=on_event,
                     notify=lambda line: append(events, f"\n{line}\n"),
                     add_profile_directive=add_profile_directive,
+                    meta=meta,
+                    include_wakeups=include_wakeups,
                 )
             except Exception as exc:  # noqa: BLE001
                 append(events, f"\nerror: {type(exc).__name__}: {exc}\n")
             finally:
                 busy.clear()
                 streaming["active"] = False
+                enqueue_process_notifications(start=False)
                 invalidate()
                 start_next_queued()
 
         threading.Thread(target=work, daemon=True).start()
+
+    def enqueue_process_notifications(*, start: bool = True) -> None:
+        notes = repl.drain_process_notification_events()
+        for event, text in notes:
+            queued_inputs.append({
+                "text": text,
+                "display_text": text,
+                "add_profile_directive": False,
+                "include_wakeups": False,
+                "meta": repl._process_notification_meta(event),
+            })
+            append(events, f"\nbackground process notification: {event.get('session_id', '')}\n")
+        if start and not busy.is_set():
+            start_next_queued()
+
+    def process_notification_loop() -> None:
+        while not stop_notifications.wait(0.5):
+            try:
+                enqueue_process_notifications()
+            except Exception:  # noqa: BLE001
+                pass
 
     def run_slash_async(command: str) -> None:
         busy.set()
@@ -188,6 +226,7 @@ def run_fullscreen(
             finally:
                 busy.clear()
                 streaming["active"] = False
+                enqueue_process_notifications(start=False)
                 invalidate()
                 start_next_queued()
 
@@ -297,7 +336,12 @@ def run_fullscreen(
         style=None,
     )
     app_ref["app"] = app
-    app.run()
+    stop_notifications = threading.Event()
+    threading.Thread(target=process_notification_loop, daemon=True).start()
+    try:
+        app.run()
+    finally:
+        stop_notifications.set()
 
 
 def _render_session(session: Session) -> str:

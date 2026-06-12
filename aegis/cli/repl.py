@@ -423,6 +423,8 @@ def run_terminal_turn(
     on_event: Callable[[dict], None],
     notify: Callable[[str], None] | None = None,
     add_profile_directive: bool = True,
+    meta: dict | None = None,
+    include_wakeups: bool = True,
 ):
     """Run one terminal-surface turn with the same REPL/TUI lifecycle.
 
@@ -441,7 +443,9 @@ def run_terminal_turn(
         session=agent.session,
         agent=agent,
         surface=surface,
+        meta=meta,
         on_event=on_event,
+        include_wakeups=include_wakeups,
     )
     _record_terminal_run(agent, run)
 
@@ -451,7 +455,9 @@ def run_terminal_turn(
             session=agent.session,
             agent=agent,
             surface=surface,
+            meta={"goal_continuation": True, **(meta or {})},
             on_event=on_event,
+            include_wakeups=include_wakeups,
         )
         _record_terminal_run(agent, cont)
         store.save(agent.session)
@@ -1101,6 +1107,62 @@ def handle_slash(
     return ""
 
 
+def _process_notification_meta(event: dict) -> dict:
+    return {
+        "synthetic": "process_notification",
+        "process_event_type": event.get("type", ""),
+        "process_session_id": event.get("session_id", ""),
+        "process_session_key": event.get("session_key", ""),
+    }
+
+
+def drain_process_notification_events() -> list[tuple[dict, str]]:
+    try:
+        from ..tools.process_registry import process_registry
+
+        events = process_registry.drain_notifications()
+    except Exception:  # noqa: BLE001
+        return []
+    if events:
+        try:
+            from ..agent import wakeups
+
+            wakeups.drain_wakeups(source="process")
+        except Exception:  # noqa: BLE001
+            pass
+    return events
+
+
+def drain_process_notifications(
+    agent: Any,
+    runner: SurfaceRunner,
+    store: SessionStore,
+    *,
+    surface: str,
+    on_event: Callable[[dict], None],
+    notify: Callable[[str], None] | None = None,
+    max_turns: int = 10,
+) -> int:
+    count = 0
+    for event, text in drain_process_notification_events()[:max_turns]:
+        if notify is not None:
+            notify(f"background process notification: {event.get('session_id', '')}")
+        run_terminal_turn(
+            text,
+            agent,
+            runner,
+            store,
+            surface=surface,
+            on_event=on_event,
+            notify=notify,
+            add_profile_directive=False,
+            meta=_process_notification_meta(event),
+            include_wakeups=False,
+        )
+        count += 1
+    return count
+
+
 # --------------------------------------------------------------------------- #
 # Entry points
 # --------------------------------------------------------------------------- #
@@ -1184,4 +1246,12 @@ def interactive(config: Config, *, model=None, provider_name=None,
             agent.cancel()   # stop the loop at the next safe point; discard partial work
             _out("\n  ⏹ interrupted — stopped this turn (your session is intact)", style="yellow")
         store.save(agent.session)
+        drain_process_notifications(
+            agent,
+            runner,
+            store,
+            surface="repl",
+            on_event=renderer,
+            notify=lambda line: _out(f"  {line}", style="magenta"),
+        )
         _out(_status_line(agent, renderer.status), style="bright_black")
