@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import threading
 import time
 
@@ -11,6 +12,8 @@ import httpx
 from ..types import new_id
 from ..util import slugify
 from .base import Tool, ToolContext, ToolResult
+
+_NO_TOOLSETS = ["__none__"]
 
 # Process-global registry of spawned subagents (id -> {status, task}) for observability and a
 # bounded view of recent children. Capped so it can't grow without bound.
@@ -69,6 +72,35 @@ def _register_terminal_backend_override(sid: str, backend: str) -> None:
         register_task_env_overrides(sid, {"terminal_backend": backend})
     except Exception:  # noqa: BLE001
         pass
+
+
+def _child_config_for_toolsets(config, requested_toolsets):
+    if not requested_toolsets:
+        return config
+    try:
+        from ..config import Config
+    except Exception:  # noqa: BLE001
+        return config
+
+    requested = [
+        str(item).strip()
+        for item in requested_toolsets
+        if isinstance(item, str) and str(item).strip()
+    ]
+    if not requested:
+        requested = _NO_TOOLSETS
+    parent_toolsets = [
+        str(item).strip()
+        for item in (config.get("tools.toolsets", []) or ["core"])
+        if isinstance(item, str) and str(item).strip()
+    ]
+    parent_enabled = set(parent_toolsets)
+    child_toolsets = requested if "all" in parent_enabled else [
+        item for item in requested if item in parent_enabled
+    ]
+    data = copy.deepcopy(getattr(config, "data", {}) or {})
+    data.setdefault("tools", {})["toolsets"] = child_toolsets or list(_NO_TOOLSETS)
+    return Config(data)
 
 
 # Typed subagents: a named type = a tool whitelist + a role preamble. Read-only types
@@ -232,18 +264,17 @@ class SubagentTool(Tool):
                 kwargs = {}
                 if spec["tools"] is not None:
                     kwargs["registry"] = _restricted_registry(spec["tools"])
+                child_config = _child_config_for_toolsets(config, toolsets)
                 child_session = Session.create()
                 from ..surface import apply_session_runtime, inherit_session_runtime
                 inherit_session_runtime(getattr(parent, "session", None), child_session)
                 _seed_role_prompt(child_session, atype, role_prompt)
-                child = Agent.create(config, session=child_session, cwd=ctx.cwd, **kwargs)
+                child = Agent.create(child_config, session=child_session, cwd=ctx.cwd, **kwargs)
                 apply_session_runtime(child)
                 child._depth = depth  # type: ignore[attr-defined]
-                if toolsets:
-                    child.config.data.setdefault("tools", {})["toolsets"] = toolsets
                 from ..surface import SurfaceRunner
 
-                runner = SurfaceRunner(config, cwd=ctx.cwd, include_mcp=True)
+                runner = SurfaceRunner(child_config, cwd=ctx.cwd, include_mcp=True)
                 result = runner.run_prompt(
                     task,
                     session=child_session,

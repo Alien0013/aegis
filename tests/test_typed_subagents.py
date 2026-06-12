@@ -54,6 +54,46 @@ def test_general_type_keeps_full_tools(tmp_path, capture):
     assert "write_file" in capture["tools"] and "bash" in capture["tools"]
 
 
+def test_requested_toolsets_are_child_only(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_run(self, task, on_event=None):
+        seen["child_toolsets"] = self.config.get("tools.toolsets")
+        return Message.assistant("ok")
+
+    monkeypatch.setattr(Agent, "run", fake_run)
+    config = Config.load()
+    config.data["tools"]["toolsets"] = ["core", "browser"]
+    ctx = ToolContext(cwd=tmp_path, config=config)
+
+    r = SubagentTool().run({"task": "use browser only", "toolsets": ["browser", "lsp"]}, ctx)
+
+    assert not r.is_error
+    assert seen["child_toolsets"] == ["browser"]
+    assert config.data["tools"]["toolsets"] == ["core", "browser"]
+
+
+def test_requested_toolsets_cannot_widen_child(tmp_path, monkeypatch):
+    from aegis.tools.agentic import _NO_TOOLSETS
+
+    seen = {}
+
+    def fake_run(self, task, on_event=None):
+        seen["child_toolsets"] = self.config.get("tools.toolsets")
+        return Message.assistant("ok")
+
+    monkeypatch.setattr(Agent, "run", fake_run)
+    config = Config.load()
+    config.data["tools"]["toolsets"] = ["core"]
+    ctx = ToolContext(cwd=tmp_path, config=config)
+
+    r = SubagentTool().run({"task": "use browser", "toolsets": ["browser"]}, ctx)
+
+    assert not r.is_error
+    assert seen["child_toolsets"] == _NO_TOOLSETS
+    assert config.data["tools"]["toolsets"] == ["core"]
+
+
 def test_unknown_type_rejected(tmp_path):
     r = SubagentTool().run({"task": "x", "agent_type": "ninja"}, _ctx(tmp_path))
     assert r.is_error and "unknown agent_type" in r.content
