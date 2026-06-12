@@ -988,6 +988,74 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
             request=request_payload,
         )
         _fire_provider_observer(agent, "pre_api_request", observer_base)
+        fallback_attempts: list[dict[str, Any]] = []
+        fallback_observers: dict[int, dict[str, Any]] = {0: observer_base}
+        successful_fallback_attempt: int | None = None
+
+        def _fallback_observer_base(
+            attempt: dict[str, Any],
+            *,
+            _fallback_observers=fallback_observers,
+            _request_payload=request_payload,
+            _session=session,
+            _provider_span=provider_span,
+        ) -> dict[str, Any]:
+            index = int(attempt.get("index", 0) or 0)
+            if index not in _fallback_observers:
+                request = dict(_request_payload)
+                request["fallback_attempt"] = {
+                    "index": index,
+                    "provider": str(attempt.get("provider", "") or ""),
+                    "model": str(attempt.get("model", "") or ""),
+                }
+                base = _provider_observer_base(
+                    agent,
+                    api_request_id=new_id("api"),
+                    session=_session,
+                    trace_id=trace_id,
+                    turn_id=turn_id,
+                    provider_span=_provider_span,
+                    request=request,
+                )
+                _fallback_observers[index] = base
+            base = dict(_fallback_observers[index])
+            base.update({
+                "provider": str(attempt.get("provider", "") or base.get("provider", "")),
+                "model": str(attempt.get("model", "") or base.get("model", "")),
+                "api_mode": str(attempt.get("api_mode", "") or base.get("api_mode", "")),
+            })
+            _fallback_observers[index] = base
+            return base
+
+        def _observe_provider_attempt(
+            attempt: dict[str, Any],
+            *,
+            _fallback_attempts=fallback_attempts,
+            _fallback_observer_base=_fallback_observer_base,
+        ) -> None:
+            nonlocal successful_fallback_attempt
+            event = str(attempt.get("event", "") or "")
+            index = int(attempt.get("index", 0) or 0)
+            _fallback_attempts.append(dict(attempt))
+            base = _fallback_observer_base(attempt)
+            if event == "pre":
+                if index > 0:
+                    _fire_provider_observer(agent, "pre_api_request", base)
+                return
+            if event == "error":
+                error = dict(attempt.get("error") or {})
+                error.setdefault("duration_ms", int(attempt.get("duration_ms", 0) or 0))
+                payload = dict(base)
+                payload.update({
+                    "status": "error",
+                    "duration_ms": int(attempt.get("duration_ms", 0) or 0),
+                    "error": error,
+                })
+                _fire_provider_observer(agent, "api_request_error", payload)
+                return
+            if event == "post":
+                successful_fallback_attempt = index
+
         provider_started = time.perf_counter()
         try:
             agent._active_response_id = ""
@@ -1002,6 +1070,7 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                 session_id=getattr(agent.session, "id", None),
                 response_state=response_state,
                 metadata=_provider_metadata(agent),
+                on_provider_attempt=_observe_provider_attempt,
                 on_response_id=lambda rid: setattr(agent, "_active_response_id", str(rid or "")),
             )
             agent._active_response_id = ""
@@ -1023,7 +1092,8 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                 "duration_ms": provider_duration_ms,
                 "error": error_data,
             })
-            _fire_provider_observer(agent, "api_request_error", error_payload)
+            if not any(str(a.get("event") or "") == "error" for a in fallback_attempts):
+                _fire_provider_observer(agent, "api_request_error", error_payload)
             # Signed thinking blocks were invalidated upstream -> resend without them (once).
             if action == "strip_thinking" and not getattr(agent, "_strip_thinking", False):
                 if trace_store and provider_span:
@@ -1106,11 +1176,21 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
         budget.usage.add(resp.usage)
         provider_duration_ms = int((time.perf_counter() - provider_started) * 1000)
         response_payload = _response_trace_data(resp, provider_duration_ms)
+        if fallback_attempts:
+            response_payload["fallback_attempts"] = fallback_attempts
+        final_observer_base = fallback_observers.get(
+            successful_fallback_attempt if successful_fallback_attempt is not None else 0,
+            observer_base,
+        )
         if trace_store and provider_span:
             try:
+                final_provider = str(final_observer_base.get("provider", "") or getattr(agent.provider, "name", ""))
+                final_model = str(final_observer_base.get("model", "") or getattr(agent.provider, "model", ""))
                 trace_store.finish_span(
                     provider_span["span_id"],
                     status="ok",
+                    provider=final_provider,
+                    model=final_model,
                     cost=_usage_cost_usd(getattr(agent.provider, "model", ""), resp.usage, agent.config),
                     cache_read=getattr(resp.usage, "cache_read", 0),
                     cache_write=getattr(resp.usage, "cache_write", 0),
@@ -1118,7 +1198,7 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                 )
             except Exception:  # noqa: BLE001
                 pass
-        success_payload = dict(observer_base)
+        success_payload = dict(final_observer_base)
         success_payload.update({
             "status": "ok",
             "duration_ms": provider_duration_ms,

@@ -121,21 +121,62 @@ class FallbackProvider:
 
     def complete(self, messages: list[Message], tools: list[ToolSchema] | None = None,
                  **kw) -> LLMResponse:
+        on_attempt = kw.pop("on_provider_attempt", None)
         chain = self._chain()
         last_err: Exception | None = None
-        for prov in chain:
+        for index, prov in enumerate(chain):
+            attempt = {
+                "index": index,
+                "provider": getattr(prov, "name", ""),
+                "model": getattr(prov, "model", ""),
+                "api_mode": str(getattr(getattr(prov, "api_mode", ""), "value", getattr(prov, "api_mode", "")) or ""),
+            }
+            if callable(on_attempt):
+                try:
+                    on_attempt({**attempt, "event": "pre"})
+                except Exception:  # noqa: BLE001
+                    pass
+            import time
+            started = time.perf_counter()
             try:
                 resp = prov.complete(messages, tools=tools, **kw)
                 self.active = prov
+                if callable(on_attempt):
+                    try:
+                        on_attempt({
+                            **attempt,
+                            "event": "post",
+                            "status": "ok",
+                            "duration_ms": int((time.perf_counter() - started) * 1000),
+                        })
+                    except Exception:  # noqa: BLE001
+                        pass
                 return resp
             except Exception as e:  # noqa: BLE001
                 reason = classify_provider_error(e)
+                action = recovery_action(reason)
                 self.last_trigger = (getattr(prov, "name", "?"), reason)
                 last_err = e
+                if callable(on_attempt):
+                    try:
+                        on_attempt({
+                            **attempt,
+                            "event": "error",
+                            "status": "error",
+                            "duration_ms": int((time.perf_counter() - started) * 1000),
+                            "error": {
+                                "type": type(e).__name__,
+                                "message": str(e),
+                                "reason": reason,
+                                "recovery": action,
+                            },
+                        })
+                    except Exception:  # noqa: BLE001
+                        pass
                 # content_policy / context_overflow: another provider can't fix it (the request
                 # itself is the problem) — stop failing over and let the caller handle it
                 # (the loop compresses on context_overflow). Saves wasted calls down the chain.
-                if recovery_action(reason) in ("abort", "compress"):
+                if action in ("abort", "compress"):
                     raise
                 from .._log import info
                 info(f"fallback: {getattr(prov, 'name', '?')} failed ({reason}); "

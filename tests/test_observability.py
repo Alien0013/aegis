@@ -193,6 +193,70 @@ def test_budget_exhausted_grace_fires_provider_hooks(tmp_path):
         _HOOKS.update(original_hooks)
 
 
+def test_fallback_attempts_fire_provider_hooks(tmp_path):
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.plugins import PluginAPI, _HOOKS
+    from aegis.providers.fallback import FallbackProvider
+    from aegis.session import Session
+    from aegis.types import LLMResponse, Usage
+
+    class Provider:
+        context_length = 200_000
+        model = "m"
+        api_mode = None
+        auth = None
+
+        def __init__(self, name, *, fail=False):
+            self.name = name
+            self.fail = fail
+
+        def describe(self):
+            return self.name
+
+        def complete(self, messages, tools=None, **kwargs):
+            if self.fail:
+                raise RuntimeError(f"{self.name} down")
+            return LLMResponse(text=f"{self.name} ok", usage=Usage(input_tokens=3, output_tokens=1))
+
+    original_hooks = {event: list(hooks) for event, hooks in _HOOKS.items()}
+    _HOOKS.clear()
+    events: list[tuple[str, dict]] = []
+    api = PluginAPI()
+
+    try:
+        for event in ("pre_api_request", "post_api_request", "api_request_error"):
+            api.register_hook(event, lambda payload, _agent, event=event: events.append((event, payload)))
+
+        cfg = Config.load()
+        cfg.data["memory"]["enabled"] = False
+        cfg.data["hooks"] = {}
+        provider = FallbackProvider(Provider("primary", fail=True), [Provider("fallback")])
+        agent = Agent(config=cfg, provider=provider, session=Session.create(), cwd=tmp_path)
+
+        msg = agent.run("hello")
+
+        assert msg.content == "fallback ok"
+        assert [(event, payload["provider"]) for event, payload in events] == [
+            ("pre_api_request", "primary"),
+            ("api_request_error", "primary"),
+            ("pre_api_request", "fallback"),
+            ("post_api_request", "fallback"),
+        ]
+        assert events[1][1]["error"]["reason"] == "invalid_response"
+        assert events[2][1]["request"]["fallback_attempt"]["index"] == 1
+        attempts = events[3][1]["response"]["fallback_attempts"]
+        assert [(a["event"], a["provider"]) for a in attempts] == [
+            ("pre", "primary"),
+            ("error", "primary"),
+            ("pre", "fallback"),
+            ("post", "fallback"),
+        ]
+    finally:
+        _HOOKS.clear()
+        _HOOKS.update(original_hooks)
+
+
 def test_cost_pricing_prefix_match():
     from aegis.usage_log import _price
     assert _price("claude-opus-4-8")[1] == 25.0      # output price (Opus 4.5+ tier)
