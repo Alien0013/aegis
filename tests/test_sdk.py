@@ -330,6 +330,7 @@ def test_sdk_retargets_run_after_session_switch(monkeypatch, tmp_path):
     from aegis.runs import RunStore
     from aegis.sdk import AegisClient
     from aegis.session import Session, SessionStore
+    from aegis.tracing import TraceStore
     from aegis.types import LLMResponse, Message
     from conftest import FakeProvider
 
@@ -339,12 +340,22 @@ def test_sdk_retargets_run_after_session_switch(monkeypatch, tmp_path):
     parent = Session.create("sdk parent")
     child = Session.create("sdk child", parent_id=parent.id)
     store.save(parent)
+    trace_id = "trace_sdk_child"
+    turn_id = "turn_sdk_child"
 
     def fake_run(self, _user_input, _emit=None):
+        trace_store = TraceStore.from_config(cfg)
+        span = trace_store.start_span(
+            trace_id=trace_id,
+            session_id=parent.id,
+            turn_id=turn_id,
+            kind="turn",
+        )
+        trace_store.finish_span(span["span_id"], status="ok")
         self.session = child
         self.tool_context.session = child
         self.store.save(child)
-        self._trace_context = {"trace_id": "trace_sdk_child", "turn_id": "turn_sdk_child"}
+        self._trace_context = {"trace_id": trace_id, "turn_id": turn_id}
         return Message.assistant("child reply")
 
     monkeypatch.setattr("aegis.sdk.Agent.run", fake_run)
@@ -360,6 +371,7 @@ def test_sdk_retargets_run_after_session_switch(monkeypatch, tmp_path):
 
     assert result.session_id == child.id
     assert RunStore().get(result.run_id)["session_id"] == child.id
+    assert TraceStore.from_config(cfg).get_trace(result.trace_id)["session_id"] == child.id
 
 
 def test_sdk_expands_context_references_and_records_metadata(tmp_path):

@@ -72,11 +72,14 @@ class GatewayRunner:
         return cmd in self._ALWAYS_ALLOWED or cmd in set(self.config.get("gateway.user_commands", []) or [])
 
     def interrupt(self, ev: MessageEvent) -> bool:
-        """Cancel the run in progress for ev's session (sets the agent's cancel_event). True if
-        an active agent was signalled."""
+        """Cancel the run in progress for ev's session. True if an active agent was signalled."""
         agent = self._agents.get(self._key(ev))
         if agent is not None and not agent.cancel_event.is_set():
-            agent.cancel_event.set()
+            cancel = getattr(agent, "cancel", None)
+            if callable(cancel):
+                cancel()
+            else:
+                agent.cancel_event.set()
             return True
         return False
 

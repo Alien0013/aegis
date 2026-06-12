@@ -229,6 +229,16 @@ class AegisClient:
             pass
         if run_store is not None and run_id:
             try:
+                if result.trace_id and result.session_id != session.id:
+                    try:
+                        from .tracing import TraceStore
+
+                        TraceStore.from_config(self.config).retarget_session(
+                            result.trace_id,
+                            result.session_id,
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
                 _retarget_run_session(run_store, run_id, result.session_id)
                 run_store.finish(
                     run_id,

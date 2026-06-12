@@ -387,9 +387,17 @@ def test_runner_interrupt_sets_cancel(monkeypatch, tmp_path):
     gr.session_mode = "per_channel"
 
     class FakeAgent:
-        cancel_event = threading.Event()
+        def __init__(self):
+            self.cancel_event = threading.Event()
+            self.cancelled = False
+
+        def cancel(self):
+            self.cancelled = True
+            self.cancel_event.set()
+
     gr._agents = {"telegram:42": FakeAgent()}
     assert gr.interrupt(MessageEvent(platform="telegram", chat_id="42", text="stop")) is True
+    assert gr._agents["telegram:42"].cancelled is True
     assert gr._agents["telegram:42"].cancel_event.is_set()
     assert gr.interrupt(MessageEvent(platform="telegram", chat_id="99", text="stop")) is False
 
