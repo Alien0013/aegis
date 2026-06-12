@@ -253,6 +253,24 @@ def test_process_tool_submit_and_wait(tmp_path):
         process_registry._finished.pop(sid, None)
 
 
+def test_process_registry_recovers_running_checkpoint(tmp_path, monkeypatch):
+    from aegis.tools.process_registry import ProcessRegistry
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("AEGIS_HOME", str(home))
+    registry = ProcessRegistry()
+    session = registry.spawn_local("sleep 5", cwd=tmp_path, task_id="recover_task")
+    try:
+        recovered = ProcessRegistry()
+        poll = recovered.poll(session.id)
+        assert poll["status"] == "running"
+        assert poll["detached"] is True
+        assert recovered.has_active_processes("recover_task")
+    finally:
+        registry.kill_process(session.id)
+        ProcessRegistry().kill_process(session.id)
+
+
 def test_task_env_override_updates_live_local_cwd(tmp_path):
     from aegis.tools.backends import (
         cleanup_task_environment,
