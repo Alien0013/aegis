@@ -560,6 +560,45 @@ def test_process_registry_recovers_running_checkpoint(tmp_path, monkeypatch):
         ProcessRegistry().kill_process(session.id)
 
 
+def test_process_registry_does_not_recover_sandbox_pid_as_host(tmp_path, monkeypatch):
+    import json
+    import os
+    import time
+
+    from aegis.tools.process_registry import ProcessRegistry
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("AEGIS_HOME", str(home))
+    home.mkdir()
+    (home / "processes.json").write_text(
+        json.dumps({
+            "running": [{
+                "id": "proc_sandbox",
+                "command": "sleep 99",
+                "task_id": "sandbox_task",
+                "pid": os.getpid(),
+                "pid_scope": "sandbox",
+                "cwd": str(tmp_path),
+                "started_at": time.time(),
+                "exited": False,
+                "watch_patterns": ["READY"],
+            }],
+            "finished": [],
+        }),
+        encoding="utf-8",
+    )
+
+    recovered = ProcessRegistry()
+    poll = recovered.poll("proc_sandbox")
+
+    assert poll["status"] == "exited"
+    assert poll["detached"] is True
+    assert poll["pid_scope"] == "sandbox"
+    assert "sandbox-local PID" in poll["note"]
+    assert "sandbox-local PID" in poll["output_preview"]
+    assert not recovered.has_active_processes("sandbox_task")
+
+
 def test_task_env_override_updates_live_local_cwd(tmp_path):
     from aegis.tools.backends import (
         cleanup_task_environment,

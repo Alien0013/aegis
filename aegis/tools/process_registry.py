@@ -33,6 +33,10 @@ WATCH_GLOBAL_MAX_PER_WINDOW = 15
 WATCH_GLOBAL_WINDOW_SECONDS = 10
 WATCH_GLOBAL_COOLDOWN_SECONDS = 30
 ENV_POLL_INTERVAL_SECONDS = 2.0
+SANDBOX_RECOVERY_NOTE = (
+    "Process used a sandbox-local PID and cannot be recovered after restart; "
+    "output history may be incomplete."
+)
 
 
 @dataclass
@@ -648,7 +652,13 @@ class ProcessRegistry:
             self._completion_consumed.add(session.id)
         if session.detached:
             result["detached"] = True
-            result["note"] = "Process recovered after restart; output history may be incomplete"
+            result["note"] = (
+                SANDBOX_RECOVERY_NOTE
+                if session.pid_scope != "host"
+                else "Process recovered after restart; output history may be incomplete"
+            )
+        if session.pid_scope != "host":
+            result["pid_scope"] = session.pid_scope
         if session.pty:
             result["pty"] = True
         if session.pty_fallback:
@@ -806,6 +816,7 @@ class ProcessRegistry:
                 "status": "exited" if session.exited else "running",
                 "output_preview": session.output_buffer[-200:],
                 "exit_code": session.exit_code if session.exited else None,
+                "pid_scope": session.pid_scope,
                 "pty": session.pty,
                 "pty_fallback": session.pty_fallback,
                 "watch_patterns": session.watch_patterns,
@@ -850,6 +861,14 @@ class ProcessRegistry:
 
     def _refresh_detached_session(self, session: ProcessSession) -> None:
         if session.exited or not session.detached or session.pid is None:
+            return
+        if session.pid_scope != "host":
+            with session._lock:
+                session.exited = True
+                session.exit_code = None
+                if not session.output_buffer:
+                    session.output_buffer = SANDBOX_RECOVERY_NOTE
+            self._move_to_finished(session)
             return
         if _pid_alive(session.pid):
             return
@@ -899,6 +918,13 @@ class ProcessRegistry:
         for entry in running or []:
             session = self._session_from_json(entry, detached=True)
             if session is None:
+                continue
+            if session.pid_scope != "host":
+                session.exited = True
+                session.exit_code = None
+                if not session.output_buffer:
+                    session.output_buffer = SANDBOX_RECOVERY_NOTE
+                self._finished[session.id] = session
                 continue
             if session.pid and _pid_alive(session.pid):
                 self._running[session.id] = session
