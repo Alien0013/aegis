@@ -25,6 +25,7 @@ def capture(monkeypatch):
         seen["system_prompt"] = self.session.messages[0].content
         seen["prompt_parts"] = list(self.session.meta.get("prompt_parts") or [])
         seen["session_meta"] = dict(self.session.meta)
+        seen.setdefault("task_ids", []).append(getattr(self.tool_context, "task_id", ""))
         return Message.assistant("child answer")
 
     monkeypatch.setattr(Agent, "run", fake_run)
@@ -64,6 +65,8 @@ def test_continuation_reuses_child(tmp_path, capture):
     sid = re.search(r"subagent id: (\S+) ", r1.content).group(1)
     r2 = tool.run({"task": "refine step 3", "continue_id": sid}, _ctx(tmp_path))
     assert not r2.is_error and "child answer" in r2.content
+    assert capture["task_ids"][0] == sid
+    assert capture["task_ids"][-1] == sid
     assert capture["tasks"][-1] == "refine step 3"      # follow-up went to the same child
     assert capture["session_meta"]["agent_type"] == "plan"
     assert "READ-ONLY planning architect" in capture["system_prompt"]

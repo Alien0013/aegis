@@ -316,7 +316,14 @@ class BashTool(Tool):
 
         timeout = min(int(args.get("timeout", 120)), 600)
         backend = ctx.config.get("tools.terminal_backend", "local") if ctx.config else "local"
-        out, code = run_command(args["command"], str(ctx.cwd), timeout, backend, ctx.config)
+        out, code = run_command(
+            args["command"],
+            str(ctx.cwd),
+            timeout,
+            backend,
+            ctx.config,
+            task_id=getattr(ctx, "task_id", "") or None,
+        )
         out = out.strip() or "(no output)"
         tail = f"\n[exit {code}]"
         return ToolResult(

@@ -91,20 +91,58 @@ def test_bash_tool_runs(tmp_path):
     assert "hello-bash" in res.content and not res.is_error
 
 
-def test_bash_tool_explains_outer_bwrap_loopback_failure(tmp_path, monkeypatch):
-    from types import SimpleNamespace
+def test_bash_tool_persists_local_shell_state_by_task(tmp_path):
+    from aegis.tools.backends import cleanup_task_environment
+    from aegis.tools.builtin import BashTool
 
+    tool = BashTool()
+    task_id = f"test_{tmp_path.name}"
+    other_task_id = f"{task_id}_other"
+    ctx = _ctx(tmp_path)
+    ctx.task_id = task_id
+    other = _ctx(tmp_path)
+    other.task_id = other_task_id
+    try:
+        first = tool.run(
+            {"command": "mkdir -p inner && cd inner && export AEGIS_TEST_PERSIST=ok"},
+            ctx,
+        )
+        assert not first.is_error
+
+        second = tool.run(
+            {"command": 'printf "%s|%s" "$AEGIS_TEST_PERSIST" "$(pwd -P)"'},
+            ctx,
+        )
+        assert not second.is_error
+        assert f"ok|{tmp_path / 'inner'}" in second.content
+
+        isolated = tool.run(
+            {"command": 'printf "%s|%s" "${AEGIS_TEST_PERSIST-unset}" "$(pwd -P)"'},
+            other,
+        )
+        assert not isolated.is_error
+        assert f"unset|{tmp_path}" in isolated.content
+    finally:
+        cleanup_task_environment(task_id)
+        cleanup_task_environment(other_task_id)
+
+
+def test_bash_tool_explains_outer_bwrap_loopback_failure(tmp_path, monkeypatch):
     import aegis.tools.backends as backends
     from aegis.tools.builtin import BashTool
 
-    def fake_run(*_a, **_k):
-        return SimpleNamespace(
-            stdout="",
-            stderr="bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted\n",
-            returncode=1,
-        )
+    class FakeEnvironment:
+        def execute(self, *_a, **_k):
+            return {
+                "output": "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted\n",
+                "returncode": 1,
+            }
 
-    monkeypatch.setattr(backends.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        backends,
+        "_get_or_create_local_environment",
+        lambda *_a, **_k: FakeEnvironment(),
+    )
     res = BashTool().run({"command": "pwd"}, _ctx(tmp_path))
 
     assert res.is_error

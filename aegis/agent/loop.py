@@ -861,6 +861,17 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
     turn_span = None
     trace_id = new_id("trace")
     turn_id = new_id("turn")
+    task_id = (
+        getattr(agent, "_terminal_task_id", "")
+        or getattr(getattr(agent, "tool_context", None), "task_id", "")
+        or getattr(session, "id", "")
+        or turn_id
+    )
+    try:
+        agent._terminal_task_id = task_id
+        agent.tool_context.task_id = task_id
+    except Exception:  # noqa: BLE001
+        pass
     prompt_meta = _prompt_trace_meta(session)
     from ..tracing import should_trace
     if should_trace(agent.config, trace_id):

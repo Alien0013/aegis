@@ -21,14 +21,33 @@ environment (``TERMINAL_SSH_HOST``, ``TERMINAL_SSH_USER``, ``TERMINAL_SSH_PORT``
 
 from __future__ import annotations
 
+import atexit
 import os
 import shutil
 import subprocess
+import threading
+import time
+from pathlib import Path
 from typing import Any
 
-__all__ = ["run_command"]
+from .environments import LocalEnvironment
+
+__all__ = [
+    "cleanup_all_environments",
+    "cleanup_task_environment",
+    "run_command",
+]
 
 DEFAULT_DOCKER_IMAGE = "python:3.12-slim"
+DEFAULT_ENV_LIFETIME_SECONDS = 300
+
+_active_environments: dict[tuple[str, str], Any] = {}
+_last_activity: dict[tuple[str, str], float] = {}
+_env_lock = threading.Lock()
+_creation_locks: dict[tuple[str, str], threading.Lock] = {}
+_creation_locks_lock = threading.Lock()
+_cleanup_thread: threading.Thread | None = None
+_cleanup_running = False
 
 
 def run_command(
@@ -37,6 +56,7 @@ def run_command(
     timeout: int,
     backend: str = "local",
     config: Any = None,
+    task_id: str | None = None,
 ) -> tuple[str, int]:
     """Run ``command`` via the named backend.
 
@@ -47,34 +67,213 @@ def run_command(
     """
     backend = (backend or "local").strip().lower()
     if backend == "docker":
-        return _run_docker(command, cwd, timeout, config)
+        return _run_docker(command, cwd, timeout, config, task_id)
     if backend == "ssh":
-        return _run_ssh(command, cwd, timeout, config)
+        return _run_ssh(command, cwd, timeout, config, task_id)
     if backend in ("singularity", "apptainer"):
-        return _run_singularity(command, cwd, timeout, config)
+        return _run_singularity(command, cwd, timeout, config, task_id)
     if backend == "modal":
-        return _run_modal(command, cwd, timeout, config)
+        return _run_modal(command, cwd, timeout, config, task_id)
     if backend != "local":
-        out, code = _run_local(command, cwd, timeout)
+        out, code = _run_local(command, cwd, timeout, config, task_id)
         return _note(f"unknown backend {backend!r}; ran locally", out), code
-    return _run_local(command, cwd, timeout)
+    return _run_local(command, cwd, timeout, config, task_id)
 
 
 # --------------------------------------------------------------------------- #
 # local
 # --------------------------------------------------------------------------- #
-def _run_local(command: str, cwd: str, timeout: int) -> tuple[str, int]:
+def _run_local(command: str, cwd: str, timeout: int, config: Any = None,
+               task_id: str | None = None) -> tuple[str, int]:
+    task_key = task_id or "default"
+    _start_cleanup_thread(config)
     try:
-        proc = subprocess.run(
-            command, shell=True, cwd=cwd,
-            capture_output=True, text=True, timeout=timeout,
+        env = _get_or_create_local_environment(
+            task_key,
+            cwd=cwd,
+            timeout=timeout,
+            config=config,
         )
-    except subprocess.TimeoutExpired:
-        return f"command timed out after {timeout}s", 124
+        result = env.execute(command, timeout=timeout)
     except OSError as e:
         return _outer_sandbox_failure(str(e)) or (f"local command failed to start ({e})", 126)
-    out = _merge(proc.stdout, proc.stderr)
-    return _outer_sandbox_failure(out) or (out, proc.returncode)
+    except Exception as e:  # noqa: BLE001
+        return _outer_sandbox_failure(str(e)) or (f"local command failed ({type(e).__name__}: {e})", 126)
+    out = str(result.get("output", ""))
+    code = int(result.get("returncode", 0) or 0)
+    return _outer_sandbox_failure(out) or (out, code)
+
+
+def _get_or_create_local_environment(
+    task_id: str,
+    *,
+    cwd: str,
+    timeout: int,
+    config: Any,
+) -> LocalEnvironment:
+    key = ("local", task_id)
+    with _env_lock:
+        env = _active_environments.get(key)
+        if env is not None:
+            _last_activity[key] = time.time()
+            return env
+
+    with _creation_locks_lock:
+        lock = _creation_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _creation_locks[key] = lock
+
+    with lock:
+        with _env_lock:
+            env = _active_environments.get(key)
+            if env is not None:
+                _last_activity[key] = time.time()
+                return env
+
+        env_dir = _environment_state_dir(config, backend="local", task_id=task_id)
+        env = LocalEnvironment(
+            cwd=cwd,
+            timeout=timeout,
+            task_id=task_id,
+            state_dir=env_dir,
+        )
+        with _env_lock:
+            _active_environments[key] = env
+            _last_activity[key] = time.time()
+        return env
+
+
+def _environment_state_dir(config: Any, *, backend: str, task_id: str) -> Path:
+    safe_task_id = _path_safe_id(task_id)
+    try:
+        from .. import config as cfg
+
+        root = cfg.sub("terminal", backend, safe_task_id)
+    except Exception:
+        root = (
+            Path(os.environ.get("AEGIS_HOME", str(Path.home() / ".aegis")))
+            / "terminal"
+            / backend
+            / safe_task_id
+        )
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _path_safe_id(task_id: str) -> str:
+    safe = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in task_id)
+    return safe or "default"
+
+
+def _terminal_lifetime(config: Any) -> int:
+    if config is not None:
+        try:
+            return int(config.get("tools.terminal_lifetime_seconds", DEFAULT_ENV_LIFETIME_SECONDS))
+        except Exception:  # noqa: BLE001
+            pass
+    return DEFAULT_ENV_LIFETIME_SECONDS
+
+
+def _cleanup_inactive_envs(lifetime_seconds: int = DEFAULT_ENV_LIFETIME_SECONDS) -> int:
+    current_time = time.time()
+    envs_to_stop: list[tuple[tuple[str, str], Any]] = []
+    with _env_lock:
+        for key, last_time in list(_last_activity.items()):
+            if current_time - last_time > lifetime_seconds:
+                env = _active_environments.pop(key, None)
+                _last_activity.pop(key, None)
+                if env is not None:
+                    envs_to_stop.append((key, env))
+        with _creation_locks_lock:
+            for key, _env in envs_to_stop:
+                _creation_locks.pop(key, None)
+
+    for _key, env in envs_to_stop:
+        _cleanup_environment(env)
+    return len(envs_to_stop)
+
+
+def _cleanup_thread_worker(config: Any) -> None:
+    while _cleanup_running:
+        try:
+            _cleanup_inactive_envs(_terminal_lifetime(config))
+        except Exception:
+            pass
+        for _ in range(60):
+            if not _cleanup_running:
+                break
+            time.sleep(1)
+
+
+def _start_cleanup_thread(config: Any = None) -> None:
+    global _cleanup_running, _cleanup_thread
+    with _env_lock:
+        if _cleanup_thread is not None and _cleanup_thread.is_alive():
+            return
+        _cleanup_running = True
+        _cleanup_thread = threading.Thread(
+            target=_cleanup_thread_worker,
+            args=(config,),
+            daemon=True,
+        )
+        _cleanup_thread.start()
+
+
+def _stop_cleanup_thread() -> None:
+    global _cleanup_running
+    _cleanup_running = False
+    thread = _cleanup_thread
+    if thread is not None:
+        try:
+            thread.join(timeout=5)
+        except (KeyboardInterrupt, SystemExit):
+            pass
+
+
+def cleanup_task_environment(task_id: str, backend: str | None = None) -> int:
+    """Clean up cached environments for one task id."""
+    envs_to_stop: list[Any] = []
+    with _env_lock:
+        for key in list(_active_environments):
+            key_backend, key_task = key
+            if key_task != task_id or (backend is not None and key_backend != backend):
+                continue
+            env = _active_environments.pop(key, None)
+            _last_activity.pop(key, None)
+            if env is not None:
+                envs_to_stop.append(env)
+        with _creation_locks_lock:
+            for key in list(_creation_locks):
+                key_backend, key_task = key
+                if key_task == task_id and (backend is None or key_backend == backend):
+                    _creation_locks.pop(key, None)
+    for env in envs_to_stop:
+        _cleanup_environment(env)
+    return len(envs_to_stop)
+
+
+def cleanup_all_environments() -> int:
+    """Clean up all cached terminal environments."""
+    envs_to_stop: list[Any]
+    with _env_lock:
+        envs_to_stop = list(_active_environments.values())
+        _active_environments.clear()
+        _last_activity.clear()
+    with _creation_locks_lock:
+        _creation_locks.clear()
+    for env in envs_to_stop:
+        _cleanup_environment(env)
+    return len(envs_to_stop)
+
+
+def _cleanup_environment(env: Any) -> None:
+    try:
+        cleanup = getattr(env, "cleanup", None) or getattr(env, "stop", None)
+        if callable(cleanup):
+            cleanup()
+    except Exception:
+        pass
 
 
 # --------------------------------------------------------------------------- #
@@ -89,18 +288,20 @@ def _allow_fallback(config: Any) -> bool:
         return False
 
 
-def _degraded(config: Any, reason: str, command: str, cwd: str, timeout: int) -> tuple[str, int]:
+def _degraded(config: Any, reason: str, command: str, cwd: str, timeout: int,
+              task_id: str | None = None) -> tuple[str, int]:
     """Fail closed: only run locally if the user explicitly opted in."""
     if _allow_fallback(config):
-        out, code = _run_local(command, cwd, timeout)
+        out, code = _run_local(command, cwd, timeout, config, task_id)
         return _note(reason + "; ran locally (allow_local_fallback=true)", out), code
     return (f"⛔ sandbox unavailable: {reason}. Refusing to run on the host. "
             f"Set tools.allow_local_fallback: true to permit a local fallback.", 126)
 
 
-def _run_docker(command: str, cwd: str, timeout: int, config: Any) -> tuple[str, int]:
+def _run_docker(command: str, cwd: str, timeout: int, config: Any,
+                task_id: str | None = None) -> tuple[str, int]:
     if shutil.which("docker") is None:
-        return _degraded(config, "docker not found on PATH", command, cwd, timeout)
+        return _degraded(config, "docker not found on PATH", command, cwd, timeout, task_id)
 
     image = DEFAULT_DOCKER_IMAGE
     if config is not None:
@@ -115,6 +316,7 @@ def _run_docker(command: str, cwd: str, timeout: int, config: Any) -> tuple[str,
         "--cap-drop", "ALL",                 # drop all Linux capabilities
         "--security-opt", "no-new-privileges",
         "--pids-limit", "256",
+        "-e", f"AEGIS_TASK_ID={task_id or 'default'}",
         "-v", f"{cwd}:/work",
         "-w", "/work",
         image, "bash", "-c", command,
@@ -124,7 +326,7 @@ def _run_docker(command: str, cwd: str, timeout: int, config: Any) -> tuple[str,
     except subprocess.TimeoutExpired:
         return f"docker command timed out after {timeout}s", 124
     except OSError as e:
-        return _degraded(config, f"docker failed to start ({e})", command, cwd, timeout)
+        return _degraded(config, f"docker failed to start ({e})", command, cwd, timeout, task_id)
 
     # Distinguish "image missing / daemon down" from the program's own failure.
     out = _merge(proc.stdout, proc.stderr)
@@ -132,26 +334,30 @@ def _run_docker(command: str, cwd: str, timeout: int, config: Any) -> tuple[str,
         return failure
     if proc.returncode == 125 and "Unable to find image" not in out and "/work" not in out:
         return _degraded(config, f"docker run failed: {out.strip() or 'unknown error'}",
-                         command, cwd, timeout)
+                         command, cwd, timeout, task_id)
     return out, proc.returncode
 
 
 # --------------------------------------------------------------------------- #
 # ssh
 # --------------------------------------------------------------------------- #
-def _run_ssh(command: str, cwd: str, timeout: int, config: Any = None) -> tuple[str, int]:
+def _run_ssh(command: str, cwd: str, timeout: int, config: Any = None,
+             task_id: str | None = None) -> tuple[str, int]:
     host = os.environ.get("TERMINAL_SSH_HOST", "").strip()
     user = os.environ.get("TERMINAL_SSH_USER", "").strip()
     port = os.environ.get("TERMINAL_SSH_PORT", "").strip()
 
     if shutil.which("ssh") is None:
-        return _degraded(config, "ssh not found on PATH", command, cwd, timeout)
+        return _degraded(config, "ssh not found on PATH", command, cwd, timeout, task_id)
     if not host:
-        return _degraded(config, "TERMINAL_SSH_HOST not set", command, cwd, timeout)
+        return _degraded(config, "TERMINAL_SSH_HOST not set", command, cwd, timeout, task_id)
 
     target = f"{user}@{host}" if user else host
     # `cd` into cwd on the remote when present, then run the command in bash.
-    remote = f"cd {_sh_quote(cwd)} 2>/dev/null; bash -c {_sh_quote(command)}"
+    remote = (
+        f"export AEGIS_TASK_ID={_sh_quote(task_id or 'default')}; "
+        f"cd {_sh_quote(cwd)} 2>/dev/null; bash -c {_sh_quote(command)}"
+    )
     argv = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
     if port:
         argv += ["-p", port]
@@ -162,7 +368,7 @@ def _run_ssh(command: str, cwd: str, timeout: int, config: Any = None) -> tuple[
     except subprocess.TimeoutExpired:
         return f"ssh command timed out after {timeout}s", 124
     except OSError as e:
-        return _degraded(config, f"ssh failed to start ({e})", command, cwd, timeout)
+        return _degraded(config, f"ssh failed to start ({e})", command, cwd, timeout, task_id)
 
     out = _merge(proc.stdout, proc.stderr)
     if failure := _outer_sandbox_failure(out):
@@ -170,17 +376,18 @@ def _run_ssh(command: str, cwd: str, timeout: int, config: Any = None) -> tuple[
     # 255 is ssh's own "connection failed" code (auth/network), not the remote program's exit.
     if proc.returncode == 255:
         return _degraded(config, f"ssh connection to {target} failed: {out.strip() or 'unknown error'}",
-                         command, cwd, timeout)
+                         command, cwd, timeout, task_id)
     return out, proc.returncode
 
 
 # --------------------------------------------------------------------------- #
 # singularity / apptainer (HPC-style container)
 # --------------------------------------------------------------------------- #
-def _run_singularity(command: str, cwd: str, timeout: int, config: Any) -> tuple[str, int]:
+def _run_singularity(command: str, cwd: str, timeout: int, config: Any,
+                     task_id: str | None = None) -> tuple[str, int]:
     binp = shutil.which("apptainer") or shutil.which("singularity")
     if binp is None:
-        return _degraded(config, "apptainer/singularity not found", command, cwd, timeout)
+        return _degraded(config, "apptainer/singularity not found", command, cwd, timeout, task_id)
     image = "docker://python:3.12-slim"
     if config is not None:
         try:
@@ -188,30 +395,32 @@ def _run_singularity(command: str, cwd: str, timeout: int, config: Any) -> tuple
         except Exception:  # noqa: BLE001
             pass
     argv = [binp, "exec", "--containall", "--writable-tmpfs",
+            "--env", f"AEGIS_TASK_ID={task_id or 'default'}",
             "--bind", f"{cwd}:/work", "--pwd", "/work", image, "bash", "-c", command]
     try:
         proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         return f"singularity command timed out after {timeout}s", 124
     except OSError as e:
-        return _degraded(config, f"singularity failed to start ({e})", command, cwd, timeout)
+        return _degraded(config, f"singularity failed to start ({e})", command, cwd, timeout, task_id)
     out = _merge(proc.stdout, proc.stderr)
     if failure := _outer_sandbox_failure(out):
         return failure
     if proc.returncode == 255 and "/work" not in out:
-        return _degraded(config, f"singularity run failed: {out.strip() or 'unknown'}", command, cwd, timeout)
+        return _degraded(config, f"singularity run failed: {out.strip() or 'unknown'}", command, cwd, timeout, task_id)
     return out, proc.returncode
 
 
 # --------------------------------------------------------------------------- #
 # modal (cloud sandbox via the modal SDK)
 # --------------------------------------------------------------------------- #
-def _run_modal(command: str, cwd: str, timeout: int, config: Any) -> tuple[str, int]:
+def _run_modal(command: str, cwd: str, timeout: int, config: Any,
+               task_id: str | None = None) -> tuple[str, int]:
     try:
         import modal
     except ImportError:
         return _degraded(config, "modal SDK not installed (pip install modal; modal token set)",
-                         command, cwd, timeout)
+                         command, cwd, timeout, task_id)
     try:
         app = modal.App.lookup("aegis-sandbox", create_if_missing=True)
         image = modal.Image.debian_slim()
@@ -224,7 +433,7 @@ def _run_modal(command: str, cwd: str, timeout: int, config: Any) -> tuple[str, 
                 pass
         sb = modal.Sandbox.create(app=app, image=image, timeout=timeout)
         try:
-            p = sb.exec("bash", "-c", command)
+            p = sb.exec("bash", "-c", f"export AEGIS_TASK_ID={_sh_quote(task_id or 'default')}; {command}")
             out = p.stdout.read()
             err = p.stderr.read()
             code = p.wait()
@@ -232,7 +441,7 @@ def _run_modal(command: str, cwd: str, timeout: int, config: Any) -> tuple[str, 
             sb.terminate()
         return _merge(out, err), code
     except Exception as e:  # noqa: BLE001
-        return _degraded(config, f"modal sandbox error ({e})", command, cwd, timeout)
+        return _degraded(config, f"modal sandbox error ({e})", command, cwd, timeout, task_id)
 
 
 # --------------------------------------------------------------------------- #
@@ -271,3 +480,6 @@ def _outer_sandbox_failure(output: str) -> tuple[str, int] | None:
 def _sh_quote(s: str) -> str:
     """POSIX single-quote a string for safe embedding in a remote shell line."""
     return "'" + s.replace("'", "'\\''") + "'"
+
+
+atexit.register(lambda: (_stop_cleanup_thread(), cleanup_all_environments()))

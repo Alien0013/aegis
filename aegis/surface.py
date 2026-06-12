@@ -388,6 +388,12 @@ class SurfaceRunner:
         agent.platform = platform
         agent.chat_id = chat_id
         agent._surface_run_id = run_id
+        task_id = _surface_task_id(session, run_id)
+        try:
+            agent._terminal_task_id = task_id
+            agent.tool_context.task_id = task_id
+        except Exception:  # noqa: BLE001
+            pass
         if stream is not None:
             agent.stream = bool(stream)
 
@@ -597,6 +603,17 @@ def _workspace_run_meta(cwd: Path) -> dict[str, str]:
         "worktree": root,
         "branch": branch,
     }
+
+
+def _surface_task_id(session: Session | None, run_id: str = "") -> str:
+    meta = getattr(session, "meta", {}) or {}
+    if isinstance(meta, dict):
+        for key in ("subagent_id", "background_task_id", "task_id"):
+            value = meta.get(key)
+            if value:
+                return str(value)
+    session_id = getattr(session, "id", "")
+    return str(session_id or run_id or "default")
 
 
 def _retarget_run_session(run_store: Any, run_id: str, session_id: str) -> None:

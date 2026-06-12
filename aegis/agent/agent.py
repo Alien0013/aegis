@@ -135,9 +135,11 @@ class Agent:
                 except Exception:  # noqa: BLE001
                     pass
 
+        self._terminal_task_id = getattr(self.session, "id", "")
         self.tool_context = ToolContext(
             cwd=self.cwd, config=config, memory=self.memory, skills=self.skills,
             session=self.session, agent=self, approver=approver,
+            task_id=self._terminal_task_id,
         )
         if self._context_engine is not None:
             try:
@@ -332,6 +334,9 @@ class Agent:
         self.session = new_session
         self.tool_context.session = new_session
         new_id = getattr(new_session, "id", "")
+        if not getattr(self, "_terminal_task_id", "") or self._terminal_task_id == old_id:
+            self._terminal_task_id = new_id
+        self.tool_context.task_id = self._terminal_task_id or new_id
         if new_id != old_id:
             try:
                 delattr(self, "_subdir_hints")
@@ -345,6 +350,7 @@ class Agent:
 
     def end_session(self) -> None:
         """Fire session-end hooks (process exit, agent teardown, /new)."""
+        task_id = getattr(self.tool_context, "task_id", "")
         if self.memory:
             try:
                 self.memory.on_session_end(self.session.messages)
@@ -359,6 +365,13 @@ class Agent:
             )
         except Exception:  # noqa: BLE001
             pass
+        if task_id:
+            try:
+                from ..tools.backends import cleanup_task_environment
+
+                cleanup_task_environment(task_id)
+            except Exception:  # noqa: BLE001
+                pass
 
     # -- run ----------------------------------------------------------------
     def _provider_target(self, provider) -> tuple[str, str]:
