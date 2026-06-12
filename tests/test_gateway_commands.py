@@ -321,3 +321,63 @@ def test_goal_rejected_mid_run_but_control_allowed(tmp_path, monkeypatch):
     from aegis import goals
     reply, start = goals.handle_command(r._session(key), "/goal ship it")
     assert start and goals.get(r._session(key))["text"] == "ship it"
+
+
+def test_gateway_goal_continuation_uses_surface_runner(tmp_path, monkeypatch):
+    import threading
+    from types import SimpleNamespace
+
+    from aegis import goals
+    from aegis.runs import RunStore
+    from aegis.types import Message
+
+    import aegis.gateway.runner as rmod
+
+    r = _runner(tmp_path, monkeypatch)
+    r.config.data["memory"]["enabled"] = False
+    verdicts = iter([(False, "one more step"), (True, "complete")])
+    monkeypatch.setattr(goals, "judge", lambda *_args, **_kwargs: next(verdicts))
+    built = []
+
+    class FakeAgent:
+        def __init__(self, config, session):
+            self.config = config
+            self.session = session
+            self.cwd = tmp_path
+            self.provider = SimpleNamespace(name="fake", model="fake-model")
+            self.tool_context = SimpleNamespace(session=session)
+            self.budget = SimpleNamespace(api_call_count=0)
+            self.cancel_event = threading.Event()
+            self.tools_used = 0
+            self.calls = 0
+
+        def run(self, prompt, on_event=None):
+            self.calls += 1
+            self._trace_context = {
+                "trace_id": f"trace_gateway_goal_{self.calls}",
+                "turn_id": f"turn_gateway_goal_{self.calls}",
+            }
+            self.session.messages.append(Message.user(str(prompt)))
+            message = Message.assistant(f"reply {self.calls}")
+            self.session.messages.append(message)
+            return message
+
+    def create(config, **kwargs):
+        agent = FakeAgent(config, kwargs["session"])
+        built.append(agent)
+        return agent
+
+    monkeypatch.setattr(rmod.Agent, "create", staticmethod(create))
+
+    out = r.dispatch(_ev("/goal ship it"))
+
+    assert "Goal achieved" in out
+    assert built[0].calls == 2
+    key = r._key(_ev("x"))
+    assert goals.get(r._session(key)) is None
+    runs = RunStore().list(session_id=key, limit=10)
+    gateway_runs = [row for row in runs if row["surface"] == "gateway"]
+    assert len(gateway_runs) == 2
+    assert any(row["data"].get("goal_continuation") is True for row in gateway_runs)
+    assert any("[Continuing toward your standing goal]" in row["prompt_preview"]
+               for row in gateway_runs)

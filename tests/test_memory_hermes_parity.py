@@ -32,6 +32,23 @@ def test_over_limit_refuses_and_lists_entries(store):
     assert "remembered" in store.add("memory", big)
     r = store.add("memory", "y" * 200)
     assert r.startswith("memory full") and "action=replace" in r
+    assert "(2,100/2,200 chars)" in r
+    assert "would put it at 2,303" in r
+
+
+def test_replace_over_limit_reports_current_and_proposed_usage(store):
+    assert "remembered" in store.add("memory", "short")
+    r = store.replace("memory", "short", "x" * 2300)
+    assert r.startswith("memory full")
+    assert "(5/2,200 chars)" in r
+    assert "would put it at 2,300" in r
+
+
+def test_only_exact_duplicate_add_is_rejected(store):
+    assert "remembered" in store.add("user", "The user's name is TJ.")
+    assert store.add("user", "The user's name is TJ.") == "already remembered"
+    assert "remembered" in store.add("user", "User's name is TJ")
+    assert store.entries("user") == ["The user's name is TJ.", "User's name is TJ"]
 
 
 def test_ambiguous_match_refused_with_previews(store):
@@ -80,16 +97,23 @@ def test_snapshot_renders_hermes_headers(tmp_path, monkeypatch):
     assert "═" * 46 in block
 
 
-def test_tool_read_action_and_old_text_alias(tmp_path, monkeypatch):
+def test_tool_old_text_alias_and_no_match_errors(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     from aegis.config import Config
     from aegis.memory import MemoryManager
     mm = MemoryManager(Config.load())
     mm.handle_tool({"action": "add", "target": "memory", "content": "fact one"})
-    r = mm.handle_tool({"action": "read", "target": "memory"})
-    assert "fact one" in r.content and "/2,200 chars" in r.content
     # Hermes param name old_text works; legacy 'match' still accepted
     assert not mm.handle_tool({"action": "replace", "target": "memory",
                                "old_text": "fact one", "content": "fact 1"}).is_error
     assert not mm.handle_tool({"action": "remove", "target": "memory",
                                "match": "fact 1"}).is_error
+    assert mm.handle_tool({"action": "replace", "target": "memory",
+                           "old_text": "missing", "content": "nope"}).is_error
+    assert mm.handle_tool({"action": "remove", "target": "memory",
+                           "old_text": "missing"}).is_error
+
+
+def test_memory_tool_schema_exposes_only_hermes_actions():
+    from aegis.tools.builtin import MemoryTool
+    assert MemoryTool.parameters["properties"]["action"]["enum"] == ["add", "replace", "remove"]

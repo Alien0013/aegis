@@ -620,13 +620,13 @@ class MemoryTool(Tool):
         "- 'user': who the user is — name, role, preferences, communication style, pet peeves\n"
         "- 'memory': your notes — environment facts, project conventions, tool quirks, lessons learned\n\n"
         "ACTIONS: add (new entry), replace (update existing — old_text identifies it), "
-        "remove (delete — old_text identifies it), read (list live entries + usage).\n\n"
+        "remove (delete — old_text identifies it).\n\n"
         "SKIP: trivial/obvious info, things easily re-discovered, raw data dumps, temporary task state."
     )
     parameters = {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["add", "replace", "remove", "read"]},
+            "action": {"type": "string", "enum": ["add", "replace", "remove"]},
             "target": {"type": "string", "enum": ["memory", "user"],
                        "description": "'memory' for personal notes, 'user' for the user profile."},
             "content": {"type": "string",

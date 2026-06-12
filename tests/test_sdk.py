@@ -226,6 +226,61 @@ def test_sdk_respects_session_runtime_controls():
     assert cfg.get("gateway.busy_mode") == "interrupt"
 
 
+def test_sdk_respects_session_runtime_metadata_without_controls():
+    from aegis.config import Config
+    from aegis.runs import RunStore
+    from aegis.sdk import AegisClient
+    from aegis.session import Session, SessionStore
+    from aegis.types import LLMResponse
+
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = False
+    session = Session.create("sdk runtime")
+    session.meta["runtime"] = {
+        "provider": "runtime-provider",
+        "model": "runtime-model",
+        "reasoning_effort": "high",
+        "reasoning_display": "live",
+        "busy_mode": "steer",
+    }
+    SessionStore().save(session)
+    captured = {}
+
+    class Provider:
+        context_length = 200_000
+        name = "runtime-provider"
+        api_mode = None
+        auth = None
+
+        def __init__(self, model):
+            self.model = model
+            self.last_reasoning = None
+
+        def complete(self, messages, **kwargs):
+            self.last_reasoning = kwargs.get("reasoning")
+            return LLMResponse(text="runtime ok")
+
+    def factory(**kwargs):
+        captured.update(kwargs)
+        provider = Provider(kwargs.get("model"))
+        captured["provider_obj"] = provider
+        return provider
+
+    client = AegisClient(config=cfg, provider_factory=factory, include_mcp=False)
+
+    result = client.run("hello", session_id=session.id)
+
+    assert result.text == "runtime ok"
+    assert captured["provider_name"] == "runtime-provider"
+    assert captured["model"] == "runtime-model"
+    assert captured["provider_obj"].last_reasoning == "high"
+    assert cfg.get("display.reasoning") == "live"
+    assert cfg.get("gateway.busy_mode") == "steer"
+    run = RunStore().get(result.run_id)
+    assert run["data"]["provider"] == "runtime-provider"
+    assert run["data"]["model"] == "runtime-model"
+
+
 def test_sdk_run_metadata_updates_to_final_provider(tmp_path):
     from aegis.config import Config
     from aegis.runs import RunStore

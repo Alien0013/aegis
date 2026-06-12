@@ -140,6 +140,20 @@ def run_mcp_server(config) -> None:
                 _send({"jsonrpc": "2.0", "id": mid,
                        "error": {"code": -32601, "message": "method not found"}})
     finally:
+        try:
+            if memory is not None:
+                memory.on_session_end(session.messages)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from ..hooks import run_hooks
+            run_hooks(
+                config,
+                "session_stop",
+                {"session_id": session.id, "message_count": len(session.messages)},
+            )
+        except Exception:  # noqa: BLE001
+            pass
         if memory is not None:
             memory.shutdown()
 

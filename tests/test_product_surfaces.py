@@ -1357,6 +1357,9 @@ def test_mcp_server_initializes_provider_tools_and_shutdown(monkeypatch, tmp_pat
             calls.append(("tools",))
             return [ProviderTool()]
 
+        def on_session_end(self, messages):
+            calls.append(("on_session_end", len(messages)))
+
         def shutdown(self):
             calls.append(("shutdown",))
 
@@ -1373,6 +1376,9 @@ def test_mcp_server_initializes_provider_tools_and_shutdown(monkeypatch, tmp_pat
     monkeypatch.setattr("aegis.tools.permissions.PermissionEngine", Perms)
     monkeypatch.setattr("aegis.memory_providers.build_memory_provider",
                         lambda _name, _config: Provider())
+    monkeypatch.setattr("aegis.hooks.run_hooks",
+                        lambda _config, event, context=None:
+                        calls.append(("hook", event, context.get("session_id"))))
 
     cfg = Config.load()
     cfg.data.setdefault("memory", {})["provider"] = "fake"
@@ -1394,6 +1400,9 @@ def test_mcp_server_initializes_provider_tools_and_shutdown(monkeypatch, tmp_pat
     assert ("initialize", "mcp:stdio") in calls
     assert ("tools",) in calls
     assert ("tool", "mcp:stdio", True) in calls
+    assert ("on_session_end", 0) in calls
+    assert ("hook", "session_stop", "mcp:stdio") in calls
+    assert calls.index(("on_session_end", 0)) < calls.index(("shutdown",))
     assert calls[-1] == ("shutdown",)
 
 

@@ -14,7 +14,12 @@ from typing import Any, Callable, Iterable
 from .agent.agent import Agent
 from .config import Config
 from .session import Session, SessionStore
-from .surface import _effective_runtime_data, _workspace_run_meta, apply_session_runtime
+from .surface import (
+    _effective_runtime_data,
+    _workspace_run_meta,
+    apply_session_runtime,
+    session_runtime_controls,
+)
 from .types import Message, Usage
 
 EventHandler = Callable[[dict[str, Any]], None]
@@ -24,19 +29,7 @@ Asker = Callable[[str, list[str]], str]
 
 
 def _sdk_runtime_controls(session: Session | None) -> dict[str, str]:
-    if session is None:
-        return {}
-    meta = getattr(session, "meta", {}) or {}
-    controls = meta.get("runtime_controls") if isinstance(meta.get("runtime_controls"), dict) else {}
-    out: dict[str, str] = {}
-    for key in ("provider", "model", "reasoning_effort", "reasoning_display", "busy_mode"):
-        value = controls.get(key)
-        if value:
-            out[key] = str(value)
-    for key in ("provider", "model"):
-        if key not in out and meta.get(key):
-            out[key] = str(meta[key])
-    return out
+    return session_runtime_controls(session)
 
 
 @dataclass
@@ -120,8 +113,8 @@ class AegisClient:
         controls = _sdk_runtime_controls(session)
         agent = self._agent(
             session=session,
-            model=model or controls.get("model"),
-            provider_name=provider or controls.get("provider"),
+            model=model,
+            provider_name=provider,
             cwd=run_cwd,
             auto=auto,
             include_mcp=self.include_mcp if include_mcp is None else include_mcp,
@@ -385,6 +378,17 @@ class AegisClient:
             with lock:
                 with self._cache_lock:
                     cached = self._agents.get(key)
+                    if cached is None and self._can_rekey_runtime_cache(session, model, provider_name):
+                        old_key, cached = self._cached_agent_for_session_locked(
+                            session=session,
+                            cwd=cwd,
+                            auto=auto,
+                            include_mcp=include_mcp,
+                        )
+                        if cached is not None:
+                            self._agents.pop(old_key, None)
+                            self._agent_locks.pop(old_key, None)
+                            self._agents[key] = cached
                 if cached is not None:
                     from .surface import _retarget_agent
 
@@ -482,6 +486,41 @@ class AegisClient:
             id(self.provider_factory) if self.provider_factory is not None else None,
             id(self.config),
         )
+
+    @staticmethod
+    def _can_rekey_runtime_cache(
+        session: Session,
+        model: str | None,
+        provider_name: str | None,
+    ) -> bool:
+        if model or provider_name:
+            return False
+        meta = getattr(session, "meta", {}) or {}
+        if isinstance(meta.get("runtime_controls"), dict):
+            return False
+        return not (meta.get("provider") or meta.get("model"))
+
+    def _cached_agent_for_session_locked(
+        self,
+        *,
+        session: Session,
+        cwd: Path,
+        auto: bool,
+        include_mcp: bool,
+    ) -> tuple[tuple[Any, ...], Agent | None]:
+        suffix = (
+            include_mcp,
+            auto,
+            id(self.approver) if self.approver is not None else None,
+            id(self.asker) if self.asker is not None else None,
+            id(self.provider_factory) if self.provider_factory is not None else None,
+            id(self.config),
+        )
+        cwd_key = str(cwd.resolve())
+        for old_key, agent in self._agents.items():
+            if old_key[0] == session.id and old_key[1] == cwd_key and old_key[7:] == suffix:
+                return old_key, agent
+        return (), None
 
     def _lock_for(self, key: tuple[Any, ...]):
         import threading

@@ -491,7 +491,29 @@ class GatewayRunner:
                 goal_notes: list[str] = []
                 try:                       # standing /goal: judge + auto-continue (Ralph loop)
                     from .. import goals
-                    final_text = goals.run_loop(agent, final_text, goal_notes.append, _collect)
+
+                    def _run_goal_turn(prompt_text: str):
+                        cont = self._surface_runner.run_prompt(
+                            prompt_text,
+                            session=agent.session,
+                            agent=agent,
+                            surface="gateway",
+                            meta={
+                                "platform": ev.platform,
+                                "chat_id": ev.chat_id,
+                                "user_id": ev.user_id or "",
+                                "goal_continuation": True,
+                            },
+                            platform=ev.platform,
+                            chat_id=ev.chat_id,
+                            on_event=_collect,
+                        )
+                        self.store.save(cont.session)
+                        return cont.message
+
+                    final_text = goals.run_loop(
+                        agent, final_text, goal_notes.append, _collect, run_turn=_run_goal_turn
+                    )
                     if goal_notes:
                         self.store.save(session)
                 except Exception:  # noqa: BLE001  (goal machinery must never eat the reply)

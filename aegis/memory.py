@@ -144,7 +144,7 @@ class MemoryStore:
                 f"was saved to {bak}. Integrate the extra content via action=add one entry "
                 "at a time (or clean the file to §-delimited entries), then retry.")
 
-    def _over_limit(self, target: str, entries: list[str], adding: int = 0) -> str:
+    def _over_limit(self, target: str, entries: list[str], *, current_total: int | None = None) -> str:
         """'' if the entries fit, else a consolidation directive listing current
         entries. Old facts are never silently dropped — the model is told to
         merge/remove instead (refusing beats quietly forgetting)."""
@@ -152,23 +152,13 @@ class MemoryStore:
         total = len(MEMORY_DELIM.join(entries))
         if total <= limit:
             return ""
-        current = total - adding
+        current = total if current_total is None else current_total
         listing = "\n".join(f"  - {e[:90]}" for e in entries[:-1] if e)
         return (f"memory full ({current:,}/{limit:,} chars): this write would put it at "
                 f"{total:,}. Nothing was dropped. Consolidate NOW in this turn: use "
                 "action=replace to merge overlapping entries into shorter ones, or "
                 "action=remove for stale or less important ones, then retry the add — "
                 f"all in this turn. Current entries:\n{listing}")
-
-    @staticmethod
-    def _norm(text: str) -> str:
-        """Normalized form for near-duplicate detection — \"The user's name is TJ.\"
-        and \"User's name is TJ\" are the same fact."""
-        import re
-        text = text.lower().replace("'", "").replace("’", "")   # user's == users
-        words = re.sub(r"[^a-z0-9 ]+", " ", text).split()
-        stop = {"the", "a", "an", "is", "are", "was", "were"}
-        return " ".join(w for w in words if w not in stop)
 
     @staticmethod
     def _ambiguous(matches: list[tuple[int, str]]) -> str:
@@ -198,11 +188,9 @@ class MemoryStore:
             entries = self.entries(target)
             if content in entries:
                 return "already remembered"          # exact duplicate (Hermes parity)
-            norm = self._norm(content)
-            if norm and norm in {self._norm(e) for e in entries}:
-                return "already remembered"          # near-duplicate (AEGIS extra guard)
+            current_total = len(MEMORY_DELIM.join(entries))
             entries.append(content)
-            over = self._over_limit(target, entries, adding=len(content))
+            over = self._over_limit(target, entries, current_total=current_total)
             if over:
                 return over
             self._write_entries(target, entries)
@@ -230,8 +218,9 @@ class MemoryStore:
             amb = self._ambiguous(matches)
             if amb:
                 return amb
+            current_total = len(MEMORY_DELIM.join(entries))
             entries[matches[0][0]] = content
-            over = self._over_limit(target, entries)
+            over = self._over_limit(target, entries, current_total=current_total)
             if over:
                 return over
             self._write_entries(target, entries)
@@ -392,7 +381,7 @@ class MemoryManager:
                 # phrase into the placeholder would re-inject it into the prompt.
                 category = why.split(":", 1)[0].strip()
                 out.append(f"[BLOCKED: stored entry matched a threat pattern ({category}); "
-                           "inspect with memory(action=read) and remove it]")
+                           "inspect with /memory and remove it]")
             else:
                 out.append(e)
         if not out:
@@ -577,14 +566,14 @@ class MemoryManager:
             if not match or not args.get("content"):
                 return ToolResult.error("replace needs old_text and content")
             result = self.store.replace(target, match, args["content"])
-            if result.startswith(("memory full", "refused", "multiple entries")):
+            if result.startswith(("memory full", "refused", "multiple entries", "no entry matching")):
                 return ToolResult.error(result)
             return ToolResult.ok(result)
         if action == "remove":
             if not match:
                 return ToolResult.error("remove needs old_text")
             result = self.store.remove(target, match)
-            if result.startswith(("refused", "multiple entries")):
+            if result.startswith(("refused", "multiple entries", "no entry matching")):
                 return ToolResult.error(result)
             return ToolResult.ok(result)
         if action == "read":                         # live state (snapshot may be older)
