@@ -71,6 +71,7 @@ SLASH_COMMANDS = (
     SlashCommand("/retry", "context", "rerun the last user turn"),
     SlashCommand("/undo", "context", "remove the last user turn and its response"),
     SlashCommand("/save", "context", "export this session to markdown", "/save [path]"),
+    SlashCommand("/title", "sessions", "rename this session", "/title <name>"),
     SlashCommand("/think", "model control", "set reasoning effort", "/think off|minimal|low|medium|high|xhigh"),
     SlashCommand("/reasoning", "model control", "set reasoning visibility or effort", "/reasoning off|summary|live|..."),
     SlashCommand("/busy", "model control", "set busy input behavior", "/busy queue|steer|interrupt"),
@@ -1096,6 +1097,14 @@ def handle_slash(
             _out(f"proposed {len(found)} candidate(s); review with `aegis learn list`", style="green")
         except Exception as e:  # noqa: BLE001
             _out(f"learn failed: {e}", style="red")
+    elif name == "/title":
+        if not arg.strip():
+            _out(f"current title: {agent.session.title or '(untitled)'}\nusage: /title <new title>")
+        else:
+            agent.session.title = arg.strip()
+            agent.session.meta["title_locked"] = True   # don't auto-overwrite a hand-set title
+            (store or SessionStore()).save(agent.session)
+            _out(f"session renamed → {agent.session.title}", style="green")
     elif name == "/save":
         out = Path(arg).expanduser() if arg else (agent.cwd / f"{agent.session.id}.md")
         lines = [f"# {agent.session.title}\n"]

@@ -5,6 +5,9 @@ import { Chat } from "./pages/Chat";
 import { ListPage } from "./pages/ListPage";
 import { ConfigPage } from "./pages/ConfigPage";
 import { SystemPage } from "./pages/SystemPage";
+import { CronPage } from "./pages/CronPage";
+import { ModelsPage } from "./pages/ModelsPage";
+import { KeysPage } from "./pages/KeysPage";
 
 type NavItem = { id: string; label: string; icon: string };
 const NAV: NavItem[] = [
@@ -13,6 +16,7 @@ const NAV: NavItem[] = [
   { id: "sessions", label: "Sessions", icon: "sessions" },
   { id: "models", label: "Models", icon: "models" },
   { id: "channels", label: "Channels", icon: "channels" },
+  { id: "keys", label: "API Keys", icon: "config" },
   { id: "skills", label: "Skills", icon: "skills" },
   { id: "memory", label: "Memory", icon: "memory" },
   { id: "cron", label: "Cron", icon: "cron" },
@@ -28,19 +32,18 @@ function pageFor(id: string, go: (id: string) => void) {
     case "overview": return <Overview go={go} />;
     case "chat": return <Chat />;
     case "config": return <ConfigPage />;
+    case "cron": return <CronPage />;
+    case "models": return <ModelsPage />;
+    case "keys": return <KeysPage />;
     case "system": return <SystemPage />;
     case "sessions": return <ListPage key="sessions" endpoint="sessions" title="Sessions"
       cols={[["title", "Title"], ["updated_at", "Updated"]]} />;
-    case "models": return <ListPage key="models" endpoint="models" arrayKey="models" title="Models"
-      cols={[["id", "Model"], ["provider", "Provider"], ["context", "Context"]]} />;
     case "channels": return <ListPage key="channels" endpoint="pairing" arrayKey="pending" title="Channels & Pairing"
       cols={[["platform", "Platform"], ["code", "Code"], ["user", "User"]]} empty="No pending pairings. Connect a channel with `aegis gateway --channels telegram`." />;
     case "skills": return <ListPage key="skills" endpoint="skills" arrayKey="skills" title="Skills"
       cols={[["name", "Skill"], ["description", "Description"]]} />;
     case "memory": return <ListPage key="memory" endpoint="memory" arrayKey="memory" title="Memory"
       cols={[["text", "Entry"]]} raw />;
-    case "cron": return <ListPage key="cron" endpoint="cron" arrayKey="jobs" title="Cron Jobs"
-      cols={[["schedule", "Schedule"], ["prompt", "Prompt"], ["channel", "Deliver to"]]} empty="No scheduled jobs. Add one with `aegis cron add`." />;
     case "tools": return <ListPage key="tools" endpoint="tools" arrayKey="tools" title="Tools"
       cols={[["name", "Tool"], ["description", "Description"]]} />;
     case "logs": return <ListPage key="logs" endpoint="logs" arrayKey="lines" title="Logs" cols={[["line", "Line"]]} raw />;

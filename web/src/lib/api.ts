@@ -33,3 +33,29 @@ export function sse(path: string, onMessage: (data: any) => void): () => void {
   es.onmessage = (e) => { try { onMessage(JSON.parse(e.data)); } catch { /* ignore */ } };
   return () => es.close();
 }
+
+// Stream a POST endpoint that emits SSE-style "data: {json}\n\n" frames.
+export async function postStream(
+  path: string, body: unknown, onEvent: (data: any) => void,
+): Promise<void> {
+  const r = await fetch(`/api/${path}`, {
+    method: "POST",
+    headers: headers({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+  if (!r.body) throw new Error(`${path}: no stream`);
+  const reader = r.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf("\n\n")) >= 0) {
+      const frame = buf.slice(0, i); buf = buf.slice(i + 2);
+      const line = frame.split("\n").find((l) => l.startsWith("data:"));
+      if (line) { try { onEvent(JSON.parse(line.slice(5).trim())); } catch { /* ignore */ } }
+    }
+  }
+}

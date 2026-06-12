@@ -26,3 +26,4 @@ state.db
 # web frontend build
 web/node_modules/
 web/dist/
+web/*.tsbuildinfo
