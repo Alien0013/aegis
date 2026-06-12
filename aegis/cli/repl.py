@@ -413,7 +413,89 @@ def handle_goal_command(
     return active["text"] if active else None
 
 
+def _process_notification_target_session(
+    agent: Any,
+    store: SessionStore,
+    meta: dict | None,
+) -> Session | None:
+    if not isinstance(meta, dict) or meta.get("synthetic") != "process_notification":
+        return None
+    session_key = str(meta.get("process_session_key") or "").strip()
+    if not session_key:
+        return None
+    current = getattr(agent, "session", None)
+    if current is not None and getattr(current, "id", "") == session_key:
+        return current
+    try:
+        return store.load(session_key) or Session(id=session_key, title=session_key)
+    except Exception:  # noqa: BLE001
+        return Session(id=session_key, title=session_key)
+
+
+def _switch_for_process_notification(
+    agent: Any,
+    store: SessionStore,
+    meta: dict | None,
+) -> Session | None:
+    target = _process_notification_target_session(agent, store, meta)
+    if target is None:
+        return None
+    current = getattr(agent, "session", None)
+    if current is not None and getattr(current, "id", "") == target.id:
+        return None
+    _switch_session(agent, target, reason="process_notification")
+    return current
+
+
+def _restore_after_process_notification(
+    agent: Any,
+    store: SessionStore,
+    restore_session: Session,
+) -> None:
+    current = getattr(agent, "session", None)
+    if current is not None:
+        try:
+            store.save(current)
+        except Exception:  # noqa: BLE001
+            pass
+    _switch_session(agent, restore_session, reason="process_notification_return")
+
+
 def run_terminal_turn(
+    text: str,
+    agent: Any,
+    runner: SurfaceRunner,
+    store: SessionStore,
+    *,
+    surface: str,
+    on_event: Callable[[dict], None],
+    notify: Callable[[str], None] | None = None,
+    add_profile_directive: bool = True,
+    meta: dict | None = None,
+    include_wakeups: bool = True,
+):
+    """Run a terminal turn, routing synthetic process notifications by session key."""
+
+    restore_session = _switch_for_process_notification(agent, store, meta)
+    try:
+        return _run_terminal_turn_active_session(
+            text,
+            agent,
+            runner,
+            store,
+            surface=surface,
+            on_event=on_event,
+            notify=notify,
+            add_profile_directive=add_profile_directive,
+            meta=meta,
+            include_wakeups=include_wakeups,
+        )
+    finally:
+        if restore_session is not None:
+            _restore_after_process_notification(agent, store, restore_session)
+
+
+def _run_terminal_turn_active_session(
     text: str,
     agent: Any,
     runner: SurfaceRunner,

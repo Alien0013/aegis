@@ -554,6 +554,71 @@ def test_terminal_process_notification_runs_synthetic_turn(tmp_path):
     assert [n["source"] for n in wakeups.drain_wakeups()] == ["subagent"]
 
 
+def test_terminal_process_notification_routes_to_session_key(tmp_path):
+    from types import SimpleNamespace
+
+    from aegis.agent import wakeups
+    from aegis.cli import repl
+    from aegis.config import Config
+    from aegis.session import Session, SessionStore
+    from aegis.tools.process_registry import process_registry
+    from aegis.types import Message
+
+    wakeups.drain_wakeups()
+    process_registry.drain_notifications()
+    process_registry.completion_queue.put({
+        "type": "completion",
+        "session_id": "proc_target",
+        "session_key": "sess_process_target",
+        "command": "echo target",
+        "exit_code": 0,
+        "output": "target",
+    })
+
+    store = SessionStore()
+    active = Session(id="sess_active_terminal", title="active")
+    target = Session(id="sess_process_target", title="target")
+    store.save(active)
+    store.save(target)
+    agent = SimpleNamespace(config=Config.load(), session=active, tools_used=0)
+    calls = []
+
+    class Runner:
+        def run_prompt(self, prompt, **kwargs):
+            session = kwargs["session"]
+            calls.append((prompt, kwargs, session.id))
+            session.messages.append(Message.user(str(prompt)))
+            message = Message.assistant("ack")
+            session.messages.append(message)
+            return SimpleNamespace(
+                message=message,
+                session=session,
+                agent=agent,
+                text="ack",
+                trace_id="trace_target",
+                turn_id="turn_target",
+                run_id="run_target",
+                events=[],
+            )
+
+    count = repl.drain_process_notifications(
+        agent,
+        Runner(),
+        store,
+        surface="repl",
+        on_event=lambda _event: None,
+    )
+
+    saved_active = store.load(active.id)
+    saved_target = store.load(target.id)
+    assert count == 1
+    assert calls[0][2] == target.id
+    assert agent.session.id == active.id
+    assert saved_active is not None and saved_active.messages == []
+    assert saved_target is not None
+    assert saved_target.messages[0].content.startswith("[IMPORTANT: Background process proc_target")
+
+
 def test_terminal_goal_command_returns_start_prompt(monkeypatch):
     from aegis.cli import repl
     from aegis.config import Config
