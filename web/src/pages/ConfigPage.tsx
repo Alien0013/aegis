@@ -16,46 +16,88 @@ export function ConfigPage() {
   const [cfg, setCfg] = useState<any>(undefined);
   const [q, setQ] = useState("");
   const [edit, setEdit] = useState<Record<string, string>>({});
+  const [newKey, setNewKey] = useState("");
+  const [newValue, setNewValue] = useState("");
   const [msg, setMsg] = useState("");
   async function load() { try { setCfg(await api("config")); } catch (e) { setCfg({ __err: String(e) }); } }
   useEffect(() => { load(); }, []);
-  if (cfg === undefined) return <><Head /><div className="empty"><span className="spin" /> loading…</div></>;
+  if (cfg === undefined) return <><Head /><div className="empty"><span className="spin" /> loading...</div></>;
   if (cfg.__err) return <><Head /><div className="card mut">Couldn't load: {cfg.__err}</div></>;
 
   let rows = flatten(cfg).filter(([k]) => !k.includes("seen"));
   if (q) rows = rows.filter(([k]) => k.toLowerCase().includes(q.toLowerCase()));
 
-  async function save(key: string) {
-    const raw = edit[key];
-    let value: any = raw;
-    if (raw === "true") value = true; else if (raw === "false") value = false;
-    else if (raw !== "" && !isNaN(Number(raw)) && /^[0-9.]+$/.test(raw)) value = Number(raw);
-    try { await post("config", { key, value }); setMsg(`✓ ${key} saved`); setEdit((e) => { const c = { ...e }; delete c[key]; return c; }); await load(); }
-    catch (e) { setMsg("✗ " + String(e)); }
+  function toText(value: any): string {
+    return value && typeof value === "object" ? JSON.stringify(value, null, 2) : String(value ?? "");
+  }
+
+  function parse(raw: string): any {
+    const text = raw.trim();
+    if (!text) return "";
+    if (text === "true") return true;
+    if (text === "false") return false;
+    if (text === "null") return null;
+    if (/^-?\d+(\.\d+)?$/.test(text)) return Number(text);
+    if ((text.startsWith("{") && text.endsWith("}")) || (text.startsWith("[") && text.endsWith("]"))) {
+      return JSON.parse(text);
+    }
+    return raw;
+  }
+
+  async function save(key: string, raw = edit[key]): Promise<boolean> {
+    let value: any;
+    try { value = parse(raw); }
+    catch (e) { setMsg("Invalid JSON: " + String(e)); return false; }
+    try { await post("config", { key, value }); setMsg(`${key} saved`); setEdit((e) => { const c = { ...e }; delete c[key]; return c; }); await load(); return true; }
+    catch (e) { setMsg("Error: " + String(e)); return false; }
+  }
+
+  async function addSetting() {
+    const key = newKey.trim();
+    if (!key) return;
+    if (await save(key, newValue)) {
+      setNewKey("");
+      setNewValue("");
+    }
   }
 
   return (
     <>
       <Head count={rows.length} />
-      <div className="card">
-        <input placeholder="Filter settings…" value={q} onChange={(e) => setQ(e.target.value)} style={{ marginBottom: 12 }} />
+      <div className="panel" style={{ marginBottom: 14 }}>
+        <h3>Add or replace a setting</h3>
+        <div className="grid c3" style={{ gap: 10, alignItems: "end" }}>
+          <label>Key<input value={newKey} onChange={(e) => setNewKey(e.target.value)} placeholder="tools.exec_mode" /></label>
+          <label style={{ gridColumn: "span 1" }}>Value<input value={newValue} onChange={(e) => setNewValue(e.target.value)} placeholder='true, 3, "text", ["core","mcp"]' /></label>
+          <button className="btn" onClick={addSetting}>Save setting</button>
+        </div>
+        <div className="mut" style={{ marginTop: 8 }}>Objects and arrays can be entered as JSON. Secrets belong in API Keys.</div>
+      </div>
+      <div className="panel">
+        <input placeholder="Filter settings..." value={q} onChange={(e) => setQ(e.target.value)} style={{ marginBottom: 12 }} />
         {msg && <div className="mut" style={{ marginBottom: 8 }}>{msg}</div>}
         {rows.map(([key, val]) => {
           const editing = key in edit;
-          const display = Array.isArray(val) ? JSON.stringify(val) : String(val);
+          const display = toText(val);
+          const redacted = display.includes(String.fromCharCode(8226).repeat(6)) || display.includes("******");
+          const multiline = display.length > 80 || display.includes("\n") || display.startsWith("{") || display.startsWith("[");
           return (
             <div className="row" key={key}>
               <span style={{ fontFamily: "ui-monospace,monospace", fontSize: 12.5 }}>{key}</span>
-              <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <span style={{ display: "flex", gap: 6, alignItems: "center", maxWidth: "min(680px, 100%)" }}>
                 {editing
                   ? <>
-                      <input value={edit[key]} onChange={(e) => setEdit({ ...edit, [key]: e.target.value })} style={{ width: 220 }} autoFocus />
+                      {multiline
+                        ? <textarea value={edit[key]} rows={4} onChange={(e) => setEdit({ ...edit, [key]: e.target.value })} style={{ width: 360 }} autoFocus />
+                        : <input value={edit[key]} onChange={(e) => setEdit({ ...edit, [key]: e.target.value })} style={{ width: 260 }} autoFocus />}
                       <button className="btn" onClick={() => save(key)}>Save</button>
-                      <button className="btn ghost" onClick={() => setEdit((e) => { const c = { ...e }; delete c[key]; return c; })}>×</button>
+                      <button className="btn ghost" onClick={() => setEdit((e) => { const c = { ...e }; delete c[key]; return c; })}>Cancel</button>
                     </>
                   : <>
-                      <span className="mut" style={{ maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{display || "—"}</span>
-                      {!Array.isArray(val) && typeof val !== "object" && <button className="btn ghost" onClick={() => setEdit({ ...edit, [key]: display })}>edit</button>}
+                      <span className="mut" style={{ maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{display || "-"}</span>
+                      {redacted
+                        ? <span className="pill">API Keys</span>
+                        : <button className="btn ghost" onClick={() => setEdit({ ...edit, [key]: display })}>edit</button>}
                     </>}
               </span>
             </div>
@@ -66,5 +108,5 @@ export function ConfigPage() {
   );
 }
 function Head({ count }: { count?: number }) {
-  return <div className="head"><h1>Config</h1><span className="crumb">{count != null ? `${count} settings · ` : ""}secrets redacted · edits persist to config.yaml</span></div>;
+  return <div className="head"><h1>Config</h1><span className="crumb">{count != null ? `${count} settings - ` : ""}secrets redacted - edits persist to config.yaml</span></div>;
 }

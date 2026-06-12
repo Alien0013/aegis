@@ -17,5 +17,7 @@ export const ICONS: Record<string, ReactElement> = {
   config: P('<circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.5-2.4 1a7 7 0 0 0-1.7-1L14.5 2h-5l-.3 2.6a7 7 0 0 0-1.7 1l-2.4-1-2 3.5L2.6 11a7 7 0 0 0 0 2l-2 1.5 2 3.5 2.4-1a7 7 0 0 0 1.7 1L9.5 22h5l.3-2.6a7 7 0 0 0 1.7-1l2.4 1 2-3.5-2-1.5q.1-.5.1-1z"/>'),
   logs: P('<path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/>'),
   system: P('<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>'),
+  menu: P('<path d="M4 6h16M4 12h16M4 18h16"/>'),
+  close: P('<path d="M6 6l12 12M18 6L6 18"/>'),
 };
 export const Icon = ({ n }: { n: string }) => ICONS[n] || ICONS.overview;

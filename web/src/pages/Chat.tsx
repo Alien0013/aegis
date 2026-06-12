@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { postStream } from "../lib/api";
+import { api, postStream } from "../lib/api";
+import { Icon } from "../lib/icons";
+import { compact, dateish } from "../lib/format";
 
 type ToolCard = { id: string; name: string; target: string; status: "running" | "ok" | "error"; preview: string };
 type Msg = {
@@ -15,15 +17,14 @@ const emptyBot = (): Msg => ({ role: "bot", text: "", thinking: "", tools: [], s
 
 function ToolIcon({ name }: { name: string }) {
   const n = name.toLowerCase();
-  let g = "⚙";
-  if (n.includes("read") || n.includes("file")) g = "📄";
-  else if (n.includes("write") || n.includes("edit")) g = "✏️";
-  else if (n.includes("bash") || n.includes("shell") || n.includes("exec")) g = "▷";
-  else if (n.includes("search") || n.includes("grep") || n.includes("glob")) g = "🔎";
-  else if (n.includes("web") || n.includes("fetch") || n.includes("url")) g = "🌐";
-  else if (n.includes("memory")) g = "🧠";
-  else if (n.includes("kanban") || n.includes("todo")) g = "🗂";
-  return <span className="tcard-ico">{g}</span>;
+  let icon = "tools";
+  if (n.includes("read") || n.includes("file")) icon = "logs";
+  else if (n.includes("write") || n.includes("edit")) icon = "config";
+  else if (n.includes("bash") || n.includes("shell") || n.includes("exec")) icon = "system";
+  else if (n.includes("search") || n.includes("grep") || n.includes("glob")) icon = "overview";
+  else if (n.includes("memory")) icon = "memory";
+  else if (n.includes("kanban") || n.includes("todo")) icon = "kanban";
+  return <span className="tcard-ico"><Icon n={icon} /></span>;
 }
 
 function Thinking({ text }: { text: string }) {
@@ -32,8 +33,8 @@ function Thinking({ text }: { text: string }) {
   return (
     <div className="think">
       <div className="think-h" onClick={() => setOpen((o) => !o)}>
-        <span className="think-dot" /> Thinking {open ? "▾" : "▸"}
-        {!open && <span className="mut" style={{ marginLeft: 6 }}>{text.slice(-60).replace(/\n/g, " ")}…</span>}
+        <span className="think-dot" /> Thinking {open ? "v" : ">"}
+        {!open && <span className="mut" style={{ marginLeft: 6 }}>{text.slice(-60).replace(/\n/g, " ")}...</span>}
       </div>
       {open && <div className="think-body">{text}</div>}
     </div>
@@ -48,7 +49,7 @@ function ToolCardView({ t }: { t: ToolCard }) {
         <div className="tcard-top">
           <b>{t.name}</b>
           {t.status === "running" ? <span className="spin sm" />
-            : <span className={"tcard-badge " + t.status}>{t.status === "ok" ? "✓" : "✗"}</span>}
+            : <span className={"tcard-badge " + t.status}>{t.status === "ok" ? "OK" : "ERR"}</span>}
         </div>
         {t.target && <code className="tcard-target">{t.target}</code>}
         {t.preview && <div className="tcard-out">{t.preview}</div>}
@@ -66,8 +67,10 @@ export function Chat() {
   const [cwd, setCwd] = useState("");
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
+  const [sessions, setSessions] = useState<any[]>([]);
   const logRef = useRef<HTMLDivElement>(null);
   useEffect(() => { logRef.current?.scrollTo(0, logRef.current.scrollHeight); }, [msgs]);
+  useEffect(() => { api("sessions").then((s) => setSessions(Array.isArray(s) ? s : [])).catch(() => setSessions([])); }, []);
 
   function patchBot(fn: (m: Msg) => Msg) {
     setMsgs((all) => {
@@ -91,7 +94,7 @@ export function Chat() {
           ? { ...tc, status: e.status === "error" ? "error" : "ok", preview: e.target || "" } : tc),
       }));
     else if (t === "iteration") patchBot((m) => ({ ...m, status: `step ${e.n}/${e.max}` }));
-    else if (t === "compacting") patchBot((m) => ({ ...m, status: "compacting context…" }));
+    else if (t === "compacting") patchBot((m) => ({ ...m, status: "compacting context..." }));
     else if (t === "compacted") patchBot((m) => ({ ...m, status: "" }));
   }
 
@@ -111,10 +114,10 @@ export function Chat() {
         else if (ev.type === "final") {
           patchBot((m) => ({ ...m, text: m.text || ev.reply || "(no response)", status: "", done: true }));
           if (ev.session_id) setSession(ev.session_id);
-        } else if (ev.type === "error") patchBot((m) => ({ ...m, text: "⚠ " + (ev.reply || "error"), status: "", done: true }));
+        } else if (ev.type === "error") patchBot((m) => ({ ...m, text: "Error: " + (ev.reply || "error"), status: "", done: true }));
       });
     } catch (e) {
-      patchBot((m) => ({ ...m, text: "⚠ " + String(e), status: "", done: true }));
+      patchBot((m) => ({ ...m, text: "Error: " + String(e), status: "", done: true }));
     } finally {
       setBusy(false);
       patchBot((m) => ({ ...m, status: "", done: true }));
@@ -122,18 +125,50 @@ export function Chat() {
   }
 
   function newSession() { setSession(""); setMsgs([]); }
+  async function resume(id: string) {
+    setSession(id);
+    setMsgs([]);
+    try {
+      const d = await api(`session?id=${encodeURIComponent(id)}`);
+      const loaded: Msg[] = (d.messages || []).filter((m: any) => m.content).map((m: any) => ({
+        role: m.role === "user" ? "user" : "bot",
+        text: m.content,
+        thinking: "",
+        tools: [],
+        status: "",
+        done: true,
+      }));
+      setMsgs(loaded);
+    } catch {
+      setMsgs([]);
+    }
+  }
 
   return (
     <>
       <div className="head">
-        <h1>Chat</h1>
-        <span style={{ display: "flex", gap: 10, alignItems: "center" }}>
+        <div>
+          <h1>Chat</h1>
+          <span className="crumb">{session ? `session ${compact(session, 34)}` : "new dashboard session"}</span>
+        </div>
+        <span className="actions">
           <span className="crumb">{session || "new session"}</span>
           <button className="btn ghost" onClick={() => setShowCtx((s) => !s)}>{showCtx ? "Hide" : "Context"}</button>
           <button className="btn ghost" onClick={newSession}>New chat</button>
         </span>
       </div>
-      <div className="card chatcard">
+      <div className="chat-layout">
+        <aside className="session-rail">
+          <h3>Recent sessions</h3>
+          {!sessions.length && <div className="empty small">No sessions yet.</div>}
+          {sessions.slice(0, 12).map((s) => (
+            <button className={"session-chip" + (session === s.id ? " active" : "")} key={s.id} onClick={() => resume(s.id)}>
+              <b>{compact(s.title || s.id, 44)}</b>
+              <span>{dateish(s.updated_at)}</span>
+            </button>
+          ))}
+        </aside>
+        <section className="panel chatcard">
         {showCtx && (
           <div className="grid c3" style={{ gap: 8, marginBottom: 10 }}>
             <input value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="working dir (cwd)" />
@@ -144,8 +179,8 @@ export function Chat() {
         <div className="chatlog" ref={logRef}>
           {!msgs.length && (
             <div className="empty">
-              <div style={{ fontSize: 15, marginBottom: 6 }}>Say hello 👋</div>
-              You'll see the agent think and watch every tool it runs, live — same agent as the terminal.
+              <div style={{ fontSize: 15, marginBottom: 6 }}>Start a dashboard turn</div>
+              You can watch reasoning summaries, tool calls, and the final answer in one stream.
             </div>
           )}
           {msgs.map((m, i) =>
@@ -166,11 +201,12 @@ export function Chat() {
           )}
         </div>
         <div className="composer">
-          <textarea rows={2} value={input} placeholder="Message AEGIS…  (Enter to send · Shift+Enter for newline)"
+          <textarea rows={2} value={input} placeholder="Message AEGIS...  (Enter to send / Shift+Enter for newline)"
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} />
           <button className="btn" onClick={send} disabled={busy}>{busy ? <span className="spin sm" /> : "Send"}</button>
         </div>
+        </section>
       </div>
     </>
   );

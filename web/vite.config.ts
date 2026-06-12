@@ -11,5 +11,9 @@ export default defineConfig({
     emptyOutDir: true,
     assetsDir: "assets",
   },
-  server: { proxy: { "/api": "http://127.0.0.1:9119" } },
+  server: {
+    proxy: {
+      "/api": process.env.VITE_AEGIS_API_TARGET || "http://127.0.0.1:9119",
+    },
+  },
 });
