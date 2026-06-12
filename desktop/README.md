@@ -9,6 +9,7 @@ random free port with a random token, then loads it.
 cd desktop
 npm install
 npm start            # launches the app (requires `aegis` installed / on PATH)
+npm run start:sandbox  # opt into Chromium's sandbox if your chrome-sandbox is configured
 ```
 
 ## Build installers
@@ -23,9 +24,11 @@ available — set `AEGIS_BIN` to override the executable path.
 Electron's Chromium needs a root-owned setuid helper that `npm install` can't set,
 so an unprivileged install would otherwise abort with a *"SUID sandbox helper …
 is not configured correctly"* error. Since the app only loads our own localhost
-dashboard, `main.js` disables Chromium's setuid sandbox on Linux automatically —
-no `sudo` needed. If your install *has* a correctly-configured sandbox and you'd
-rather keep it, run with `AEGIS_ELECTRON_SANDBOX=1`.
+dashboard, `npm start` launches Electron with `--no-sandbox` on Linux before
+Chromium initializes; Linux packages also set the same executable argument. No
+`sudo` needed. If your install *has* a correctly-configured sandbox and you'd
+rather keep it for source runs, use `npm run start:sandbox` or
+`AEGIS_ELECTRON_SANDBOX=1 npm start`.
 
 ## How it works
 `main.js` → free port + random token → `spawn("aegis", ["dashboard","--port",P,"--no-open"])`

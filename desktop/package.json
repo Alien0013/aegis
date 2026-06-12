@@ -5,7 +5,8 @@
   "description": "AEGIS — your terminal AI agent, as a desktop app.",
   "main": "main.js",
   "scripts": {
-    "start": "electron .",
+    "start": "node launch.js",
+    "start:sandbox": "node launch.js --sandbox",
     "dist": "electron-builder"
   },
   "devDependencies": {
@@ -18,6 +19,10 @@
     "files": ["main.js", "package.json"],
     "mac": { "category": "public.app-category.developer-tools", "target": ["dmg"] },
     "win": { "target": ["nsis"] },
-    "linux": { "target": ["AppImage", "deb"], "category": "Development" }
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "category": "Development",
+      "executableArgs": ["--no-sandbox"]
+    }
   }
 }

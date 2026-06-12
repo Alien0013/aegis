@@ -8,11 +8,9 @@ const { spawn } = require("child_process");
 const net = require("net");
 const http = require("http");
 
-// On Linux, Chromium's setuid sandbox helper must be root-owned with mode 4755 —
-// a permission `npm install` can't set, so an unprivileged install aborts with a
-// SUID-sandbox error. We only ever load our own localhost dashboard, so disable
-// the setuid sandbox to make the app run without sudo. (Override with
-// AEGIS_ELECTRON_SANDBOX=1 if your install has a correctly-configured sandbox.)
+// On Linux, launch.js / electron-builder pass --no-sandbox before Chromium's
+// early setuid-sandbox check. Keep this switch too so child processes inherit
+// the same posture when main.js does run.
 if (process.platform === "linux" && process.env.AEGIS_ELECTRON_SANDBOX !== "1") {
   app.commandLine.appendSwitch("no-sandbox");
 }
