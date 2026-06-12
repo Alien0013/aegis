@@ -396,10 +396,10 @@ class MemoryManager:
         return f"{sep}\n{header}\n{sep}\n{content}"
 
     def _memory_files(self) -> list:
-        # workspace/USER.md is watched ONLY so that if someone drops a legacy file
-        # there mid-run, is_stale() fires and the refresh migrates it immediately.
+        # the legacy nested workspace/USER.md is watched ONLY so that if someone drops
+        # one there mid-run, is_stale() fires and the refresh migrates it immediately.
         return [self.store._path("memory"), self.store._path("user"),
-                cfg.workspace_dir() / "USER.md"]
+                cfg.sub("workspace") / "USER.md"]
 
     def _memory_mtimes(self) -> dict:
         out = {}
@@ -430,7 +430,7 @@ class MemoryManager:
         """One-time: import a legacy hand-edited workspace/USER.md into
         memories/USER.md (deduped), then rename it to USER.md.migrated. The rename
         is the done-marker; nothing re-reads the old location afterwards."""
-        legacy = cfg.workspace_dir() / "USER.md"
+        legacy = cfg.sub("workspace") / "USER.md"   # the OLD nested path, explicitly
         if not legacy.exists():
             return
         try:

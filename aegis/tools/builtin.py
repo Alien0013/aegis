@@ -540,14 +540,15 @@ class SystemStatusTool(Tool):
             except Exception as e:  # noqa: BLE001
                 lines.append(f"surface: error: {type(e).__name__}: {e}")
 
-            workspace = cfg.workspace_dir()
-            workspace_files = []
-            if workspace.exists():
-                workspace_files = sorted(p.name for p in workspace.iterdir() if p.is_file())
+            workspace = cfg.workspace_dir()        # home root (SOUL.md/AGENTS.md live here)
+            # only identity/rule files — not the whole home (which holds .env, auth.json …)
+            from ..config import Workspace, _ROOT_WORKSPACE_FILES
+            identity = list(_ROOT_WORKSPACE_FILES) + list(Workspace.RULE_FILES)
+            workspace_files = sorted({n for n in identity if (workspace / n).is_file()})
             lines.append("")
-            lines.append("Workspace")
+            lines.append("Identity & rules")
             lines.append(f"path: {workspace}")
-            lines.append("files: " + (", ".join(workspace_files) if workspace_files else "(empty)"))
+            lines.append("files: " + (", ".join(workspace_files) if workspace_files else "(none yet)"))
 
             host = config.get("server.dashboard_host", "127.0.0.1")
             port = config.get("server.dashboard_port", 9119)

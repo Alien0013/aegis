@@ -338,7 +338,7 @@ tests/               349 offline tests (fake provider, isolated home)
 
 ## 🧷 Identity & rules
 
-Drop into `~/.aegis/workspace/` (global) or your project root (local, wins):
+Drop into `~/.aegis/` (global) or your project root (local, wins):
 `SOUL.md` (persona) · `AGENTS.md`/`.aegis.md`/`CLAUDE.md` (operational rules) · `USER.md` (facts about you).
 
 ## ⚙️ Configuration

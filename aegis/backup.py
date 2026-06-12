@@ -11,7 +11,8 @@ Included entries (relative to the home):
     .env             secrets (API keys)
     auth.json        OAuth tokens
     cron.json        scheduled jobs
-    workspace/       SOUL.md, AGENTS.md (identity + rules)
+    SOUL.md AGENTS.md … identity + rule files (home root)
+    personalities/   persona files
     skills/          SKILL.md packages
     memories/        MEMORY.md, USER.md, history.jsonl
     state.db         sessions (omitted when ``quick=True``)
@@ -30,8 +31,10 @@ from . import config as cfg
 from .util import ensure_dir, human_size
 
 # Top-level files included verbatim, and directories included recursively.
-_BACKUP_FILES = ("config.yaml", ".env", "auth.json", "cron.json")
-_BACKUP_DIRS = ("workspace", "skills", "memories")
+_BACKUP_FILES = ("config.yaml", ".env", "auth.json", "cron.json",
+                 # identity/rule files now live at the home root (was workspace/)
+                 "SOUL.md", "AGENTS.md", ".aegis.md", "CLAUDE.md", ".cursorrules", "README.md")
+_BACKUP_DIRS = ("personalities", "skills", "memories")
 _STATE_DB = "state.db"
 
 

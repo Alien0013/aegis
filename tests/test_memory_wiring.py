@@ -157,7 +157,8 @@ def test_legacy_workspace_profile_migrates_once(tmp_path, monkeypatch):
     from aegis import config as cfg
     from aegis.memory import MemoryManager
 
-    legacy = cfg.workspace_dir() / "USER.md"
+    legacy = cfg.sub("workspace") / "USER.md"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
     legacy.write_text("# User Profile\n\nPrefers dark mode and short answers.\n\nName: TJ\n")
     mm = MemoryManager(config)
     # content imported into the canonical store...
@@ -168,7 +169,7 @@ def test_legacy_workspace_profile_migrates_once(tmp_path, monkeypatch):
     assert "dark mode" in block and "Name: TJ" in block
     # the legacy file is parked — no second live USER.md anymore
     assert not legacy.exists()
-    assert (cfg.workspace_dir() / "USER.md.migrated").exists()
+    assert (cfg.sub("workspace") / "USER.md.migrated").exists()
     # re-running is a no-op (no duplicates)
     mm.refresh_snapshot()
     assert mm.store.entries("user").count("Name: TJ") == 1
@@ -179,7 +180,8 @@ def test_untouched_template_workspace_profile_is_discarded(tmp_path, monkeypatch
     from aegis import config as cfg
     from aegis.memory import MemoryManager
 
-    legacy = cfg.workspace_dir() / "USER.md"
+    legacy = cfg.sub("workspace") / "USER.md"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
     legacy.write_text("# User Profile\n\nAdd stable preferences, aliases, or project notes here.\n")
     mm = MemoryManager(config)
     assert mm.store.entries("user") == []              # template noise not imported
@@ -281,3 +283,29 @@ def test_refresh_policy_refreshes_default_and_allows_frozen(monkeypatch):
     assert run_one("message") >= 1      # alias: rebuilds so the fact applies now
     assert run_one("frozen") == 0       # explicit cache-first mode
     assert run_one("never") == 0
+
+
+def test_flatten_workspace_to_root_migration(tmp_path, monkeypatch):
+    """Old installs nested SOUL.md/AGENTS.md/personalities under workspace/; the flatten
+    migration lifts them to the home root (matching the reference layout) and folds a
+    legacy workspace/USER.md into memories/USER.md."""
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.config import Config, Workspace
+    from aegis.memory import MemoryManager
+    ws = tmp_path / "workspace"; (ws / "personalities").mkdir(parents=True)
+    (ws / "SOUL.md").write_text("# my persona")
+    (ws / "AGENTS.md").write_text("# my rules")
+    (ws / "personalities" / "pirate.md").write_text("arr")
+    (ws / "USER.md").write_text("# User Profile\n\nName: TJ\n")
+
+    w = Workspace()
+    assert "my persona" in w.soul()                       # reads from root after migrate
+    assert (tmp_path / "SOUL.md").exists()                 # lifted to root
+    assert (tmp_path / "AGENTS.md").exists()
+    assert (tmp_path / "personalities" / "pirate.md").exists()
+    assert "my rules" in w.rules()
+
+    mm = MemoryManager(Config.load())                      # folds legacy USER.md
+    assert any("TJ" in e for e in mm.store.entries("user"))
+    w.soul()                                               # second pass parks the husk
+    assert not ws.exists()

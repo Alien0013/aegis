@@ -6,9 +6,11 @@ Layout of the runtime home (``$AEGIS_HOME`` or ``~/.aegis``)::
     .env             secrets (API keys); KEY=VALUE, injected into os.environ
     auth.json        OAuth tokens (chmod 0600)
     state.db         sessions (SQLite)
+    SOUL.md          persona / tone (home root, matching ~/.hermes/SOUL.md)
+    AGENTS.md        global operating rules (home root)
+    personalities/   named persona files
     memories/        MEMORY.md, USER.md (the user profile), history.jsonl
     skills/          user/managed SKILL.md packages
-    workspace/       SOUL.md, AGENTS.md (identity + rules — no USER.md here)
     logs/
 
 Precedence for settings: CLI flags > config.yaml > .env/env vars > defaults.
@@ -57,7 +59,56 @@ def skills_dir() -> Path:
 
 
 def workspace_dir() -> Path:
-    return ensure_dir(sub("workspace"))
+    """Where identity/rule files (SOUL.md, AGENTS.md, personalities/) live: the home
+    ROOT, matching the reference layout (``~/.aegis/SOUL.md``). A legacy nested
+    ``workspace/`` from older installs is migrated up to the root by
+    :func:`migrate_workspace_to_root`, called on home resolution."""
+    home = ensure_dir(get_home())
+    migrate_workspace_to_root(home)
+    return home
+
+
+# Identity/rule files relocated from the old workspace/ subdir to the home root.
+_ROOT_WORKSPACE_FILES = ("SOUL.md", "AGENTS.md", ".aegis.md", "CLAUDE.md",
+                         ".cursorrules", "README.md")
+_migrated_homes: set[str] = set()
+
+
+def migrate_workspace_to_root(home: Path) -> None:
+    """One-time: lift identity/rule files and personalities/ out of a legacy
+    ``<home>/workspace/`` into the home root, then park the old dir. USER.md is left
+    for the memory layer to fold into memories/USER.md. Idempotent + cheap (guarded
+    by an in-process set and the absence of the legacy dir)."""
+    key = str(home)
+    if key in _migrated_homes:
+        return
+    _migrated_homes.add(key)
+    legacy = home / "workspace"
+    if not legacy.is_dir():
+        return
+    try:
+        for name in _ROOT_WORKSPACE_FILES:
+            src, dst = legacy / name, home / name
+            if src.exists() and not dst.exists():
+                src.rename(dst)
+        pers_src, pers_dst = legacy / "personalities", home / "personalities"
+        if pers_src.is_dir() and not pers_dst.exists():
+            pers_src.rename(pers_dst)
+        # Park the husk ONLY when nothing live remains. A still-present USER.md must be
+        # left for the memory layer to fold into memories/USER.md first — renaming the
+        # dir out from under it would strand the user's profile. (Re-checked each call;
+        # the husk gets parked on a later run once USER.md -> USER.md.migrated.)
+        remaining = [p.name for p in legacy.iterdir()]
+        if not remaining or all(n == "USER.md.migrated" for n in remaining):
+            if not (home / "workspace.migrated").exists():
+                legacy.rename(home / "workspace.migrated")
+            else:
+                import shutil
+                shutil.rmtree(legacy, ignore_errors=True)
+        else:
+            _migrated_homes.discard(key)      # USER.md still live — re-attempt next call
+    except OSError:
+        _migrated_homes.discard(key)          # unwritable now — retry next call
 
 
 def sessions_db() -> Path:
