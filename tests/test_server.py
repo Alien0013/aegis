@@ -238,6 +238,9 @@ def test_openai_chat_completions_stream_sse_contract(monkeypatch, tmp_path):
     assert chunks[1]["choices"][0]["delta"]["content"] == "hel"
     assert chunks[2]["metadata"]["event"]["name"] == "read_file"
     assert chunks[-1]["choices"][0]["finish_reason"] == "stop"
+    assert chunks[-1]["usage"]["prompt_tokens"] == 11
+    assert chunks[-1]["usage"]["completion_tokens"] == 7
+    assert chunks[-1]["usage"]["prompt_tokens_details"]["cached_tokens"] == 3
     assert chunks[-1]["metadata"]["session_id"] == "serve:stream"
     assert chunks[-1]["metadata"]["trace_id"] == "trace_http"
     assert _FakeRunner.calls[0]["stream"] is True

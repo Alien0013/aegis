@@ -234,6 +234,7 @@ def make_handler(config: Config):
             final = {"id": cid, "object": "chat.completion.chunk", "created": int(time.time()),
                      "model": result.agent.provider.model,
                      "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                     "usage": _usage(getattr(result, "usage", None) or result.agent),
                      "metadata": {
                          "session_id": result.session.id,
                          "trace_id": result.trace_id,

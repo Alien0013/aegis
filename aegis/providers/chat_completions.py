@@ -104,6 +104,8 @@ class ChatCompletionsTransport(ProviderTransport):
         if wire_tools:
             payload["tools"] = wire_tools
             payload["tool_choice"] = "auto"
+        if stream:
+            payload["stream_options"] = {"include_usage": True}
 
         if stream:
             return self._stream(url, headers, payload, on_delta, timeout, on_reasoning)

@@ -79,6 +79,8 @@ def test_chat_completions_stream_records_rate_and_balance_headers(monkeypatch):
     from aegis.providers.chat_completions import ChatCompletionsTransport
     from aegis.types import Message
 
+    captured = {}
+
     class FakeAuth:
         def headers(self):
             return {}
@@ -96,6 +98,8 @@ def test_chat_completions_stream_records_rate_and_balance_headers(monkeypatch):
         def iter_lines(self):
             return iter([
                 'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}',
+                'data: {"choices":[],"usage":{"prompt_tokens":9,"completion_tokens":4,'
+                '"prompt_tokens_details":{"cached_tokens":2}}}',
                 "data: [DONE]",
             ])
 
@@ -110,6 +114,7 @@ def test_chat_completions_stream_records_rate_and_balance_headers(monkeypatch):
             return None
 
         def stream(self, method, url, headers, json):
+            captured["json"] = json
             return FakeStream()
 
     ratelimit._latest.clear()
@@ -125,6 +130,10 @@ def test_chat_completions_stream_records_rate_and_balance_headers(monkeypatch):
     )
 
     assert resp.text == "ok"
+    assert captured["json"]["stream_options"] == {"include_usage": True}
+    assert resp.usage.input_tokens == 9
+    assert resp.usage.output_tokens == 4
+    assert resp.usage.cache_read == 2
     assert ratelimit.balance()["provider"] == "openrouter"
     assert ratelimit.balance()["credits left"] == "8.50"
 
