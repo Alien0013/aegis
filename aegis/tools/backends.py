@@ -241,11 +241,18 @@ def _get_or_create_local_environment(
     config: Any,
 ) -> LocalEnvironment:
     key = ("local", task_id)
+    env_dir = _environment_state_dir(config, backend="local", task_id=task_id)
+    stale_env = None
     with _env_lock:
         env = _active_environments.get(key)
         if env is not None:
-            _last_activity[key] = time.time()
-            return env
+            if _environment_matches_state_dir(env, env_dir):
+                _last_activity[key] = time.time()
+                return env
+            stale_env = _active_environments.pop(key, None)
+            _last_activity.pop(key, None)
+    if stale_env is not None:
+        _cleanup_environment(stale_env)
 
     with _creation_locks_lock:
         lock = _creation_locks.get(key)
@@ -254,13 +261,18 @@ def _get_or_create_local_environment(
             _creation_locks[key] = lock
 
     with lock:
+        stale_env = None
         with _env_lock:
             env = _active_environments.get(key)
             if env is not None:
-                _last_activity[key] = time.time()
-                return env
+                if _environment_matches_state_dir(env, env_dir):
+                    _last_activity[key] = time.time()
+                    return env
+                stale_env = _active_environments.pop(key, None)
+                _last_activity.pop(key, None)
+        if stale_env is not None:
+            _cleanup_environment(stale_env)
 
-        env_dir = _environment_state_dir(config, backend="local", task_id=task_id)
         env = LocalEnvironment(
             cwd=cwd,
             timeout=timeout,
@@ -271,6 +283,16 @@ def _get_or_create_local_environment(
             _active_environments[key] = env
             _last_activity[key] = time.time()
         return env
+
+
+def _environment_matches_state_dir(env: Any, state_dir: Path) -> bool:
+    snapshot = getattr(env, "_snapshot_path", "")
+    if not snapshot:
+        return True
+    try:
+        return Path(str(snapshot)).parent == state_dir
+    except Exception:
+        return True
 
 
 def register_task_env_overrides(task_id: str, overrides: dict[str, Any]) -> None:

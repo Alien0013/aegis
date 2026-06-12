@@ -50,6 +50,14 @@ def _cwd_marker(session_id: str) -> str:
     return f"__AEGIS_CWD_{session_id}__"
 
 
+def _process_output_text(output: str | bytes | None) -> str:
+    if output is None:
+        return ""
+    if isinstance(output, bytes):
+        return output.decode("utf-8", errors="replace")
+    return str(output)
+
+
 class BaseEnvironment(ABC):
     """Common foreground execution flow for task-aware terminal backends."""
 
@@ -177,6 +185,28 @@ class BaseEnvironment(ABC):
         return result
 
     def _wait_for_process(self, proc: ProcessHandle, timeout: int = 120) -> dict[str, int | str]:
+        communicate = getattr(proc, "communicate", None)
+        if callable(communicate) and getattr(proc, "stdin", None) is None:
+            try:
+                output, _stderr = communicate(timeout=timeout)
+                return {
+                    "output": _process_output_text(output),
+                    "returncode": proc.returncode or 0,
+                }
+            except subprocess.TimeoutExpired as e:
+                self._kill_process(proc)
+                partial = _process_output_text(getattr(e, "output", "") or "")
+                try:
+                    output, _stderr = communicate(timeout=2)
+                    partial = _process_output_text(output) or partial
+                except Exception:
+                    pass
+                message = f"\n[Command timed out after {timeout}s]"
+                return {
+                    "output": partial + message if partial else message.lstrip(),
+                    "returncode": 124,
+                }
+
         output_chunks: list[str] = []
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 

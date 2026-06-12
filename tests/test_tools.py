@@ -127,6 +127,44 @@ def test_bash_tool_persists_local_shell_state_by_task(tmp_path):
         cleanup_task_environment(other_task_id)
 
 
+def test_local_environment_cache_is_scoped_to_aegis_home(tmp_path, monkeypatch):
+    from aegis.config import Config
+    from aegis.tools import backends
+
+    task_id = "same_task_different_home"
+    home_one = tmp_path / "home-one"
+    home_two = tmp_path / "home-two"
+    try:
+        monkeypatch.setenv("AEGIS_HOME", str(home_one))
+        out_one, code_one = backends.run_command(
+            "echo first-home",
+            str(tmp_path),
+            10,
+            "local",
+            Config.load(),
+            task_id=task_id,
+        )
+        env_one = backends.get_active_environment(task_id)
+
+        monkeypatch.setenv("AEGIS_HOME", str(home_two))
+        out_two, code_two = backends.run_command(
+            "echo second-home",
+            str(tmp_path),
+            10,
+            "local",
+            Config.load(),
+            task_id=task_id,
+        )
+        env_two = backends.get_active_environment(task_id)
+
+        assert code_one == 0 and "first-home" in out_one
+        assert code_two == 0 and "second-home" in out_two
+        assert env_one is not None and env_two is not None
+        assert env_two is not env_one
+    finally:
+        backends.cleanup_task_environment(task_id)
+
+
 def test_bash_tool_explains_outer_bwrap_loopback_failure(tmp_path, monkeypatch):
     import aegis.tools.backends as backends
     from aegis.tools.builtin import BashTool
