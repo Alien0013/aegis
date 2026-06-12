@@ -13,9 +13,19 @@ type NavItem = { id: string; label: string; icon: string };
 const NAV: NavItem[] = [
   { id: "overview", label: "Overview", icon: "overview" },
   { id: "chat", label: "Chat", icon: "chat" },
+  { id: "runs", label: "Runs", icon: "sessions" },
+  { id: "traces", label: "Traces", icon: "logs" },
+  { id: "agents", label: "Agents", icon: "tools" },
   { id: "sessions", label: "Sessions", icon: "sessions" },
+  { id: "kanban", label: "Kanban", icon: "kanban" },
   { id: "models", label: "Models", icon: "models" },
   { id: "channels", label: "Channels", icon: "channels" },
+  { id: "mcp", label: "MCP", icon: "tools" },
+  { id: "webhooks", label: "Webhooks", icon: "channels" },
+  { id: "plugins", label: "Plugins", icon: "skills" },
+  { id: "projects", label: "Projects", icon: "system" },
+  { id: "worktrees", label: "Worktrees", icon: "sessions" },
+  { id: "evals", label: "Evals", icon: "logs" },
   { id: "keys", label: "API Keys", icon: "config" },
   { id: "skills", label: "Skills", icon: "skills" },
   { id: "memory", label: "Memory", icon: "memory" },
@@ -31,15 +41,35 @@ function pageFor(id: string, go: (id: string) => void) {
   switch (id) {
     case "overview": return <Overview go={go} />;
     case "chat": return <Chat />;
+    case "runs": return <ListPage key="runs" endpoint="runs?limit=100" arrayKey="runs" title="Runs"
+      cols={[["title", "Run"], ["status", "Status"], ["surface", "Surface"]]} />;
+    case "traces": return <ListPage key="traces" endpoint="traces?limit=100" arrayKey="traces" title="Traces"
+      cols={[["id", "Trace"], ["status", "Status"], ["source", "Source"]]} />;
+    case "agents": return <ListPage key="agents" endpoint="agents" arrayKey="agents" title="Agents"
+      cols={[["id", "Agent"], ["status", "Status"], ["type", "Type"]]} />;
+    case "kanban": return <ListPage key="kanban" endpoint="kanban" title="Kanban"
+      cols={[["title", "Card"], ["status", "Status"], ["assignee", "Assignee"]]} />;
     case "config": return <ConfigPage />;
     case "cron": return <CronPage />;
     case "models": return <ModelsPage />;
     case "keys": return <KeysPage />;
     case "system": return <SystemPage />;
+    case "mcp": return <ListPage key="mcp" endpoint="mcp" title="MCP Servers"
+      cols={[["name", "Server"], ["command", "Command"]]} />;
+    case "webhooks": return <ListPage key="webhooks" endpoint="webhooks" title="Webhooks"
+      cols={[["name", "Webhook"], ["prompt", "Prompt"]]} />;
+    case "plugins": return <ListPage key="plugins" endpoint="plugins" arrayKey="manifests" title="Plugins"
+      cols={[["name", "Plugin"], ["version", "Version"], ["description", "Description"]]} />;
+    case "projects": return <ListPage key="projects" endpoint="projects" arrayKey="projects" title="Projects"
+      cols={[["name", "Project"], ["kind", "Kind"], ["path", "Path"]]} />;
+    case "worktrees": return <ListPage key="worktrees" endpoint="worktrees" arrayKey="worktrees" title="Worktrees"
+      cols={[["worktree", "Worktree"], ["branch", "Branch"], ["path", "Path"]]} />;
+    case "evals": return <ListPage key="evals" endpoint="evals" arrayKey="evals" title="Evals"
+      cols={[["name", "Eval"], ["status", "Status"], ["source", "Source"]]} />;
     case "sessions": return <ListPage key="sessions" endpoint="sessions" title="Sessions"
       cols={[["title", "Title"], ["updated_at", "Updated"]]} />;
     case "channels": return <ListPage key="channels" endpoint="pairing" arrayKey="pending" title="Channels & Pairing"
-      cols={[["platform", "Platform"], ["code", "Code"], ["user", "User"]]} empty="No pending pairings. Connect a channel with `aegis gateway --channels telegram`." />;
+      cols={[["platform", "Platform"], ["code", "Code"], ["user_id", "User"]]} empty="No pending pairings. Connect a channel with `aegis gateway --channels telegram`." />;
     case "skills": return <ListPage key="skills" endpoint="skills" arrayKey="skills" title="Skills"
       cols={[["name", "Skill"], ["description", "Description"]]} />;
     case "memory": return <ListPage key="memory" endpoint="memory" arrayKey="memory" title="Memory"

@@ -80,10 +80,20 @@ def test_background_spawn_inherits_parent_runtime_controls(tmp_path, monkeypatch
         def __init__(self, config, cwd=None, include_mcp=True):
             pass
 
+        def load_or_create_session(self, session_id=None, title=None, surface="", meta=None, **_kwargs):
+            seen["session_id"] = session_id
+            seen["meta"] = meta or {}
+            return type("S", (), {"id": session_id, "title": title, "meta": meta or {}})()
+
+        def make_agent(self, **kwargs):
+            seen["include_mcp"] = kwargs.get("include_mcp")
+            seen["registry"] = kwargs.get("registry")
+            return object()
+
         def run_prompt(self, prompt, **kwargs):
             seen["prompt"] = prompt
-            seen["meta"] = kwargs.get("meta") or {}
-            seen["session_id"] = kwargs.get("session_id", "")
+            seen["meta"] = kwargs.get("meta") or seen.get("meta") or {}
+            seen["session_id"] = getattr(kwargs.get("session"), "id", "") or seen.get("session_id", "")
             return type("R", (), {"text": "ok", "run_id": "run_bg"})()
 
         def close(self):
@@ -128,6 +138,12 @@ def test_background_spawn_registers_subagent_terminal_backend(tmp_path, monkeypa
     class FakeRunner:
         def __init__(self, config, cwd=None, include_mcp=True):
             pass
+
+        def load_or_create_session(self, session_id=None, title=None, surface="", meta=None, **_kwargs):
+            return type("S", (), {"id": session_id, "title": title, "meta": meta or {}})()
+
+        def make_agent(self, **_kwargs):
+            return object()
 
         def run_prompt(self, prompt, **kwargs):
             return type("R", (), {"text": "ok", "run_id": "run_bg"})()

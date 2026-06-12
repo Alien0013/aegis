@@ -36,6 +36,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Verify dashboard bundle
+        run: scripts/check_web_dist.sh
       - name: Build
         run: |
           pip install build

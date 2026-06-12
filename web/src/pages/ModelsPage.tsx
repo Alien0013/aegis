@@ -16,8 +16,20 @@ export function ModelsPage() {
   useEffect(() => { load().catch((e) => setMsg(String(e))); }, []);
   if (!data) return <><div className="head"><h1>Models</h1></div><div className="empty"><span className="spin" /> loading…</div></>;
 
-  const list: any[] = data.models || data.available || (Array.isArray(data) ? data : []);
-  const providers: string[] = data.providers || [...new Set(list.map((m: any) => m.provider).filter(Boolean))];
+  const presetRows = Object.entries(data.presets || {}).flatMap(([p, models]) =>
+    (Array.isArray(models) ? models : []).map((id) => ({ id, provider: p })),
+  );
+  const apiRows: any[] = data.models || data.available || [];
+  const list: any[] = apiRows.length ? apiRows : (presetRows.length ? presetRows : (Array.isArray(data) ? data : []));
+  const providers: string[] = data.providers || [
+    ...new Set([
+      ...list.map((m: any) => m.provider).filter(Boolean),
+      ...(data.provider_catalog || []).map((p: any) => p.name).filter(Boolean),
+    ]),
+  ];
+  const modelsForProvider = provider
+    ? list.filter((m: any) => !m.provider || m.provider === provider)
+    : list;
 
   async function apply() {
     setMsg("");
@@ -33,7 +45,12 @@ export function ModelsPage() {
         <div className="grid c3" style={{ gap: 10, alignItems: "end" }}>
           <label>Provider
             {providers.length
-              ? <select value={provider} onChange={(e) => setProvider(e.target.value)}>{providers.map((p) => <option key={p}>{p}</option>)}</select>
+              ? <select value={provider} onChange={(e) => {
+                const next = e.target.value;
+                setProvider(next);
+                const first = list.find((m: any) => m.provider === next);
+                if (first) setModel(first.id || first.name || String(first));
+              }}>{providers.map((p) => <option key={p}>{p}</option>)}</select>
               : <input value={provider} onChange={(e) => setProvider(e.target.value)} />}
           </label>
           <label>Model<input value={model} onChange={(e) => setModel(e.target.value)} placeholder="claude-sonnet-4-6" /></label>
@@ -43,8 +60,8 @@ export function ModelsPage() {
       </div>
       <div className="card">
         <h3>Available</h3>
-        {!list.length && <div className="empty">No model list from this provider.</div>}
-        {list.slice(0, 60).map((m: any, i: number) => (
+        {!modelsForProvider.length && <div className="empty">No model list from this provider.</div>}
+        {modelsForProvider.slice(0, 80).map((m: any, i: number) => (
           <div className="row click" key={i} onClick={() => { setModel(m.id || m.name || m); if (m.provider) setProvider(m.provider); }}>
             <span>{m.id || m.name || String(m)}</span>
             <span className="mut">{m.provider || ""}{m.context ? ` · ${m.context}` : ""}</span>

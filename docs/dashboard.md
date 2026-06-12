@@ -8,18 +8,20 @@ A **React + Vite + TypeScript** control panel (source in `web/`, built to
 `aegis/static/web_dist/` and served from the package) at `http://127.0.0.1:9119`.
 The built bundle ships with the package, so installs don't need Node — only
 developing the frontend does (`cd web && npm run dev`, or `scripts/build_web.sh`
-to rebuild). It speaks the same token-gated JSON API as every other surface;
-chat streams over SSE, and the Cron / Models / API-Keys pages are full editors.
+to rebuild). Releases run `scripts/check_web_dist.sh` so the committed bundle
+cannot drift from `web/`. It speaks the same token-gated JSON API as every
+other surface; chat streams over SSE, and the Cron / Models / API-Keys pages
+are full editors.
 
 ## Pages
 
 | Group | Pages |
 |---|---|
-| — | **Cockpit** (stat tiles, spend chart, recent sessions) · **Traces** · **Runs** · **Agents** · **Chat** · **Live activity** (SSE feed) |
+| — | **Overview** (stat tiles, spend, recent sessions) · **Runs** · **Traces** · **Agents** · **Chat** |
 | Agent | Sessions · Memory · Skills · Tools |
-| Automation | Kanban (with Run board) · Schedules · Webhooks |
-| Platform | Models · API keys · MCP servers · Plugins · Pairing · Personas |
-| Operations | Projects · Worktrees · Evals · Analytics (daily spend + by-model) · Curator · Logs · System · Config |
+| Automation | Kanban · Schedules · Webhooks |
+| Platform | Models · API keys · MCP servers · Plugins · Pairing |
+| Operations | Projects · Worktrees · Evals · Logs · System · Config |
 
 ## Cockpit APIs
 
@@ -58,19 +60,13 @@ The dashboard exposes read-only cockpit APIs used by the no-build frontend:
 
 ## Niceties
 
-- **Ctrl-K command palette** — jump to any page from the keyboard.
-- The Runs page includes filters for surface, status, and session id. Gateway
-  slash commands such as `/status`, `/whoami`, `/model`, `/busy`, and goal
-  control actions are recorded as `gateway/control` runs.
-- The Traces page includes filters for session id, status, and source so a
-  cockpit operator can narrow replay/debug views to one conversation lane.
-- The Chat page shows run, trace, session, and turn breadcrumbs for each
-  message, plus compact event pills for provider/tool progress. Those links
-  open the matching cockpit detail view without leaving the dashboard.
+- Inventory pages include a client-side filter box for quick scanning.
 - Chat progress streams live from the dashboard API, so long tool-heavy turns
   update the visible bubble instead of appearing frozen until the final answer.
-- **5 themes** (Aegis, Midnight, Ember, Hermit, Paper-light) — cycle with the sun icon.
-- Toast feedback on every action; secrets are masked and never echoed by the API.
+- The Chat page can steer a turn's `cwd`, provider, and model while preserving
+  the session id across streamed turns.
+- **3 themes** (dark, paper, mono) — switch from the sidebar.
+- Secrets are masked and never echoed by the API.
 
 ## Security
 

@@ -25,12 +25,14 @@ class BackgroundManager:
         self._lock = threading.Lock()
 
     def spawn(self, config: Any, prompt: str, *, cwd=None, on_done=None,
-              parent_session=None) -> str:
+              parent_session=None, registry=None, include_mcp: bool = True,
+              session_meta: dict | None = None) -> str:
         """Run ``prompt`` in a background agent. ``on_done(task)`` (if given) fires
         when it finishes — used to announce the result back into a chat."""
         from .surface import SurfaceRunner, runtime_controls_meta, session_runtime_controls
 
         task = BgTask(id=new_id("bg"), prompt=prompt)
+        session_id = f"background:{task.id}"
         with self._lock:
             self._tasks[task.id] = task
         try:
@@ -38,23 +40,37 @@ class BackgroundManager:
             if backend and backend not in {"inherit", "parent"}:
                 from .tools.backends import register_task_env_overrides
 
-                register_task_env_overrides(task.id, {"terminal_backend": backend})
+                for env_task_id in (task.id, session_id):
+                    register_task_env_overrides(env_task_id, {"terminal_backend": backend})
         except Exception:  # noqa: BLE001
             pass
 
         meta = {
             "background_task_id": task.id,
             **runtime_controls_meta(session_runtime_controls(parent_session)),
+            **(session_meta or {}),
         }
 
         def _work():
             runner = None
             try:
-                runner = SurfaceRunner(config, cwd=cwd, include_mcp=True)
+                runner = SurfaceRunner(config, cwd=cwd, include_mcp=include_mcp)
+                session = runner.load_or_create_session(
+                    session_id=session_id,
+                    title=f"background {task.id}",
+                    surface="background",
+                    meta=meta,
+                )
+                agent = runner.make_agent(
+                    session=session,
+                    cwd=cwd,
+                    include_mcp=include_mcp,
+                    registry=registry,
+                )
                 result = runner.run_prompt(
                     prompt,
-                    session_id=f"background:{task.id}",
-                    title=f"background {task.id}",
+                    session=session,
+                    agent=agent,
                     surface="background",
                     meta=meta,
                 )
@@ -76,7 +92,8 @@ class BackgroundManager:
                 try:
                     from .tools.backends import clear_task_env_overrides
 
-                    clear_task_env_overrides(task.id)
+                    for env_task_id in (task.id, session_id):
+                        clear_task_env_overrides(env_task_id)
                 except Exception:  # noqa: BLE001
                     pass
             if on_done is not None:

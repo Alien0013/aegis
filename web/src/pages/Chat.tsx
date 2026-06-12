@@ -8,6 +8,9 @@ export function Chat() {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [session, setSession] = useState("");
+  const [cwd, setCwd] = useState("");
+  const [provider, setProvider] = useState("");
+  const [model, setModel] = useState("");
   const logRef = useRef<HTMLDivElement>(null);
   useEffect(() => { logRef.current?.scrollTo(0, logRef.current.scrollHeight); }, [msgs]);
 
@@ -22,7 +25,13 @@ export function Chat() {
     setMsgs((m) => [...m, { role: "user", text }, { role: "bot", text: "", tools: [] }]);
     setBusy(true);
     try {
-      await postStream("chat/stream", { message: text, session_id: session }, (ev) => {
+      await postStream("chat/stream", {
+        message: text,
+        session_id: session,
+        cwd: cwd.trim() || undefined,
+        provider: provider.trim() || undefined,
+        model: model.trim() || undefined,
+      }, (ev) => {
         if (ev.type === "start" && ev.session_id) setSession(ev.session_id);
         else if (ev.type === "event") {
           const e = ev.event || {};
@@ -45,6 +54,11 @@ export function Chat() {
     <>
       <div className="head"><h1>Chat</h1><span className="crumb">{session || "new session"}</span></div>
       <div className="card">
+        <div className="grid c3" style={{ gap: 8, marginBottom: 10 }}>
+          <input value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="cwd" />
+          <input value={provider} onChange={(e) => setProvider(e.target.value)} placeholder="provider" />
+          <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="model" />
+        </div>
         <div className="chatlog" ref={logRef}>
           {!msgs.length && <div className="empty">Say hello — streams live, same agent as the terminal.</div>}
           {msgs.map((m, i) => (

@@ -11,17 +11,48 @@ type Props = {
 function rowsOf(data: any, arrayKey?: string): any[] {
   if (Array.isArray(data)) return data;
   if (arrayKey && Array.isArray(data?.[arrayKey])) return data[arrayKey];
+  if (arrayKey && data?.[arrayKey] && typeof data[arrayKey] === "object") {
+    return flattenMap(data[arrayKey], arrayKey);
+  }
   for (const k of ["items", "rows", "entries", "list", arrayKey || ""]) {
     if (k && Array.isArray(data?.[k])) return data[k];
   }
-  // memory endpoint: {memory: "text", user: "text"} → split into entries
+  // Column/map endpoints: {ready: [...], done: [...]} or {pending: {telegram: {...}}}
   if (data && typeof data === "object") {
     const vals = Object.values(data).filter((v) => Array.isArray(v));
-    if (vals.length) return vals[0] as any[];
+    if (vals.length) return Object.entries(data).flatMap(([k, v]) =>
+      Array.isArray(v) ? v.map((row) => toRow(row, { status: k })) : [],
+    );
+    const maps = Object.values(data).filter((v) => v && typeof v === "object");
+    if (maps.length) return flattenMap(data, "group");
+    // memory endpoint: {memory: "text", user: "text"} → split into entries
     const strs = Object.entries(data).filter(([, v]) => typeof v === "string" && (v as string).trim());
     if (strs.length) return strs.map(([k, v]) => ({ text: `${k}: ${v}` }));
   }
   return [];
+}
+
+function toRow(value: any, extra: Record<string, any>): any {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? { ...extra, ...value }
+    : { ...extra, value: value, text: String(value) };
+}
+
+function flattenMap(obj: Record<string, any>, arrayKey: string): any[] {
+  const rows: any[] = [];
+  const outerName = arrayKey === "pending" || arrayKey === "approved" ? "platform" : "group";
+  for (const [outer, value] of Object.entries(obj || {})) {
+    if (Array.isArray(value)) {
+      rows.push(...value.map((item) => toRow(item, { [outerName]: outer })));
+    } else if (value && typeof value === "object") {
+      for (const [inner, item] of Object.entries(value)) {
+        rows.push(toRow(item, { [outerName]: outer, code: inner }));
+      }
+    } else {
+      rows.push({ [outerName]: outer, value, text: String(value) });
+    }
+  }
+  return rows;
 }
 
 export function ListPage({ endpoint, title, cols, arrayKey, raw, empty }: Props) {

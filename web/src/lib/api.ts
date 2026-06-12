@@ -43,6 +43,7 @@ export async function postStream(
     headers: headers({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
   });
+  if (!r.ok) throw new Error(`${path}: ${r.status}`);
   if (!r.body) throw new Error(`${path}: no stream`);
   const reader = r.body.getReader();
   const dec = new TextDecoder();

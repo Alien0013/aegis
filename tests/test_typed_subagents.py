@@ -25,6 +25,7 @@ def capture(monkeypatch):
         seen["system_prompt"] = self.session.messages[0].content
         seen["prompt_parts"] = list(self.session.meta.get("prompt_parts") or [])
         seen["session_meta"] = dict(self.session.meta)
+        seen["agent"] = self
         seen.setdefault("task_ids", []).append(getattr(self.tool_context, "task_id", ""))
         return Message.assistant("child answer")
 
@@ -42,16 +43,46 @@ def test_explore_type_is_readonly(tmp_path, capture):
     assert not r.is_error
     assert capture["tools"] <= _READONLY_TOOLS          # whitelist enforced
     assert "write_file" not in capture["tools"] and "bash" not in capture["tools"]
+    assert "skill" in capture["tools"]                  # read-only skill access is preserved
     assert capture["tasks"][0] == "find the config loader"
     assert not capture["tasks"][0].startswith("You are a READ-ONLY explore agent")
     assert "You are a READ-ONLY explore agent" in capture["system_prompt"]
     assert any(p["name"] == "subagent_role:explore" for p in capture["prompt_parts"])
 
 
+def test_explore_skill_tool_cannot_mutate(tmp_path, capture):
+    r = SubagentTool().run({"task": "inspect skills", "agent_type": "explore"}, _ctx(tmp_path))
+    assert not r.is_error
+    skill = capture["agent"].registry.get("skill")
+    assert skill is not None
+    result = skill.run({
+        "action": "create",
+        "name": "nope",
+        "description": "x",
+        "body": "x",
+    }, capture["agent"].tool_context)
+    assert result.is_error
+    assert "read-only" in result.content
+
+
 def test_general_type_keeps_full_tools(tmp_path, capture):
     r = SubagentTool().run({"task": "do it"}, _ctx(tmp_path))
     assert not r.is_error
     assert "write_file" in capture["tools"] and "bash" in capture["tools"]
+
+
+def test_general_subagent_loads_mcp_tools(tmp_path, capture, monkeypatch):
+    loaded = []
+
+    def fake_load_mcp(self):
+        loaded.append(self.session.id)
+
+    monkeypatch.setattr(Agent, "load_mcp", fake_load_mcp)
+
+    r = SubagentTool().run({"task": "do it"}, _ctx(tmp_path))
+
+    assert not r.is_error
+    assert loaded
 
 
 def test_general_subagent_is_leaf_by_default(tmp_path, capture):
@@ -221,7 +252,8 @@ def test_background_subagent_notifies_parent_memory(tmp_path, monkeypatch):
         chat_id = None
 
     class Manager:
-        def spawn(self, config, prompt, *, cwd=None, on_done=None, parent_session=None):
+        def spawn(self, config, prompt, *, cwd=None, on_done=None, parent_session=None,
+                  registry=None, include_mcp=True, session_meta=None):
             task = type("Task", (), {
                 "id": "bg_test",
                 "prompt": prompt,
@@ -230,17 +262,25 @@ def test_background_subagent_notifies_parent_memory(tmp_path, monkeypatch):
                 "error": "",
                 "run_id": "run_bg",
             })()
+            self.registry = registry
+            self.include_mcp = include_mcp
+            self.session_meta = session_meta or {}
             if on_done is not None:
                 on_done(task)
             return task.id
 
-    monkeypatch.setattr("aegis.background.get_manager", lambda: Manager())
+    manager = Manager()
+    monkeypatch.setattr("aegis.background.get_manager", lambda: manager)
     ctx = ToolContext(cwd=tmp_path, config=Config.load(), agent=Parent())
 
-    r = SubagentTool().run({"task": "bg task", "background": True}, ctx)
+    r = SubagentTool().run({"task": "bg task", "background": True, "agent_type": "review"}, ctx)
 
     assert not r.is_error
     assert calls == [("bg task", "done bg")]
+    assert manager.include_mcp is False
+    assert manager.session_meta["agent_type"] == "review"
+    assert "READ-ONLY code reviewer" in manager.session_meta["subagent_role_prompt"]
+    assert {t.name for t in manager.registry.all()} <= _READONLY_TOOLS
 
 
 def test_subagent_inherits_parent_runtime_controls(tmp_path, capture):

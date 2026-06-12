@@ -321,8 +321,8 @@ aegis trace list               # trace spans for turns, providers, tools, agents
 aegis eval run suite.jsonl     # provider-free replay evals
 aegis cost --days 30           # token-aware, cache-discounted spend by model
 aegis insights                 # usage analytics
-aegis ui                       # cockpit: traces, runs, agents, chat, live feed,
-                               # kanban, schedules, models, MCP — Ctrl-K palette, themes
+aegis ui                       # cockpit: traces, runs, agents, chat,
+                               # kanban, schedules, models, MCP, logs, system
 ```
 
 The same runtime is embeddable from Python with `from aegis import AegisClient`:

@@ -127,6 +127,42 @@ _READONLY_TOOLS = {
     "read_file", "list_dir", "glob", "search", "web_fetch", "web_search",
     "session_search", "tool_search", "skill", "system_status", "lsp",
 }
+
+
+class _ReadOnlySkillTool(Tool):
+    name = "skill"
+    description = "Read skills only. action: list | view | stats. Cannot create or improve skills."
+    parameters = {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["list", "view", "stats"]},
+            "name": {"type": "string", "description": "skill name for view"},
+        },
+        "required": ["action"],
+    }
+
+    def run(self, args, ctx) -> ToolResult:
+        if ctx.skills is None:
+            return ToolResult.error("skills are not available.")
+        action = args.get("action")
+        if action == "list":
+            return ToolResult.ok(ctx.skills.index_block() or "(no skills)", display="listed skills")
+        if action == "stats":
+            usage = ctx.skills.usage()
+            if not usage:
+                return ToolResult.ok("(no skill usage recorded yet)", display="skill stats")
+            rows = sorted(usage.items(), key=lambda kv: -kv[1].get("count", 0))
+            return ToolResult.ok("\n".join(f"{n}: used {u['count']}x (last {u.get('last_used','?')})"
+                                           for n, u in rows), display="skill stats")
+        if action != "view":
+            return ToolResult.error("read-only subagents can only list, view, or inspect skill stats.")
+        name = args.get("name")
+        if not name:
+            return ToolResult.error("name is required for view.")
+        body = ctx.skills.activate(name)
+        if body is None:
+            return ToolResult.error(f"skill '{name}' not found.")
+        return ToolResult.ok(body, display=f"loaded skill {name}")
 AGENT_TYPES: dict[str, dict] = {
     "general": {"tools": None, "preamble": ""},
     "explore": {"tools": _READONLY_TOOLS, "preamble":
@@ -265,15 +301,12 @@ class SubagentTool(Tool):
                 _notify_delegation(parent, tasks[0], f"[subagent error] {e}")
                 return ToolResult.error(f"subagent continuation failed: {e}")
 
-        if args.get("background") and depth == 1:
-            return self._spawn_background(tasks, ctx, config)
-
         def _restricted_registry(allowed: set[str], *, allow_delegation: bool = False):
             from .registry import ToolRegistry, default_registry
             reg = ToolRegistry()
             for t in default_registry().all():
                 if t.name in allowed and (allow_delegation or t.name != "spawn_subagent"):
-                    reg.register(t)
+                    reg.register(_ReadOnlySkillTool() if t.name == "skill" else t)
             return reg
 
         def _child_registry(spec: dict, *, allow_delegation: bool):
@@ -287,6 +320,18 @@ class SubagentTool(Tool):
                 if tool.name != "spawn_subagent":
                     reg.register(tool)
             return reg
+
+        if args.get("background") and depth == 1:
+            return self._spawn_background(
+                tasks, ctx, config,
+                agent_type=atype,
+                spec=spec,
+                role=role,
+                toolsets=toolsets,
+                child_registry=_child_registry,
+                depth=depth,
+                max_depth=max_depth,
+            )
 
         def _one(task: str) -> tuple[str, str]:
             sid = new_id("sub")
@@ -316,6 +361,11 @@ class SubagentTool(Tool):
                     cwd=ctx.cwd,
                     **kwargs,
                 )
+                if spec["tools"] is None:
+                    try:
+                        child.load_mcp()
+                    except Exception:  # noqa: BLE001
+                        pass
                 apply_session_runtime(child)
                 child._depth = depth  # type: ignore[attr-defined]
                 from ..surface import SurfaceRunner
@@ -370,12 +420,23 @@ class SubagentTool(Tool):
         body = "\n\n".join(f"## subagent {i + 1} ({sid})\n{r}" for i, (sid, r) in enumerate(results))
         return ToolResult.ok(body, display=f"{len(tasks)} {atype} subagents finished")
 
-    def _spawn_background(self, tasks, ctx, config) -> ToolResult:
+    def _spawn_background(self, tasks, ctx, config, *, agent_type: str, spec: dict,
+                          role: str, toolsets, child_registry, depth: int,
+                          max_depth: int) -> ToolResult:
         """Fire-and-forget delegation: the child runs after this turn ends and its
         result is announced into the originating chat (gateway) or kept for /tasks (CLI)."""
         from ..background import get_manager
         platform = getattr(ctx.agent, "platform", None)
         chat_id = getattr(ctx.agent, "chat_id", None)
+        allow_delegation = role == "orchestrator" and depth < max_depth
+        registry = child_registry(spec, allow_delegation=allow_delegation)
+        child_config = _child_config_for_toolsets(config, toolsets)
+        role_prompt = _role_prompt(agent_type, spec)
+        session_meta = {
+            "agent_type": agent_type,
+            "subagent_role_prompt": role_prompt,
+        } if role_prompt or agent_type else {}
+        include_mcp = spec["tools"] is None
 
         def _announce(task) -> None:
             _notify_delegation(ctx.agent, task.prompt, task.result or task.error)
@@ -399,7 +460,9 @@ class SubagentTool(Tool):
         parent_session = getattr(ctx.agent, "session", None)
         ids = [
             get_manager().spawn(
-                config, t, cwd=ctx.cwd, on_done=_announce, parent_session=parent_session
+                child_config, t, cwd=ctx.cwd, on_done=_announce,
+                parent_session=parent_session, registry=registry,
+                include_mcp=include_mcp, session_meta=session_meta,
             )
             for t in tasks
         ]

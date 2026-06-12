@@ -30,6 +30,7 @@ with `target = testpypi`, then `pip install -i https://test.pypi.org/simple/ aeg
 
 ```bash
 pip install build twine
+scripts/check_web_dist.sh
 python -m build
 twine upload dist/*          # username: __token__ · password: a pypi-… token you create
 ```
