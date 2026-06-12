@@ -54,6 +54,37 @@ def test_general_type_keeps_full_tools(tmp_path, capture):
     assert "write_file" in capture["tools"] and "bash" in capture["tools"]
 
 
+def test_general_subagent_is_leaf_by_default(tmp_path, capture):
+    r = SubagentTool().run({"task": "do it"}, _ctx(tmp_path))
+
+    assert not r.is_error
+    assert "spawn_subagent" not in capture["tools"]
+
+
+def test_orchestrator_role_keeps_delegation_when_depth_allows(tmp_path, capture):
+    config = Config.load()
+    config.data["agent"]["max_spawn_depth"] = 2
+    ctx = ToolContext(cwd=tmp_path, config=config)
+
+    r = SubagentTool().run({"task": "coordinate workers", "role": "orchestrator"}, ctx)
+
+    assert not r.is_error
+    assert "spawn_subagent" in capture["tools"]
+
+
+def test_subagent_depth_limit_blocks_grandchildren_by_default(tmp_path):
+    class Parent:
+        _depth = 1
+
+    ctx = _ctx(tmp_path)
+    ctx.agent = Parent()
+
+    r = SubagentTool().run({"task": "spawn lower"}, ctx)
+
+    assert r.is_error
+    assert "depth limit" in r.content
+
+
 def test_requested_toolsets_are_child_only(tmp_path, monkeypatch):
     seen = {}
 

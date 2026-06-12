@@ -134,6 +134,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "max_iterations": 50,
         "stream": True,
         "subagent_concurrency": 4,   # max child agents run in parallel by spawn_subagent
+        "max_spawn_depth": 1,        # flat by default; role=orchestrator can opt into deeper trees
         "context_engine": "default", # context-management strategy (plugins can register others)
         "reasoning_effort": "off",   # off|minimal|low|medium|high|xhigh
         "subdir_hints": True,        # inject a subdir's rule files when the agent first works there

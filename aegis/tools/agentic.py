@@ -103,6 +103,13 @@ def _child_config_for_toolsets(config, requested_toolsets):
     return Config(data)
 
 
+def _max_spawn_depth(config) -> int:
+    try:
+        return max(1, int(config.get("agent.max_spawn_depth", 1) or 1))
+    except Exception:  # noqa: BLE001
+        return 1
+
+
 # Typed subagents: a named type = a tool whitelist + a role preamble. Read-only types
 # can fan out aggressively because they cannot modify anything.
 _READONLY_TOOLS = {
@@ -157,6 +164,8 @@ class SubagentTool(Tool):
                       "description": "Several self-contained instructions, run in parallel."},
             "agent_type": {"type": "string", "enum": ["general", "explore", "plan", "review"],
                            "description": "Specialist type (explore/plan/review are read-only)."},
+            "role": {"type": "string", "enum": ["leaf", "orchestrator"],
+                     "description": "leaf cannot spawn children; orchestrator may if depth budget allows."},
             "continue_id": {"type": "string",
                             "description": "id of a previous subagent — sends `task` to it as a "
                                            "follow-up with its context intact."},
@@ -174,11 +183,12 @@ class SubagentTool(Tool):
 
         parent = ctx.agent
         depth = (getattr(parent, "_depth", 0) if parent else 0) + 1
-        if depth > 2:
-            return ToolResult.error("subagent depth limit reached (max 2).")
         config = ctx.config
         if config is None:
             return ToolResult.error("no config available for subagent.")
+        max_depth = _max_spawn_depth(config)
+        if depth > max_depth:
+            return ToolResult.error(f"subagent depth limit reached (max {max_depth}).")
         tasks = list(args.get("tasks") or ([] if args.get("task") is None else [args["task"]]))
         tasks = [t for t in tasks if isinstance(t, str) and t.strip()]
         if not tasks:
@@ -189,6 +199,9 @@ class SubagentTool(Tool):
         if spec is None:
             return ToolResult.error(f"unknown agent_type '{atype}' "
                                     f"(use {', '.join(AGENT_TYPES)})")
+        role = str(args.get("role") or "leaf").strip().lower()
+        if role not in {"leaf", "orchestrator"}:
+            role = "leaf"
 
         if args.get("continue_id"):                       # follow-up to a previous child
             with _REG_LOCK:
@@ -244,12 +257,24 @@ class SubagentTool(Tool):
         if args.get("background") and depth == 1:
             return self._spawn_background(tasks, ctx, config)
 
-        def _restricted_registry(allowed: set[str]):
+        def _restricted_registry(allowed: set[str], *, allow_delegation: bool = False):
             from .registry import ToolRegistry, default_registry
             reg = ToolRegistry()
             for t in default_registry().all():
-                if t.name in allowed:
+                if t.name in allowed and (allow_delegation or t.name != "spawn_subagent"):
                     reg.register(t)
+            return reg
+
+        def _child_registry(spec: dict, *, allow_delegation: bool):
+            from .registry import ToolRegistry, default_registry
+            if spec["tools"] is not None:
+                return _restricted_registry(spec["tools"], allow_delegation=allow_delegation)
+            if allow_delegation:
+                return None
+            reg = ToolRegistry()
+            for tool in default_registry().all():
+                if tool.name != "spawn_subagent":
+                    reg.register(tool)
             return reg
 
         def _one(task: str) -> tuple[str, str]:
@@ -261,15 +286,24 @@ class SubagentTool(Tool):
                       role_prompt=role_prompt, terminal_backend=terminal_backend)
             ctx.emit_event(type="subagent_start", id=sid, task=task[:80])
             try:
+                allow_delegation = role == "orchestrator" and depth < max_depth
                 kwargs = {}
-                if spec["tools"] is not None:
-                    kwargs["registry"] = _restricted_registry(spec["tools"])
+                registry = _child_registry(spec, allow_delegation=allow_delegation)
+                if registry is not None:
+                    kwargs["registry"] = registry
                 child_config = _child_config_for_toolsets(config, toolsets)
                 child_session = Session.create()
                 from ..surface import apply_session_runtime, inherit_session_runtime
                 inherit_session_runtime(getattr(parent, "session", None), child_session)
                 _seed_role_prompt(child_session, atype, role_prompt)
-                child = Agent.create(child_config, session=child_session, cwd=ctx.cwd, **kwargs)
+                from ..surface import _agent_create
+                child = _agent_create(
+                    Agent,
+                    child_config,
+                    session=child_session,
+                    cwd=ctx.cwd,
+                    **kwargs,
+                )
                 apply_session_runtime(child)
                 child._depth = depth  # type: ignore[attr-defined]
                 from ..surface import SurfaceRunner
