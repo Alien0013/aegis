@@ -91,6 +91,28 @@ def test_bash_tool_runs(tmp_path):
     assert "hello-bash" in res.content and not res.is_error
 
 
+def test_bash_tool_explains_outer_bwrap_loopback_failure(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import aegis.tools.backends as backends
+    from aegis.tools.builtin import BashTool
+
+    def fake_run(*_a, **_k):
+        return SimpleNamespace(
+            stdout="",
+            stderr="bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted\n",
+            returncode=1,
+        )
+
+    monkeypatch.setattr(backends.subprocess, "run", fake_run)
+    res = BashTool().run({"command": "pwd"}, _ctx(tmp_path))
+
+    assert res.is_error
+    assert "bubblewrap wrapper failed before the command ran" in res.content
+    assert "Subagents can still spawn" in res.content
+    assert "[exit 126]" in res.content
+
+
 def test_registry_has_full_surface():
     from aegis.tools.registry import default_registry
     names = {t.name for t in default_registry().all()}

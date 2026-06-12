@@ -71,7 +71,10 @@ def _run_local(command: str, cwd: str, timeout: int) -> tuple[str, int]:
         )
     except subprocess.TimeoutExpired:
         return f"command timed out after {timeout}s", 124
-    return _merge(proc.stdout, proc.stderr), proc.returncode
+    except OSError as e:
+        return _outer_sandbox_failure(str(e)) or (f"local command failed to start ({e})", 126)
+    out = _merge(proc.stdout, proc.stderr)
+    return _outer_sandbox_failure(out) or (out, proc.returncode)
 
 
 # --------------------------------------------------------------------------- #
@@ -125,6 +128,8 @@ def _run_docker(command: str, cwd: str, timeout: int, config: Any) -> tuple[str,
 
     # Distinguish "image missing / daemon down" from the program's own failure.
     out = _merge(proc.stdout, proc.stderr)
+    if failure := _outer_sandbox_failure(out):
+        return failure
     if proc.returncode == 125 and "Unable to find image" not in out and "/work" not in out:
         return _degraded(config, f"docker run failed: {out.strip() or 'unknown error'}",
                          command, cwd, timeout)
@@ -160,6 +165,8 @@ def _run_ssh(command: str, cwd: str, timeout: int, config: Any = None) -> tuple[
         return _degraded(config, f"ssh failed to start ({e})", command, cwd, timeout)
 
     out = _merge(proc.stdout, proc.stderr)
+    if failure := _outer_sandbox_failure(out):
+        return failure
     # 255 is ssh's own "connection failed" code (auth/network), not the remote program's exit.
     if proc.returncode == 255:
         return _degraded(config, f"ssh connection to {target} failed: {out.strip() or 'unknown error'}",
@@ -189,6 +196,8 @@ def _run_singularity(command: str, cwd: str, timeout: int, config: Any) -> tuple
     except OSError as e:
         return _degraded(config, f"singularity failed to start ({e})", command, cwd, timeout)
     out = _merge(proc.stdout, proc.stderr)
+    if failure := _outer_sandbox_failure(out):
+        return failure
     if proc.returncode == 255 and "/work" not in out:
         return _degraded(config, f"singularity run failed: {out.strip() or 'unknown'}", command, cwd, timeout)
     return out, proc.returncode
@@ -239,6 +248,24 @@ def _merge(stdout: str, stderr: str) -> str:
 def _note(message: str, output: str) -> str:
     prefix = f"[backend: {message}]"
     return f"{prefix}\n{output}" if output else prefix
+
+
+def _outer_sandbox_failure(output: str) -> tuple[str, int] | None:
+    """Detect host-level sandbox bootstrap failures that happen before the command runs."""
+    summary = " ".join((output or "").strip().split())
+    lowered = summary.lower()
+    if "bwrap:" not in lowered:
+        return None
+    if "rtm_newaddr" not in lowered or "operation not permitted" not in lowered:
+        return None
+    return (
+        "sandbox unavailable: the host bubblewrap wrapper failed before the command ran "
+        f"({summary}). This usually means the environment blocks loopback/network namespace "
+        "setup. Subagents can still spawn, but bash/process tools will fail until AEGIS is "
+        "run in an environment that permits that sandbox setup, or a remote/container backend "
+        "is configured from a host that can start subprocesses.",
+        126,
+    )
 
 
 def _sh_quote(s: str) -> str:
