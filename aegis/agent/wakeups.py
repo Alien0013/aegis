@@ -28,11 +28,13 @@ def _path():
     return ensure_dir(cfg.sub("processes")) / "wakeups.jsonl"
 
 
-def add_wakeup(source: str, title: str, text: str) -> None:
+def add_wakeup(source: str, title: str, text: str, *, session_key: str = "") -> None:
     """Queue a completion note. Never raises — a lost note must not kill a watcher."""
     try:
         note = {"ts": now_iso(), "source": source, "title": title[:200],
                 "text": (text or "")[:_MAX_NOTE]}
+        if session_key:
+            note["session_key"] = str(session_key)
         with STORE_LOCK, file_lock(_path()):
             with open(_path(), "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(note) + "\n")
@@ -40,11 +42,13 @@ def add_wakeup(source: str, title: str, text: str) -> None:
         pass
 
 
-def drain_wakeups(source: str | None = None) -> list[dict]:
+def drain_wakeups(source: str | None = None, *, session_key: str | None = None) -> list[dict]:
     """Return queued notes and clear them.
 
     When ``source`` is provided, only notes from that source are consumed; the
     rest stay queued for a later user turn.
+    When ``session_key`` is provided, scoped notes for other sessions are left
+    queued; legacy unscoped notes still drain everywhere.
     """
     try:
         with STORE_LOCK, file_lock(_path()):
@@ -58,10 +62,17 @@ def drain_wakeups(source: str | None = None) -> list[dict]:
                 except json.JSONDecodeError:
                     continue
             if source is None:
-                atomic_write(_path(), "")
-                return notes[-_MAX_DRAIN:]
-            selected = [n for n in notes if n.get("source") == source]
-            remaining = [n for n in notes if n.get("source") != source]
+                selected = [n for n in notes if _matches_session(n, session_key)]
+                remaining = [n for n in notes if not _matches_session(n, session_key)]
+            else:
+                selected = [
+                    n for n in notes
+                    if n.get("source") == source and _matches_session(n, session_key)
+                ]
+                remaining = [
+                    n for n in notes
+                    if n.get("source") != source or not _matches_session(n, session_key)
+                ]
             body = "".join(json.dumps(n) + "\n" for n in remaining)
             atomic_write(_path(), body)
             return selected[-_MAX_DRAIN:]
@@ -69,9 +80,16 @@ def drain_wakeups(source: str | None = None) -> list[dict]:
         return []
 
 
-def wakeup_block() -> str:
+def _matches_session(note: dict, session_key: str | None) -> bool:
+    if session_key is None:
+        return True
+    note_key = str(note.get("session_key") or "")
+    return not note_key or note_key == str(session_key)
+
+
+def wakeup_block(*, session_key: str | None = None) -> str:
     """Drained notes rendered as one untrusted context block ('' if none)."""
-    notes = drain_wakeups()
+    notes = drain_wakeups(session_key=session_key)
     if not notes:
         return ""
     body = "\n\n".join(f"[{n['source']}] {n['title']}\n{n['text']}".strip() for n in notes)

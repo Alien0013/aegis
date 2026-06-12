@@ -25,6 +25,21 @@ def test_drain_wakeups_can_filter_by_source():
     assert [n["source"] for n in wakeups.drain_wakeups()] == ["subagent"]
 
 
+def test_wakeups_can_filter_by_session_key():
+    from aegis.agent import wakeups
+    wakeups.drain_wakeups()
+    wakeups.add_wakeup("process", "proc-a", "done-a", session_key="sess-a")
+    wakeups.add_wakeup("process", "proc-b", "done-b", session_key="sess-b")
+    wakeups.add_wakeup("subagent", "legacy", "done-global")
+
+    block = wakeups.wakeup_block(session_key="sess-a")
+
+    assert "proc-a" in block
+    assert "legacy" in block
+    assert "proc-b" not in block
+    assert [n["title"] for n in wakeups.drain_wakeups()] == ["proc-b"]
+
+
 def test_wakeup_block_format_and_cap():
     from aegis.agent import wakeups
     wakeups.drain_wakeups()
@@ -75,6 +90,31 @@ def test_agent_run_folds_wakeups(monkeypatch):
     agent.run("continue please")
     assert "<background_completions>" in seen["user"]
     assert "proc_9" in seen["user"] and "continue please" in seen["user"]
+
+
+def test_agent_run_keeps_other_session_wakeups_queued(monkeypatch):
+    from aegis.agent import wakeups
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.session import Session
+    from aegis.types import Message
+    wakeups.drain_wakeups()
+    session = Session(id="sess-a", title="a")
+    wakeups.add_wakeup("process", "proc-a", "build ok", session_key="sess-a")
+    wakeups.add_wakeup("process", "proc-b", "wrong session", session_key="sess-b")
+    agent = Agent.create(Config.load(), session=session)
+    seen = {}
+
+    def fake_conversation(a, on_event=None):
+        seen["user"] = a.session.messages[-1].content
+        return Message.assistant("ok")
+
+    monkeypatch.setattr("aegis.agent.agent.run_conversation", fake_conversation)
+    agent.run("continue please")
+
+    assert "proc-a" in seen["user"]
+    assert "proc-b" not in seen["user"]
+    assert [n["title"] for n in wakeups.drain_wakeups()] == ["proc-b"]
 
 
 def test_agent_run_can_skip_wakeups_once(monkeypatch):

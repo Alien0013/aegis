@@ -870,7 +870,7 @@ def test_terminal_background_inherits_agent_cwd(monkeypatch, tmp_path):
     )
     monkeypatch.setattr("aegis.background.get_manager", lambda: Manager())
     monkeypatch.setattr("aegis.agent.wakeups.add_wakeup",
-                        lambda source, title, text: wakeups.append((source, title, text)))
+                        lambda source, title, text, **_kwargs: wakeups.append((source, title, text)))
     monkeypatch.setattr("aegis.eventbus.BUS.publish", lambda event: events.append(event))
     monkeypatch.setattr(repl, "_out", lambda text="", style=None: out.append(str(text)))
 

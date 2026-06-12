@@ -590,7 +590,12 @@ class ProcessRegistry:
         try:
             from ..agent.wakeups import add_wakeup
 
-            add_wakeup("process", text[:200], str(event.get("output") or event.get("message") or ""))
+            add_wakeup(
+                "process",
+                text[:200],
+                str(event.get("output") or event.get("message") or ""),
+                session_key=str(event.get("session_key") or ""),
+            )
         except Exception:
             pass
         platform = str(event.get("platform") or "")
@@ -623,7 +628,7 @@ class ProcessRegistry:
         try:
             from ..agent.wakeups import add_wakeup
 
-            add_wakeup("process", title, output_tail)
+            add_wakeup("process", title, output_tail, session_key=session.session_key)
         except Exception:
             pass
         if session.watcher_platform and session.watcher_chat_id:

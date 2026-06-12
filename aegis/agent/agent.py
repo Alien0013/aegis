@@ -547,7 +547,7 @@ class Agent:
         if include_wakeups:
             try:                           # background work that finished since the last turn
                 from .wakeups import wakeup_block
-                wb = wakeup_block()
+                wb = wakeup_block(session_key=str(getattr(self.session, "id", "") or ""))
                 if wb:
                     msg.content = f"{wb}\n\n{msg.content}"
             except Exception:  # noqa: BLE001

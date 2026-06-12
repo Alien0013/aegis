@@ -977,7 +977,8 @@ def handle_slash(
                 try:
                     from ..agent.wakeups import add_wakeup
                     add_wakeup("background", f"{task.id}: {task.prompt[:80]}",
-                               task.result or task.error)
+                               task.result or task.error,
+                               session_key=str(getattr(getattr(agent, "session", None), "id", "") or ""))
                 except Exception:  # noqa: BLE001
                     pass
                 try:

@@ -364,7 +364,8 @@ class SubagentTool(Tool):
                     else f"⚠ background task failed: {task.error}")
             from ..agent.wakeups import add_wakeup     # parent agent learns it next turn
             add_wakeup("subagent", f"{task.id}: {task.prompt[:80]}",
-                       task.result or task.error)
+                       task.result or task.error,
+                       session_key=str(getattr(getattr(ctx.agent, "session", None), "id", "") or ""))
             if platform and chat_id:                 # announce back into the chat via the outbox
                 try:
                     from ..gateway.queue import DeliveryQueue
