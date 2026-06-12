@@ -154,6 +154,10 @@ def test_model_provider_session_override(tmp_path, monkeypatch):
     assert r._session(key).meta["runtime_controls"]["provider"] == "anthropic"
     assert key not in r._agents
     assert "anthropic/claude-sonnet-4-6" in r.dispatch(_ev("/model"))
+    status = r.dispatch(_ev("/status"))
+    assert "provider=anthropic" in status
+    assert "model=claude-sonnet-4-6" in status
+    assert "provider=anthropic" in r.dispatch(_ev("/help"))
     from aegis.runs import RunStore
     run = next(row for row in RunStore().list(session_id=key, limit=10)
                if row["kind"] == "control" and row["data"].get("model") == "claude-sonnet-4-6")

@@ -120,6 +120,19 @@ class GatewayRunner:
             f"busy_mode: {busy_mode}\nreasoning: display={reasoning_display} · effort={reasoning_effort}"
         )
 
+    def _gateway_status(self, key: str, session: Session) -> str:
+        from ..surface import session_runtime_controls
+
+        controls = session_runtime_controls(session)
+        provider = controls.get("provider") or self.config.get("model.provider")
+        model = controls.get("model") or self.config.get("model.default")
+        return (
+            f"AEGIS gateway · provider={provider} · model={model} · session={key}\n"
+            "Commands: /new · /status · /whoami · /model [provider/model] · "
+            "/provider [name] · /reasoning [mode] · /compress · /busy [mode] · "
+            "/goal <text> · /subgoal <text> · /steer <text> · stop"
+        )
+
     def _control_reply(
         self,
         ev: MessageEvent,
@@ -194,13 +207,7 @@ class GatewayRunner:
                 ev,
                 key,
                 text.split()[0],
-                lambda _proxy: (
-                    f"AEGIS gateway · provider={self.config.get('model.provider')} · "
-                    f"model={self.config.get('model.default')} · session={key}\n"
-                    "Commands: /new · /status · /whoami · /model [provider/model] · "
-                    "/provider [name] · /reasoning [mode] · /compress · /busy [mode] · "
-                    "/goal <text> · /subgoal <text> · /steer <text> · stop"
-                ),
+                lambda proxy: self._gateway_status(key, proxy.session),
             )
         if text == "/whoami":
             return self._control_reply(
