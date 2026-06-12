@@ -833,6 +833,7 @@ def compact_now(agent, session=None, emit: OnEvent | None = None, *,
 def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
     """Drive one user turn to completion. Returns the final assistant message."""
     emit = on_event or (lambda e: None)
+    session = agent.session
     # Memory freshness policy (memory.refresh):
     #   "session" (default) / "message" — if memory files changed since the last
     #     prompt snapshot, rebuild at the next turn so durable facts are visible.
@@ -850,9 +851,10 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
     )
     if memory_stale or skills_stale:
         agent.refresh_volatile()
+    elif session.meta.pop("_rebuild_system_prompt", False):
+        agent.refresh_volatile()
     else:
         agent.ensure_system_prompt()
-    session = agent.session
     budget = agent.budget
     budget.reset()
     trace_store = None

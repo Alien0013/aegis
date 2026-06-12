@@ -137,6 +137,56 @@ def test_forked_review_writes_agent_created_skill(tmp_path):
     assert run["data"]["model"] == "m"
 
 
+def test_forked_review_restores_parent_memory_provider_session(tmp_path):
+    from aegis.agent.agent import Agent
+    from aegis.agent import review
+    from aegis.config import Config
+    from aegis.memory import MemoryManager
+    from aegis.session import Session
+    from aegis.types import LLMResponse, Message
+
+    class ExternalMemory:
+        def __init__(self):
+            self.current = ""
+            self.prefetch_sessions = []
+            self.switches = []
+
+        def initialize(self, session_id="", **_kw):
+            self.current = session_id
+
+        def on_session_switch(self, *, old_session_id, new_session_id, **_kw):
+            self.switches.append((old_session_id, new_session_id))
+            self.current = new_session_id
+
+        def prefetch(self, query, *, session_id=""):
+            self.prefetch_sessions.append(session_id)
+            return ""
+
+        def system_prompt_block(self):
+            return f"bound {self.current}"
+
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = True
+    parent_session = Session.create("parent")
+    parent_session.messages = [Message.user("remember this"), Message.assistant("noted")]
+    external = ExternalMemory()
+    agent = Agent(
+        config=cfg,
+        provider=FakeProvider([LLMResponse(text="nothing to save")]),
+        session=parent_session,
+        memory=MemoryManager(cfg, external=external),
+        cwd=tmp_path,
+    )
+
+    review.run_review(agent, "memory")
+    agent.memory.prefetch("after review")
+
+    assert external.current == parent_session.id
+    assert external.prefetch_sessions[-1] == parent_session.id
+    assert external.switches[-1][1] == parent_session.id
+    assert external.switches[-1][0] != parent_session.id
+
+
 def test_compaction_splits_into_child_session(tmp_path, monkeypatch):
     """When the window fills, roll into a child session (parent kept, lineage chained)."""
     from aegis.agent import compaction

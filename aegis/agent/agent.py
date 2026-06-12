@@ -331,9 +331,15 @@ class Agent:
         old_id = getattr(self.session, "id", "")
         self.session = new_session
         self.tool_context.session = new_session
-        if self.memory and getattr(new_session, "id", "") != old_id:
+        new_id = getattr(new_session, "id", "")
+        if new_id != old_id:
             try:
-                self.memory.on_session_switch(old_id, new_session.id)
+                delattr(self, "_subdir_hints")
+            except AttributeError:
+                pass
+        if self.memory and new_id != old_id:
+            try:
+                self.memory.on_session_switch(old_id, new_id)
             except Exception:  # noqa: BLE001
                 pass
 
@@ -497,7 +503,7 @@ class Agent:
         self._strip_thinking = False       # one-shot thinking-signature 400 -> resend w/o blocks
         self._retrieved_memory_for_turn = ""
         self._retrieved_memory_user_content = ""
-        if not self.session.messages:      # first turn of a session
+        if not any(m.role != "system" for m in self.session.messages):  # first turn of a session
             from ..plugins import fire_hook
             fire_hook("on_session_start", self)
             try:

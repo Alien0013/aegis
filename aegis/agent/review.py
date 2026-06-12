@@ -79,17 +79,24 @@ def run_review(agent, kind: str, on_event=None) -> list[str]:
         if ev.get("type") == "tool_result" and ev.get("name") in ("memory", "skill"):
             actions.append(ev.get("summary", ev["name"]))
 
-    with provenance.origin_scope("agent"):     # skills written here are curatable
-        from ..surface import SurfaceRunner
-        SurfaceRunner(agent.config, cwd=agent.cwd, include_mcp=False, reuse_agents=False).run_prompt(
-            f"{prompt}\n\nCONVERSATION:\n{snapshot}",
-            session=child.session,
-            agent=child,
-            surface="review",
-            title=f"{kind} review",
-            meta={"review_kind": kind},
-            on_event=_capture,
-        )
+    try:
+        with provenance.origin_scope("agent"):     # skills written here are curatable
+            from ..surface import SurfaceRunner
+            SurfaceRunner(agent.config, cwd=agent.cwd, include_mcp=False, reuse_agents=False).run_prompt(
+                f"{prompt}\n\nCONVERSATION:\n{snapshot}",
+                session=child.session,
+                agent=child,
+                surface="review",
+                title=f"{kind} review",
+                meta={"review_kind": kind},
+                on_event=_capture,
+            )
+    finally:
+        if getattr(child, "memory", None) is getattr(agent, "memory", None) and agent.memory is not None:
+            try:
+                agent.memory.on_session_switch(child.session.id, agent.session.id)
+            except Exception:  # noqa: BLE001
+                pass
     if on_event:
         on_event({"type": "review_done", "kind": kind, "actions": actions})
     return actions

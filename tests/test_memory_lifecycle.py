@@ -411,6 +411,59 @@ def test_terminal_new_ends_old_session_before_switch(tmp_path, monkeypatch):
     assert agent.session.id != old.id
 
 
+def test_forked_session_rebuilds_memory_provider_prompt_on_first_run(tmp_path, monkeypatch):
+    config = _cfg(tmp_path, monkeypatch)
+    from aegis.agent.agent import Agent
+    from aegis.memory import MemoryManager
+    from aegis.session import Session, SessionStore
+    from aegis.types import LLMResponse, Message
+
+    class SessionBoundProvider:
+        def __init__(self):
+            self.session_id = ""
+
+        def initialize(self, session_id="", **_kw):
+            self.session_id = session_id
+
+        def system_prompt_block(self):
+            return f"session-bound {self.session_id}"
+
+    class Provider:
+        context_length = 200_000
+        name = "fake"
+        model = "fake"
+        api_mode = None
+        auth = None
+
+        def __init__(self):
+            self.system_prompt = ""
+
+        def complete(self, messages, **_kwargs):
+            self.system_prompt = messages[0].content
+            return LLMResponse(text="done")
+
+    store = SessionStore()
+    parent = Session.create("parent")
+    parent.messages = [Message.system("old system with session-bound parent")]
+    store.save(parent)
+    child = store.fork(parent)
+    provider = Provider()
+    agent = Agent(
+        config=config,
+        provider=provider,
+        session=child,
+        memory=MemoryManager(config, external=SessionBoundProvider()),
+        cwd=tmp_path,
+        store=store,
+    )
+
+    agent.run("child turn")
+
+    assert f"session-bound {child.id}" in provider.system_prompt
+    assert "session-bound parent" not in provider.system_prompt
+    assert "_rebuild_system_prompt" not in agent.session.meta
+
+
 # --- .cursorrules + subdirectory hints --------------------------------------
 def test_cursorrules_recognized(tmp_path):
     from aegis.config import Workspace
@@ -456,6 +509,25 @@ def test_subdir_hints_disabled_via_config(tmp_path, monkeypatch):
         pass
     a = FakeAgent(); a.config = config
     assert hints_for_call(a, "read_file", {"path": "pkg/x.py"}, tmp_path) == ""
+
+
+def test_subdir_hints_reset_on_session_switch(tmp_path, monkeypatch):
+    config = _cfg(tmp_path, monkeypatch)
+    from aegis.agent.agent import Agent
+    from aegis.agent.subdir_hints import hints_for_call
+    from aegis.session import Session
+    from conftest import FakeProvider
+
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "AGENTS.md").write_text("PACKAGE RULES")
+    agent = Agent(config=config, provider=FakeProvider(), session=Session.create(), cwd=tmp_path)
+
+    first = hints_for_call(agent, "read_file", {"path": "pkg/a.py"}, tmp_path)
+    agent.switch_session(Session.create())
+    second = hints_for_call(agent, "read_file", {"path": "pkg/b.py"}, tmp_path)
+
+    assert "PACKAGE RULES" in first
+    assert "PACKAGE RULES" in second
 
 
 # --- credit/balance telemetry -----------------------------------------------

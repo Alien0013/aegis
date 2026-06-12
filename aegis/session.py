@@ -172,6 +172,7 @@ class SessionStore:
         if carry_summary:
             child.meta["forked_from"] = parent.id
             child.meta["summary"] = parent.meta.get("summary", "")
+        child.meta["_rebuild_system_prompt"] = True
         for key in ("runtime", "runtime_controls", "model", "provider"):
             if key in parent.meta:
                 value = parent.meta[key]
