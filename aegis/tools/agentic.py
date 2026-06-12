@@ -52,6 +52,25 @@ def _notify_delegation(parent, task: str, result: str) -> None:
         pass
 
 
+def _subagent_terminal_backend(config) -> str:
+    try:
+        backend = str(config.get("tools.subagent_terminal_backend", "") or "").strip().lower()
+    except Exception:  # noqa: BLE001
+        return ""
+    return "" if backend in {"", "inherit", "parent"} else backend
+
+
+def _register_terminal_backend_override(sid: str, backend: str) -> None:
+    if not sid or not backend:
+        return
+    try:
+        from .backends import register_task_env_overrides
+
+        register_task_env_overrides(sid, {"terminal_backend": backend})
+    except Exception:  # noqa: BLE001
+        pass
+
+
 # Typed subagents: a named type = a tool whitelist + a role preamble. Read-only types
 # can fan out aggressively because they cannot modify anything.
 _READONLY_TOOLS = {
@@ -151,6 +170,8 @@ class SubagentTool(Tool):
 
                 role_type = str(entry.get("type") or atype)
                 role_spec = AGENT_TYPES.get(role_type, spec)
+                terminal_backend = str(entry.get("terminal_backend") or _subagent_terminal_backend(config))
+                _register_terminal_backend_override(args["continue_id"], terminal_backend)
                 child_session = getattr(child, "session", None)
                 inherit_session_runtime(getattr(parent, "session", None), child_session)
                 apply_session_runtime(child)
@@ -202,8 +223,10 @@ class SubagentTool(Tool):
         def _one(task: str) -> tuple[str, str]:
             sid = new_id("sub")
             role_prompt = _role_prompt(atype, spec)
+            terminal_backend = _subagent_terminal_backend(config)
+            _register_terminal_backend_override(sid, terminal_backend)
             _register(sid, status="running", task=task[:80], type=atype,
-                      role_prompt=role_prompt)
+                      role_prompt=role_prompt, terminal_backend=terminal_backend)
             ctx.emit_event(type="subagent_start", id=sid, task=task[:80])
             try:
                 kwargs = {}

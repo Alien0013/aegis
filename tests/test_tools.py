@@ -440,6 +440,44 @@ def test_task_env_override_updates_live_local_cwd(tmp_path):
         cleanup_task_environment(task_id)
 
 
+def test_task_terminal_backend_override_changes_dispatch(tmp_path, monkeypatch):
+    from aegis.config import Config
+    from aegis.tools import backends
+
+    seen = {}
+
+    def fake_docker(command, cwd, timeout, config, task_id=None):
+        seen.update({
+            "command": command,
+            "cwd": cwd,
+            "timeout": timeout,
+            "task_id": task_id,
+        })
+        return "docker-ok", 0
+
+    monkeypatch.setattr(backends, "_run_docker", fake_docker)
+    backends.register_task_env_overrides("sub_backend", {"terminal_backend": "docker"})
+    try:
+        out, code = backends.run_command(
+            "echo hi",
+            str(tmp_path),
+            7,
+            "local",
+            Config.load(),
+            task_id="sub_backend",
+        )
+    finally:
+        backends.clear_task_env_overrides("sub_backend")
+
+    assert (out, code) == ("docker-ok", 0)
+    assert seen == {
+        "command": "echo hi",
+        "cwd": str(tmp_path),
+        "timeout": 7,
+        "task_id": "sub_backend",
+    }
+
+
 def test_docker_backend_uses_task_image_override(tmp_path, monkeypatch):
     import aegis.tools.backends as backends
     from aegis.config import Config

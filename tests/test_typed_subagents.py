@@ -198,6 +198,23 @@ def test_subagent_inherits_parent_runtime_controls(tmp_path, capture):
     assert capture["reasoning"] == "high"
 
 
+def test_subagent_terminal_backend_override_registered(tmp_path, capture):
+    from aegis.tools import backends
+
+    config = Config.load()
+    config.data["tools"]["subagent_terminal_backend"] = "docker"
+    ctx = ToolContext(cwd=tmp_path, config=config)
+
+    r = SubagentTool().run({"task": "use isolated shell"}, ctx)
+    sid = re.search(r"subagent id: (\S+) ", r.content).group(1)
+    try:
+        assert not r.is_error
+        assert capture["task_ids"][0] == sid
+        assert backends.effective_backend("local", sid) == "docker"
+    finally:
+        backends.clear_task_env_overrides(sid)
+
+
 def test_subagent_registry_eviction_closes_child_lifecycle():
     from types import SimpleNamespace
 

@@ -117,6 +117,41 @@ def test_background_spawn_inherits_parent_runtime_controls(tmp_path, monkeypatch
     assert seen["closed"] == 1
 
 
+def test_background_spawn_registers_subagent_terminal_backend(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import time
+    import aegis.surface as surface
+    from aegis.background import BackgroundManager
+    from aegis.config import Config
+    from aegis.tools import backends
+
+    class FakeRunner:
+        def __init__(self, config, cwd=None, include_mcp=True):
+            pass
+
+        def run_prompt(self, prompt, **kwargs):
+            return type("R", (), {"text": "ok", "run_id": "run_bg"})()
+
+        def close(self):
+            pass
+
+    config = Config.load()
+    config.data["tools"]["subagent_terminal_backend"] = "docker"
+    monkeypatch.setattr(surface, "SurfaceRunner", FakeRunner)
+
+    mgr = BackgroundManager()
+    tid = mgr.spawn(config, "do it later", cwd=tmp_path)
+    try:
+        for _ in range(50):
+            task = mgr.get(tid)
+            if task and task.status != "running":
+                break
+            time.sleep(0.01)
+        assert backends.effective_backend("local", tid) == "docker"
+    finally:
+        backends.clear_task_env_overrides(tid)
+
+
 # --- iteration-budget refund ------------------------------------------------
 def test_iteration_budget_refund():
     from aegis.agent.agent import IterationBudget

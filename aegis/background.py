@@ -33,6 +33,14 @@ class BackgroundManager:
         task = BgTask(id=new_id("bg"), prompt=prompt)
         with self._lock:
             self._tasks[task.id] = task
+        try:
+            backend = str(config.get("tools.subagent_terminal_backend", "") or "").strip().lower()
+            if backend and backend not in {"inherit", "parent"}:
+                from .tools.backends import register_task_env_overrides
+
+                register_task_env_overrides(task.id, {"terminal_backend": backend})
+        except Exception:  # noqa: BLE001
+            pass
 
         meta = {
             "background_task_id": task.id,

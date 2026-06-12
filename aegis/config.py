@@ -163,6 +163,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "allowlist": [],             # shell command prefixes auto-approved
         "toolsets": ["core", "mcp"], # enabled toolsets (add "browser","computer" to opt in)
         "terminal_backend": "local", # local | docker | ssh | singularity | modal | daytona
+        "subagent_terminal_backend": "", # "" inherits terminal_backend; else backend for subagents
         "terminal_lifetime_seconds": 300, # idle task environments are cleaned after this long
         "docker_image": "python:3.12-slim",
         "singularity_image": "docker://python:3.12-slim",

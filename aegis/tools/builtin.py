@@ -339,12 +339,14 @@ class BashTool(Tool):
     }
 
     def run(self, args, ctx) -> ToolResult:
-        from .backends import run_command
+        from .backends import effective_backend, run_command
 
         timeout = min(int(args.get("timeout", 120)), 600)
         backend = ctx.config.get("tools.terminal_backend", "local") if ctx.config else "local"
+        task_id = getattr(ctx, "task_id", "") or ""
+        backend = effective_backend(backend, task_id)
         if args.get("background"):
-            if str(backend or "local").strip().lower() != "local":
+            if backend != "local":
                 return ToolResult.error(
                     "background bash is currently supported for the local terminal backend only"
                 )
@@ -363,7 +365,7 @@ class BashTool(Tool):
             proc = process_registry.spawn_local(
                 args["command"],
                 cwd=ctx.cwd,
-                task_id=getattr(ctx, "task_id", "") or "",
+                task_id=task_id,
                 notify_on_complete=notify_on_complete,
                 watcher_platform=getattr(agent, "platform", "") or "",
                 watcher_chat_id=getattr(agent, "chat_id", "") or "",
@@ -413,7 +415,7 @@ class BashTool(Tool):
             timeout,
             backend,
             ctx.config,
-            task_id=getattr(ctx, "task_id", "") or None,
+            task_id=task_id or None,
         )
         out = out.strip() or "(no output)"
         tail = f"\n[exit {code}]"

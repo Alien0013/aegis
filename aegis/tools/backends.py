@@ -41,6 +41,7 @@ __all__ = [
     "cleanup_all_environments",
     "cleanup_task_environment",
     "clear_task_env_overrides",
+    "effective_backend",
     "get_active_environment",
     "register_task_env_overrides",
     "run_command",
@@ -74,7 +75,7 @@ def run_command(
     returncode is ``124`` (the conventional ``timeout(1)`` code). Unknown or
     unavailable backends fall back to ``local`` with an explanatory note.
     """
-    backend = (backend or "local").strip().lower()
+    backend = effective_backend(backend, task_id)
     if backend == "docker":
         return _run_docker(command, cwd, timeout, config, task_id)
     if backend == "ssh":
@@ -89,6 +90,14 @@ def run_command(
         out, code = _run_local(command, cwd, timeout, config, task_id)
         return _note(f"unknown backend {backend!r}; ran locally", out), code
     return _run_local(command, cwd, timeout, config, task_id)
+
+
+def effective_backend(backend: str | None, task_id: str | None = None) -> str:
+    """Return the backend after applying any per-task override."""
+    override = _task_overrides(task_id).get("terminal_backend")
+    if isinstance(override, str) and override.strip():
+        return override.strip().lower()
+    return (backend or "local").strip().lower()
 
 
 # --------------------------------------------------------------------------- #
@@ -161,7 +170,8 @@ def register_task_env_overrides(task_id: str, overrides: dict[str, Any]) -> None
     """Register per-task terminal environment overrides.
 
     Supported keys are intentionally small and Hermes-compatible:
-    ``cwd``, ``docker_image``, ``singularity_image``, and ``modal_pip``.
+    ``cwd``, ``terminal_backend``, ``docker_image``, ``singularity_image``,
+    and ``modal_pip``.
     """
     if not task_id:
         return
