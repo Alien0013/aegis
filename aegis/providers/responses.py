@@ -155,12 +155,15 @@ class ResponsesTransport(ProviderTransport):
                     )
         payload["input"] = self._to_wire_input(wire_messages)
         clean_metadata = self._metadata(metadata)
-        if clean_metadata:
+        # The chatgpt.com/backend-api/codex backend rejects `metadata` and
+        # `context_management` (400 Unsupported parameter); only the public
+        # Responses API accepts them.
+        if clean_metadata and not is_codex_backend:
             payload["metadata"] = clean_metadata
         context_management = self._context_management(
             state.get("context_management") or state.get("compaction")
         )
-        if context_management:
+        if context_management and not is_codex_backend:
             payload["context_management"] = context_management
         if not is_codex_backend:
             payload["max_output_tokens"] = max_tokens

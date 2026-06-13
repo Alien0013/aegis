@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from .. import config as cfg
 from ..constants import MIN_CONTEXT_LENGTH
 from .anthropic import AnthropicTransport
-from .auth import ApiKeyAuth, AuthProvider, AuthStore, CodexCliAuth, OAuthAuth, OAuthConfig
+from .auth import ApiKeyAuth, AuthProvider, AuthStore, CodexBackendAuth, CodexCliAuth, OAuthAuth, OAuthConfig
 from .base import ApiMode, Provider, ProviderTransport
 from .chat_completions import ChatCompletionsTransport
 from .codex_app_server import CodexAppServerTransport
@@ -86,6 +86,8 @@ OPENAI_CODEX_OAUTH = OAuthConfig(
     localhost_port=1455,
     callback_host="localhost",
     callback_path="/auth/callback",
+    # Codex's Cloudflare front 403s requests without an allowed originator.
+    api_extra_headers={"originator": "codex_cli_rs", "User-Agent": "codex_cli_rs/0.0.0 (AEGIS)"},
 )
 
 # Google (Gemini CLI) installed-app OAuth client. The bearer authorizes the Code
@@ -124,7 +126,7 @@ PROVIDERS: dict[str, ProviderSpec] = {
     ),
     "codex": ProviderSpec(
         "codex", ApiMode.RESPONSES, "https://chatgpt.com/backend-api/codex",
-        "gpt-5.5", 272_000, [], oauth=OPENAI_CODEX_OAUTH,
+        "gpt-5.5", 272_000, [], "codex-backend",
     ),
     "codex-app-server": ProviderSpec(
         "codex-app-server", ApiMode.CODEX_APP_SERVER, "codex://app-server",
@@ -434,6 +436,8 @@ def _resolve_auth(spec: ProviderSpec, prefer: str | None = None) -> AuthProvider
     """Pick OAuth or API key. ``prefer`` can force 'oauth' or 'apikey'."""
     if spec.api_mode == ApiMode.CODEX_APP_SERVER or spec.auth_scheme == "codex-cli":
         return CodexCliAuth()
+    if spec.auth_scheme == "codex-backend":
+        return CodexBackendAuth()
     store = AuthStore()
     oauth = OAuthAuth(spec.oauth, store) if spec.oauth else None
     if oauth and not spec.env_vars and spec.auth_scheme != "none":

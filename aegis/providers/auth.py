@@ -155,6 +155,56 @@ class CodexCliAuth(AuthProvider):
         return "codex-cli (not logged in; run `codex login`)"
 
 
+# Codex's Cloudflare front whitelists a few first-party originators; a request
+# without an allowed `originator` is served 403. Pin the codex-rs CLI identity.
+CODEX_ORIGINATOR_HEADERS = {
+    "originator": "codex_cli_rs",
+    "User-Agent": "codex_cli_rs/0.0.0 (AEGIS)",
+}
+
+
+def _codex_auth_path() -> Path:
+    return Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex")) / "auth.json"
+
+
+class CodexBackendAuth(AuthProvider):
+    """Direct ``chatgpt.com/backend-api/codex`` auth using the local ``codex login``
+    token (``~/.codex/auth.json``).
+
+    Unlike the app-server transport, this calls the Responses API directly with the
+    Cloudflare-required ``originator``/User-Agent, so it does NOT spawn the Codex
+    runtime and therefore creates no Codex threads/rollouts; combined with the
+    transport's ``store: false`` nothing is written to Codex/ChatGPT memory.
+    """
+
+    def _read(self) -> dict:
+        try:
+            return json.loads(_codex_auth_path().read_text())
+        except Exception:
+            return {}
+
+    def _access_token(self, data: dict) -> str:
+        tokens = data.get("tokens") or {}
+        return tokens.get("access_token") or data.get("access_token") or ""
+
+    def headers(self) -> dict[str, str]:
+        data = self._read()
+        access = self._access_token(data)
+        if not access:
+            raise AuthError("Not logged in to Codex. Run `codex login` (ChatGPT), then retry.")
+        h = {"Authorization": f"Bearer {access}", **CODEX_ORIGINATOR_HEADERS}
+        account = (data.get("tokens") or {}).get("account_id") or _jwt_account_id(access)
+        if account:
+            h["chatgpt-account-id"] = account
+        return h
+
+    def available(self) -> bool:
+        return bool(self._access_token(self._read()))
+
+    def describe(self) -> str:
+        return "codex-backend (ChatGPT login ready)" if self.available() else "codex-backend (run `codex login`)"
+
+
 # --------------------------------------------------------------------------- #
 # OAuth 2.0 with PKCE
 # --------------------------------------------------------------------------- #
