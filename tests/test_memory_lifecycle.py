@@ -16,20 +16,47 @@ class RecordingProvider:
     def __init__(self):
         self.calls = []
 
-    def initialize(self, session_id="", **kw): self.calls.append(("initialize", session_id))
-    def system_prompt_block(self): self.calls.append(("system_prompt_block",)); return "PROVIDER MEM"
-    def prefetch(self, query, *, session_id=""): self.calls.append(("prefetch", query)); return "FETCHED:" + query[:10]
-    def queue_prefetch(self, query, *, session_id=""): self.calls.append(("queue_prefetch",))
-    def sync_turn(self, messages): self.calls.append(("sync_turn", len(messages)))
-    def tools(self): self.calls.append(("tools",)); return []
-    def on_session_end(self, messages): self.calls.append(("on_session_end",))
-    def on_pre_compress(self, messages): self.calls.append(("on_pre_compress",)); return "keep this"
-    def on_session_switch(self, *, old_session_id, new_session_id, **kw): self.calls.append(("on_session_switch", old_session_id, new_session_id))
-    def on_delegation(self, task, result, **kw): self.calls.append(("on_delegation", task))
+    def initialize(self, session_id="", **kw):
+        self.calls.append(("initialize", session_id))
+
+    def system_prompt_block(self):
+        self.calls.append(("system_prompt_block",))
+        return "PROVIDER MEM"
+
+    def prefetch(self, query, *, session_id=""):
+        self.calls.append(("prefetch", query))
+        return "FETCHED:" + query[:10]
+
+    def queue_prefetch(self, query, *, session_id=""):
+        self.calls.append(("queue_prefetch",))
+
+    def sync_turn(self, messages):
+        self.calls.append(("sync_turn", len(messages)))
+
+    def tools(self):
+        self.calls.append(("tools",))
+        return []
+
+    def on_turn_start(self, turn_number, message, **kw):
+        self.calls.append(("on_turn_start", turn_number, message, kw))
+
+    def on_session_end(self, messages):
+        self.calls.append(("on_session_end",))
+
+    def on_pre_compress(self, messages):
+        self.calls.append(("on_pre_compress",))
+        return "keep this"
+
+    def on_session_switch(self, *, old_session_id, new_session_id, **kw):
+        self.calls.append(("on_session_switch", old_session_id, new_session_id))
+
+    def on_delegation(self, task, result, **kw):
+        self.calls.append(("on_delegation", task))
     def on_memory_write(self, *, action, target, content="", old_text="", result="",
                         session_id="", **kw):
         self.calls.append(("on_memory_write", action, target, content, old_text, result, session_id))
-    def shutdown(self): self.calls.append(("shutdown",))
+    def shutdown(self):
+        self.calls.append(("shutdown",))
 
 
 def test_manager_fans_out_every_hook(tmp_path, monkeypatch):
@@ -41,6 +68,7 @@ def test_manager_fans_out_every_hook(tmp_path, monkeypatch):
     mm.initialize("sess-1")
     assert mm.prefetch("hello world query") == "FETCHED:hello worl"
     mm.queue_prefetch("q")
+    mm.on_turn_start(7, "hello world query", model="fake-model")
     mm.sync_turn([1, 2, 3])
     assert mm.provider_tools() == []
     assert mm.on_pre_compress([]) == "keep this"
@@ -54,9 +82,48 @@ def test_manager_fans_out_every_hook(tmp_path, monkeypatch):
 
     kinds = [c[0] for c in p.calls]
     for hook in ("initialize", "prefetch", "queue_prefetch", "sync_turn", "tools",
-                 "on_pre_compress", "on_session_switch", "on_delegation",
+                 "on_turn_start", "on_pre_compress", "on_session_switch", "on_delegation",
                  "on_memory_write", "on_session_end", "shutdown", "system_prompt_block"):
         assert hook in kinds, f"{hook} was never fanned out"
+    turn_start = next(c for c in p.calls if c[0] == "on_turn_start")
+    assert turn_start[1] == 7
+    assert turn_start[3]["model"] == "fake-model"
+
+
+def test_sync_turn_supports_hermes_style_provider_signature(tmp_path, monkeypatch):
+    config = _cfg(tmp_path, monkeypatch)
+    from aegis.memory import MemoryManager
+    from aegis.types import Message
+
+    class HermesStyleProvider:
+        def __init__(self):
+            self.calls = []
+
+        def sync_turn(self, user_content, assistant_content, *, session_id="", messages=None):
+            self.calls.append((user_content, assistant_content, session_id, messages))
+
+    provider = HermesStyleProvider()
+    mm = MemoryManager(config, external=provider)
+    mm.initialize("sess-sync")
+
+    mm.sync_turn([
+        Message.user("first user"),
+        Message.assistant("first answer"),
+        Message.user("latest user"),
+        Message.assistant("latest answer"),
+    ])
+
+    assert provider.calls == [(
+        "latest user",
+        "latest answer",
+        "sess-sync",
+        [
+            {"role": "user", "content": "first user"},
+            {"role": "assistant", "content": "first answer"},
+            {"role": "user", "content": "latest user"},
+            {"role": "assistant", "content": "latest answer"},
+        ],
+    )]
 
 
 def test_memory_tool_writes_mirror_to_external_provider(tmp_path, monkeypatch):
@@ -242,7 +309,10 @@ def test_prefetch_is_wire_only_not_persisted(tmp_path, monkeypatch):
         def __init__(self):
             self.queued = ""
             self.synced = []
+            self.started = []
 
+        def on_turn_start(self, turn_number, message, **kw):
+            self.started.append((turn_number, message, kw))
         def prefetch(self, q, *, session_id=""): return "RELEVANT PAST FACT"
         def queue_prefetch(self, q, *, session_id=""): self.queued = q
         def sync_turn(self, messages): self.synced = list(messages)
@@ -271,6 +341,9 @@ def test_prefetch_is_wire_only_not_persisted(tmp_path, monkeypatch):
     assert "RELEVANT PAST FACT" in provider.wire_user
     user_message = next(m.content for m in agent.session.messages if m.role == "user")
     assert user_message == "what did we decide?"
+    assert external.started[0][0] == 1
+    assert external.started[0][1] == "what did we decide?"
+    assert external.started[0][2]["session_id"] == agent.session.id
     assert external.queued == "what did we decide?"
     assert all("<retrieved_memory>" not in m.content for m in agent.session.messages)
     assert all("<retrieved_memory>" not in m.content for m in external.synced)
@@ -555,7 +628,8 @@ def test_subdir_hints_disabled_via_config(tmp_path, monkeypatch):
 
     class FakeAgent:
         pass
-    a = FakeAgent(); a.config = config
+    a = FakeAgent()
+    a.config = config
     assert hints_for_call(a, "read_file", {"path": "pkg/x.py"}, tmp_path) == ""
 
 

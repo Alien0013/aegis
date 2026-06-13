@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import inspect
 
 from . import config as cfg
 from .constants import MEMORY_CHAR_LIMIT, MEMORY_DELIM, USER_CHAR_LIMIT
@@ -323,6 +324,9 @@ class MemoryProvider:
     def on_session_end(self, messages) -> None:  # pragma: no cover - interface
         """The session is ending (process exit, /new) — final flush/consolidation."""
 
+    def on_turn_start(self, turn_number: int, message: str, **kw) -> None:  # pragma: no cover
+        """A user turn is starting. Providers can update counters/scope or prewarm."""
+
     def on_pre_compress(self, messages) -> str:  # pragma: no cover - interface
         """About to compress; optionally return a note to preserve into the summary."""
         return ""
@@ -521,12 +525,60 @@ class MemoryManager:
         self._provider_call("queue_prefetch", query,
                             session_id=getattr(self, "_session_id", ""))
 
+    @staticmethod
+    def _message_wire(messages) -> list[dict]:
+        return [
+            {"role": getattr(m, "role", ""), "content": getattr(m, "content", "")}
+            for m in messages
+            if getattr(m, "role", "") in {"user", "assistant", "tool"}
+        ]
+
+    @staticmethod
+    def _last_content(messages, role: str) -> str:
+        return next((getattr(m, "content", "") for m in reversed(messages)
+                     if getattr(m, "role", "") == role), "")
+
+    def _sync_turn_compat(self, messages) -> None:
+        if self.external is None:
+            return
+        fn = getattr(self.external, "sync_turn", None)
+        if not callable(fn):
+            return
+        try:
+            params = inspect.signature(fn).parameters
+        except (TypeError, ValueError):
+            params = {}
+        positional = [
+            p for p in params.values()
+            if p.kind in (inspect.Parameter.POSITIONAL_ONLY,
+                          inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        ]
+        accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+        accepts_varargs = any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params.values())
+        # Existing AEGIS providers use sync_turn(messages). Hermes-style providers
+        # use sync_turn(user_content, assistant_content, session_id=..., messages=...).
+        if len(positional) <= 1 and not accepts_varargs and "user_content" not in params:
+            fn(messages)
+            return
+        kw = {"session_id": getattr(self, "_session_id", "")}
+        if accepts_kwargs or "messages" in params:
+            kw["messages"] = self._message_wire(messages)
+        fn(self._last_content(messages, "user"), self._last_content(messages, "assistant"), **kw)
+
     def sync_turn(self, messages) -> None:
-        self._provider_call("sync_turn", messages)
+        try:
+            self._sync_turn_compat(messages)
+        except Exception:  # noqa: BLE001
+            from ._log import log_exc
+            log_exc("memory provider sync_turn failed")
 
     def provider_tools(self) -> list:
         tools = self._provider_call("tools")
         return list(tools) if tools else []
+
+    def on_turn_start(self, turn_number: int, message: str, **kw) -> None:
+        kw.setdefault("session_id", getattr(self, "_session_id", ""))
+        self._provider_call("on_turn_start", turn_number, message, **kw)
 
     def on_session_end(self, messages) -> None:
         self._provider_call("on_session_end", messages)

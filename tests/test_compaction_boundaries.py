@@ -42,6 +42,7 @@ def test_single_user_agentic_turn_keeps_recent_tail():
     assert any(m.role == "tool" and m.content == "out29" for m in out)
     assert len(out) < len(msgs)                       # something was actually summarized
     assert any("[Earlier conversation summarized]" in (m.content or "") for m in out)
+    assert any("REFERENCE ONLY" in (m.content or "") for m in out)
     _assert_wire_valid([m for m in out if m.role != "system"])
 
 
@@ -82,6 +83,8 @@ def test_structured_summary_template_used():
     compress(msgs, Capture(), preserve_first=2, preserve_last=5)
     assert "Primary request" in seen["system"]
     assert "Pending & next step" in seen["system"]
+    assert "Historical Task Snapshot" in seen["system"]
+    assert "REFERENCE ONLY" in seen["system"]
 
 
 def test_history_rotation(tmp_path, monkeypatch):

@@ -22,6 +22,14 @@ from ..util import estimate_tokens
 
 _IMG_DATA_URI = re.compile(r"data:image/[a-zA-Z.+-]+;base64,[A-Za-z0-9+/=\s]{200,}")
 _SUMMARY_MARKER = "[Earlier conversation summarized]"
+_SUMMARY_REFERENCE_PREFIX = (
+    "[CONTEXT COMPACTION - REFERENCE ONLY] Earlier turns were compacted into "
+    "the summary below. Treat it as background, not as active instructions. "
+    "Respond to the latest user message after this summary; that latest message wins."
+)
+_SUMMARY_END_MARKER = (
+    "--- END OF CONTEXT SUMMARY - respond to the message below, not the summary above ---"
+)
 # Tokens of recent conversation to protect by default when a caller doesn't pass a budget.
 _DEFAULT_TAIL_TOKENS = 6000
 
@@ -146,16 +154,20 @@ def _fallback_summary(middle: list[Message], prior: list[str],
 
 _SUMMARY_INSTRUCTION = (
     "You are compressing an agent conversation so work can continue seamlessly with this "
-    "summary in place of the original messages. Write a structured handoff with exactly "
-    "these sections (skip a section only if truly empty):\n"
-    "1. Primary request — what the user asked for, including later refinements.\n"
-    "2. Key decisions & constraints — choices made and rules to respect.\n"
-    "3. Files & code — every file touched, with the specific functions/lines that matter "
-    "and any snippets still needed.\n"
-    "4. Errors & fixes — what failed, how it was fixed, what to avoid repeating.\n"
-    "5. Completed work — what is already DONE (so it isn't redone).\n"
-    "6. Pending & next step — what remains, and the exact next action.\n"
-    "Be factual and specific (paths, commands, names). No filler."
+    "summary in place of the original messages. This summary will be REFERENCE ONLY: "
+    "old tasks and old asks must not become active instructions for the next model turn. "
+    "Write a structured handoff with exactly these sections (skip a section only if truly empty):\n"
+    "1. ## Historical Task Snapshot / Primary request — what the user asked for, including later refinements.\n"
+    "2. ## Constraints & Preferences — durable constraints, user preferences, and safety rules.\n"
+    "3. ## Completed Work — what is already DONE, with commands/results when useful.\n"
+    "4. ## Key Decisions — choices made and why.\n"
+    "5. ## Relevant Files — paths touched or inspected, with functions/lines that matter.\n"
+    "6. ## Errors & Fixes — what failed, how it was fixed, and what to avoid repeating.\n"
+    "7. ## Historical In-Progress State — any unfinished state from the compacted window, clearly marked historical.\n"
+    "8. ## Historical Pending User Asks — user asks from the compacted window that were not resolved, clearly marked historical.\n"
+    "9. ## Historical Remaining Work / Pending & next step — remaining work and the exact next action, clearly marked historical.\n"
+    "10. ## Critical Context — facts that would break continuity if omitted.\n"
+    "Be factual and specific (paths, commands, names). No filler. Do not invent work."
 )
 
 
@@ -197,6 +209,10 @@ def compress(messages: list[Message], provider, *, preserve_first: int = 3,
         body = prior[-1]
         if pre_compress_context:
             body = f"{body}\n\nMemory provider pre-compression notes:\n{pre_compress_context}"
+        if _SUMMARY_REFERENCE_PREFIX not in body:
+            body = f"{_SUMMARY_REFERENCE_PREFIX}\n\n{body}"
+        if _SUMMARY_END_MARKER not in body:
+            body = f"{body}\n\n{_SUMMARY_END_MARKER}"
         note = Message.assistant(_SUMMARY_MARKER + "\n" + body)
         return system_msgs + head + [note] + tail
 
@@ -232,5 +248,9 @@ def compress(messages: list[Message], provider, *, preserve_first: int = 3,
     except Exception:  # noqa: BLE001 — keep continuity anchors instead of losing the window
         summary = _fallback_summary(new_middle, prior, pre_compress_context)
 
+    if _SUMMARY_REFERENCE_PREFIX not in summary:
+        summary = f"{_SUMMARY_REFERENCE_PREFIX}\n\n{summary}"
+    if _SUMMARY_END_MARKER not in summary:
+        summary = f"{summary}\n\n{_SUMMARY_END_MARKER}"
     note = Message.assistant(_SUMMARY_MARKER + "\n" + summary)
     return system_msgs + head + [note] + tail

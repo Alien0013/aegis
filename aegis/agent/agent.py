@@ -596,6 +596,22 @@ class Agent:
         msg = user_input if isinstance(user_input, Message) else Message.user(user_input)
         self._apply_routing(msg.content)
         self.session.maybe_title_from(msg.content)
+        provider_query = msg.content
+        if self.memory:
+            try:
+                turn_number = sum(1 for m in self.session.messages if m.role == "user") + 1
+                self.memory.on_turn_start(
+                    turn_number,
+                    provider_query,
+                    model=str(getattr(self.provider, "model", "") or ""),
+                    provider=str(getattr(self.provider, "name", "") or ""),
+                    platform=str(getattr(self, "platform", "") or "cli"),
+                    remaining_iterations=self.budget.remaining,
+                    tool_count=len(self.registry.all()),
+                    cwd=str(self.cwd),
+                )
+            except Exception:  # noqa: BLE001
+                pass
         if include_wakeups:
             try:                           # background work that finished since the last turn
                 from .wakeups import wakeup_block
@@ -606,11 +622,11 @@ class Agent:
                 pass
         if self.memory:                    # provider prefetch relevant to THIS turn (volatile)
             try:
-                fetched = self.memory.prefetch(msg.content)
+                fetched = self.memory.prefetch(provider_query)
                 if fetched:
                     self._retrieved_memory_for_turn = fetched
                     self._retrieved_memory_user_content = msg.content
-                self.memory.queue_prefetch(msg.content)   # warm the next turn in the background
+                self.memory.queue_prefetch(provider_query)   # warm the next turn in the background
             except Exception:  # noqa: BLE001
                 pass
         self.session.messages.append(msg)
