@@ -246,6 +246,47 @@ def test_repl_prompt_toolkit_disabled_inside_running_loop(monkeypatch):
     assert asyncio.run(inside_loop()) is False
 
 
+def test_repl_input_falls_back_if_event_loop_starts_later(monkeypatch):
+    import asyncio
+    import builtins
+
+    import aegis.cli.repl as repl
+
+    class FakePrompt:
+        called = False
+
+        def prompt(self, _prompt):
+            self.called = True
+            raise AssertionError("prompt_toolkit should not run inside loop")
+
+    monkeypatch.setattr(repl, "PromptSession", object())
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "fallback")
+
+    async def inside_loop():
+        ps = FakePrompt()
+        value = repl._read_repl_input(ps)
+        return value, ps.called
+
+    value, called = asyncio.run(inside_loop())
+    assert value == "fallback"
+    assert called is False
+
+
+def test_repl_input_falls_back_on_prompt_toolkit_runtime_error(monkeypatch):
+    import builtins
+
+    import aegis.cli.repl as repl
+
+    class FakePrompt:
+        def prompt(self, _prompt):
+            raise RuntimeError("asyncio.run() cannot be called from a running event loop")
+
+    monkeypatch.setattr(repl, "_prompt_session_supported", lambda: True)
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "fallback")
+
+    assert repl._read_repl_input(FakePrompt()) == "fallback"
+
+
 def test_daemon_install_reports_gateway_failure(monkeypatch, capsys):
     from types import SimpleNamespace
 

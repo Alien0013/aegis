@@ -112,6 +112,24 @@ def _prompt_session_supported() -> bool:
     return False
 
 
+def _read_repl_input(ps, prompt: str = ">>> ") -> str:
+    """Read one REPL line, falling back when prompt_toolkit cannot run safely.
+
+    The event-loop state can change after startup: a provider or UI integration may
+    leave an asyncio loop active by the time the next prompt is drawn. Re-checking
+    here prevents PromptSession.prompt() from crashing with asyncio.run() errors.
+    """
+    if ps is None or not _prompt_session_supported():
+        return input(prompt)
+    try:
+        return ps.prompt(prompt)
+    except RuntimeError as exc:
+        msg = str(exc)
+        if "asyncio.run()" in msg or "running event loop" in msg:
+            return input(prompt)
+        raise
+
+
 def _out(text: str = "", style: str | None = None) -> None:
     if _console:
         _console.print(text, style=style)
@@ -1320,47 +1338,55 @@ def interactive(config: Config, *, model=None, provider_name=None,
         ps = PromptSession(history=FileHistory(str(logs_dir() / "repl_history")),
                            completer=make_slash_completer())
 
-    while True:
-        try:
-            user = ps.prompt(">>> ") if ps else input(">>> ")
-        except (EOFError, KeyboardInterrupt):
-            _out("\nbye.")
-            if config.get("learn.auto") and len(agent.session.messages) > 4:
-                try:
-                    from ..learn import review_session
-                    found = review_session(config, agent.session.id)
-                    if found:
-                        _out(f"💡 learned {len(found)} candidate(s); `aegis learn list` to review.",
-                             style="magenta")
-                except Exception:  # noqa: BLE001
-                    pass
-            break
-        user = user.strip()
-        if not user:
-            continue
-        if user.startswith(("/goal", "/subgoal")):
-            goal_prompt = handle_goal_command(user, agent, store)
-            if not goal_prompt:
-                continue
-            user = goal_prompt   # run the new goal as this turn
-        elif user.startswith("/"):
-            if handle_slash(user, agent, runner=runner, store=store,
-                            surface="repl", on_event=Renderer(config)) == "break":
+    try:
+        while True:
+            try:
+                user = _read_repl_input(ps)
+            except (EOFError, KeyboardInterrupt):
+                _out("\nbye.")
+                if config.get("learn.auto") and len(agent.session.messages) > 4:
+                    try:
+                        from ..learn import review_session
+                        found = review_session(config, agent.session.id)
+                        if found:
+                            _out(f"💡 learned {len(found)} candidate(s); `aegis learn list` to review.",
+                                 style="magenta")
+                    except Exception:  # noqa: BLE001
+                        pass
                 break
-            continue
-        try:
-            renderer = Renderer(config)
-            run_terminal_turn(user, agent, runner, store, surface="repl", on_event=renderer)
-        except KeyboardInterrupt:
-            agent.cancel()   # stop the loop at the next safe point; discard partial work
-            _out("\n  ⏹ interrupted — stopped this turn (your session is intact)", style="yellow")
-        store.save(agent.session)
-        drain_process_notifications(
-            agent,
-            runner,
-            store,
-            surface="repl",
-            on_event=renderer,
-            notify=lambda line: _out(f"  {line}", style="magenta"),
-        )
-        _out(_status_line(agent, renderer.status), style="bright_black")
+            user = user.strip()
+            if not user:
+                continue
+            if user.startswith(("/goal", "/subgoal")):
+                goal_prompt = handle_goal_command(user, agent, store)
+                if not goal_prompt:
+                    continue
+                user = goal_prompt   # run the new goal as this turn
+            elif user.startswith("/"):
+                if handle_slash(user, agent, runner=runner, store=store,
+                                surface="repl", on_event=Renderer(config)) == "break":
+                    break
+                continue
+            try:
+                renderer = Renderer(config)
+                run_terminal_turn(user, agent, runner, store, surface="repl", on_event=renderer)
+            except KeyboardInterrupt:
+                agent.cancel()   # stop the loop at the next safe point; discard partial work
+                _out("\n  ⏹ interrupted — stopped this turn (your session is intact)", style="yellow")
+            store.save(agent.session)
+            drain_process_notifications(
+                agent,
+                runner,
+                store,
+                surface="repl",
+                on_event=renderer,
+                notify=lambda line: _out(f"  {line}", style="magenta"),
+            )
+            _out(_status_line(agent, renderer.status), style="bright_black")
+    finally:
+        end = getattr(agent, "end_session", None)
+        if callable(end):
+            try:
+                end()
+            except Exception:  # noqa: BLE001
+                pass

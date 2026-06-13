@@ -305,3 +305,71 @@ def test_maybe_review_skill_autonomy(monkeypatch):
     review.maybe_review(Agent(**{"learn.auto_apply": True, "learn.auto_apply_skills": True}), tools_this_turn=5)
     time.sleep(0.2)
     assert ("write", "memory") in routed and ("write", "skill") in routed
+
+
+def test_session_end_flushes_pending_memory_review(monkeypatch, tmp_path):
+    from aegis.agent.agent import Agent
+    import aegis.agent.review as review
+    from aegis.config import Config
+    from aegis.session import Session
+    from aegis.types import Message
+    from conftest import FakeProvider
+
+    cfg = Config.load()
+    cfg.data["learn"]["background"] = True
+    cfg.data["learn"]["auto_apply"] = True
+    cfg.data["learn"]["flush_min_turns"] = 2
+
+    session = Session.create()
+    session.messages = [
+        Message.user("first durable task"),
+        Message.assistant("done"),
+        Message.user("second durable task"),
+    ]
+    session.meta["_turns_since_memory"] = 1
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        review,
+        "run_review",
+        lambda _agent, kind, on_event=None: calls.append(kind),
+    )
+
+    agent = Agent(config=cfg, provider=FakeProvider(), session=session, cwd=tmp_path)
+    agent.end_session()
+
+    assert calls == ["memory"]
+    assert session.meta["_turns_since_memory"] == 0
+
+    agent.end_session()
+    assert calls == ["memory"]
+
+
+def test_session_end_memory_flush_skips_short_sessions(monkeypatch, tmp_path):
+    from aegis.agent.agent import Agent
+    import aegis.agent.review as review
+    from aegis.config import Config
+    from aegis.session import Session
+    from aegis.types import Message
+    from conftest import FakeProvider
+
+    cfg = Config.load()
+    cfg.data["learn"]["background"] = True
+    cfg.data["learn"]["auto_apply"] = True
+    cfg.data["learn"]["flush_min_turns"] = 3
+
+    session = Session.create()
+    session.messages = [Message.user("one task")]
+    session.meta["_turns_since_memory"] = 1
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        review,
+        "run_review",
+        lambda _agent, kind, on_event=None: calls.append(kind),
+    )
+
+    agent = Agent(config=cfg, provider=FakeProvider(), session=session, cwd=tmp_path)
+    agent.end_session()
+
+    assert calls == []

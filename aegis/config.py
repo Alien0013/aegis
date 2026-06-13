@@ -305,6 +305,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "auto": True,                # auto-review sessions on exit to propose memory/skill candidates
         "background": True,           # forked self-improvement review after substantial turns (on by default)
         "memory_every": 6,            # run a memory review every N turns
+        "flush_min_turns": 6,          # run a final memory review on session end after N user turns
         "skill_every_iters": 5,       # run a skill review when a turn used >= N tool iterations
         "auto_apply": True,           # auto-write reviewed MEMORY (low risk); False = queue candidates
         "auto_apply_skills": True,    # auto-write reviewed SKILLS too (full autonomy; False = human-gated)

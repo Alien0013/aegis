@@ -351,6 +351,7 @@ class Agent:
     def end_session(self) -> None:
         """Fire session-end hooks (process exit, agent teardown, /new)."""
         task_id = getattr(self.tool_context, "task_id", "")
+        self._maybe_flush_memory_review()
         if self.memory:
             try:
                 self.memory.on_session_end(self.session.messages)
@@ -377,6 +378,44 @@ class Agent:
 
                 cleanup_task_environment(task_id)
                 clear_task_env_overrides(task_id)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _maybe_flush_memory_review(self) -> None:
+        """Run one final memory review before a long session is left behind.
+
+        Periodic reviews fire every few turns, but a CLI crash, /new, or exit can
+        otherwise leave recent durable facts unreviewed. This mirrors the reference
+        agent's "memory flush" behavior while staying fail-soft.
+        """
+        if getattr(self, "_no_review", False):
+            return
+        if not (self.memory and self.provider):
+            return
+        if not bool(self.config.get("learn.background", False)):
+            return
+        if not bool(self.config.get("learn.auto_apply", False)):
+            return
+        min_turns = int(self.config.get("learn.flush_min_turns", 0) or 0)
+        if min_turns <= 0:
+            return
+        user_turns = sum(1 for m in self.session.messages if m.role == "user")
+        if user_turns < min_turns:
+            return
+        meta = self.session.meta
+        if meta.get("_memory_flush_reviewed"):
+            return
+        if int(meta.get("_turns_since_memory", 0) or 0) <= 0:
+            return
+        meta["_memory_flush_reviewed"] = True
+        try:
+            from . import review
+            review.run_review(self, "memory", on_event=getattr(self.tool_context, "emit", None))
+            meta["_turns_since_memory"] = 0
+        except Exception:  # noqa: BLE001
+            try:
+                from .._log import log_exc
+                log_exc("session-end memory review failed")
             except Exception:  # noqa: BLE001
                 pass
 
