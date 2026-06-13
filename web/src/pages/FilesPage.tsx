@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api } from "../lib/api";
+import { api, post, TOKEN } from "../lib/api";
 import { Icon } from "../lib/icons";
 import { Button, Card, Empty, Loading, PageHeader } from "../lib/ui";
 
@@ -15,6 +15,8 @@ export function FilesPage() {
   const [data, setData] = useState<any>(undefined);
   const [path, setPath] = useState("");
   const [view, setView] = useState<any>(null); // {path, content} | {path, error}
+  const [newDir, setNewDir] = useState("");
+  const [busy, setBusy] = useState("");
 
   async function load(p?: string) {
     setData(undefined);
@@ -30,17 +32,64 @@ export function FilesPage() {
     try { setView(await api(`files/read?path=${encodeURIComponent(fp)}`)); }
     catch (e) { setView({ path: fp, error: String(e) }); }
   }
+  async function mkdir() {
+    const name = newDir.trim();
+    if (!name) return;
+    setBusy("mkdir");
+    try {
+      const res = await post("files/mkdir", { path, name, exist_ok: true });
+      if (res?.error) setView({ path, error: res.error });
+      else { setNewDir(""); await load(path); }
+    } catch (e) {
+      setView({ path, error: String(e) });
+    } finally {
+      setBusy("");
+    }
+  }
+  async function upload(file?: File) {
+    if (!file) return;
+    setBusy("upload");
+    try {
+      const body = new FormData();
+      body.set("path", path);
+      body.set("file", file);
+      const headers: Record<string, string> = {};
+      if (TOKEN) headers["X-Aegis-Token"] = TOKEN;
+      const r = await fetch("/api/files/upload", { method: "POST", headers, body });
+      const res = await r.json();
+      if (!r.ok || res?.error) setView({ path, error: res?.error || `upload failed: ${r.status}` });
+      else await load(path);
+    } catch (e) {
+      setView({ path, error: String(e) });
+    } finally {
+      setBusy("");
+    }
+  }
 
   const entries: any[] = data?.entries || [];
   return (
     <>
-      <PageHeader title="Files" sub="read-only browser · token-gated"
+      <PageHeader title="Files" sub="browse · upload · mkdir · token-gated"
         actions={<Button variant="ghost" icon="refresh" onClick={() => load(path)}>Refresh</Button>} />
       <div className="toolbar">
         <input className="search mono" value={path} onChange={(e) => setPath(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && load(path)} placeholder="/home/you/…" />
         <Button onClick={() => load(path)}>Go</Button>
         {data?.parent && <Button variant="ghost" onClick={() => load(data.parent)}>↑ Up</Button>}
+      </div>
+      <div className="toolbar file-actions">
+        <input className="search" value={newDir} onChange={(e) => setNewDir(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && mkdir()} placeholder="New folder name" />
+        <Button variant="ghost" icon="plus" onClick={mkdir} disabled={busy === "mkdir" || !newDir.trim()}>Folder</Button>
+        <label className={`btn ghost file-picker ${busy === "upload" ? "disabled" : ""}`}>
+          <span style={{ display: "inline-flex", width: 14, height: 14 }}><Icon n="plus" /></span>
+          Upload
+          <input type="file" disabled={busy === "upload"} onChange={async (e) => {
+            const input = e.currentTarget;
+            await upload(input.files?.[0]);
+            input.value = "";
+          }} />
+        </label>
       </div>
       <div className="agents-layout">
         <Card pad={false}>

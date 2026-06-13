@@ -11,7 +11,7 @@ dashboard token; do not expose it publicly without trusted network controls.
 from __future__ import annotations
 
 import json
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse, urlunparse
@@ -2238,28 +2238,10 @@ def _dashboard_url(config: Config, host: str, port: int) -> str:
 
 def serve_dashboard(config: Config, host: str = "127.0.0.1", port: int = 9119,
                     open_browser: bool = False) -> None:
-    handler = make_handler(config)
-    requested = port
-    for candidate in range(port, port + 50):       # auto-select if the port is occupied
-        try:
-            httpd = ThreadingHTTPServer((host, candidate), handler)
-            break
-        except OSError:
-            continue
-    else:
-        raise OSError(f"no free port in {requested}–{requested + 49} on {host}")
-    port = httpd.server_address[1]
-    if port != requested:
-        print(f"  (port {requested} busy — using {port})")
-    url = _dashboard_url(config, host, port)
-    print(f"AEGIS control panel → {url}")
-    print("  (leave this running; press Ctrl+C to stop)")
-    if open_browser:
-        import threading
-        import webbrowser
-        threading.Timer(0.6, lambda: webbrowser.open(url)).start()
+    from .dashboard_fastapi import run_dashboard
+
     try:
-        httpd.serve_forever()
+        run_dashboard(config, host=host, port=port, open_browser=open_browser)
     except KeyboardInterrupt:
         print("\ndashboard stopped.")
 

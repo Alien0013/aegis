@@ -18,11 +18,13 @@ import { FilesPage } from "./pages/FilesPage";
 import { McpPage } from "./pages/McpPage";
 import { WebhooksPage } from "./pages/WebhooksPage";
 import { PluginsPage } from "./pages/PluginsPage";
+import { TerminalPage } from "./pages/TerminalPage";
 
 type NavItem = { id: string; label: string; icon: string; group: string };
 const NAV: NavItem[] = [
   { id: "overview", label: "Home", icon: "overview", group: "Home" },
   { id: "chat", label: "Chat", icon: "chat", group: "Home" },
+  { id: "terminal", label: "Terminal", icon: "system", group: "Home" },
   { id: "agents", label: "Agents", icon: "agents", group: "Observe" },
   { id: "sessions", label: "Sessions", icon: "sessions", group: "Observe" },
   { id: "runs", label: "Runs", icon: "sessions", group: "Observe" },
@@ -55,6 +57,7 @@ function pageFor(id: string, go: (id: string) => void) {
     case "cockpit": return <Overview go={go} />;
     case "overview": return <Overview go={go} />;
     case "chat": return <Chat />;
+    case "terminal": return <TerminalPage />;
     case "runs": return <ListPage key="runs" endpoint="runs?limit=100" arrayKey="runs" title="Runs"
       detailEndpoint="run" cols={[["title", "Run"], ["status", "Status"], ["surface", "Surface"], ["updated_at", "Updated"]]} />;
     case "traces": return <ListPage key="traces" endpoint="traces?limit=100" arrayKey="traces" title="Traces"

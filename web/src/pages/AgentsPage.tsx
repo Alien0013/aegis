@@ -19,12 +19,33 @@ function statusClass(s = "") {
   return "";
 }
 
-// Live activity bus lives at /events (not under /api/), so open it directly.
 function openEvents(onMsg: (d: any) => void): () => void {
-  const url = TOKEN ? `/events?token=${TOKEN}` : "/events";
-  const es = new EventSource(url);
-  es.onmessage = (e) => { try { onMsg(JSON.parse(e.data)); } catch { /* ignore */ } };
-  return () => es.close();
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const q = TOKEN ? `?token=${encodeURIComponent(TOKEN)}` : "";
+  let stopped = false;
+  let opened = false;
+  let es: EventSource | null = null;
+  let ws: WebSocket | null = null;
+  const fallback = () => {
+    if (stopped || es) return;
+    es = new EventSource(TOKEN ? `/events?token=${encodeURIComponent(TOKEN)}` : "/events");
+    es.onopen = () => onMsg({ type: "live" });
+    es.onmessage = (e) => { try { onMsg(JSON.parse(e.data)); } catch { /* ignore */ } };
+  };
+  try {
+    ws = new WebSocket(`${proto}//${window.location.host}/api/ws${q}`);
+    ws.onopen = () => { opened = true; onMsg({ type: "live" }); };
+    ws.onmessage = (e) => { try { onMsg(JSON.parse(e.data)); } catch { /* ignore */ } };
+    ws.onerror = () => { if (!opened) fallback(); };
+    ws.onclose = () => { if (!opened) fallback(); };
+  } catch {
+    fallback();
+  }
+  return () => {
+    stopped = true;
+    try { ws?.close(); } catch { /* already closed */ }
+    es?.close();
+  };
 }
 
 export function AgentsPage() {

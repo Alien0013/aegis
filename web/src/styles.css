@@ -282,6 +282,17 @@ table.tbl td.mono,table.tbl td .mono{font-family:var(--mono);color:var(--mut);fo
 .panel.group{margin-bottom:10px;overflow:hidden}
 .agent-row{align-items:flex-start}
 .topcmd{margin-left:auto}
+.file-actions{align-items:center}
+.file-actions .search{max-width:260px}
+.file-picker{position:relative;overflow:hidden}
+.file-picker input{position:absolute;inset:0;opacity:0;cursor:pointer}
+.file-picker.disabled{opacity:.5;cursor:not-allowed}
+.file-picker.disabled input{cursor:not-allowed}
+.terminal-sub{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.terminal-shell{height:min(72vh,760px);min-height:420px;background:#05070a;border-radius:8px;box-shadow:var(--shadow);padding:8px;overflow:hidden}
+.terminal-shell .xterm{height:100%}
+.terminal-shell .xterm-viewport{border-radius:5px}
+@media(max-width:700px){.terminal-shell{min-height:360px;height:68vh}.file-actions .search{max-width:none}}
 
 /* kanban board */
 .kanban-board{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;align-items:start}

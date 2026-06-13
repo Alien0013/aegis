@@ -15,10 +15,14 @@ keywords = ["agent", "llm", "cli", "ai", "claude", "openai", "harness", "tools",
 # Upper-bound ceilings on every dependency (supply-chain hygiene, post-litellm policy):
 # post-1.0 packages pin <next_major; pre-1.0 packages allow a couple of minors.
 dependencies = [
+    "fastapi>=0.115,<1",
     "httpx>=0.27,<0.30",
+    "ptyprocess>=0.7,<1; sys_platform != 'win32'",
+    "python-multipart>=0.0.9,<1",
     "pyyaml>=6.0,<7",
     "prompt_toolkit>=3.0,<4",
     "rich>=13.0,<16",
+    "uvicorn[standard]>=0.30,<1",
 ]
 
 [project.optional-dependencies]
