@@ -55,6 +55,36 @@ def test_chat_event_row_carries_text_and_tool_id():
     assert it["n"] == 2 and it["max"] == 30
 
 
+def test_dashboard_status_includes_operational_controls(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.config import Config
+    from aegis.dashboard import _dashboard_status
+
+    cfg = Config.load()
+    cfg.data["model"] = {"provider": "localtest", "default": "local-model"}
+    cfg.data["custom_providers"] = [{
+        "name": "localtest",
+        "base_url": "http://local.test/v1",
+        "api_mode": "chat_completions",
+        "context_length": 70_000,
+    }]
+    cfg.data["tools"]["exec_mode"] = "ask"
+    cfg.data["tools"]["toolsets"] = ["core"]
+    cfg.data["display"]["reasoning"] = "live"
+    cfg.data["agent"]["reasoning_effort"] = "high"
+    cfg.data["gateway"]["busy_mode"] = "steer"
+
+    data = _dashboard_status(cfg)
+
+    assert data["context_length"] == 70_000
+    assert data["exec_mode"] == "ask"
+    assert data["toolsets"] == ["core"]
+    assert data["reasoning_display"] == "live"
+    assert data["reasoning_effort"] == "high"
+    assert data["busy_mode"] == "steer"
+    assert data["learn"]["memory_every"] >= 1
+
+
 def test_memory_post_add_and_remove(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     monkeypatch.setenv("AEGIS_DASHBOARD_TOKEN", "t")

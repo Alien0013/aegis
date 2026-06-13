@@ -368,6 +368,26 @@ def _run_refs(agent: Any) -> tuple[str, str, str]:
     return run_id, trace_id, turn_id
 
 
+def _fmt_token_count(n: int) -> str:
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 10_000:
+        return f"{round(n / 1000):.0f}k"
+    if n >= 1000:
+        return f"{n / 1000:.1f}k"
+    return f"{n:,}"
+
+
+def _context_window(agent: Any) -> dict[str, int]:
+    from ..agent.compaction import estimated_tokens
+
+    window = int(getattr(getattr(agent, "provider", None), "context_length", 0) or 0)
+    used = int(estimated_tokens(getattr(getattr(agent, "session", None), "messages", []) or []))
+    remaining = max(0, window - used) if window else 0
+    percent = int(100 * used / max(1, window)) if window else 0
+    return {"used": used, "window": window, "remaining": remaining, "percent": percent}
+
+
 def _record_terminal_run(agent: Any, run: Any) -> None:
     meta = getattr(getattr(agent, "session", None), "meta", None)
     if not isinstance(meta, dict):
@@ -383,11 +403,15 @@ def _record_terminal_run(agent: Any, run: Any) -> None:
 
 
 def _status_line(agent: Agent, progress: TerminalStatusState | None = None) -> str:
-    from ..agent.compaction import estimated_tokens
     u = agent.budget.usage
-    used = estimated_tokens(agent.session.messages)
-    fill = int(100 * used / max(1, agent.provider.context_length))
+    ctx = _context_window(agent)
     run_id, trace, _turn = _run_refs(agent)
+    reasoning = f"{agent.config.get('display.reasoning', 'summary')}/{getattr(agent, 'reasoning', 'off')}"
+    perms = str(agent.config.get("tools.exec_mode", "auto") or "auto")
+    if ctx["window"]:
+        ctx_text = f"ctx {_fmt_token_count(ctx['used'])}/{_fmt_token_count(ctx['window'])} ({ctx['percent']}%)"
+    else:
+        ctx_text = f"ctx {_fmt_token_count(ctx['used'])}"
     suffix = ""
     if progress and progress.segment():
         suffix += f" · {progress.segment()}"
@@ -395,7 +419,10 @@ def _status_line(agent: Agent, progress: TerminalStatusState | None = None) -> s
         suffix += f" · run {run_id[:12]}"
     if trace:
         suffix += f" · trace {trace[:12]}"
-    return f"  [{agent.provider.model} · ctx {fill}% · tokens in {u.input_tokens:,} out {u.output_tokens:,}{suffix}]"
+    return (
+        f"  [{agent.provider.model} · {ctx_text} · tokens in {u.input_tokens:,} "
+        f"out {u.output_tokens:,} · reasoning {reasoning} · perms {perms}{suffix}]"
+    )
 
 
 def banner(agent: Agent) -> None:
@@ -406,6 +433,21 @@ def banner(agent: Agent) -> None:
         body.append("  ▟▛ AEGIS ", style="bold magenta")
         body.append(f"v{__version__}\n\n", style="dim")
         body.append("  model    ", style="dim"); body.append(f"{model}\n", style="cyan")
+        ctx = _context_window(agent)
+        if ctx["window"]:
+            body.append("  context  ", style="dim")
+            body.append(
+                f"{_fmt_token_count(ctx['used'])}/{_fmt_token_count(ctx['window'])} "
+                f"({ctx['remaining']:,} left)\n",
+                style="white",
+            )
+        body.append("  controls ", style="dim")
+        body.append(
+            f"reasoning {agent.config.get('display.reasoning', 'summary')}/"
+            f"{getattr(agent, 'reasoning', 'off')} · permissions "
+            f"{agent.config.get('tools.exec_mode', 'auto')}\n",
+            style="white",
+        )
         body.append("  cwd      ", style="dim"); body.append(f"{agent.cwd}\n", style="white")
         body.append("  session  ", style="dim"); body.append(f"{agent.session.id}\n\n", style="white")
         body.append("  Other ways in:\n", style="bold")
@@ -421,6 +463,13 @@ def banner(agent: Agent) -> None:
     else:
         print("=" * 60)
         print(f"AEGIS v{__version__}  ·  {model}  ·  session {agent.session.id}")
+        ctx = _context_window(agent)
+        if ctx["window"]:
+            print(f"context: {_fmt_token_count(ctx['used'])}/{_fmt_token_count(ctx['window'])} "
+                  f"({ctx['remaining']:,} left)")
+        print(f"controls: reasoning {agent.config.get('display.reasoning', 'summary')}/"
+              f"{getattr(agent, 'reasoning', 'off')} · permissions "
+              f"{agent.config.get('tools.exec_mode', 'auto')}")
         print(f"cwd: {agent.cwd}")
         print("Other ways in:  aegis tui (full-screen)  ·  aegis ui (web panel)")
         print("Try: /help · @file · /goal · /quit")
@@ -834,7 +883,28 @@ def handle_slash(
     elif name == "/status":
         _out(f"provider: {agent.provider.describe()}")
         _out(f"session: {agent.session.id} ({len(agent.session.messages)} msgs)")
-        _out(f"reasoning: {getattr(agent, 'reasoning', 'off')} · exec_mode: {agent.config.get('tools.exec_mode')}")
+        ctx = _context_window(agent)
+        if ctx["window"]:
+            _out(
+                "context: "
+                f"{ctx['used']:,}/{ctx['window']:,} tokens "
+                f"({ctx['percent']}%, {ctx['remaining']:,} remaining)"
+            )
+        else:
+            _out(f"context: {ctx['used']:,} estimated tokens")
+        u = agent.budget.usage
+        _out(
+            f"usage: input {u.input_tokens:,} · output {u.output_tokens:,} · "
+            f"cache read {u.cache_read:,} · cache write {u.cache_write:,}"
+        )
+        _out(
+            f"reasoning: display {agent.config.get('display.reasoning', 'summary')} · "
+            f"effort {getattr(agent, 'reasoning', 'off')}"
+        )
+        _out(
+            f"permissions: exec_mode {agent.config.get('tools.exec_mode')} · "
+            f"toolsets {', '.join(agent.config.get('tools.toolsets', []) or []) or 'none'}"
+        )
         comps = agent.session.meta.get("compactions") or []
         if comps:
             saved = sum(c["tokens_before"] - c["tokens_after"] for c in comps)

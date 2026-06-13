@@ -379,6 +379,38 @@ def test_terminal_status_state_summarizes_progress():
     assert "budget exhausted" in state.segment()
 
 
+def test_terminal_status_line_surfaces_context_controls():
+    from types import SimpleNamespace
+
+    from aegis.cli import repl
+    from aegis.config import Config
+    from aegis.session import Session
+    from aegis.types import Message
+
+    cfg = Config.load()
+    cfg.data.setdefault("display", {})["reasoning"] = "live"
+    cfg.data.setdefault("tools", {})["exec_mode"] = "ask"
+    session = Session.create()
+    session.messages = [Message.user("hello " * 200)]
+    agent = SimpleNamespace(
+        provider=SimpleNamespace(model="local-model", context_length=1000),
+        budget=SimpleNamespace(
+            usage=SimpleNamespace(input_tokens=12, output_tokens=5, cache_read=0, cache_write=0),
+        ),
+        session=session,
+        config=cfg,
+        reasoning="high",
+        _trace_context={},
+    )
+
+    line = repl._status_line(agent)
+
+    assert "ctx" in line and "/1.0k" in line
+    assert "tokens in 12 out 5" in line
+    assert "reasoning live/high" in line
+    assert "perms ask" in line
+
+
 def test_terminal_session_picker_resume_and_branch(monkeypatch):
     from types import SimpleNamespace
 

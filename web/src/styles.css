@@ -72,6 +72,10 @@ code,kbd{font-family:ui-monospace,"SF Mono",Menlo,monospace;background:var(--pan
 input,select,textarea{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:8px 10px;width:100%;min-width:0}
 textarea{resize:vertical}
 label{color:var(--mut);font-size:12px;font-weight:650;display:flex;flex-direction:column;gap:6px}
+.quick-grid{display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:10px}
+.toggle-grid{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.toggle-row{flex-direction:row;align-items:center;justify-content:space-between;gap:10px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:168px}
+.toggle-row input{width:18px;height:18px;padding:0;accent-color:var(--accent);flex:0 0 auto}
 .toolbar{display:flex;gap:10px;margin-bottom:12px;align-items:center}
 .toolbar input{max-width:460px}
 .stack{display:flex;flex-direction:column;gap:10px}
@@ -91,6 +95,7 @@ label{color:var(--mut);font-size:12px;font-weight:650;display:flex;flex-directio
 .session-chip:hover,.session-chip.active{background:var(--panel2);border-color:var(--line)}
 .session-chip span{color:var(--mut);font-size:12px}
 .chatcard{display:flex;flex-direction:column;min-height:70vh}
+.context-panel{display:flex;flex-direction:column;gap:10px;margin-bottom:10px}
 .chatlog{height:62vh;overflow:auto;display:flex;flex-direction:column;gap:12px;padding:4px 2px}
 .msg{max-width:82%;padding:10px 13px;border-radius:8px;white-space:pre-wrap;word-break:break-word}
 .msg.user{align-self:flex-end;background:var(--accent);color:#06110f;font-weight:650}
@@ -129,6 +134,7 @@ label{color:var(--mut);font-size:12px;font-weight:650;display:flex;flex-directio
 .drawer-head h2{margin:0;font-size:20px;line-height:1.2}
 .drawer-body{padding:16px;overflow:auto;display:flex;flex-direction:column;gap:16px}
 .kvgrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.kvgrid.compact{grid-template-columns:repeat(4,minmax(120px,1fr))}
 .kv{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px;min-width:0}
 .kv span{display:block;color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.06em}
 .kv b{display:block;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -150,7 +156,7 @@ label{color:var(--mut);font-size:12px;font-weight:650;display:flex;flex-directio
   .scrim{display:block;position:fixed;inset:0;z-index:19;background:rgba(0,0,0,.42);border:0}
   .main{padding:16px 14px 28px;max-width:none}.head{align-items:stretch;flex-direction:column}.actions{width:100%}.actions .btn{flex:1}
   .welcome-row{flex-direction:column}.welcome-row .btn{width:100%}
-  .c4,.c3,.c2{grid-template-columns:1fr}.toolbar{flex-direction:column;align-items:stretch}.toolbar input{max-width:none}
+  .c4,.c3,.c2,.quick-grid{grid-template-columns:1fr}.toolbar{flex-direction:column;align-items:stretch}.toolbar input{max-width:none}
   .kanban-board{grid-template-columns:1fr;overflow:visible}
   .row{align-items:flex-start;flex-direction:column;gap:5px}.datarow{display:flex}.datarow span{white-space:normal}.composer{flex-direction:column}.msg,.botwrap{max-width:100%}
   .kvgrid{grid-template-columns:repeat(2,minmax(0,1fr))}.drawer-panel{width:100%}

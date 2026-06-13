@@ -14,6 +14,12 @@ type Msg = {
 };
 
 const emptyBot = (): Msg => ({ role: "bot", text: "", thinking: "", tools: [], status: "", done: false });
+const numFmt = new Intl.NumberFormat();
+
+function fmtTokens(value: any): string {
+  const n = Number(value || 0);
+  return n > 0 ? numFmt.format(n) : "-";
+}
 
 function ToolIcon({ name }: { name: string }) {
   const n = name.toLowerCase();
@@ -68,9 +74,21 @@ export function Chat() {
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
   const [sessions, setSessions] = useState<any[]>([]);
+  const [ctx, setCtx] = useState<any>({});
   const logRef = useRef<HTMLDivElement>(null);
   useEffect(() => { logRef.current?.scrollTo(0, logRef.current.scrollHeight); }, [msgs]);
   useEffect(() => { api("sessions").then((s) => setSessions(Array.isArray(s) ? s : [])).catch(() => setSessions([])); }, []);
+  useEffect(() => { void refreshContext(""); }, []);
+
+  async function refreshContext(id = session) {
+    const status = await api("status").catch((e) => ({ error: String(e) }));
+    let detail: any = null;
+    if (id) {
+      const loaded = await api(`session?id=${encodeURIComponent(id)}`).catch(() => null);
+      detail = loaded?.detail || null;
+    }
+    setCtx({ status, detail });
+  }
 
   function patchBot(fn: (m: Msg) => Msg) {
     setMsgs((all) => {
@@ -114,6 +132,7 @@ export function Chat() {
         else if (ev.type === "final") {
           patchBot((m) => ({ ...m, text: m.text || ev.reply || "(no response)", status: "", done: true }));
           if (ev.session_id) setSession(ev.session_id);
+          void refreshContext(ev.session_id || session);
         } else if (ev.type === "error") patchBot((m) => ({ ...m, text: "Error: " + (ev.reply || "error"), status: "", done: true }));
       });
     } catch (e) {
@@ -139,17 +158,30 @@ export function Chat() {
         done: true,
       }));
       setMsgs(loaded);
+      void refreshContext(id);
     } catch {
       setMsgs([]);
     }
   }
+
+  const status = ctx.status || {};
+  const detail = ctx.detail || {};
+  const prompt = detail.prompt || {};
+  const metrics = detail.metrics || {};
+  const usage = detail.meta?.usage || {};
+  const runtime = detail.meta?.runtime || prompt.runtime || {};
+  const contextLength = runtime.context_length || status.context_length;
+  const contextUsed = prompt.tokens || metrics.approx_tokens || 0;
 
   return (
     <>
       <div className="head">
         <div>
           <h1>Chat</h1>
-          <span className="crumb">{session ? `session ${compact(session, 34)}` : "new dashboard session"}</span>
+          <span className="crumb">
+            {session ? `session ${compact(session, 34)}` : "new dashboard session"}
+            {contextLength ? ` · ctx ${fmtTokens(contextLength)}` : ""}
+          </span>
         </div>
         <span className="actions">
           <span className="crumb">{session || "new session"}</span>
@@ -170,10 +202,22 @@ export function Chat() {
         </aside>
         <section className="panel chatcard">
         {showCtx && (
-          <div className="grid c3" style={{ gap: 8, marginBottom: 10 }}>
-            <input value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="working dir (cwd)" />
-            <input value={provider} onChange={(e) => setProvider(e.target.value)} placeholder="provider (optional)" />
-            <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="model (optional)" />
+          <div className="context-panel">
+            <div className="kvgrid compact">
+              <div className="kv"><span>Window</span><b>{fmtTokens(contextLength)}</b></div>
+              <div className="kv"><span>Prompt</span><b>{fmtTokens(contextUsed)}</b></div>
+              <div className="kv"><span>Input</span><b>{fmtTokens(usage.input_tokens)}</b></div>
+              <div className="kv"><span>Output</span><b>{fmtTokens(usage.output_tokens)}</b></div>
+              <div className="kv"><span>Reasoning</span><b>{status.reasoning_display || "-"} / {status.reasoning_effort || "-"}</b></div>
+              <div className="kv"><span>Permissions</span><b>{status.exec_mode || "-"}</b></div>
+              <div className="kv"><span>Run</span><b>{compact(detail.links?.latest_run_id || "-", 18)}</b></div>
+              <div className="kv"><span>Trace</span><b>{compact(detail.links?.latest_trace_id || "-", 18)}</b></div>
+            </div>
+            <div className="grid c3" style={{ gap: 8 }}>
+              <input value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="working dir (cwd)" />
+              <input value={provider} onChange={(e) => setProvider(e.target.value)} placeholder="provider (optional)" />
+              <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="model (optional)" />
+            </div>
           </div>
         )}
         <div className="chatlog" ref={logRef}>

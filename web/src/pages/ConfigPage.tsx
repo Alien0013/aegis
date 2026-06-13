@@ -12,6 +12,20 @@ function flatten(obj: any, prefix = ""): [string, any][] {
   return out;
 }
 
+const QUICK_SELECTS = [
+  { key: "tools.exec_mode", label: "Permissions", options: ["auto", "ask", "smart", "allowlist", "deny", "full"] },
+  { key: "display.reasoning", label: "Reasoning view", options: ["summary", "live", "off"] },
+  { key: "agent.reasoning_effort", label: "Reasoning effort", options: ["off", "minimal", "low", "medium", "high", "xhigh"] },
+  { key: "gateway.busy_mode", label: "Busy mode", options: ["queue", "steer", "interrupt"] },
+];
+
+const QUICK_TOGGLES = [
+  { key: "learn.background", label: "Background learning" },
+  { key: "learn.auto_apply", label: "Apply memories" },
+  { key: "learn.auto_apply_skills", label: "Apply skills" },
+  { key: "memory.enabled", label: "Memory" },
+];
+
 export function ConfigPage() {
   const [cfg, setCfg] = useState<any>(undefined);
   const [q, setQ] = useState("");
@@ -44,12 +58,24 @@ export function ConfigPage() {
     return raw;
   }
 
+  const valueOf = (key: string) => cfg[key];
+
   async function save(key: string, raw = edit[key]): Promise<boolean> {
     let value: any;
     try { value = parse(raw); }
     catch (e) { setMsg("Invalid JSON: " + String(e)); return false; }
     try { await post("config", { key, value }); setMsg(`${key} saved`); setEdit((e) => { const c = { ...e }; delete c[key]; return c; }); await load(); return true; }
     catch (e) { setMsg("Error: " + String(e)); return false; }
+  }
+
+  async function quickSave(key: string, value: any) {
+    try {
+      await post("config", { key, value });
+      setMsg(`${key} saved`);
+      await load();
+    } catch (e) {
+      setMsg("Error: " + String(e));
+    }
   }
 
   async function addSetting() {
@@ -64,6 +90,33 @@ export function ConfigPage() {
   return (
     <>
       <Head count={rows.length} />
+      <div className="panel" style={{ marginBottom: 14 }}>
+        <h3>Quick settings</h3>
+        <div className="quick-grid">
+          {QUICK_SELECTS.map((item) => (
+            <label key={item.key}>{item.label}
+              <select
+                value={String(valueOf(item.key) ?? "")}
+                onChange={(e) => quickSave(item.key, e.target.value)}
+              >
+                {item.options.map((option) => <option key={option} value={option}>{option}</option>)}
+              </select>
+            </label>
+          ))}
+        </div>
+        <div className="toggle-grid">
+          {QUICK_TOGGLES.map((item) => (
+            <label className="toggle-row" key={item.key}>
+              <span>{item.label}</span>
+              <input
+                type="checkbox"
+                checked={Boolean(valueOf(item.key))}
+                onChange={(e) => quickSave(item.key, e.target.checked)}
+              />
+            </label>
+          ))}
+        </div>
+      </div>
       <div className="panel" style={{ marginBottom: 14 }}>
         <h3>Add or replace a setting</h3>
         <div className="grid c3" style={{ gap: 10, alignItems: "end" }}>

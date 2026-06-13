@@ -136,6 +136,47 @@ def _profiles(config: Config) -> dict:
     return {"active": config.get("agent.personality") or "", "available": names}
 
 
+def _dashboard_status(config: Config) -> dict:
+    from .session import SessionStore
+    from .skills import SkillsLoader
+    from .tools.registry import default_registry
+
+    context_length = 0
+    active_provider: dict = {}
+    provider_error = ""
+    try:
+        from .providers.registry import provider_report
+
+        report = provider_report(config)
+        active_provider = report.get("active") if isinstance(report.get("active"), dict) else {}
+        context_length = int(active_provider.get("context_length") or 0)
+        provider_error = str(active_provider.get("error") or "")
+    except Exception as exc:  # noqa: BLE001
+        provider_error = f"{type(exc).__name__}: {exc}"
+    return {
+        "version": __version__,
+        "provider": config.get("model.provider"),
+        "model": config.get("model.default"),
+        "context_length": context_length,
+        "provider_error": provider_error,
+        "capabilities": _jsonable(active_provider.get("capabilities", {})),
+        "sessions": len(SessionStore().list(9999)),
+        "skills": len(SkillsLoader(config).available()),
+        "tools": len(default_registry().all()),
+        "exec_mode": config.get("tools.exec_mode"),
+        "toolsets": config.get("tools.toolsets", []),
+        "reasoning_effort": config.get("agent.reasoning_effort"),
+        "reasoning_display": config.get("display.reasoning"),
+        "busy_mode": config.get("gateway.busy_mode"),
+        "learn": {
+            "background": bool(config.get("learn.background", False)),
+            "auto_apply": bool(config.get("learn.auto_apply", False)),
+            "memory_every": int(config.get("learn.memory_every", 0) or 0),
+            "flush_min_turns": int(config.get("learn.flush_min_turns", 0) or 0),
+        },
+    }
+
+
 def _system_info() -> dict:
     """Host + install facts and recent checkpoints for the System tab (no psutil dependency)."""
     import platform
@@ -1629,14 +1670,7 @@ def make_handler(config: Config):
             elif not self._authorized():
                 self._unauthorized()
             elif path == "/api/status":
-                from .skills import SkillsLoader
-                from .tools.registry import default_registry
-                self._json({"version": __version__, "provider": config.get("model.provider"),
-                            "model": config.get("model.default"),
-                            "sessions": len(SessionStore().list(9999)),
-                            "skills": len(SkillsLoader(config).available()),
-                            "tools": len(default_registry().all()),
-                            "exec_mode": config.get("tools.exec_mode")})
+                self._json(_dashboard_status(config))
             elif path == "/events":
                 self._stream_events()
             elif path == "/api/kanban":
