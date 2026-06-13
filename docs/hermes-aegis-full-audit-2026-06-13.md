@@ -21,6 +21,7 @@ Implementation update in this branch:
 - Expanded AEGIS `session_search` to browse, discover, read, and scroll past sessions.
 - Added external-memory `on_memory_write` mirroring hook and JSONL provider support.
 - Added typed FastAPI control-plane routes for auth status, health, config defaults/schema/raw/import, env list/set/reveal/delete, and sessions list/search/stats/detail/export/prune/delete.
+- Added typed FastAPI cron and gateway management routes for job CRUD/run/service status/control and gateway channel/service status/control.
 - Added regression tests for recall behavior and memory write mirroring.
 
 ## Executive Verdict
@@ -74,8 +75,9 @@ Hermes has:
 
 Implemented:
 - Added typed FastAPI routes for `/api/health`, `/api/auth/me`, config defaults/schema/raw/import, env list/set/reveal/delete, and sessions list/search/stats/detail/export/prune/delete.
+- Added typed FastAPI routes for cron jobs/service control and gateway status/channels/service control.
 - Kept the generic dispatcher as a compatibility shim for the existing dashboard app.
-- Added FastAPI regression tests for route registration, config/env safety, session search/detail/export/delete, and auth status.
+- Added FastAPI regression tests for route registration, config/env safety, session search/detail/export/delete, auth status, cron job management, and gateway controls.
 
 Needed inputs:
 - Continue replacing the generic dispatcher with typed FastAPI routes for remaining parity-critical surfaces.
@@ -89,8 +91,8 @@ Needed inputs:
   - config export
   - provider OAuth start/submit/poll/revoke
   - sessions patch/rename/message-level APIs
-  - cron jobs/runs/blueprints
-  - gateway start/stop/restart/status
+  - cron run logs/blueprints and richer scheduler state
+  - gateway pairing/channel setup details and platform-specific status probes
   - audio transcribe/TTS/voices
   - self-update check/apply
   - dashboard themes/fonts/plugins
@@ -139,7 +141,8 @@ Needed inputs:
 - Add voice/media parity per existing platforms before adding too many new ones.
 - Add channel directory and home-channel resolution for cron/delivery.
 - Add native slash/app command surfaces where platforms support them.
-- Make gateway process status and restart fully dashboard-managed.
+- Done in this branch: typed dashboard routes for gateway status, channel configuration, and service install/start/stop/restart/remove.
+- Still needed: platform-specific live probes, onboarding forms, channel directory, and richer delivery target management.
 
 ### 5. Cron automation is useful but not Hermes-grade
 
@@ -159,6 +162,7 @@ Needed inputs:
 - Add cron blueprints and dashboard create/edit flow.
 - Add script-only/no-agent mode.
 - Disable recursive cron creation inside cron sessions.
+- Done in this branch: typed dashboard routes for cron job list/create/detail/edit/delete/run plus cron service status/install/start/stop/restart/remove.
 
 ### 6. Skills and learning loop need Hermes tool parity
 
@@ -259,12 +263,12 @@ P0: Fix recall behavior
 - Done in this branch: `SESSION_SEARCH_GUIDANCE`-style prompt guidance, browse/discover/read/scroll, and regression tests.
 
 P1: Make the dashboard a real control plane
-- Done in this branch: typed routes for auth status, health, config, env, and sessions while keeping old paths as compatibility shims.
-- Still needed: auth middleware + WS tickets, provider OAuth, cron, gateway, audio, self-update, ops, and profile-aware management.
+- Done in this branch: typed routes for auth status, health, config, env, sessions, cron, and gateway while keeping old paths as compatibility shims.
+- Still needed: auth middleware + WS tickets, provider OAuth, audio, self-update, ops, and profile-aware management.
 
 P2: Cron and gateway foundations
 - Structured cron store and `cronjob` tool.
-- Gateway status/start/stop/restart in dashboard.
+- Done in this branch: gateway status/start/stop/restart in dashboard.
 - Channel directory and home-target resolution.
 
 P3: Memory provider parity

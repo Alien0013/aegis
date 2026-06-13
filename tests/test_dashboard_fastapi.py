@@ -74,6 +74,9 @@ def test_fastapi_registers_live_and_pty_websockets(tmp_path, monkeypatch):
         "/api/env",
         "/api/sessions/search",
         "/api/sessions/stats",
+        "/api/cron/jobs",
+        "/api/cron/service",
+        "/api/gateway/status",
     ):
         assert routes[path] == "APIRoute"
 
@@ -168,6 +171,127 @@ def test_fastapi_sessions_control_plane(tmp_path, monkeypatch):
     deleted = asyncio.run(_request(app, "DELETE", f"/api/sessions/{session.id}", headers=headers))
     assert deleted.status_code == 200
     assert deleted.json()["ok"] is True
+
+
+def test_fastapi_cron_control_plane(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    import aegis.cron as cron
+    from aegis.daemon import ServiceResult
+
+    monkeypatch.setattr(
+        cron,
+        "run_job",
+        lambda _config, job, **_kw: {
+            "ok": True,
+            "job_id": job,
+            "run_id": "run_typed",
+            "session_id": f"cron:{job}",
+        },
+    )
+    monkeypatch.setattr("aegis.daemon.cron_service_status", lambda: "active (running, enabled)")
+    monkeypatch.setattr("aegis.daemon.control_cron_service", lambda action: ServiceResult(True, f"cron {action}"))
+
+    create = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/cron/jobs",
+        json={
+            "schedule": "every 2h",
+            "prompt": "ship a dashboard digest",
+            "deliver": "telegram:42",
+            "skills": ["summarize"],
+        },
+        headers=headers,
+    ))
+    assert create.status_code == 200
+    job_id = create.json()["id"]
+    assert create.json()["job"]["enabled"] is True
+
+    jobs = asyncio.run(_request(app, "GET", "/api/cron/jobs", headers=headers))
+    assert any(job["id"] == job_id for job in jobs.json()["jobs"])
+
+    patch = asyncio.run(_request(
+        app,
+        "PATCH",
+        f"/api/cron/jobs/{job_id}",
+        json={"enabled": False, "schedule": "every 3h"},
+        headers=headers,
+    ))
+    assert patch.status_code == 200
+    assert patch.json()["job"]["enabled"] is False
+    assert patch.json()["job"]["schedule"] == "every 3h"
+
+    run = asyncio.run(_request(app, "POST", f"/api/cron/jobs/{job_id}/run", headers=headers))
+    assert run.status_code == 200
+    assert run.json()["run_id"] == "run_typed"
+
+    service = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/cron/service",
+        json={"action": "restart"},
+        headers=headers,
+    ))
+    assert service.status_code == 200
+    assert service.json() == {"ok": True, "message": "cron restart"}
+
+    delete = asyncio.run(_request(app, "DELETE", f"/api/cron/jobs/{job_id}", headers=headers))
+    assert delete.status_code == 200
+    assert delete.json()["ok"] is True
+
+
+def test_fastapi_gateway_control_plane(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    from aegis.daemon import ServiceResult
+
+    monkeypatch.setattr("aegis.daemon.gateway_service_status", lambda: "inactive (dead, disabled)")
+    monkeypatch.setattr(
+        "aegis.daemon.install_gateway_service",
+        lambda _config, channels, enable_now=True: ServiceResult(True, f"installed {','.join(channels)}"),
+    )
+    monkeypatch.setattr(
+        "aegis.daemon.control_gateway_service",
+        lambda action: ServiceResult(True, f"gateway {action}"),
+    )
+
+    set_channels = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/gateway/channels",
+        json={"channels": "telegram,discord"},
+        headers=headers,
+    ))
+    assert set_channels.status_code == 200
+    assert set_channels.json()["gateway"]["channels"] == ["telegram", "discord"]
+
+    status = asyncio.run(_request(app, "GET", "/api/gateway/status", headers=headers))
+    assert status.status_code == 200
+    assert status.json()["configured"] is True
+    assert status.json()["service"] == "inactive (dead, disabled)"
+
+    install = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/gateway/service",
+        json={"action": "install", "channels": ["telegram"], "no_start": True},
+        headers=headers,
+    ))
+    assert install.status_code == 200
+    assert install.json() == {"ok": True, "message": "installed telegram"}
+
+    restart = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/gateway/service",
+        json={"action": "restart"},
+        headers=headers,
+    ))
+    assert restart.status_code == 200
+    assert restart.json() == {"ok": True, "message": "gateway restart"}
 
 
 def test_fastapi_websocket_auth_and_resize_protocol(tmp_path, monkeypatch):

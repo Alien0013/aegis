@@ -149,6 +149,29 @@ class CronStore:
         self._save(jobs)
         return hit
 
+    def update(self, job_id: str, **updates) -> CronJob | None:
+        jobs = self._load()
+        allowed = {"schedule", "prompt", "channel", "enabled", "script", "skills", "deliver"}
+        found: dict | None = None
+        now = time.time()
+        for j in jobs:
+            if j["id"] == job_id or j["id"].startswith(job_id):
+                for key, value in updates.items():
+                    if key not in allowed:
+                        continue
+                    if key == "skills" and value is None:
+                        continue
+                    j[key] = value
+                if "schedule" in updates:
+                    j["run_at"] = _parse_oneshot(str(j.get("schedule", "")), now) or 0.0
+                    j["last_run"] = 0.0
+                found = j
+                break
+        if found is None:
+            return None
+        self._save(jobs)
+        return CronJob(**found)
+
     def mark_run(self, job_id: str, when: float) -> None:
         jobs = self._load()
         for j in jobs:

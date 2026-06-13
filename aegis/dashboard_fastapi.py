@@ -244,6 +244,39 @@ def _prune_sessions(older_than_days: int) -> dict:
     return {"ok": True, "removed": removed, "count": len(removed), "cutoff": cutoff.isoformat(timespec="seconds")}
 
 
+def _cron_job_detail(job_id: str) -> dict:
+    for row in dash._dashboard_cron_jobs():
+        if row["id"] == job_id or row["id"].startswith(job_id):
+            return {"found": True, "job": row}
+    return {"found": False, "id": job_id, "error": "cron job not found"}
+
+
+def _service_result(result) -> dict:
+    return {"ok": bool(getattr(result, "ok", False)), "message": str(getattr(result, "message", ""))}
+
+
+def _gateway_status(config: Config) -> dict:
+    from .daemon import gateway_service_status
+    from .gateway.queue import DeliveryQueue
+
+    try:
+        pending = DeliveryQueue().pending_count()
+    except Exception:  # noqa: BLE001
+        pending = 0
+    channels = list(config.get("gateway.channels", []) or [])
+    return {
+        "channels": channels,
+        "configured": bool(channels),
+        "busy_mode": config.get("gateway.busy_mode", "queue"),
+        "session_mode": config.get("gateway.session_mode", "per_channel_peer"),
+        "require_mention": bool(config.get("gateway.require_mention", False)),
+        "mention_triggers": list(config.get("gateway.mention_triggers", []) or []),
+        "admins": list(config.get("gateway.admins", []) or []),
+        "queue_pending": pending,
+        "service": gateway_service_status(),
+    }
+
+
 def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
     if path == "/api/status":
         return dash._dashboard_status(config)
@@ -826,6 +859,145 @@ def create_app(config: Config) -> FastAPI:
 
         ok = SessionStore().delete(session_id)
         return JSONResponse({"ok": ok, "id": session_id}, status_code=200 if ok else 404)
+
+    @app.get("/api/cron/jobs")
+    async def api_cron_jobs(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse({"jobs": dash._dashboard_cron_jobs()})
+
+    @app.post("/api/cron/jobs")
+    async def api_cron_job_create(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        if not body.get("schedule") or not body.get("prompt"):
+            return JSONResponse({"ok": False, "error": "schedule and prompt are required"}, status_code=400)
+        from .cron import CronStore
+
+        skills = body.get("skills") or []
+        if isinstance(skills, str):
+            skills = [s.strip() for s in skills.split(",") if s.strip()]
+        job = CronStore().add(
+            str(body["schedule"]),
+            str(body["prompt"]),
+            channel=str(body.get("channel") or ""),
+            script=str(body.get("script") or ""),
+            skills=list(skills),
+            deliver=str(body.get("deliver") or ""),
+        )
+        return JSONResponse({"ok": True, "id": job.id, "job": _cron_job_detail(job.id)["job"]})
+
+    @app.get("/api/cron/jobs/{job_id}")
+    async def api_cron_job_detail(job_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        detail = _cron_job_detail(job_id)
+        return JSONResponse(detail, status_code=200 if detail.get("found") else 404)
+
+    @app.patch("/api/cron/jobs/{job_id}")
+    async def api_cron_job_patch(job_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        from .cron import CronStore
+
+        updates = {key: body[key] for key in (
+            "schedule", "prompt", "channel", "enabled", "script", "skills", "deliver"
+        ) if key in body}
+        job = CronStore().update(job_id, **updates)
+        if job is None:
+            return JSONResponse({"ok": False, "error": "cron job not found", "id": job_id}, status_code=404)
+        return JSONResponse({"ok": True, "id": job.id, "job": _cron_job_detail(job.id)["job"]})
+
+    @app.delete("/api/cron/jobs/{job_id}")
+    async def api_cron_job_delete(job_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from .cron import CronStore
+
+        ok = CronStore().remove(job_id)
+        return JSONResponse({"ok": ok, "id": job_id}, status_code=200 if ok else 404)
+
+    @app.post("/api/cron/jobs/{job_id}/run")
+    async def api_cron_job_run(job_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from .cron import CronStore, build_delivery_sink, run_job
+
+        store = CronStore()
+        if store.get(job_id) is None:
+            return JSONResponse({"ok": False, "error": "cron job not found", "id": job_id}, status_code=404)
+        sink = build_delivery_sink(config, verbose=False)
+        return JSONResponse(run_job(config, job_id, sink=sink, store=store, verbose=False))
+
+    @app.get("/api/cron/service")
+    async def api_cron_service_get(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from .daemon import cron_service_status
+
+        return JSONResponse({"service": "aegis-cron.service", "status": cron_service_status()})
+
+    @app.post("/api/cron/service")
+    async def api_cron_service_post(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        action = str(body.get("action") or "status")
+        from .daemon import control_cron_service, cron_service_status, install_cron_service, remove_cron_service
+
+        if action == "status":
+            return JSONResponse({"ok": True, "service": "aegis-cron.service", "status": cron_service_status()})
+        if action == "install":
+            return JSONResponse(_service_result(install_cron_service(
+                config,
+                enable_now=not bool(body.get("no_start", False)),
+            )))
+        if action == "remove":
+            return JSONResponse(_service_result(remove_cron_service()))
+        if action in {"start", "stop", "restart"}:
+            return JSONResponse(_service_result(control_cron_service(action)))
+        return JSONResponse({"ok": False, "error": f"unknown cron service action: {action}"}, status_code=400)
+
+    @app.get("/api/gateway/status")
+    async def api_gateway_status(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_gateway_status(config))
+
+    @app.post("/api/gateway/channels")
+    async def api_gateway_channels(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        channels = body.get("channels", [])
+        if isinstance(channels, str):
+            channels = [c.strip() for c in channels.split(",") if c.strip()]
+        if not isinstance(channels, list):
+            return JSONResponse({"ok": False, "error": "channels must be a list or comma string"}, status_code=400)
+        config.data.setdefault("gateway", {})["channels"] = [str(c).strip() for c in channels if str(c).strip()]
+        config.save()
+        return JSONResponse({"ok": True, "gateway": _gateway_status(config)})
+
+    @app.post("/api/gateway/service")
+    async def api_gateway_service(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        action = str(body.get("action") or "status")
+        from .daemon import (
+            control_gateway_service,
+            gateway_service_status,
+            install_gateway_service,
+            remove_gateway_service,
+        )
+
+        if action == "status":
+            return JSONResponse({"ok": True, "service": "aegis-gateway.service", "status": gateway_service_status()})
+        if action == "install":
+            channels = body.get("channels") or config.get("gateway.channels", []) or []
+            if isinstance(channels, str):
+                channels = [c.strip() for c in channels.split(",") if c.strip()]
+            return JSONResponse(_service_result(install_gateway_service(
+                config,
+                [str(c).strip() for c in channels if str(c).strip()],
+                enable_now=not bool(body.get("no_start", False)),
+            )))
+        if action == "remove":
+            return JSONResponse(_service_result(remove_gateway_service()))
+        if action in {"start", "stop", "restart"}:
+            return JSONResponse(_service_result(control_gateway_service(action)))
+        return JSONResponse({"ok": False, "error": f"unknown gateway service action: {action}"}, status_code=400)
 
     @app.get("/api/{path:path}")
     async def api_get(path: str, request: Request) -> JSONResponse:

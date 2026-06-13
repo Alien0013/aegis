@@ -224,6 +224,35 @@ def remove_cron_service() -> ServiceResult:
     return ServiceResult(True, "aegis-cron.service removed" if removed else "aegis-cron.service not installed")
 
 
+def gateway_service_status() -> str:
+    if not systemd_available():
+        return "user systemd unavailable"
+    return _unit_state("aegis-gateway.service")
+
+
+def control_gateway_service(action: str) -> ServiceResult:
+    if action not in {"start", "stop", "restart"}:
+        return ServiceResult(False, f"unknown gateway service action: {action}")
+    if shutil.which("systemctl") is None:
+        return ServiceResult(False, "systemctl not found")
+    res = _systemctl(action, "aegis-gateway.service")
+    ok = res.returncode == 0
+    return ServiceResult(ok, res.stdout.strip() or res.stderr.strip() or action)
+
+
+def remove_gateway_service() -> ServiceResult:
+    if shutil.which("systemctl"):
+        _systemctl("disable", "--now", "aegis-gateway.service")
+    try:
+        (_unit_dir() / "aegis-gateway.service").unlink()
+        removed = True
+    except FileNotFoundError:
+        removed = False
+    if shutil.which("systemctl"):
+        _systemctl("daemon-reload")
+    return ServiceResult(True, "aegis-gateway.service removed" if removed else "aegis-gateway.service not installed")
+
+
 def status() -> dict[str, str]:
     out: dict[str, str] = {}
     if not systemd_available():
