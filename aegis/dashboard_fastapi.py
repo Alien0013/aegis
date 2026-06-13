@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import os
 import queue
 import re
 import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -77,6 +79,169 @@ def _html_response(config: Config) -> HTMLResponse:
             samesite="lax",
         )
     return response
+
+
+def _config_schema(defaults: dict[str, Any] | None = None) -> dict:
+    from .config import DEFAULT_CONFIG
+
+    def flatten(node: Any, prefix: str = "") -> list[dict]:
+        if isinstance(node, dict):
+            rows: list[dict] = []
+            for key, value in sorted(node.items()):
+                path = f"{prefix}.{key}" if prefix else str(key)
+                if isinstance(value, dict):
+                    rows.extend(flatten(value, path))
+                else:
+                    rows.append({
+                        "path": path,
+                        "type": type(value).__name__ if value is not None else "null",
+                        "default": value,
+                    })
+            return rows
+        return []
+
+    base = copy.deepcopy(defaults or DEFAULT_CONFIG)
+    sections = {
+        key: {"type": "object", "fields": flatten(value, key)}
+        for key, value in sorted(base.items())
+        if isinstance(value, dict)
+    }
+    loose = [
+        {"path": key, "type": type(value).__name__ if value is not None else "null", "default": value}
+        for key, value in sorted(base.items())
+        if not isinstance(value, dict)
+    ]
+    return {"sections": sections, "fields": flatten(base), "loose": loose}
+
+
+def _redacted_value(value: str) -> dict:
+    if value == "":
+        return {"set": True, "preview": "", "length": 0}
+    return {"set": True, "preview": "****", "length": len(value)}
+
+
+def _env_file_values() -> dict[str, str]:
+    from . import config as cfg
+
+    values: dict[str, str] = {}
+    path = cfg.env_path()
+    if not path.exists():
+        return values
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        values[key.strip()] = val.strip().strip('"').strip("'")
+    return values
+
+
+def _env_list() -> dict:
+    from . import config as cfg
+
+    file_values = _env_file_values()
+    names = list(dict.fromkeys(dash._COMMON_KEYS + sorted(file_values)))  # noqa: SLF001
+    rows = []
+    for key in names:
+        in_file = key in file_values
+        live = os.environ.get(key)
+        value = file_values.get(key, live or "")
+        row = {"key": key, "source": "file" if in_file else ("environment" if live else "missing")}
+        row.update(_redacted_value(value) if in_file or live else {"set": False, "preview": "", "length": 0})
+        rows.append(row)
+    return {"env_path": str(cfg.env_path()), "keys": rows}
+
+
+def _delete_env_key(key: str) -> bool:
+    from . import config as cfg
+    from .util import atomic_write
+
+    key = key.strip()
+    if not key:
+        return False
+    path = cfg.env_path()
+    if not path.exists():
+        os.environ.pop(key, None)
+        return False
+    lines = path.read_text(encoding="utf-8").splitlines()
+    kept = [
+        line for line in lines
+        if not (line.strip().startswith(f"{key}=") or line.strip().startswith(f"{key} ="))
+    ]
+    changed = len(kept) != len(lines)
+    if changed:
+        atomic_write(path, "\n".join(kept) + ("\n" if kept else ""))
+    os.environ.pop(key, None)
+    return changed
+
+
+def _session_export(session) -> dict:
+    return {
+        "id": session.id,
+        "title": session.title,
+        "created_at": session.created_at,
+        "updated_at": session.updated_at,
+        "parent_id": session.parent_id,
+        "messages": [m.to_dict() for m in session.messages],
+        "todos": session.todos,
+        "meta": session.meta,
+    }
+
+
+def _session_stats() -> dict:
+    from .session import SessionStore
+
+    store = SessionStore()
+    rows = store.list(10000)
+    total_messages = 0
+    role_counts: dict[str, int] = {}
+    roots = 0
+    children = 0
+    for row in rows:
+        sess = store.load(row["id"])
+        if not sess:
+            continue
+        if sess.parent_id:
+            children += 1
+        else:
+            roots += 1
+        for message in sess.messages:
+            if message.role == "system":
+                continue
+            total_messages += 1
+            role_counts[message.role] = role_counts.get(message.role, 0) + 1
+    return {
+        "session_count": len(rows),
+        "root_sessions": roots,
+        "child_sessions": children,
+        "message_count": total_messages,
+        "role_counts": role_counts,
+    }
+
+
+def _parse_iso(value: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _prune_sessions(older_than_days: int) -> dict:
+    from .session import SessionStore
+
+    older_than_days = max(0, int(older_than_days))
+    cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
+    store = SessionStore()
+    removed: list[str] = []
+    for row in store.list(10000):
+        updated = _parse_iso(row.get("updated_at", ""))
+        if updated is None:
+            continue
+        if updated.tzinfo is None:
+            updated = updated.replace(tzinfo=timezone.utc)
+        if updated < cutoff and store.delete(row["id"]):
+            removed.append(row["id"])
+    return {"ok": True, "removed": removed, "count": len(removed), "cutoff": cutoff.isoformat(timespec="seconds")}
 
 
 def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
@@ -499,6 +664,168 @@ def create_app(config: Config) -> FastAPI:
             except Exception:  # noqa: BLE001
                 pass
             BUS.unsubscribe(sub)
+
+    @app.get("/api/health")
+    async def api_health(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse({"ok": True, "version": __version__})
+
+    @app.get("/api/auth/me")
+    async def api_auth_me(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse({
+            "authenticated": True,
+            "auth_required": bool(dash._dashboard_token(config)),
+            "providers": ["token"] if dash._dashboard_token(config) else ["loopback"],
+            "user": "local",
+        })
+
+    @app.get("/api/config")
+    async def api_config_get(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(dash._redacted_config(config))
+
+    @app.post("/api/config")
+    async def api_config_set(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        return JSONResponse(_api_post("/api/config", body, config, chat_runner))
+
+    @app.get("/api/config/defaults")
+    async def api_config_defaults(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from .config import DEFAULT_CONFIG
+
+        return JSONResponse(copy.deepcopy(DEFAULT_CONFIG))
+
+    @app.get("/api/config/schema")
+    async def api_config_schema(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_config_schema())
+
+    @app.get("/api/config/raw")
+    async def api_config_raw(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse({"config": copy.deepcopy(config.data)})
+
+    @app.put("/api/config/raw")
+    async def api_config_raw_put(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        raw = body.get("config", body) if isinstance(body, dict) else None
+        if not isinstance(raw, dict):
+            return JSONResponse({"ok": False, "error": "config object required"}, status_code=400)
+        config.data = copy.deepcopy(raw)
+        config.save()
+        return JSONResponse({"ok": True, "config": copy.deepcopy(config.data)})
+
+    @app.post("/api/config/import")
+    async def api_config_import(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        raw = body.get("config", body) if isinstance(body, dict) else None
+        if not isinstance(raw, dict):
+            return JSONResponse({"ok": False, "error": "config object required"}, status_code=400)
+        config.data = copy.deepcopy(raw)
+        config.save()
+        return JSONResponse({"ok": True, "config": dash._redacted_config(config)})
+
+    @app.get("/api/env")
+    async def api_env_list(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_env_list())
+
+    @app.post("/api/env")
+    async def api_env_set(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        key = str(body.get("key") or "").strip()
+        if not key:
+            return JSONResponse({"ok": False, "error": "missing key"}, status_code=400)
+        from .config import set_env_var
+
+        set_env_var(key, str(body.get("value") or ""))
+        return JSONResponse({"ok": True, "key": key})
+
+    @app.get("/api/env/{key}/reveal")
+    async def api_env_reveal(key: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        values = _env_file_values()
+        if key not in values and key not in os.environ:
+            return JSONResponse({"ok": False, "error": "key not set", "key": key}, status_code=404)
+        return JSONResponse({"ok": True, "key": key, "value": values.get(key, os.environ.get(key, ""))})
+
+    @app.delete("/api/env/{key}")
+    async def api_env_delete(key: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse({"ok": _delete_env_key(key), "key": key})
+
+    @app.get("/api/sessions")
+    async def api_sessions_list(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        limit = int(request.query_params.get("limit") or 100)
+        from .session import SessionStore
+
+        return JSONResponse(SessionStore().list(max(1, min(limit, 1000))))
+
+    @app.get("/api/sessions/stats")
+    async def api_sessions_stats(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_session_stats())
+
+    @app.get("/api/sessions/search")
+    async def api_sessions_search(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from .session import SessionStore
+
+        store = SessionStore()
+        query = str(request.query_params.get("query") or request.query_params.get("q") or "").strip()
+        limit = int(request.query_params.get("limit") or (3 if query else 10))
+        current_session_id = request.query_params.get("current_session_id")
+        if not query:
+            return JSONResponse(store.browse_sessions(limit=limit, current_session_id=current_session_id))
+        role_filter = request.query_params.getlist("role")
+        if not role_filter and request.query_params.get("role_filter"):
+            role_filter = [r.strip() for r in request.query_params["role_filter"].split(",") if r.strip()]
+        return JSONResponse(store.discover_sessions(
+            query,
+            limit=limit,
+            role_filter=role_filter or None,
+            sort=request.query_params.get("sort"),
+            current_session_id=current_session_id,
+        ))
+
+    @app.post("/api/sessions/prune")
+    async def api_sessions_prune(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        return JSONResponse(_prune_sessions(int(body.get("older_than_days", 30))))
+
+    @app.get("/api/sessions/{session_id}")
+    async def api_session_detail(session_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(dash._dashboard_session_detail(session_id, config))
+
+    @app.get("/api/sessions/{session_id}/export")
+    async def api_session_export(session_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from .session import SessionStore
+
+        session = SessionStore().load(session_id)
+        if session is None:
+            return JSONResponse({"ok": False, "error": "session not found", "id": session_id}, status_code=404)
+        return JSONResponse(
+            _session_export(session),
+            headers={"Content-Disposition": f'attachment; filename="{session_id}.json"'},
+        )
+
+    @app.delete("/api/sessions/{session_id}")
+    async def api_session_delete(session_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from .session import SessionStore
+
+        ok = SessionStore().delete(session_id)
+        return JSONResponse({"ok": ok, "id": session_id}, status_code=200 if ok else 404)
 
     @app.get("/api/{path:path}")
     async def api_get(path: str, request: Request) -> JSONResponse:

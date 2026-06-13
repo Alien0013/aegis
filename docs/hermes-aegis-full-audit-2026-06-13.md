@@ -20,6 +20,7 @@ Implementation update in this branch:
 - Added Hermes-style runtime guidance to call `session_search` before answering prior-session questions.
 - Expanded AEGIS `session_search` to browse, discover, read, and scroll past sessions.
 - Added external-memory `on_memory_write` mirroring hook and JSONL provider support.
+- Added typed FastAPI control-plane routes for auth status, health, config defaults/schema/raw/import, env list/set/reveal/delete, and sessions list/search/stats/detail/export/prune/delete.
 - Added regression tests for recall behavior and memory write mirroring.
 
 ## Executive Verdict
@@ -62,7 +63,7 @@ Status: improved, still partial.
 
 AEGIS has:
 - `aegis/dashboard_fastapi.py`: FastAPI app, static SPA serving, token/cookie auth, `/api/ws`, `/api/pty`, upload, chat stream, and generic `/api/{path}` dispatcher.
-- 13 FastAPI decorators, 36 explicit API dispatcher paths.
+- 33 FastAPI route decorators after this branch's typed control-plane route pass, plus compatibility fallback through 36 explicit API dispatcher paths.
 - `web/src/pages/TerminalPage.tsx`: xterm.js terminal to `/api/pty`.
 
 Hermes has:
@@ -71,8 +72,13 @@ Hermes has:
 - `dashboard_auth/` with login, OAuth/cookie auth, auth providers, logout, `/api/auth/me`, and WS tickets.
 - Profile-aware dashboard management and remote dashboard support.
 
+Implemented:
+- Added typed FastAPI routes for `/api/health`, `/api/auth/me`, config defaults/schema/raw/import, env list/set/reveal/delete, and sessions list/search/stats/detail/export/prune/delete.
+- Kept the generic dispatcher as a compatibility shim for the existing dashboard app.
+- Added FastAPI regression tests for route registration, config/env safety, session search/detail/export/delete, and auth status.
+
 Needed inputs:
-- Replace generic dispatcher with typed FastAPI routes for parity-critical surfaces.
+- Continue replacing the generic dispatcher with typed FastAPI routes for remaining parity-critical surfaces.
 - Add dashboard auth middleware/gate:
   - loopback no-op mode
   - non-loopback fail-closed auth
@@ -80,10 +86,9 @@ Needed inputs:
   - username/password or OAuth providers
   - WS ticket flow for `/api/ws` and `/api/pty`
 - Add missing route groups:
-  - config schema/defaults/raw/import/export
-  - env list/set/delete/reveal
+  - config export
   - provider OAuth start/submit/poll/revoke
-  - sessions search/stats/messages/export/patch/delete/prune
+  - sessions patch/rename/message-level APIs
   - cron jobs/runs/blueprints
   - gateway start/stop/restart/status
   - audio transcribe/TTS/voices
@@ -254,9 +259,8 @@ P0: Fix recall behavior
 - Done in this branch: `SESSION_SEARCH_GUIDANCE`-style prompt guidance, browse/discover/read/scroll, and regression tests.
 
 P1: Make the dashboard a real control plane
-- Auth middleware + WS tickets.
-- Typed routes for config/env/provider OAuth/sessions/cron/gateway.
-- Replace generic route dispatcher gradually, keeping old paths as compatibility shims.
+- Done in this branch: typed routes for auth status, health, config, env, and sessions while keeping old paths as compatibility shims.
+- Still needed: auth middleware + WS tickets, provider OAuth, cron, gateway, audio, self-update, ops, and profile-aware management.
 
 P2: Cron and gateway foundations
 - Structured cron store and `cronjob` tool.
