@@ -1046,7 +1046,47 @@ def test_provider_count_and_oauth():
     from aegis.providers import list_providers
     from aegis.providers import registry
     assert len(list_providers()) >= 20
-    assert all(registry.get_spec(p).oauth for p in ("anthropic", "openai", "codex", "openai-codex", "google"))
+    assert all(registry.get_spec(p).oauth for p in ("anthropic", "openai", "openai-codex", "google"))
+    assert registry.get_spec("codex").auth_scheme == "codex-backend"
+
+
+def test_wave3_oauth_catalog_scaffold_is_discoverable():
+    from aegis.config import Config
+    from aegis.providers import registry
+
+    cfg = Config.load()
+    catalog = {row["name"]: row for row in registry.oauth_catalog(cfg)}
+
+    for name in ("qwen", "minimax", "xai", "copilot"):
+        assert name in catalog
+        assert catalog[name]["oauth_status"] == "planned"
+
+    qwen_spec = registry.get_spec("qwen", cfg)
+    dashscope_spec = registry.get_spec("dashscope", cfg)
+    assert qwen_spec is not None
+    assert dashscope_spec is not None
+    assert qwen_spec.base_url == dashscope_spec.base_url
+    assert qwen_spec.env_vars == ["QWEN_API_KEY", "DASHSCOPE_API_KEY"]
+    assert qwen_spec.oauth is None
+
+    for name in ("qwen", "minimax", "xai"):
+        assert catalog[name]["known_provider"] is True
+        assert catalog[name]["catalog_only"] is False
+        assert catalog[name]["auth_methods"] == ["api_key"]
+        assert catalog[name]["oauth"] is False
+        assert "API_KEY" in " ".join(catalog[name]["env_vars"])
+
+    assert catalog["copilot"]["known_provider"] is False
+    assert catalog["copilot"]["catalog_only"] is True
+    assert catalog["copilot"]["auth_methods"] == ["oauth"]
+
+    report = registry.provider_report(cfg)
+    provider_rows = {row["name"]: row for row in report["provider_catalog"]}
+    assert provider_rows["qwen"]["oauth_status"] == "planned"
+    assert provider_rows["minimax"]["oauth_status"] == "planned"
+    assert provider_rows["xai"]["oauth_status"] == "planned"
+    assert "copilot" not in provider_rows
+    assert {row["name"] for row in report["oauth_catalog"]} >= {"qwen", "minimax", "xai", "copilot"}
 
 
 def test_provider_report_exposes_chain_routing_and_catalog():
@@ -1149,11 +1189,15 @@ def test_openai_codex_builds_oauth_responses_provider():
     assert provider.base_url == "https://chatgpt.com/backend-api/codex"
 
 
-def test_codex_builds_stateless_oauth_responses_provider():
+def test_codex_builds_stateless_backend_responses_provider(monkeypatch, tmp_path):
     from aegis.config import Config
     from aegis.providers import build_provider
     from aegis.providers.base import ApiMode
     from aegis.providers.responses import ResponsesTransport
+
+    codex_home = tmp_path / "codex"
+    codex_home.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
 
     cfg = Config.load()
     cfg.data["model"]["provider"] = "codex"
@@ -1162,7 +1206,7 @@ def test_codex_builds_stateless_oauth_responses_provider():
 
     assert provider.api_mode == ApiMode.RESPONSES
     assert isinstance(provider.transport, ResponsesTransport)
-    assert provider.auth.describe() == "oauth (openai-codex: not logged in)"
+    assert provider.auth.describe() == "codex-backend (run `codex login`)"
     assert provider.base_url == "https://chatgpt.com/backend-api/codex"
 
 
@@ -1398,7 +1442,12 @@ def test_fallback_provider_retries():
     from aegis.types import LLMResponse
 
     class Down:
-        context_length = 64_000; name = "d"; model = "m"; api_mode = None; auth = None
+        context_length = 64_000
+        name = "d"
+        model = "m"
+        api_mode = None
+        auth = None
+
         def describe(self): return "d"
         def complete(self, *a, **k): raise RuntimeError("boom")
 

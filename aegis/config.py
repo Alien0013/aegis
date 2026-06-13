@@ -387,6 +387,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "profiles": {},                       # per-platform agent overlay, e.g.
                                               #   telegram: {personality: tg, model: ..., provider: ...}
     },
+    # Per-provider key pools: {anthropic: {keys: [...], strategy: fill_first|round_robin|
+    #   least_used|random, cooldown_hours: 24}}. Keys here merge with the comma-split env var.
+    # On 402/quota a key is benched for cooldown_hours; on 429/401 the pool rotates. Shared
+    # process-wide so subagents reuse rotation state. See `aegis auth pool`.
     "credential_pools": {},
     "dashboard": {
         "frontend": "static",         # static | packaged

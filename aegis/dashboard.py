@@ -1610,6 +1610,11 @@ def _dashboard_cron_jobs() -> list[dict]:
             "prompt": job.prompt,
             "enabled": job.enabled,
             "one_shot": bool(job.run_at),
+            "no_agent": bool(job.no_agent),
+            "state": job.state,
+            "last_error": job.last_error,
+            "next_run": job.next_run,
+            "runs": list(job.runs or []),
             "last_run": job.last_run,
             "run_count": len(history),
             "last_run_id": history[0]["id"] if history else "",
@@ -1862,7 +1867,9 @@ def make_handler(config: Config):
             elif path.startswith("/assets/"):       # built React bundle (public static)
                 asset = _asset(path)
                 if asset is None:
-                    self.send_response(404); self.end_headers(); return
+                    self.send_response(404)
+                    self.end_headers()
+                    return
                 data, ctype = asset
                 self.send_response(200)
                 self.send_header("Content-Type", ctype)
@@ -1872,7 +1879,9 @@ def make_handler(config: Config):
             elif path in {"/favicon.ico"} or path.startswith(("/fonts/", "/fonts-terminal/")):
                 asset = _dist_file(path)
                 if asset is None:
-                    self.send_response(404); self.end_headers(); return
+                    self.send_response(404)
+                    self.end_headers()
+                    return
                 data, ctype = asset
                 self.send_response(200)
                 self.send_header("Content-Type", ctype)
@@ -2076,7 +2085,19 @@ def make_handler(config: Config):
                 cs = CronStore()
                 act = body.get("action")
                 if act == "add" and body.get("schedule") and body.get("prompt"):
-                    j = cs.add(body["schedule"], body["prompt"], body.get("channel", ""))
+                    skills = body.get("skills") or []
+                    if isinstance(skills, str):
+                        skills = [s.strip() for s in skills.split(",") if s.strip()]
+                    j = cs.add(
+                        body["schedule"],
+                        body["prompt"],
+                        body.get("channel", ""),
+                        script=str(body.get("script") or ""),
+                        skills=list(skills),
+                        deliver=str(body.get("deliver") or ""),
+                        name=str(body.get("name") or ""),
+                        no_agent=bool(body.get("no_agent", False)),
+                    )
                     return self._json({"id": j.id})
                 if act == "remove" and body.get("id"):
                     return self._json({"ok": cs.remove(body["id"])})

@@ -154,10 +154,10 @@ class MCPClient:
         self._initialized = True
         return self
 
-    def list_tools(self) -> list[dict]:
+    def list_tools(self, *, apply_filter: bool = True) -> list[dict]:
         resp = self._request("tools/list", {})
         tools = (resp or {}).get("result", {}).get("tools", [])
-        return _filter_tools(tools, self.tool_filter)
+        return _filter_tools(tools, self.tool_filter) if apply_filter else tools
 
     def list_resources(self) -> list[dict]:
         resp = self._request("resources/list", {})
@@ -407,20 +407,108 @@ def install_from_catalog(config, name: str) -> dict:
     return spec
 
 
+def probe_server(config, name: str) -> dict:
+    """Connect to a configured MCP server and return a structured inventory."""
+    spec = _server_configs(config).get(name)
+    if not isinstance(spec, dict) or not (spec.get("command") or spec.get("url")):
+        raise KeyError(name)
+    client = _client_from_spec(name, spec)
+    try:
+        client.connect()
+        all_tools = client.list_tools(apply_filter=False)
+        tools = _filter_tools(all_tools, spec.get("tool_filter"))
+        resources, resource_error = _optional_capability(client.list_resources)
+        prompts, prompt_error = _optional_capability(client.list_prompts)
+        return {
+            "ok": True,
+            "name": name,
+            "transport": "http" if spec.get("url") else "stdio",
+            "tools": tools,
+            "all_tools": all_tools,
+            "resources": resources,
+            "prompts": prompts,
+            "capability_errors": {
+                k: v for k, v in {
+                    "resources": resource_error,
+                    "prompts": prompt_error,
+                }.items() if v
+            },
+        }
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "name": name, "error": str(e), "tools": [],
+                "all_tools": [], "resources": [], "prompts": []}
+    finally:
+        client.close()
+
+
+def tool_checklist(config, name: str) -> dict:
+    """Return discovered MCP tools with their current selected/surfaced state."""
+    probe = probe_server(config, name)
+    if not probe.get("ok"):
+        return {**probe, "items": []}
+    selected = {tool.get("name", "") for tool in probe.get("tools", [])}
+    items = []
+    for tool in probe.get("all_tools", []):
+        tool_name = str(tool.get("name", ""))
+        if not tool_name:
+            continue
+        items.append({
+            "name": tool_name,
+            "description": str(tool.get("description", "")),
+            "selected": tool_name in selected,
+        })
+    return {**probe, "items": items}
+
+
+def save_tool_checklist(config, name: str, include: list[str]) -> dict:
+    """Persist a selected MCP tool checklist as ``tool_filter.include``."""
+    servers = dict(config.get("mcp.servers", {}) or {})
+    spec = servers.get(name)
+    if not isinstance(spec, dict):
+        raise KeyError(name)
+    spec = dict(spec)
+    tool_filter = dict(spec.get("tool_filter") or {})
+    tool_filter["include"] = _dedupe_strings(include)
+    spec["tool_filter"] = tool_filter
+    servers[name] = spec
+    config.data.setdefault("mcp", {})["servers"] = servers
+    config.save()
+    return spec
+
+
 def _filter_tools(tools: list[dict], tool_filter: dict | None) -> list[dict]:
     filt = tool_filter or {}
+    has_include = "include" in filt and filt.get("include") is not None
     include = set(filt.get("include") or [])
     exclude = set(filt.get("exclude") or [])
-    if not include and not exclude:
+    if not has_include and not exclude:
         return tools
     out = []
     for tool in tools:
         name = tool.get("name", "")
-        if include and name not in include:
+        if has_include and name not in include:
             continue
         if exclude and name in exclude:
             continue
         out.append(tool)
+    return out
+
+
+def _optional_capability(fn) -> tuple[list[dict], str]:
+    try:
+        return fn(), ""
+    except Exception as e:  # noqa: BLE001
+        return [], str(e)
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value).strip()
+        if text and text not in seen:
+            out.append(text)
+            seen.add(text)
     return out
 
 
@@ -472,12 +560,16 @@ def build_manager(config) -> MCPManager:
         if not isinstance(spec, dict) or not (spec.get("command") or spec.get("url")):
             # skip malformed entries instead of spamming "no command or url configured"
             continue
-        mgr.add(MCPClient(
-            name, command=spec.get("command"), args=spec.get("args"),
-            env=spec.get("env"), url=spec.get("url"), headers=spec.get("headers"),
-            cwd=spec.get("cwd"), tool_filter=spec.get("tool_filter"),
-        ))
+        mgr.add(_client_from_spec(name, spec))
     return mgr
+
+
+def _client_from_spec(name: str, spec: dict) -> MCPClient:
+    return MCPClient(
+        name, command=spec.get("command"), args=spec.get("args"),
+        env=spec.get("env"), url=spec.get("url"), headers=spec.get("headers"),
+        cwd=spec.get("cwd"), tool_filter=spec.get("tool_filter"),
+    )
 
 
 def mcp_tools_from_config(config) -> tuple[list[Tool], MCPManager]:

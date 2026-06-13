@@ -355,17 +355,24 @@ class AcpServer:
             self._update(sid, {"sessionUpdate": "agent_message_chunk",
                                "content": {"type": "text", "text": text}})
 
-    def _request_permission(self, sid: str, description: str) -> bool:
+    def _request_permission(self, sid: str, description: str) -> bool | str:
         """Ask the editor to approve a tool action (runs on the prompt worker)."""
         result = self._rpc_call("session/request_permission", {
             "sessionId": sid,
             "toolCall": {"toolCallId": f"perm-{self._req_id}", "title": description or "tool action",
                          "kind": "other", "status": "pending"},
-            "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+            "options": [{"optionId": "allow", "name": "Allow once", "kind": "allow_once"},
+                        {"optionId": "allow_session", "name": "Allow this session",
+                         "kind": "allow_session"},
                         {"optionId": "reject", "name": "Reject", "kind": "reject_once"}],
         })
         outcome = (result or {}).get("outcome") or {}
-        return outcome.get("outcome") == "selected" and outcome.get("optionId") == "allow"
+        if outcome.get("outcome") != "selected":
+            return False
+        option_id = outcome.get("optionId")
+        if option_id == "allow_session":
+            return "always"
+        return option_id == "allow"
 
     def _send_tool_call(self, sid: str, entry: _SessionEntry, event: dict[str, Any],
                         *, status: str) -> None:

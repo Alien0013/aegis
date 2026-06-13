@@ -163,9 +163,13 @@ def cmd_model(args, config: Config) -> int:
 # --------------------------------------------------------------------------- #
 def cmd_auth(args, config: Config) -> int:
     from ..providers import registry
-    from ..providers.auth import AuthError, AuthStore, CodexCliAuth, OAuthAuth
+    from ..providers.auth import AuthError, AuthStore, CodexBackendAuth, CodexCliAuth, OAuthAuth
 
     store = AuthStore()
+    if args.action == "pool":
+        from .. import credentials
+        args.name = args.provider
+        return credentials.cmd_auth_pool(args, config)
     if args.action == "status":
         _print("Provider auth status:")
         for name in registry.list_providers():
@@ -178,7 +182,12 @@ def cmd_auth(args, config: Config) -> int:
                 ).removesuffix(")")
             else:
                 oauth = "—"
-            codex = CodexCliAuth().describe() if spec.auth_scheme == "codex-cli" else "—"
+            if spec.auth_scheme == "codex-cli":
+                codex = CodexCliAuth().describe()
+            elif spec.auth_scheme == "codex-backend":
+                codex = CodexBackendAuth().describe()
+            else:
+                codex = "—"
             _print(f"  {name:<12} api-key: {api:<5} oauth: {oauth:<30} codex: {codex}")
         return 0
     if args.action == "login":
@@ -422,7 +431,8 @@ def cmd_cron(args, config: Config) -> int:
         skills = [s.strip() for s in (getattr(args, "skills", "") or "").split(",") if s.strip()]
         job = store.add(prompt=prompt, schedule=args.schedule,
                         script=getattr(args, "script", "") or "", skills=skills,
-                        deliver=getattr(args, "deliver", "") or "")
+                        deliver=getattr(args, "deliver", "") or "",
+                        no_agent=bool(getattr(args, "no_agent", False)))
         _print(f"added cron {job.id}: [{job.schedule}] {job.prompt[:60]}")
         return 0
     if args.action == "rm":
@@ -1251,7 +1261,7 @@ def build_parser() -> argparse.ArgumentParser:
     m.set_defaults(func=cmd_model)
 
     a = sub.add_parser("auth", help="API-key / OAuth authentication")
-    a.add_argument("action", choices=["status", "login", "logout", "import-claude"])
+    a.add_argument("action", choices=["status", "login", "logout", "import-claude", "pool"])
     a.add_argument("provider", nargs="?")
     a.add_argument("--manual", action="store_true", help="manual code-paste OAuth flow")
     a.set_defaults(func=cmd_auth)
@@ -1285,7 +1295,9 @@ def build_parser() -> argparse.ArgumentParser:
     st.set_defaults(func=cmd_status)
 
     ba = sub.add_parser("batch", help="run a prompt per line of a file (or - for stdin)")
-    ba.add_argument("file"); ba.add_argument("-m", "--model"); ba.add_argument("--provider")
+    ba.add_argument("file")
+    ba.add_argument("-m", "--model")
+    ba.add_argument("--provider")
     ba.set_defaults(func=cmd_batch)
 
     cm = sub.add_parser("completion", help="output shell completion script")
@@ -1304,7 +1316,8 @@ def build_parser() -> argparse.ArgumentParser:
     from .. import webhook as _webhook
 
     bk = sub.add_parser("backup", help="back up ~/.aegis to a zip")
-    bk.add_argument("--out"); bk.add_argument("--quick", action="store_true")
+    bk.add_argument("--out")
+    bk.add_argument("--quick", action="store_true")
     bk.set_defaults(func=_backup.cmd_backup)
 
     im = sub.add_parser("import", help="restore a backup zip")
@@ -1318,7 +1331,8 @@ def build_parser() -> argparse.ArgumentParser:
     snap.set_defaults(func=_backup.cmd_snapshot)
 
     ins = sub.add_parser("insights", help="usage analytics over your history")
-    ins.add_argument("--days", type=int, default=30); ins.add_argument("--source")
+    ins.add_argument("--days", type=int, default=30)
+    ins.add_argument("--source")
     ins.add_argument("--json", action="store_true")
     ins.set_defaults(func=_insights.cmd_insights)
 
@@ -1335,8 +1349,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     wh = sub.add_parser("webhook", help="event webhooks that trigger the agent")
     wh.add_argument("action", nargs="?", choices=["list", "add", "remove", "serve"], default="list")
-    wh.add_argument("name", nargs="?"); wh.add_argument("prompt", nargs="*")
-    wh.add_argument("--secret"); wh.add_argument("--host"); wh.add_argument("--port", type=int)
+    wh.add_argument("name", nargs="?")
+    wh.add_argument("prompt", nargs="*")
+    wh.add_argument("--secret")
+    wh.add_argument("--host")
+    wh.add_argument("--port", type=int)
     wh.add_argument("--deliver", help="comma-sep platform:chat_id targets, e.g. telegram:42")
     wh.add_argument("--events", help="comma-sep X-GitHub-Event allowlist, e.g. pull_request,push")
     wh.add_argument("--skills", help="comma-sep skills to load before running")
@@ -1352,8 +1369,12 @@ def build_parser() -> argparse.ArgumentParser:
                     choices=["create", "list", "show", "claim", "complete", "assign", "dispatch",
                              "decompose", "run"],
                     default="list")
-    kb.add_argument("title", nargs="?"); kb.add_argument("--id"); kb.add_argument("--body")
-    kb.add_argument("--priority", type=int); kb.add_argument("--status"); kb.add_argument("--assignee")
+    kb.add_argument("title", nargs="?")
+    kb.add_argument("--id")
+    kb.add_argument("--body")
+    kb.add_argument("--priority", type=int)
+    kb.add_argument("--status")
+    kb.add_argument("--assignee")
     kb.add_argument("--worker")
     kb.set_defaults(func=_kanban.cmd_kanban)
 
@@ -1371,7 +1392,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     for _name in ("dashboard", "ui"):       # `aegis ui` is the friendly alias
         db = sub.add_parser(_name, help="open the AEGIS control panel in your browser")
-        db.add_argument("--host"); db.add_argument("--port", type=int)
+        db.add_argument("--host")
+        db.add_argument("--port", type=int)
         db.add_argument("--no-open", action="store_true", help="don't auto-open the browser")
         db.set_defaults(func=_dash.cmd_dashboard)
 
@@ -1402,7 +1424,8 @@ def build_parser() -> argparse.ArgumentParser:
     from ..gateway.pairing import cmd_pairing as _cmd_pairing
     pr = sub.add_parser("pairing", help="approve/revoke gateway users")
     pr.add_argument("action", nargs="?", choices=["list", "approve", "revoke"], default="list")
-    pr.add_argument("platform", nargs="?"); pr.add_argument("code", nargs="?")
+    pr.add_argument("platform", nargs="?")
+    pr.add_argument("code", nargs="?")
     pr.set_defaults(func=_cmd_pairing)
 
     ck = sub.add_parser("checkpoints", help="list/diff/rollback/clear file checkpoints")
@@ -1501,6 +1524,7 @@ def build_parser() -> argparse.ArgumentParser:
     cr.add_argument("--script", help="Python file to run first; its stdout is prepended as context")
     cr.add_argument("--skills", help="comma-sep skills to load before running")
     cr.add_argument("--deliver", help="comma-sep platform:chat_id targets (supersedes single channel)")
+    cr.add_argument("--no-agent", action="store_true", help="run script-only and deliver stdout")
     cr.add_argument("--no-start", action="store_true", help="write service unit but do not start it")
     cr.set_defaults(func=cmd_cron)
 

@@ -241,3 +241,75 @@ def test_cron_script_context_in_prompt(monkeypatch, tmp_path):
     s.add("every 1s", "summarize the context", script=str(script))
     tick(None, sink=lambda ch, txt: None, store=s, verbose=False)
     assert "ARXIV: 3 new papers" in seen["prompt"] and "# Context" in seen["prompt"]
+
+
+def test_cron_no_agent_script_delivers_stdout(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.agent.agent as am
+    from aegis.cron import CronStore, tick
+
+    def fail_agent(*_args, **_kwargs):
+        raise AssertionError("no-agent cron should not create an agent")
+
+    monkeypatch.setattr(am.Agent, "create", staticmethod(fail_agent))
+    script = tmp_path / "status.py"
+    script.write_text("print('status: green')")
+    store = CronStore()
+    job = store.add("every 1s", "ignored", script=str(script), deliver="telegram:1",
+                    no_agent=True)
+    delivered = []
+
+    assert tick(None, sink=lambda ch, txt: delivered.append((ch, txt)),
+                store=store, verbose=False) == 1
+
+    assert delivered == [("telegram:1", "status: green")]
+    saved = CronStore().get(job.id)
+    assert saved.state == "ok"
+    assert saved.last_error == ""
+    assert saved.runs[-1]["ok"] is True
+    assert saved.runs[-1]["chars"] == len("status: green")
+    assert saved.next_run > saved.last_run
+
+
+def test_cron_records_failed_no_agent_script(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.cron import CronStore, run_job
+
+    script = tmp_path / "fail.py"
+    script.write_text("import sys\nprint('before fail')\nsys.stderr.write('boom')\nsys.exit(7)")
+    store = CronStore()
+    job = store.add("every 1h", "ignored", script=str(script), no_agent=True)
+
+    result = run_job(None, job.id, store=store, verbose=False)
+
+    assert result["ok"] is False
+    saved = CronStore().get(job.id)
+    assert saved.state == "error"
+    assert "script exited 7" in saved.last_error
+    assert saved.runs[-1]["ok"] is False
+
+
+def test_cron_missed_next_run_recovers(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.cron import CronStore, is_due
+
+    store = CronStore()
+    job = store.add("0 12 * * *", "daily")
+    store.update(job.id, enabled=True)
+    raw = store._load()
+    raw[0]["next_run"] = 100.0
+    raw[0]["last_run"] = 0.0
+    store._save(raw)
+
+    assert is_due(CronStore().get(job.id), 101.0)
+
+
+def test_cron_recursive_tick_guard(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.cron as cron
+
+    cron._TICK_LOCAL.active = True
+    try:
+        assert cron.tick(None, store=cron.CronStore(), verbose=False) == 0
+    finally:
+        cron._TICK_LOCAL.active = False

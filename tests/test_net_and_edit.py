@@ -345,17 +345,21 @@ def test_telegram_inplace_status(monkeypatch):
     a._finish("42", 555, "short answer")                       # edited in place
     assert [m for m, _ in calls] == ["editMessageText"] and calls[0][1]["message_id"] == 555
 
-    calls.clear(); a._finish("42", 555, "see\nMEDIA:/tmp/x.png")   # media -> drop bubble + deliver
+    calls.clear()
+    a._finish("42", 555, "see\nMEDIA:/tmp/x.png")   # media -> drop bubble + deliver
     assert "deleteMessage" in [m for m, _ in calls] and "editMessageText" not in [m for m, _ in calls]
 
-    calls.clear(); a._finish("42", 555, "L" * 5000)            # long -> drop + chunk
+    calls.clear()
+    a._finish("42", 555, "L" * 5000)            # long -> drop + chunk
     ms = [m for m, _ in calls]
     assert ms[0] == "deleteMessage" and ms.count("sendMessage") >= 2
 
-    calls.clear(); a._finish("42", 555, "")                    # empty -> just drop bubble
+    calls.clear()
+    a._finish("42", 555, "")                    # empty -> just drop bubble
     assert [m for m, _ in calls] == ["deleteMessage"]
 
-    calls.clear(); a._finish("42", 555, "| A | B |\n|---|---|\n| 1 | 2 |")   # table tableified on edit
+    calls.clear()
+    a._finish("42", 555, "| A | B |\n|---|---|\n| 1 | 2 |")   # table tableified on edit
     assert calls[0][0] == "editMessageText" and "•" in calls[0][1]["text"] and "|" not in calls[0][1]["text"]
 
 
@@ -455,7 +459,8 @@ def test_acp_request_permission():
     ok, req = run("allow")
     assert ok is True
     assert req["method"] == "session/request_permission"
-    assert [o["optionId"] for o in req["params"]["options"]] == ["allow", "reject"]
+    assert [o["optionId"] for o in req["params"]["options"]] == ["allow", "allow_session", "reject"]
+    assert run("allow_session")[0] == "always"
     assert run("reject")[0] is False
     assert run("cancel")[0] is False         # client cancelled while we waited -> deny
 
@@ -1238,21 +1243,26 @@ def test_permission_override_and_cron_approval(tmp_path, monkeypatch):
 
     class A:
         def __init__(self):
-            c = Config.load(); c.data["tools"]["exec_mode"] = "ask"   # base = ask, so override shows
+            c = Config.load()
+            c.data["tools"]["exec_mode"] = "ask"   # base = ask, so override shows
             self.permissions = PermissionEngine(c)
         def run(self, p):
             seen["mode"] = self.permissions.mode
             return type("R", (), {"content": "ok"})()
     monkeypatch.setattr(am.Agent, "create", staticmethod(lambda cfg, session=None: A()))
 
-    s = CronStore(); s.add("every 1s", "do")
-    cfg = Config.load(); cfg.data["tools"]["exec_mode"] = "ask"
+    s = CronStore()
+    s.add("every 1s", "do")
+    cfg = Config.load()
+    cfg.data["tools"]["exec_mode"] = "ask"
     cfg.data.setdefault("cron", {})["approval"] = "approve"   # in-memory
     tick(cfg, store=s, verbose=False)
     assert seen["mode"] == ExecMode.AUTO          # approve -> cron overrides to auto
 
-    s2 = CronStore(); s2.add("every 1s", "do2")
-    cfg2 = Config.load(); cfg2.data["tools"]["exec_mode"] = "ask"
+    s2 = CronStore()
+    s2.add("every 1s", "do2")
+    cfg2 = Config.load()
+    cfg2.data["tools"]["exec_mode"] = "ask"
     cfg2.data.setdefault("cron", {})["approval"] = "deny"
     tick(cfg2, store=s2, verbose=False)
     assert seen["mode"] == ExecMode.ASK           # deny -> no override, inherits config (ask)

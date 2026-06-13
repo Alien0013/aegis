@@ -144,11 +144,16 @@ class Provider:
                 import random
                 import time
                 from .fallback import classify_provider_error, recovery_action
-                action = recovery_action(classify_provider_error(e))
+                kind = classify_provider_error(e)
+                action = recovery_action(kind)
                 if action in ("abort", "compress") or attempts >= 4:
                     raise
-                if action == "rotate" and hasattr(self.auth, "rotate"):
-                    self.auth.rotate()                     # bad key / quota -> next credential
+                if action == "rotate":
+                    # credential-pool policy: billing -> cooldown+rotate, rate_limit/auth -> rotate
+                    if hasattr(self.auth, "report"):
+                        self.auth.report(kind)
+                    elif hasattr(self.auth, "rotate"):
+                        self.auth.rotate()
                 time.sleep(min(30.0, (2 ** attempts) * 1.5) + random.random())
                 attempts += 1
                 continue

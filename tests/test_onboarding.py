@@ -44,14 +44,11 @@ def test_onboarding_rejects_key_as_provider(monkeypatch):
     assert not (workspace / "USER.md").exists()
 
 
-def test_onboarding_can_select_oauth(monkeypatch):
+def test_onboarding_can_select_codex_login(monkeypatch):
     from aegis.config import Config
     from aegis.onboarding import run_onboarding
 
-    monkeypatch.setattr(
-        "aegis.onboarding._oauth_login",
-        lambda _provider, _spec, _out: True,
-    )
+    monkeypatch.setattr("aegis.onboarding._ensure_codex_cli_login", lambda *_args: True)
     cfg = Config.load()
     answers = iter([
         "y",           # security notice
@@ -77,16 +74,16 @@ def test_onboarding_can_select_oauth(monkeypatch):
     assert Config.load().get("model.provider") == "codex"
     text = "\n".join(out)
     assert "Choose authentication method" in text
-    assert "ChatGPT subscription via Codex OAuth" in text
+    assert "ChatGPT subscription via Codex login" in text
     assert "Auth:            codex" in text
 
 
-def test_onboarding_codex_oauth_failure_aborts_setup(monkeypatch):
+def test_onboarding_codex_login_failure_aborts_setup(monkeypatch):
     from aegis.config import Config
     from aegis.onboarding import run_onboarding
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.setattr("aegis.onboarding._oauth_login", lambda *_args: False)
+    monkeypatch.setattr("aegis.onboarding._ensure_codex_cli_login", lambda *_args: False)
     cfg = Config.load()
     answers = iter([
         "y",           # security notice
@@ -117,11 +114,11 @@ def test_onboarding_codex_oauth_failure_aborts_setup(monkeypatch):
     assert Config.load().get("model.provider") == "anthropic"
 
 
-def test_onboarding_codex_oauth_failure_does_not_probe(monkeypatch):
+def test_onboarding_codex_login_failure_does_not_probe(monkeypatch):
     from aegis.config import Config
     from aegis.onboarding import run_onboarding
 
-    monkeypatch.setattr("aegis.onboarding._oauth_login", lambda *_args: False)
+    monkeypatch.setattr("aegis.onboarding._ensure_codex_cli_login", lambda *_args: False)
 
     def fail_probe(*_args):
         raise AssertionError("probe should not run without usable credentials")
@@ -328,14 +325,18 @@ def test_noninteractive_provider_uses_provider_default_model(capsys):
     assert Config.load().get("model.default") == default
 
 
-def test_noninteractive_codex_auth_uses_stateless_provider(capsys):
+def test_noninteractive_codex_auth_uses_stateless_provider(monkeypatch, tmp_path, capsys):
     import json
 
     from aegis.cli.main import main
     from aegis.config import Config
-    from aegis.providers.auth import AuthStore
 
-    AuthStore().save("openai-codex", {"access_token": "token", "token_type": "Bearer"})
+    codex_home = tmp_path / "codex"
+    codex_home.mkdir()
+    (codex_home / "auth.json").write_text(
+        json.dumps({"tokens": {"access_token": "token", "account_id": "acct"}})
+    )
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
 
     rc = main([
         "setup",
@@ -498,6 +499,39 @@ def test_onboarding_can_select_a_provider_model(monkeypatch):
     from aegis.providers.registry import get_spec
     assert rc == 0
     assert Config.load().get("model.default") == get_spec("openai").default_model
+
+
+def test_onboarding_can_select_qwen_wave3_provider(monkeypatch):
+    from aegis.config import Config
+    from aegis.onboarding import run_onboarding
+
+    cfg = Config.load()
+    answers = iter([
+        "y",           # security notice
+        "qwen",        # Wave 3 provider option
+        "skip",        # skip API key for now
+        "",            # model default
+        "",            # exec mode default
+        "6",           # skip web setup
+        "",            # no messaging integrations
+    ])
+    out: list[str] = []
+
+    rc = run_onboarding(
+        cfg,
+        quick=True,
+        probe=False,
+        services=False,
+        input_func=lambda _prompt: next(answers),
+        output_func=out.append,
+    )
+
+    assert rc == 0
+    assert Config.load().get("model.provider") == "qwen"
+    assert Config.load().get("model.default") == "qwen-max"
+    text = "\n".join(out)
+    assert "Qwen" in text
+    assert "API key (QWEN_API_KEY)" in text
 
 
 def test_openai_oauth_login_scope_avoids_auth_page_rejection():

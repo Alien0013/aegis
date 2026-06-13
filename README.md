@@ -8,7 +8,7 @@ Any model · any channel · runs on your machine · learns as it goes — in ~35
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="python">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
   <img src="https://img.shields.io/badge/tests-608%20passing-brightgreen" alt="tests">
-  <img src="https://img.shields.io/badge/providers-28-blueviolet" alt="providers">
+  <img src="https://img.shields.io/badge/providers-29-blueviolet" alt="providers">
   <img src="https://img.shields.io/badge/tools-37-blueviolet" alt="tools">
   <img src="https://img.shields.io/badge/skills-29-orange" alt="skills">
   <img src="https://img.shields.io/badge/UI-React%20%2B%20Vite-06b6d4" alt="react">
@@ -47,7 +47,7 @@ aegis            # start chatting   ·   aegis ui   # …or a clickable browser 
 |  | What it means |
 |---|---|
 | 🪶 **Tiny, auditable core** | ~35k lines across ~95 modules — small enough to read and trust end to end. Full-platform capability, none of the sprawl. |
-| 🔌 **Truly model-agnostic** | **28 provider presets** (Claude, GPT, Gemini, Llama, DeepSeek, Qwen, Grok, local Ollama…) behind one interface, with **API-key *and* OAuth** auth, fallback chains, credential pools, and per-prompt routing. |
+| 🔌 **Truly model-agnostic** | **29 provider presets** (Claude, GPT, Gemini, Llama, DeepSeek, Qwen, Grok, local Ollama…) behind one interface, with **API-key *and* OAuth** auth, fallback chains, credential pools, and per-prompt routing. |
 | 🧠 **It actually learns** | **Autonomous memory** — saves your preferences, facts, and corrections as it works (no asking). Plus a background self-improvement loop that reviews finished sessions, auto-applies memory, and proposes new skills (secret-redacted; skills human-gated by default, fully autonomous with one flag). FTS5 cross-session recall. |
 | 🛡️ **Safe by default** | Permission cascade with a **hardline blocklist** (refuses `rm -rf /` even in yolo), pre-exec scanning, **fail-closed** docker/ssh/singularity/modal sandboxes, and untrusted-tool-result wrapping against prompt injection. |
 | 📡 **Everywhere you are** | One agent serving CLI, Telegram, Discord, Slack, Signal, Matrix, Email, and webhooks — with voice-memo transcription and a durable, retrying delivery queue. |
@@ -211,7 +211,9 @@ aegis setup                                   # guided onboarding (re-runnable)
 # …or configure directly:
 aegis config set ANTHROPIC_API_KEY sk-ant-…   # Claude (API key)
 aegis config set OPENAI_API_KEY    sk-…       # OpenAI (API key)
-aegis auth login codex && aegis model set codex gpt-5.5  # ChatGPT subscription
+aegis config set QWEN_API_KEY      sk-…       # Qwen / DashScope-compatible API key
+codex login && aegis model set codex gpt-5.5  # ChatGPT subscription
+aegis model set qwen qwen-max                  # Qwen API-compatible provider
 aegis model set ollama llama3.1               # …or fully local, no key
 
 aegis                                         # interactive REPL (streaming + slash cmds)
@@ -235,11 +237,12 @@ print(result.text, result.session_id, result.trace_id)
 ## 🧩 Features
 
 ### Providers & auth
-28 presets — `codex`, `codex-app-server`, `anthropic`, `openai`, `google`, `openrouter`, `groq`, `deepseek`,
-`xai`, `mistral`, `together`, `ollama`, `lmstudio`, `vllm`, … plus any
+29 presets — `codex`, `codex-app-server`, `anthropic`, `openai`, `google`, `openrouter`, `groq`, `deepseek`,
+`qwen`, `xai`, `minimax`, `mistral`, `together`, `ollama`, `lmstudio`, `vllm`, … plus any
 OpenAI-compatible endpoint via `model.base_url`. Auth resolves **base_url → API key →
 OAuth** (API keys win because some OAuth tokens are identity-only). OAuth is full PKCE S256
 with localhost-callback **and** manual-paste, auto-refresh, and `auth.json` at `0600`.
+Qwen, MiniMax, and xAI OAuth are catalog scaffolds for now; they run with API keys.
 → [docs/providers.md](docs/providers.md)
 
 ### Tools & permissions (37 tools)
@@ -338,7 +341,7 @@ use the normal AEGIS stores.
 | Capability | AEGIS |
 |---|---|
 | Core size | **~35k LOC**, ~95 modules — auditable end to end |
-| Providers | **28 presets**, API key **+ OAuth** (full PKCE for Anthropic/OpenAI/Google/Codex) |
+| Providers | **29 presets**, API key **+ OAuth** (full PKCE for Anthropic/OpenAI/Google/OpenAI-Codex) |
 | Safety | hardline blocklist (even in yolo) · pre-exec scanning · fail-closed docker/ssh/singularity/modal sandboxes |
 | MCP | client **and** server |
 | Channels | CLI · Telegram · Discord · Slack · Signal · Matrix · Email · Webhook · ntfy |

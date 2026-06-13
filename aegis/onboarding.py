@@ -90,7 +90,7 @@ def _banner(out: Output) -> None:
     out(_paint("   ─────────────────────────────────", "2", out))
     out("   " + _paint(f"v{__version__}", "1", out)
         + _paint("  ·  your personal agent harness", "2", out)
-        + _paint("  ·  28 providers · 30+ tools · 8 channels", "2", out))
+        + _paint("  ·  29 providers · 30+ tools · 8 channels", "2", out))
     out("")
 
 
@@ -164,6 +164,17 @@ MODEL_PRESETS: dict[str, list[tuple[str, str]]] = {
         ("llama-3.3-70b-versatile", "Llama 3.3 70B Versatile"),
         ("openai/gpt-oss-120b", "GPT-OSS 120B"),
         ("openai/gpt-oss-20b", "GPT-OSS 20B"),
+    ],
+    "qwen": [
+        ("qwen-max", "Qwen Max"),
+        ("qwen-plus", "Qwen Plus"),
+        ("qwen-turbo", "Qwen Turbo"),
+    ],
+    "minimax": [
+        ("MiniMax-M2", "MiniMax M2"),
+    ],
+    "xai": [
+        ("grok-2-latest", "Grok default"),
     ],
 }
 
@@ -323,12 +334,19 @@ def run_onboarding_noninteractive(
             ok, detail = _codex_login_status()
             if not ok:
                 return fail(f"Codex CLI auth is not ready: {detail}")
+        elif spec.auth_scheme == "codex-backend":
+            from .providers.auth import CodexBackendAuth
+            if not CodexBackendAuth().available():
+                return fail(
+                    "Codex auth is not ready: run `codex login` "
+                    "or use --auth api-key/skip"
+                )
         elif spec.oauth and spec.oauth.provider == "openai-codex":
             from .providers.auth import AuthStore, OAuthAuth
             oauth = OAuthAuth(spec.oauth, AuthStore())
             if not oauth.available():
                 return fail(
-                    "Codex OAuth auth is not ready: run `aegis auth login codex` "
+                    "Codex OAuth auth is not ready: run `aegis auth login openai-codex` "
                     "or use --auth api-key/skip"
                 )
         else:
@@ -736,6 +754,9 @@ def _configure_model(
         ("openrouter", "OpenRouter"),
         ("deepseek", "DeepSeek"),
         ("groq", "Groq"),
+        ("qwen", "Qwen"),
+        ("minimax", "MiniMax"),
+        ("xai", "xAI (Grok)"),
     ]
     if advanced:
         known = {v for v, _ in common}
@@ -760,7 +781,7 @@ def _configure_model(
         auth_method = _choose(
             "Choose authentication method:",
             [
-                ("codex", "ChatGPT subscription via Codex OAuth"),
+                ("codex", "ChatGPT subscription via Codex login"),
                 ("api_key", f"OpenAI API key ({env_name})"),
                 ("skip", "Skip credentials for now"),
             ],
@@ -779,7 +800,10 @@ def _configure_model(
                 spec = codex_spec
                 state.provider = provider
                 config.set("model.provider", provider)
-                auth_ready = _oauth_login(provider, spec, out)
+                if spec.auth_scheme == "codex-backend":
+                    auth_ready = _ensure_codex_cli_login(input_func, out)
+                else:
+                    auth_ready = _oauth_login(provider, spec, out)
                 if not auth_ready:
                     state.auth_method = "skipped"
                     return abort_required_auth("! ChatGPT subscription setup did not finish.")

@@ -1522,6 +1522,7 @@ def create_app(config: Config) -> FastAPI:
             script=str(body.get("script") or ""),
             skills=list(skills),
             deliver=str(body.get("deliver") or ""),
+            no_agent=bool(body.get("no_agent", False)),
         )
         return JSONResponse({"ok": True, "id": job.id, "job": _cron_job_detail(job.id)["job"]})
 
@@ -1538,7 +1539,8 @@ def create_app(config: Config) -> FastAPI:
         from .cron import CronStore
 
         updates = {key: body[key] for key in (
-            "schedule", "prompt", "name", "channel", "enabled", "script", "skills", "deliver"
+            "schedule", "prompt", "name", "channel", "enabled", "script", "skills", "deliver",
+            "no_agent"
         ) if key in body}
         job = CronStore().update(job_id, **updates)
         if job is None:

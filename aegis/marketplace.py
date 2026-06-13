@@ -98,6 +98,15 @@ def _scan_skill(skill_dir: Path) -> str | None:
         return None
 
 
+def _scan_skill_text(body: str) -> str | None:
+    try:
+        from .security_scan import scan_text
+        flagged, reason = scan_text(body)
+        return reason if flagged else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def install(source: str, force: bool = False) -> list[str]:
     """Install one or more skills from a source spec. Returns installed names.
 
@@ -131,6 +140,12 @@ def install(source: str, force: bool = False) -> list[str]:
         body = httpx.get(source, timeout=30, follow_redirects=True).text
         m = re.search(r"name:\s*(.+)", body)
         name = m.group(1).strip() if m else "downloaded-skill"
+        if not NAME_RE.match(name):
+            raise ValueError(f"invalid skill name '{name}' (must be lowercase-with-hyphens)")
+        flagged = _scan_skill_text(body)
+        if flagged and not force:
+            print(f"  ⚠ skipped '{name}': security scan flagged ({flagged}); use --force")
+            return []
         d = dest_root / name
         d.mkdir(parents=True, exist_ok=True)
         (d / "SKILL.md").write_text(body, encoding="utf-8")

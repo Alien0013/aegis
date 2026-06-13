@@ -65,15 +65,29 @@ class AuthProvider(ABC):
 class ApiKeyAuth(AuthProvider):
     """Resolves a key from the environment (.env is loaded into os.environ)."""
 
-    def __init__(self, env_vars: list[str], scheme: str = "bearer", extra: dict[str, str] | None = None):
+    def __init__(self, env_vars: list[str], scheme: str = "bearer", extra: dict[str, str] | None = None,
+                 *, provider_name: str | None = None, config=None):
         # scheme: "bearer" -> Authorization: Bearer; "anthropic" -> x-api-key; "none" -> no auth
         self.env_vars = env_vars
         self.scheme = scheme
         self.extra = extra or {}
-        self._idx = 0  # credential-pool cursor
+        self._idx = 0  # fallback cursor (used only when no shared pool is available)
+        self.provider_name = provider_name
+        self.config = config
+
+    def _credential_pool(self):
+        """The shared, state-persisting CredentialPool for this provider (strategies + billing
+        cooldowns + subagent sharing), or None to fall back to the simple env comma-split."""
+        if not self.provider_name:
+            return None
+        try:
+            from ..credentials import pool_for
+            return pool_for(self.provider_name, self.env_vars, self.config)
+        except Exception:  # noqa: BLE001
+            return None
 
     def _pool(self) -> list[str]:
-        """A credential pool: the first present env var, split on commas."""
+        """Simple fallback pool: the first present env var, split on commas."""
         for var in self.env_vars:
             v = os.environ.get(var)
             if v:
@@ -81,16 +95,31 @@ class ApiKeyAuth(AuthProvider):
         return []
 
     def _key(self) -> str | None:
-        pool = self._pool()
-        return pool[self._idx % len(pool)] if pool else None
+        pool = self._credential_pool()
+        if pool is not None:
+            return pool.current()
+        simple = self._pool()
+        return simple[self._idx % len(simple)] if simple else None
 
     def rotate(self) -> bool:
         """Advance to the next key in the pool (called on 429/401). True if rotated."""
-        pool = self._pool()
-        if len(pool) <= 1:
+        pool = self._credential_pool()
+        if pool is not None:
+            return pool.rotate()
+        simple = self._pool()
+        if len(simple) <= 1:
             return False
-        self._idx = (self._idx + 1) % len(pool)
+        self._idx = (self._idx + 1) % len(simple)
         return True
+
+    def report(self, kind: str) -> None:
+        """Apply credential-pool failure policy for a classified error kind
+        (billing -> cooldown+rotate; rate_limit/auth -> rotate)."""
+        pool = self._credential_pool()
+        if pool is not None:
+            pool.report(kind)
+        elif kind in ("billing", "rate_limit", "auth"):
+            self.rotate()
 
     def available(self) -> bool:
         return self.scheme == "none" or self._key() is not None

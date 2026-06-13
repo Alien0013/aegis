@@ -6,8 +6,10 @@ aegis setup --non-interactive --accept-risk --json
 # or pick directly:
 aegis config set ANTHROPIC_API_KEY sk-ant-…   # API key
 aegis config set OPENAI_API_KEY sk-…          # OpenAI API key
-aegis auth login codex                         # ChatGPT subscription OAuth
+aegis config set QWEN_API_KEY sk-…            # Qwen / DashScope-compatible API key
+codex login                                    # ChatGPT subscription auth
 aegis model set codex gpt-5.5                  # stateless Codex backend
+aegis model set qwen qwen-max                  # Qwen API-compatible provider
 aegis model set codex-app-server gpt-5.5       # optional Codex-native runtime
 aegis model set ollama llama3.1                # …or fully local
 ```

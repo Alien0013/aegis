@@ -152,6 +152,28 @@ def test_acp_lists_details_searches_and_forks_sessions(monkeypatch, tmp_path):
     assert forked["sessionId"] in server.sessions
 
 
+def test_acp_permission_request_supports_allow_session(monkeypatch, tmp_path):
+    server, _out = _server(monkeypatch, tmp_path, "")
+    calls = []
+
+    def rpc_call(method, params):
+        calls.append((method, params))
+        return {"outcome": {"outcome": "selected", "optionId": "allow_session"}}
+
+    monkeypatch.setattr(server, "_rpc_call", rpc_call)
+
+    assert server._request_permission("sid", "Allow bash(ls)?") == "always"
+    method, params = calls[0]
+    assert method == "session/request_permission"
+    assert params["sessionId"] == "sid"
+    assert [o["kind"] for o in params["options"]] == [
+        "allow_once",
+        "allow_session",
+        "reject_once",
+    ]
+    assert [o["optionId"] for o in params["options"]] == ["allow", "allow_session", "reject"]
+
+
 def test_acp_prompt_streams_and_completes(monkeypatch, tmp_path):
     class FakeAgent:
         stream = False

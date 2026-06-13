@@ -40,6 +40,16 @@ class ProviderSpec:
     extra_headers: dict[str, str] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class OAuthCatalogEntry:
+    name: str
+    display_name: str
+    oauth_status: str
+    auth_methods: tuple[str, ...]
+    notes: str = ""
+    catalog_only: bool = False
+
+
 # --------------------------------------------------------------------------- #
 # OAuth configs (data — override anything in config.yaml -> oauth_overrides)
 # --------------------------------------------------------------------------- #
@@ -186,6 +196,11 @@ PROVIDERS: dict[str, ProviderSpec] = {
         "minimax", ApiMode.CHAT_COMPLETIONS, "https://api.minimax.io/v1",
         "MiniMax-M2", 128_000, ["MINIMAX_API_KEY"],
     ),
+    "qwen": ProviderSpec(
+        "qwen", ApiMode.CHAT_COMPLETIONS,
+        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        "qwen-max", 131_072, ["QWEN_API_KEY", "DASHSCOPE_API_KEY"],
+    ),
     "nvidia": ProviderSpec(
         "nvidia", ApiMode.CHAT_COMPLETIONS, "https://integrate.api.nvidia.com/v1",
         "nvidia/llama-3.3-nemotron-super-49b-v1", 128_000, ["NVIDIA_API_KEY"],
@@ -245,6 +260,39 @@ _STRICT_MODEL_PRESET_PROVIDERS = {
     "groq",
     "openai",
     "openai-codex",
+}
+
+
+_OAUTH_CATALOG: dict[str, OAuthCatalogEntry] = {
+    "qwen": OAuthCatalogEntry(
+        name="qwen",
+        display_name="Qwen",
+        oauth_status="planned",
+        auth_methods=("api_key",),
+        notes="Runnable today with QWEN_API_KEY or DASHSCOPE_API_KEY; OAuth metadata is scaffolded only.",
+    ),
+    "minimax": OAuthCatalogEntry(
+        name="minimax",
+        display_name="MiniMax",
+        oauth_status="planned",
+        auth_methods=("api_key",),
+        notes="Runnable today with MINIMAX_API_KEY; OAuth metadata is scaffolded only.",
+    ),
+    "xai": OAuthCatalogEntry(
+        name="xai",
+        display_name="xAI",
+        oauth_status="planned",
+        auth_methods=("api_key",),
+        notes="Runnable today with XAI_API_KEY; OAuth metadata is scaffolded only.",
+    ),
+    "copilot": OAuthCatalogEntry(
+        name="copilot",
+        display_name="GitHub Copilot",
+        oauth_status="planned",
+        auth_methods=("oauth",),
+        notes="Catalog-only until GitHub/Copilot OAuth token exchange and transport auth are implemented.",
+        catalog_only=True,
+    ),
 }
 
 
@@ -432,7 +480,7 @@ def model_validation_message(validation: dict | None) -> str:
     return text
 
 
-def _resolve_auth(spec: ProviderSpec, prefer: str | None = None) -> AuthProvider:
+def _resolve_auth(spec: ProviderSpec, prefer: str | None = None, config=None) -> AuthProvider:
     """Pick OAuth or API key. ``prefer`` can force 'oauth' or 'apikey'."""
     if spec.api_mode == ApiMode.CODEX_APP_SERVER or spec.auth_scheme == "codex-cli":
         return CodexCliAuth()
@@ -442,7 +490,8 @@ def _resolve_auth(spec: ProviderSpec, prefer: str | None = None) -> AuthProvider
     oauth = OAuthAuth(spec.oauth, store) if spec.oauth else None
     if oauth and not spec.env_vars and spec.auth_scheme != "none":
         return oauth
-    api = ApiKeyAuth(spec.env_vars, spec.auth_scheme, dict(spec.extra_headers))
+    api = ApiKeyAuth(spec.env_vars, spec.auth_scheme, dict(spec.extra_headers),
+                     provider_name=spec.name, config=config)
 
     if prefer == "oauth" and oauth:
         return oauth
@@ -496,7 +545,7 @@ def build_provider(config: cfg.Config, *, model: str | None = None, name: str | 
             f"Refusing to start; override model.context_length if this is wrong."
         )
 
-    auth = _resolve_auth(spec)
+    auth = _resolve_auth(spec, config=config)
     transport = _transport_for(api_mode)
     return Provider(
         name=spec.name,
@@ -570,6 +619,78 @@ def _auth_status(auth: AuthProvider) -> dict:
     except Exception:  # noqa: BLE001
         available = False
     return {"description": description, "available": available}
+
+
+def _auth_methods_for_spec(spec: ProviderSpec) -> list[str]:
+    methods: list[str] = []
+    if spec.env_vars:
+        methods.append("api_key")
+    if spec.oauth:
+        methods.append("oauth")
+    if spec.auth_scheme == "codex-cli":
+        methods.append("codex_cli")
+    elif spec.auth_scheme == "codex-backend":
+        methods.append("codex_backend")
+    elif spec.auth_scheme == "none":
+        methods.append("none")
+    return methods or [spec.auth_scheme]
+
+
+def _oauth_status_for_spec(name: str, spec: ProviderSpec) -> str:
+    entry = _OAUTH_CATALOG.get(name)
+    if entry is not None:
+        return entry.oauth_status
+    if spec.oauth:
+        return "configured"
+    if spec.auth_scheme == "none":
+        return "not_applicable"
+    return "not_configured"
+
+
+def _oauth_notes_for_spec(name: str) -> str:
+    entry = _OAUTH_CATALOG.get(name)
+    return entry.notes if entry is not None else ""
+
+
+def oauth_catalog(config: cfg.Config | None = None) -> list[dict]:
+    """OAuth discoverability catalog, including planned provider scaffolds.
+
+    Rows with ``catalog_only`` are intentionally not runnable providers yet.
+    They let onboarding/UI surfaces advertise the auth work without inventing
+    endpoints or weakening existing provider auth behavior.
+    """
+
+    ensure_plugin_providers(config)
+    specs = _specs_for(config)
+    rows: list[dict] = []
+    for name, spec in sorted(specs.items()):
+        entry = _OAUTH_CATALOG.get(name)
+        rows.append({
+            "name": name,
+            "display_name": entry.display_name if entry else name,
+            "known_provider": True,
+            "catalog_only": False,
+            "oauth": bool(spec.oauth),
+            "oauth_status": _oauth_status_for_spec(name, spec),
+            "auth_methods": _auth_methods_for_spec(spec),
+            "env_vars": list(spec.env_vars),
+            "notes": _oauth_notes_for_spec(name),
+        })
+    for name, entry in sorted(_OAUTH_CATALOG.items()):
+        if name in specs:
+            continue
+        rows.append({
+            "name": name,
+            "display_name": entry.display_name,
+            "known_provider": False,
+            "catalog_only": entry.catalog_only,
+            "oauth": False,
+            "oauth_status": entry.oauth_status,
+            "auth_methods": list(entry.auth_methods),
+            "env_vars": [],
+            "notes": entry.notes,
+        })
+    return rows
 
 
 def _model_capabilities(model: str, api_mode: ApiMode | str) -> dict:
@@ -650,16 +771,21 @@ def _provider_status(provider: Provider, *, role: str, configured: dict | None =
 def _spec_status(name: str, spec: ProviderSpec, *, origin: str) -> dict:
     auth = _resolve_auth(spec)
     capabilities = _model_capabilities(spec.default_model, spec.api_mode)
+    entry = _OAUTH_CATALOG.get(name)
     return {
         "name": name,
+        "display_name": entry.display_name if entry else name,
         "origin": origin,
         "default_model": spec.default_model,
         "api_mode": spec.api_mode.value,
         "base_url": spec.base_url,
         "context_length": spec.context_length,
         "auth_scheme": spec.auth_scheme,
+        "auth_methods": _auth_methods_for_spec(spec),
         "env_vars": list(spec.env_vars),
         "oauth": bool(spec.oauth),
+        "oauth_status": _oauth_status_for_spec(name, spec),
+        "oauth_notes": _oauth_notes_for_spec(name),
         "auth": _auth_status(auth),
         "capabilities": capabilities,
         "capability_summary": _capability_summary(capabilities),
@@ -778,6 +904,7 @@ def provider_report(config: cfg.Config) -> dict:
         "fallbacks": fallbacks,
         "routing": routing,
         "provider_catalog": provider_catalog,
+        "oauth_catalog": oauth_catalog(config),
         "custom_providers": [_spec_status(name, spec, origin="custom")
                              for name, spec in sorted(custom.items())],
         "provider": configured_provider,

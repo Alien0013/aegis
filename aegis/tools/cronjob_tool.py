@@ -44,6 +44,7 @@ class CronJobTool(Tool):
                 ),
             },
             "script": {"type": "string", "description": "Optional Python script path to prepend output as context"},
+            "no_agent": {"type": "boolean", "description": "Run script-only and deliver stdout without an agent"},
             "skills": {"type": "array", "items": {"type": "string"}},
             "skill": {"type": "string", "description": "Compatibility alias for one skill"},
             "enabled": {"type": "boolean", "description": "Set enabled/paused state on update"},
@@ -104,6 +105,7 @@ class CronJobTool(Tool):
             script=str(args.get("script") or "").strip(),
             skills=skills,
             name=str(args.get("name") or "").strip(),
+            no_agent=bool(args.get("no_agent", False)),
         )
         data = {
             "success": True,
@@ -133,6 +135,8 @@ class CronJobTool(Tool):
                 updates[key] = str(args.get(key) or "").strip()
         if "enabled" in args and args.get("enabled") is not None:
             updates["enabled"] = bool(args.get("enabled"))
+        if "no_agent" in args and args.get("no_agent") is not None:
+            updates["no_agent"] = bool(args.get("no_agent"))
         if "deliver" in args and args.get("deliver") is not None:
             deliver, deliver_error = _normalize_deliver(args.get("deliver"), ctx, default_origin=False)
             if deliver_error:
@@ -335,13 +339,16 @@ def _format_job(job: CronJob) -> dict[str, Any]:
         "deliver": job.deliver or job.channel or "local",
         "channel": job.channel,
         "script": job.script or None,
+        "no_agent": bool(job.no_agent),
         "skills": list(job.skills or []),
         "enabled": bool(job.enabled),
-        "state": "scheduled" if job.enabled else "paused",
+        "state": _display_state(job),
+        "last_error": job.last_error or "",
         "run_at": job.run_at or None,
         "next_run_at": _next_run_epoch(job),
         "last_run": job.last_run or None,
         "last_run_at": _iso(job.last_run),
+        "runs": list(job.runs or []),
         "due": is_due(job, time.time()),
         "kind": _schedule_kind(job),
         "repeat": "once" if job.run_at else "forever",
@@ -350,6 +357,12 @@ def _format_job(job: CronJob) -> dict[str, Any]:
 
 def _job_name(job: CronJob) -> str:
     return (job.name or job.prompt[:50] or job.id).strip()
+
+
+def _display_state(job: CronJob) -> str:
+    if not job.enabled:
+        return "paused"
+    return job.state if job.state in {"running", "ok", "error"} else "scheduled"
 
 
 def _preview(text: str, limit: int = 100) -> str:
@@ -372,6 +385,8 @@ def _next_run_epoch(job: CronJob) -> float | None:
         return None
     if job.run_at:
         return None if job.last_run else job.run_at
+    if job.next_run:
+        return job.next_run
     interval = _interval_seconds(job.schedule)
     if interval is not None:
         if not job.last_run:
