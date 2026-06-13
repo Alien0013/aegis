@@ -121,6 +121,20 @@ def test_dashboard_tools_payload_includes_schema_and_policy(tmp_path, monkeypatc
     assert any("schema" in row and "toolset" in row and "enabled" in row for row in payload["tools"])
 
 
+def test_chat_meta_maps_reasoning_to_runtime_control():
+    """The Chat 'Thinking' toggle sends a reasoning level that must become a
+    session runtime control so the agent actually streams live reasoning."""
+    from aegis.dashboard import _dashboard_chat_meta
+    on = _dashboard_chat_meta({"reasoning": "medium"}, "/api/chat/stream")
+    assert on["runtime_controls"] == {"reasoning_effort": "medium", "reasoning_display": "live"}
+    off = _dashboard_chat_meta({"reasoning": "off"}, "/api/chat/stream")
+    assert off["runtime_controls"] == {"reasoning_effort": "off", "reasoning_display": "off"}
+    none = _dashboard_chat_meta({}, "/api/chat/stream")
+    assert "runtime_controls" not in none
+    bad = _dashboard_chat_meta({"reasoning": "bogus"}, "/api/chat/stream")
+    assert "runtime_controls" not in bad
+
+
 def test_memory_post_add_and_remove(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     monkeypatch.setenv("AEGIS_DASHBOARD_TOKEN", "t")

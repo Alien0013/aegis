@@ -213,3 +213,54 @@ label{color:var(--mut);font-size:12px;font-weight:650;display:flex;flex-directio
   .row{align-items:flex-start;flex-direction:column;gap:5px}.datarow{display:flex}.datarow span{white-space:normal}.composer{flex-direction:column}.msg,.botwrap{max-width:100%}
   .kvgrid{grid-template-columns:repeat(2,minmax(0,1fr))}.drawer-panel{width:100%}
 }
+
+/* reasoning (Thinking) toggle in the Chat header */
+.reason-toggle{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--mut);background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:4px 8px}
+.reason-toggle svg{width:15px;height:15px}
+.reason-toggle select{width:auto;padding:2px 4px;border:0;background:transparent;color:var(--text);font:inherit;cursor:pointer}
+
+/* spawned-agent cards inside Chat */
+.agent-group{border:1px solid var(--line);border-radius:10px;background:var(--panel2);padding:8px 10px}
+.agent-group-h{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--mut);margin-bottom:6px}
+.agent-group-h svg{width:14px;height:14px}
+.acard{display:flex;align-items:center;gap:9px;padding:6px 0;border-top:1px solid var(--line)}
+.agent-group .acard:first-of-type{border-top:0}
+.acard.error{opacity:.95}
+.acard-type{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:1px 6px;color:var(--accent2);flex:0 0 auto}
+.acard-task{flex:1;min-width:0;font-size:12.5px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* Agents page */
+.agents-layout{display:grid;grid-template-columns:1fr 320px;gap:16px;align-items:start}
+@media(max-width:900px){.agents-layout{grid-template-columns:1fr}}
+.agent-row{align-items:flex-start}
+.agent-badge{font-size:12px;padding:2px 9px;border-radius:20px;border:1px solid var(--line);color:var(--mut);background:var(--panel2);flex:0 0 auto;text-transform:capitalize}
+.agent-badge.running{color:var(--accent2);border-color:color-mix(in srgb,var(--accent2) 45%,var(--line))}
+.agent-badge.ok{color:var(--ok)}.agent-badge.error{color:var(--err)}
+.live-dot{font-size:12px;color:var(--mut);display:inline-flex;align-items:center;gap:6px}
+.live-dot::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--mut)}
+.live-dot.on{color:var(--ok)}.live-dot.on::before{background:var(--ok);animation:pulse 1.4s ease-in-out infinite}
+.live-rail{position:sticky;top:16px;max-height:80vh;overflow:auto}
+.live-rail h3{display:flex;align-items:center;gap:6px}.live-rail h3 svg{width:15px;height:15px}
+.tick{display:flex;flex-direction:column;gap:1px;padding:6px 0;border-bottom:1px solid var(--line);font-size:12px}
+.tick:last-child{border-bottom:0}
+.tick-type{font-family:ui-monospace,monospace;font-size:11px;color:var(--mut)}
+.tick-type.ok{color:var(--ok)}.tick-type.error{color:var(--err)}
+.tick-text{color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.empty.small{padding:10px;font-size:12.5px}
+
+/* grouped, typed settings */
+.panel.group{padding:0;margin-bottom:10px;overflow:hidden}
+.group-h{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;cursor:pointer;font-size:14px}
+.group-h:hover{background:var(--panel2)}
+.fields{padding:4px 16px 14px;display:grid;grid-template-columns:1fr 1fr;gap:8px 22px}
+@media(max-width:760px){.fields{grid-template-columns:1fr}}
+.field{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid var(--line);min-width:0}
+.field.wide{grid-column:1 / -1}
+.field>span{font-family:ui-monospace,monospace;font-size:12px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.field input[type=text],.field input[type=number],.field select{width:170px}
+.field input[type=checkbox]{width:auto}
+.field-val{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:5px 8px;cursor:pointer;max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;font-size:12px}
+.field-val.mono{font-family:ui-monospace,monospace}
+.field-edit{display:flex;gap:6px;align-items:flex-start;width:100%}
+.field-edit textarea{flex:1;min-width:0}
+.btn.sm{padding:5px 9px;font-size:12px}

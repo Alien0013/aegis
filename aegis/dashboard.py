@@ -731,6 +731,13 @@ def _chat_event_row(event: dict) -> dict:
         row["n"] = event.get("n")
         row["max"] = event.get("max")
         row["summary"] = f"{event.get('n', '')}/{event.get('max', '')}".strip("/")
+    elif etype in ("subagent_start", "subagent_done"):
+        # Spawned subagents: surface the task + agent type so the UI can show each
+        # one as its own live card (and so the Agents page can track them).
+        row["task"] = str(event.get("task") or event.get("summary") or "")[:240]
+        row["agent_type"] = str(event.get("agent_type") or event.get("type_name") or "")
+        if not row["status"] and etype == "subagent_start":
+            row["status"] = "running"
     return row
 
 
@@ -740,11 +747,20 @@ def _dashboard_chat_cwd(body: dict) -> str:
     return str(Path(text).expanduser()) if text else ""
 
 
+_REASONING_LEVELS = ("off", "minimal", "low", "medium", "high", "xhigh")
+
+
 def _dashboard_chat_meta(body: dict, route: str) -> dict:
     cwd = _dashboard_chat_cwd(body)
     meta = {"surface_route": route}
     if cwd:
         meta["dashboard_cwd"] = cwd
+    # A reasoning choice from the Chat toggle becomes a session runtime control so
+    # the agent streams (or stops streaming) live thinking for this turn onward.
+    reasoning = str(body.get("reasoning") or "").strip().lower()
+    if reasoning in _REASONING_LEVELS:
+        meta["runtime_controls"] = {"reasoning_effort": reasoning,
+                                    "reasoning_display": "live" if reasoning != "off" else "off"}
     return meta
 
 

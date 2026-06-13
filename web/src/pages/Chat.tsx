@@ -4,16 +4,18 @@ import { Icon } from "../lib/icons";
 import { compact, dateish } from "../lib/format";
 
 type ToolCard = { id: string; name: string; target: string; status: "running" | "ok" | "error"; preview: string };
+type AgentCard = { id: string; task: string; type: string; status: "running" | "ok" | "error" };
 type Msg = {
   role: "user" | "bot";
   text: string;
   thinking: string;
   tools: ToolCard[];
+  agents: AgentCard[];
   status: string;        // live status line (iteration / compacting)
   done: boolean;
 };
 
-const emptyBot = (): Msg => ({ role: "bot", text: "", thinking: "", tools: [], status: "", done: false });
+const emptyBot = (): Msg => ({ role: "bot", text: "", thinking: "", tools: [], agents: [], status: "", done: false });
 const numFmt = new Intl.NumberFormat();
 
 function fmtTokens(value: any): string {
@@ -73,6 +75,7 @@ export function Chat() {
   const [cwd, setCwd] = useState("");
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
+  const [reasoning, setReasoning] = useState(localStorage.getItem("aegis_reasoning") || "off");
   const [sessions, setSessions] = useState<any[]>([]);
   const [ctx, setCtx] = useState<any>({});
   const logRef = useRef<HTMLDivElement>(null);
@@ -111,6 +114,14 @@ export function Chat() {
         tools: m.tools.map((tc) => (tc.id === e.id || (!e.id && tc.status === "running"))
           ? { ...tc, status: e.status === "error" ? "error" : "ok", preview: e.target || "" } : tc),
       }));
+    else if (t === "subagent_start")
+      patchBot((m) => ({ ...m, agents: [...m.agents, { id: e.id || String(m.agents.length), task: e.task || "", type: e.agent_type || "agent", status: "running" }] }));
+    else if (t === "subagent_done")
+      patchBot((m) => ({
+        ...m,
+        agents: m.agents.map((a) => (a.id === e.id || (!e.id && a.status === "running"))
+          ? { ...a, status: e.status === "error" ? "error" : "ok" } : a),
+      }));
     else if (t === "iteration") patchBot((m) => ({ ...m, status: `step ${e.n}/${e.max}` }));
     else if (t === "compacting") patchBot((m) => ({ ...m, status: "compacting context..." }));
     else if (t === "compacted") patchBot((m) => ({ ...m, status: "" }));
@@ -120,12 +131,13 @@ export function Chat() {
     const text = input.trim();
     if (!text || busy) return;
     setInput("");
-    setMsgs((m) => [...m, { role: "user", text, thinking: "", tools: [], status: "", done: true }, emptyBot()]);
+    setMsgs((m) => [...m, { role: "user", text, thinking: "", tools: [], agents: [], status: "", done: true }, emptyBot()]);
     setBusy(true);
     try {
       await postStream("chat/stream", {
         message: text, session_id: session,
         cwd: cwd.trim() || undefined, provider: provider.trim() || undefined, model: model.trim() || undefined,
+        reasoning,
       }, (ev) => {
         if (ev.type === "start" && ev.session_id) setSession(ev.session_id);
         else if (ev.type === "event") applyEvent(ev.event || {});
@@ -154,6 +166,7 @@ export function Chat() {
         text: m.content,
         thinking: "",
         tools: [],
+        agents: [],
         status: "",
         done: true,
       }));
@@ -184,7 +197,16 @@ export function Chat() {
           </span>
         </div>
         <span className="actions">
-          <span className="crumb">{session || "new session"}</span>
+          <label className="reason-toggle" title="Stream the model's live reasoning into the Thinking panel">
+            <Icon n="memory" /> Thinking
+            <select value={reasoning}
+              onChange={(e) => { setReasoning(e.target.value); localStorage.setItem("aegis_reasoning", e.target.value); }}>
+              <option value="off">off</option>
+              <option value="low">low</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+            </select>
+          </label>
           <button className="btn ghost" onClick={() => setShowCtx((s) => !s)}>{showCtx ? "Hide" : "Context"}</button>
           <button className="btn ghost" onClick={newSession}>New chat</button>
         </span>
@@ -233,6 +255,19 @@ export function Chat() {
               : (
                 <div className="botwrap" key={i}>
                   <Thinking text={m.thinking} />
+                  {m.agents.length > 0 && (
+                    <div className="agent-group">
+                      <div className="agent-group-h"><Icon n="tools" /> {m.agents.length} spawned agent{m.agents.length === 1 ? "" : "s"}</div>
+                      {m.agents.map((a) => (
+                        <div className={"acard " + a.status} key={a.id}>
+                          <span className="acard-type">{a.type}</span>
+                          <span className="acard-task">{a.task || "working…"}</span>
+                          {a.status === "running" ? <span className="spin sm" />
+                            : <span className={"tcard-badge " + a.status}>{a.status === "ok" ? "OK" : "ERR"}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   {m.tools.map((t) => <ToolCardView t={t} key={t.id} />)}
                   {(m.text || (busy && i === msgs.length - 1)) && (
                     <div className="msg bot">

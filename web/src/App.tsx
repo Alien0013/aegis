@@ -14,6 +14,7 @@ import { ModelsPage } from "./pages/ModelsPage";
 import { KeysPage } from "./pages/KeysPage";
 import { MemoryPage } from "./pages/MemoryPage";
 import { ChannelsPage } from "./pages/ChannelsPage";
+import { AgentsPage } from "./pages/AgentsPage";
 import { McpPage } from "./pages/McpPage";
 import { WebhooksPage } from "./pages/WebhooksPage";
 import { PluginsPage } from "./pages/PluginsPage";
@@ -58,8 +59,7 @@ function pageFor(id: string, go: (id: string) => void) {
       detailEndpoint="run" cols={[["title", "Run"], ["status", "Status"], ["surface", "Surface"], ["updated_at", "Updated"]]} />;
     case "traces": return <ListPage key="traces" endpoint="traces?limit=100" arrayKey="traces" title="Traces"
       detailEndpoint="trace" cols={[["id", "Trace"], ["status", "Status"], ["source", "Source"], ["spans.span_count", "Spans"]]} />;
-    case "agents": return <ListPage key="agents" endpoint="agents" arrayKey="agents" title="Agents"
-      detailEndpoint="agent" cols={[["id", "Agent"], ["status", "Status"], ["type", "Type"], ["model", "Model"]]} />;
+    case "agents": return <AgentsPage />;
     case "kanban": return <KanbanPage />;
     case "config": return <ConfigPage />;
     case "cron": return <CronPage />;
