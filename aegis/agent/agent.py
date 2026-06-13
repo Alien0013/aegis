@@ -206,6 +206,13 @@ class Agent:
 
         toolsets = list(self.config.get("tools.toolsets", ["core"]) or ["core"])
         enabled_tools = self.registry.available(toolsets)
+        recall_guidance = ""
+        if any(tool.name == "session_search" for tool in enabled_tools):
+            recall_guidance = (
+                "\n- If the user asks about prior chats, last session, what you remember from "
+                "before, or you suspect cross-session context matters, call `session_search` "
+                "before answering or asking them to repeat it."
+            )
         return (
             "# AEGIS runtime\n"
             f"- provider: {getattr(self.provider, 'name', 'unknown')}\n"
@@ -219,6 +226,7 @@ class Agent:
             "use the auth line above as ground truth.\n"
             "- For install, auth, tools, workspace, dashboard, daemon, or system-health checks, "
             "call the `system_status` tool first, then inspect with focused tools if needed."
+            f"{recall_guidance}"
         )
 
     def deferred_tool_names(self, available=None) -> set[str]:

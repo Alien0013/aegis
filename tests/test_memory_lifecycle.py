@@ -26,6 +26,9 @@ class RecordingProvider:
     def on_pre_compress(self, messages): self.calls.append(("on_pre_compress",)); return "keep this"
     def on_session_switch(self, *, old_session_id, new_session_id, **kw): self.calls.append(("on_session_switch", old_session_id, new_session_id))
     def on_delegation(self, task, result, **kw): self.calls.append(("on_delegation", task))
+    def on_memory_write(self, *, action, target, content="", old_text="", result="",
+                        session_id="", **kw):
+        self.calls.append(("on_memory_write", action, target, content, old_text, result, session_id))
     def shutdown(self): self.calls.append(("shutdown",))
 
 
@@ -43,6 +46,7 @@ def test_manager_fans_out_every_hook(tmp_path, monkeypatch):
     assert mm.on_pre_compress([]) == "keep this"
     mm.on_session_switch("old", "new")
     mm.on_delegation("do a thing", "did it")
+    mm.on_memory_write(action="add", target="memory", content="fact", result="remembered")
     mm.on_session_end([])
     mm.shutdown()
     # provider system_prompt_block flows through build_context_block
@@ -51,8 +55,33 @@ def test_manager_fans_out_every_hook(tmp_path, monkeypatch):
     kinds = [c[0] for c in p.calls]
     for hook in ("initialize", "prefetch", "queue_prefetch", "sync_turn", "tools",
                  "on_pre_compress", "on_session_switch", "on_delegation",
-                 "on_session_end", "shutdown", "system_prompt_block"):
+                 "on_memory_write", "on_session_end", "shutdown", "system_prompt_block"):
         assert hook in kinds, f"{hook} was never fanned out"
+
+
+def test_memory_tool_writes_mirror_to_external_provider(tmp_path, monkeypatch):
+    config = _cfg(tmp_path, monkeypatch)
+    from aegis.memory import MemoryManager
+
+    provider = RecordingProvider()
+    mm = MemoryManager(config, external=provider)
+    mm.initialize("sess-42")
+
+    assert not mm.handle_tool({"action": "add", "target": "memory", "content": "fact one"}).is_error
+    assert not mm.handle_tool({
+        "action": "replace",
+        "target": "memory",
+        "old_text": "fact one",
+        "content": "fact 1",
+    }).is_error
+    assert not mm.handle_tool({"action": "remove", "target": "memory", "old_text": "fact 1"}).is_error
+
+    writes = [c for c in provider.calls if c[0] == "on_memory_write"]
+    assert [w[1] for w in writes] == ["add", "replace", "remove"]
+    assert writes[0][3] == "fact one"
+    assert writes[1][4] == "fact one"
+    assert writes[2][4] == "fact 1"
+    assert all(w[6] == "sess-42" for w in writes)
 
 
 def test_external_prompt_block_is_snapshotted_until_refresh(tmp_path, monkeypatch):

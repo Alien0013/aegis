@@ -197,19 +197,58 @@ class SessionStore:
             return [dict(r) for r in rows]
 
     @staticmethod
-    def _fts_query(query: str) -> str:
-        """Natural-language query -> FTS5 OR-of-terms (ranked). A whole-query phrase
-        match meant 'what did we decide about X' could never hit anything."""
+    def _query_terms(query: str) -> list[str]:
         import re
         stop = {"the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "we", "i",
                 "you", "it", "is", "are", "was", "were", "do", "did", "does", "done",
                 "have", "has", "had", "what", "when", "how", "who", "our", "my", "your",
                 "this", "that", "about", "with", "like", "so", "far", "me", "us"}
-        toks = [t for t in re.findall(r"[A-Za-z0-9_]{2,}", query)
+        return [t for t in re.findall(r"[A-Za-z0-9_]{2,}", query)
                 if t.lower() not in stop][:12]
+
+    @classmethod
+    def _fts_query(cls, query: str) -> str:
+        """Natural-language query -> FTS5 OR-of-terms (ranked). A whole-query phrase
+        match meant 'what did we decide about X' could never hit anything."""
+        toks = cls._query_terms(query)
         if not toks:
             return '"' + query.replace('"', "") + '"'
         return " OR ".join(f'"{t}"' for t in toks)
+
+    @staticmethod
+    def _message_payload(index: int, message: Message, *, anchor_id: int | None = None) -> dict:
+        payload: dict[str, Any] = {"id": index, "role": message.role, "content": message.content}
+        if message.name:
+            payload["tool_name"] = message.name
+        if message.tool_call_id:
+            payload["tool_call_id"] = message.tool_call_id
+        if message.tool_calls:
+            payload["tool_calls"] = [tc.to_dict() for tc in message.tool_calls]
+        if anchor_id is not None and index == anchor_id:
+            payload["anchor"] = True
+        return payload
+
+    @classmethod
+    def _visible_messages(cls, sess: Session, *, roles: set[str] | None = None) -> list[dict]:
+        roles = roles or {"user", "assistant", "tool"}
+        return [
+            cls._message_payload(i, message)
+            for i, message in enumerate(sess.messages)
+            if message.role in roles
+        ]
+
+    @classmethod
+    def _first_matching_message_id(cls, sess: Session, query: str,
+                                   roles: set[str] | None = None) -> int | None:
+        roles = roles or {"user", "assistant"}
+        terms = [t.lower() for t in cls._query_terms(query)] or [query.lower()]
+        for i, message in enumerate(sess.messages):
+            if message.role not in roles:
+                continue
+            content = (message.content or "").lower()
+            if any(term in content for term in terms):
+                return i
+        return None
 
     def search_messages(self, query: str, limit: int = 8) -> list[dict]:
         """Cross-session recall: ranked message snippets across past sessions (FTS5)."""
@@ -223,31 +262,238 @@ class SessionStore:
                         "FROM messages_fts WHERE messages_fts MATCH ? ORDER BY rank LIMIT ?",
                         (match, limit),
                     ).fetchall()
-                return [{"session": r["session_id"], "title": r["title"], "when": r["ts"],
-                         "role": r["role"], "snippet": r["snip"].replace("\n", " ")} for r in rows]
+                out = []
+                for r in rows:
+                    sess = self.load(r["session_id"])
+                    out.append({
+                        "session": r["session_id"],
+                        "title": r["title"],
+                        "when": r["ts"],
+                        "role": r["role"],
+                        "snippet": r["snip"].replace("\n", " "),
+                        "message_id": self._first_matching_message_id(sess, query) if sess else None,
+                    })
+                return out
             except sqlite3.OperationalError:
                 pass
         # Fallback without FTS: scan recent sessions for ANY query term.
-        import re
-        toks = [t.lower() for t in re.findall(r"[A-Za-z0-9_]{2,}", query)][:12] or [query.lower()]
+        toks = [t.lower() for t in self._query_terms(query)] or [query.lower()]
         out: list[dict] = []
         with self._conn() as c:
             rows = c.execute("SELECT * FROM sessions ORDER BY updated_at DESC LIMIT ?",
                              (limit * 5,)).fetchall()
         for row in rows:
             sess = Session.from_row(row)
-            for m in sess.messages:
+            for msg_index, m in enumerate(sess.messages):
                 low = m.content.lower() if m.content else ""
                 hit = next((t for t in toks if t in low), None)
                 if m.role in ("user", "assistant") and hit:
-                    idx = low.find(hit)
-                    snippet = m.content[max(0, idx - 80):idx + 160].strip().replace("\n", " ")
+                    char_index = low.find(hit)
+                    snippet = m.content[max(0, char_index - 80):char_index + 160].strip().replace("\n", " ")
                     out.append({"session": sess.id, "title": sess.title,
-                                "when": sess.updated_at, "role": m.role, "snippet": snippet})
+                                "when": sess.updated_at, "role": m.role,
+                                "snippet": snippet, "message_id": msg_index})
                     break
             if len(out) >= limit:
                 break
         return out
+
+    def _resolve_session(self, sid: str) -> Session | None:
+        sess = self.load(sid)
+        if sess:
+            return sess
+        needle = (sid or "").strip().lower()
+        if not needle:
+            return None
+        for row in self.list(200):
+            row_id = str(row.get("id", ""))
+            title = str(row.get("title", ""))
+            if row_id.startswith(sid) or title.lower() == needle:
+                return self.load(row_id)
+        return None
+
+    def _lineage_root(self, sid: str | None) -> str | None:
+        cur = sid
+        seen: set[str] = set()
+        while cur and cur not in seen:
+            seen.add(cur)
+            sess = self.load(cur)
+            if not sess or not sess.parent_id:
+                return cur
+            cur = sess.parent_id
+        return cur
+
+    def browse_sessions(self, limit: int = 10, *, current_session_id: str | None = None) -> dict:
+        """Hermes-style browse shape: recent sessions without needing a query."""
+        limit = max(1, min(int(limit or 10), 50))
+        current_root = self._lineage_root(current_session_id)
+        results = []
+        for row in self.list(limit * 3):
+            sess = self.load(row["id"])
+            if not sess:
+                continue
+            root = self._lineage_root(sess.id)
+            if current_root and root == current_root:
+                continue
+            if sess.parent_id:
+                continue
+            preview = next((m.content for m in sess.messages
+                            if m.role in ("user", "assistant") and m.content), "")
+            results.append({
+                "session_id": sess.id,
+                "title": sess.title,
+                "created_at": sess.created_at,
+                "updated_at": sess.updated_at,
+                "message_count": len([m for m in sess.messages if m.role != "system"]),
+                "preview": preview[:240],
+            })
+            if len(results) >= limit:
+                break
+        return {"success": True, "mode": "browse", "results": results, "count": len(results)}
+
+    def read_session(self, sid: str, *, head: int = 20, tail: int = 10) -> dict:
+        """Hermes-style read shape: bounded transcript dump by session id/title/prefix."""
+        sess = self._resolve_session(sid)
+        if not sess:
+            return {"success": False, "mode": "read", "error": f"session_id not found: {sid}"}
+        shaped = self._visible_messages(sess)
+        total = len(shaped)
+        truncated = total > head + tail
+        messages = shaped[:head] + shaped[-tail:] if truncated else shaped
+        out = {
+            "success": True,
+            "mode": "read",
+            "session_id": sess.id,
+            "session_meta": {
+                "title": sess.title,
+                "created_at": sess.created_at,
+                "updated_at": sess.updated_at,
+                "parent_id": sess.parent_id,
+            },
+            "message_count": total,
+            "truncated": truncated,
+            "messages": messages,
+        }
+        if truncated:
+            out["message"] = (
+                f"Session has {total} messages; showing first {head} + last {tail}. "
+                "Use around_message_id with any shown id to scroll."
+            )
+        return out
+
+    def messages_around(self, sid: str, around_message_id: int, *, window: int = 5,
+                        current_session_id: str | None = None) -> dict:
+        """Hermes-style scroll shape: a bounded message window centered on an anchor id."""
+        sess = self._resolve_session(sid)
+        if not sess:
+            return {"success": False, "mode": "scroll", "error": f"session_id not found: {sid}"}
+        current_root = self._lineage_root(current_session_id)
+        if current_root and self._lineage_root(sess.id) == current_root:
+            return {
+                "success": False,
+                "mode": "scroll",
+                "error": "anchor lives in the current session lineage (already in active context)",
+            }
+        try:
+            anchor = int(around_message_id)
+        except (TypeError, ValueError):
+            return {"success": False, "mode": "scroll", "error": "around_message_id must be an integer"}
+        window = max(1, min(int(window or 5), 20))
+        shaped = self._visible_messages(sess)
+        positions = {m["id"]: i for i, m in enumerate(shaped)}
+        if anchor not in positions:
+            return {
+                "success": False,
+                "mode": "scroll",
+                "session_id": sess.id,
+                "error": f"around_message_id {anchor} not in session",
+            }
+        pos = positions[anchor]
+        start = max(0, pos - window)
+        end = min(len(shaped), pos + window + 1)
+        messages = [
+            {**m, **({"anchor": True} if m["id"] == anchor else {})}
+            for m in shaped[start:end]
+        ]
+        return {
+            "success": True,
+            "mode": "scroll",
+            "session_id": sess.id,
+            "around_message_id": anchor,
+            "session_meta": {
+                "title": sess.title,
+                "created_at": sess.created_at,
+                "updated_at": sess.updated_at,
+                "parent_id": sess.parent_id,
+            },
+            "window": window,
+            "messages": messages,
+            "messages_before": start,
+            "messages_after": len(shaped) - end,
+        }
+
+    def discover_sessions(self, query: str, limit: int = 3, *,
+                          role_filter: list[str] | None = None,
+                          sort: str | None = None,
+                          current_session_id: str | None = None) -> dict:
+        """Hermes-style discovery shape: search plus message windows and bookends."""
+        limit = max(1, min(int(limit or 3), 10))
+        roles = {r for r in (role_filter or ["user", "assistant"]) if r}
+        hits = self.search_messages(query, limit=limit * 8)
+        if sort == "newest":
+            hits.sort(key=lambda h: h.get("when") or "", reverse=True)
+        elif sort == "oldest":
+            hits.sort(key=lambda h: h.get("when") or "")
+        current_root = self._lineage_root(current_session_id)
+        results = []
+        seen_roots: set[str] = set()
+        for hit in hits:
+            if roles and hit.get("role") not in roles:
+                continue
+            sid = hit["session"]
+            root = self._lineage_root(sid) or sid
+            if current_root and root == current_root:
+                continue
+            if root in seen_roots:
+                continue
+            sess = self.load(sid)
+            if not sess:
+                continue
+            seen_roots.add(root)
+            msg_id = hit.get("message_id")
+            if msg_id is None:
+                msg_id = self._first_matching_message_id(sess, query, roles=roles)
+            view = (
+                self.messages_around(sid, int(msg_id), window=5, current_session_id=None)
+                if msg_id is not None else {"messages": [], "messages_before": 0, "messages_after": 0}
+            )
+            bookend_roles = {"user", "assistant"}
+            visible = self._visible_messages(sess, roles=bookend_roles)
+            entry = {
+                "session_id": sid,
+                "title": sess.title,
+                "when": sess.updated_at,
+                "matched_role": hit.get("role"),
+                "match_message_id": msg_id,
+                "snippet": hit.get("snippet", ""),
+                "bookend_start": visible[:3],
+                "messages": view.get("messages", []),
+                "bookend_end": visible[-3:] if len(visible) > 3 else visible,
+                "messages_before": view.get("messages_before", 0),
+                "messages_after": view.get("messages_after", 0),
+            }
+            if root != sid:
+                entry["parent_session_id"] = root
+            results.append(entry)
+            if len(results) >= limit:
+                break
+        return {
+            "success": True,
+            "mode": "discover",
+            "query": query,
+            "results": results,
+            "count": len(results),
+        }
 
     def summarize(self, sid: str, provider=None, config=None) -> str:
         """Generate + store a 1-2 sentence summary of a session via the provider."""

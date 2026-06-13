@@ -334,6 +334,11 @@ class MemoryProvider:
     def on_delegation(self, task: str, result: str, **kw) -> None:  # pragma: no cover
         """A subagent/delegated task finished — record the task and its outcome."""
 
+    def on_memory_write(self, *, action: str, target: str, content: str = "",
+                        old_text: str = "", result: str = "",
+                        session_id: str = "", **kw) -> None:  # pragma: no cover
+        """The local memory tool successfully changed MEMORY.md or USER.md."""
+
     def shutdown(self) -> None:  # pragma: no cover - interface
         """Release resources (threads, clients)."""
 
@@ -536,6 +541,18 @@ class MemoryManager:
     def on_delegation(self, task: str, result: str) -> None:
         self._provider_call("on_delegation", task, result)
 
+    def on_memory_write(self, *, action: str, target: str, content: str = "",
+                        old_text: str = "", result: str = "") -> None:
+        self._provider_call(
+            "on_memory_write",
+            action=action,
+            target=target,
+            content=content,
+            old_text=old_text,
+            result=result,
+            session_id=getattr(self, "_session_id", ""),
+        )
+
     def shutdown(self) -> None:
         self._provider_call("shutdown")
 
@@ -553,6 +570,12 @@ class MemoryManager:
             result = self.store.add(target, args["content"])
             if result.startswith(("memory full", "refused", "multiple entries")):
                 return ToolResult.error(result)      # the model must consolidate / rephrase
+            self.on_memory_write(
+                action="add",
+                target=target,
+                content=args["content"],
+                result=result,
+            )
             refresh_mode = (self.config.get("memory.refresh", "session") or "session")
             if refresh_mode not in {"frozen", "never"}:
                 note = "now in context from your next message on."
@@ -568,6 +591,13 @@ class MemoryManager:
             result = self.store.replace(target, match, args["content"])
             if result.startswith(("memory full", "refused", "multiple entries", "no entry matching")):
                 return ToolResult.error(result)
+            self.on_memory_write(
+                action="replace",
+                target=target,
+                content=args["content"],
+                old_text=match,
+                result=result,
+            )
             return ToolResult.ok(result)
         if action == "remove":
             if not match:
@@ -575,6 +605,12 @@ class MemoryManager:
             result = self.store.remove(target, match)
             if result.startswith(("refused", "multiple entries", "no entry matching")):
                 return ToolResult.error(result)
+            self.on_memory_write(
+                action="remove",
+                target=target,
+                old_text=match,
+                result=result,
+            )
             return ToolResult.ok(result)
         if action == "read":                         # live state (snapshot may be older)
             ents = self.store.entries(target)

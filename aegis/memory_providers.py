@@ -28,9 +28,11 @@ class JSONLMemoryProvider(MemoryProvider):
         notes = []
         for ln in lines:
             try:
-                notes.append("- " + json.loads(ln).get("note", ""))
+                note = json.loads(ln).get("note", "")
             except json.JSONDecodeError:
                 continue
+            if note:
+                notes.append("- " + note)
         return "# Recalled context\n" + "\n".join(notes) if notes else ""
 
     def sync_turn(self, messages) -> None:
@@ -42,6 +44,26 @@ class JSONLMemoryProvider(MemoryProvider):
             if last_asst:
                 note += f" | replied: {last_asst[:160]}"
             append_line(self.path, json.dumps({"note": note}))
+
+    def on_memory_write(self, *, action: str, target: str, content: str = "",
+                        old_text: str = "", result: str = "",
+                        session_id: str = "", **kw) -> None:
+        if action in {"add", "replace"} and content:
+            note = f"{target} {action}: {content[:240]}"
+        elif action == "remove" and old_text:
+            note = f"{target} remove: {old_text[:240]}"
+        else:
+            note = f"{target} {action}".strip()
+        append_line(self.path, json.dumps({
+            "event": "memory_write",
+            "action": action,
+            "target": target,
+            "note": note,
+            "content": content,
+            "old_text": old_text,
+            "result": result,
+            "session_id": session_id,
+        }))
 
 
 class Mem0Provider(MemoryProvider):

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 
 # --- learning loop ----------------------------------------------------------
 class _JSONProvider:
@@ -76,6 +78,57 @@ def test_fts_or_like_recall():
     st.save(s)
     hits = st.search_messages("kubernetes")
     assert hits and hits[0]["session"] == s.id
+
+
+def test_session_search_tool_browse_discover_read_and_scroll():
+    from aegis.session import Session, SessionStore
+    from aegis.tools.base import ToolContext
+    from aegis.tools.recall import SessionSearchTool
+    from aegis.types import Message
+
+    store = SessionStore()
+    previous = Session.create(title="parser launch notes")
+    previous.messages = [
+        Message.user("what did we decide about the parser bug?"),
+        Message.assistant("We fixed the parser bug, shipped v2, and kept the fallback parser."),
+        Message.user("also remember the kubernetes rollout plan"),
+    ]
+    store.save(previous)
+    current = Session.create(title="current chat")
+    store.save(current)
+
+    tool = SessionSearchTool()
+    ctx = ToolContext(session=current)
+
+    browse = json.loads(tool.run({}, ctx).content)
+    assert browse["mode"] == "browse"
+    assert any(row["session_id"] == previous.id for row in browse["results"])
+
+    discover = json.loads(tool.run({"query": "what did we decide about parser bug"}, ctx).content)
+    assert discover["mode"] == "discover"
+    assert discover["results"][0]["session_id"] == previous.id
+    assert discover["results"][0]["match_message_id"] == 0
+
+    read = json.loads(tool.run({"session_id": previous.id[:14]}, ctx).content)
+    assert read["mode"] == "read"
+    assert read["session_id"] == previous.id
+    assert read["messages"][1]["content"].startswith("We fixed the parser bug")
+
+    scroll = json.loads(tool.run({"session_id": previous.id, "around_message_id": 1, "window": 1}, ctx).content)
+    assert scroll["mode"] == "scroll"
+    assert [m["id"] for m in scroll["messages"]] == [0, 1, 2]
+    assert scroll["messages"][1]["anchor"] is True
+
+
+def test_system_prompt_guides_prior_session_recall(tmp_path):
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.session import Session
+
+    agent = Agent(config=Config.load(), provider=_JSONProvider(), session=Session.create(), cwd=tmp_path)
+    agent.ensure_system_prompt()
+    prompt = agent.session.messages[0].content
+    assert "call `session_search` before answering" in prompt
 
 
 def test_session_summary_stored():
