@@ -240,12 +240,21 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "transcribe", "speak", "computer", "download", "github", "mixture_of_agents",
         ],
     },
-    "auxiliary": {                   # small/cheap model for compaction, vision, smart-approval
+    "auxiliary": {                   # small/cheap model for internal side-tasks
         "provider": "",              # "" = reuse main provider
         "model": "",
-        "compaction": {},            # optional purpose overrides: {provider, model, context_length}
-        "session_summary": {},
+        # Per-task slots (each may set provider/model/base_url/api_key/context_length/timeout;
+        # empty = inherit auxiliary.* then the main provider). Resolved by build_aux_provider.
+        "compaction": {},            # context compression summaries
+        "session_summary": {},       # session title/summary
         "trajectory_compression": {},
+        "curator": {},               # phase-2 skill consolidation review
+        "vision": {},                # vision_analyze image understanding
+        "web_extract": {},           # web_extract page summarization
+        "approval": {},              # smart command-approval classifier
+        "skills_hub": {},            # skill-install scan / summarization
+        "mcp": {},                   # MCP tool-selection / summarization
+        "kanban_decomposer": {},     # kanban task decomposition
     },
     "security": {
         "scan_enabled": True,        # Tirith-style pre-execution command scanning
@@ -265,6 +274,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "min_idle_hours": 2,         # only run after the agent has been idle this long
         "stale_after_days": 30,      # active -> stale
         "archive_after_days": 90,    # stale -> archived (Hermes-aligned; never deleted)
+        "llm_review": True,          # phase-2 aux-model consolidation pass (uses auxiliary.curator)
         "backup": {
             "enabled": True,
             "keep": 5,               # tar.gz snapshots of skills/ retained before each run
@@ -289,6 +299,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "status_footer": True,
         "tool_progress": "compact",  # compact | detailed
         "theme": "system",
+    },
+    "prompt_caching": {
+        "cache_ttl": "5m",           # "5m" (default) or "1h" — TTL for Anthropic cache breakpoints
     },
     "responses": {
         "state": {

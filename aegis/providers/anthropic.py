@@ -19,6 +19,26 @@ from .schema import sanitize as _sanitize_schema
 
 ANTHROPIC_VERSION = "2023-06-01"
 
+_CACHE_TTL: str | None = None
+
+
+def _cache_ttl() -> str:
+    """Configured prompt-cache TTL ("5m" default | "1h"), read once per process."""
+    global _CACHE_TTL
+    if _CACHE_TTL is None:
+        try:
+            from ..config import Config
+            _CACHE_TTL = (Config.load().get("prompt_caching.cache_ttl", "5m") or "5m")
+        except Exception:  # noqa: BLE001
+            _CACHE_TTL = "5m"
+    return _CACHE_TTL
+
+
+def _cache_marker() -> dict[str, Any]:
+    """Anthropic cache_control marker honoring the configured TTL (1h needs the field; 5m is default)."""
+    ttl = _cache_ttl()
+    return {"type": "ephemeral", "ttl": ttl} if ttl and ttl != "5m" else {"type": "ephemeral"}
+
 # Models on the adaptive-thinking API surface (budget_tokens would 400 on fable/4.7/4.8
 # and is deprecated on the 4.6 family). Prefix-matched.
 _ADAPTIVE_THINKING_PREFIXES = ("claude-fable", "claude-opus-4-6", "claude-opus-4-7",
@@ -123,7 +143,7 @@ class AnthropicTransport(ProviderTransport):
         for wm in wire_messages[-3:]:
             blocks = wm.get("content")
             if isinstance(blocks, list) and blocks and isinstance(blocks[-1], dict):
-                blocks[-1]["cache_control"] = {"type": "ephemeral"}
+                blocks[-1]["cache_control"] = _cache_marker()
         headers = {
             "Content-Type": "application/json",
             "anthropic-version": ANTHROPIC_VERSION,
@@ -162,7 +182,7 @@ class AnthropicTransport(ProviderTransport):
         if system:
             # Cache the (stable) system prompt prefix to cut cost/latency across turns.
             sys_blocks.append({"type": "text", "text": system,
-                               "cache_control": {"type": "ephemeral"}})
+                               "cache_control": _cache_marker()})
         if sys_blocks:
             payload["system"] = sys_blocks
         wire_tools = self._to_wire_tools(tools)

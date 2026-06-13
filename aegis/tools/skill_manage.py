@@ -173,6 +173,7 @@ def _view(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     skill = ctx.skills.discover().get(name)
     if not skill:
         return _json_error(f"skill '{name}' not found.")
+    ctx.skills.record_view(name)               # Hermes view_count telemetry
     content = ctx.skills.activate(name)
     return _json_result(
         {
@@ -247,6 +248,7 @@ def _patch(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
             return _json_error(f"patch would break SKILL.md structure: {split_err}")
 
     atomic_write(target, new_text)
+    ctx.skills.record_patch(name)              # Hermes patch_count telemetry
     ctx.skills.invalidate()
     _refresh_agent_prompt(ctx)
     rel = str(target.relative_to(skill.dir))

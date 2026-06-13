@@ -96,7 +96,9 @@ class SkillInfo:
     dir: Path
     description: str = ""
     malformed: str = ""              # reason string, empty if well-formed
-    count: int = 0
+    count: int = 0                   # use_count (loaded into a prompt)
+    view_count: int = 0              # skill_manage view
+    patch_count: int = 0             # skill_manage patch/edit/write_file/remove_file
     last_used: str = ""              # iso, "" if never
     age_days: float = 0.0            # days since last_used (or dir mtime)
 
@@ -137,6 +139,8 @@ def _scan(now: datetime | None = None) -> list[SkillInfo]:
 
         u = usage.get(info.name) or usage.get(d.name) or {}
         info.count = int(u.get("count", 0))
+        info.view_count = int(u.get("view_count", 0))
+        info.patch_count = int(u.get("patch_count", 0))
         info.last_used = u.get("last_used", "")
         ref = _parse_iso(info.last_used)
         if ref is None:
@@ -407,25 +411,113 @@ def _write_report(result: dict, stale_days: int, archive_days: int) -> Path:
         f"- pruned (stale, no overlap): {', '.join(result.get('pruned', [])) or 'none'}",
         f"- now stale (>{stale_days}d, watching): {', '.join(result.get('stale', [])) or 'none'}",
         f"- archive-after: {archive_days}d",
+        f"- llm review: {', '.join((result.get('llm_review') or {}).get('actions', [])) or '(none / not run)'}",
     ]
     atomic_write(d / "REPORT.md", "\n".join(lines) + "\n")
     return d
 
 
+_CONSOLIDATION_PROMPT = (
+    "You are the skill curator. Review the agent-created skills listed below and improve the "
+    "library using the `skill_manage` tool (view with `skill`). Priorities, in order:\n"
+    "  1. CONSOLIDATE near-duplicate or overlapping skills — patch the best survivor to absorb "
+    "the key steps/pitfalls of the others, then archive the others (skill_manage delete; archival "
+    "is recoverable).\n"
+    "  2. PATCH skills that are thin, stale, or have drifted from reality.\n"
+    "  3. ARCHIVE skills that are obsolete or fully redundant.\n"
+    "Package integrity: if a skill has references/, scripts/, templates/, or relative links to "
+    "them, either keep it standalone, re-home the support files and rewrite the paths, or archive "
+    "the whole package — never flatten only SKILL.md into another skill.\n"
+    "Do NOT touch bundled, hub-installed, pinned, or user-created skills. Make your edits, then "
+    "stop. If the library is already clean, say so and stop."
+)
+
+
+def _curator_registry():
+    """A tool registry restricted to skill inspection + management."""
+    from .tools.registry import ToolRegistry, default_registry
+    reg = ToolRegistry()
+    for t in default_registry().all():
+        if t.name in ("skill", "skill_manage"):
+            reg.register(t)
+    return reg
+
+
+def _curatable_summaries() -> list[str]:
+    from . import provenance
+    out: list[str] = []
+    for s in _scan():
+        if s.malformed or not provenance.curatable(s.name):
+            continue
+        out.append(f"- {s.name}: {s.description[:160]}  (used {s.count}x, {s.age_days}d idle)")
+    return out
+
+
+def llm_review(config, *, dry_run: bool = False, max_iterations: int = 8) -> dict:
+    """Phase-2 curator (Hermes parity): fork an aux-model agent restricted to skill tools that
+    reads the agent-created skills and consolidates/patches/archives them. No-op (never raises)
+    when there are no curatable skills or no provider is available."""
+    summaries = _curatable_summaries()
+    if not summaries:
+        return {"ran": False, "reason": "no curatable skills"}
+    if dry_run:
+        return {"ran": False, "reason": "dry-run", "candidates": [s[2:].split(":", 1)[0] for s in summaries]}
+    try:
+        from . import provenance
+        from .agent.agent import Agent
+        from .providers.fallback import build_with_fallbacks
+        from .providers.registry import build_aux_provider
+        from .session import Session
+        from .surface import SurfaceRunner
+
+        try:
+            main = build_with_fallbacks(config)
+        except Exception:  # noqa: BLE001
+            main = None
+        provider = build_aux_provider(config, purpose="curator", fallback_provider=main)
+    except Exception as e:  # noqa: BLE001 — maintenance must never crash
+        return {"ran": False, "reason": f"no provider: {type(e).__name__}"}
+
+    child = Agent(config=config, provider=provider, session=Session.create(title="[curator]"),
+                  registry=_curator_registry())
+    child._no_review = True
+    child.tool_context.approver = lambda *a, **k: True   # autonomous maintenance, never blocks
+    child.budget.max_iterations = max_iterations
+    actions: list[str] = []
+
+    def _capture(ev):
+        if ev.get("type") == "tool_result" and ev.get("name") == "skill_manage":
+            actions.append(ev.get("summary", "skill_manage"))
+
+    prompt = _CONSOLIDATION_PROMPT + "\n\nAGENT-CREATED SKILLS:\n" + "\n".join(summaries)
+    try:
+        with provenance.origin_scope("agent"):
+            SurfaceRunner(config, cwd=child.cwd, include_mcp=False, reuse_agents=False).run_prompt(
+                prompt, session=child.session, agent=child, surface="curator",
+                title="curator review", meta={"curator": True}, on_event=_capture,
+            )
+    except Exception as e:  # noqa: BLE001
+        return {"ran": True, "actions": actions, "error": f"{type(e).__name__}: {e}"}
+    return {"ran": True, "actions": actions}
+
+
 def run(config=None, *, dry_run: bool = False) -> dict:
-    """Run a full curator pass: snapshot skills/, apply lifecycle transitions, write a report,
-    and stamp ``last_run_at``. Returns the transition result (plus report path)."""
+    """Run a full curator pass: snapshot skills/, apply lifecycle transitions, optionally run the
+    aux-model consolidation review, write a report, and stamp ``last_run_at``."""
     stale_days, archive_days = STALE_AFTER_DAYS, ARCHIVE_AFTER_DAYS
-    backup_keep, backup_enabled = 5, True
+    backup_keep, backup_enabled, do_llm = 5, True, True
     if config is not None:
         stale_days = int(config.get("curator.stale_after_days", stale_days) or stale_days)
         archive_days = int(config.get("curator.archive_after_days", archive_days) or archive_days)
         backup_keep = int(config.get("curator.backup.keep", backup_keep) or backup_keep)
         backup_enabled = bool(config.get("curator.backup.enabled", True))
+        do_llm = bool(config.get("curator.llm_review", True))
     if not dry_run and backup_enabled:
         backup(reason="pre-curator", keep=backup_keep)
     result = apply_transitions(dry_run=dry_run, stale_after_days=stale_days,
                                archive_after_days=archive_days)
+    if not dry_run and do_llm and config is not None:
+        result["llm_review"] = llm_review(config, dry_run=False)
     if not dry_run:
         result["report"] = str(_write_report(result, stale_days, archive_days))
         state = _load_state()
@@ -482,8 +574,13 @@ def cmd_curator(args, config) -> int:
         skills = _scan()
         print(f"  {len(skills)} personal skill(s) in {cfg.skills_dir()}")
         for s in skills:
-            tag = f"!{s.malformed}" if s.malformed else f"{s.count}x, {s.age_days}d idle"
+            tag = (f"!{s.malformed}" if s.malformed
+                   else f"use {s.count} · view {s.view_count} · patch {s.patch_count} · {s.age_days}d idle")
             print(f"  {s.name:<28} {tag}")
+        lru = [s for s in sorted(skills, key=lambda s: -s.age_days) if not s.malformed][:5]
+        if lru:
+            print("  least-recently-used (next to go stale): "
+                  + ", ".join(f"{s.name} ({s.age_days}d)" for s in lru))
         arc = archived()
         if arc:
             print(f"  archived: {', '.join(arc)}")

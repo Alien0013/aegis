@@ -45,6 +45,7 @@ class ToolRegistry:
 def default_registry(*, include_plugins: bool = True) -> ToolRegistry:
     """Registry pre-loaded with all built-in tools (+ extended + plugin tools)."""
     from .agentic import agentic_tools
+    from .aux_tools import aux_tools
     from .browser import browser_tools
     from .builtin import all_builtin_tools
     from .code_exec import code_tools
@@ -62,6 +63,7 @@ def default_registry(*, include_plugins: bool = True) -> ToolRegistry:
     reg = ToolRegistry()
     reg.register_all(all_builtin_tools())
     reg.register_all(extra_tools())
+    reg.register_all(aux_tools())
     reg.register_all(agentic_tools())
     reg.register_all(code_tools())
     reg.register_all(browser_tools())

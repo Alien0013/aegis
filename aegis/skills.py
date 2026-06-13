@@ -198,16 +198,30 @@ class SkillsLoader:
         except Exception:  # noqa: BLE001
             return {}
 
-    def record_use(self, name: str) -> None:
+    def _bump(self, name: str, count_key: str, ts_key: str) -> None:
+        """Increment one telemetry counter (use/view/patch) and its timestamp."""
         import json
         from ._locks import STORE_LOCK
         from .util import atomic_write, now_iso
         with STORE_LOCK:                       # serialize read-modify-write on usage.json
             data = self.usage()
             entry = data.setdefault(name, {"count": 0, "last_used": ""})
-            entry["count"] += 1
-            entry["last_used"] = now_iso()
+            entry[count_key] = int(entry.get(count_key, 0)) + 1
+            entry[ts_key] = now_iso()
             atomic_write(self._usage_path(), json.dumps(data, indent=2))
+
+    def record_use(self, name: str) -> None:
+        # Hermes use_count: skill loaded into a conversation's prompt. `count`/`last_used`
+        # stay the canonical use counters for back-compat with existing readers.
+        self._bump(name, "count", "last_used")
+
+    def record_view(self, name: str) -> None:
+        # Hermes view_count: the agent inspected the skill via skill_manage view.
+        self._bump(name, "view_count", "last_viewed_at")
+
+    def record_patch(self, name: str) -> None:
+        # Hermes patch_count: skill_manage patch/edit/write_file/remove_file ran on the skill.
+        self._bump(name, "patch_count", "last_patched_at")
 
     def improve(self, name: str, note: str) -> Path | None:
         """Append a learned note to a skill's body (closing the create→use→improve loop)."""
