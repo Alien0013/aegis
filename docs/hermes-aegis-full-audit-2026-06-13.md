@@ -22,6 +22,7 @@ Implementation update in this branch:
 - Added external-memory `on_memory_write` mirroring hook and JSONL provider support.
 - Added typed FastAPI control-plane routes for auth status, health, config defaults/schema/raw/import, env list/set/reveal/delete, and sessions list/search/stats/detail/export/prune/delete.
 - Added typed FastAPI cron and gateway management routes for job CRUD/run/service status/control and gateway channel/service status/control.
+- Added short-lived single-use WebSocket tickets for `/api/ws` and `/api/pty`.
 - Added regression tests for recall behavior and memory write mirroring.
 
 ## Executive Verdict
@@ -76,8 +77,9 @@ Hermes has:
 Implemented:
 - Added typed FastAPI routes for `/api/health`, `/api/auth/me`, config defaults/schema/raw/import, env list/set/reveal/delete, and sessions list/search/stats/detail/export/prune/delete.
 - Added typed FastAPI routes for cron jobs/service control and gateway status/channels/service control.
+- Added `/api/auth/ws-ticket` and ticket validation for dashboard WebSockets.
 - Kept the generic dispatcher as a compatibility shim for the existing dashboard app.
-- Added FastAPI regression tests for route registration, config/env safety, session search/detail/export/delete, auth status, cron job management, and gateway controls.
+- Added FastAPI regression tests for route registration, config/env safety, session search/detail/export/delete, auth status, WebSocket tickets, cron job management, and gateway controls.
 
 Needed inputs:
 - Continue replacing the generic dispatcher with typed FastAPI routes for remaining parity-critical surfaces.
@@ -86,7 +88,7 @@ Needed inputs:
   - non-loopback fail-closed auth
   - login page
   - username/password or OAuth providers
-  - WS ticket flow for `/api/ws` and `/api/pty`
+  - richer auth provider/session UX beyond the current token + WS-ticket flow
 - Add missing route groups:
   - config export
   - provider OAuth start/submit/poll/revoke
@@ -263,8 +265,8 @@ P0: Fix recall behavior
 - Done in this branch: `SESSION_SEARCH_GUIDANCE`-style prompt guidance, browse/discover/read/scroll, and regression tests.
 
 P1: Make the dashboard a real control plane
-- Done in this branch: typed routes for auth status, health, config, env, sessions, cron, and gateway while keeping old paths as compatibility shims.
-- Still needed: auth middleware + WS tickets, provider OAuth, audio, self-update, ops, and profile-aware management.
+- Done in this branch: typed routes for auth status, health, config, env, sessions, cron, gateway, and WebSocket tickets while keeping old paths as compatibility shims.
+- Still needed: login/OAuth auth UX, non-loopback fail-closed policy, provider OAuth, audio, self-update, ops, and profile-aware management.
 
 P2: Cron and gateway foundations
 - Structured cron store and `cronjob` tool.

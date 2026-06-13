@@ -69,6 +69,7 @@ def test_fastapi_registers_live_and_pty_websockets(tmp_path, monkeypatch):
     assert routes["/api/pty"] == "APIWebSocketRoute"
     for path in (
         "/api/auth/me",
+        "/api/auth/ws-ticket",
         "/api/config/schema",
         "/api/config/raw",
         "/api/env",
@@ -122,6 +123,31 @@ def test_fastapi_config_and_env_control_plane(tmp_path, monkeypatch):
     assert deleted.json()["ok"] is True
     missing = asyncio.run(_request(app, "GET", "/api/env/OPENAI_API_KEY/reveal", headers=headers))
     assert missing.status_code == 404
+
+
+def test_fastapi_websocket_ticket_flow(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    from types import SimpleNamespace
+
+    from aegis.config import Config
+    from aegis.dashboard_fastapi import _websocket_authorized
+
+    denied = asyncio.run(_request(app, "POST", "/api/auth/ws-ticket"))
+    assert denied.status_code == 401
+
+    issued = asyncio.run(_request(app, "POST", "/api/auth/ws-ticket", headers=headers))
+    assert issued.status_code == 200
+    body = issued.json()
+    assert body["ok"] is True
+    assert body["ticket"]
+    assert body["ttl_seconds"] > 0
+
+    cfg = Config.load()
+    ws = SimpleNamespace(query_params={"ticket": body["ticket"]}, headers={}, cookies={})
+    assert _websocket_authorized(ws, cfg)
+    assert not _websocket_authorized(ws, cfg)
 
 
 def test_fastapi_sessions_control_plane(tmp_path, monkeypatch):

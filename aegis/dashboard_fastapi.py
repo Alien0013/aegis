@@ -8,6 +8,8 @@ import json
 import os
 import queue
 import re
+import secrets
+import time
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -28,6 +30,9 @@ except ImportError as exc:  # pragma: no cover - import check covers dependency 
 from . import dashboard as dash
 
 _RESIZE_RE = re.compile(rb"^\x1b\]1337;Resize=cols=(\d+);rows=(\d+)\x07$")
+_WS_TICKET_TTL_SECONDS = 30
+_WS_TICKETS: dict[str, float] = {}
+_WS_TICKET_LOCK = threading.Lock()
 
 
 def _query_dict(request: Request) -> dict[str, list[str]]:
@@ -58,7 +63,37 @@ def _require_request(request: Request, config: Config) -> None:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+def _issue_ws_ticket(ttl_seconds: int = _WS_TICKET_TTL_SECONDS) -> dict:
+    now = time.time()
+    expires = now + max(1, int(ttl_seconds))
+    ticket = secrets.token_urlsafe(32)
+    with _WS_TICKET_LOCK:
+        for key, expiry in list(_WS_TICKETS.items()):
+            if expiry <= now:
+                _WS_TICKETS.pop(key, None)
+        _WS_TICKETS[ticket] = expires
+    return {
+        "ticket": ticket,
+        "ttl_seconds": int(expires - now),
+        "expires_at": datetime.fromtimestamp(expires, timezone.utc).isoformat(timespec="seconds"),
+    }
+
+
+def _consume_ws_ticket(ticket: str) -> bool:
+    if not ticket:
+        return False
+    now = time.time()
+    with _WS_TICKET_LOCK:
+        expiry = _WS_TICKETS.pop(ticket, None)
+        for key, candidate in list(_WS_TICKETS.items()):
+            if candidate <= now:
+                _WS_TICKETS.pop(key, None)
+    return bool(expiry and expiry > now)
+
+
 def _websocket_authorized(ws: WebSocket, config: Config) -> bool:
+    if _consume_ws_ticket(ws.query_params.get("ticket", "")):
+        return True
     return _authorized_token(
         config,
         query=ws.query_params.get("token", ""),
@@ -712,6 +747,12 @@ def create_app(config: Config) -> FastAPI:
             "providers": ["token"] if dash._dashboard_token(config) else ["loopback"],
             "user": "local",
         })
+
+    @app.post("/api/auth/ws-ticket")
+    async def api_auth_ws_ticket(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        ticket = _issue_ws_ticket()
+        return JSONResponse({"ok": True, **ticket})
 
     @app.get("/api/config")
     async def api_config_get(request: Request) -> JSONResponse:
