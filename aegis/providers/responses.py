@@ -273,6 +273,8 @@ class ResponsesTransport(ProviderTransport):
     def _stream(self, url, headers, payload, on_delta, timeout, on_response_id=None,
                 on_reasoning=None) -> LLMResponse:
         text_parts: list[str] = []
+        done_text_parts: list[str] = []
+        output_items: list[dict[str, Any]] = []
         completed: dict[str, Any] | None = None
         seen_response_ids: set[str] = set()
         stream_timeout = httpx.Timeout(connect=15.0, read=90.0, write=30.0, pool=15.0)
@@ -298,6 +300,14 @@ class ResponsesTransport(ProviderTransport):
                         text_parts.append(delta)
                         if on_delta:
                             on_delta(delta)
+                    elif etype == "response.output_text.done":
+                        text = event.get("text") or ""
+                        if text:
+                            done_text_parts.append(text)
+                    elif etype == "response.output_item.done":
+                        item = event.get("item")
+                        if isinstance(item, dict):
+                            output_items.append(item)
                     elif etype.startswith("response.reasoning") and etype.endswith(".delta"):
                         # response.reasoning_summary_text.delta (and raw
                         # reasoning_text.delta) carry the model's live thinking.
@@ -308,10 +318,15 @@ class ResponsesTransport(ProviderTransport):
                         completed = event.get("response") or {}
                         self._notify_response_id(completed, on_response_id, seen_response_ids)
         if completed:
+            if output_items and not completed.get("output"):
+                completed = dict(completed)
+                completed["output"] = output_items
             parsed = self._parse_response(completed)
             if parsed.text:
                 return parsed
             parsed.text = "".join(text_parts)
+            if not parsed.text:
+                parsed.text = "".join(done_text_parts)
             return parsed
         return LLMResponse(text="".join(text_parts))
 

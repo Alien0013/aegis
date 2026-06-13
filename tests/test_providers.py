@@ -953,6 +953,60 @@ def test_responses_stream_reports_active_response_id(monkeypatch):
     assert seen == ["resp_stream"]
 
 
+def test_responses_stream_uses_done_output_item_when_completed_output_is_empty(monkeypatch):
+    from aegis.providers.responses import ResponsesTransport
+    from aegis.types import Message
+
+    class FakeAuth:
+        def headers(self):
+            return {}
+
+    class FakeStream:
+        status_code = 200
+        headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def iter_lines(self):
+            return iter([
+                'data: {"type":"response.created","response":{"id":"resp_codex"}}',
+                'data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Recovered from done item."}]}}',
+                'data: {"type":"response.completed","response":{"id":"resp_codex","status":"completed","output":[],"usage":{"output_tokens":5}}}',
+                "data: [DONE]",
+            ])
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def stream(self, method, url, headers, json):
+            return FakeStream()
+
+    monkeypatch.setattr("aegis.providers.responses.httpx.Client", FakeClient)
+
+    resp = ResponsesTransport().complete(
+        base_url="https://chatgpt.com/backend-api/codex",
+        auth=FakeAuth(),
+        model="gpt-5.5",
+        messages=[Message.user("hi")],
+        tools=None,
+        stream=False,
+    )
+
+    assert resp.text == "Recovered from done item."
+    assert resp.raw["output"][0]["type"] == "message"
+
+
 def test_codex_responses_forces_stream(monkeypatch):
     from aegis.providers.responses import ResponsesTransport
     from aegis.types import LLMResponse, Message
