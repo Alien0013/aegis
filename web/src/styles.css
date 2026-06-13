@@ -85,6 +85,8 @@ kbd{background:var(--panel2);border:1px solid var(--line);border-radius:5px;padd
 .nav svg{width:16px;height:16px;flex:0 0 auto;opacity:.85}
 .nav.active svg{color:var(--accent);opacity:1}
 .sidefoot{margin-top:auto;padding-top:10px;display:flex;flex-direction:column;gap:8px}
+.profile-switch{display:flex;flex-direction:column;gap:5px;font-size:11px;color:var(--mut)}
+.profile-switch select{font-size:12px;padding:6px 8px}
 .statusbox{display:flex;align-items:center;gap:9px;padding:9px;border:1px solid var(--line);border-radius:7px;background:var(--panel2);min-width:0}
 .statusbox b,.statusbox span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
 .statusbox b{font-weight:600}.statusbox span{color:var(--mut);font-size:11px}
@@ -149,6 +151,7 @@ textarea{resize:vertical;font-family:inherit}
 label.lbl{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--mut);font-weight:500}
 .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
 .toolbar .search{flex:1;min-width:160px}
+input.compact{width:210px;max-width:38vw}
 .switch{position:relative;width:34px;height:20px;flex:0 0 auto;cursor:pointer}
 .switch input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer}
 .switch .track{position:absolute;inset:0;background:var(--line2);border-radius:20px;transition:background .15s}
@@ -164,6 +167,13 @@ label.lbl{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--
 .badge.warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 40%,var(--line));background:color-mix(in srgb,var(--warn) 10%,transparent)}
 .badge.dot::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
 .pill{display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:20px;background:var(--panel2);border:1px solid var(--line);font-size:11px;color:var(--mut)}
+.pill.warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 38%,var(--line))}
+.pill-list,.badge-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:8px}
+.notice{margin-top:8px;padding:8px 9px;border:1px solid var(--line);border-radius:7px;font-size:12px;color:var(--mut);background:var(--panel2)}
+.notice.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 36%,var(--line))}
+.notice.warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 36%,var(--line))}
+.notice.err{color:var(--err);border-color:color-mix(in srgb,var(--err) 36%,var(--line))}
+.smalltext{font-size:11.5px;margin-top:8px;white-space:pre-wrap;overflow-wrap:anywhere}
 
 /* ───────── stat tiles ───────── */
 .stat{padding:13px 14px}
@@ -175,8 +185,11 @@ label.lbl{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--
 /* ───────── rows / lists ───────── */
 .row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px solid var(--line)}
 .row:last-child{border-bottom:0}
+.row.compact{padding:7px 0}
 .row.click{cursor:pointer;margin:0 -16px;padding:9px 16px;border-radius:0;transition:background .12s}
 .row.click:hover{background:var(--panel2)}
+.statline{display:flex;flex-direction:column;gap:2px;margin-bottom:7px}
+.statline b{font-size:20px;line-height:1}.statline span{font-family:var(--mono);font-size:12px;color:var(--mut);overflow-wrap:anywhere}
 
 /* ───────── table ───────── */
 .tablewrap{overflow:auto;border-radius:var(--radius)}
@@ -284,7 +297,7 @@ table.tbl td.mono,table.tbl td .mono{font-family:var(--mono);color:var(--mut);fo
 .quick-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
 .toggle-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin-top:12px}
 .toggle-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid var(--line);border-radius:7px;background:var(--panel2);font-size:12.5px}
-.group-h{display:flex;justify-content:space-between;align-items:center;padding:11px 14px;cursor:pointer;font-size:13px}
+.group-h{display:flex;justify-content:space-between;align-items:center;padding:11px 14px;cursor:pointer;font-size:13px;width:100%;border:0;border-radius:0;background:transparent;color:var(--text);text-align:left}
 .group-h:hover{background:var(--panel2)}
 .fields{padding:2px 14px 12px;display:grid;grid-template-columns:1fr 1fr;gap:4px 22px}
 @media(max-width:760px){.fields{grid-template-columns:1fr}}
@@ -296,6 +309,17 @@ table.tbl td.mono,table.tbl td .mono{font-family:var(--mono);color:var(--mut);fo
 .field-val{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:5px 8px;cursor:pointer;max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;font-family:var(--mono);font-size:11.5px}
 .field-edit{display:flex;gap:6px;align-items:flex-start;width:100%}
 .field-edit textarea{flex:1;min-width:0}
+.schema-field{align-items:flex-start}
+.field .field-info{display:flex;flex-direction:column;gap:2px;min-width:0;white-space:normal}
+.field .field-info b{font-family:inherit;font-size:12.5px;color:var(--text);font-weight:600}
+.field .field-info small{font-family:inherit;font-size:11.5px;color:var(--mut);line-height:1.35}
+.field.schema-field input[type=text],.field.schema-field input[type=number],.field.schema-field select{width:220px;max-width:42vw}
+.key-group{padding:2px 14px 8px}
+.list-subhead{font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.06em;margin-top:9px}
+.channel-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;padding:14px}
+.channel-card{border:1px solid var(--line);border-radius:8px;background:color-mix(in srgb,var(--panel2) 60%,transparent);padding:12px;min-width:0}
+.channel-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+.channel-top b{font-size:14px}
 
 /* ───────── page-specific ───────── */
 .banner{background:color-mix(in srgb,var(--accent) 8%,var(--panel));border:1px solid color-mix(in srgb,var(--accent) 40%,var(--line));border-radius:var(--radius);padding:13px 15px}

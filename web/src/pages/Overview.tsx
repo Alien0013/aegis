@@ -10,7 +10,7 @@ const QUICK: [string, string][] = [
   ["agents", "Watch spawned agents live"],
   ["models", "Provider & model"],
   ["memory", "What the agent remembers"],
-  ["channels", "Pair Telegram / Discord / Slack"],
+  ["channels", "Channels & gateway"],
   ["cron", "Schedule recurring work"],
 ];
 

@@ -106,6 +106,8 @@ def test_governance_backfills_orphans():
 class _FakeProvider:
     """Returns one tool call, then a final message."""
 
+    name = "fake"
+    model = "fake-model"
     context_length = 200_000
 
     def __init__(self):
@@ -156,6 +158,12 @@ def test_agent_loop_runs(tmp_path, monkeypatch):
     tool_event = next(e for e in events if e["type"] == "tool_result")
     assert {"preview", "duration_ms", "artifact_ref", "classification"} <= set(tool_event)
     assert isinstance(tool_event["duration_ms"], int)
+    provider_starts = [e for e in events if e["type"] == "provider_start"]
+    provider_ends = [e for e in events if e["type"] == "provider_end"]
+    assert len(provider_starts) == 2
+    assert len(provider_ends) == 2
+    assert provider_starts[0]["provider"] == "fake"
+    assert provider_ends[0]["duration_ms"] >= 0
     assert any(e["type"] == "final" for e in events)
     trace = TraceStore.from_config(cfg).get_trace(agent._trace_context["trace_id"])
     provider_span = next(s for s in trace["spans"] if s["kind"] == "provider_call")

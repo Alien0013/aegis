@@ -1075,6 +1075,12 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                 successful_fallback_attempt = index
 
         provider_started = time.perf_counter()
+        emit({
+            "type": "provider_start",
+            "provider": getattr(agent.provider, "name", ""),
+            "model": getattr(agent.provider, "model", ""),
+            "stream": bool(agent.stream),
+        })
         try:
             agent._active_response_id = ""
             agent._active_response_cancelled = ""
@@ -1098,6 +1104,13 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
             from ..providers.fallback import classify_provider_error, recovery_action
             action = recovery_action(classify_provider_error(e))
             provider_duration_ms = int((time.perf_counter() - provider_started) * 1000)
+            emit({
+                "type": "provider_end",
+                "provider": getattr(agent.provider, "name", ""),
+                "model": getattr(agent.provider, "model", ""),
+                "duration_ms": provider_duration_ms,
+                "status": "error",
+            })
             error_data = {
                 "type": type(e).__name__,
                 "message": str(e),
@@ -1193,6 +1206,13 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
         budget.api_call_count += 1
         budget.usage.add(resp.usage)
         provider_duration_ms = int((time.perf_counter() - provider_started) * 1000)
+        emit({
+            "type": "provider_end",
+            "provider": getattr(agent.provider, "name", ""),
+            "model": getattr(agent.provider, "model", ""),
+            "duration_ms": provider_duration_ms,
+            "status": "ok",
+        })
         response_payload = _response_trace_data(resp, provider_duration_ms)
         if fallback_attempts:
             response_payload["fallback_attempts"] = fallback_attempts

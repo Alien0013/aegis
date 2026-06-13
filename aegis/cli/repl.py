@@ -323,6 +323,22 @@ class Renderer:
                 self._streaming = False
             elif e.get("text"):
                 _out(e["text"])
+        elif t == "provider_start":
+            self._provider_streaming = bool(e.get("stream"))
+            _out(
+                f"  contacting {e.get('provider') or 'provider'} / {e.get('model') or 'model'}...",
+                style="bright_black",
+            )
+        elif t == "provider_end":
+            ms = int(e.get("duration_ms") or 0)
+            if getattr(self, "_provider_streaming", False) and e.get("status") != "error":
+                return
+            if e.get("status") == "error" or ms >= 1500:
+                style = "red" if e.get("status") == "error" else "bright_black"
+                _out(
+                    f"  provider {e.get('status') or 'done'} in {ms / 1000:.1f}s",
+                    style=style,
+                )
         elif t == "tool_start":
             args = e.get("args", {})
             detail = (args.get("command") or args.get("path") or args.get("url")

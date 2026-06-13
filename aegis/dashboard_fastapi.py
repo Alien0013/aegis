@@ -285,6 +285,98 @@ def _html_response(config: Config, request: Request | None = None) -> HTMLRespon
     return response
 
 
+_CONFIG_FIELD_META: dict[str, dict[str, Any]] = {
+    "model.provider": {
+        "label": "Provider",
+        "description": "Primary model provider used by CLI, dashboard, gateway, and scheduled jobs.",
+        "group": "Model",
+    },
+    "model.default": {
+        "label": "Default model",
+        "description": "Model id for the active provider.",
+        "group": "Model",
+    },
+    "model.base_url": {
+        "label": "Base URL override",
+        "description": "OpenAI-compatible endpoint override for custom/local providers.",
+        "group": "Model",
+    },
+    "model.api_mode": {
+        "label": "API mode override",
+        "description": "Force a transport when auto-detection is not enough.",
+        "enum": ["", "chat_completions", "responses", "anthropic", "codex_app_server"],
+        "group": "Model",
+    },
+    "model.context_length": {
+        "label": "Context length override",
+        "description": "Override detected context length only when the provider catalog is wrong.",
+        "group": "Model",
+    },
+    "tools.exec_mode": {
+        "label": "Tool permissions",
+        "description": "How shell/file/network tools ask for or apply permissions.",
+        "enum": ["auto", "ask", "smart", "allowlist", "deny", "full"],
+        "group": "Tools & permissions",
+        "restart": "new turns",
+    },
+    "display.reasoning": {
+        "label": "Reasoning display",
+        "description": "How much reasoning telemetry the terminal and dashboard show.",
+        "enum": ["summary", "live", "off"],
+        "group": "Display",
+    },
+    "agent.reasoning_effort": {
+        "label": "Reasoning effort",
+        "description": "Default reasoning budget for providers that support it.",
+        "enum": ["off", "minimal", "low", "medium", "high", "xhigh"],
+        "group": "Agent",
+    },
+    "gateway.channels": {
+        "label": "Gateway channels",
+        "description": "Enabled inbound/outbound gateway platforms.",
+        "group": "Gateway",
+        "restart": "gateway service",
+    },
+    "gateway.busy_mode": {
+        "label": "Busy mode",
+        "description": "What happens when a channel message arrives while the agent is mid-turn.",
+        "enum": ["queue", "steer", "interrupt"],
+        "group": "Gateway",
+    },
+    "gateway.session_mode": {
+        "label": "Session mode",
+        "description": "How channel messages map to AEGIS sessions.",
+        "enum": ["main", "per_channel", "per_channel_peer", "per_peer"],
+        "group": "Gateway",
+    },
+    "gateway.require_mention": {
+        "label": "Require mention",
+        "description": "Only answer in group channels when the bot is mentioned.",
+        "group": "Gateway",
+    },
+    "learn.background": {
+        "label": "Background learning",
+        "description": "Let AEGIS learn reusable memories/skills in the background.",
+        "group": "Learning",
+    },
+    "learn.auto_apply": {
+        "label": "Apply memories",
+        "description": "Attach relevant memories automatically to new turns.",
+        "group": "Learning",
+    },
+    "learn.auto_apply_skills": {
+        "label": "Apply skills",
+        "description": "Attach relevant skills automatically to new turns.",
+        "group": "Learning",
+    },
+    "memory.enabled": {
+        "label": "Memory",
+        "description": "Enable local memory/profile retrieval.",
+        "group": "Memory",
+    },
+}
+
+
 def _config_schema(defaults: dict[str, Any] | None = None) -> dict:
     from .config import DEFAULT_CONFIG
 
@@ -296,10 +388,12 @@ def _config_schema(defaults: dict[str, Any] | None = None) -> dict:
                 if isinstance(value, dict):
                     rows.extend(flatten(value, path))
                 else:
+                    meta = _CONFIG_FIELD_META.get(path, {})
                     rows.append({
                         "path": path,
                         "type": type(value).__name__ if value is not None else "null",
                         "default": value,
+                        **meta,
                     })
             return rows
         return []
@@ -311,7 +405,8 @@ def _config_schema(defaults: dict[str, Any] | None = None) -> dict:
         if isinstance(value, dict)
     }
     loose = [
-        {"path": key, "type": type(value).__name__ if value is not None else "null", "default": value}
+        {"path": key, "type": type(value).__name__ if value is not None else "null",
+         "default": value, **_CONFIG_FIELD_META.get(key, {})}
         for key, value in sorted(base.items())
         if not isinstance(value, dict)
     ]
@@ -570,6 +665,41 @@ def _gateway_status(config: Config) -> dict:
     }
 
 
+def _provider_probe(config: Config, body: dict[str, Any]) -> dict:
+    from .doctor import probe_provider
+
+    probe_config = Config(copy.deepcopy(config.data))
+    provider = str(body.get("provider") or "").strip()
+    model = str(body.get("model") or "").strip()
+    if provider:
+        probe_config.data.setdefault("model", {})["provider"] = provider
+    if model:
+        probe_config.data.setdefault("model", {})["default"] = model
+    ok, detail = probe_provider(probe_config)
+    return {
+        "ok": bool(ok),
+        "provider": probe_config.get("model.provider"),
+        "model": probe_config.get("model.default"),
+        "detail": detail,
+    }
+
+
+def _gateway_probe(body: dict[str, Any]) -> dict:
+    from .doctor import CHANNEL_PROBES
+
+    channel = str(body.get("channel") or "").strip().lower()
+    if not channel:
+        return {"ok": False, "error": "channel is required"}
+    probe = CHANNEL_PROBES.get(channel)
+    if probe is None:
+        return {"ok": False, "channel": channel, "detail": "no live probe for this channel yet"}
+    try:
+        ok, detail = probe()
+    except Exception as exc:  # noqa: BLE001
+        ok, detail = False, f"{type(exc).__name__}: {exc}"
+    return {"ok": bool(ok), "channel": channel, "detail": detail}
+
+
 def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
     if path == "/api/status":
         return dash._dashboard_status(config)
@@ -582,6 +712,8 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
     if path == "/api/config":
         return dash._redacted_config(config)
     if path == "/api/models":
+        return dash._dashboard_models(config)
+    if path == "/api/providers":
         return dash._dashboard_models(config)
     if path == "/api/analytics":
         from . import ratelimit
@@ -768,6 +900,8 @@ def _api_post(path: str, body: dict, config: Config, chat_runner: Any) -> dict:
                 "model": config.get("model.default"),
                 "warning": registry.model_validation_message(validation),
                 "validation": validation}
+    if path == "/api/providers/test":
+        return _provider_probe(config, body)
     if path == "/api/keys":
         from .config import set_env_var
 
@@ -785,6 +919,8 @@ def _api_post(path: str, body: dict, config: Config, chat_runner: Any) -> dict:
         if act == "revoke" and body.get("user_id"):
             return {"ok": ps.revoke(plat, body["user_id"])}
         return {"error": "bad pairing request"}
+    if path == "/api/gateway/probe":
+        return _gateway_probe(body)
     if path == "/api/system":
         if body.get("action") == "backup":
             from .backup import create_backup

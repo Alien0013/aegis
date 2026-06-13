@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { Icon } from "./lib/icons";
-import { api } from "./lib/api";
+import { api, post } from "./lib/api";
 import { Loading } from "./lib/ui";
 import { CommandPalette } from "./CommandPalette";
 import { Tooltip, TooltipProvider } from "./lib/components/Tooltip";
@@ -111,6 +111,7 @@ export function App() {
   const [navOpen, setNavOpen] = useState(false);
   const [cmdOpen, setCmdOpen] = useState(false);
   const [status, setStatus] = useState<any>(null);
+  const [profiles, setProfiles] = useState<any>(null);
   const [navQuery, setNavQuery] = useState("");
   useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem("aegis_theme", theme); }, [theme]);
   const loadStatus = () => api("status").then((s) => setStatus(s)).catch(() => setStatus({ error: true }));
@@ -120,6 +121,9 @@ export function App() {
     load();
     const timer = setInterval(load, 15000);
     return () => { mounted = false; clearInterval(timer); };
+  }, []);
+  useEffect(() => {
+    api("profiles").then(setProfiles).catch(() => setProfiles(null));
   }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -186,6 +190,22 @@ export function App() {
         ))}
         {!visibleNav.length && <div className="empty small">No pages match</div>}
         <div className="sidefoot">
+          {profiles?.available?.length > 0 && (
+            <label className="profile-switch">
+              <span>Persona</span>
+              <select
+                value={profiles.active || ""}
+                onChange={async (e) => {
+                  await post("profiles", { name: e.target.value });
+                  const next = await api("profiles");
+                  setProfiles(next);
+                }}
+              >
+                <option value="">Default</option>
+                {profiles.available.map((name: string) => <option key={name} value={name}>{name}</option>)}
+              </select>
+            </label>
+          )}
           <div className="statusbox">
             <span className={"statusdot" + (!online ? " err" : "")} />
             <div>

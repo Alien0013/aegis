@@ -29,6 +29,12 @@ export async function post<T = any>(path: string, body: unknown): Promise<T> {
   return r.json();
 }
 
+export async function apiDelete<T = any>(path: string): Promise<T> {
+  const r = await fetch(`/api/${path}`, { method: "DELETE", headers: headers() });
+  if (!r.ok) throw new Error(`${path}: ${r.status}`);
+  return r.json();
+}
+
 export function sse(path: string, onMessage: (data: any) => void): () => void {
   const q = TOKEN ? `${path}${path.includes("?") ? "&" : "?"}token=${TOKEN}` : path;
   const es = new EventSource(`/api/${q}`);

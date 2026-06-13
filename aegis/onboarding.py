@@ -180,7 +180,7 @@ MODEL_PRESETS: dict[str, list[tuple[str, str]]] = {
 
 VALID_WEB_BACKENDS = {"auto", "duckduckgo", "brave", "tavily", "serper", "skip"}
 VALID_TOOLSETS = {"core", "browser", "computer", "voice", "lsp", "mcp", "all"}
-VALID_CHANNELS = {"cli", "telegram", "discord", "slack", "signal", "matrix", "email", "webhook"}
+VALID_CHANNELS = {"cli", "telegram", "discord", "slack", "signal", "matrix", "email", "webhook", "ntfy"}
 
 
 @dataclass

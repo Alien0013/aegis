@@ -214,6 +214,54 @@ def test_fastapi_config_and_env_control_plane(tmp_path, monkeypatch):
     assert missing.status_code == 404
 
 
+def test_fastapi_provider_and_gateway_control_plane_routes(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    schema = asyncio.run(_request(app, "GET", "/api/config/schema", headers=headers)).json()
+    exec_mode = next(f for f in schema["fields"] if f["path"] == "tools.exec_mode")
+    assert exec_mode["enum"] == ["auto", "ask", "smart", "allowlist", "deny", "full"]
+    assert exec_mode["description"]
+
+    providers = asyncio.run(_request(app, "GET", "/api/providers", headers=headers))
+    assert providers.status_code == 200
+    body = providers.json()
+    assert body["provider_catalog"]
+    assert body["active"]
+
+    import aegis.doctor as doctor
+
+    def fake_probe(config):
+        return True, f"{config.get('model.provider')}/{config.get('model.default')} ok"
+
+    monkeypatch.setattr(doctor, "probe_provider", fake_probe)
+    probe = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/providers/test",
+        json={"provider": "openai", "model": "gpt-test"},
+        headers=headers,
+    ))
+    assert probe.status_code == 200
+    assert probe.json() == {
+        "ok": True,
+        "provider": "openai",
+        "model": "gpt-test",
+        "detail": "openai/gpt-test ok",
+    }
+
+    monkeypatch.setitem(doctor.CHANNEL_PROBES, "telegram", lambda: (True, "bot @aegis"))
+    channel = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/gateway/probe",
+        json={"channel": "telegram"},
+        headers=headers,
+    ))
+    assert channel.status_code == 200
+    assert channel.json() == {"ok": True, "channel": "telegram", "detail": "bot @aegis"}
+
+
 def test_fastapi_websocket_ticket_flow(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
     headers = {"X-Aegis-Token": "t"}

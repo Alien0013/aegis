@@ -1,7 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, post } from "../lib/api";
 
-// flatten nested config into dotted keys for inline editing
+type SchemaField = {
+  path: string;
+  type?: string;
+  default?: any;
+  label?: string;
+  description?: string;
+  enum?: string[];
+  group?: string;
+  restart?: string;
+};
+
 function flatten(obj: any, prefix = ""): [string, any][] {
   const out: [string, any][] = [];
   for (const [k, v] of Object.entries(obj || {})) {
@@ -12,59 +22,102 @@ function flatten(obj: any, prefix = ""): [string, any][] {
   return out;
 }
 
-const QUICK_SELECTS = [
-  { key: "tools.exec_mode", label: "Permissions", options: ["auto", "ask", "smart", "allowlist", "deny", "full"] },
-  { key: "display.reasoning", label: "Reasoning view", options: ["summary", "live", "off"] },
-  { key: "agent.reasoning_effort", label: "Reasoning effort", options: ["off", "minimal", "low", "medium", "high", "xhigh"] },
-  { key: "gateway.busy_mode", label: "Busy mode", options: ["queue", "steer", "interrupt"] },
+function getByPath(obj: any, path: string): any {
+  if (obj && Object.prototype.hasOwnProperty.call(obj, path)) return obj[path];
+  return path.split(".").reduce((node, part) => (
+    node && typeof node === "object" ? node[part] : undefined
+  ), obj);
+}
+
+const QUICK_KEYS = [
+  "tools.exec_mode",
+  "display.reasoning",
+  "agent.reasoning_effort",
+  "gateway.busy_mode",
 ];
 
 const QUICK_TOGGLES = [
-  { key: "learn.background", label: "Background learning" },
-  { key: "learn.auto_apply", label: "Apply memories" },
-  { key: "learn.auto_apply_skills", label: "Apply skills" },
-  { key: "memory.enabled", label: "Memory" },
+  "learn.background",
+  "learn.auto_apply",
+  "learn.auto_apply_skills",
+  "memory.enabled",
 ];
 
-// Known enums so a setting renders as a dropdown instead of free text.
-const ENUMS: Record<string, string[]> = Object.fromEntries(QUICK_SELECTS.map((s) => [s.key, s.options]));
-
-// Friendly section titles for the top-level config groups.
-const GROUP_TITLES: Record<string, string> = {
-  agent: "Agent", tools: "Tools & permissions", model: "Model", memory: "Memory",
-  learn: "Learning", display: "Display", gateway: "Gateway", web: "Web access",
-  server: "Dashboard & server", mcp: "MCP", cron: "Scheduled tasks", goals: "Goals",
-  onboarding: "Onboarding", lsp: "Language server",
+const FALLBACK_ENUMS: Record<string, string[]> = {
+  "tools.exec_mode": ["auto", "ask", "smart", "allowlist", "deny", "full"],
+  "display.reasoning": ["summary", "live", "off"],
+  "agent.reasoning_effort": ["off", "minimal", "low", "medium", "high", "xhigh"],
+  "gateway.busy_mode": ["queue", "steer", "interrupt"],
 };
-// title-case any group we don't have an explicit label for (custom_providers → Custom providers)
-const groupTitle = (g: string) =>
-  GROUP_TITLES[g] || g.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+
+const GROUP_TITLES: Record<string, string> = {
+  agent: "Agent",
+  tools: "Tools & permissions",
+  model: "Model",
+  memory: "Memory",
+  learn: "Learning",
+  display: "Display",
+  gateway: "Gateway",
+  web: "Web access",
+  server: "Dashboard & server",
+  mcp: "MCP",
+  cron: "Scheduled tasks",
+  goals: "Goals",
+  onboarding: "Onboarding",
+  lsp: "Language server",
+};
+
+const groupTitle = (field: SchemaField) => (
+  field.group || GROUP_TITLES[field.path.split(".")[0]] ||
+  field.path.split(".")[0].replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase())
+);
+
+const labelFor = (field: SchemaField) => (
+  field.label || field.path.split(".").slice(1).join(".") || field.path
+);
 
 export function ConfigPage() {
   const [cfg, setCfg] = useState<any>(undefined);
+  const [schema, setSchema] = useState<SchemaField[]>([]);
   const [q, setQ] = useState("");
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [edit, setEdit] = useState<Record<string, string>>({});
   const [newKey, setNewKey] = useState("");
   const [newValue, setNewValue] = useState("");
   const [msg, setMsg] = useState("");
-  async function load() { try { setCfg(await api("config")); } catch (e) { setCfg({ __err: String(e) }); } }
-  useEffect(() => { load(); }, []);
+
+  async function load() {
+    const [nextCfg, nextSchema] = await Promise.all([api("config"), api("config/schema")]);
+    setCfg(nextCfg);
+    setSchema(nextSchema.fields || []);
+  }
+
+  useEffect(() => { load().catch((e) => setCfg({ __err: String(e) })); }, []);
+  const meta = useMemo(() => new Map(schema.map((f) => [f.path, f])), [schema]);
+
   if (cfg === undefined) return <><Head /><div className="empty"><span className="spin" /> loading...</div></>;
   if (cfg.__err) return <><Head /><div className="card mut">Couldn't load: {cfg.__err}</div></>;
 
-  let rows = flatten(cfg).filter(([k]) => !k.includes("seen"));
-  if (q) rows = rows.filter(([k]) => k.toLowerCase().includes(q.toLowerCase()));
-
-  // group by top-level segment
-  const groups: Record<string, [string, any][]> = {};
-  for (const r of rows) { const g = r[0].split(".")[0]; (groups[g] ||= []).push(r); }
+  const allRows = flatten(cfg).filter(([k]) => !k.includes("seen"));
+  const fields: SchemaField[] = allRows.map(([path, value]) => ({
+    path,
+    default: meta.get(path)?.default,
+    type: meta.get(path)?.type || (value === null ? "null" : typeof value),
+    ...(meta.get(path) || {}),
+  }));
+  const query = q.trim().toLowerCase();
+  const filtered = query
+    ? fields.filter((f) => `${f.path} ${labelFor(f)} ${f.description || ""} ${groupTitle(f)}`.toLowerCase().includes(query))
+    : fields;
+  const groups: Record<string, SchemaField[]> = {};
+  for (const f of filtered) (groups[groupTitle(f)] ||= []).push(f);
   const groupNames = Object.keys(groups).sort();
-  const searching = q.trim().length > 0;
+  const searching = query.length > 0;
 
   function toText(value: any): string {
     return value && typeof value === "object" ? JSON.stringify(value, null, 2) : String(value ?? "");
   }
+
   function parse(raw: string): any {
     const text = raw.trim();
     if (!text) return "";
@@ -76,84 +129,127 @@ export function ConfigPage() {
     return raw;
   }
 
-  async function quickSave(key: string, value: any) {
+  async function saveValue(key: string, value: any) {
     try { await post("config", { key, value }); setMsg(`${key} saved`); await load(); }
     catch (e) { setMsg("Error: " + String(e)); }
   }
+
   async function saveText(key: string, raw: string): Promise<boolean> {
     let value: any;
     try { value = parse(raw); } catch (e) { setMsg("Invalid JSON: " + String(e)); return false; }
-    try { await post("config", { key, value }); setMsg(`${key} saved`); setEdit((e) => { const c = { ...e }; delete c[key]; return c; }); await load(); return true; }
-    catch (e) { setMsg("Error: " + String(e)); return false; }
+    try {
+      await post("config", { key, value });
+      setMsg(`${key} saved`);
+      setEdit((prev) => { const next = { ...prev }; delete next[key]; return next; });
+      await load();
+      return true;
+    } catch (e) {
+      setMsg("Error: " + String(e));
+      return false;
+    }
   }
+
   async function addSetting() {
     const key = newKey.trim();
     if (!key) return;
     if (await saveText(key, newValue)) { setNewKey(""); setNewValue(""); }
   }
 
-  // one typed control per setting — no syntax for the user to remember
-  function Field({ k, v }: { k: string; v: any }) {
-    const leaf = k.split(".").slice(1).join(".") || k;
-    if (typeof v === "boolean")
-      return <label className="field"><span>{leaf}</span>
-        <input type="checkbox" checked={v} onChange={(e) => quickSave(k, e.target.checked)} /></label>;
-    if (ENUMS[k])
-      return <label className="field"><span>{leaf}</span>
-        <select value={String(v ?? "")} onChange={(e) => quickSave(k, e.target.value)}>
-          {ENUMS[k].map((o) => <option key={o} value={o}>{o}</option>)}
-        </select></label>;
-    const isObj = v && typeof v === "object";
-    if (isObj) {
-      const editing = k in edit;
-      return <label className="field wide"><span>{leaf}</span>
-        {editing
-          ? <span className="field-edit">
-              <textarea rows={4} value={edit[k]} autoFocus onChange={(e) => setEdit({ ...edit, [k]: e.target.value })} />
-              <button className="btn sm" onClick={() => saveText(k, edit[k])}>Save</button>
-              <button className="btn ghost sm" onClick={() => setEdit((e) => { const c = { ...e }; delete c[k]; return c; })}>x</button>
-            </span>
-          : <button className="field-val mono" onClick={() => setEdit({ ...edit, [k]: toText(v) })}>{toText(v).slice(0, 70) || "[]"}</button>}
-      </label>;
+  function FieldRow({ field }: { field: SchemaField }) {
+    const value = getByPath(cfg, field.path);
+    const enums = field.enum || FALLBACK_ENUMS[field.path];
+    const leaf = labelFor(field);
+    const description = field.description || `Default: ${toText(field.default) || "(empty)"}`;
+    const restart = field.restart ? ` · ${field.restart}` : "";
+
+    if (typeof value === "boolean") {
+      return (
+        <label className="field schema-field">
+          <span className="field-info"><b>{leaf}</b><small>{description}{restart}</small></span>
+          <input type="checkbox" checked={value} onChange={(e) => saveValue(field.path, e.target.checked)} />
+        </label>
+      );
     }
-    // number / string — save on blur or Enter, only if changed
-    const cur = String(v ?? "");
-    const pending = k in edit ? edit[k] : cur;
-    const commit = () => { if (pending !== cur) quickSave(k, parse(pending)); else setEdit((e) => { const c = { ...e }; delete c[k]; return c; }); };
-    return <label className="field"><span>{leaf}</span>
-      <input type={typeof v === "number" ? "number" : "text"} value={pending}
-        onChange={(e) => setEdit({ ...edit, [k]: e.target.value })}
-        onBlur={commit}
-        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLInputElement).blur(); } }} />
-    </label>;
+    if (enums) {
+      const options = enums.includes(String(value ?? "")) ? enums : [String(value ?? ""), ...enums];
+      return (
+        <label className="field schema-field">
+          <span className="field-info"><b>{leaf}</b><small>{description}{restart}</small></span>
+          <select value={String(value ?? "")} onChange={(e) => saveValue(field.path, e.target.value)}>
+            {options.map((o) => <option key={o} value={o}>{o || "(empty)"}</option>)}
+          </select>
+        </label>
+      );
+    }
+    if (value && typeof value === "object") {
+      const editing = field.path in edit;
+      return (
+        <label className="field wide schema-field">
+          <span className="field-info"><b>{leaf}</b><small>{description}{restart}</small></span>
+          {editing
+            ? <span className="field-edit">
+                <textarea rows={4} value={edit[field.path]} autoFocus onChange={(e) => setEdit({ ...edit, [field.path]: e.target.value })} />
+                <button className="btn sm" onClick={() => saveText(field.path, edit[field.path])}>Save</button>
+                <button className="btn ghost sm" onClick={() => setEdit((prev) => { const next = { ...prev }; delete next[field.path]; return next; })}>Cancel</button>
+              </span>
+            : <button className="field-val mono" onClick={() => setEdit({ ...edit, [field.path]: toText(value) })}>{toText(value).slice(0, 90) || "[]"}</button>}
+        </label>
+      );
+    }
+    const cur = String(value ?? "");
+    const pending = field.path in edit ? edit[field.path] : cur;
+    const commit = () => {
+      if (pending !== cur) saveValue(field.path, parse(pending));
+      else setEdit((prev) => { const next = { ...prev }; delete next[field.path]; return next; });
+    };
+    return (
+      <label className="field schema-field">
+        <span className="field-info"><b>{leaf}</b><small>{description}{restart}</small></span>
+        <input
+          type={typeof value === "number" ? "number" : "text"}
+          value={pending}
+          onChange={(e) => setEdit({ ...edit, [field.path]: e.target.value })}
+          onBlur={commit}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLInputElement).blur(); } }}
+        />
+      </label>
+    );
   }
 
   return (
     <>
-      <Head count={rows.length} />
+      <Head count={filtered.length} />
       <div className="panel" style={{ marginBottom: 14 }}>
         <h3>Quick settings</h3>
         <div className="quick-grid">
-          {QUICK_SELECTS.map((item) => (
-            <label key={item.key}>{item.label}
-              <select value={String(cfg[item.key] ?? "")} onChange={(e) => quickSave(item.key, e.target.value)}>
-                {item.options.map((o) => <option key={o} value={o}>{o}</option>)}
-              </select>
-            </label>
-          ))}
+          {QUICK_KEYS.map((key) => {
+            const field = meta.get(key) || { path: key, enum: FALLBACK_ENUMS[key] };
+            const value = getByPath(cfg, key);
+            const options = field.enum || FALLBACK_ENUMS[key] || [];
+            return (
+              <label key={key}>{field.label || labelFor(field)}
+                <select value={String(value ?? "")} onChange={(e) => saveValue(key, e.target.value)}>
+                  {options.map((o) => <option key={o} value={o}>{o}</option>)}
+                </select>
+              </label>
+            );
+          })}
         </div>
         <div className="toggle-grid">
-          {QUICK_TOGGLES.map((item) => (
-            <label className="toggle-row" key={item.key}>
-              <span>{item.label}</span>
-              <input type="checkbox" checked={Boolean(cfg[item.key])} onChange={(e) => quickSave(item.key, e.target.checked)} />
-            </label>
-          ))}
+          {QUICK_TOGGLES.map((key) => {
+            const field = meta.get(key) || { path: key };
+            return (
+              <label className="toggle-row" key={key}>
+                <span>{field.label || labelFor(field)}</span>
+                <input type="checkbox" checked={Boolean(getByPath(cfg, key))} onChange={(e) => saveValue(key, e.target.checked)} />
+              </label>
+            );
+          })}
         </div>
       </div>
 
       <div className="panel" style={{ marginBottom: 14 }}>
-        <input placeholder="Search all settings..." value={q} onChange={(e) => setQ(e.target.value)} />
+        <input placeholder="Search settings by name, group, or description..." value={q} onChange={(e) => setQ(e.target.value)} />
         {msg && <div className="mut" style={{ marginTop: 8 }}>{msg}</div>}
       </div>
 
@@ -161,11 +257,11 @@ export function ConfigPage() {
         const isOpen = searching || open[g];
         return (
           <div className="panel group" key={g}>
-            <div className="group-h" onClick={() => setOpen((o) => ({ ...o, [g]: !o[g] }))}>
-              <b>{groupTitle(g)}</b>
-              <span className="mut">{groups[g].length} · {isOpen ? "▾" : "▸"}</span>
-            </div>
-            {isOpen && <div className="fields">{groups[g].map(([k, v]) => <Field k={k} v={v} key={k} />)}</div>}
+            <button className="group-h" onClick={() => setOpen((prev) => ({ ...prev, [g]: !prev[g] }))}>
+              <b>{g}</b>
+              <span className="mut">{groups[g].length} · {isOpen ? "open" : "closed"}</span>
+            </button>
+            {isOpen && <div className="fields">{groups[g].map((field) => <FieldRow field={field} key={field.path} />)}</div>}
           </div>
         );
       })}
@@ -177,12 +273,12 @@ export function ConfigPage() {
           <label>Value<input value={newValue} onChange={(e) => setNewValue(e.target.value)} placeholder='true, 3, "text", ["core"]' /></label>
           <button className="btn" onClick={addSetting}>Save</button>
         </div>
-        <div className="mut" style={{ marginTop: 8 }}>Most settings are above — this is for advanced/new keys. Secrets belong in API Keys.</div>
+        <div className="mut" style={{ marginTop: 8 }}>Secrets belong in API Keys.</div>
       </div>
     </>
   );
 }
 
 function Head({ count }: { count?: number }) {
-  return <div className="head"><h1>Settings</h1><span className="crumb">{count != null ? `${count} settings · ` : ""}changes save instantly to config.yaml · secrets redacted</span></div>;
+  return <div className="head"><h1>Settings</h1><span className="crumb">{count != null ? `${count} settings · ` : ""}schema-backed config.yaml editor</span></div>;
 }
