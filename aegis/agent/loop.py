@@ -14,6 +14,9 @@ from ..types import Message, ToolCall, new_id
 from . import compaction, governance
 
 OnEvent = Callable[[dict], None]
+_PERSISTED_OUTPUT_TAG = "<persisted-output>"
+_PERSISTED_OUTPUT_CLOSE = "</persisted-output>"
+_SPILL_MARKER = "truncated to protect context"
 
 
 def _without_thinking(m: Message) -> Message:
@@ -499,19 +502,21 @@ class ToolExecutor:
         self._run_hooks("post_tool", {"tool": call.name, "is_error": str(res.is_error)})
         return res
 
-    def _maybe_spill(self, call: ToolCall, content: str, is_error: bool) -> str:
-        """Spill an oversized tool output to disk; return a preview + reference path so
-        a single huge result can't blow the context window (the agent can read_file it)."""
-        cfg_obj = getattr(self.ctx, "config", None)
-        if is_error or not content or cfg_obj is None:
-            return content
-        from ..util import estimate_tokens
-        limit = int(cfg_obj.get("tools.max_result_tokens", 4000) or 0)
-        if limit <= 0 or estimate_tokens(content) <= limit:
-            return content
+    def _inline_spill_fallback(self, content: str, preview_chars: int) -> str:
+        preview = content[:max(1, preview_chars)].rstrip()
+        return (f"{_PERSISTED_OUTPUT_TAG}\n"
+                f"This tool result was {_SPILL_MARKER}, but the full output could not "
+                f"be saved to disk ({len(content):,} chars).\n\n"
+                f"Preview (first {len(preview)} chars):\n{preview}\n"
+                f"{_PERSISTED_OUTPUT_CLOSE}")
+
+    def _spill_to_disk(self, call: ToolCall, content: str, *, preview_chars: int,
+                       reason: str) -> str:
         import os
+        import re
         import time
         from .. import config as cfg
+
         d = cfg.sub("tool_outputs")
         try:
             os.makedirs(d, exist_ok=True)
@@ -523,14 +528,73 @@ class ToolExecutor:
                         os.unlink(p)
                 except OSError:
                     continue
-            path = os.path.join(d, f"{call.name}_{call.id}.txt")
+            safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", call.name or "tool")[:80]
+            safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", call.id or "call")[:80]
+            path = os.path.join(d, f"{safe_name}_{safe_id}.txt")
             with open(path, "w", encoding="utf-8") as f:
                 f.write(content)
         except Exception:  # noqa: BLE001
+            return self._inline_spill_fallback(content, preview_chars)
+        preview = content[:max(1, preview_chars)].rstrip()
+        more = "\n..." if len(preview) < len(content) else ""
+        return (f"{_PERSISTED_OUTPUT_TAG}\n"
+                f"This tool result was {_SPILL_MARKER}: {reason} ({len(content):,} chars).\n"
+                f"Full output saved to: {path}\n"
+                "Use read_file with offset and limit to inspect specific sections.\n\n"
+                f"Preview (first {len(preview)} chars):\n{preview}{more}\n"
+                f"{_PERSISTED_OUTPUT_CLOSE}")
+
+    def _maybe_spill(self, call: ToolCall, content: str, is_error: bool) -> str:
+        """Spill an oversized tool output to disk; return a preview + reference path so
+        a single huge result can't blow the context window (the agent can read_file it)."""
+        cfg_obj = getattr(self.ctx, "config", None)
+        if is_error or not content or cfg_obj is None:
             return content
-        head = content[: limit * 4].rstrip()
-        return (f"{head}\n\n…[output truncated to protect context; full {len(content):,} "
-                f"chars saved to {path} — use read_file to inspect specific parts]")
+        from ..util import estimate_tokens
+        limit = int(cfg_obj.get("tools.max_result_tokens", 4000) or 0)
+        if limit <= 0 or estimate_tokens(content) <= limit:
+            return content
+        return self._spill_to_disk(
+            call,
+            content,
+            preview_chars=limit * 4,
+            reason=f"single-output limit exceeded ({limit:,} estimated tokens)",
+        )
+
+    def _enforce_turn_result_budget(self, messages: list[Message]) -> list[Message]:
+        """Hermes-style aggregate clamp for many medium tool results in one turn."""
+        cfg_obj = getattr(self.ctx, "config", None)
+        if not messages or cfg_obj is None:
+            return messages
+        from ..util import estimate_tokens
+        limit = int(cfg_obj.get("tools.max_turn_result_tokens", 50000) or 0)
+        if limit <= 0:
+            return messages
+        sizes: list[tuple[int, int]] = []
+        total = 0
+        for i, msg in enumerate(messages):
+            content = msg.content or ""
+            tokens = estimate_tokens(content)
+            total += tokens
+            if content and _PERSISTED_OUTPUT_TAG not in content and _SPILL_MARKER not in content:
+                sizes.append((i, tokens))
+        if total <= limit:
+            return messages
+        preview_chars = int(cfg_obj.get("tools.turn_result_preview_chars", 1500) or 1500)
+        for idx, tokens in sorted(sizes, key=lambda pair: pair[1], reverse=True):
+            if total <= limit:
+                break
+            msg = messages[idx]
+            original = msg.content or ""
+            replacement = self._spill_to_disk(
+                ToolCall(msg.tool_call_id or f"budget_{idx}", msg.name or "tool", {}),
+                original,
+                preview_chars=preview_chars,
+                reason=f"tool-batch budget exceeded ({limit:,} estimated tokens)",
+            )
+            msg.content = replacement
+            total += estimate_tokens(replacement) - tokens
+        return messages
 
     def _run_one(self, call: ToolCall) -> Message:
         res = self.execute_one_raw(call)
@@ -555,15 +619,17 @@ class ToolExecutor:
         return Message.tool(call.id, call.name, content)
 
     def execute(self, calls: list[ToolCall]) -> list[Message]:
+        if not calls:
+            return []
         if len(calls) == 1:
-            return [self._run_one(calls[0])]
+            return self._enforce_turn_result_budget([self._run_one(calls[0])])
         # Preserve order in results while running concurrently.
         results: list[Message | None] = [None] * len(calls)
         with ThreadPoolExecutor(max_workers=min(MAX_PARALLEL_TOOLS, len(calls))) as pool:
             futures = {pool.submit(self._run_one, c): i for i, c in enumerate(calls)}
             for fut in futures:
                 results[futures[fut]] = fut.result()
-        return [r for r in results if r is not None]
+        return self._enforce_turn_result_budget([r for r in results if r is not None])
 
 
 def _next_in_lineage(title: str) -> str:

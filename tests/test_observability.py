@@ -362,6 +362,49 @@ def test_tool_output_spill_to_disk(tmp_path):
     assert ex._maybe_spill(ToolCall("c3", "bash", {}), "short", is_error=False) == "short"
 
 
+def test_tool_output_spill_fallback_stays_bounded(tmp_path, monkeypatch):
+    from aegis.agent.loop import ToolExecutor
+    from aegis.config import Config
+    from aegis.tools.base import ToolContext
+    from aegis.tools.registry import default_registry
+    from aegis.types import ToolCall
+
+    cfg = Config.load()
+    cfg.data["tools"]["max_result_tokens"] = 50
+    ex = ToolExecutor(default_registry(), None, ToolContext(cwd=tmp_path, config=cfg), lambda e: None)
+    big = "LINE\n" * 2000
+    monkeypatch.setattr("os.makedirs", lambda *a, **k: (_ for _ in ()).throw(OSError("nope")))
+    out = ex._maybe_spill(ToolCall("c1", "bash", {}), big, is_error=False)
+    assert "could not be saved to disk" in out
+    assert "truncated to protect context" in out
+    assert len(out) < len(big)
+
+
+def test_tool_turn_budget_spills_many_medium_outputs(tmp_path):
+    import os
+    from aegis.agent.loop import ToolExecutor
+    from aegis.config import Config
+    from aegis.tools.base import ToolContext
+    from aegis.tools.registry import default_registry
+    from aegis.types import Message
+
+    cfg = Config.load()
+    cfg.data["tools"]["max_result_tokens"] = 0
+    cfg.data["tools"]["max_turn_result_tokens"] = 100
+    cfg.data["tools"]["turn_result_preview_chars"] = 80
+    ex = ToolExecutor(default_registry(), None, ToolContext(cwd=tmp_path, config=cfg), lambda e: None)
+    medium = "alpha beta gamma delta epsilon\n" * 80
+    msgs = [Message.tool(f"c{i}", "bash", medium) for i in range(3)]
+    assert ex.execute([]) == []
+
+    out = ex._enforce_turn_result_budget(msgs)
+    spilled = [m for m in out if "tool-batch budget exceeded" in m.content]
+    assert spilled
+    assert len("".join(m.content for m in out)) < len(medium) * 3
+    from aegis import config as c
+    assert os.path.exists(os.path.join(c.sub("tool_outputs"), f"bash_{spilled[0].tool_call_id}.txt"))
+
+
 def test_anthropic_oauth_injects_claude_code_prefix():
     """claude.ai OAuth tokens require the system prompt to start with the Claude Code
     identity block, or the Messages API rejects the request. API-key auth must not."""
@@ -374,10 +417,14 @@ def test_anthropic_oauth_injects_claude_code_prefix():
     cap = {}
 
     class H(BaseHTTPRequestHandler):
-        def log_message(self, *a): pass
+        def log_message(self, *a):
+            pass
+
         def do_POST(self):
             cap["payload"] = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
             self.wfile.write(json.dumps({"content": [{"type": "text", "text": "ok"}],
                                          "stop_reason": "end_turn", "usage": {}}).encode())
 

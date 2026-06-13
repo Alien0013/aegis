@@ -283,7 +283,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "singularity_image": "docker://python:3.12-slim",
         "modal_pip": [],             # extra pip packages for the modal sandbox image
         "allow_local_fallback": False,  # if a sandbox backend is down, refuse (fail closed)
-        "max_result_tokens": 4000,   # spill tool outputs larger than this to disk (0 = never)
+        "max_result_tokens": 4000,   # spill a single tool output larger than this (tokens; 0 = never)
+        "max_turn_result_tokens": 50000, # spill largest outputs when a tool batch exceeds this
+        "turn_result_preview_chars": 1500, # inline preview for aggregate-budget spills
         "loop_warn_after": 3,        # warn after N identical tool failures/results in a turn
         "loop_block_after": 5,       # hard-block an identical failing call after N repeats
         "todo_nudge_after": 15,      # remind to update the todo list after N tool uses
