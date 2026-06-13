@@ -23,6 +23,7 @@ Implementation update in this branch:
 - Added typed FastAPI control-plane routes for auth status, health, config defaults/schema/raw/import, env list/set/reveal/delete, and sessions list/search/stats/detail/export/prune/delete.
 - Added typed FastAPI cron and gateway management routes for job CRUD/run/service status/control and gateway channel/service status/control.
 - Added short-lived single-use WebSocket tickets for `/api/ws` and `/api/pty`.
+- Added dashboard username/password login, signed session cookies, logout, Basic auth, non-loopback fail-closed startup, and host/peer guards.
 - Added regression tests for recall behavior and memory write mirroring.
 
 ## Executive Verdict
@@ -78,17 +79,15 @@ Implemented:
 - Added typed FastAPI routes for `/api/health`, `/api/auth/me`, config defaults/schema/raw/import, env list/set/reveal/delete, and sessions list/search/stats/detail/export/prune/delete.
 - Added typed FastAPI routes for cron jobs/service control and gateway status/channels/service control.
 - Added `/api/auth/ws-ticket` and ticket validation for dashboard WebSockets.
+- Added `/login`, `/auth/login`, `/auth/logout`, `/api/auth/login`, `/api/auth/logout`, signed session cookies, Basic auth, non-loopback fail-closed startup, and host/peer request guards.
 - Kept the generic dispatcher as a compatibility shim for the existing dashboard app.
-- Added FastAPI regression tests for route registration, config/env safety, session search/detail/export/delete, auth status, WebSocket tickets, cron job management, and gateway controls.
+- Added FastAPI regression tests for route registration, config/env safety, session search/detail/export/delete, auth status, login/session/logout, fail-closed binding, host/peer guards, WebSocket tickets, cron job management, and gateway controls.
 
 Needed inputs:
 - Continue replacing the generic dispatcher with typed FastAPI routes for remaining parity-critical surfaces.
 - Add dashboard auth middleware/gate:
-  - loopback no-op mode
-  - non-loopback fail-closed auth
-  - login page
-  - username/password or OAuth providers
-  - richer auth provider/session UX beyond the current token + WS-ticket flow
+  - OAuth login providers
+  - richer browser UX around the current token/basic/session auth
 - Add missing route groups:
   - config export
   - provider OAuth start/submit/poll/revoke
@@ -265,8 +264,8 @@ P0: Fix recall behavior
 - Done in this branch: `SESSION_SEARCH_GUIDANCE`-style prompt guidance, browse/discover/read/scroll, and regression tests.
 
 P1: Make the dashboard a real control plane
-- Done in this branch: typed routes for auth status, health, config, env, sessions, cron, gateway, and WebSocket tickets while keeping old paths as compatibility shims.
-- Still needed: login/OAuth auth UX, non-loopback fail-closed policy, provider OAuth, audio, self-update, ops, and profile-aware management.
+- Done in this branch: typed routes for auth status, health, config, env, sessions, cron, gateway, login/session/logout auth, non-loopback fail-closed policy, host/peer guards, and WebSocket tickets while keeping old paths as compatibility shims.
+- Still needed: dashboard OAuth login UX, provider OAuth, audio, self-update, ops, and profile-aware management.
 
 P2: Cron and gateway foundations
 - Structured cron store and `cronjob` tool.

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import copy
+import hashlib
+import hmac
 import json
 import os
 import queue
@@ -20,7 +23,7 @@ from .config import Config
 
 try:
     from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket
-    from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+    from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 except ImportError as exc:  # pragma: no cover - import check covers dependency presence
     raise RuntimeError(
         "AEGIS dashboard requires fastapi and uvicorn. Install with: "
@@ -33,6 +36,11 @@ _RESIZE_RE = re.compile(rb"^\x1b\]1337;Resize=cols=(\d+);rows=(\d+)\x07$")
 _WS_TICKET_TTL_SECONDS = 30
 _WS_TICKETS: dict[str, float] = {}
 _WS_TICKET_LOCK = threading.Lock()
+_SESSION_COOKIE = "aegis_dashboard_session"
+_SESSION_TTL_SECONDS = 12 * 60 * 60
+_BASIC_USER_ENV = "AEGIS_DASHBOARD_BASIC_AUTH_USERNAME"
+_BASIC_PASS_ENV = "AEGIS_DASHBOARD_BASIC_AUTH_PASSWORD"
+_BASIC_SECRET_ENV = "AEGIS_DASHBOARD_BASIC_AUTH_SECRET"
 
 
 def _query_dict(request: Request) -> dict[str, list[str]]:
@@ -43,18 +51,123 @@ def _authorized_token(config: Config, *, query: str = "", header: str = "",
                       auth: str = "", cookie: str = "") -> bool:
     token = dash._dashboard_token(config)
     if not token:
-        return True
+        return not _basic_auth_configured() and not _remote_bind_requires_auth(config)
     bearer = auth.removeprefix("Bearer ").strip() if auth.startswith("Bearer ") else ""
     return token in (query, header, bearer, cookie)
 
 
+def _basic_auth_credentials() -> tuple[str, str]:
+    return os.environ.get(_BASIC_USER_ENV, ""), os.environ.get(_BASIC_PASS_ENV, "")
+
+
+def _basic_auth_configured() -> bool:
+    user, password = _basic_auth_credentials()
+    return bool(user and password)
+
+
+def _auth_configured(config: Config) -> bool:
+    return bool(dash._dashboard_token(config) or _basic_auth_configured())
+
+
+def _session_secret(config: Config) -> str:
+    return (
+        os.environ.get(_BASIC_SECRET_ENV)
+        or dash._dashboard_token(config)
+        or os.environ.get(_BASIC_PASS_ENV)
+        or "aegis-dashboard-dev-session-secret"
+    )
+
+
+def _sign_session(payload: str, config: Config) -> str:
+    return hmac.new(_session_secret(config).encode(), payload.encode(), hashlib.sha256).hexdigest()
+
+
+def _make_session_cookie(username: str, config: Config) -> str:
+    expiry = int(time.time() + _SESSION_TTL_SECONDS)
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"sub": username, "exp": expiry}, separators=(",", ":")).encode()
+    ).decode().rstrip("=")
+    return f"{payload}.{_sign_session(payload, config)}"
+
+
+def _session_cookie_authorized(cookie: str, config: Config) -> bool:
+    if not cookie or "." not in cookie:
+        return False
+    payload, _, sig = cookie.partition(".")
+    if not hmac.compare_digest(sig, _sign_session(payload, config)):
+        return False
+    try:
+        padded = payload + ("=" * (-len(payload) % 4))
+        data = json.loads(base64.urlsafe_b64decode(padded.encode()).decode())
+        return int(data.get("exp", 0)) > time.time()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _basic_auth_authorized(auth: str) -> bool:
+    if not auth.startswith("Basic "):
+        return False
+    expected_user, expected_password = _basic_auth_credentials()
+    if not expected_user or not expected_password:
+        return False
+    try:
+        decoded = base64.b64decode(auth.removeprefix("Basic ").strip()).decode()
+    except Exception:  # noqa: BLE001
+        return False
+    username, _, password = decoded.partition(":")
+    return hmac.compare_digest(username, expected_user) and hmac.compare_digest(password, expected_password)
+
+
+def _is_loopback_host(host: str) -> bool:
+    host = (host or "").split(":", 1)[0].strip("[]").lower()
+    return host in {"", "127.0.0.1", "localhost", "::1"} or host.startswith("127.")
+
+
+def _bind_host(config: Config) -> str:
+    return str(config.get("server.dashboard_host", "127.0.0.1") or "127.0.0.1")
+
+
+def _remote_bind_requires_auth(config: Config) -> bool:
+    host = _bind_host(config)
+    return not _is_loopback_host(host)
+
+
+def _peer_allowed(client_host: str, host_header: str, config: Config) -> bool:
+    if _is_loopback_host(_bind_host(config)):
+        return _is_loopback_host(client_host)
+    if not _auth_configured(config):
+        return False
+    bind = _bind_host(config)
+    if bind in {"0.0.0.0", "::"}:
+        return True
+    host_header = (host_header or "").split(":", 1)[0]
+    return _is_loopback_host(host_header) or host_header == bind
+
+
+def _request_peer_allowed(request: Request, config: Config) -> bool:
+    client_host = getattr(getattr(request, "client", None), "host", "") or ""
+    return _peer_allowed(client_host, request.headers.get("host", ""), config)
+
+
+def _websocket_peer_allowed(ws: WebSocket, config: Config) -> bool:
+    client_host = getattr(getattr(ws, "client", None), "host", "") or ""
+    return _peer_allowed(client_host, ws.headers.get("host", ""), config)
+
+
 def _request_authorized(request: Request, config: Config) -> bool:
+    if not _request_peer_allowed(request, config):
+        return False
     return _authorized_token(
         config,
         query=request.query_params.get("token", ""),
         header=request.headers.get("X-Aegis-Token", ""),
         auth=request.headers.get("Authorization", ""),
         cookie=request.cookies.get("aegis_dashboard_token", ""),
+    ) or _basic_auth_authorized(
+        request.headers.get("Authorization", "")
+    ) or _session_cookie_authorized(
+        request.cookies.get(_SESSION_COOKIE, ""),
+        config,
     )
 
 
@@ -92,6 +205,8 @@ def _consume_ws_ticket(ticket: str) -> bool:
 
 
 def _websocket_authorized(ws: WebSocket, config: Config) -> bool:
+    if not _websocket_peer_allowed(ws, config):
+        return False
     if _consume_ws_ticket(ws.query_params.get("ticket", "")):
         return True
     return _authorized_token(
@@ -100,13 +215,35 @@ def _websocket_authorized(ws: WebSocket, config: Config) -> bool:
         header=ws.headers.get("X-Aegis-Token", ""),
         auth=ws.headers.get("Authorization", ""),
         cookie=ws.cookies.get("aegis_dashboard_token", ""),
+    ) or _basic_auth_authorized(
+        ws.headers.get("Authorization", "")
+    ) or _session_cookie_authorized(
+        ws.cookies.get(_SESSION_COOKIE, ""),
+        config,
     )
 
 
-def _html_response(config: Config) -> HTMLResponse:
+def _login_page(error: str = "") -> HTMLResponse:
+    msg = f"<p class='error'>{error}</p>" if error else ""
+    return HTMLResponse(
+        "<!doctype html><html><head><title>AEGIS Login</title>"
+        "<style>body{font-family:sans-serif;max-width:26rem;margin:12vh auto;padding:1rem}"
+        "label,input,button{display:block;width:100%;margin:.5rem 0}input,button{padding:.65rem}"
+        ".error{color:#b00020}</style></head><body><h1>AEGIS</h1>"
+        f"{msg}<form method='post' action='/auth/login'>"
+        "<label>Username<input name='username' autocomplete='username'></label>"
+        "<label>Password<input name='password' type='password' autocomplete='current-password'></label>"
+        "<button type='submit'>Sign in</button></form></body></html>"
+    )
+
+
+def _html_response(config: Config, request: Request | None = None) -> HTMLResponse:
+    if request is not None and _basic_auth_configured() and not _request_authorized(request, config):
+        return _login_page()
     response = HTMLResponse(dash._page_with_bootstrap(config))
     token = dash._dashboard_token(config)
-    if token:
+    client_host = getattr(getattr(request, "client", None), "host", "") if request is not None else "127.0.0.1"
+    if token and _is_loopback_host(client_host):
         response.set_cookie(
             "aegis_dashboard_token",
             token,
@@ -644,12 +781,46 @@ def create_app(config: Config) -> FastAPI:
     from .session import SessionStore
     from .surface import SurfaceRunner
 
+    if _remote_bind_requires_auth(config) and not _auth_configured(config):
+        raise RuntimeError(
+            "dashboard bound to a non-loopback host without auth; set "
+            "AEGIS_DASHBOARD_TOKEN or AEGIS_DASHBOARD_BASIC_AUTH_USERNAME/PASSWORD"
+        )
     app = FastAPI(title="AEGIS", version=__version__)
     chat_runner = SurfaceRunner(config, store=SessionStore(), include_mcp=True)
 
     @app.get("/", response_class=HTMLResponse)
-    async def index() -> HTMLResponse:
-        return _html_response(config)
+    async def index(request: Request) -> HTMLResponse:
+        return _html_response(config, request)
+
+    @app.get("/login", response_class=HTMLResponse)
+    async def login_page() -> HTMLResponse:
+        return _login_page()
+
+    @app.post("/auth/login")
+    async def login_form(username: Annotated[str, Form()] = "",
+                         password: Annotated[str, Form()] = "") -> Response:
+        if not _basic_auth_configured():
+            return _login_page("Username/password login is not configured.")
+        expected_user, expected_password = _basic_auth_credentials()
+        if not (hmac.compare_digest(username, expected_user)
+                and hmac.compare_digest(password, expected_password)):
+            return _login_page("Invalid username or password.")
+        response = RedirectResponse("/", status_code=303)
+        response.set_cookie(
+            _SESSION_COOKIE,
+            _make_session_cookie(username, config),
+            httponly=True,
+            samesite="lax",
+        )
+        return response
+
+    @app.post("/auth/logout")
+    async def logout_form() -> RedirectResponse:
+        response = RedirectResponse("/login", status_code=303)
+        response.delete_cookie(_SESSION_COOKIE)
+        response.delete_cookie("aegis_dashboard_token")
+        return response
 
     @app.get("/assets/{name:path}")
     async def asset(name: str) -> Response:
@@ -741,12 +912,48 @@ def create_app(config: Config) -> FastAPI:
     @app.get("/api/auth/me")
     async def api_auth_me(request: Request) -> JSONResponse:
         _require_request(request, config)
+        providers = []
+        if dash._dashboard_token(config):
+            providers.append("token")
+        if _basic_auth_configured():
+            providers.append("basic")
+        if not providers:
+            providers.append("loopback")
         return JSONResponse({
             "authenticated": True,
-            "auth_required": bool(dash._dashboard_token(config)),
-            "providers": ["token"] if dash._dashboard_token(config) else ["loopback"],
+            "auth_required": _auth_configured(config) or _remote_bind_requires_auth(config),
+            "providers": providers,
             "user": "local",
         })
+
+    @app.post("/api/auth/login")
+    async def api_auth_login(request: Request) -> JSONResponse:
+        if not _request_peer_allowed(request, config):
+            return JSONResponse({"ok": False, "error": "request rejected by dashboard host guard"}, status_code=403)
+        body = await request.json()
+        username = str(body.get("username") or "")
+        password = str(body.get("password") or "")
+        if not _basic_auth_configured():
+            return JSONResponse({"ok": False, "error": "username/password login is not configured"}, status_code=400)
+        expected_user, expected_password = _basic_auth_credentials()
+        if not (hmac.compare_digest(username, expected_user)
+                and hmac.compare_digest(password, expected_password)):
+            return JSONResponse({"ok": False, "error": "invalid username or password"}, status_code=401)
+        response = JSONResponse({"ok": True, "user": username})
+        response.set_cookie(
+            _SESSION_COOKIE,
+            _make_session_cookie(username, config),
+            httponly=True,
+            samesite="lax",
+        )
+        return response
+
+    @app.post("/api/auth/logout")
+    async def api_auth_logout(request: Request) -> JSONResponse:  # noqa: ARG001
+        response = JSONResponse({"ok": True})
+        response.delete_cookie(_SESSION_COOKIE)
+        response.delete_cookie("aegis_dashboard_token")
+        return response
 
     @app.post("/api/auth/ws-ticket")
     async def api_auth_ws_ticket(request: Request) -> JSONResponse:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 
 import httpx
 
@@ -8,6 +9,18 @@ import httpx
 def _app(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     monkeypatch.setenv("AEGIS_DASHBOARD_TOKEN", "t")
+    from aegis.config import Config
+    from aegis.dashboard_fastapi import create_app
+
+    return create_app(Config.load())
+
+
+def _basic_app(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    monkeypatch.delenv("AEGIS_DASHBOARD_TOKEN", raising=False)
+    monkeypatch.setenv("AEGIS_DASHBOARD_BASIC_AUTH_USERNAME", "admin")
+    monkeypatch.setenv("AEGIS_DASHBOARD_BASIC_AUTH_PASSWORD", "pw-secret")
+    monkeypatch.setenv("AEGIS_DASHBOARD_BASIC_AUTH_SECRET", "session-secret")
     from aegis.config import Config
     from aegis.dashboard_fastapi import create_app
 
@@ -32,6 +45,82 @@ def test_fastapi_dashboard_auth_and_cookie(tmp_path, monkeypatch):
 
     res = asyncio.run(_request(app, "GET", "/api/status", headers={"X-Aegis-Token": "t"}))
     assert res.status_code == 200
+
+
+def test_fastapi_basic_login_session_and_logout(tmp_path, monkeypatch):
+    app = _basic_app(tmp_path, monkeypatch)
+
+    res = asyncio.run(_request(app, "GET", "/api/status"))
+    assert res.status_code == 401
+
+    login_page = asyncio.run(_request(app, "GET", "/login"))
+    assert login_page.status_code == 200
+    assert "AEGIS" in login_page.text
+
+    bad = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/auth/login",
+        json={"username": "admin", "password": "wrong"},
+    ))
+    assert bad.status_code == 401
+
+    good = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/auth/login",
+        json={"username": "admin", "password": "pw-secret"},
+    ))
+    assert good.status_code == 200
+    session_cookie = good.cookies["aegis_dashboard_session"]
+
+    authed = asyncio.run(_request(
+        app,
+        "GET",
+        "/api/status",
+        cookies={"aegis_dashboard_session": session_cookie},
+    ))
+    assert authed.status_code == 200
+
+    raw = base64.b64encode(b"admin:pw-secret").decode()
+    basic = asyncio.run(_request(app, "GET", "/api/status", headers={"Authorization": f"Basic {raw}"}))
+    assert basic.status_code == 200
+
+    logout = asyncio.run(_request(app, "POST", "/api/auth/logout"))
+    assert logout.status_code == 200
+    assert "aegis_dashboard_session" in logout.headers.get("set-cookie", "")
+
+
+def test_fastapi_remote_bind_fails_closed_without_auth(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    monkeypatch.delenv("AEGIS_DASHBOARD_TOKEN", raising=False)
+    monkeypatch.delenv("AEGIS_DASHBOARD_BASIC_AUTH_USERNAME", raising=False)
+    monkeypatch.delenv("AEGIS_DASHBOARD_BASIC_AUTH_PASSWORD", raising=False)
+    from pytest import raises
+
+    from aegis.config import Config
+    from aegis.dashboard_fastapi import create_app
+
+    cfg = Config.load()
+    cfg.data.setdefault("server", {})["dashboard_host"] = "0.0.0.0"
+    with raises(RuntimeError, match="non-loopback host without auth"):
+        create_app(cfg)
+
+
+def test_dashboard_peer_guard_helpers(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.config import Config
+    from aegis.dashboard_fastapi import _peer_allowed
+
+    cfg = Config.load()
+    cfg.data.setdefault("server", {})["dashboard_host"] = "127.0.0.1"
+    assert _peer_allowed("127.0.0.1", "localhost:9119", cfg)
+    assert not _peer_allowed("10.0.0.5", "localhost:9119", cfg)
+
+    monkeypatch.setenv("AEGIS_DASHBOARD_TOKEN", "remote-token")
+    cfg.data["server"]["dashboard_host"] = "aegis.local"
+    assert _peer_allowed("10.0.0.5", "aegis.local:9119", cfg)
+    assert not _peer_allowed("10.0.0.5", "evil.local:9119", cfg)
 
 
 def test_fastapi_files_upload_and_mkdir(tmp_path, monkeypatch):
