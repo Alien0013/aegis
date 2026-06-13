@@ -27,6 +27,7 @@ const PluginsPage = lazy(() => import("./pages/PluginsPage").then((m) => ({ defa
 const TerminalPage = lazy(() => import("./pages/TerminalPage").then((m) => ({ default: m.TerminalPage })));
 const ProfilesPage = lazy(() => import("./pages/ProfilesPage").then((m) => ({ default: m.ProfilesPage })));
 const SkillsPage = lazy(() => import("./pages/SkillsPage").then((m) => ({ default: m.SkillsPage })));
+const ToolsPage = lazy(() => import("./pages/ToolsPage").then((m) => ({ default: m.ToolsPage })));
 
 type NavItem = { id: string; label: string; icon: string; group: string };
 const NAV: NavItem[] = [
@@ -98,8 +99,7 @@ function Pages({ go }: { go: (id: string) => void }) {
       <Route path="/sessions" element={<ListPage endpoint="sessions" title="Sessions"
         detailEndpoint="session" cols={[["title", "Title"], ["updated_at", "Updated"], ["id", "ID"]]} />} />
       <Route path="/skills" element={<SkillsPage />} />
-      <Route path="/tools" element={<ListPage endpoint="tools" title="Tools"
-        cols={[["name", "Tool"], ["toolset", "Toolset"], ["enabled", "Enabled"], ["description", "Description"]]} />} />
+      <Route path="/tools" element={<ToolsPage />} />
       <Route path="/logs" element={<ListPage endpoint="logs" arrayKey="lines" title="Logs" cols={[["line", "Line"]]} raw />} />
       <Route path="*" element={<Overview go={go} />} />
     </Routes>
