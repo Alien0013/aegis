@@ -464,7 +464,7 @@ def banner(agent: Agent) -> None:
     if _console:
         from rich.text import Text
         art = Text()
-        for line, color in zip(_AEGIS_ART, _AEGIS_ART_COLORS):
+        for line, color in zip(_AEGIS_ART, _AEGIS_ART_COLORS, strict=False):
             art.append("  " + line + "\n", style=f"bold {color}")
         _console.print(art)
         body = Text()
