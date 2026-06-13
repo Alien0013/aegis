@@ -8,6 +8,6 @@ system, persistent memory, a SKILL.md skills engine, and a multi-channel gateway
 __version__ = "0.1.0"
 APP_NAME = "aegis"
 
-from .sdk import AegisClient, AegisResult, run
+from .sdk import AegisClient, AegisResult, run  # noqa: E402  (after metadata constants by design)
 
 __all__ = ["__version__", "APP_NAME", "AegisClient", "AegisResult", "run"]

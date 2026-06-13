@@ -37,12 +37,16 @@ class WebhookChannel(BasePlatformAdapter):
 
             def do_POST(self):  # noqa: N802
                 if secret and self.headers.get("X-Secret") != secret:
-                    self.send_response(401); self.end_headers(); return
+                    self.send_response(401)
+                    self.end_headers()
+                    return
                 n = int(self.headers.get("content-length", 0))
                 try:
                     body = json.loads(self.rfile.read(n) or b"{}")
                 except json.JSONDecodeError:
-                    self.send_response(400); self.end_headers(); return
+                    self.send_response(400)
+                    self.end_headers()
+                    return
                 ev = MessageEvent(
                     platform=body.get("platform", "webhook"),
                     chat_id=str(body.get("chat_id", "unknown")),

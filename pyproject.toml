@@ -23,6 +23,9 @@ dependencies = [
     "prompt_toolkit>=3.0,<4",
     "rich>=13.0,<16",
     "uvicorn[standard]>=0.30,<1",
+    # Pulled transitively by uvicorn[standard]; pinned explicitly so a future major that
+    # drops the deprecated `websockets.legacy` API uvicorn still imports can't land silently.
+    "websockets>=12,<17",
 ]
 
 [project.optional-dependencies]
@@ -44,6 +47,19 @@ all = [
 
 [project.scripts]
 aegis = "aegis.cli.main:main"
+
+[tool.ruff]
+# Explicit lint scope so a clean local `ruff check aegis/` matches CI exactly.
+line-length = 110
+target-version = "py310"
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    # uvicorn[standard] still imports the deprecated websockets.legacy module; not ours
+    # to fix and harmless until websockets drops it (capped <17 in dependencies).
+    "ignore:websockets.legacy is deprecated.*:DeprecationWarning",
+    "ignore:websockets.server.WebSocketServerProtocol is deprecated.*:DeprecationWarning",
+]
 
 [tool.setuptools.packages.find]
 include = ["aegis*"]

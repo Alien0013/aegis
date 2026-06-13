@@ -23,7 +23,7 @@ _LIMITS = {"memory": MEMORY_CHAR_LIMIT, "user": USER_CHAR_LIMIT}
 # write, hand edit) would inject forever. Flagged content is refused at write time;
 # entries already on disk are masked in the snapshot but stay visible to the memory
 # tool so the user can inspect and remove them.
-import re as _re
+import re as _re  # noqa: E402  (placed next to the patterns it compiles, after the design note above)
 
 _INJECTION_PATTERNS: tuple[tuple[_re.Pattern, str], ...] = (
     (_re.compile(r"ignore\s+(?:all\s+)?(?:previous|prior|above)\s+(?:instructions|messages|rules)", _re.I),
