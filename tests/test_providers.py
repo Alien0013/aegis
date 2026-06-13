@@ -353,6 +353,71 @@ def test_responses_stream_records_rate_and_balance_headers(monkeypatch):
     assert ratelimit.balance()["credits left"] == "5.00"
 
 
+def test_responses_streams_reasoning_summary_deltas(monkeypatch):
+    """The Responses API streams thinking as
+    `response.reasoning_summary_text.delta`; the transport must route those
+    through `on_reasoning` so live reasoning renders."""
+    from aegis.providers.responses import ResponsesTransport
+    from aegis.types import Message
+
+    class FakeAuth:
+        def headers(self):
+            return {}
+
+    class FakeStream:
+        status_code = 200
+        headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def iter_lines(self):
+            return iter([
+                'data: {"type":"response.reasoning_summary_text.delta","delta":"Plan"}',
+                'data: {"type":"response.reasoning_summary_text.delta","delta":"ning."}',
+                'data: {"type":"response.output_text.delta","delta":"Done"}',
+                'data: {"type":"response.completed","response":{"status":"completed","output":[]}}',
+                "data: [DONE]",
+            ])
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def stream(self, method, url, headers, json):
+            self.payload = json
+            FakeClient.last_payload = json
+            return FakeStream()
+
+    monkeypatch.setattr("aegis.providers.responses.httpx.Client", FakeClient)
+
+    thoughts: list[str] = []
+    resp = ResponsesTransport().complete(
+        base_url="https://api.openai.com/v1",
+        auth=FakeAuth(),
+        model="gpt-5.5",
+        messages=[Message.user("hi")],
+        tools=None,
+        stream=True,
+        reasoning="medium",
+        on_reasoning=thoughts.append,
+    )
+
+    assert "".join(thoughts) == "Planning."
+    assert resp.text == "Done"
+    # effort set => we ask codex/openai for a reasoning summary
+    assert FakeClient.last_payload["reasoning"] == {"effort": "medium", "summary": "auto"}
+
+
 def test_responses_retrieve_and_cancel_helpers(monkeypatch):
     from aegis.providers.responses import ResponsesTransport
 
@@ -898,7 +963,8 @@ def test_codex_responses_forces_stream(monkeypatch):
         def headers(self):
             return {}
 
-    def fake_stream(self, url, headers, payload, on_delta, timeout, on_response_id=None):
+    def fake_stream(self, url, headers, payload, on_delta, timeout, on_response_id=None,
+                    on_reasoning=None):
         captured["url"] = url
         captured["payload"] = payload
         return LLMResponse(text="ok")
@@ -1177,6 +1243,58 @@ def test_codex_app_server_handles_dynamic_tool_request():
         "success": True,
     }
     assert client.error is None
+
+
+def test_codex_app_server_streams_reasoning_deltas():
+    """Codex emits its thinking as `item/reasoning/summaryTextDelta`
+    notifications; the transport must surface them through `on_reasoning` so
+    the display can render the live reasoning box."""
+    from aegis.providers.codex_app_server import CodexAppServerTransport
+    from aegis.types import Message
+
+    class FakeClient:
+        def __init__(self, messages):
+            self._messages = list(messages)
+
+        def request(self, _method, _params, timeout=20, server_request_handler=None):
+            return {"turn": {"id": "turn_1"}}
+
+        def is_alive(self):
+            return True
+
+        def stderr_tail(self):
+            return ""
+
+        def take_message(self, timeout=0.25):
+            return self._messages.pop(0) if self._messages else None
+
+    transport = CodexAppServerTransport()
+    transport._thread_id = "thr_1"
+    transport._client = FakeClient([
+        {"method": "item/reasoning/summaryTextDelta", "params": {"delta": "Let me "}},
+        {"method": "item/reasoning/summaryTextDelta", "params": {"delta": "think."}},
+        {"method": "item/agentMessage/delta", "params": {"delta": "Hi."}},
+        {"method": "item/completed", "params": {"item": {"type": "agentMessage", "text": "Hi."}}},
+        {"method": "turn/completed", "params": {"turn": {"id": "turn_1"}}},
+    ])
+    transport._ensure_thread = lambda **_kw: transport._client
+
+    thoughts: list[str] = []
+    text: list[str] = []
+    resp = transport.complete(
+        base_url="codex://app-server",
+        auth=type("A", (), {"available": lambda self: True})(),
+        model="gpt-5.5",
+        messages=[Message(role="user", content="hello")],
+        tools=None,
+        stream=True,
+        on_delta=text.append,
+        on_reasoning=thoughts.append,
+    )
+
+    assert "".join(thoughts) == "Let me think."
+    assert "".join(text) == "Hi."
+    assert resp.text == "Hi."
 
 
 def test_codex_app_server_request_does_not_replay_notifications():

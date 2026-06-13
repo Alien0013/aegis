@@ -116,6 +116,7 @@ class ResponsesTransport(ProviderTransport):
         response_state: dict | None = None,
         metadata: dict | None = None,
         on_response_id=None,
+        on_reasoning: OnDelta | None = None,
     ) -> LLMResponse:
         url = f"{base_url}/responses"
         headers = {"Content-Type": "application/json", **(extra_headers or {}), **auth.headers()}
@@ -165,13 +166,15 @@ class ResponsesTransport(ProviderTransport):
         eff = {"minimal": "low", "low": "low", "medium": "medium", "high": "high",
                "xhigh": "high"}.get(reasoning)
         if eff:
-            payload["reasoning"] = {"effort": eff}
+            # Request a reasoning summary so the model streams visible thinking
+            # (`response.reasoning_summary_text.delta`) when a live display wants it.
+            payload["reasoning"] = {"effort": eff, "summary": "auto"}
         wire_tools = self._to_wire_tools(tools)
         if wire_tools:
             payload["tools"] = wire_tools
 
         if wire_stream:
-            resp = self._stream(url, headers, payload, on_delta, timeout, on_response_id)
+            resp = self._stream(url, headers, payload, on_delta, timeout, on_response_id, on_reasoning)
         else:
             resp = self._blocking(url, headers, payload, timeout)
             if on_response_id and isinstance(resp.raw, dict) and resp.raw.get("id"):
@@ -263,7 +266,8 @@ class ResponsesTransport(ProviderTransport):
         data = r.json()
         return self._parse_response(data)
 
-    def _stream(self, url, headers, payload, on_delta, timeout, on_response_id=None) -> LLMResponse:
+    def _stream(self, url, headers, payload, on_delta, timeout, on_response_id=None,
+                on_reasoning=None) -> LLMResponse:
         text_parts: list[str] = []
         completed: dict[str, Any] | None = None
         seen_response_ids: set[str] = set()
@@ -284,11 +288,18 @@ class ResponsesTransport(ProviderTransport):
                     except json.JSONDecodeError:
                         continue
                     self._notify_response_id(event, on_response_id, seen_response_ids)
-                    if event.get("type") == "response.output_text.delta":
+                    etype = event.get("type") or ""
+                    if etype == "response.output_text.delta":
                         delta = event.get("delta") or ""
                         text_parts.append(delta)
                         if on_delta:
                             on_delta(delta)
+                    elif etype.startswith("response.reasoning") and etype.endswith(".delta"):
+                        # response.reasoning_summary_text.delta (and raw
+                        # reasoning_text.delta) carry the model's live thinking.
+                        delta = event.get("delta") or ""
+                        if delta and on_reasoning:
+                            on_reasoning(delta)
                     elif event.get("type") == "response.completed":
                         completed = event.get("response") or {}
                         self._notify_response_id(completed, on_response_id, seen_response_ids)

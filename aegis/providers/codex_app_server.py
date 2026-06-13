@@ -218,6 +218,7 @@ class CodexAppServerTransport(ProviderTransport):
         tool_runner: ToolRunner | None = None,
         approver: ApprovalHandler | None = None,
         cwd: Path | None = None,
+        on_reasoning: OnDelta | None = None,
     ) -> LLMResponse:
         if not auth.available():
             raise CodexAppServerError(
@@ -276,6 +277,13 @@ class CodexAppServerTransport(ProviderTransport):
                     text_parts.append(delta)
                     if on_delta:
                         on_delta(delta)
+            elif method in ("item/reasoning/summaryTextDelta", "item/reasoning/textDelta"):
+                # Codex streams its reasoning summary (and, when enabled, raw
+                # reasoning) as separate notifications. Surface them live so the
+                # display layer can render the thinking box.
+                delta = params.get("delta") or ""
+                if delta and on_reasoning:
+                    on_reasoning(delta)
             elif method == "item/completed":
                 item = params.get("item") or {}
                 if item.get("type") == "agentMessage" and item.get("text"):
