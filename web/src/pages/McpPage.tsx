@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { api, post } from "../lib/api";
+import { Button, Card, Empty, Field, PageHeader, useToast } from "../lib/ui";
 
 export function McpPage() {
   const [servers, setServers] = useState<any[]>([]);
   const [name, setName] = useState("");
   const [command, setCommand] = useState("");
-  const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const toast = useToast();
 
   async function load() {
     try {
@@ -23,32 +24,34 @@ export function McpPage() {
     setBusy(true);
     try {
       const r = await post("mcp", { action: "add", name: name.trim(), command: command.trim() });
-      setMsg(r.ok ? `✓ added ${name}` : "✗ " + (r.error || "failed"));
-      if (r.ok) { setName(""); setCommand(""); await load(); }
+      if (r.ok) { toast(`Connected ${name}`, "ok"); setName(""); setCommand(""); await load(); }
+      else toast(r.error || "failed", "err");
     } finally { setBusy(false); }
   }
-  async function remove(n: string) { await post("mcp", { action: "remove", name: n }); await load(); }
+  async function remove(n: string) { await post("mcp", { action: "remove", name: n }); toast("Removed"); await load(); }
 
   return (
     <>
-      <div className="head"><h1>MCP Servers</h1><span className="crumb">{servers.length} server{servers.length === 1 ? "" : "s"}</span></div>
-      <div className="card" style={{ marginBottom: 14 }}>
-        <h3>Connect a server</h3>
-        <div className="grid c3" style={{ gap: 10, alignItems: "end" }}>
-          <label>Name<input value={name} onChange={(e) => setName(e.target.value)} placeholder="github" /></label>
-          <label style={{ gridColumn: "span 1" }}>Command<input value={command} onChange={(e) => setCommand(e.target.value)} placeholder="npx -y @modelcontextprotocol/server-github" /></label>
-          <button className="btn" onClick={add} disabled={busy}>Add</button>
-        </div>
-        {msg && <div className="mut" style={{ marginTop: 8 }}>{msg}</div>}
-      </div>
-      <div className="card">
-        {!servers.length && <div className="empty">No MCP servers connected yet.</div>}
-        {servers.map((s, i) => (
-          <div className="row" key={s.name || i}>
-            <span><b>{s.name}</b> <span className="mut">{[s.command, ...(s.args || [])].filter(Boolean).join(" ").slice(0, 70) || s.url || ""}</span></span>
-            <button className="btn ghost" onClick={() => remove(s.name)}>Remove</button>
+      <PageHeader title="MCP Servers" sub={`${servers.length} server${servers.length === 1 ? "" : "s"}`} />
+      <div className="stack">
+        <Card title="Connect a server">
+          <div className="grid c3" style={{ alignItems: "end" }}>
+            <Field label="Name"><input value={name} onChange={(e) => setName(e.target.value)} placeholder="github" /></Field>
+            <Field label="Command"><input value={command} onChange={(e) => setCommand(e.target.value)} placeholder="npx -y @modelcontextprotocol/server-github" /></Field>
+            <Button onClick={add} disabled={busy} icon="plus">Add</Button>
           </div>
-        ))}
+        </Card>
+        <Card title="Connected" pad={false}>
+          {!servers.length && <Empty small>No MCP servers connected yet.</Empty>}
+          <div style={{ padding: servers.length ? "2px 14px 6px" : 0 }}>
+            {servers.map((s, i) => (
+              <div className="row" key={s.name || i}>
+                <span style={{ minWidth: 0 }}><b>{s.name}</b> <span className="mut mono">{[s.command, ...(s.args || [])].filter(Boolean).join(" ").slice(0, 70) || s.url || ""}</span></span>
+                <Button variant="danger" sm onClick={() => remove(s.name)}>Remove</Button>
+              </div>
+            ))}
+          </div>
+        </Card>
       </div>
     </>
   );

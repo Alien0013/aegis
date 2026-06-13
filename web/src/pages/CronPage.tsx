@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, post } from "../lib/api";
+import { Badge, Button, Card, Empty, Field, PageHeader, useToast } from "../lib/ui";
 
 export function CronPage() {
   const [jobs, setJobs] = useState<any[]>([]);
@@ -7,6 +8,7 @@ export function CronPage() {
   const [prompt, setPrompt] = useState("");
   const [channel, setChannel] = useState("");
   const [busy, setBusy] = useState(false);
+  const toast = useToast();
 
   async function load() {
     try { const d = await api("cron"); setJobs(d.jobs || d.cron || (Array.isArray(d) ? d : [])); }
@@ -17,38 +19,45 @@ export function CronPage() {
   async function add() {
     if (!schedule.trim() || !prompt.trim()) return;
     setBusy(true);
-    try { await post("cron", { action: "add", schedule, prompt, channel }); setPrompt(""); await load(); }
+    try { await post("cron", { action: "add", schedule, prompt, channel }); setPrompt(""); toast("Job scheduled", "ok"); await load(); }
+    catch (e) { toast(String(e), "err"); }
     finally { setBusy(false); }
   }
-  async function remove(id: string) { await post("cron", { action: "remove", id }); await load(); }
+  async function remove(id: string) { await post("cron", { action: "remove", id }); toast("Job deleted"); await load(); }
   async function toggle(id: string, enabled: boolean) { await post("cron", { action: "toggle", id, enabled: !enabled }); await load(); }
-  async function runNow(id: string) { await post("cron", { action: "run", id }); }
+  async function runNow(id: string) { await post("cron", { action: "run", id }); toast("Run triggered", "ok"); }
 
   return (
     <>
-      <div className="head"><h1>Cron</h1><span className="crumb">{jobs.length} job{jobs.length === 1 ? "" : "s"}</span></div>
-      <div className="card" style={{ marginBottom: 14 }}>
-        <h3>Schedule a task</h3>
-        <div className="grid c3" style={{ gap: 10, alignItems: "end" }}>
-          <label>Schedule<input value={schedule} onChange={(e) => setSchedule(e.target.value)} placeholder="@daily, every 2h, 0 9 * * 1" /></label>
-          <label style={{ gridColumn: "span 1" }}>Deliver to<input value={channel} onChange={(e) => setChannel(e.target.value)} placeholder="telegram:12345 (optional)" /></label>
-          <button className="btn" onClick={add} disabled={busy}>Add job</button>
-        </div>
-        <label style={{ display: "block", marginTop: 10 }}>Prompt
-          <textarea rows={2} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="summarize today's commits and DM me" /></label>
-      </div>
-      <div className="card">
-        {!jobs.length && <div className="empty">No scheduled jobs yet.</div>}
-        {jobs.map((j) => (
-          <div className="row" key={j.id}>
-            <span><b>{j.schedule}</b> <span className="mut">— {(j.prompt || "").slice(0, 60)}</span>{j.channel && <span className="pill" style={{ marginLeft: 8 }}>{j.channel}</span>}</span>
-            <span style={{ display: "flex", gap: 8 }}>
-              <button className="btn ghost" onClick={() => runNow(j.id)}>Run</button>
-              <button className="btn ghost" onClick={() => toggle(j.id, j.enabled !== false)}>{j.enabled === false ? "Enable" : "Disable"}</button>
-              <button className="btn ghost" onClick={() => remove(j.id)}>Delete</button>
-            </span>
+      <PageHeader title="Cron" sub={`${jobs.length} job${jobs.length === 1 ? "" : "s"}`} />
+      <div className="stack">
+        <Card title="Schedule a task">
+          <div className="grid c3" style={{ alignItems: "end" }}>
+            <Field label="Schedule"><input value={schedule} onChange={(e) => setSchedule(e.target.value)} placeholder="@daily · every 2h · 0 9 * * 1" /></Field>
+            <Field label="Deliver to (optional)"><input value={channel} onChange={(e) => setChannel(e.target.value)} placeholder="telegram:12345" /></Field>
+            <Button onClick={add} disabled={busy} icon="plus">Add job</Button>
           </div>
-        ))}
+          <Field label="Prompt"><textarea rows={2} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="summarize today's commits and DM me" /></Field>
+        </Card>
+        <Card title="Scheduled jobs" pad={false}>
+          {!jobs.length && <Empty small>No scheduled jobs yet.</Empty>}
+          <div style={{ padding: jobs.length ? "2px 14px 6px" : 0 }}>
+            {jobs.map((j) => (
+              <div className="row" key={j.id}>
+                <span style={{ minWidth: 0 }}>
+                  <b className="mono">{j.schedule}</b> <span className="mut">— {(j.prompt || "").slice(0, 64)}</span>
+                  {j.channel && <span className="pill" style={{ marginLeft: 8 }}>{j.channel}</span>}
+                  {j.enabled === false && <Badge status="disabled" >paused</Badge>}
+                </span>
+                <span className="actions">
+                  <Button variant="ghost" sm onClick={() => runNow(j.id)}>Run</Button>
+                  <Button variant="ghost" sm onClick={() => toggle(j.id, j.enabled !== false)}>{j.enabled === false ? "Enable" : "Disable"}</Button>
+                  <Button variant="danger" sm onClick={() => remove(j.id)}>Delete</Button>
+                </span>
+              </div>
+            ))}
+          </div>
+        </Card>
       </div>
     </>
   );

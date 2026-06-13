@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { api, post } from "../lib/api";
+import { Button, Card, Empty, Field, PageHeader, useToast } from "../lib/ui";
 
 export function WebhooksPage() {
   const [hooks, setHooks] = useState<any[]>([]);
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
+  const toast = useToast();
 
   async function load() {
     try {
@@ -20,32 +22,35 @@ export function WebhooksPage() {
   async function add() {
     if (!name.trim() || !prompt.trim()) return;
     setBusy(true);
-    try { await post("webhooks", { action: "add", name: name.trim(), prompt }); setName(""); setPrompt(""); await load(); }
+    try { await post("webhooks", { action: "add", name: name.trim(), prompt }); toast(`Webhook ${name} created`, "ok"); setName(""); setPrompt(""); await load(); }
+    catch (e) { toast(String(e), "err"); }
     finally { setBusy(false); }
   }
-  async function remove(n: string) { await post("webhooks", { action: "remove", name: n }); await load(); }
+  async function remove(n: string) { await post("webhooks", { action: "remove", name: n }); toast("Removed"); await load(); }
 
   return (
     <>
-      <div className="head"><h1>Webhooks</h1><span className="crumb">{hooks.length} hook{hooks.length === 1 ? "" : "s"}</span></div>
-      <div className="card" style={{ marginBottom: 14 }}>
-        <h3>Create a webhook</h3>
-        <div className="grid c3" style={{ gap: 10, alignItems: "end" }}>
-          <label>Name<input value={name} onChange={(e) => setName(e.target.value)} placeholder="deploy-notify" /></label>
-          <button className="btn" style={{ gridColumn: "3" }} onClick={add} disabled={busy}>Add</button>
-        </div>
-        <label style={{ display: "block", marginTop: 10 }}>Prompt to run when called
-          <textarea rows={2} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="summarize the payload and post it to #ops" /></label>
-        {name.trim() && <div className="mut" style={{ marginTop: 8 }}>POST to <code>/hooks/{name.trim()}</code> to trigger.</div>}
-      </div>
-      <div className="card">
-        {!hooks.length && <div className="empty">No webhooks yet.</div>}
-        {hooks.map((h, i) => (
-          <div className="row" key={h.name || i}>
-            <span><b>{h.name}</b> <span className="mut">— {(h.prompt || "").slice(0, 60)}</span></span>
-            <button className="btn ghost" onClick={() => remove(h.name)}>Remove</button>
+      <PageHeader title="Webhooks" sub={`${hooks.length} hook${hooks.length === 1 ? "" : "s"}`} />
+      <div className="stack">
+        <Card title="Create a webhook">
+          <div className="grid c3" style={{ alignItems: "end" }}>
+            <Field label="Name"><input value={name} onChange={(e) => setName(e.target.value)} placeholder="deploy-notify" /></Field>
+            <div style={{ gridColumn: "2 / 4", alignSelf: "end" }}><Button onClick={add} disabled={busy} icon="plus">Add</Button></div>
           </div>
-        ))}
+          <Field label="Prompt to run when called"><textarea rows={2} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="summarize the payload and post it to #ops" /></Field>
+          {name.trim() && <div className="mut">POST to <code>/hooks/{name.trim()}</code> to trigger.</div>}
+        </Card>
+        <Card title="Webhooks" pad={false}>
+          {!hooks.length && <Empty small>No webhooks yet.</Empty>}
+          <div style={{ padding: hooks.length ? "2px 14px 6px" : 0 }}>
+            {hooks.map((h, i) => (
+              <div className="row" key={h.name || i}>
+                <span style={{ minWidth: 0 }}><b>{h.name}</b> <span className="mut">— {(h.prompt || "").slice(0, 64)}</span></span>
+                <Button variant="danger" sm onClick={() => remove(h.name)}>Remove</Button>
+              </div>
+            ))}
+          </div>
+        </Card>
       </div>
     </>
   );
