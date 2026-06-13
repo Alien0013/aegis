@@ -3,6 +3,8 @@
 const url = new URL(window.location.href);
 const fromQuery = url.searchParams.get("token");
 if (fromQuery) localStorage.setItem("aegis_token", fromQuery);
+const fromBootstrap = (window as any).__AEGIS_SESSION_TOKEN__ || "";
+if (fromBootstrap) localStorage.setItem("aegis_token", fromBootstrap);
 export const TOKEN = localStorage.getItem("aegis_token") || "";
 
 function headers(extra: Record<string, string> = {}): Record<string, string> {

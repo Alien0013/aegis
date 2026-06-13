@@ -19,5 +19,6 @@ export const ICONS: Record<string, ReactElement> = {
   system: P('<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>'),
   menu: P('<path d="M4 6h16M4 12h16M4 18h16"/>'),
   close: P('<path d="M6 6l12 12M18 6L6 18"/>'),
+  search: P('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>'),
 };
 export const Icon = ({ n }: { n: string }) => ICONS[n] || ICONS.overview;

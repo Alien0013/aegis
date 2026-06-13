@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Icon } from "./lib/icons";
 import { api } from "./lib/api";
 import { Overview } from "./pages/Overview";
@@ -44,6 +44,8 @@ const NAV: NavItem[] = [
 ];
 const THEMES = ["dark", "paper", "mono"];
 
+const hashView = () => (location.hash.slice(1) || "overview").replace(/^\//, "");
+
 function pageFor(id: string, go: (id: string) => void) {
   switch (id) {
     case "overview": return <Overview go={go} />;
@@ -79,13 +81,14 @@ function pageFor(id: string, go: (id: string) => void) {
 }
 
 export function App() {
-  const [view, setView] = useState(location.hash.slice(1) || "overview");
+  const [view, setView] = useState(hashView());
   const [theme, setTheme] = useState(localStorage.getItem("aegis_theme") || "dark");
   const [navOpen, setNavOpen] = useState(false);
   const [status, setStatus] = useState<any>(null);
+  const [navQuery, setNavQuery] = useState("");
   useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem("aegis_theme", theme); }, [theme]);
   useEffect(() => {
-    const onHash = () => setView(location.hash.slice(1) || "overview");
+    const onHash = () => setView(hashView());
     addEventListener("hashchange", onHash);
     return () => removeEventListener("hashchange", onHash);
   }, []);
@@ -97,41 +100,66 @@ export function App() {
     return () => { mounted = false; clearInterval(timer); };
   }, []);
   const go = (id: string) => { setView(id); location.hash = id; setNavOpen(false); };
-  const groups = [...new Set(NAV.map((n) => n.group))];
+  const visibleNav = useMemo(() => {
+    const q = navQuery.trim().toLowerCase();
+    if (!q) return NAV;
+    return NAV.filter((n) => `${n.label} ${n.group} ${n.id}`.toLowerCase().includes(q));
+  }, [navQuery]);
+  const groups = [...new Set(visibleNav.map((n) => n.group))];
   const current = NAV.find((n) => n.id === view);
+  const online = status && !status.error;
   return (
     <div className="app">
       <header className="topbar">
         <button className="iconbtn" aria-label="Open navigation" onClick={() => setNavOpen(true)}><Icon n="menu" /></button>
         <div>
-          <b>{current?.label || "AEGIS"}</b>
-          <span>{status?.model || "source dashboard"}</span>
+          <b>{current?.label || "AEGIS Agent"}</b>
+          <span>{online ? `${status.provider || "provider"} / ${status.model || "model"}` : "dashboard"}</span>
         </div>
       </header>
       {navOpen && <button className="scrim" aria-label="Close navigation" onClick={() => setNavOpen(false)} />}
       <aside className={"side" + (navOpen ? " open" : "")}>
-        <div className="brand"><span className="dot" /> AEGIS</div>
+        <div className="brand">
+          <span className="mark">A</span>
+          <div>
+            <b>AEGIS Agent</b>
+            <span>Operator workspace</span>
+          </div>
+        </div>
+        <div className="navsearch">
+          <Icon n="search" />
+          <input
+            aria-label="Filter navigation"
+            value={navQuery}
+            onChange={(e) => setNavQuery(e.target.value)}
+            placeholder="Find page"
+          />
+        </div>
         {groups.map((group) => (
           <div className="navgroup" key={group}>
             <div className="navlabel">{group}</div>
-            {NAV.filter((n) => n.group === group).map((n) => (
+            {visibleNav.filter((n) => n.group === group).map((n) => (
               <button key={n.id} className={"nav" + (view === n.id ? " active" : "")} onClick={() => go(n.id)}>
                 <Icon n={n.icon} /> <span>{n.label}</span>
               </button>
             ))}
           </div>
         ))}
+        {!visibleNav.length && <div className="empty small">No pages match</div>}
         <div className="sidefoot">
           <div className="statusbox">
-            <span className={"statusdot" + (status?.error ? " err" : "")} />
+            <span className={"statusdot" + (!online ? " err" : "")} />
             <div>
-              <b>{status?.provider || "AEGIS"}</b>
-              <span>{status?.model || (status?.error ? "backend offline" : "loading...")}</span>
+              <b>{online ? status.provider || "AEGIS" : "Backend"}</b>
+              <span>{online ? status.model || "ready" : status?.error ? "offline" : "connecting..."}</span>
             </div>
           </div>
           <div className="themebar" aria-label="Theme">
             {THEMES.map((t) => (
-              <button key={t} className={theme === t ? "active" : ""} onClick={() => setTheme(t)}>{t}</button>
+              <button key={t} className={theme === t ? "active" : ""} onClick={() => setTheme(t)}>
+                <span className={`swatch ${t}`} />
+                {t}
+              </button>
             ))}
           </div>
         </div>

@@ -55,6 +55,34 @@ def _asset(path: str) -> tuple[bytes, str] | None:
     return data, ctype
 
 
+def _dist_file(path: str) -> tuple[bytes, str] | None:
+    """Serve public files copied by Vite into static/web_dist."""
+    import os
+    from importlib import resources
+    rel = path.lstrip("/")
+    if not rel or "\\" in rel or ".." in rel:
+        return None
+    try:
+        data = (resources.files("aegis") / "static" / "web_dist" / rel).read_bytes()
+    except Exception:  # noqa: BLE001
+        return None
+    ctype = _ASSET_TYPES.get(os.path.splitext(rel)[1], "application/octet-stream")
+    return data, ctype
+
+
+def _page_with_bootstrap(config: Config) -> bytes:
+    page = _page()
+    token = _dashboard_token(config) or ""
+    bootstrap = (
+        "<script>"
+        f"window.__AEGIS_SESSION_TOKEN__={json.dumps(token)};"
+        "</script>"
+    ).encode()
+    if b"</head>" in page:
+        return page.replace(b"</head>", bootstrap + b"</head>", 1)
+    return bootstrap + page
+
+
 
 
 
@@ -1572,7 +1600,7 @@ def make_handler(config: Config):
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.end_headers()
-                self.wfile.write(_page())
+                self.wfile.write(_page_with_bootstrap(config))
             elif path.startswith("/assets/"):       # built React bundle (public static)
                 asset = _asset(path)
                 if asset is None:
@@ -1583,6 +1611,21 @@ def make_handler(config: Config):
                 self.send_header("Cache-Control", "public, max-age=31536000, immutable")
                 self.end_headers()
                 self.wfile.write(data)
+            elif path in {"/favicon.ico"} or path.startswith(("/fonts/", "/fonts-terminal/")):
+                asset = _dist_file(path)
+                if asset is None:
+                    self.send_response(404); self.end_headers(); return
+                data, ctype = asset
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+                self.end_headers()
+                self.wfile.write(data)
+            elif not path.startswith("/api/") and path != "/events":
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(_page_with_bootstrap(config))
             elif not self._authorized():
                 self._unauthorized()
             elif path == "/api/status":
