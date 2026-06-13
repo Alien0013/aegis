@@ -15,6 +15,12 @@
 }
 [data-theme="paper"]{--bg:#f4f4f2;--panel:#ffffff;--panel2:#f2f2ef;--panel3:#e9e9e5;--line:#e4e4df;--line2:#cdcdc6;--text:#13151a;--mut:#5b616c;--faint:#969ca7;--accent:#4f6bff;--accent2:#0c8f88;--shadow:0 1px 2px rgba(20,20,30,.06),0 0 0 1px var(--line);--shadow-lg:0 20px 50px -14px rgba(30,30,40,.22),0 0 0 1px var(--line2);}
 [data-theme="mono"]{--bg:#0a0a0a;--panel:#101010;--panel2:#181818;--panel3:#222;--line:#262626;--line2:#3a3a3a;--text:#f2f2f2;--mut:#9a9a9a;--faint:#646464;--accent:#e8e8e8;--accent2:#b4b4b4;--grad:linear-gradient(135deg,#fff,#888);}
+/* hacker — matrix green on near-black, monospace, faint grid */
+[data-theme="hacker"]{--bg:#03070a;--panel:#07130e;--panel2:#0a1c14;--panel3:#0f2a1d;--line:#123022;--line2:#1d4a35;--text:#c9f7da;--mut:#5fae80;--faint:#356b4f;--accent:#27e06a;--accent2:#9bff4d;--ok:#27e06a;--warn:#d9e04a;--err:#ff5d5d;--grad:linear-gradient(135deg,#27e06a,#9bff4d);--shadow:0 0 0 1px #123022,0 0 16px -6px #27e06a55;--shadow-lg:0 18px 50px -12px #000,0 0 0 1px #1d4a35,0 0 30px -10px #27e06a40;}
+[data-theme="hacker"] body{font-family:var(--mono)}
+[data-theme="hacker"] .main{background-image:linear-gradient(#27e06a08 1px,transparent 1px),linear-gradient(90deg,#27e06a08 1px,transparent 1px);background-size:30px 30px}
+[data-theme="hacker"] h1,[data-theme="hacker"] .brand b{text-shadow:0 0 14px #27e06a55}
+[data-theme="hacker"] .nav.active{box-shadow:inset 2px 0 0 var(--accent),0 0 18px -8px #27e06a}
 
 *{box-sizing:border-box}
 html,body,#root{height:100%;margin:0}
@@ -58,7 +64,8 @@ kbd{background:var(--panel2);border:1px solid var(--line);border-radius:5px;padd
 .themebar button{display:flex;align-items:center;justify-content:center;gap:5px;padding:6px 4px;border:1px solid var(--line);background:var(--panel2);color:var(--mut);border-radius:6px;cursor:pointer;font-size:11px;text-transform:capitalize}
 .themebar button.active{border-color:var(--accent);color:var(--text)}
 .swatch{width:8px;height:8px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2))}
-.swatch.paper{background:linear-gradient(135deg,#fff,#0c8f88)}.swatch.mono{background:linear-gradient(135deg,#fff,#555)}
+.swatch.paper{background:linear-gradient(135deg,#fff,#0c8f88)}.swatch.mono{background:linear-gradient(135deg,#fff,#555)}.swatch.hacker{background:linear-gradient(135deg,#27e06a,#9bff4d)}
+.themebar{grid-template-columns:repeat(4,1fr)}
 
 .main{overflow:auto;padding:22px 26px 60px;min-width:0}
 .topbar{display:none}.scrim{display:none}

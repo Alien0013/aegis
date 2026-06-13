@@ -44,7 +44,7 @@ const NAV: NavItem[] = [
   { id: "config", label: "Config", icon: "config", group: "System" },
   { id: "system", label: "System", icon: "system", group: "System" },
 ];
-const THEMES = ["dark", "paper", "mono"];
+const THEMES = ["dark", "hacker", "paper", "mono"];
 
 const hashView = () => (location.hash.slice(1) || "overview").replace(/^\//, "");
 

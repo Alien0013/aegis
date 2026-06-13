@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { compact, dateish } from "../lib/format";
-import { Badge, Button, Card, Empty, Loading, PageHeader, Stat } from "../lib/ui";
+import { Badge, BarChart, Button, Card, Empty, Loading, PageHeader, Stat } from "../lib/ui";
 
 const fmt$ = (n: number) => "$" + (Number(n) || 0).toFixed(2);
 
@@ -38,6 +38,23 @@ export function Overview({ go }: { go: (id: string) => void }) {
         <Stat label="Agents" value={(d.agents.agents || []).length} sub={`${running} running`} onClick={() => go("agents")} />
         <Stat label="Spend · 30d" value={fmt$(d.an.total_cost_usd)} sub={`${d.an.calls ?? 0} calls`} />
       </div>
+
+      <div style={{ marginTop: 12 }} />
+      <Card title="Activity · 30 days" actions={<span className="mut" style={{ fontSize: 12 }}>{d.an.calls ?? 0} calls · {fmt$(d.an.total_cost_usd)}</span>}>
+        {(() => {
+          const series: any[] = d.an.series || [];
+          const calls = series.map((s) => Number(s.calls) || 0);
+          const cost = series.map((s) => Number(s.cost_usd) || 0);
+          const anyData = calls.some((c) => c) || cost.some((c) => c);
+          if (!anyData) return <Empty small>No activity recorded yet — runs and spend will chart here.</Empty>;
+          return (
+            <div className="grid c2" style={{ gap: 18 }}>
+              <div><div className="mut" style={{ fontSize: 11, marginBottom: 4 }}>Calls / day</div><BarChart data={calls} color="var(--accent)" /></div>
+              <div><div className="mut" style={{ fontSize: 11, marginBottom: 4 }}>Spend / day</div><BarChart data={cost} color="var(--accent2)" /></div>
+            </div>
+          );
+        })()}
+      </Card>
 
       <div className="grid c2" style={{ marginTop: 12 }}>
         <Card title="Recent sessions" actions={<Button variant="ghost" sm onClick={() => go("sessions")}>All</Button>} pad={false}>

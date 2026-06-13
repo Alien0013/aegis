@@ -101,6 +101,22 @@ export function ToastHost({ children }: { children: ReactNode }) {
   );
 }
 
+/* ---------- dependency-free bar chart ---------- */
+export function BarChart({ data, height = 60, color }: { data: number[]; height?: number; color?: string }) {
+  const max = Math.max(1, ...data);
+  const n = Math.max(1, data.length);
+  const w = 100 / n;
+  return (
+    <svg viewBox={`0 0 100 ${height}`} preserveAspectRatio="none" style={{ width: "100%", height, display: "block" }}>
+      {data.map((v, i) => {
+        const h = (v / max) * (height - 2);
+        return <rect key={i} x={i * w + w * 0.12} y={height - Math.max(h, 0.6)} width={w * 0.76}
+          height={Math.max(h, 0.6)} rx={0.5} fill={color || "var(--accent)"} opacity={v ? 0.92 : 0.16} />;
+      })}
+    </svg>
+  );
+}
+
 /* ---------- toolbar with search ---------- */
 export function Toolbar({ q, setQ, placeholder, children }:
   { q?: string; setQ?: (v: string) => void; placeholder?: string; children?: ReactNode }) {
