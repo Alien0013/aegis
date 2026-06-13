@@ -115,22 +115,19 @@ def test_mcp_server_exposes_tools():
 
 def test_dashboard_serves(monkeypatch):
     import http.client
-    import threading
-    from http.server import ThreadingHTTPServer
     from aegis.config import Config
-    from aegis.dashboard import make_handler, _page
+    from aegis.dashboard import _page
+    from tests._dashboard_server import serve_app
 
     page = _page().decode()
     # the served shell is the React app (api calls live in the bundle) — or the
     # legacy vanilla dashboard.html fallback; both are AEGIS-branded.
     assert "AEGIS" in page and ('id="root"' in page or "/api/" in page)
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(Config.load()))
-    port = httpd.server_address[1]
-    threading.Thread(target=httpd.handle_request, daemon=True).start()
+    srv, port = serve_app(Config.load())
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
     conn.request("GET", "/api/status")
     body = conn.getresponse().read().decode()
-    httpd.server_close()
+    srv.shutdown()
     import json
     data = json.loads(body)
     assert "tools" in data and "version" in data

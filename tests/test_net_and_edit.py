@@ -484,16 +484,13 @@ def test_dashboard_sse_streams_events(tmp_path, monkeypatch):
     import http.client
     import threading
     import time
-    from http.server import ThreadingHTTPServer
     from aegis.config import Config
-    from aegis.dashboard import make_handler
+    from tests._dashboard_server import serve_app
     from aegis.eventbus import BUS
 
     cfg = Config.load()
     cfg.set("dashboard.token", "")
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(cfg))
-    port = srv.server_address[1]
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    srv, port = serve_app(cfg)
     got = {}
 
     def reader():
@@ -577,15 +574,12 @@ def test_dashboard_kanban_board(tmp_path, monkeypatch):
     import http.client
     import json
     import threading
-    from http.server import ThreadingHTTPServer
     from aegis.config import Config
-    from aegis.dashboard import make_handler
+    from tests._dashboard_server import serve_app
 
     cfg = Config.load()
     cfg.set("dashboard.token", "")
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(cfg))
-    port = srv.server_address[1]
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    srv, port = serve_app(cfg)
 
     def req(method, path, body=None):
         c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
@@ -627,9 +621,8 @@ def test_dashboard_config_redaction_and_cron(tmp_path, monkeypatch):
     import http.client
     import json
     import threading
-    from http.server import ThreadingHTTPServer
     from aegis.config import Config
-    from aegis.dashboard import make_handler
+    from tests._dashboard_server import serve_app
     import aegis.agent.agent as am
 
     class A:
@@ -639,9 +632,7 @@ def test_dashboard_config_redaction_and_cron(tmp_path, monkeypatch):
     monkeypatch.setattr(am.Agent, "create", staticmethod(lambda cfg, session=None: A()))
     cfg = Config.load()
     cfg.set("dashboard.token", "")
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(cfg))
-    port = srv.server_address[1]
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    srv, port = serve_app(cfg)
 
     def req(m, p, b=None):
         c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
@@ -685,9 +676,8 @@ def test_dashboard_models_and_analytics(tmp_path, monkeypatch):
     import http.client
     import json
     import threading
-    from http.server import ThreadingHTTPServer
     from aegis.config import Config
-    from aegis.dashboard import make_handler
+    from tests._dashboard_server import serve_app
     from aegis import ratelimit
     from aegis import usage_log
     from aegis.types import Usage
@@ -700,9 +690,7 @@ def test_dashboard_models_and_analytics(tmp_path, monkeypatch):
     cfg.set("model.provider", "openai")
     cfg.set("model.default", "gpt-5.5")
     cfg.data["pricing"] = {"claude-opus-4-8": [100.0, 200.0]}
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(cfg))
-    port = srv.server_address[1]
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    srv, port = serve_app(cfg)
 
     def req(m, p, b=None):
         c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
@@ -731,16 +719,13 @@ def test_dashboard_keys_pairing_and_port(tmp_path, monkeypatch):
     import socket
     import threading
     import time
-    from http.server import ThreadingHTTPServer
     from aegis.config import Config
     from aegis import dashboard
-    from aegis.dashboard import make_handler
+    from tests._dashboard_server import serve_app
 
     cfg = Config.load()
     cfg.set("dashboard.token", "")
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(cfg))
-    port = srv.server_address[1]
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    srv, port = serve_app(cfg)
 
     def req(m, p, b=None):
         c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
@@ -788,16 +773,14 @@ def test_dashboard_system_and_logs(tmp_path, monkeypatch):
     import json
     import os
     import threading
-    from http.server import ThreadingHTTPServer
     from aegis.config import Config
-    from aegis.dashboard import make_handler, _system_info
+    from aegis.dashboard import _system_info
+    from tests._dashboard_server import serve_app
 
     assert {"version", "platform", "disk_total_gb", "checkpoints"} <= set(_system_info())
     cfg = Config.load()
     cfg.set("dashboard.token", "")
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(cfg))
-    port = srv.server_address[1]
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    srv, port = serve_app(cfg)
 
     def req(m, p, b=None):
         c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
@@ -819,14 +802,11 @@ def test_dashboard_mcp_and_webhooks(tmp_path, monkeypatch):
     import http.client
     import json
     import threading
-    from http.server import ThreadingHTTPServer
     from aegis.config import Config
-    from aegis.dashboard import make_handler
+    from tests._dashboard_server import serve_app
     cfg = Config.load()
     cfg.set("dashboard.token", "")
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(cfg))
-    port = srv.server_address[1]
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    srv, port = serve_app(cfg)
 
     def req(m, p, b=None):
         c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
@@ -848,9 +828,8 @@ def test_dashboard_public_plan_endpoints(tmp_path, monkeypatch):
     import http.client
     import json
     import threading
-    from http.server import ThreadingHTTPServer
     from aegis.config import Config
-    from aegis.dashboard import make_handler
+    from tests._dashboard_server import serve_app
     from aegis.session import Session, SessionStore
     from aegis.types import Message, ToolCall
     from aegis.tools.agentic import _REGISTRY, _REG_LOCK, _register
@@ -951,9 +930,7 @@ def test_dashboard_public_plan_endpoints(tmp_path, monkeypatch):
     _register("sub_dash", status="done", task="inspect dashboard", type="explore",
               run_id=run["id"], session_id=s.id, trace_id="trace_dash")
 
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(cfg))
-    port = srv.server_address[1]
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    srv, port = serve_app(cfg)
 
     def req(path):
         c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
@@ -1126,9 +1103,8 @@ def test_dashboard_kanban_automation(tmp_path, monkeypatch):
     import json
     import threading
     import time
-    from http.server import ThreadingHTTPServer
     from aegis.config import Config
-    from aegis.dashboard import make_handler
+    from tests._dashboard_server import serve_app
 
     class FakeResp:
         def __init__(self, c): self.content = c
@@ -1141,9 +1117,7 @@ def test_dashboard_kanban_automation(tmp_path, monkeypatch):
 
     cfg = Config.load()
     cfg.set("dashboard.token", "")
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(cfg))
-    port = srv.server_address[1]
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    srv, port = serve_app(cfg)
 
     def req(m, p, b=None):
         c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
@@ -1168,10 +1142,9 @@ def test_dashboard_curator_plugins_profiles(tmp_path, monkeypatch):
     import http.client
     import json
     import threading
-    from http.server import ThreadingHTTPServer
     import aegis.config as cfg
     from aegis.config import Config
-    from aegis.dashboard import make_handler
+    from tests._dashboard_server import serve_app
     pdir = cfg.workspace_dir() / "personalities"
     pdir.mkdir(parents=True, exist_ok=True)
     (pdir / "pirate.md").write_text("arr")
@@ -1193,9 +1166,7 @@ def test_dashboard_curator_plugins_profiles(tmp_path, monkeypatch):
 
     c = Config.load()
     c.set("dashboard.token", "")
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(c))
-    port = srv.server_address[1]
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    srv, port = serve_app(c)
 
     def req(m, p, b=None):
         cc = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
@@ -1206,11 +1177,11 @@ def test_dashboard_curator_plugins_profiles(tmp_path, monkeypatch):
         assert "stale" in cur and "to_archive" in cur
         assert "stale" in req("POST", "/api/curator", {})
         pl = req("GET", "/api/plugins")
-        assert "loaded" in pl and "tools" in pl
+        assert "plugins" in pl and "tools" in pl
         assert pl["providers"] == ["dashprov"]
         assert pl["channels"] == ["dashchan"]
-        assert pl["manifests"][0]["name"] == "dash_ext"
-        assert pl["manifests"][0]["enabled"] is True
+        assert pl["plugins"][0]["name"] == "dash_ext"
+        assert pl["plugins"][0]["enabled"] is True
         pr = req("GET", "/api/profiles")
         assert "pirate" in pr["available"]
         req("POST", "/api/profiles", {"name": "pirate"})

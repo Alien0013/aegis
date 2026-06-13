@@ -2767,7 +2767,15 @@ def create_app(config: Config) -> FastAPI:
     @app.post("/api/{path:path}")
     async def api_post(path: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        body = await request.json()
+        # Tolerate an empty or malformed body (default to {}) — some POST endpoints
+        # take no payload (e.g. /api/curator), and a 500 on missing JSON is hostile.
+        raw = await request.body()
+        try:
+            body = json.loads(raw) if raw else {}
+        except ValueError:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
         return JSONResponse(_api_post(f"/api/{path}", body, config, chat_runner))
 
     @app.websocket("/api/pty")

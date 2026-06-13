@@ -4,15 +4,11 @@ from __future__ import annotations
 
 import http.client
 import json
-import threading
-from http.server import ThreadingHTTPServer
 
 
 def _serve(cfg):
-    from aegis.dashboard import make_handler
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(cfg))
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    return srv, srv.server_address[1]
+    from tests._dashboard_server import serve_app
+    return serve_app(cfg)
 
 
 def _req(port, method, path, body=None, token="t"):
