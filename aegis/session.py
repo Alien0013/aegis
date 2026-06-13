@@ -605,31 +605,62 @@ class SessionStore:
             cur = sess.parent_id
         return cur
 
+    @staticmethod
+    def _is_compression_continuation(sess: Session) -> bool:
+        return (
+            str(sess.meta.get("creator_kind") or "") in {"compression", "manual_compression"}
+            or str(sess.meta.get("parent_end_reason") or "") in {"compression", "manual_compression"}
+        )
+
+    def compression_tip(self, sid: str | None) -> Session | None:
+        """Walk compression-created child sessions from ``sid`` to the live tip."""
+        if not sid:
+            return None
+        cur = self._resolve_session(sid)
+        seen: set[str] = set()
+        while cur and cur.id not in seen:
+            seen.add(cur.id)
+            next_child: Session | None = None
+            for child_row in self.children(cur.id):
+                child = self.load(child_row["id"])
+                if child and self._is_compression_continuation(child):
+                    if next_child is None or child.updated_at > next_child.updated_at:
+                        next_child = child
+            if next_child is None:
+                return cur
+            cur = next_child
+        return cur
+
     def browse_sessions(self, limit: int = 10, *, current_session_id: str | None = None) -> dict:
         """Hermes-style browse shape: recent sessions without needing a query."""
         limit = max(1, min(int(limit or 10), 50))
         current_root = self._lineage_root(current_session_id)
         results = []
-        for row in self.list(limit * 3):
+        for row in self.list(max(limit * 10, 100)):
             sess = self.load(row["id"])
             if not sess:
                 continue
-            root = self._lineage_root(sess.id)
-            if current_root and root == current_root:
-                continue
             if sess.parent_id:
                 continue
-            preview = next((m.content for m in sess.messages
+            display = self.compression_tip(sess.id) or sess
+            root = self._lineage_root(display.id)
+            if current_root and root == current_root:
+                continue
+            preview = next((m.content for m in display.messages
                             if m.role in ("user", "assistant") and m.content), "")
-            results.append({
-                "session_id": sess.id,
-                "title": sess.title,
-                "profile": sess.profile,
+            row_out = {
+                "session_id": display.id,
+                "title": display.title,
+                "profile": display.profile,
                 "created_at": sess.created_at,
-                "updated_at": sess.updated_at,
-                "message_count": len([m for m in sess.messages if m.role != "system"]),
+                "updated_at": display.updated_at,
+                "message_count": len([m for m in display.messages if m.role != "system"]),
                 "preview": preview[:240],
-            })
+            }
+            if display.id != sess.id:
+                row_out["parent_session_id"] = sess.id
+                row_out["lineage_root_id"] = sess.id
+            results.append(row_out)
             if len(results) >= limit:
                 break
         return {"success": True, "mode": "browse", "results": results, "count": len(results)}

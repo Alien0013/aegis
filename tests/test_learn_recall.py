@@ -181,6 +181,43 @@ def test_session_search_rebinds_row_anchor_to_child_lineage():
     assert "current session lineage" in active_reject["error"]
 
 
+def test_session_browse_projects_compression_tip_not_branch():
+    from aegis.session import Session, SessionStore
+    from aegis.tools.base import ToolContext
+    from aegis.tools.recall import SessionSearchTool
+    from aegis.types import Message
+
+    store = SessionStore()
+    compressed_root = Session.create(title="long task")
+    compressed_root.messages = [Message.user("old opening")]
+    compressed_root.meta["end_reason"] = "compression"
+    store.save(compressed_root)
+    compression_child = Session.create(title="long task #2", parent_id=compressed_root.id)
+    compression_child.messages = [Message.user("live continuation preview")]
+    compression_child.meta["creator_kind"] = "compression"
+    compression_child.meta["parent_end_reason"] = "compression"
+    store.save(compression_child)
+
+    branch_root = Session.create(title="branch root")
+    branch_root.messages = [Message.user("branch root preview")]
+    store.save(branch_root)
+    branch = Session.create(title="manual branch", parent_id=branch_root.id)
+    branch.messages = [Message.user("manual branch preview")]
+    branch.meta["branch_reason"] = "manual_branch"
+    store.save(branch)
+
+    browsed = json.loads(SessionSearchTool().run({"limit": 10}, ToolContext()).content)
+    ids = [row["session_id"] for row in browsed["results"]]
+
+    assert compression_child.id in ids
+    assert compressed_root.id not in ids
+    compression_row = next(row for row in browsed["results"] if row["session_id"] == compression_child.id)
+    assert compression_row["lineage_root_id"] == compressed_root.id
+    assert compression_row["preview"] == "live continuation preview"
+    assert branch_root.id in ids
+    assert branch.id not in ids
+
+
 def test_session_search_can_read_explicit_profile():
     from aegis import config as cfg
     from aegis.session import Session, SessionStore
