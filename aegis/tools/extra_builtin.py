@@ -299,5 +299,7 @@ class SendMessageTool(Tool):
 
 
 def extra_tools() -> list[Tool]:
+    from .cronjob_tool import CronJobTool
+
     return [ApplyPatchTool(), DownloadTool(), HttpRequestTool(), ScheduleTaskTool(),
-            DependencyAuditTool(), ClarifyTool(), SendMessageTool()]
+            CronJobTool(), DependencyAuditTool(), ClarifyTool(), SendMessageTool()]

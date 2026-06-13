@@ -22,6 +22,7 @@ class CronJob:
     id: str
     schedule: str
     prompt: str
+    name: str = ""             # optional human-friendly label
     channel: str = ""          # optional "telegram:<chat_id>" sink (single target; back-compat)
     last_run: float = 0.0
     enabled: bool = True
@@ -124,9 +125,9 @@ class CronStore:
         return None
 
     def add(self, schedule: str, prompt: str, channel: str = "", script: str = "",
-            skills: list[str] | None = None, deliver: str = "") -> CronJob:
+            skills: list[str] | None = None, deliver: str = "", name: str = "") -> CronJob:
         run_at = _parse_oneshot(schedule, time.time()) or 0.0
-        job = CronJob(id=new_id("cron"), schedule=schedule, prompt=prompt, channel=channel,
+        job = CronJob(id=new_id("cron"), schedule=schedule, prompt=prompt, name=name, channel=channel,
                       run_at=run_at, script=script, skills=skills or [], deliver=deliver)
         jobs = self._load()
         jobs.append(job.__dict__)
@@ -151,7 +152,7 @@ class CronStore:
 
     def update(self, job_id: str, **updates) -> CronJob | None:
         jobs = self._load()
-        allowed = {"schedule", "prompt", "channel", "enabled", "script", "skills", "deliver"}
+        allowed = {"schedule", "prompt", "name", "channel", "enabled", "script", "skills", "deliver"}
         found: dict | None = None
         now = time.time()
         for j in jobs:

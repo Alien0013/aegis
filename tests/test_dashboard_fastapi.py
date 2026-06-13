@@ -313,6 +313,7 @@ def test_fastapi_cron_control_plane(tmp_path, monkeypatch):
         "POST",
         "/api/cron/jobs",
         json={
+            "name": "Dashboard digest",
             "schedule": "every 2h",
             "prompt": "ship a dashboard digest",
             "deliver": "telegram:42",
@@ -323,20 +324,22 @@ def test_fastapi_cron_control_plane(tmp_path, monkeypatch):
     assert create.status_code == 200
     job_id = create.json()["id"]
     assert create.json()["job"]["enabled"] is True
+    assert create.json()["job"]["name"] == "Dashboard digest"
 
     jobs = asyncio.run(_request(app, "GET", "/api/cron/jobs", headers=headers))
-    assert any(job["id"] == job_id for job in jobs.json()["jobs"])
+    assert any(job["id"] == job_id and job["name"] == "Dashboard digest" for job in jobs.json()["jobs"])
 
     patch = asyncio.run(_request(
         app,
         "PATCH",
         f"/api/cron/jobs/{job_id}",
-        json={"enabled": False, "schedule": "every 3h"},
+        json={"enabled": False, "schedule": "every 3h", "name": "Paused digest"},
         headers=headers,
     ))
     assert patch.status_code == 200
     assert patch.json()["job"]["enabled"] is False
     assert patch.json()["job"]["schedule"] == "every 3h"
+    assert patch.json()["job"]["name"] == "Paused digest"
 
     run = asyncio.run(_request(app, "POST", f"/api/cron/jobs/{job_id}/run", headers=headers))
     assert run.status_code == 200

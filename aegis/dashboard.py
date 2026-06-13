@@ -1605,6 +1605,7 @@ def _dashboard_cron_jobs() -> list[dict]:
         history = _cron_run_history(job.id)
         rows.append({
             "id": job.id,
+            "name": getattr(job, "name", "") or "",
             "schedule": job.schedule,
             "prompt": job.prompt,
             "enabled": job.enabled,

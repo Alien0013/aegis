@@ -24,6 +24,7 @@ Implementation update in this branch:
 - Added typed FastAPI cron and gateway management routes for job CRUD/run/service status/control and gateway channel/service status/control.
 - Added short-lived single-use WebSocket tickets for `/api/ws` and `/api/pty`.
 - Added dashboard username/password login, signed session cookies, logout, Basic auth, non-loopback fail-closed startup, and host/peer guards.
+- Added Hermes-style `cronjob` tool with create/list/update/delete/pause/resume/run/status/service actions and dashboard cron name support.
 - Added Hermes-style `skill_manage` with list/view/create/patch/delete/usage/pin/unpin/report and curator-backed archive safety.
 - Added regression tests for recall behavior and memory write mirroring.
 
@@ -103,7 +104,7 @@ Needed inputs:
 
 ### 3. External memory providers are thin
 
-Status: partial.
+Status: partial; Hermes-style `cronjob` tool basics implemented in this branch.
 
 AEGIS has:
 - Built-in memory close to Hermes semantics.
@@ -152,14 +153,15 @@ Status: partial.
 
 AEGIS has:
 - JSON-backed cron jobs, interval/5-field/one-shot schedules, script context, skill preload, delivery targets, `[SILENT]`, direct or queued delivery.
+- `cronjob` tool with create/list/update/delete/pause/resume/run/status/service actions.
+- Dashboard cron job names and typed CRUD routes.
 
 Hermes has:
 - Unified `cronjob` tool with action-style operations.
 - Typed job store, next-run tracking, missed-run recovery, file lock, scheduler state, run logs, multiple delivery targets, origin delivery, no-agent script mode, per-job toolsets, blueprints, dashboard job runs, and stronger prompt-injection blocking.
 
 Needed inputs:
-- Add `cronjob` tool compatible with Hermes action schema.
-- Switch jobs to a structured store with `state`, `next_run_at`, `last_run_at`, `last_error`, `runs`, and `delivery_error`.
+- Switch jobs to a structured store with persisted `state`, `next_run_at`, `last_run_at`, `last_error`, `runs`, and `delivery_error`.
 - Add file/process lock around tick.
 - Add cron blueprints and dashboard create/edit flow.
 - Add script-only/no-agent mode.
@@ -214,8 +216,8 @@ Needed inputs:
 
 Status: partial.
 
-AEGIS has 38 built-in tools:
-`agent_state`, `apply_patch`, `bash`, `browser`, `clarify`, `cloud_browser`, `cloud_image`, `computer`, `dependency_audit`, `download`, `edit_file`, `execute_code`, `generate_image`, `github`, `glob`, `http_request`, `kanban`, `list_dir`, `lsp`, `memory`, `mixture_of_agents`, `process`, `read_file`, `schedule_task`, `search`, `send_message`, `session_search`, `skill`, `skill_manage`, `spawn_subagent`, `speak`, `system_status`, `todo_write`, `tool_search`, `transcribe`, `web_fetch`, `web_search`, `write_file`.
+AEGIS has 39 built-in tools:
+`agent_state`, `apply_patch`, `bash`, `browser`, `clarify`, `cloud_browser`, `cloud_image`, `computer`, `cronjob`, `dependency_audit`, `download`, `edit_file`, `execute_code`, `generate_image`, `github`, `glob`, `http_request`, `kanban`, `list_dir`, `lsp`, `memory`, `mixture_of_agents`, `process`, `read_file`, `schedule_task`, `search`, `send_message`, `session_search`, `skill`, `skill_manage`, `spawn_subagent`, `speak`, `system_status`, `todo_write`, `tool_search`, `transcribe`, `web_fetch`, `web_search`, `write_file`.
 
 Hermes has a larger registry and explicit toolsets including browser, clarify, code_execution, cronjob, delegation, file, image, kanban, memory, messaging, MCP, MoA, process registry, safe, search, session_search, skills, terminal, todo, TTS, video, vision, web, X search, and platform tools.
 
@@ -270,7 +272,8 @@ P1: Make the dashboard a real control plane
 - Still needed: dashboard OAuth login UX, provider OAuth, audio, self-update, ops, and profile-aware management.
 
 P2: Cron and gateway foundations
-- Structured cron store and `cronjob` tool.
+- Done in this branch: Hermes-style `cronjob` tool action surface and cron job names.
+- Still needed: persisted run records/last errors, next-run state, scheduler file/process lock, blueprints, script-only/no-agent mode, recursive cron guard.
 - Done in this branch: gateway status/start/stop/restart in dashboard.
 - Channel directory and home-target resolution.
 
