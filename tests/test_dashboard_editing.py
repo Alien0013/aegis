@@ -121,6 +121,27 @@ def test_dashboard_tools_payload_includes_schema_and_policy(tmp_path, monkeypatc
     assert any("schema" in row and "toolset" in row and "enabled" in row for row in payload["tools"])
 
 
+def test_files_browser_lists_and_reads(tmp_path, monkeypatch):
+    """Read-only file browser endpoints back the dashboard Files page."""
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    monkeypatch.setenv("AEGIS_DASHBOARD_TOKEN", "t")
+    (tmp_path / "hello.txt").write_text("hi there")
+    (tmp_path / "sub").mkdir()
+    from aegis.config import Config
+    srv, port = _serve(Config.load())
+    try:
+        st, b = _req(port, "GET", f"/api/files?path={tmp_path}")
+        assert st == 200
+        names = {e["name"] for e in b.get("entries", [])}
+        assert "hello.txt" in names and "sub" in names
+        st, b = _req(port, "GET", f"/api/files/read?path={tmp_path}/hello.txt")
+        assert b.get("content") == "hi there"
+        st, b = _req(port, "GET", f"/api/files/read?path={tmp_path}/nope.txt")
+        assert b.get("error")
+    finally:
+        srv.shutdown()
+
+
 def test_chat_meta_maps_reasoning_to_runtime_control():
     """The Chat 'Thinking' toggle sends a reasoning level that must become a
     session runtime control so the agent actually streams live reasoning."""

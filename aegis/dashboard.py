@@ -1508,6 +1508,54 @@ def _parse_worktree_porcelain(text: str) -> list[dict]:
     return out
 
 
+def _dashboard_files(query: dict) -> dict:
+    """Read-only directory listing for the dashboard file browser. Token-gated,
+    localhost-only; no write/delete (those would need a real upload transport)."""
+    import time
+    raw = (query.get("path", [""])[0] or "").strip()
+    base = Path(raw).expanduser() if raw else Path.home()
+    try:
+        base = base.resolve()
+    except Exception:  # noqa: BLE001
+        base = Path.home()
+    if not base.is_dir():
+        return {"path": str(base), "error": "not a directory", "entries": []}
+    entries = []
+    try:
+        for p in sorted(base.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
+            try:
+                st = p.stat()
+                entries.append({
+                    "name": p.name,
+                    "is_dir": p.is_dir(),
+                    "size": None if p.is_dir() else st.st_size,
+                    "modified": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(st.st_mtime)),
+                })
+            except OSError:
+                continue
+    except PermissionError:
+        return {"path": str(base), "error": "permission denied", "entries": []}
+    return {"path": str(base), "parent": str(base.parent), "entries": entries[:2000]}
+
+
+def _dashboard_file_read(query: dict) -> dict:
+    raw = (query.get("path", [""])[0] or "").strip()
+    if not raw:
+        return {"error": "no path"}
+    try:
+        p = Path(raw).expanduser().resolve()
+    except Exception:  # noqa: BLE001
+        return {"error": "bad path"}
+    if not p.is_file():
+        return {"error": "not a file"}
+    try:
+        if p.stat().st_size > 512 * 1024:
+            return {"path": str(p), "error": "file too large to preview (>512KB)"}
+        return {"path": str(p), "content": p.read_text(errors="replace")}
+    except Exception as e:  # noqa: BLE001
+        return {"path": str(p), "error": str(e)}
+
+
 def _dashboard_worktrees() -> dict:
     from .lsp.workspace import find_git_worktree
     root = find_git_worktree(str(Path.cwd()))
@@ -1906,6 +1954,10 @@ def make_handler(config: Config):
                 self._json(_dashboard_projects())
             elif path == "/api/worktrees":
                 self._json(_dashboard_worktrees())
+            elif path == "/api/files":
+                self._json(_dashboard_files(q))
+            elif path == "/api/files/read":
+                self._json(_dashboard_file_read(q))
             elif path == "/api/review":
                 self._json(_dashboard_review())
             elif path == "/api/evals":

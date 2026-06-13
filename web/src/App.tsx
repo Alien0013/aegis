@@ -14,6 +14,7 @@ import { KeysPage } from "./pages/KeysPage";
 import { MemoryPage } from "./pages/MemoryPage";
 import { ChannelsPage } from "./pages/ChannelsPage";
 import { AgentsPage } from "./pages/AgentsPage";
+import { FilesPage } from "./pages/FilesPage";
 import { McpPage } from "./pages/McpPage";
 import { WebhooksPage } from "./pages/WebhooksPage";
 import { PluginsPage } from "./pages/PluginsPage";
@@ -38,6 +39,7 @@ const NAV: NavItem[] = [
   { id: "tools", label: "Tools", icon: "tools", group: "Configure" },
   { id: "mcp", label: "MCP", icon: "tools", group: "Configure" },
   { id: "plugins", label: "Plugins", icon: "skills", group: "Configure" },
+  { id: "files", label: "Files", icon: "logs", group: "Workspace" },
   { id: "projects", label: "Projects", icon: "system", group: "Workspace" },
   { id: "worktrees", label: "Worktrees", icon: "sessions", group: "Workspace" },
   { id: "evals", label: "Evals", icon: "logs", group: "Workspace" },
@@ -66,6 +68,7 @@ function pageFor(id: string, go: (id: string) => void) {
     case "memory": return <MemoryPage />;
     case "channels": return <ChannelsPage />;
     case "system": return <SystemPage />;
+    case "files": return <FilesPage />;
     case "mcp": return <McpPage />;
     case "webhooks": return <WebhooksPage />;
     case "plugins": return <PluginsPage />;
