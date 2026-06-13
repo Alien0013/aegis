@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
-import { Icon } from "../lib/icons";
 import { compact, dateish, titleOf } from "../lib/format";
 import { Badge, Button, Empty, Loading, PageHeader, Toolbar } from "../lib/ui";
+import { Dialog } from "../lib/components/Dialog";
 
 type Col = [string, string];
 type Props = {
@@ -57,49 +58,44 @@ function cell(value: any): string {
   return compact(value);
 }
 
-function Drawer({ row, detail, loading, error, onClose }:
-  { row: any; detail: any; loading: boolean; error: string; onClose: () => void }) {
+function Drawer({ row, detail, loading, error, open, onClose }:
+  { row: any; detail: any; loading: boolean; error: string; open: boolean; onClose: () => void }) {
   const payload = detail && !detail.__err ? detail : row;
   const messages = payload?.messages || payload?.session?.messages || [];
   const metrics = payload?.metrics || payload?.summary || {};
   return (
-    <>
-      <div className="drawer-scrim" onClick={onClose} />
-      <aside className="drawer" role="dialog" aria-modal="true">
-        <div className="drawer-h">
-          <div><b>{titleOf(row)}</b><div className="crumb mono">{row.id || row.trace_id || row.run_id || row.name || ""}</div></div>
-          <button className="iconbtn" aria-label="Close" onClick={onClose}><Icon n="close" /></button>
-        </div>
-        <div className="drawer-b">
-          {loading && <Loading />}
-          {error && <div className="badge err" style={{ height: "auto", padding: 8 }}>{error}</div>}
-          {!loading && !error && <>
-            {!!Object.keys(metrics).length && (
-              <div className="kvgrid" style={{ marginBottom: 14 }}>
-                {Object.entries(metrics).slice(0, 10).map(([k, v]) => (
-                  <div className="kv" key={k}><span>{k.replaceAll("_", " ")}</span><b>{compact(v, 40)}</b></div>
-                ))}
+    <Dialog side open={open} onOpenChange={(v) => { if (!v) onClose(); }}
+      title={row ? titleOf(row) : ""}
+      subtitle={row ? (row.id || row.trace_id || row.run_id || row.name || "") : ""}>
+      {loading && <Loading />}
+      {error && <div className="badge err" style={{ height: "auto", padding: 8 }}>{error}</div>}
+      {!loading && !error && row && <>
+        {!!Object.keys(metrics).length && (
+          <div className="kvgrid" style={{ marginBottom: 14 }}>
+            {Object.entries(metrics).slice(0, 10).map(([k, v]) => (
+              <div className="kv" key={k}><span>{k.replaceAll("_", " ")}</span><b>{compact(v, 40)}</b></div>
+            ))}
+          </div>
+        )}
+        {!!messages.length && (
+          <div style={{ marginBottom: 14 }}>
+            <h3 className="mb-2 text-[11px] uppercase tracking-wider text-faint">Messages</h3>
+            {messages.slice(-14).map((m: any, i: number) => (
+              <div key={i} className="flex gap-2 border-b border-line py-1.5">
+                <span className="pill">{m.role || "msg"}</span>
+                <span style={{ minWidth: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{compact(m.content || m.text || "", 400)}</span>
               </div>
-            )}
-            {!!messages.length && (
-              <div style={{ marginBottom: 14 }}>
-                <h3 style={{ fontSize: 12, color: "var(--faint)", textTransform: "uppercase", letterSpacing: ".05em" }}>Messages</h3>
-                {messages.slice(-14).map((m: any, i: number) => (
-                  <div key={i} style={{ display: "flex", gap: 8, padding: "6px 0", borderBottom: "1px solid var(--line)" }}>
-                    <span className="pill">{m.role || "msg"}</span>
-                    <span style={{ minWidth: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{compact(m.content || m.text || "", 400)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-            <h3 style={{ fontSize: 12, color: "var(--faint)", textTransform: "uppercase", letterSpacing: ".05em" }}>Raw</h3>
-            <pre>{JSON.stringify(payload, null, 2)}</pre>
-          </>}
-        </div>
-      </aside>
-    </>
+            ))}
+          </div>
+        )}
+        <h3 className="mb-2 text-[11px] uppercase tracking-wider text-faint">Raw</h3>
+        <pre className="overflow-auto whitespace-pre-wrap break-words rounded-md border border-line bg-panel2 p-3 font-mono text-[11.5px]">{JSON.stringify(payload, null, 2)}</pre>
+      </>}
+    </Dialog>
   );
 }
+
+const rowId = (row: any, idKey: string) => valueFor(row, idKey) || row.id || row.trace_id || row.run_id || row.name;
 
 export function ListPage({ endpoint, title, cols, arrayKey, raw, empty, detailEndpoint, detailParam = "id", idKey = "id" }: Props) {
   const [data, setData] = useState<any>(undefined);
@@ -109,6 +105,10 @@ export function ListPage({ endpoint, title, cols, arrayKey, raw, empty, detailEn
   const [detail, setDetail] = useState<any>(null);
   const [dLoading, setDLoading] = useState(false);
   const [dError, setDError] = useState("");
+  // Sync the open detail row to a ?id= query param so a row is deep-linkable
+  // (e.g. #/sessions?id=abc opens that session's drawer on load and on Back/Forward).
+  const [params, setParams] = useSearchParams();
+  const urlId = params.get("id");
 
   async function load() {
     setErr(""); setData(undefined);
@@ -116,14 +116,32 @@ export function ListPage({ endpoint, title, cols, arrayKey, raw, empty, detailEn
   }
   useEffect(() => { load(); setSelected(null); }, [endpoint]);
 
-  async function open(row: any) {
+  async function loadDetail(row: any) {
     setSelected(row); setDetail(null); setDError("");
-    const id = valueFor(row, idKey) || row.id || row.trace_id || row.run_id || row.name;
+    const id = rowId(row, idKey);
     if (!detailEndpoint || !id) return;
     setDLoading(true);
     try { setDetail(await api(`${detailEndpoint}?${detailParam}=${encodeURIComponent(String(id))}`)); }
     catch (e) { setDError(String(e)); } finally { setDLoading(false); }
   }
+
+  function open(row: any) {
+    const id = rowId(row, idKey);
+    if (id) setParams((p) => { p.set("id", String(id)); return p; });
+    else void loadDetail(row);
+  }
+  function close() {
+    setSelected(null);
+    setParams((p) => { p.delete("id"); return p; });
+  }
+
+  // Open (or restore) the drawer whenever the ?id= param points at a known row.
+  useEffect(() => {
+    if (!urlId || data === undefined) return;
+    if (selected && String(rowId(selected, idKey)) === urlId) return;
+    const row = rowsOf(data, arrayKey).find((r) => String(rowId(r, idKey)) === urlId);
+    if (row) void loadDetail(row);
+  }, [urlId, data]);
 
   const header = (
     <PageHeader title={title}
@@ -166,7 +184,7 @@ export function ListPage({ endpoint, title, cols, arrayKey, raw, empty, detailEn
             </div>
           )}
       </div>
-      {selected && <Drawer row={selected} detail={detail} loading={dLoading} error={dError} onClose={() => setSelected(null)} />}
+      <Drawer row={selected} detail={detail} loading={dLoading} error={dError} open={!!selected} onClose={close} />
     </>
   );
 }

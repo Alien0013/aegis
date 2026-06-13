@@ -5,13 +5,13 @@ import { Badge, BarChart, Button, Card, Empty, Loading, PageHeader, Stat } from 
 
 const fmt$ = (n: number) => "$" + (Number(n) || 0).toFixed(2);
 
-const QUICK: [string, string, string][] = [
-  ["chat", "chat", "Send a live agent turn"],
-  ["agents", "agents", "Watch spawned agents live"],
-  ["models", "models", "Provider & model"],
-  ["memory", "memory", "What the agent remembers"],
-  ["channels", "channels", "Pair Telegram / Discord / Slack"],
-  ["cron", "cron", "Schedule recurring work"],
+const QUICK: [string, string][] = [
+  ["chat", "Send a live agent turn"],
+  ["agents", "Watch spawned agents live"],
+  ["models", "Provider & model"],
+  ["memory", "What the agent remembers"],
+  ["channels", "Pair Telegram / Discord / Slack"],
+  ["cron", "Schedule recurring work"],
 ];
 
 export function Overview({ go }: { go: (id: string) => void }) {
@@ -26,10 +26,17 @@ export function Overview({ go }: { go: (id: string) => void }) {
 
   const running = (d.agents.agents || []).filter((a: any) => /run|active/i.test(a.status || "")).length;
   const sessions = Array.isArray(d.sessions) ? d.sessions : (d.sessions?.sessions || []);
+  const series: any[] = d.an.series || [];
+  const calls = series.map((s) => Number(s.calls) || 0);
+  const cost = series.map((s) => Number(s.cost_usd) || 0);
+  const anyData = calls.some((c) => c) || cost.some((c) => c);
   return (
     <>
       <PageHeader title="Home"
-        sub={<span className="row-flex" style={{ gap: 8 }}><Badge status={d.status.error ? "offline" : "ok"}>{d.status.error ? "offline" : "online"}</Badge> {d.status.provider} / {d.status.model}</span>}
+        sub={<span className="inline-flex items-center gap-2">
+          <Badge status={d.status.error ? "offline" : "ok"}>{d.status.error ? "offline" : "online"}</Badge>
+          {d.status.provider} / {d.status.model}
+        </span>}
         actions={<Button icon="chat" onClick={() => go("chat")}>Open chat</Button>} />
 
       <div className="grid c4">
@@ -39,27 +46,23 @@ export function Overview({ go }: { go: (id: string) => void }) {
         <Stat label="Spend · 30d" value={fmt$(d.an.total_cost_usd)} sub={`${d.an.calls ?? 0} calls`} />
       </div>
 
-      <div style={{ marginTop: 12 }} />
-      <Card title="Activity · 30 days" actions={<span className="mut" style={{ fontSize: 12 }}>{d.an.calls ?? 0} calls · {fmt$(d.an.total_cost_usd)}</span>}>
-        {(() => {
-          const series: any[] = d.an.series || [];
-          const calls = series.map((s) => Number(s.calls) || 0);
-          const cost = series.map((s) => Number(s.cost_usd) || 0);
-          const anyData = calls.some((c) => c) || cost.some((c) => c);
-          if (!anyData) return <Empty small>No activity recorded yet — runs and spend will chart here.</Empty>;
-          return (
-            <div className="grid c2" style={{ gap: 18 }}>
-              <div><div className="mut" style={{ fontSize: 11, marginBottom: 4 }}>Calls / day</div><BarChart data={calls} color="var(--accent)" /></div>
-              <div><div className="mut" style={{ fontSize: 11, marginBottom: 4 }}>Spend / day</div><BarChart data={cost} color="var(--accent2)" /></div>
-            </div>
-          );
-        })()}
-      </Card>
+      <div className="mt-3">
+        <Card title="Activity · 30 days" actions={<span className="text-xs text-mut">{d.an.calls ?? 0} calls · {fmt$(d.an.total_cost_usd)}</span>}>
+          {!anyData
+            ? <Empty small>No activity recorded yet — runs and spend will chart here.</Empty>
+            : (
+              <div className="grid gap-5 c2">
+                <div><div className="mb-1 text-[11px] text-mut">Calls / day</div><BarChart data={calls} color="var(--accent)" /></div>
+                <div><div className="mb-1 text-[11px] text-mut">Spend / day</div><BarChart data={cost} color="var(--accent2)" /></div>
+              </div>
+            )}
+        </Card>
+      </div>
 
-      <div className="grid c2" style={{ marginTop: 12 }}>
+      <div className="mt-3 grid c2">
         <Card title="Recent sessions" actions={<Button variant="ghost" sm onClick={() => go("sessions")}>All</Button>} pad={false}>
           {!sessions.length && <Empty small>No sessions yet — say hello in Chat.</Empty>}
-          <div style={{ padding: "2px 14px 8px" }}>
+          <div className="px-3.5 pb-2 pt-0.5">
             {sessions.slice(0, 8).map((x: any) => (
               <div className="row click" key={x.id} onClick={() => go("sessions")}>
                 <span>{compact(x.title || x.id, 60)}</span><span className="pill">{dateish(x.updated_at)}</span>
@@ -68,10 +71,10 @@ export function Overview({ go }: { go: (id: string) => void }) {
           </div>
         </Card>
         <Card title="Quick actions" pad={false}>
-          <div style={{ padding: "2px 14px 8px" }}>
-            {QUICK.map(([id, , sub]) => (
+          <div className="px-3.5 pb-2 pt-0.5">
+            {QUICK.map(([id, sub]) => (
               <div className="row click" key={id} onClick={() => go(id)}>
-                <span style={{ textTransform: "capitalize", fontWeight: 600 }}>{id}</span><span className="mut">{sub}</span>
+                <span className="font-semibold capitalize">{id}</span><span className="text-mut">{sub}</span>
               </div>
             ))}
           </div>
