@@ -3,11 +3,14 @@
   "productName": "AEGIS",
   "version": "0.1.0",
   "description": "AEGIS — your terminal AI agent, as a desktop app.",
-  "main": "main.js",
+  "main": "electron/main.js",
   "scripts": {
     "start": "node launch.js",
     "start:sandbox": "node launch.js --sandbox",
-    "dist": "electron-builder"
+    "dist": "electron-builder",
+    "dist:linux": "electron-builder --linux AppImage deb",
+    "dist:win": "electron-builder --win nsis",
+    "dist:mac": "electron-builder --mac dmg"
   },
   "devDependencies": {
     "electron": "^33.0.0",
@@ -16,12 +19,36 @@
   "build": {
     "appId": "com.alien0013.aegis",
     "productName": "AEGIS",
-    "files": ["main.js", "package.json"],
-    "mac": { "category": "public.app-category.developer-tools", "target": ["dmg"] },
-    "win": { "target": ["nsis"] },
+    "artifactName": "AEGIS-${version}-${os}-${arch}.${ext}",
+    "icon": "build/icon.png",
+    "directories": { "output": "release", "buildResources": "build" },
+    "files": ["electron/**", "package.json"],
+    "extraResources": [{ "from": "build/icon.png", "to": "icon.png" }],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.png",
+      "target": ["dmg", "zip"]
+    },
+    "dmg": {
+      "title": "Install AEGIS",
+      "contents": [
+        { "x": 150, "y": 180, "type": "file" },
+        { "x": 410, "y": 180, "type": "link", "path": "/Applications" }
+      ]
+    },
+    "win": { "icon": "build/icon.ico", "target": ["nsis"] },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "shortcutName": "AEGIS"
+    },
     "linux": {
-      "target": ["AppImage", "deb"],
+      "icon": "build/icon.png",
       "category": "Development",
+      "maintainer": "Alien0013 <taranjot0013@gmail.com>",
+      "synopsis": "AEGIS — your terminal AI agent, as a desktop app.",
+      "target": ["AppImage", "deb"],
       "executableArgs": ["--no-sandbox"]
     }
   }

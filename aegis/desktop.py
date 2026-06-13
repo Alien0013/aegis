@@ -12,7 +12,11 @@ from typing import Any
 
 from . import config as cfg
 
-DESKTOP_FILES = ("package.json", "package-lock.json", "main.js", "launch.js")
+DESKTOP_FILES = (
+    "package.json", "package-lock.json", "launch.js",
+    "electron/main.js", "electron/preload.js", "electron/boot.html",
+    "build/icon.png",
+)
 
 
 def _print(message: str = "") -> None:
@@ -41,7 +45,10 @@ def _desktop_dir() -> Path:
 
 def _read_source_file(source: Any, name: str) -> bytes:
     try:
-        return source.joinpath(name).read_bytes()
+        node = source
+        for part in name.split("/"):           # traverse subdirs (electron/, build/)
+            node = node.joinpath(part)
+        return node.read_bytes()
     except FileNotFoundError as exc:
         raise RuntimeError(f"desktop template is missing {name}") from exc
 
@@ -53,6 +60,7 @@ def _sync_desktop_app(source: Any, target: Path) -> bool:
     for name in DESKTOP_FILES:
         data = _read_source_file(source, name)
         dst = target / name
+        dst.parent.mkdir(parents=True, exist_ok=True)
         if not dst.exists() or dst.read_bytes() != data:
             dst.write_bytes(data)
             changed = True

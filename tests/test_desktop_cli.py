@@ -11,7 +11,9 @@ from aegis.cli.main import build_parser
 def _write_desktop_template(root: Path) -> Path:
     root.mkdir()
     for name in desktop.DESKTOP_FILES:
-        (root / name).write_text(f"{name}\n", encoding="utf-8")
+        p = root / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(f"{name}\n", encoding="utf-8")
     return root
 
 
