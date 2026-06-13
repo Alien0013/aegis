@@ -129,6 +129,58 @@ def test_session_search_tool_browse_discover_read_and_scroll():
     assert row_id_scroll["messages"][1]["anchor"] is True
 
 
+def test_session_search_rebinds_row_anchor_to_child_lineage():
+    from aegis.session import Session, SessionStore
+    from aegis.tools.base import ToolContext
+    from aegis.tools.recall import SessionSearchTool
+    from aegis.types import Message
+
+    store = SessionStore()
+    parent = Session.create(title="compressed parent")
+    parent.messages = [Message.user("root setup")]
+    store.save(parent)
+    child = Session.create(title="compressed child", parent_id=parent.id)
+    child.messages = [
+        Message.user("summary breadcrumb"),
+        Message.assistant("the child owns the detailed anchor"),
+        Message.user("tail work"),
+    ]
+    store.save(child)
+
+    tool = SessionSearchTool()
+    parent_read = json.loads(tool.run({"session_id": parent.id}, ToolContext()).content)
+    child_read = json.loads(tool.run({"session_id": child.id}, ToolContext()).content)
+    child_row_id = child_read["messages"][1]["message_row_id"]
+    assert child_row_id not in {m["id"] for m in parent_read["messages"]}
+
+    rebound = json.loads(tool.run({
+        "session_id": parent.id,
+        "around_message_row_id": child_row_id,
+        "window": 1,
+    }, ToolContext()).content)
+    assert rebound["success"] is True
+    assert rebound["session_id"] == child.id
+    assert rebound["rebound_from_session_id"] == parent.id
+    assert rebound["around_message_id"] == 1
+    assert rebound["messages"][1]["anchor"] is True
+
+    hermes_style = json.loads(tool.run({
+        "session_id": parent.id,
+        "around_message_id": child_row_id,
+        "window": 1,
+    }, ToolContext()).content)
+    assert hermes_style["session_id"] == child.id
+    assert hermes_style["around_message_id"] == 1
+
+    active_reject = json.loads(tool.run({
+        "session_id": parent.id,
+        "around_message_row_id": child_row_id,
+        "window": 1,
+    }, ToolContext(session=child)).content)
+    assert active_reject["success"] is False
+    assert "current session lineage" in active_reject["error"]
+
+
 def test_session_search_can_read_explicit_profile():
     from aegis import config as cfg
     from aegis.session import Session, SessionStore

@@ -459,6 +459,21 @@ class SessionStore:
         except (sqlite3.OperationalError, TypeError, ValueError):
             return None
 
+    def _message_owner_for_row_id(self, row_id: int | None) -> tuple[str, int] | None:
+        if row_id is None:
+            return None
+        try:
+            with self._conn() as c:
+                row = c.execute(
+                    "SELECT session_id, message_index FROM messages WHERE id=?",
+                    (int(row_id),),
+                ).fetchone()
+            if not row:
+                return None
+            return str(row["session_id"]), int(row["message_index"])
+        except (sqlite3.OperationalError, TypeError, ValueError):
+            return None
+
     def _message_payload(self, session_id: str, index: int, message: Message,
                          *, anchor_id: int | None = None) -> dict:
         payload: dict[str, Any] = {"id": index, "role": message.role, "content": message.content}
@@ -657,6 +672,7 @@ class SessionStore:
         sess = self._resolve_session(sid)
         if not sess:
             return {"success": False, "mode": "scroll", "error": f"session_id not found: {sid}"}
+        requested_session_id = sess.id
         current_root = self._lineage_root(current_session_id)
         if current_root and self._lineage_root(sess.id) == current_root:
             return {
@@ -669,16 +685,43 @@ class SessionStore:
         except (TypeError, ValueError):
             return {"success": False, "mode": "scroll", "error": "around_message_id must be an integer"}
         window = max(1, min(int(window or 5), 20))
+        rebind_message = ""
+        if anchor_is_row_id:
+            owner = self._message_owner_for_row_id(anchor)
+            if owner and self._lineage_root(owner[0]) == self._lineage_root(sess.id):
+                owner_session_id, owner_index = owner
+                if owner_session_id != sess.id:
+                    rebound = self.load(owner_session_id)
+                    if rebound:
+                        sess = rebound
+                        rebind_message = (
+                            f"around_message_row_id {around_message_id} lives in {owner_session_id}; "
+                            "rebound transparently"
+                        )
+                anchor = owner_index
         shaped = self._visible_messages(sess)
         positions = {m["id"]: i for i, m in enumerate(shaped)}
-        if anchor_is_row_id:
-            row_index = self._message_index_for_row_id(anchor, session_id=sess.id)
-            if row_index is not None:
-                anchor = row_index
-        elif anchor not in positions:
-            row_index = self._message_index_for_row_id(anchor, session_id=sess.id)
-            if row_index is not None:
-                anchor = row_index
+        if not anchor_is_row_id and anchor not in positions:
+            owner = self._message_owner_for_row_id(anchor)
+            if owner and self._lineage_root(owner[0]) == self._lineage_root(sess.id):
+                owner_session_id, owner_index = owner
+                rebound = self.load(owner_session_id)
+                if rebound:
+                    sess = rebound
+                    anchor = owner_index
+                    shaped = self._visible_messages(sess)
+                    positions = {m["id"]: i for i, m in enumerate(shaped)}
+                    if owner_session_id != requested_session_id:
+                        rebind_message = (
+                            f"around_message_id {around_message_id} lives in {owner_session_id}; "
+                            "rebound transparently"
+                        )
+        if current_root and self._lineage_root(sess.id) == current_root:
+            return {
+                "success": False,
+                "mode": "scroll",
+                "error": "anchor lives in the current session lineage (already in active context)",
+            }
         if anchor not in positions:
             return {
                 "success": False,
@@ -693,7 +736,7 @@ class SessionStore:
             {**m, **({"anchor": True} if m["id"] == anchor else {})}
             for m in shaped[start:end]
         ]
-        return {
+        out = {
             "success": True,
             "mode": "scroll",
             "session_id": sess.id,
@@ -710,6 +753,11 @@ class SessionStore:
             "messages_before": start,
             "messages_after": len(shaped) - end,
         }
+        if sess.id != requested_session_id:
+            out["rebound_from_session_id"] = requested_session_id
+        if rebind_message:
+            out["message"] = rebind_message
+        return out
 
     def discover_sessions(self, query: str, limit: int = 3, *,
                           role_filter: list[str] | None = None,
