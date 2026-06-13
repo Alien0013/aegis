@@ -119,6 +119,15 @@ def test_session_search_tool_browse_discover_read_and_scroll():
     assert [m["id"] for m in scroll["messages"]] == [0, 1, 2]
     assert scroll["messages"][1]["anchor"] is True
 
+    row_id_scroll = json.loads(tool.run({
+        "session_id": previous.id,
+        "around_message_row_id": read["messages"][1]["message_row_id"],
+        "window": 1,
+    }, ctx).content)
+    assert row_id_scroll["mode"] == "scroll"
+    assert row_id_scroll["around_message_id"] == 1
+    assert row_id_scroll["messages"][1]["anchor"] is True
+
 
 def test_session_search_can_read_explicit_profile():
     from aegis import config as cfg

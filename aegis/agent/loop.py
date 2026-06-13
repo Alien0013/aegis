@@ -618,6 +618,66 @@ def _tail_token_budget(agent, comp: dict, *, tight: bool = False) -> int:
     return int(ctx * frac) if ctx > 0 else (3000 if tight else 6000)
 
 
+def _ensure_compression_feasibility(agent, engine, comp: dict, emit: OnEvent | None = None) -> None:
+    """Hermes-style aux compression preflight.
+
+    If the configured compression summarizer has a smaller context window than
+    the main model threshold, lower the live default-engine threshold for this
+    session so compaction starts while the summarizer can still read the window.
+    """
+    if getattr(agent, "_compression_feasibility_checked", False):
+        return
+    agent._compression_feasibility_checked = True
+    main_ctx = int(getattr(agent.provider, "context_length", 0) or 0)
+    if main_ctx <= 0:
+        return
+    from ..constants import COMPACT_THRESHOLD
+    try:
+        current_fraction = (
+            engine.threshold_fraction() if hasattr(engine, "threshold_fraction")
+            else comp.get("threshold", COMPACT_THRESHOLD)
+        )
+    except Exception:  # noqa: BLE001
+        current_fraction = comp.get("threshold", COMPACT_THRESHOLD)
+    try:
+        threshold_fraction = float(COMPACT_THRESHOLD if current_fraction is None else current_fraction)
+    except (TypeError, ValueError):
+        threshold_fraction = 0.5
+    threshold_tokens = max(1, int(main_ctx * threshold_fraction))
+    try:
+        summarizer = _summarizer(agent)
+        aux_ctx = int(getattr(summarizer, "context_length", 0) or 0)
+    except Exception:  # noqa: BLE001
+        return
+    if aux_ctx <= 0 or aux_ctx >= threshold_tokens:
+        return
+    new_fraction = max(0.01, min(threshold_fraction, aux_ctx / main_ctx))
+    adjusted = False
+    try:
+        if hasattr(engine, "set_threshold_fraction"):
+            engine.set_threshold_fraction(new_fraction)
+            adjusted = True
+    except Exception:  # noqa: BLE001
+        adjusted = False
+    rec = {
+        "main_context_tokens": main_ctx,
+        "old_threshold": threshold_fraction,
+        "old_threshold_tokens": threshold_tokens,
+        "aux_context_tokens": aux_ctx,
+        "new_threshold": new_fraction,
+        "new_threshold_tokens": int(main_ctx * new_fraction),
+        "adjusted": adjusted,
+        "aux_model": str(getattr(summarizer, "model", "") or ""),
+        "aux_provider": str(getattr(summarizer, "name", "") or ""),
+    }
+    try:
+        agent.session.meta["compression_feasibility"] = rec
+    except Exception:  # noqa: BLE001
+        pass
+    if emit:
+        emit({"type": "compression_feasibility", **rec})
+
+
 def _memory_pre_compress_context(agent, session) -> str:
     if not agent.memory:
         return ""
@@ -682,6 +742,7 @@ def _force_compact(agent, session):
         return session
     comp = agent.config.get("agent.compression", {}) or {}
     engine = _engine(agent)
+    _ensure_compression_feasibility(agent, engine, comp)
     try:
         pre_compress_context = _memory_pre_compress_context(agent, session)
         try:
@@ -740,7 +801,11 @@ def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
         return session
     engine = _engine(agent)
     comp = agent.config.get("agent.compression", {}) or {}
-    threshold = comp.get("threshold")   # for the record's reason text; the engine applies it
+    _ensure_compression_feasibility(agent, engine, comp, emit)
+    threshold = (
+        engine.threshold_fraction() if hasattr(engine, "threshold_fraction")
+        else comp.get("threshold")
+    )   # for the record's reason text; the engine applies it
     if not engine.should_compress(session.messages, agent.provider.context_length, schema_tokens):
         return session
     lock_session = session
@@ -847,12 +912,13 @@ def compact_now(agent, session=None, emit: OnEvent | None = None, *,
     emit = emit or (lambda _e: None)
     session = session or agent.session
     engine = _engine(agent)
+    comp = agent.config.get("agent.compression", {}) or {}
+    _ensure_compression_feasibility(agent, engine, comp, emit)
     lock_session = session
     acquired, holder = _acquire_compression_lock(agent, lock_session, emit)
     if not acquired:
         return session
     emit({"type": "compacting", "reason": reason})
-    comp = agent.config.get("agent.compression", {}) or {}
     pre_compress_context = _memory_pre_compress_context(agent, session)
     try:
         from .context_engine import call_hook

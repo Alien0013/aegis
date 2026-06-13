@@ -443,12 +443,18 @@ class SessionStore:
         except (sqlite3.OperationalError, TypeError, ValueError):
             return None
 
-    def _message_index_for_row_id(self, row_id: int | None) -> int | None:
+    def _message_index_for_row_id(self, row_id: int | None, *, session_id: str | None = None) -> int | None:
         if row_id is None:
             return None
         try:
             with self._conn() as c:
-                row = c.execute("SELECT message_index FROM messages WHERE id=?", (int(row_id),)).fetchone()
+                if session_id:
+                    row = c.execute(
+                        "SELECT message_index FROM messages WHERE id=? AND session_id=?",
+                        (int(row_id), session_id),
+                    ).fetchone()
+                else:
+                    row = c.execute("SELECT message_index FROM messages WHERE id=?", (int(row_id),)).fetchone()
             return int(row["message_index"]) if row else None
         except (sqlite3.OperationalError, TypeError, ValueError):
             return None
@@ -645,7 +651,8 @@ class SessionStore:
         return out
 
     def messages_around(self, sid: str, around_message_id: int, *, window: int = 5,
-                        current_session_id: str | None = None) -> dict:
+                        current_session_id: str | None = None,
+                        anchor_is_row_id: bool = False) -> dict:
         """Hermes-style scroll shape: a bounded message window centered on an anchor id."""
         sess = self._resolve_session(sid)
         if not sess:
@@ -664,6 +671,14 @@ class SessionStore:
         window = max(1, min(int(window or 5), 20))
         shaped = self._visible_messages(sess)
         positions = {m["id"]: i for i, m in enumerate(shaped)}
+        if anchor_is_row_id:
+            row_index = self._message_index_for_row_id(anchor, session_id=sess.id)
+            if row_index is not None:
+                anchor = row_index
+        elif anchor not in positions:
+            row_index = self._message_index_for_row_id(anchor, session_id=sess.id)
+            if row_index is not None:
+                anchor = row_index
         if anchor not in positions:
             return {
                 "success": False,

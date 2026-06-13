@@ -45,6 +45,10 @@ class SessionSearchTool(Tool):
                 "type": "integer",
                 "description": "Message id to center when scrolling within a session.",
             },
+            "around_message_row_id": {
+                "type": "integer",
+                "description": "Stable SQLite message_row_id to center when scrolling within a session.",
+            },
             "window": {
                 "type": "integer",
                 "description": "Messages before/after around_message_id (default 5, max 20).",
@@ -79,6 +83,14 @@ class SessionSearchTool(Tool):
     }
 
     def _session_lookup(self, store, args, session_id: str, current_session_id: str | None) -> dict:
+        if args.get("around_message_row_id") is not None:
+            return store.messages_around(
+                session_id,
+                args.get("around_message_row_id"),
+                window=int(args.get("window", 5)),
+                current_session_id=current_session_id,
+                anchor_is_row_id=True,
+            )
         if args.get("around_message_id") is not None:
             return store.messages_around(
                 session_id,

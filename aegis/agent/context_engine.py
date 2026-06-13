@@ -49,6 +49,12 @@ class DefaultContextEngine:
         from . import compaction
         return compaction.should_compress(messages, context_length, overhead_tokens, self._threshold)
 
+    def threshold_fraction(self) -> float | None:
+        return self._threshold
+
+    def set_threshold_fraction(self, threshold: float | None) -> None:
+        self._threshold = threshold
+
     def compress(self, messages: list, provider: Any, **kw) -> list:
         from . import compaction
         return compaction.compress(messages, provider, **kw)

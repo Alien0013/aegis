@@ -187,6 +187,35 @@ def test_historical_images_are_stripped_but_newest_image_survives():
     assert latest.images == [newest_image]
 
 
+def test_aux_compression_preflight_lowers_live_threshold(monkeypatch):
+    from types import SimpleNamespace
+
+    from aegis.agent import loop
+    from aegis.agent.context_engine import DefaultContextEngine
+    from aegis.session import Session
+
+    class Main:
+        context_length = 200_000
+
+    class Aux:
+        context_length = 80_000
+        model = "small-compressor"
+        name = "aux-provider"
+
+    agent = SimpleNamespace(provider=Main(), session=Session.create())
+    engine = DefaultContextEngine(threshold=0.75)
+    events = []
+    monkeypatch.setattr(loop, "_summarizer", lambda _agent: Aux())
+
+    loop._ensure_compression_feasibility(agent, engine, {"threshold": 0.75}, events.append)
+
+    assert engine.threshold_fraction() == 0.4
+    assert agent.session.meta["compression_feasibility"]["old_threshold_tokens"] == 150_000
+    assert agent.session.meta["compression_feasibility"]["new_threshold_tokens"] == 80_000
+    assert agent.session.meta["compression_feasibility"]["adjusted"] is True
+    assert events[0]["type"] == "compression_feasibility"
+
+
 # --- aux model input fitting -------------------------------------------------
 def test_summarizer_input_capped_to_aux_window():
     from aegis.agent.compaction import compress
@@ -196,7 +225,8 @@ def test_summarizer_input_capped_to_aux_window():
 
     msgs = [Message.system("s"), Message.user("start")]
     for i in range(200):
-        msgs.append(Message.assistant("word " * 200)); msgs.append(Message.user(f"u{i}"))
+        msgs.append(Message.assistant("word " * 200))
+        msgs.append(Message.user(f"u{i}"))
     fp = Tiny()
     compress(msgs, fp, preserve_first=2, tail_tokens=500)
     # input was capped well under a naive 60k-char dump (8000-6000 reserve)*4 ≈ 8k chars

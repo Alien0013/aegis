@@ -40,6 +40,21 @@ _INJECTION_PATTERNS: tuple[tuple[_re.Pattern, str], ...] = (
     (_re.compile(r"\bnew\s+system\s+prompt\b", _re.I), "prompt replacement"),
 )
 
+_PROVIDER_CONTEXT_TAGS = _re.compile(
+    r"</?\s*(?:retrieved_memory|memory-context|system|assistant|user)\s*>",
+    _re.I,
+)
+_PROVIDER_SYSTEM_NOTE = _re.compile(r"^\s*\[?\s*system\s+note\s*:.*$", _re.I | _re.M)
+
+
+def sanitize_provider_context(text: str) -> str:
+    """Keep external memory text inside its volatile context fence."""
+    if not text:
+        return ""
+    text = _PROVIDER_CONTEXT_TAGS.sub("[provider context tag removed]", str(text))
+    text = _PROVIDER_SYSTEM_NOTE.sub("[provider system note removed]", text)
+    return text.strip()
+
 
 def scan_entry(text: str) -> str | None:
     """Return why this content must not enter memory, or None if clean.
@@ -520,10 +535,10 @@ class MemoryManager:
         cached = self._provider_call("consume_prefetch", query,
                                      session_id=getattr(self, "_session_id", "")) or ""
         if isinstance(cached, str) and cached.strip():
-            return cached.strip()
+            return sanitize_provider_context(cached)
         block = self._provider_call("prefetch", query,
                                     session_id=getattr(self, "_session_id", "")) or ""
-        return block.strip() if isinstance(block, str) else ""
+        return sanitize_provider_context(block) if isinstance(block, str) else ""
 
     def queue_prefetch(self, query: str) -> None:
         session_id = getattr(self, "_session_id", "")
