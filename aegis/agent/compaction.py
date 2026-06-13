@@ -14,6 +14,7 @@ keep long, repeatedly-compacted sessions coherent:
 
 from __future__ import annotations
 
+import dataclasses
 import re
 
 from ..constants import COMPACT_THRESHOLD, DEFAULT_CONTEXT_LENGTH
@@ -34,8 +35,32 @@ _SUMMARY_END_MARKER = (
 _DEFAULT_TAIL_TOKENS = 6000
 
 
+class CompressionAborted(RuntimeError):
+    """Raised when configured compression policy refuses deterministic fallback."""
+
+
 def _strip_images(text: str) -> str:
     return _IMG_DATA_URI.sub("[image omitted]", text)
+
+
+def _strip_historical_media(messages: list[Message]) -> list[Message]:
+    """Drop image payloads from older turns while preserving the newest image turn."""
+    image_indexes = [i for i, m in enumerate(messages) if getattr(m, "images", None)]
+    if not image_indexes:
+        return messages
+    newest_image = image_indexes[-1]
+    out: list[Message] = []
+    for i, m in enumerate(messages):
+        content = _strip_images(m.content or "")
+        images = list(getattr(m, "images", []) or [])
+        if images and i < newest_image:
+            suffix = "[historical image omitted after context compaction]"
+            content = f"{content}\n{suffix}".strip() if content else suffix
+            images = []
+        if content != (m.content or "") or images != getattr(m, "images", []):
+            m = dataclasses.replace(m, content=content, images=images)
+        out.append(m)
+    return out
 
 
 def _prune_tool_output(text: str, max_tokens: int) -> str:
@@ -65,6 +90,7 @@ def _prune_messages(messages: list[Message], max_tool_tokens: int) -> list[Messa
 
 def estimated_tokens(messages: list[Message]) -> int:
     return sum(estimate_tokens(m.content or "") + estimate_tokens(m.reasoning or "")
+               + sum(estimate_tokens(str(img)) for img in getattr(m, "images", []) or [])
                + sum(estimate_tokens(str(tc.arguments)) for tc in m.tool_calls)
                for m in messages)
 
@@ -79,6 +105,7 @@ def should_compress(messages: list[Message], context_length: int, overhead_token
 
 def _msg_tokens(m: Message) -> int:
     return (estimate_tokens(m.content or "") + estimate_tokens(m.reasoning or "")
+            + sum(estimate_tokens(str(img)) for img in getattr(m, "images", []) or [])
             + sum(estimate_tokens(str(tc.arguments)) for tc in m.tool_calls))
 
 
@@ -125,7 +152,30 @@ def _summary_input_budget(provider) -> int:
 
 
 def _is_summary_note(m: Message) -> bool:
-    return m.role == "assistant" and bool(m.content) and m.content.startswith(_SUMMARY_MARKER)
+    return (
+        m.role == "assistant"
+        and (
+            bool(getattr(m, "meta", {}).get("_compressed_summary"))
+            or (bool(m.content) and m.content.startswith(_SUMMARY_MARKER))
+        )
+    )
+
+
+def _summary_body(m: Message) -> str:
+    text = m.content or ""
+    return text[len(_SUMMARY_MARKER):].strip() if text.startswith(_SUMMARY_MARKER) else text.strip()
+
+
+def _summary_note(body: str, *, fallback_used: bool = False) -> Message:
+    return Message(
+        role="assistant",
+        content=_SUMMARY_MARKER + "\n" + body,
+        meta={
+            "_compressed_summary": True,
+            "summary_end_marker": _SUMMARY_END_MARKER,
+            "fallback_used": bool(fallback_used),
+        },
+    )
 
 
 def _fallback_summary(middle: list[Message], prior: list[str],
@@ -174,7 +224,8 @@ _SUMMARY_INSTRUCTION = (
 def compress(messages: list[Message], provider, *, preserve_first: int = 3,
              preserve_last: int = 20, max_tool_tokens: int = 600,
              focus: str = "", tail_tokens: int | None = None,
-             pre_compress_context: str = "") -> list[Message]:
+             pre_compress_context: str = "",
+             abort_on_summary_failure: bool = False) -> list[Message]:
     system_msgs = [m for m in messages if m.role == "system"]
     convo = [m for m in messages if m.role != "system"]
     tail_start = _tail_start(convo, preserve_last, tail_tokens)
@@ -185,7 +236,7 @@ def compress(messages: list[Message], provider, *, preserve_first: int = 3,
         cut += 1
     if tail_start <= cut:
         # Nothing meaningful to summarize, but still prune oversized tool dumps.
-        return system_msgs + _prune_messages(convo, max_tool_tokens)
+        return system_msgs + _strip_historical_media(_prune_messages(convo, max_tool_tokens))
 
     # Prune oversized tool outputs / images in the kept turns before summarizing the rest.
     head = _prune_messages(convo[:cut], max_tool_tokens)
@@ -197,7 +248,7 @@ def compress(messages: list[Message], provider, *, preserve_first: int = 3,
     # Iterative fold: a summary note from a previous compaction in the middle is UPDATED,
     # not re-summarized (that would drift). Pull prior summaries out; the newest is handed
     # to the summarizer to carry forward. Their bodies are dropped from the new transcript.
-    prior = [m.content[len(_SUMMARY_MARKER):].strip() for m in middle if _is_summary_note(m)]
+    prior = [_summary_body(m) for m in middle if _is_summary_note(m)]
     new_middle = [m for m in middle if not _is_summary_note(m)]
 
     pre_compress_context = (pre_compress_context or "").strip()
@@ -205,7 +256,7 @@ def compress(messages: list[Message], provider, *, preserve_first: int = 3,
     if not new_middle:
         # The middle was only prior summaries — keep the most recent, drop the rest. No call.
         if not prior:
-            return system_msgs + head + tail
+            return system_msgs + _strip_historical_media(head + tail)
         body = prior[-1]
         if pre_compress_context:
             body = f"{body}\n\nMemory provider pre-compression notes:\n{pre_compress_context}"
@@ -213,8 +264,7 @@ def compress(messages: list[Message], provider, *, preserve_first: int = 3,
             body = f"{_SUMMARY_REFERENCE_PREFIX}\n\n{body}"
         if _SUMMARY_END_MARKER not in body:
             body = f"{body}\n\n{_SUMMARY_END_MARKER}"
-        note = Message.assistant(_SUMMARY_MARKER + "\n" + body)
-        return system_msgs + head + [note] + tail
+        return system_msgs + _strip_historical_media(head + [_summary_note(body)] + tail)
 
     transcript = "\n".join(
         f"{m.role}: {m.content}" + (f" [tools: {[tc.name for tc in m.tool_calls]}]" if m.tool_calls else "")
@@ -237,6 +287,7 @@ def compress(messages: list[Message], provider, *, preserve_first: int = 3,
         user_content = f"{prelude}{transcript}"
     user_content = user_content[:_summary_input_budget(provider)]   # fit the aux model
 
+    fallback_used = False
     try:
         resp = provider.complete(
             [Message.system(instruction), Message.user(user_content)],
@@ -245,12 +296,16 @@ def compress(messages: list[Message], provider, *, preserve_first: int = 3,
         summary = resp.text.strip()
         if not summary:
             raise ValueError("empty summary")
-    except Exception:  # noqa: BLE001 — keep continuity anchors instead of losing the window
+    except Exception as exc:  # noqa: BLE001 — keep continuity anchors instead of losing the window
+        if abort_on_summary_failure:
+            raise CompressionAborted(f"summary generation failed: {exc}") from exc
+        fallback_used = True
         summary = _fallback_summary(new_middle, prior, pre_compress_context)
 
     if _SUMMARY_REFERENCE_PREFIX not in summary:
         summary = f"{_SUMMARY_REFERENCE_PREFIX}\n\n{summary}"
     if _SUMMARY_END_MARKER not in summary:
         summary = f"{summary}\n\n{_SUMMARY_END_MARKER}"
-    note = Message.assistant(_SUMMARY_MARKER + "\n" + summary)
-    return system_msgs + head + [note] + tail
+    return system_msgs + _strip_historical_media(
+        head + [_summary_note(summary, fallback_used=fallback_used)] + tail
+    )

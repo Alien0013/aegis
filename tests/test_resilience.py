@@ -151,6 +151,34 @@ def test_manual_compaction_split_records_session_provenance(tmp_path):
     assert compaction["child_session"] == child.id
 
 
+def test_manual_compaction_skips_when_session_lock_held(tmp_path):
+    from aegis.agent.loop import compact_now
+    from aegis.session import Session, SessionStore
+    from aegis.types import LLMResponse, Message
+
+    class Windowed(FakeProvider):
+        context_length = 100_000
+
+    store = SessionStore()
+    session = Session.create("locked manual task")
+    session.messages = [Message.user(("locked context " * 2000) + str(i)) for i in range(40)]
+    store.save(session)
+    assert store.try_acquire_compression_lock(session.id, "other-holder") is True
+
+    provider = Windowed([LLMResponse(text="manual summary")])
+    a = _agent(provider, tmp_path, store=store)
+    a.session = session
+    a.tool_context.session = session
+    events = []
+
+    result = compact_now(a, session, emit=events.append, preserve_last=1)
+
+    assert result.id == session.id
+    assert any(event.get("type") == "compaction_skipped" for event in events)
+    assert store.children(session.id) == []
+    assert store.get_compression_lock_holder(session.id) == "other-holder"
+
+
 # --- #8 failure modes ------------------------------------------------------
 def test_crashed_tool_does_not_break_run(tmp_path):
     from aegis.tools.base import Tool, ToolResult  # noqa: F401

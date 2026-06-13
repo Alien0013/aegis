@@ -134,6 +134,59 @@ def test_summary_failure_keeps_anchors():
     assert "loop.py" in note.content or "config.yaml" in note.content   # anchors survived
 
 
+def test_summary_note_has_metadata_and_roundtrips():
+    from aegis.agent.compaction import compress
+    from aegis.types import Message
+
+    msgs = _convo(8, body="metadata material ")
+    out = compress(msgs, FakeProvider(reply="metadata summary"), preserve_first=1, tail_tokens=1)
+    note = next(m for m in out if (m.content or "").startswith("[Earlier"))
+
+    assert note.meta["_compressed_summary"] is True
+    assert Message.from_dict(note.to_dict()).meta["_compressed_summary"] is True
+
+
+def test_abort_on_summary_failure_raises_without_fallback():
+    import pytest
+
+    from aegis.agent.compaction import CompressionAborted, compress
+
+    msgs = _convo(8, body="abort material ")
+    with pytest.raises(CompressionAborted):
+        compress(
+            msgs,
+            FakeProvider(reply=None),
+            preserve_first=1,
+            tail_tokens=1,
+            abort_on_summary_failure=True,
+        )
+
+
+def test_historical_images_are_stripped_but_newest_image_survives():
+    from aegis.agent.compaction import compress
+    from aegis.types import Message
+
+    old_image = "data:image/png;base64," + ("a" * 256)
+    newest_image = "data:image/png;base64," + ("b" * 256)
+    msgs = [
+        Message.system("sys"),
+        Message.user("old image", images=[old_image]),
+    ]
+    for i in range(12):
+        msgs.append(Message.assistant(f"work {i} with enough detail to summarize"))
+        msgs.append(Message.user(f"continue {i} with enough detail to summarize"))
+    msgs.append(Message.user("latest image", images=[newest_image]))
+    msgs.append(Message.assistant("latest image noted"))
+
+    out = compress(msgs, FakeProvider(reply="image summary"), preserve_first=2, tail_tokens=80)
+    old = next(m for m in out if "old image" in (m.content or ""))
+    latest = next(m for m in out if "latest image" in (m.content or ""))
+
+    assert old.images == []
+    assert "historical image omitted" in old.content
+    assert latest.images == [newest_image]
+
+
 # --- aux model input fitting -------------------------------------------------
 def test_summarizer_input_capped_to_aux_window():
     from aegis.agent.compaction import compress

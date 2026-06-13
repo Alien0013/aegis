@@ -61,6 +61,8 @@ class Message:
     thinking_blocks: list = field(default_factory=list)
     # optional image references (file paths or data URLs)
     images: list[str] = field(default_factory=list)
+    # small internal/provider metadata (not shown to the model unless a caller uses it)
+    meta: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"role": self.role, "content": self.content}
@@ -76,6 +78,8 @@ class Message:
             d["thinking_blocks"] = self.thinking_blocks
         if self.images:
             d["images"] = self.images
+        if self.meta:
+            d["meta"] = self.meta
         return d
 
     @classmethod
@@ -92,6 +96,7 @@ class Message:
             reasoning=d.get("reasoning", "") or "",
             thinking_blocks=d.get("thinking_blocks", []) or [],
             images=d.get("images", []) or [],
+            meta=d.get("meta", {}) or {},
         )
 
     @staticmethod

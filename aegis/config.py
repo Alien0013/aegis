@@ -252,6 +252,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
                         # crosses this fraction of the window OR this many messages
                         "gateway_hygiene_threshold": 0.85,
                         "hard_message_limit": 400,
+                        # Hermes-compatible opt-in: when true, failed summarization aborts
+                        # compaction instead of inserting a deterministic fallback summary.
+                        "abort_on_summary_failure": False,
                         # when the window fills, roll into a fresh child session (parent kept
                         # intact, lineage chained) instead of editing history in place
                         "split_sessions": True},

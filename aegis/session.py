@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -131,6 +132,16 @@ class SessionStore:
             msg_cols = {r[1] for r in c.execute("PRAGMA table_info(messages)").fetchall()}
             if "profile" not in msg_cols:
                 c.execute("ALTER TABLE messages ADD COLUMN profile TEXT DEFAULT ''")
+            c.execute(
+                """CREATE TABLE IF NOT EXISTS compression_locks (
+                       session_id TEXT PRIMARY KEY,
+                       holder TEXT NOT NULL,
+                       acquired_at REAL NOT NULL,
+                       expires_at REAL NOT NULL
+                   )"""
+            )
+            c.execute("CREATE INDEX IF NOT EXISTS idx_compression_locks_expires "
+                      "ON compression_locks(expires_at)")
             # full-text index over message content (graceful if FTS5 is unavailable)
             try:
                 rebuild_fts = False
@@ -266,6 +277,71 @@ class SessionStore:
                                 "VALUES (?,?,?,?,?)",
                                 (m.content, session.id, session.title, m.role, session.updated_at),
                             )
+
+    def try_acquire_compression_lock(self, session_id: str, holder: str,
+                                     ttl_seconds: float = 300.0) -> bool:
+        """Atomically acquire a per-session compression lock.
+
+        Expired locks are reclaimed, and a current holder may reacquire its own lock.
+        """
+        if not session_id or not holder:
+            return False
+        now = time.time()
+        expires_at = now + max(0.001, float(ttl_seconds or 300.0))
+        try:
+            with self._conn() as c:
+                c.execute(
+                    "DELETE FROM compression_locks WHERE session_id=? AND expires_at < ?",
+                    (session_id, now),
+                )
+                row = c.execute(
+                    "SELECT holder FROM compression_locks WHERE session_id=?",
+                    (session_id,),
+                ).fetchone()
+                if row and row["holder"] != holder:
+                    return False
+                if row:
+                    c.execute(
+                        "UPDATE compression_locks SET acquired_at=?, expires_at=? "
+                        "WHERE session_id=? AND holder=?",
+                        (now, expires_at, session_id, holder),
+                    )
+                else:
+                    c.execute(
+                        "INSERT INTO compression_locks "
+                        "(session_id, holder, acquired_at, expires_at) VALUES (?,?,?,?)",
+                        (session_id, holder, now, expires_at),
+                    )
+                return True
+        except sqlite3.Error:
+            return False
+
+    def release_compression_lock(self, session_id: str, holder: str) -> None:
+        """Release a compression lock only if owned by ``holder``."""
+        if not session_id or not holder:
+            return
+        try:
+            with self._conn() as c:
+                c.execute(
+                    "DELETE FROM compression_locks WHERE session_id=? AND holder=?",
+                    (session_id, holder),
+                )
+        except sqlite3.Error:
+            pass
+
+    def get_compression_lock_holder(self, session_id: str) -> str | None:
+        """Return the current non-expired compression lock holder, if any."""
+        if not session_id:
+            return None
+        try:
+            with self._conn() as c:
+                row = c.execute(
+                    "SELECT holder FROM compression_locks WHERE session_id=? AND expires_at >= ?",
+                    (session_id, time.time()),
+                ).fetchone()
+                return row["holder"] if row else None
+        except sqlite3.Error:
+            return None
 
     def load(self, sid: str) -> Session | None:
         with self._conn() as c:

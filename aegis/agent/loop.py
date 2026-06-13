@@ -629,40 +629,95 @@ def _memory_pre_compress_context(agent, session) -> str:
     return note.strip() if isinstance(note, str) else ""
 
 
+def _compression_lock_holder(agent, session) -> str:
+    return f"{getattr(session, 'id', 'unknown')}:{new_id('lock')}"
+
+
+def _acquire_compression_lock(agent, session, emit: OnEvent | None = None) -> tuple[bool, str | None]:
+    store = getattr(agent, "store", None)
+    sid = getattr(session, "id", "") or ""
+    if store is None or not sid:
+        return True, None
+    holder = _compression_lock_holder(agent, session)
+    try:
+        acquired = store.try_acquire_compression_lock(sid, holder)
+    except Exception:  # noqa: BLE001
+        return True, None
+    if acquired:
+        return True, holder
+    existing = None
+    try:
+        existing = store.get_compression_lock_holder(sid)
+    except Exception:  # noqa: BLE001
+        pass
+    if emit:
+        emit({
+            "type": "compaction_skipped",
+            "reason": "compression_lock_held",
+            "session_id": sid,
+            "holder": existing or "",
+        })
+    return False, None
+
+
+def _release_compression_lock(agent, session, holder: str | None) -> None:
+    if not holder:
+        return
+    store = getattr(agent, "store", None)
+    sid = getattr(session, "id", "") or ""
+    if store is None or not sid:
+        return
+    try:
+        store.release_compression_lock(sid, holder)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _force_compact(agent, session):
     """Compress unconditionally — recovery from a provider context_overflow. Tighter tail than
     the proactive path so the request actually shrinks below the window."""
+    acquired, holder = _acquire_compression_lock(agent, session)
+    if not acquired:
+        agent._compact_stuck = True
+        return session
     comp = agent.config.get("agent.compression", {}) or {}
     engine = _engine(agent)
-    pre_compress_context = _memory_pre_compress_context(agent, session)
     try:
-        from .context_engine import call_hook
-        call_hook(engine, "on_pre_compress", agent, session)
-    except Exception:  # noqa: BLE001
-        pass
-    before_n = len(session.messages)
-    before_tok = compaction.estimated_tokens(session.messages)
-    session.messages = governance.normalize(engine.compress(
-        session.messages, _summarizer(agent),
-        preserve_first=comp.get("preserve_first", 3),
-        tail_tokens=_tail_token_budget(agent, comp, tight=True),
-        max_tool_tokens=min(400, comp.get("max_tool_tokens", 600)),
-        pre_compress_context=pre_compress_context,
-    ))
-    after_tok = compaction.estimated_tokens(session.messages)
-    from ..util import now_iso
-    _trace_compaction(agent, session, {
-        "at": now_iso(),
-        "iteration": getattr(agent.budget, "api_call_count", 0),
-        "messages_before": before_n,
-        "messages_after": len(session.messages),
-        "tokens_before": before_tok,
-        "tokens_after": after_tok,
-        "reason": "context_overflow",
-        "recovery": True,
-    })
-    agent.refresh_volatile()
-    return session
+        pre_compress_context = _memory_pre_compress_context(agent, session)
+        try:
+            from .context_engine import call_hook
+            call_hook(engine, "on_pre_compress", agent, session)
+        except Exception:  # noqa: BLE001
+            pass
+        before_n = len(session.messages)
+        before_tok = compaction.estimated_tokens(session.messages)
+        session.messages = governance.normalize(engine.compress(
+            session.messages, _summarizer(agent),
+            preserve_first=comp.get("preserve_first", 3),
+            tail_tokens=_tail_token_budget(agent, comp, tight=True),
+            max_tool_tokens=min(400, comp.get("max_tool_tokens", 600)),
+            pre_compress_context=pre_compress_context,
+            abort_on_summary_failure=bool(comp.get("abort_on_summary_failure", False)),
+        ))
+        after_tok = compaction.estimated_tokens(session.messages)
+        from ..util import now_iso
+        _trace_compaction(agent, session, {
+            "at": now_iso(),
+            "iteration": getattr(agent.budget, "api_call_count", 0),
+            "messages_before": before_n,
+            "messages_after": len(session.messages),
+            "tokens_before": before_tok,
+            "tokens_after": after_tok,
+            "reason": "context_overflow",
+            "recovery": True,
+        })
+        agent.refresh_volatile()
+        return session
+    except compaction.CompressionAborted:
+        agent._compact_stuck = True
+        return session
+    finally:
+        _release_compression_lock(agent, session, holder)
 
 
 def _engine(agent):
@@ -688,6 +743,11 @@ def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
     threshold = comp.get("threshold")   # for the record's reason text; the engine applies it
     if not engine.should_compress(session.messages, agent.provider.context_length, schema_tokens):
         return session
+    lock_session = session
+    acquired, holder = _acquire_compression_lock(agent, lock_session, emit)
+    if not acquired:
+        agent._compact_stuck = True
+        return session
     emit({"type": "compacting"})
     pre_compress_context = _memory_pre_compress_context(agent, session)
     try:
@@ -697,13 +757,30 @@ def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
         pass
     before_n = len(session.messages)
     before_tok = compaction.estimated_tokens(session.messages)
-    compressed = engine.compress(
-        session.messages, _summarizer(agent),    # summarize on the cheap aux model, not the main one
-        preserve_first=comp.get("preserve_first", 3),
-        tail_tokens=_tail_token_budget(agent, comp),   # token-budgeted tail, scales with the window
-        max_tool_tokens=comp.get("max_tool_tokens", 600),
-        pre_compress_context=pre_compress_context,
-    )
+    try:
+        compressed = engine.compress(
+            session.messages, _summarizer(agent),    # summarize on the cheap aux model, not the main one
+            preserve_first=comp.get("preserve_first", 3),
+            tail_tokens=_tail_token_budget(agent, comp),   # token-budgeted tail, scales with the window
+            max_tool_tokens=comp.get("max_tool_tokens", 600),
+            pre_compress_context=pre_compress_context,
+            abort_on_summary_failure=bool(comp.get("abort_on_summary_failure", False)),
+        )
+    except compaction.CompressionAborted as exc:
+        from ..util import now_iso
+        rec = {"at": now_iso(), "iteration": budget.api_call_count,
+               "messages_before": before_n, "messages_after": before_n,
+               "tokens_before": before_tok, "tokens_after": before_tok,
+               "reason": "compression_aborted", "error": str(exc), "aborted": True}
+        session.meta.setdefault("compactions", []).append(rec)
+        _trace_compaction(agent, session, rec)
+        agent._compact_stuck = True
+        _release_compression_lock(agent, lock_session, holder)
+        emit({"type": "compaction_aborted", **rec})
+        return session
+    except Exception:
+        _release_compression_lock(agent, lock_session, holder)
+        raise
     after_tok = compaction.estimated_tokens(compressed)
     # If we're STILL over the threshold after compacting, the preserved tail is the floor —
     # further compaction can't help, so don't retry this turn (avoids per-iteration thrash).
@@ -756,6 +833,7 @@ def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
         session.messages = compressed
         session.meta.setdefault("compactions", []).append(rec)
     _trace_compaction(agent, session, rec)
+    _release_compression_lock(agent, lock_session, holder)
     emit({"type": "compacted", **rec})
     agent.refresh_volatile()
     return session
@@ -769,6 +847,10 @@ def compact_now(agent, session=None, emit: OnEvent | None = None, *,
     emit = emit or (lambda _e: None)
     session = session or agent.session
     engine = _engine(agent)
+    lock_session = session
+    acquired, holder = _acquire_compression_lock(agent, lock_session, emit)
+    if not acquired:
+        return session
     emit({"type": "compacting", "reason": reason})
     comp = agent.config.get("agent.compression", {}) or {}
     pre_compress_context = _memory_pre_compress_context(agent, session)
@@ -792,7 +874,23 @@ def compact_now(agent, session=None, emit: OnEvent | None = None, *,
         kwargs["focus"] = focus
     if pre_compress_context:
         kwargs["pre_compress_context"] = pre_compress_context
-    compressed = governance.normalize(engine.compress(session.messages, _summarizer(agent), **kwargs))
+    kwargs["abort_on_summary_failure"] = bool(comp.get("abort_on_summary_failure", False))
+    try:
+        compressed = governance.normalize(engine.compress(session.messages, _summarizer(agent), **kwargs))
+    except compaction.CompressionAborted as exc:
+        from ..util import now_iso
+        rec = {"at": now_iso(), "iteration": getattr(agent.budget, "api_call_count", 0),
+               "messages_before": before_n, "messages_after": before_n,
+               "tokens_before": before_tok, "tokens_after": before_tok,
+               "reason": reason, "manual": True, "aborted": True, "error": str(exc)}
+        session.meta.setdefault("compactions", []).append(rec)
+        _trace_compaction(agent, session, rec)
+        _release_compression_lock(agent, lock_session, holder)
+        emit({"type": "compaction_aborted", **rec})
+        return session
+    except Exception:
+        _release_compression_lock(agent, lock_session, holder)
+        raise
     after_tok = compaction.estimated_tokens(compressed)
 
     from ..util import now_iso
@@ -844,6 +942,7 @@ def compact_now(agent, session=None, emit: OnEvent | None = None, *,
             except Exception:  # noqa: BLE001
                 pass
     _trace_compaction(agent, session, rec)
+    _release_compression_lock(agent, lock_session, holder)
     emit({"type": "compacted", **rec})
     agent.refresh_volatile()
     return session
