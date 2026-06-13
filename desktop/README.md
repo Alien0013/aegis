@@ -20,8 +20,10 @@ aegis desktop --install-only
 
 ## Build installers
 ```bash
-npm run dist         # → dist/  (.dmg on macOS, .exe on Windows, .AppImage/.deb on Linux)
+npm run dist         # → release/  (.dmg/.zip mac · nsis .exe win · .AppImage/.deb linux)
+npm run dist:linux   # just the Linux targets
 ```
+Branded with `build/icon.png` / `build/icon.ico` (generated from `assets/logo.svg`).
 Signed/notarized installers need each platform's signing certs and (usually)
 that platform's machine or CI runner. The app itself just needs `aegis`
 available — set `AEGIS_BIN` to override the executable path.
@@ -37,6 +39,19 @@ rather keep it for source runs, use `npm run start:sandbox` or
 `AEGIS_ELECTRON_SANDBOX=1 npm start`.
 
 ## How it works
-`main.js` → free port + random token → `spawn("aegis", ["dashboard","--port",P,"--no-open"])`
-→ wait for `/` → `BrowserWindow.loadURL(http://127.0.0.1:P/?token=…)`. On quit it
-stops the server. External links open in the system browser.
+A structured Electron app under `electron/`:
+
+- **`electron/main.js`** — the main process. Shows a splash instantly, starts the
+  backend (`aegis dashboard` on a free port + random token), health-probes it
+  while reporting progress to the splash, then opens the main window and swaps it
+  in when loaded. Keeps the backend alive (**restart-on-crash**, up to 3×), stops
+  it cleanly on quit, and captures stdout/stderr to a log for the failure screen.
+- **`electron/boot.html`** — the splash / boot screen: branding, live progress,
+  and an **error state** (Retry · Open logs · Quit) if the backend won't start.
+- **`electron/preload.js`** — a locked-down `contextBridge` (the only thing the
+  splash can call: boot status + retry/openLogs/quit).
+
+Extras: single-instance lock, **window size/position persistence**, native menu
+(`Cmd/Ctrl+1/2/3` → Home/Chat/Agents, `Cmd/Ctrl+,` → Settings, Restart Backend,
+Open Logs), and external links open in the system browser. Logs live at
+`<userData>/desktop.log`.
