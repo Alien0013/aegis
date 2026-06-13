@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Icon } from "./lib/icons";
 import { api } from "./lib/api";
+import { CommandPalette } from "./CommandPalette";
+import { Cockpit } from "./pages/Cockpit";
 import { Overview } from "./pages/Overview";
 import { Chat } from "./pages/Chat";
 import { ListPage } from "./pages/ListPage";
@@ -18,8 +20,9 @@ import { PluginsPage } from "./pages/PluginsPage";
 
 type NavItem = { id: string; label: string; icon: string; group: string };
 const NAV: NavItem[] = [
-  { id: "overview", label: "Overview", icon: "overview", group: "Home" },
+  { id: "cockpit", label: "Cockpit", icon: "overview", group: "Home" },
   { id: "chat", label: "Chat", icon: "chat", group: "Home" },
+  { id: "overview", label: "Overview", icon: "overview", group: "Home" },
   { id: "sessions", label: "Sessions", icon: "sessions", group: "Observe" },
   { id: "runs", label: "Runs", icon: "sessions", group: "Observe" },
   { id: "traces", label: "Traces", icon: "logs", group: "Observe" },
@@ -44,10 +47,11 @@ const NAV: NavItem[] = [
 ];
 const THEMES = ["dark", "paper", "mono"];
 
-const hashView = () => (location.hash.slice(1) || "overview").replace(/^\//, "");
+const hashView = () => (location.hash.slice(1) || "cockpit").replace(/^\//, "");
 
 function pageFor(id: string, go: (id: string) => void) {
   switch (id) {
+    case "cockpit": return <Cockpit go={go} />;
     case "overview": return <Overview go={go} />;
     case "chat": return <Chat />;
     case "runs": return <ListPage key="runs" endpoint="runs?limit=100" arrayKey="runs" title="Runs"
@@ -84,6 +88,7 @@ export function App() {
   const [view, setView] = useState(hashView());
   const [theme, setTheme] = useState(localStorage.getItem("aegis_theme") || "dark");
   const [navOpen, setNavOpen] = useState(false);
+  const [cmdOpen, setCmdOpen] = useState(false);
   const [status, setStatus] = useState<any>(null);
   const [navQuery, setNavQuery] = useState("");
   useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem("aegis_theme", theme); }, [theme]);
@@ -92,12 +97,24 @@ export function App() {
     addEventListener("hashchange", onHash);
     return () => removeEventListener("hashchange", onHash);
   }, []);
+  const loadStatus = () => api("status").then((s) => setStatus(s)).catch(() => setStatus({ error: true }));
   useEffect(() => {
     let mounted = true;
     const load = () => api("status").then((s) => mounted && setStatus(s)).catch(() => mounted && setStatus({ error: true }));
     load();
     const timer = setInterval(load, 15000);
     return () => { mounted = false; clearInterval(timer); };
+  }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setCmdOpen(true);
+      }
+      if (e.key === "Escape") setCmdOpen(false);
+    };
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
   }, []);
   const go = (id: string) => { setView(id); location.hash = id; setNavOpen(false); };
   const visibleNav = useMemo(() => {
@@ -116,7 +133,9 @@ export function App() {
           <b>{current?.label || "AEGIS Agent"}</b>
           <span>{online ? `${status.provider || "provider"} / ${status.model || "model"}` : "dashboard"}</span>
         </div>
+        <button className="iconbtn topcmd" aria-label="Open command palette" onClick={() => setCmdOpen(true)}><Icon n="search" /></button>
       </header>
+      <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} go={go} reload={loadStatus} />
       {navOpen && <button className="scrim" aria-label="Close navigation" onClick={() => setNavOpen(false)} />}
       <aside className={"side" + (navOpen ? " open" : "")}>
         <div className="brand">
@@ -135,6 +154,9 @@ export function App() {
             placeholder="Find page"
           />
         </div>
+        <button className="cmd-trigger" onClick={() => setCmdOpen(true)}>
+          <Icon n="search" /><span>Command palette</span><kbd>Ctrl K</kbd>
+        </button>
         {groups.map((group) => (
           <div className="navgroup" key={group}>
             <div className="navlabel">{group}</div>

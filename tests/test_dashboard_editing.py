@@ -85,6 +85,42 @@ def test_dashboard_status_includes_operational_controls(tmp_path, monkeypatch):
     assert data["learn"]["memory_every"] >= 1
 
 
+def test_dashboard_cockpit_payload_aggregates_operator_surfaces(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.config import Config
+    from aegis.dashboard import _dashboard_cockpit
+
+    cfg = Config.load()
+    data = _dashboard_cockpit(cfg)
+
+    assert data["status"]["model"]
+    assert "sessions" in data
+    assert "agents" in data and "agents" in data["agents"]
+    assert "kanban" in data and "ready" in data["kanban"]
+    assert "tools" in data and data["tools"]["tools"]
+    assert "memory" in data and "user_entries" in data["memory"]
+    assert "review" in data and "files" in data["review"]
+    assert "logs" in data and "errors" in data["logs"]
+
+
+def test_dashboard_tools_payload_includes_schema_and_policy(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.config import Config
+    from aegis.dashboard import _dashboard_tools
+
+    cfg = Config.load()
+    cfg.data.setdefault("tools", {})["toolsets"] = ["core"]
+    cfg.data["tools"]["deny_groups"] = ["runtime"]
+    cfg.data["tools"]["allowlist"] = ["git status"]
+
+    payload = _dashboard_tools(cfg)
+
+    assert payload["toolsets"] == ["core"]
+    assert payload["deny_groups"] == ["runtime"]
+    assert payload["allowlist"] == ["git status"]
+    assert any("schema" in row and "toolset" in row and "enabled" in row for row in payload["tools"])
+
+
 def test_memory_post_add_and_remove(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     monkeypatch.setenv("AEGIS_DASHBOARD_TOKEN", "t")

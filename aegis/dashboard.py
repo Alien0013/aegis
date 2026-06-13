@@ -136,6 +136,45 @@ def _profiles(config: Config) -> dict:
     return {"active": config.get("agent.personality") or "", "available": names}
 
 
+def _dashboard_kanban() -> dict:
+    from .kanban import KanbanStore
+
+    ks = KanbanStore()
+    return {s: [{"id": t.id, "title": t.title, "body": t.body,
+                 "assignee": t.assignee, "priority": t.priority,
+                 "run_id": t.run_id, "session_id": t.session_id,
+                 "trace_id": t.trace_id}
+                for t in ks.list(status=s)]
+            for s in ("ready", "in_progress", "done", "blocked")}
+
+
+def _dashboard_tools(config: Config) -> dict:
+    from .tools.registry import default_registry
+
+    reg = default_registry()
+    toolsets = list(config.get("tools.toolsets", []) or ["core"])
+    enabled = {t.name for t in reg.available(toolsets, only_usable=False)}
+    rows = []
+    for tool in reg.all():
+        available, reason = tool.available()
+        rows.append({
+            "name": tool.name,
+            "description": tool.description.splitlines()[0] if tool.description else "",
+            "groups": list(tool.groups or []),
+            "toolset": tool.toolset,
+            "enabled": tool.name in enabled,
+            "available": bool(available),
+            "unavailable_reason": "" if available else str(reason),
+            "schema": _jsonable(tool.schema()),
+        })
+    return {
+        "toolsets": toolsets,
+        "deny_groups": list(config.get("tools.deny_groups", []) or []),
+        "allowlist": list(config.get("tools.allowlist", []) or []),
+        "tools": sorted(rows, key=lambda row: (row["toolset"], row["name"])),
+    }
+
+
 def _dashboard_status(config: Config) -> dict:
     from .session import SessionStore
     from .skills import SkillsLoader
@@ -174,6 +213,119 @@ def _dashboard_status(config: Config) -> dict:
             "memory_every": int(config.get("learn.memory_every", 0) or 0),
             "flush_min_turns": int(config.get("learn.flush_min_turns", 0) or 0),
         },
+    }
+
+
+def _dashboard_review() -> dict:
+    from .lsp.workspace import find_git_worktree
+
+    cwd = Path.cwd().resolve()
+    root = find_git_worktree(str(cwd))
+    if not root:
+        return {
+            "available": False,
+            "cwd": str(cwd),
+            "root": "",
+            "files": [],
+            "diff_stat": "",
+            "diff": "",
+            "note": "Current directory is not a git worktree.",
+        }
+    root_path = Path(root)
+    status = _git(root_path, "status", "--short") or ""
+    name_status = _git(root_path, "diff", "--name-status") or ""
+    staged_name_status = _git(root_path, "diff", "--cached", "--name-status") or ""
+    files = []
+    seen = set()
+    for source, text in (("working", name_status), ("staged", staged_name_status)):
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            code, _, path = line.partition("\t")
+            key = (path or code).strip()
+            if not key or (source, key) in seen:
+                continue
+            seen.add((source, key))
+            files.append({"path": key, "status": code.strip(), "source": source})
+    return {
+        "available": True,
+        "cwd": str(cwd),
+        "root": str(root_path),
+        "branch": _git(root_path, "branch", "--show-current") or
+        _git(root_path, "rev-parse", "--short", "HEAD") or "",
+        "dirty": bool(status),
+        "status": status.splitlines()[:200],
+        "files": files[:200],
+        "diff_stat": _git(root_path, "diff", "--stat") or "",
+        "staged_diff_stat": _git(root_path, "diff", "--cached", "--stat") or "",
+        "diff": (_git(root_path, "diff", "--no-ext-diff", "--unified=3") or "")[:40000],
+    }
+
+
+def _dashboard_recent_logs(limit: int = 80) -> dict:
+    from . import config as _cfg
+
+    lp = _cfg.logs_dir() / "aegis.log"
+    lines = lp.read_text(errors="replace").splitlines()[-limit:] if lp.exists() else []
+    errors = [line for line in lines if any(word in line.lower() for word in (
+        "error", "exception", "traceback", "failed", "fatal",
+    ))][-20:]
+    return {"path": str(lp), "lines": lines, "errors": errors}
+
+
+def _dashboard_memory_payload() -> dict:
+    from .memory import MemoryStore
+
+    ms = MemoryStore()
+
+    def entries(raw: str) -> list[str]:
+        return [part.strip() for part in (raw or "").split("§") if part.strip()]
+
+    memory = ms.raw("memory")
+    user = ms.raw("user")
+    return {
+        "memory": memory,
+        "user": user,
+        "memory_entries": entries(memory),
+        "user_entries": entries(user),
+    }
+
+
+def _dashboard_cockpit(config: Config) -> dict:
+    from . import ratelimit
+    from .session import SessionStore
+    from .usage_log import cost_report, daily_series
+
+    analytics = cost_report(30, config)
+    analytics["series"] = daily_series(30, config)
+    analytics["balance"] = ratelimit.balance()
+    sessions = SessionStore().list(40)
+    latest_id = str((sessions[0] or {}).get("id", "")) if sessions else ""
+    latest_session = _dashboard_session_detail(latest_id, config) if latest_id else {"found": False}
+    return {
+        "status": _dashboard_status(config),
+        "analytics": analytics,
+        "sessions": sessions,
+        "latest_session": latest_session,
+        "runs": _dashboard_runs({"limit": ["40"]}),
+        "traces": _dashboard_traces({"limit": ["40"]}, config),
+        "agents": _dashboard_agents(config),
+        "kanban": _dashboard_kanban(),
+        "tools": _dashboard_tools(config),
+        "memory": _dashboard_memory_payload(),
+        "projects": _dashboard_projects(),
+        "worktrees": _dashboard_worktrees(),
+        "review": _dashboard_review(),
+        "system": _system_info(),
+        "keys": _env_keys(),
+        "plugins": _jsonable({
+            "enabled": config.get("plugins.enabled", []) or [],
+            "disabled": config.get("plugins.disabled", []) or [],
+        }),
+        "mcp": _jsonable(config.get("mcp.servers", {}) or {}),
+        "profiles": _profiles(config),
+        "logs": _dashboard_recent_logs(),
+        "config": _redacted_config(config),
     }
 
 
@@ -1671,17 +1823,12 @@ def make_handler(config: Config):
                 self._unauthorized()
             elif path == "/api/status":
                 self._json(_dashboard_status(config))
+            elif path == "/api/cockpit":
+                self._json(_dashboard_cockpit(config))
             elif path == "/events":
                 self._stream_events()
             elif path == "/api/kanban":
-                from .kanban import KanbanStore
-                ks = KanbanStore()
-                self._json({s: [{"id": t.id, "title": t.title, "body": t.body,
-                                 "assignee": t.assignee, "priority": t.priority,
-                                 "run_id": t.run_id, "session_id": t.session_id,
-                                 "trace_id": t.trace_id}
-                                for t in ks.list(status=s)]
-                            for s in ("ready", "in_progress", "done", "blocked")})
+                self._json(_dashboard_kanban())
             elif path == "/api/cron":
                 self._json(_dashboard_cron_jobs())
             elif path == "/api/config":
@@ -1743,6 +1890,8 @@ def make_handler(config: Config):
                 self._json(_dashboard_projects())
             elif path == "/api/worktrees":
                 self._json(_dashboard_worktrees())
+            elif path == "/api/review":
+                self._json(_dashboard_review())
             elif path == "/api/evals":
                 self._json(_dashboard_evals(config))
             elif path == "/api/eval":
@@ -1779,9 +1928,8 @@ def make_handler(config: Config):
                 self._json([{"name": s.name, "description": s.description}
                             for s in sorted(SkillsLoader(config).available(), key=lambda s: s.name)])
             elif path == "/api/tools":
-                from .tools.registry import default_registry
-                self._json([{"name": t.name, "description": t.description.splitlines()[0],
-                             "groups": t.groups} for t in default_registry().all()])
+                payload = _dashboard_tools(config)
+                self._json(payload["tools"])
             else:
                 self._json({"error": "not found"})
 

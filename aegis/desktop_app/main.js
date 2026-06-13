@@ -3,7 +3,7 @@
 //
 // It spawns `aegis dashboard` (the Python backend) on a free port with a random
 // token, waits for it to come up, then loads it. On quit it stops the server.
-const { app, BrowserWindow, shell, dialog } = require("electron");
+const { app, BrowserWindow, shell, dialog, Menu, clipboard, Notification } = require("electron");
 const { spawn } = require("child_process");
 const net = require("net");
 const http = require("http");
@@ -17,6 +17,39 @@ if (process.platform === "linux" && process.env.AEGIS_ELECTRON_SANDBOX !== "1") 
 
 let serverProc = null;
 let win = null;
+let dashboardUrl = "";
+
+function installMenu() {
+  const template = [
+    {
+      label: "AEGIS",
+      submenu: [
+        { label: "Open Cockpit", accelerator: "CommandOrControl+1", click: () => win?.loadURL(dashboardUrl + "#cockpit") },
+        { label: "Open Chat", accelerator: "CommandOrControl+2", click: () => win?.loadURL(dashboardUrl + "#chat") },
+        { label: "Open Settings", accelerator: "CommandOrControl+,", click: () => win?.loadURL(dashboardUrl + "#config") },
+        { type: "separator" },
+        { label: "Open Dashboard in Browser", click: () => dashboardUrl && shell.openExternal(dashboardUrl) },
+        { label: "Copy Dashboard URL", click: () => dashboardUrl && clipboard.writeText(dashboardUrl) },
+        { type: "separator" },
+        { role: "reload" },
+        { role: "toggleDevTools" },
+        { type: "separator" },
+        { role: "quit" },
+      ],
+    },
+    {
+      label: "View",
+      submenu: [
+        { role: "resetZoom" },
+        { role: "zoomIn" },
+        { role: "zoomOut" },
+        { type: "separator" },
+        { role: "togglefullscreen" },
+      ],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
 
 function freePort() {
   return new Promise((resolve) => {
@@ -64,6 +97,7 @@ async function start() {
   });
 
   const base = `http://127.0.0.1:${port}`;
+  dashboardUrl = `${base}/?token=${token}`;
   win = new BrowserWindow({
     width: 1280, height: 860, minWidth: 900, minHeight: 600,
     backgroundColor: "#0b0c10", title: "AEGIS",
@@ -74,7 +108,11 @@ async function start() {
 
   try {
     await waitForServer(base + "/", 60);
-    await win.loadURL(`${base}/?token=${token}`);
+    installMenu();
+    await win.loadURL(dashboardUrl + "#cockpit");
+    if (Notification.isSupported()) {
+      new Notification({ title: "AEGIS is ready", body: "Cockpit is running locally." }).show();
+    }
   } catch (e) {
     dialog.showErrorBox("AEGIS", "The AEGIS server didn't come up in time.\n" + e.message);
   }
