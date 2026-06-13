@@ -901,6 +901,11 @@ def _resolve_session_ref(store: SessionStore, agent: Any, ref: str) -> Session |
         if 0 <= idx < len(choices):
             return store.load(choices[idx])
     sess = store.load(ref)
+    if sess and sess.id == ref:
+        return sess
+    title_match = store.resolve_title_to_tip(ref)
+    if title_match:
+        return title_match
     if sess:
         return sess
     matches = _session_choices(store, ref, limit=2)

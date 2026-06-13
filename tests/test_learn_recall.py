@@ -218,6 +218,51 @@ def test_session_browse_projects_compression_tip_not_branch():
     assert branch.id not in ids
 
 
+def test_session_title_resolution_prefers_latest_continuation_tip():
+    from aegis.session import Session, SessionStore
+    from aegis.tools.base import ToolContext
+    from aegis.tools.recall import SessionSearchTool
+    from aegis.types import Message
+
+    store = SessionStore()
+    root = Session.create(title="parser project")
+    root.messages = [Message.user("old parser opening")]
+    root.meta["end_reason"] = "compression"
+    store.save(root)
+    child = Session.create(title="parser project #2", parent_id=root.id)
+    child.messages = [Message.user("latest parser continuation")]
+    child.meta["creator_kind"] = "compression"
+    child.meta["parent_end_reason"] = "compression"
+    store.save(child)
+
+    exact = store.load(root.id)
+    assert exact and exact.id == root.id
+    assert store.resolve_title_to_tip("parser project").id == child.id
+    assert store.resolve_title_to_tip("parser project #2").id == child.id
+
+    tool = SessionSearchTool()
+    read = json.loads(tool.run({"session_id": "parser project"}, ToolContext()).content)
+    assert read["success"] is True
+    assert read["session_id"] == child.id
+    assert read["messages"][0]["content"] == "latest parser continuation"
+
+
+def test_session_title_resolution_escapes_sql_wildcards():
+    from aegis.session import Session, SessionStore
+    from aegis.types import Message
+
+    store = SessionStore()
+    exact = Session.create(title="test_project")
+    exact.messages = [Message.user("exact underscore")]
+    store.save(exact)
+    unrelated = Session.create(title="testXproject #2")
+    unrelated.messages = [Message.user("wildcard should not match")]
+    store.save(unrelated)
+
+    resolved = store.resolve_title_to_tip("test_project")
+    assert resolved and resolved.id == exact.id
+
+
 def test_session_search_can_read_explicit_profile():
     from aegis import config as cfg
     from aegis.session import Session, SessionStore

@@ -356,6 +356,42 @@ class SessionStore:
                     return Session.from_row(row)
         return None
 
+    @staticmethod
+    def _escape_like(value: str) -> str:
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+    @staticmethod
+    def _title_base(value: str) -> tuple[str, bool]:
+        import re
+        match = re.match(r"^(.*?) #(\d+)$", value)
+        if match:
+            return match.group(1), True
+        return value, False
+
+    def resolve_title_to_tip(self, title: str) -> Session | None:
+        """Resolve a human title, preferring latest numbered continuations and compression tips."""
+        title = (title or "").strip()
+        if not title:
+            return None
+        base, numbered = self._title_base(title)
+        with self._conn() as c:
+            if numbered:
+                rows = c.execute(
+                    "SELECT * FROM sessions WHERE title=? ORDER BY updated_at DESC, created_at DESC",
+                    (title,),
+                ).fetchall()
+            else:
+                escaped = self._escape_like(base)
+                rows = c.execute(
+                    "SELECT * FROM sessions WHERE title=? OR title LIKE ? ESCAPE '\\' "
+                    "ORDER BY updated_at DESC, created_at DESC",
+                    (base, f"{escaped} #%"),
+                ).fetchall()
+        for row in rows:
+            sess = Session.from_row(row)
+            return self.compression_tip(sess.id) or sess
+        return None
+
     def latest(self) -> Session | None:
         with self._conn() as c:
             row = c.execute("SELECT * FROM sessions ORDER BY updated_at DESC LIMIT 1").fetchone()
@@ -581,7 +617,14 @@ class SessionStore:
         return out
 
     def _resolve_session(self, sid: str) -> Session | None:
+        if not (sid or "").strip():
+            return None
         sess = self.load(sid)
+        if sess and sess.id == sid:
+            return sess
+        title_match = self.resolve_title_to_tip(sid)
+        if title_match:
+            return title_match
         if sess:
             return sess
         needle = (sid or "").strip().lower()
