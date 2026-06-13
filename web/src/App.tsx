@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { Icon } from "./lib/icons";
 import { api } from "./lib/api";
 import { CommandPalette } from "./CommandPalette";
-import { Cockpit } from "./pages/Cockpit";
 import { Overview } from "./pages/Overview";
 import { Chat } from "./pages/Chat";
 import { ListPage } from "./pages/ListPage";
@@ -21,13 +20,12 @@ import { PluginsPage } from "./pages/PluginsPage";
 
 type NavItem = { id: string; label: string; icon: string; group: string };
 const NAV: NavItem[] = [
-  { id: "cockpit", label: "Cockpit", icon: "overview", group: "Home" },
+  { id: "overview", label: "Home", icon: "overview", group: "Home" },
   { id: "chat", label: "Chat", icon: "chat", group: "Home" },
-  { id: "overview", label: "Overview", icon: "overview", group: "Home" },
+  { id: "agents", label: "Agents", icon: "agents", group: "Observe" },
   { id: "sessions", label: "Sessions", icon: "sessions", group: "Observe" },
   { id: "runs", label: "Runs", icon: "sessions", group: "Observe" },
   { id: "traces", label: "Traces", icon: "logs", group: "Observe" },
-  { id: "agents", label: "Agents", icon: "tools", group: "Observe" },
   { id: "logs", label: "Logs", icon: "logs", group: "Observe" },
   { id: "kanban", label: "Kanban", icon: "kanban", group: "Operate" },
   { id: "cron", label: "Cron", icon: "cron", group: "Operate" },
@@ -48,11 +46,11 @@ const NAV: NavItem[] = [
 ];
 const THEMES = ["dark", "paper", "mono"];
 
-const hashView = () => (location.hash.slice(1) || "cockpit").replace(/^\//, "");
+const hashView = () => (location.hash.slice(1) || "overview").replace(/^\//, "");
 
 function pageFor(id: string, go: (id: string) => void) {
   switch (id) {
-    case "cockpit": return <Cockpit go={go} />;
+    case "cockpit": return <Overview go={go} />;
     case "overview": return <Overview go={go} />;
     case "chat": return <Chat />;
     case "runs": return <ListPage key="runs" endpoint="runs?limit=100" arrayKey="runs" title="Runs"

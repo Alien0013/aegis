@@ -52,7 +52,8 @@ export function CommandPalette({
   }
 
   const commands: Command[] = [
-    { id: "cockpit", title: "Open Cockpit", group: "Navigate", hint: "Agent operating room", run: () => nav("cockpit") },
+    { id: "overview", title: "Open Home", group: "Navigate", hint: "Operator overview", run: () => nav("overview") },
+    { id: "agents", title: "Open Agents", group: "Navigate", hint: "Live spawned agents", run: () => nav("agents") },
     { id: "chat", title: "Open Chat", group: "Navigate", hint: "Full thread", run: () => nav("chat") },
     { id: "kanban", title: "Open Kanban", group: "Navigate", hint: "Task board", run: () => nav("kanban") },
     { id: "memory", title: "Open Memory", group: "Navigate", hint: "USER and MEMORY facts", run: () => nav("memory") },
@@ -85,21 +86,20 @@ export function CommandPalette({
   if (!open) return null;
 
   return (
-    <div className="cmdk" role="dialog" aria-label="Command palette">
-      <button className="cmdk-backdrop" aria-label="Close command palette" onClick={onClose} />
-      <div className="cmdk-panel">
-        <div className="cmdk-search">
-          <Icon n="search" />
-          <input autoFocus value={q} onChange={(e) => setQ(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
-            placeholder="Search commands, settings, tools..." />
-        </div>
-        <div className="cmdk-list">
+    <div className="cmdscrim" role="dialog" aria-label="Command palette" onClick={onClose}>
+      <div className="cmdbox" onClick={(e) => e.stopPropagation()}>
+        <input autoFocus value={q} onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
+          placeholder="Search commands, settings, tools…" />
+        <div className="cmdlist">
           {!visible.length && <div className="empty small">No commands match.</div>}
           {visible.map((cmd) => (
-            <button className="cmdk-row" key={cmd.id} onClick={() => void cmd.run()} disabled={Boolean(busy)}>
-              <span><b>{cmd.title}</b><small>{cmd.hint}</small></span>
-              <em>{busy === cmd.id ? "running" : cmd.group}</em>
+            <button className="cmditem" key={cmd.id} onClick={() => void cmd.run()} disabled={Boolean(busy)}>
+              <span style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0, textAlign: "left" }}>
+                <b style={{ fontWeight: 600, fontSize: 13 }}>{cmd.title}</b>
+                <small className="faint" style={{ fontSize: 11 }}>{cmd.hint}</small>
+              </span>
+              <span className="grp">{busy === cmd.id ? "running…" : cmd.group}</span>
             </button>
           ))}
         </div>

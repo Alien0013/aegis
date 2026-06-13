@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, post } from "../lib/api";
+import { Badge } from "../lib/ui";
 
 export function KeysPage() {
   const [keys, setKeys] = useState<any[]>([]);
@@ -30,7 +31,7 @@ export function KeysPage() {
         <h3>Configured</h3>
         {!keys.length && <div className="empty">No keys set yet.</div>}
         {keys.map((k, i) => (
-          <div className="row" key={i}><span>{k.key || k.name || String(k)}</span><span className="pill">{k.set === false ? "empty" : "set"}</span></div>
+          <div className="row" key={i}><span className="mono">{k.key || k.name || String(k)}</span><Badge status={k.set === false ? "empty" : "set"}>{k.set === false ? "empty" : "set"}</Badge></div>
         ))}
       </div>
     </>
