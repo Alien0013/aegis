@@ -73,7 +73,7 @@ SLASH_COMMANDS = (
     SlashCommand("/save", "context", "export this session to markdown", "/save [path]"),
     SlashCommand("/title", "sessions", "rename this session", "/title <name>"),
     SlashCommand("/think", "model control", "set reasoning effort", "/think off|minimal|low|medium|high|xhigh"),
-    SlashCommand("/reasoning", "model control", "set reasoning visibility or effort", "/reasoning off|summary|live|..."),
+    SlashCommand("/reasoning", "model control", "set reasoning visibility or effort", "/reasoning off|none|summary|live|..."),
     SlashCommand("/busy", "model control", "set busy input behavior", "/busy queue|steer|interrupt"),
     SlashCommand("/goal", "goals", "set a standing goal and start it", "/goal <objective>"),
     SlashCommand("/subgoal", "goals", "set a nested standing goal", "/subgoal <objective>"),
@@ -273,6 +273,8 @@ class Renderer:
         self._streaming = False
         self.config = config
         self._thinking_chars = 0
+        self._provider_reasoning_chars = 0
+        self._provider_reasoning = ""
         self.status = TerminalStatusState()
 
     def _reasoning_mode(self) -> str:
@@ -289,6 +291,7 @@ class Renderer:
                 return
             text = e.get("text") or ""
             self._thinking_chars += len(text)
+            self._provider_reasoning_chars += len(text)
             if mode == "live":
                 # Provider-native thinking stream in a dim bordered box, so it reads
                 # as process (not answer) \u2014 like a live "reasoning" panel.
@@ -325,12 +328,27 @@ class Renderer:
                 _out(e["text"])
         elif t == "provider_start":
             self._provider_streaming = bool(e.get("stream"))
+            self._provider_reasoning_chars = 0
+            self._provider_reasoning = str(e.get("reasoning") or "")
+            reason = ""
+            if self._reasoning_mode() == "live" and self._provider_reasoning not in {"", "off", "none"}:
+                reason = f" · reasoning live/{self._provider_reasoning}"
             _out(
-                f"  contacting {e.get('provider') or 'provider'} / {e.get('model') or 'model'}...",
+                f"  contacting {e.get('provider') or 'provider'} / {e.get('model') or 'model'}...{reason}",
                 style="bright_black",
             )
         elif t == "provider_end":
             ms = int(e.get("duration_ms") or 0)
+            if (
+                e.get("status") != "error"
+                and self._reasoning_mode() == "live"
+                and self._provider_reasoning not in {"", "off", "none"}
+                and not self._provider_reasoning_chars
+            ):
+                _out(
+                    "  reasoning live requested, but this provider emitted no reasoning stream.",
+                    style="bright_black",
+                )
             if getattr(self, "_provider_streaming", False) and e.get("status") != "error":
                 return
             if e.get("status") == "error" or ms >= 1500:
@@ -465,11 +483,14 @@ def _record_terminal_run(agent: Any, run: Any) -> None:
 
 
 def _status_line(agent: Agent, progress: TerminalStatusState | None = None) -> str:
-    u = agent.budget.usage
+    usage = getattr(getattr(agent, "budget", None), "usage", None)
+    input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+    output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
     ctx = _context_window(agent)
     run_id, trace, _turn = _run_refs(agent)
     reasoning = f"{agent.config.get('display.reasoning', 'summary')}/{getattr(agent, 'reasoning', 'off')}"
     perms = str(agent.config.get("tools.exec_mode", "auto") or "auto")
+    model = str(getattr(getattr(agent, "provider", None), "model", "") or "?")
     if ctx["window"]:
         ctx_text = f"ctx {_fmt_token_count(ctx['used'])}/{_fmt_token_count(ctx['window'])} ({ctx['percent']}%)"
     else:
@@ -482,9 +503,17 @@ def _status_line(agent: Agent, progress: TerminalStatusState | None = None) -> s
     if trace:
         suffix += f" · trace {trace[:12]}"
     return (
-        f"  [{agent.provider.model} · {ctx_text} · tokens in {u.input_tokens:,} "
-        f"out {u.output_tokens:,} · reasoning {reasoning} · perms {perms}{suffix}]"
+        f"  [{model} · {ctx_text} · tokens in {input_tokens:,} "
+        f"out {output_tokens:,} · reasoning {reasoning} · perms {perms}{suffix}]"
     )
+
+
+def _maybe_print_status_footer(agent: Any, on_event: Callable[[dict], None]) -> None:
+    config = getattr(agent, "config", None)
+    if config is not None and not bool(config.get("display.status_footer", True)):
+        return
+    progress = getattr(on_event, "status", None)
+    _raw(_status_line(agent, progress) + "\n")
 
 
 def banner(agent: Agent) -> None:
@@ -705,6 +734,7 @@ def _run_terminal_turn_active_session(
     if trigger and (tip := maybe_tip(agent.config, trigger)):
         notify(tip)
     store.save(agent.session)
+    _maybe_print_status_footer(agent, on_event)
     return run.message
 
 
@@ -990,7 +1020,7 @@ def handle_slash(
             _out("last turn: " + " · ".join(refs), style="bright_black")
         for line in session_recap(agent.session):
             _out(line, style="bright_black")
-        _out(_status_line(agent))
+        _maybe_print_status_footer(agent, on_event or Renderer(agent.config))
     elif name == "/think":
         level = arg or "medium"
         if level not in ("off", "minimal", "low", "medium", "high", "xhigh"):
@@ -1019,15 +1049,19 @@ def handle_slash(
                 note = " · effort → medium (was off; nothing to show otherwise)"
             if store is not None:
                 store.save(agent.session)
-            _out(f"reasoning display → {arg}{note}", style="green")
-        elif arg in efforts or arg == "off":
-            agent.reasoning = arg
-            remember_session_runtime(agent, reasoning_effort=arg)
+            live_note = ""
+            if arg == "live":
+                live_note = " · next turn will show provider reasoning when emitted"
+            _out(f"reasoning display → {arg}{note}{live_note}", style="green")
+        elif arg in efforts or arg in {"off", "none"}:
+            value = "off" if arg == "none" else arg
+            agent.reasoning = value
+            remember_session_runtime(agent, reasoning_effort=value)
             if store is not None:
                 store.save(agent.session)
-            _out(f"reasoning effort → {arg}", style="green")
+            _out(f"reasoning effort → {value}", style="green")
         else:
-            _out("usage: /reasoning off|summary|live|minimal|low|medium|high|xhigh")
+            _out("usage: /reasoning off|none|summary|live|minimal|low|medium|high|xhigh")
     elif name == "/busy":
         mode = arg or agent.config.get("gateway.busy_mode", "queue")
         if mode not in ("queue", "steer", "interrupt"):
@@ -1252,8 +1286,9 @@ def handle_slash(
                     add_profile_directive=False,
                 )
             else:
-                agent.run(prompt, Renderer(agent.config))
-            _out(_status_line(agent), style="bright_black")
+                retry_renderer = Renderer(agent.config)
+                agent.run(prompt, retry_renderer)
+                _maybe_print_status_footer(agent, retry_renderer)
     elif name == "/undo":
         msgs = agent.session.messages
         last_user = next((i for i in range(len(msgs) - 1, -1, -1) if msgs[i].role == "user"), None)
@@ -1459,6 +1494,7 @@ def run_once(config: Config, prompt: str, *, model=None, provider_name=None,
     session = session or Session.create()
     runner = SurfaceRunner(config, store=store, include_mcp=True)
     user_input = Message.user(prompt, images=images) if images else prompt
+    renderer = Renderer(config)
     result = runner.run_prompt(
         user_input,
         session=session,
@@ -1469,8 +1505,9 @@ def run_once(config: Config, prompt: str, *, model=None, provider_name=None,
         secret_capture=make_secret_capture(),
         surface=surface,
         meta=meta,
-        on_event=Renderer(config),
+        on_event=renderer,
     )
+    _maybe_print_status_footer(result.agent, renderer)
     return result.text
 
 
@@ -1522,9 +1559,15 @@ def interactive(config: Config, *, model=None, provider_name=None,
                     continue
                 user = goal_prompt   # run the new goal as this turn
             elif user.startswith("/"):
+                renderer = Renderer(config)
                 if handle_slash(user, agent, runner=runner, store=store,
-                                surface="repl", on_event=Renderer(config)) == "break":
+                                surface="repl", on_event=renderer) == "break":
                     break
+                if user.split(maxsplit=1)[0] in {
+                    "/model", "/provider", "/think", "/reasoning", "/busy",
+                    "/resume", "/branch", "/new", "/compact", "/compress",
+                }:
+                    _maybe_print_status_footer(agent, renderer)
                 continue
             try:
                 renderer = Renderer(config)
@@ -1541,7 +1584,6 @@ def interactive(config: Config, *, model=None, provider_name=None,
                 on_event=renderer,
                 notify=lambda line: _out(f"  {line}", style="magenta"),
             )
-            _out(_status_line(agent, renderer.status), style="bright_black")
     finally:
         end = getattr(agent, "end_session", None)
         if callable(end):

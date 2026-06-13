@@ -28,6 +28,11 @@ def test_install_sh_help_mentions_onboarding_modes():
     assert "--skip-onboard" in res.stdout
 
 
+def test_install_sh_does_not_advertise_removed_tui():
+    text = (ROOT / "install.sh").read_text(encoding="utf-8")
+    assert "aegis tui" not in text
+
+
 def test_install_ps1_parse_when_pwsh_available():
     pwsh = shutil.which("pwsh")
     if not pwsh:

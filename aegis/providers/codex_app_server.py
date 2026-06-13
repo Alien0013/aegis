@@ -237,6 +237,15 @@ class CodexAppServerTransport(ProviderTransport):
         prompt = self._latest_user_text(messages)
         if not prompt.strip():
             prompt = "Continue."
+        turn_params: dict[str, Any] = {
+            "threadId": self._thread_id,
+            "input": [{"type": "text", "text": prompt}],
+            "model": model,
+        }
+        effort = _codex_reasoning_effort(reasoning)
+        if effort:
+            turn_params["effort"] = effort
+            turn_params["summary"] = "auto"
 
         text_parts: list[str] = []
         completed_text: str | None = None
@@ -247,11 +256,7 @@ class CodexAppServerTransport(ProviderTransport):
 
         turn = client.request(
             "turn/start",
-            {
-                "threadId": self._thread_id,
-                "input": [{"type": "text", "text": prompt}],
-                "model": model,
-            },
+            turn_params,
             timeout=20,
             server_request_handler=handle_server_request,
         )
@@ -484,3 +489,12 @@ class CodexAppServerTransport(ProviderTransport):
         }
         raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _codex_reasoning_effort(reasoning: str | None) -> str:
+    value = str(reasoning or "").strip().lower()
+    if value in {"", "off", "none"}:
+        return ""
+    if value in {"minimal", "low", "medium", "high", "xhigh"}:
+        return value
+    return "medium"

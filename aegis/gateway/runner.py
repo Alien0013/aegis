@@ -118,7 +118,7 @@ class GatewayRunner:
         model = controls.get("model") or self.config.get("model.default")
         busy_mode = controls.get("busy_mode") or self.config.get("gateway.busy_mode", "queue")
         reasoning_display = controls.get("reasoning_display") or self.config.get("display.reasoning", "summary")
-        reasoning_effort = controls.get("reasoning_effort") or self.config.get("agent.reasoning_effort", "off")
+        reasoning_effort = controls.get("reasoning_effort") or self.config.get("agent.reasoning_effort", "medium")
         return (
             f"platform: {ev.platform}\nuser: {ev.user_id or '?'}"
             f"{f' (@{ev.user_name})' if ev.user_name else ''}\nchat: {ev.chat_id}\n"
@@ -308,7 +308,7 @@ class GatewayRunner:
                 controls = session_runtime_controls(session)
                 if not arg:
                     display = controls.get("reasoning_display") or self.config.get("display.reasoning", "summary")
-                    effort = controls.get("reasoning_effort") or self.config.get("agent.reasoning_effort", "off")
+                    effort = controls.get("reasoning_effort") or self.config.get("agent.reasoning_effort", "medium")
                     return f"reasoning: display={display} · effort={effort}"
                 if arg in modes:
                     remember_session_runtime(type("A", (), {"session": session})(), reasoning_display=arg)
@@ -318,15 +318,16 @@ class GatewayRunner:
                         from ..surface import apply_session_runtime
                         apply_session_runtime(agent, rebuild_provider=False)
                     return f"✓ reasoning display → {arg}"
-                if arg in efforts or arg == "off":
-                    remember_session_runtime(type("A", (), {"session": session})(), reasoning_effort=arg)
+                if arg in efforts or arg in {"off", "none"}:
+                    value = "off" if arg == "none" else arg
+                    remember_session_runtime(type("A", (), {"session": session})(), reasoning_effort=value)
                     self.store.save(session)
                     agent = self._agents.get(key)
                     if agent is not None:
                         from ..surface import apply_session_runtime
                         apply_session_runtime(agent, rebuild_provider=False)
-                    return f"✓ reasoning effort → {arg}"
-                return "usage: /reasoning off|summary|live|minimal|low|medium|high|xhigh"
+                    return f"✓ reasoning effort → {value}"
+                return "usage: /reasoning off|none|summary|live|minimal|low|medium|high|xhigh"
 
             return self._control_reply(ev, key, "/reasoning", action, data={"mode": arg})
         if text == "/busy" or text.startswith("/busy "):

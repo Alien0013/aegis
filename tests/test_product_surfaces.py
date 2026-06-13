@@ -1180,7 +1180,7 @@ def test_dashboard_models_exposes_resolver_report():
                for row in data["provider_catalog"])
 
 
-def test_terminal_retry_uses_shared_surface_runner(monkeypatch):
+def test_terminal_retry_uses_shared_surface_runner(monkeypatch, capsys):
     from aegis.cli import repl
     from aegis.config import Config
     from aegis.providers import registry
@@ -1213,7 +1213,7 @@ def test_terminal_retry_uses_shared_surface_runner(monkeypatch):
     )
 
     assert result == ""
-    assert any("trace" in line for line in output)
+    assert any("trace" in line for line in output) or "trace" in capsys.readouterr().out
     assert provider.calls == 1
     assert agent.session.messages[-1].content == "retried"
     runs = RunStore().list(session_id=agent.session.id, limit=10)
@@ -1652,7 +1652,7 @@ def test_dashboard_mcp_catalog_live_inventory(tmp_path):
     assert server_info["prompts"][0]["name"] == "review"
 
 
-def test_repl_run_once_uses_shared_surface_runner(tmp_path, monkeypatch):
+def test_repl_run_once_uses_shared_surface_runner(tmp_path, monkeypatch, capsys):
     from aegis.cli import repl
     from aegis.config import Config
     from aegis.providers import registry
@@ -1674,6 +1674,10 @@ def test_repl_run_once_uses_shared_surface_runner(tmp_path, monkeypatch):
     store = SessionStore()
     session = Session.create("cli surface")
     assert repl.run_once(cfg, "inspect @file:note.md", session=session, store=store) == "cli ok"
+    out = capsys.readouterr().out
+    assert "ctx" in out
+    assert "tokens in" in out
+    assert "reasoning summary/medium" in out
 
     saved = store.load(session.id)
     assert saved is not None
@@ -1875,6 +1879,32 @@ def test_renderer_reasoning_display_modes(monkeypatch):
         r({"type": "reasoning_delta", "text": "hidden"})
         r({"type": "assistant_message", "text": "answer", "tool_calls": []})
     assert "hidden" not in out.getvalue()
+
+
+def test_renderer_live_reasoning_reports_missing_provider_stream(monkeypatch):
+    import contextlib
+    import io
+    from aegis.cli import repl
+    from aegis.config import Config
+
+    monkeypatch.setattr(repl, "_console", None)
+    cfg = Config.load()
+    cfg.data.setdefault("display", {})["reasoning"] = "live"
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        r = repl.Renderer(cfg)
+        r({
+            "type": "provider_start",
+            "provider": "codex-app-server",
+            "model": "gpt-5.5",
+            "stream": True,
+            "reasoning": "medium",
+        })
+        r({"type": "provider_end", "status": "ok", "duration_ms": 25})
+
+    text = out.getvalue()
+    assert "reasoning live/medium" in text
+    assert "emitted no reasoning stream" in text
 
 
 def test_manifest_plugin_enable_disable_and_remove(tmp_path):

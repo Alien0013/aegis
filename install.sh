@@ -381,7 +381,6 @@ if [ "$RUN_ONBOARD" != "0" ] && { has_tty || [ "$NONINTERACTIVE_ONBOARD" = "1" ]
     ok "Onboarding complete."
     echo "  Ways to use AEGIS:"
     echo "    aegis                       # chat in the terminal"
-    echo "    aegis tui                   # full-screen terminal app"
     echo "    aegis ui                    # clickable web control panel"
     echo "    aegis desktop               # native desktop app"
   else
@@ -394,7 +393,6 @@ else
   echo "  Next:"
   echo "    aegis setup                 # first-run onboarding"
   echo "    aegis                       # start chatting (terminal)"
-  echo "    aegis tui                   # full-screen terminal app"
   echo "    aegis ui                    # clickable control panel in your browser"
   echo "    aegis desktop               # native desktop app"
   echo "    aegis doctor                # verify the install"

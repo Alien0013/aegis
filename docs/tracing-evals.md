@@ -73,6 +73,7 @@ the display with:
 
 ```text
 /reasoning off
+/reasoning none
 /reasoning summary
 /reasoning live
 ```

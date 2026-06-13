@@ -187,7 +187,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "subagent_concurrency": 4,   # max child agents run in parallel by spawn_subagent
         "max_spawn_depth": 1,        # flat by default; role=orchestrator can opt into deeper trees
         "context_engine": "default", # context-management strategy (plugins can register others)
-        "reasoning_effort": "off",   # off|minimal|low|medium|high|xhigh
+        "reasoning_effort": "medium",   # off|minimal|low|medium|high|xhigh
         "subdir_hints": True,        # inject a subdir's rule files when the agent first works there
         "compression": {"preserve_first": 3, "preserve_last": 20, "max_tool_tokens": 600,
                         # in-loop compaction fires when history fills this fraction of the
@@ -313,7 +313,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         },
         "compaction": {
             "enabled": False,        # provider-native compaction hook where available
-            "compact_threshold": 0.85,  # ratio shorthand; sent as a token threshold
+            "compact_threshold": 0.50,  # ratio shorthand; sent as a token threshold
             "compact_threshold_tokens": None,
         },
     },

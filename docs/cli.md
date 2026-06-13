@@ -107,7 +107,7 @@ message (the chat gets a ping immediately if the gateway is running).
 The REPL includes the product-facing shortcuts used by the terminal and dashboard
 cockpit:
 
-- `/reasoning off|summary|live|minimal|low|medium|high|xhigh`
+- `/reasoning off|none|summary|live|minimal|low|medium|high|xhigh`
 - `/busy queue|steer|interrupt`
 - `/resume <session-id-or-title>`
 - `/branch`

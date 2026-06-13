@@ -328,7 +328,7 @@ _CONFIG_FIELD_META: dict[str, dict[str, Any]] = {
     "agent.reasoning_effort": {
         "label": "Reasoning effort",
         "description": "Default reasoning budget for providers that support it.",
-        "enum": ["off", "minimal", "low", "medium", "high", "xhigh"],
+        "enum": ["medium", "high", "low", "minimal", "xhigh", "off"],
         "group": "Agent",
     },
     "gateway.channels": {

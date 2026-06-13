@@ -856,6 +856,18 @@ def test_responses_context_management_uses_compaction_array(monkeypatch):
     )
     assert state["context_management"] == [{"type": "compaction", "compact_threshold": 4000}]
 
+    cfg_default = Config.load()
+    cfg_default.data.setdefault("responses", {})["state"] = {"enabled": True, "store": True}
+    cfg_default.data.setdefault("responses", {})["compaction"] = {"enabled": True}
+    state_default = _response_state_for_agent(
+        SimpleNamespace(
+            config=cfg_default,
+            provider=SimpleNamespace(context_length=8000),
+        ),
+        "sess_context_default",
+    )
+    assert state_default["context_management"] == [{"type": "compaction", "compact_threshold": 4000}]
+
     captured: dict = {}
 
     class FakeAuth:
@@ -1177,6 +1189,7 @@ def test_provider_report_exposes_chain_routing_and_catalog():
     assert custom["base_url"] == "http://local.test/v1"
     openai = next(row for row in report["provider_catalog"] if row["name"] == "openai")
     assert openai["capabilities"]["reasoning_effort"] is True
+    assert openai["capabilities"]["reasoning_stream"] is True
     assert openai["capabilities"]["images"] is True
 
 
@@ -1370,8 +1383,10 @@ def test_codex_app_server_streams_reasoning_deltas():
     class FakeClient:
         def __init__(self, messages):
             self._messages = list(messages)
+            self.requests = []
 
-        def request(self, _method, _params, timeout=20, server_request_handler=None):
+        def request(self, method, params, timeout=20, server_request_handler=None):
+            self.requests.append((method, params))
             return {"turn": {"id": "turn_1"}}
 
         def is_alive(self):
@@ -1405,11 +1420,16 @@ def test_codex_app_server_streams_reasoning_deltas():
         stream=True,
         on_delta=text.append,
         on_reasoning=thoughts.append,
+        reasoning="high",
     )
 
     assert "".join(thoughts) == "Let me think."
     assert "".join(text) == "Hi."
     assert resp.text == "Hi."
+    method, params = transport._client.requests[-1]
+    assert method == "turn/start"
+    assert params["effort"] == "high"
+    assert params["summary"] == "auto"
 
 
 def test_codex_app_server_request_does_not_replay_notifications():

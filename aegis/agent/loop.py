@@ -196,12 +196,15 @@ def _response_state_for_agent(agent, session_id: str) -> dict:
 
 
 def _responses_context_management(agent, native_compaction: dict) -> list[dict[str, int | str]]:
+    from ..constants import COMPACT_THRESHOLD
+
+    default_threshold = agent.config.get("agent.compression.threshold", COMPACT_THRESHOLD)
     raw = native_compaction.get("compact_threshold_tokens",
-                                native_compaction.get("compact_threshold", 0.85))
+                                native_compaction.get("compact_threshold", default_threshold))
     try:
         value = float(raw)
     except (TypeError, ValueError):
-        value = 0.85
+        value = float(default_threshold or COMPACT_THRESHOLD)
     if 0 < value < 1:
         context_length = int(getattr(getattr(agent, "provider", None), "context_length", 0) or 0)
         threshold = int(context_length * value) if context_length else 1000
@@ -1080,6 +1083,8 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
             "provider": getattr(agent.provider, "name", ""),
             "model": getattr(agent.provider, "model", ""),
             "stream": bool(agent.stream),
+            "reasoning": getattr(agent, "reasoning", "off"),
+            "reasoning_display": agent.config.get("display.reasoning", "summary"),
         })
         try:
             agent._active_response_id = ""

@@ -24,9 +24,16 @@ def test_should_compress_honors_threshold():
     assert compaction.should_compress(msgs, ctx, 0) is True
 
 
+def test_should_compress_unknown_context_uses_default_window():
+    msgs = [Message.user("short prompt")]
+    assert compaction.should_compress(msgs, 0, 0) is False
+
+
 def test_config_defaults_are_hermes_aligned():
     c = Config.load()
+    assert c.get("agent.reasoning_effort") == "medium"
     assert c.get("agent.compression.threshold") == 0.50
+    assert c.get("responses.compaction.compact_threshold") == 0.50
     assert c.get("agent.compression.gateway_hygiene_threshold") == 0.85
     assert c.get("agent.compression.hard_message_limit") == 400
     assert c.get("learn.memory_every") == 10

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import re
 
-from ..constants import COMPACT_THRESHOLD
+from ..constants import COMPACT_THRESHOLD, DEFAULT_CONTEXT_LENGTH
 from ..types import Message
 from ..util import estimate_tokens
 
@@ -64,6 +64,8 @@ def estimated_tokens(messages: list[Message]) -> int:
 def should_compress(messages: list[Message], context_length: int, overhead_tokens: int = 0,
                     threshold: float | None = None) -> bool:
     frac = COMPACT_THRESHOLD if threshold is None else threshold
+    if context_length <= 0:
+        context_length = DEFAULT_CONTEXT_LENGTH
     return estimated_tokens(messages) + overhead_tokens > context_length * frac
 
 

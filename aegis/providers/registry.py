@@ -725,10 +725,18 @@ def _model_capabilities(model: str, api_mode: ApiMode | str) -> dict:
         },
         "images": bool(native_images and chat_vision),
         "reasoning_effort": bool(anthropic_reasoning or (
-            openai_reasoning and mode in {ApiMode.CHAT_COMPLETIONS.value, ApiMode.RESPONSES.value}
+            openai_reasoning and mode in {
+                ApiMode.CHAT_COMPLETIONS.value,
+                ApiMode.RESPONSES.value,
+                ApiMode.CODEX_APP_SERVER.value,
+            }
         )),
         "reasoning_stream": bool(anthropic_reasoning or (
-            openai_reasoning and mode == ApiMode.CHAT_COMPLETIONS.value
+            openai_reasoning and mode in {
+                ApiMode.CHAT_COMPLETIONS.value,
+                ApiMode.RESPONSES.value,
+                ApiMode.CODEX_APP_SERVER.value,
+            }
         )),
         "response_state": mode == ApiMode.RESPONSES.value,
         "response_cancel": mode == ApiMode.RESPONSES.value,
