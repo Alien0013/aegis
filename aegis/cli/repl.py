@@ -157,14 +157,22 @@ _AEGIS_ART_COLORS = ["#8b5cff", "#7d6bff", "#5b8cff", "#3ba6f0", "#2bc0e4", "#22
 
 def _tool_icon(name: str) -> str:
     n = (name or "").lower()
-    if "read" in n or "file" in n: return "📄"
-    if "write" in n or "edit" in n: return "✎"
-    if "bash" in n or "shell" in n or "exec" in n or "command" in n: return "▷"
-    if "search" in n or "grep" in n or "glob" in n or "recall" in n: return "🔍"
-    if "web" in n or "fetch" in n or "url" in n or "browser" in n: return "🌐"
-    if "memory" in n: return "🧠"
-    if "skill" in n: return "📦"
-    if "kanban" in n or "todo" in n: return "🗂"
+    if "read" in n or "file" in n:
+        return "📄"
+    if "write" in n or "edit" in n:
+        return "✎"
+    if "bash" in n or "shell" in n or "exec" in n or "command" in n:
+        return "▷"
+    if "search" in n or "grep" in n or "glob" in n or "recall" in n:
+        return "🔍"
+    if "web" in n or "fetch" in n or "url" in n or "browser" in n:
+        return "🌐"
+    if "memory" in n:
+        return "🧠"
+    if "skill" in n:
+        return "📦"
+    if "kanban" in n or "todo" in n:
+        return "🗂"
     return "⚙"
 
 
@@ -508,6 +516,39 @@ def _status_line(agent: Agent, progress: TerminalStatusState | None = None) -> s
     )
 
 
+def _ctx_bar(percent: int, width: int = 10) -> str:
+    """Compact context-usage sparkline, e.g. ███░░░░░░░ for 30%."""
+    percent = max(0, min(100, int(percent or 0)))
+    filled = round(percent / 100 * width)
+    return "█" * filled + "░" * (width - filled)
+
+
+def _bottom_toolbar(agent: Agent):
+    """Persistent status bar under the prompt: model · live context meter · reasoning
+    · permissions. Returns prompt_toolkit formatted text (falls back to plain on error)."""
+    from html import escape
+    try:
+        from prompt_toolkit.formatted_text import HTML
+    except Exception:  # noqa: BLE001
+        return ""
+    model = str(getattr(getattr(agent, "provider", None), "model", "") or "?")
+    ctx = _context_window(agent)
+    reasoning = f"{agent.config.get('display.reasoning', 'summary')}/{getattr(agent, 'reasoning', 'off')}"
+    perms = str(agent.config.get("tools.exec_mode", "auto") or "auto")
+    if ctx["window"]:
+        pct = ctx["percent"]
+        ctx_text = (f"{_ctx_bar(pct)} {pct}% "
+                    f"({_fmt_token_count(ctx['used'])}/{_fmt_token_count(ctx['window'])})")
+    else:
+        ctx_text = _fmt_token_count(ctx["used"])
+    return HTML(
+        f" <b>{escape(model)}</b>  "
+        f"ctx {escape(ctx_text)}  "
+        f"reasoning {escape(reasoning)}  "
+        f"perms {escape(perms)} "
+    )
+
+
 def _maybe_print_status_footer(agent: Any, on_event: Callable[[dict], None]) -> None:
     config = getattr(agent, "config", None)
     if config is not None and not bool(config.get("display.status_footer", True)):
@@ -527,7 +568,8 @@ def banner(agent: Agent) -> None:
         body = Text()
         body.append(f"  v{__version__}", style="dim")
         body.append("  ·  your terminal agent\n\n", style="dim")
-        body.append("  model    ", style="dim"); body.append(f"{model}\n", style="cyan")
+        body.append("  model    ", style="dim")
+        body.append(f"{model}\n", style="cyan")
         ctx = _context_window(agent)
         if ctx["window"]:
             body.append("  context  ", style="dim")
@@ -543,15 +585,22 @@ def banner(agent: Agent) -> None:
             f"{agent.config.get('tools.exec_mode', 'auto')}\n",
             style="white",
         )
-        body.append("  cwd      ", style="dim"); body.append(f"{agent.cwd}\n", style="white")
-        body.append("  session  ", style="dim"); body.append(f"{agent.session.id}\n\n", style="white")
+        body.append("  cwd      ", style="dim")
+        body.append(f"{agent.cwd}\n", style="white")
+        body.append("  session  ", style="dim")
+        body.append(f"{agent.session.id}\n\n", style="white")
         body.append("  Control plane:\n", style="bold")
-        body.append("    aegis ui", style="cyan");  body.append("     web dashboard\n\n", style="dim")
+        body.append("    aegis ui", style="cyan")
+        body.append("     web dashboard\n\n", style="dim")
         body.append("  Try:  ", style="dim")
-        body.append("/help", style="green"); body.append(" commands · ", style="dim")
-        body.append("@file.py", style="green"); body.append(" attach a file · ", style="dim")
-        body.append("/goal", style="green"); body.append(" run to completion · ", style="dim")
-        body.append("/quit", style="green"); body.append(" exit", style="dim")
+        body.append("/help", style="green")
+        body.append(" commands · ", style="dim")
+        body.append("@file.py", style="green")
+        body.append(" attach a file · ", style="dim")
+        body.append("/goal", style="green")
+        body.append(" run to completion · ", style="dim")
+        body.append("/quit", style="green")
+        body.append(" exit", style="dim")
         _console.print(Panel(body, title="[bold magenta]your agent harness[/]",
                              border_style="magenta", padding=(0, 1)))
     else:
@@ -725,7 +774,8 @@ def _run_terminal_turn_active_session(
         return cont.message
 
     if notify is None:
-        notify = lambda line: _out(f"  {line}", style="magenta")
+        def notify(line):
+            _out(f"  {line}", style="magenta")
     goals.run_loop(agent, run.message.content or "", notify, on_event, run_turn=run_continuation)
 
     tools_this = getattr(agent, "tools_used", 0) - tools_before
@@ -1531,8 +1581,12 @@ def interactive(config: Config, *, model=None, provider_name=None,
     ps = None
     if _prompt_session_supported():
         from ..config import logs_dir
-        ps = PromptSession(history=FileHistory(str(logs_dir() / "repl_history")),
-                           completer=make_slash_completer())
+        ps = PromptSession(
+            history=FileHistory(str(logs_dir() / "repl_history")),
+            completer=make_slash_completer(),
+            bottom_toolbar=((lambda: _bottom_toolbar(agent))
+                            if config.get("display.status_bar", True) else None),
+        )
 
     try:
         while True:
