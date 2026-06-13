@@ -183,6 +183,31 @@ def test_skill_manage_patch_pin_delete_report(tmp_path):
     assert patched["success"] is True
     assert "NEW_MARKER" in (cfg.skills_dir() / "patched-skill" / "SKILL.md").read_text()
 
+    support = tool.run({
+        "action": "write_file",
+        "name": "patched-skill",
+        "file_path": "references/deploy-note.md",
+        "content": "# Deploy Note\n\nReusable provider quirk.",
+    }, ctx).data
+    assert support["success"] is True
+    assert (cfg.skills_dir() / "patched-skill" / "references" / "deploy-note.md").read_text() == (
+        "# Deploy Note\n\nReusable provider quirk."
+    )
+    duplicate = tool.run({
+        "action": "write_file",
+        "name": "patched-skill",
+        "file_path": "references/deploy-note.md",
+        "content": "replace me",
+    }, ctx)
+    assert duplicate.is_error
+    escaped = tool.run({
+        "action": "write_file",
+        "name": "patched-skill",
+        "file_path": "../outside.md",
+        "content": "nope",
+    }, ctx)
+    assert escaped.is_error
+
     assert tool.run({"action": "pin", "name": "patched-skill"}, ctx).data["pinned"] is True
     blocked = tool.run({"action": "delete", "name": "patched-skill"}, ctx)
     assert blocked.is_error

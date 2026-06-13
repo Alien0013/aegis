@@ -913,7 +913,7 @@ def _switch_session(agent: Any, session: Session, *, reason: str) -> None:
     old = getattr(agent, "session", None)
     from ..surface import _retarget_agent
 
-    _retarget_agent(agent, session=session)
+    _retarget_agent(agent, session=session, reason=reason, reset=(reason == "manual_new"))
     apply_session_runtime(agent)
     try:
         agent.refresh_volatile()

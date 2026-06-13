@@ -137,7 +137,7 @@ def test_forked_review_writes_agent_created_skill(tmp_path):
     assert run["data"]["model"] == "m"
 
 
-def test_forked_review_restores_parent_memory_provider_session(tmp_path):
+def test_forked_review_uses_local_memory_without_external_provider_side_effects(tmp_path):
     from aegis.agent.agent import Agent
     from aegis.agent import review
     from aegis.config import Config
@@ -179,12 +179,23 @@ def test_forked_review_restores_parent_memory_provider_session(tmp_path):
     )
 
     review.run_review(agent, "memory")
-    agent.memory.prefetch("after review")
 
     assert external.current == parent_session.id
+    assert external.switches == []
+    assert external.prefetch_sessions == []
+
+    agent.memory.prefetch("after review")
     assert external.prefetch_sessions[-1] == parent_session.id
-    assert external.switches[-1][1] == parent_session.id
-    assert external.switches[-1][0] != parent_session.id
+
+
+def test_review_prompts_include_hermes_style_learning_rules():
+    from aegis.agent import review
+
+    assert "FIRST-CLASS skill signals" in review._SKILL_PROMPT
+    assert "write_file" in review._SKILL_PROMPT
+    assert "negative claims like 'tool X is broken'" in review._SKILL_PROMPT
+    assert "who the user is" in review._COMBINED_PROMPT
+    assert "how to do this class of task" in review._COMBINED_PROMPT
 
 
 def test_compaction_splits_into_child_session(tmp_path, monkeypatch):

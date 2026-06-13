@@ -367,14 +367,20 @@ class MemoryProvider:
 class MemoryManager:
     """Builtin file memory + (optionally) one external provider."""
 
-    def __init__(self, config: cfg.Config, external: MemoryProvider | None = None):
+    def __init__(
+        self,
+        config: cfg.Config,
+        external: MemoryProvider | None = None,
+        *,
+        load_external: bool = True,
+    ):
         self.config = config
         self.store = MemoryStore(
             memory_char_limit=int(config.get("memory.memory_char_limit", 0) or 0) or None,
             user_char_limit=int(config.get("memory.user_char_limit", 0) or 0) or None,
         )
         self.history = History()
-        if external is None and config.get("memory.provider"):
+        if external is None and load_external and config.get("memory.provider"):
             try:
                 from .memory_providers import build_memory_provider
                 external = build_memory_provider(config.get("memory.provider"), config)
@@ -523,6 +529,16 @@ class MemoryManager:
             log_exc(f"memory provider {hook} failed")
             return None
 
+    @staticmethod
+    def _supported_kwargs(fn, values: dict) -> dict:
+        try:
+            params = inspect.signature(fn).parameters
+        except (TypeError, ValueError):
+            return values
+        if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
+            return values
+        return {k: v for k, v in values.items() if k in params}
+
     def initialize(self, session_id: str = "") -> None:
         self._session_id = session_id
         self._provider_call("initialize", session_id=session_id)
@@ -663,10 +679,91 @@ class MemoryManager:
         note = self._provider_call("on_pre_compress", messages) or ""
         return note.strip() if isinstance(note, str) else ""
 
-    def on_session_switch(self, old_session_id: str, new_session_id: str) -> None:
+    def _on_session_switch_compat(
+        self,
+        old_session_id: str,
+        new_session_id: str,
+        *,
+        parent_session_id: str = "",
+        reset: bool = False,
+        rewound: bool = False,
+        reason: str = "",
+        **kw,
+    ) -> None:
+        if self.external is None:
+            return
+        fn = getattr(self.external, "on_session_switch", None)
+        if not callable(fn):
+            return
+        values = {
+            "old_session_id": old_session_id,
+            "new_session_id": new_session_id,
+            "parent_session_id": parent_session_id or old_session_id,
+            "reset": reset,
+            "rewound": rewound,
+            "reason": reason,
+            **kw,
+        }
+        try:
+            params = inspect.signature(fn).parameters
+        except (TypeError, ValueError):
+            params = {}
+        positional = [
+            p for p in params.values()
+            if p.kind in (inspect.Parameter.POSITIONAL_ONLY,
+                          inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        ]
+        try:
+            if "old_session_id" in params and "new_session_id" in params:
+                fn(**self._supported_kwargs(fn, values))
+                return
+            if positional:
+                first = positional[0].name
+                hermes_style = (
+                    first in {"new_session_id", "session_id"}
+                    or "parent_session_id" in params
+                    or "reset" in params
+                    or "rewound" in params
+                )
+                if hermes_style:
+                    kw_values = {
+                        k: v for k, v in values.items()
+                        if k not in {"new_session_id"}
+                    }
+                    fn(new_session_id, **self._supported_kwargs(fn, kw_values))
+                    return
+                if len(positional) >= 2:
+                    fn(old_session_id, new_session_id, **self._supported_kwargs(fn, {
+                        k: v for k, v in values.items()
+                        if k not in {"old_session_id", "new_session_id"}
+                    }))
+                    return
+            fn(**self._supported_kwargs(fn, values))
+        except Exception:  # noqa: BLE001
+            from ._log import log_exc
+            log_exc("memory provider on_session_switch failed")
+
+    def on_session_switch(
+        self,
+        old_session_id: str,
+        new_session_id: str,
+        *,
+        parent_session_id: str = "",
+        reset: bool = False,
+        rewound: bool = False,
+        reason: str = "",
+        **kw,
+    ) -> None:
         self._session_id = new_session_id
-        self._provider_call("on_session_switch",
-                            old_session_id=old_session_id, new_session_id=new_session_id)
+        self._on_session_switch_compat(
+            old_session_id,
+            new_session_id,
+            parent_session_id=parent_session_id,
+            reset=reset,
+            rewound=rewound,
+            reason=reason,
+            **kw,
+        )
         if self.external:
             self._snapshot["external"] = self._external_prompt_block()
 

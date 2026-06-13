@@ -339,7 +339,14 @@ class Agent:
             self.memory.refresh_snapshot()
         self.ensure_system_prompt(force=True)
 
-    def switch_session(self, new_session: Session) -> None:
+    def switch_session(
+        self,
+        new_session: Session,
+        *,
+        reason: str = "",
+        reset: bool = False,
+        rewound: bool = False,
+    ) -> None:
         """Move this agent to ``new_session`` and fire the memory session-switch hook
         (resume, compaction split, /new). Keeps tool_context in sync."""
         old_id = getattr(self.session, "id", "")
@@ -356,7 +363,14 @@ class Agent:
                 pass
         if self.memory and new_id != old_id:
             try:
-                self.memory.on_session_switch(old_id, new_id)
+                self.memory.on_session_switch(
+                    old_id,
+                    new_id,
+                    parent_session_id=getattr(new_session, "parent_id", "") or old_id,
+                    reset=reset,
+                    rewound=rewound,
+                    reason=reason,
+                )
             except Exception:  # noqa: BLE001
                 pass
 

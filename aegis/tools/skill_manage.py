@@ -16,7 +16,9 @@ from .base import Tool, ToolContext, ToolResult
 
 MAX_SKILL_CONTENT_CHARS = 100_000
 ALLOWED_SUPPORT_DIRS = {"assets", "references", "scripts", "templates"}
-_ACTIONS = ("list", "view", "create", "patch", "delete", "usage", "pin", "unpin", "report")
+_ACTIONS = (
+    "list", "view", "create", "patch", "write_file", "delete", "usage", "pin", "unpin", "report"
+)
 
 
 def _json_result(payload: dict[str, Any], display: str) -> ToolResult:
@@ -131,6 +133,20 @@ def _resolve_patch_target(skill_dir: Path, file_path: str | None) -> tuple[Path 
         target.resolve().relative_to(skill_dir.resolve())
     except (OSError, ValueError):
         return None, "file_path escapes the skill directory."
+    return target, None
+
+
+def _resolve_write_target(skill_dir: Path, file_path: str | None) -> tuple[Path | None, str | None]:
+    if not file_path:
+        return None, "file_path is required for write_file."
+    target, err = _resolve_patch_target(skill_dir, file_path)
+    if err:
+        return None, err
+    if target is None:
+        return None, "file_path could not be resolved."
+    if target.name == "SKILL.md":
+        allowed = ", ".join(f"{name}/" for name in sorted(ALLOWED_SUPPORT_DIRS))
+        return None, f"write_file is only for support files under {allowed}."
     return target, None
 
 
@@ -263,6 +279,54 @@ def _patch(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     )
 
 
+def _write_file(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+    name = _require_name(args, "write_file")
+    if not name:
+        return _json_error("name is required for write_file.")
+    content = args.get("content")
+    if content is None:
+        return _json_error("content is required for write_file.")
+    content = str(content)
+    if len(content) > MAX_SKILL_CONTENT_CHARS:
+        return _json_error(
+            f"content is {len(content):,} characters "
+            f"(limit: {MAX_SKILL_CONTENT_CHARS:,})."
+        )
+
+    skill = ctx.skills.discover().get(name)
+    if not skill:
+        return _json_error(f"skill '{name}' not found.")
+    target, err = _resolve_write_target(skill.dir, args.get("file_path"))
+    if err:
+        return _json_error(err)
+    if target is None:
+        return _json_error("file_path could not be resolved.")
+    overwrite = bool(args.get("overwrite", False))
+    if target.exists() and not overwrite:
+        rel = str(target.relative_to(skill.dir))
+        return _json_error(f"file already exists in skill '{name}': {rel}. Set overwrite=true.")
+
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(target, content)
+    except OSError as exc:
+        return _json_error(f"could not write support file: {exc}")
+
+    ctx.skills.record_patch(name)
+    ctx.skills.invalidate()
+    _refresh_agent_prompt(ctx)
+    rel = str(target.relative_to(skill.dir))
+    return _json_result(
+        {
+            "success": True,
+            "message": f"Wrote {rel} in skill '{name}'.",
+            "path": str(target),
+            "overwrite": overwrite,
+        },
+        f"wrote skill file {name}/{rel}",
+    )
+
+
 def _delete(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     name = _require_name(args, "delete")
     if not name:
@@ -319,7 +383,7 @@ class SkillManageTool(Tool):
     name = "skill_manage"
     description = (
         "Manage skills with a Hermes-style action schema. Actions: list, view, create, "
-        "patch, delete, usage, pin, unpin, report. Uses Aegis SkillsLoader for "
+        "patch, write_file, delete, usage, pin, unpin, report. Uses Aegis SkillsLoader for "
         "discovery/create/view/usage and the curator for pinning, reports, and "
         "recoverable delete-by-archive."
     )
@@ -327,7 +391,7 @@ class SkillManageTool(Tool):
         "type": "object",
         "properties": {
             "action": {"type": "string", "enum": list(_ACTIONS)},
-            "name": {"type": "string", "description": "Skill name for view/create/patch/delete/pin/unpin."},
+            "name": {"type": "string", "description": "Skill name for view/create/patch/write_file/delete/pin/unpin."},
             "content": {
                 "type": "string",
                 "description": "Full SKILL.md content for create, including YAML frontmatter.",
@@ -342,7 +406,11 @@ class SkillManageTool(Tool):
             },
             "file_path": {
                 "type": "string",
-                "description": "Optional patch target within the skill; defaults to SKILL.md.",
+                "description": "Target within the skill. Patch defaults to SKILL.md; write_file requires a support directory.",
+            },
+            "overwrite": {
+                "type": "boolean",
+                "description": "For write_file, replace an existing support file.",
             },
         },
         "required": ["action"],
@@ -360,6 +428,8 @@ class SkillManageTool(Tool):
             return _create(args, ctx)
         if action == "patch":
             return _patch(args, ctx)
+        if action == "write_file":
+            return _write_file(args, ctx)
         if action == "delete":
             return _delete(args, ctx)
         if action == "usage":

@@ -887,7 +887,7 @@ def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
             agent.store.save(child)                     # make continuation visible immediately
         except Exception:  # noqa: BLE001
             pass
-        agent.switch_session(child)            # fires the memory session-switch hook
+        agent.switch_session(child, reason="compression")
         session = child
         try:
             from .context_engine import call_hook
@@ -992,7 +992,7 @@ def compact_now(agent, session=None, emit: OnEvent | None = None, *,
             agent.store.save(child)
         except Exception:  # noqa: BLE001
             pass
-        agent.switch_session(child)            # fires the memory session-switch hook
+        agent.switch_session(child, reason="manual_compression")
         session = child
         try:
             from .context_engine import call_hook

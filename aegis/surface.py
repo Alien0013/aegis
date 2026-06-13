@@ -659,14 +659,21 @@ def _retarget_run_session(run_store: Any, run_id: str, session_id: str) -> None:
         pass
 
 
-def _retarget_agent(agent: Any, *, session: Session) -> None:
+def _retarget_agent(
+    agent: Any,
+    *,
+    session: Session,
+    reason: str = "",
+    reset: bool = False,
+    rewound: bool = False,
+) -> None:
     """Point a cached agent at the latest session object for this surface."""
 
     switch = getattr(agent, "switch_session", None)
     cur_id = getattr(getattr(agent, "session", None), "id", None)
     if callable(switch) and cur_id != getattr(session, "id", None):
         try:
-            switch(session)            # fires the memory session-switch hook
+            switch(session, reason=reason, reset=reset, rewound=rewound)
             return
         except Exception:  # noqa: BLE001
             pass

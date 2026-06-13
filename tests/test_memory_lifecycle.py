@@ -246,6 +246,59 @@ def test_external_prompt_block_refreshes_on_session_switch(tmp_path, monkeypatch
     assert "session-bound old" not in block
 
 
+def test_session_switch_supports_hermes_style_provider_signature(tmp_path, monkeypatch):
+    config = _cfg(tmp_path, monkeypatch)
+    from aegis.memory import MemoryManager
+
+    class HermesStyleProvider:
+        def __init__(self):
+            self.calls = []
+
+        def on_session_switch(
+            self,
+            new_session_id,
+            *,
+            parent_session_id="",
+            reset=False,
+            rewound=False,
+            reason="",
+            old_session_id="",
+            **_kw,
+        ):
+            self.calls.append({
+                "new_session_id": new_session_id,
+                "parent_session_id": parent_session_id,
+                "reset": reset,
+                "rewound": rewound,
+                "reason": reason,
+                "old_session_id": old_session_id,
+            })
+
+        def system_prompt_block(self):
+            return "ok"
+
+    provider = HermesStyleProvider()
+    mm = MemoryManager(config, external=provider)
+
+    mm.on_session_switch(
+        "old-session",
+        "new-session",
+        parent_session_id="parent-session",
+        reset=True,
+        rewound=True,
+        reason="manual_new",
+    )
+
+    assert provider.calls == [{
+        "new_session_id": "new-session",
+        "parent_session_id": "parent-session",
+        "reset": True,
+        "rewound": True,
+        "reason": "manual_new",
+        "old_session_id": "old-session",
+    }]
+
+
 def test_hooks_are_fail_soft(tmp_path, monkeypatch):
     config = _cfg(tmp_path, monkeypatch)
     from aegis.memory import MemoryManager
@@ -549,6 +602,31 @@ def test_switch_and_end_fire_hooks(tmp_path, monkeypatch):
     agent.end_session()
     kinds = [c[0] for c in p.calls]
     assert "on_session_switch" in kinds and "on_session_end" in kinds
+
+
+def test_agent_switch_session_passes_lineage_reason_and_reset(tmp_path, monkeypatch):
+    config = _cfg(tmp_path, monkeypatch)
+    from aegis.agent.agent import Agent
+    from aegis.memory import MemoryManager
+    from aegis.session import Session
+
+    class Provider(RecordingProvider):
+        def on_session_switch(self, *, old_session_id, new_session_id, **kw):
+            self.calls.append(("on_session_switch", old_session_id, new_session_id, kw))
+
+    p = Provider()
+    parent = Session.create(title="parent")
+    child = Session.create(title="child", parent_id=parent.id)
+    agent = Agent.create(config, session=parent, memory=MemoryManager(config, external=p))
+
+    agent.switch_session(child, reason="compression", reset=False)
+
+    switch = next(c for c in p.calls if c[0] == "on_session_switch")
+    assert switch[1] == parent.id
+    assert switch[2] == child.id
+    assert switch[3]["parent_session_id"] == parent.id
+    assert switch[3]["reason"] == "compression"
+    assert switch[3]["reset"] is False
 
 
 def test_terminal_new_ends_old_session_before_switch(tmp_path, monkeypatch):

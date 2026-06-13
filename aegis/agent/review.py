@@ -18,28 +18,73 @@ import threading
 from .. import provenance
 from ..types import Message
 
-_REVIEW_TOOLS = {"memory", "skill", "session_search"}
+_REVIEW_TOOLS = {"memory", "skill", "skill_manage", "session_search"}
 
 _SKILL_PROMPT = (
-    "Review the conversation above and update your skill library. Be ACTIVE — most "
-    "substantial sessions produce at least one skill update.\n"
-    "Aim for CLASS-LEVEL skills: a few rich, reusable umbrella skills, NOT a long flat "
-    "list of one-session entries. A user correction or an explicit 'remember this' is a "
-    "FIRST-CLASS skill signal — encode it as a pitfall or an explicit step in the skill body.\n"
-    "Order of preference:\n"
-    "  1. PATCH a skill that was loaded/used this session (use `skill` view, then improve).\n"
-    "  2. Else PATCH an existing umbrella skill that covers this territory.\n"
-    "  3. Only CREATE a new skill if this is a genuinely new class of task.\n"
-    "Do not edit bundled or hub-installed skills. Use the `skill` tool to make changes, "
-    "then stop. If nothing is worth saving, say so and stop."
+    "Review the conversation above and update the skill library. Be ACTIVE: most "
+    "substantial sessions produce at least one small skill improvement. A pass that "
+    "does nothing is only right when the session had no durable technique, correction, "
+    "or reusable workflow.\n\n"
+    "Target shape: CLASS-LEVEL skills with rich SKILL.md bodies and optional "
+    "`references/`, `templates/`, `scripts/`, or `assets/` support files. Avoid a flat pile of "
+    "one-session skills.\n\n"
+    "Signals that warrant action:\n"
+    "  1. The user corrected your style, tone, format, legibility, verbosity, or "
+    "workflow. Frustration and explicit 'remember this' instructions are FIRST-CLASS "
+    "skill signals, not only memory signals. Put the lesson in the skill that governs "
+    "that class of task.\n"
+    "  2. A non-trivial technique, fix, workaround, debugging path, or tool-use pattern "
+    "emerged that would help a future session.\n"
+    "  3. A skill loaded or consulted this session was wrong, missing a step, or stale. "
+    "Patch it now.\n\n"
+    "Preference order:\n"
+    "  1. Update a currently loaded/used skill first. Use `skill` or `skill_manage` "
+    "view/list as needed, then patch or improve it.\n"
+    "  2. Else update an existing umbrella skill that covers this territory.\n"
+    "  3. Else add a support file under an existing umbrella with `skill_manage` "
+    "action=write_file and file_path under `references/`, `templates/`, `scripts/`, or `assets/`. "
+    "Add a one-line pointer in SKILL.md so future agents know it exists.\n"
+    "  4. Create a new class-level umbrella only when no existing skill covers the "
+    "class. The name must not be a PR number, error string, feature codename, "
+    "library-only label, or today's one-off task.\n\n"
+    "Support-file meaning:\n"
+    "  - `references/<topic>.md`: concise task-focused detail, error transcripts, "
+    "reproduction notes, provider quirks, quoted research/API excerpts, or domain notes.\n"
+    "  - `templates/<name>.<ext>`: starter files meant to be copied and modified.\n"
+    "  - `scripts/<name>.<ext>`: deterministic reusable probes, fixture generators, "
+    "or verification scripts the skill can run directly.\n\n"
+    "  - `assets/<name>`: small static assets the skill needs.\n\n"
+    "Do NOT edit bundled or hub-installed skills. Pinned skills can be improved; pinning "
+    "only blocks archival/consolidation, not content fixes.\n\n"
+    "Do NOT capture environment-dependent failures, missing binaries, unconfigured "
+    "credentials, negative claims like 'tool X is broken', transient errors that "
+    "resolved, or one-off task narratives. If setup state caused a failure, capture the "
+    "fix under an existing setup/troubleshooting skill, not a durable refusal.\n\n"
+    "If nothing qualifies, say 'Nothing to save.' and stop."
 )
 _MEMORY_PROMPT = (
-    "Review the conversation above. If it revealed a durable, non-obvious fact about the "
-    "USER or the PROJECT (a preference, convention, decision, or environment detail) worth "
-    "remembering across sessions, save it with the `memory` tool. Do not save secrets, "
-    "transient details, or things already obvious from the code. If nothing qualifies, stop."
+    "Review the conversation above and consider saving to memory.\n\n"
+    "Memory is for who the user is, what they prefer, durable project state, stable "
+    "environment facts, and decisions that should survive across sessions. Look for "
+    "persona, desires, preferences, personal details, expectations about how you should "
+    "behave, project conventions, and settled decisions.\n\n"
+    "Do not save secrets, tokens, credentials, transient setup failures, one-off task "
+    "details, resolved temporary errors, or facts already obvious from the repository. "
+    "If a correction is about how to do a class of task, it may belong in a skill as "
+    "well as memory.\n\n"
+    "If something stands out, save it with the `memory` tool. If nothing qualifies, "
+    "say 'Nothing to save.' and stop."
 )
-_COMBINED_PROMPT = _SKILL_PROMPT + "\n\nALSO: " + _MEMORY_PROMPT
+_COMBINED_PROMPT = (
+    "Review the conversation above and update two durable layers when there is signal.\n\n"
+    "Memory: who the user is, what they prefer, durable project state, stable environment "
+    "facts, and decisions that should survive across sessions.\n\n"
+    "Skills: how to do this class of task for this user. User corrections about style, "
+    "format, workflow, or approach belong in the relevant skill, not only in memory.\n\n"
+    + _SKILL_PROMPT
+    + "\n\n"
+    + _MEMORY_PROMPT
+)
 
 
 def _restricted_registry():
@@ -57,6 +102,17 @@ def _transcript(messages: list[Message], limit: int = 12_000) -> str:
     return "\n".join(lines)[-limit:]
 
 
+def _local_review_memory(agent, session_id: str):
+    """Review forks may write local MEMORY.md/USER.md but must not touch providers."""
+    if getattr(agent, "memory", None) is None:
+        return None
+    from ..memory import MemoryManager
+
+    memory = MemoryManager(agent.config, load_external=False)
+    memory.initialize(session_id)
+    return memory
+
+
 def run_review(agent, kind: str, on_event=None) -> list[str]:
     """Run one forked review synchronously. ``kind`` ∈ {memory, skill, combined}."""
     from ..session import Session
@@ -65,9 +121,14 @@ def run_review(agent, kind: str, on_event=None) -> list[str]:
     snapshot = _transcript(agent.session.messages)
     if not snapshot.strip():
         return []
+    child_session = Session.create(
+        title="[review]",
+        parent_id=getattr(getattr(agent, "session", None), "id", ""),
+    )
     child = Agent(
-        config=agent.config, provider=agent.provider, session=Session.create(title="[review]"),
-        registry=_restricted_registry(), memory=agent.memory, skills=agent.skills, cwd=agent.cwd,
+        config=agent.config, provider=agent.provider, session=child_session,
+        registry=_restricted_registry(), memory=_local_review_memory(agent, child_session.id),
+        skills=agent.skills, cwd=agent.cwd,
     )
     child._no_review = True                                # never let a review fork its own review
     child.tool_context.approver = lambda *a, **k: False   # never block on input in a thread
@@ -76,27 +137,20 @@ def run_review(agent, kind: str, on_event=None) -> list[str]:
         on_event({"type": "review_started", "kind": kind})
 
     def _capture(ev):
-        if ev.get("type") == "tool_result" and ev.get("name") in ("memory", "skill"):
+        if ev.get("type") == "tool_result" and ev.get("name") in ("memory", "skill", "skill_manage"):
             actions.append(ev.get("summary", ev["name"]))
 
-    try:
-        with provenance.origin_scope("agent"):     # skills written here are curatable
-            from ..surface import SurfaceRunner
-            SurfaceRunner(agent.config, cwd=agent.cwd, include_mcp=False, reuse_agents=False).run_prompt(
-                f"{prompt}\n\nCONVERSATION:\n{snapshot}",
-                session=child.session,
-                agent=child,
-                surface="review",
-                title=f"{kind} review",
-                meta={"review_kind": kind},
-                on_event=_capture,
-            )
-    finally:
-        if getattr(child, "memory", None) is getattr(agent, "memory", None) and agent.memory is not None:
-            try:
-                agent.memory.on_session_switch(child.session.id, agent.session.id)
-            except Exception:  # noqa: BLE001
-                pass
+    with provenance.origin_scope("agent"):     # skills written here are curatable
+        from ..surface import SurfaceRunner
+        SurfaceRunner(agent.config, cwd=agent.cwd, include_mcp=False, reuse_agents=False).run_prompt(
+            f"{prompt}\n\nCONVERSATION:\n{snapshot}",
+            session=child.session,
+            agent=child,
+            surface="review",
+            title=f"{kind} review",
+            meta={"review_kind": kind},
+            on_event=_capture,
+        )
     if on_event:
         on_event({"type": "review_done", "kind": kind, "actions": actions})
     return actions
