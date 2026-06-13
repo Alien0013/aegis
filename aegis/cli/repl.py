@@ -253,10 +253,13 @@ class Renderer:
             text = e.get("text") or ""
             self._thinking_chars += len(text)
             if mode == "live":
-                # Provider-native thinking stream, rendered dim so it reads as process, not answer.
+                # Provider-native thinking stream in a dim bordered box, so it reads
+                # as process (not answer) \u2014 like a live "reasoning" panel.
                 if not getattr(self, "_thinking", False):
                     self._thinking = True
-                    _raw("\x1b[2m\u273d thinking\u2026\n")
+                    import shutil
+                    w = max(24, min(shutil.get_terminal_size((80, 20)).columns, 100))
+                    _raw("\x1b[2m\u256d\u2500 reasoning " + "\u2500" * (w - 13) + "\x1b[0m\n")
                 _raw("\x1b[2m" + text + "\x1b[0m")
             elif not getattr(self, "_thinking_summary", False):
                 self._thinking_summary = True
@@ -264,7 +267,9 @@ class Renderer:
             return
         if getattr(self, "_thinking", False):
             self._thinking = False
-            _raw("\x1b[0m\n")
+            import shutil
+            w = max(24, min(shutil.get_terminal_size((80, 20)).columns, 100))
+            _raw("\x1b[0m\n\x1b[2m╰" + "─" * (w - 1) + "\x1b[0m\n")
         if t in ("assistant_message", "final", "tool_start", "error") and \
                 getattr(self, "_thinking_summary", False):
             self._thinking_summary = False
@@ -945,9 +950,16 @@ def handle_slash(
         elif arg in modes:
             agent.config.data.setdefault("display", {})["reasoning"] = arg
             remember_session_runtime(agent, reasoning_display=arg)
+            # Showing reasoning needs the model to actually produce it — if effort is
+            # off there's nothing to stream, so turn it on (matches "it just works").
+            note = ""
+            if arg != "off" and getattr(agent, "reasoning", "off") == "off":
+                agent.reasoning = "medium"
+                remember_session_runtime(agent, reasoning_effort="medium")
+                note = " · effort → medium (was off; nothing to show otherwise)"
             if store is not None:
                 store.save(agent.session)
-            _out(f"reasoning display → {arg}", style="green")
+            _out(f"reasoning display → {arg}{note}", style="green")
         elif arg in efforts or arg == "off":
             agent.reasoning = arg
             remember_session_runtime(agent, reasoning_effort=arg)
