@@ -1,5 +1,7 @@
+import { fileURLToPath, URL } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 
 // Build the dashboard into the Python package so it ships as data and is served
 // by aegis/dashboard.py at "/" with assets under "/assets/*".
@@ -30,7 +32,8 @@ function aegisDevToken(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), aegisDevToken()],
+  plugins: [react(), tailwindcss(), aegisDevToken()],
+  resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
   base: "/",
   publicDir: false,
   build: {

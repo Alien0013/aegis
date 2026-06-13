@@ -1,3 +1,33 @@
+/* Tailwind v4 (utilities + theme only — no preflight, so the existing hand-rolled
+   design system below keeps winning the cascade while pages are migrated to utilities). */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+/* Bind Tailwind color/spacing tokens to the runtime CSS variables below, so utilities
+   like bg-panel / text-mut / border-line work AND still switch with [data-theme]. */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-panel2: var(--panel2);
+  --color-panel3: var(--panel3);
+  --color-line: var(--line);
+  --color-line2: var(--line2);
+  --color-text: var(--text);
+  --color-mut: var(--mut);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent2: var(--accent2);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-err: var(--err);
+  --color-info: var(--info);
+  --radius-card: var(--radius);
+  --font-mono: var(--mono);
+}
+
+@keyframes fade { from { opacity: 0 } to { opacity: 1 } }
+@keyframes slideIn { from { transform: translateX(16px); opacity: 0 } to { transform: translateX(0); opacity: 1 } }
+
 /* AEGIS dashboard — dense dark-console design system.
    One vocabulary of primitives (.card / .table / .badge / .field / .btn / .stat)
    shared by every page via lib/ui.tsx, so the whole app stays consistent. */
@@ -266,14 +296,6 @@ table.tbl td.mono,table.tbl td .mono{font-family:var(--mono);color:var(--mut);fo
 .field-val{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:5px 8px;cursor:pointer;max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;font-family:var(--mono);font-size:11.5px}
 .field-edit{display:flex;gap:6px;align-items:flex-start;width:100%}
 .field-edit textarea{flex:1;min-width:0}
-
-/* detail drawer (ListPage) */
-.drawer-scrim{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:60}
-.drawer{position:fixed;top:0;right:0;bottom:0;width:min(560px,94vw);background:var(--panel);z-index:61;display:flex;flex-direction:column;box-shadow:var(--shadow-lg);animation:drawin .18s ease}
-@keyframes drawin{from{transform:translateX(20px);opacity:.6}}
-.drawer-h{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}
-.drawer-b{overflow:auto;padding:16px}
-.drawer-b pre{background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:12px;overflow:auto;font-family:var(--mono);font-size:11.5px;white-space:pre-wrap;word-break:break-word}
 
 /* ───────── page-specific ───────── */
 .banner{background:color-mix(in srgb,var(--accent) 8%,var(--panel));border:1px solid color-mix(in srgb,var(--accent) 40%,var(--line));border-radius:var(--radius);padding:13px 15px}
