@@ -153,3 +153,34 @@ def test_http_provider_recall_tool_is_mockable_and_fail_soft(monkeypatch):
 
     assert not failed_recall.is_error
     assert "No memory returned" in failed_recall.content
+
+
+def test_provider_surface_background_prefetch_cache():
+    import time
+
+    from aegis.memory_providers import ProviderSurfaceMixin
+
+    class Provider(ProviderSurfaceMixin):
+        name = "cachey"
+
+        def __init__(self):
+            self.calls = []
+
+        def prefetch(self, query, *, session_id=""):
+            self.calls.append((query, session_id))
+            return f"cached {query} for {session_id}"
+
+    provider = Provider()
+    provider.initialize("sess-cache")
+    provider.queue_prefetch("alpha")
+
+    deadline = time.time() + 2
+    cached = ""
+    while time.time() < deadline:
+        cached = provider.consume_prefetch("alpha", session_id="sess-cache")
+        if cached:
+            break
+        time.sleep(0.01)
+
+    assert cached == "cached alpha for sess-cache"
+    assert provider.consume_prefetch("alpha", session_id="sess-cache") == ""

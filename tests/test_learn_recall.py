@@ -120,6 +120,37 @@ def test_session_search_tool_browse_discover_read_and_scroll():
     assert scroll["messages"][1]["anchor"] is True
 
 
+def test_session_search_can_read_explicit_profile():
+    from aegis.session import Session, SessionStore
+    from aegis.tools.base import ToolContext
+    from aegis.tools.recall import SessionSearchTool
+    from aegis.types import Message
+
+    default_store = SessionStore()
+    default = Session.create(title="default launch notes")
+    default.messages = [Message.user("default-only launch note")]
+    default_store.save(default)
+
+    work_store = SessionStore(profile="work")
+    work = Session.create(title="work parser notes")
+    work.messages = [Message.user("work-only xylophonemark note"), Message.assistant("work profile answer")]
+    work_store.save(work)
+
+    tool = SessionSearchTool()
+    ctx = ToolContext(session=default)
+    default_result = json.loads(tool.run({"query": "xylophonemark"}, ctx).content)
+    work_result = json.loads(tool.run({"query": "xylophonemark", "profile": "work"}, ctx).content)
+    read_work = json.loads(tool.run({"session_id": work.id[:12], "profile": "work"}, ctx).content)
+
+    assert default_result["results"] == []
+    assert work_result["profile"] == "work"
+    assert work_result["results"][0]["session_id"] == work.id
+    assert work_result["results"][0]["profile"] == "work"
+    assert work_result["results"][0]["match_message_row_id"]
+    assert read_work["session_meta"]["profile"] == "work"
+    assert read_work["messages"][0]["message_row_id"]
+
+
 def test_system_prompt_guides_prior_session_recall(tmp_path):
     from aegis.agent.agent import Agent
     from aegis.config import Config

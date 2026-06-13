@@ -589,6 +589,9 @@ class _JSONLRecentTool(Tool):
 class ProviderSurfaceMixin:
     name = "memory-provider"
 
+    def initialize(self, session_id: str = "", **_kw) -> None:
+        self._session_id = session_id
+
     def metadata(self) -> dict[str, Any]:
         return memory_provider_metadata(self.name)
 
@@ -612,6 +615,55 @@ class ProviderSurfaceMixin:
             _ProviderSetupTool(self),
             *self._provider_tools(),
         ]
+
+    def on_session_switch(self, *, old_session_id: str, new_session_id: str, **_kw) -> None:
+        self._session_id = new_session_id
+
+    def _prefetch_lock(self):
+        import threading
+
+        lock = getattr(self, "_prefetch_cache_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._prefetch_cache_lock = lock
+        return lock
+
+    def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
+        """Hermes-style non-blocking warm recall. Providers still expose synchronous
+        ``prefetch``; this caches a best-effort result that a later turn can consume."""
+        query = str(query or "")
+        session_id = session_id or str(getattr(self, "_session_id", "") or "")
+        if not query.strip():
+            return
+        import threading
+
+        def _run() -> None:
+            try:
+                text = self.prefetch(query, session_id=session_id)
+            except Exception:  # noqa: BLE001
+                text = ""
+            with self._prefetch_lock():
+                self._prefetch_cache = {
+                    "query": query,
+                    "session_id": session_id,
+                    "text": text if isinstance(text, str) else "",
+                }
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+
+    def consume_prefetch(self, query: str, *, session_id: str = "") -> str:
+        session_id = session_id or str(getattr(self, "_session_id", "") or "")
+        with self._prefetch_lock():
+            cached = getattr(self, "_prefetch_cache", None)
+            if not isinstance(cached, dict):
+                return ""
+            if cached.get("query") != str(query or ""):
+                return ""
+            if session_id and cached.get("session_id") not in ("", session_id):
+                return ""
+            self._prefetch_cache = None
+            return str(cached.get("text") or "")
 
 
 class JSONLMemoryProvider(ProviderSurfaceMixin, MemoryProvider):
@@ -682,6 +734,18 @@ class JSONLMemoryProvider(ProviderSurfaceMixin, MemoryProvider):
             "session_id": session_id,
         }))
 
+    def on_session_end(self, messages) -> None:
+        last_user = next((m.content for m in reversed(messages) if getattr(m, "role", "") == "user"), "")
+        if last_user:
+            append_line(self.path, json.dumps({
+                "event": "session_end",
+                "note": f"session ended after: {last_user[:240]}",
+            }))
+
+    def on_pre_compress(self, messages) -> str:
+        notes = self.recent_notes(min(5, self.max_recent))
+        return "\n".join(f"- {note}" for note in notes) if notes else ""
+
 
 class Mem0Provider(ProviderSurfaceMixin, MemoryProvider):
     """Vector memory via the `mem0ai` package (optional dependency)."""
@@ -739,6 +803,14 @@ class Mem0Provider(ProviderSurfaceMixin, MemoryProvider):
                 self._mem.add(wire, user_id=self.user_id)
         except Exception:  # noqa: BLE001
             pass
+
+    def on_session_end(self, messages) -> None:
+        self.sync_turn(messages)
+
+    def on_pre_compress(self, messages) -> str:
+        query = next((m.content for m in reversed(messages)
+                      if getattr(m, "role", "") == "user" and getattr(m, "content", "")), "")
+        return self.prefetch(query or self._last_query or "recent context")
 
 
 class HonchoProvider(ProviderSurfaceMixin, MemoryProvider):
@@ -808,6 +880,14 @@ class HonchoProvider(ProviderSurfaceMixin, MemoryProvider):
         except Exception:  # noqa: BLE001
             pass
 
+    def on_session_end(self, messages) -> None:
+        self.sync_turn(messages)
+
+    def on_pre_compress(self, messages) -> str:
+        query = next((m.content for m in reversed(messages)
+                      if getattr(m, "role", "") == "user" and getattr(m, "content", "")), "")
+        return self.prefetch(query or self._last_query or "recent context")
+
 
 class HTTPMemoryProvider(ProviderSurfaceMixin, MemoryProvider):
     """Generic HTTP memory backend — wires any REST memory service via config.
@@ -873,7 +953,11 @@ class HTTPMemoryProvider(ProviderSurfaceMixin, MemoryProvider):
         try:
             import httpx
             self._last_query = query
-            r = httpx.post(self.search_url, json={"query": query or "recent context"},
+            payload = {"query": query or "recent context"}
+            session_id = session_id or str(getattr(self, "_session_id", "") or "")
+            if session_id:
+                payload["session_id"] = session_id
+            r = httpx.post(self.search_url, json=payload,
                            headers=self.headers, timeout=20)
             data = r.json()
             texts = self._extract_texts(data)
@@ -902,9 +986,33 @@ class HTTPMemoryProvider(ProviderSurfaceMixin, MemoryProvider):
             self._last_query = next((m.content for m in reversed(messages) if m.role == "user"), "")
             wire = [{"role": m.role, "content": m.content} for m in messages[-6:]
                     if m.role in ("user", "assistant") and m.content]
-            httpx.post(self.add_url, json={"messages": wire}, headers=self.headers, timeout=20)
+            payload = {"messages": wire}
+            session_id = str(getattr(self, "_session_id", "") or "")
+            if session_id:
+                payload["session_id"] = session_id
+            httpx.post(self.add_url, json=payload, headers=self.headers, timeout=20)
         except Exception:  # noqa: BLE001
             pass
+
+    def on_session_end(self, messages) -> None:
+        if not self.add_url:
+            return
+        try:
+            import httpx
+            wire = [{"role": m.role, "content": m.content} for m in messages[-12:]
+                    if m.role in ("user", "assistant") and m.content]
+            payload = {"event": "session_end", "messages": wire}
+            session_id = str(getattr(self, "_session_id", "") or "")
+            if session_id:
+                payload["session_id"] = session_id
+            httpx.post(self.add_url, json=payload, headers=self.headers, timeout=20)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def on_pre_compress(self, messages) -> str:
+        query = next((m.content for m in reversed(messages)
+                      if getattr(m, "role", "") == "user" and getattr(m, "content", "")), "")
+        return self.prefetch(query or self._last_query or "recent context")
 
 
 def build_memory_provider(name: str, config) -> MemoryProvider | None:

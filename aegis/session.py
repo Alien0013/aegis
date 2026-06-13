@@ -22,11 +22,12 @@ class Session:
     created_at: str = field(default_factory=now_iso)
     updated_at: str = field(default_factory=now_iso)
     parent_id: str | None = None        # session lineage (set when forked, e.g. on compaction)
+    profile: str = ""                   # config/runtime profile that owns this session
 
     @staticmethod
     def create(title: str = "", parent_id: str | None = None) -> "Session":
         sid = new_id("sess")
-        return Session(id=sid, title=title or sid, parent_id=parent_id)
+        return Session(id=sid, title=title or sid, parent_id=parent_id, profile=cfg.current_profile())
 
     def to_row(self) -> dict:
         return {
@@ -35,6 +36,7 @@ class Session:
             "created_at": self.created_at,
             "updated_at": now_iso(),
             "parent_id": self.parent_id,
+            "profile": self.profile,
             "data": json.dumps(
                 {
                     "messages": [m.to_dict() for m in self.messages],
@@ -57,6 +59,7 @@ class Session:
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             parent_id=row["parent_id"] if "parent_id" in keys else None,
+            profile=row["profile"] if "profile" in keys else data.get("meta", {}).get("profile", ""),
         )
 
     def maybe_title_from(self, text: str) -> None:
@@ -65,8 +68,9 @@ class Session:
 
 
 class SessionStore:
-    def __init__(self):
-        self.db = cfg.sessions_db()
+    def __init__(self, profile: str | None = None):
+        self.profile = cfg.current_profile() if profile is None else cfg.profile_name(profile)
+        self.db = cfg.sessions_db(profile)
         self._init()
 
     def _conn(self) -> sqlite3.Connection:
@@ -99,34 +103,160 @@ class SessionStore:
                 c.execute("ALTER TABLE sessions ADD COLUMN summary TEXT")
             if "parent_id" not in cols:
                 c.execute("ALTER TABLE sessions ADD COLUMN parent_id TEXT")
+            if "profile" not in cols:
+                c.execute("ALTER TABLE sessions ADD COLUMN profile TEXT DEFAULT ''")
+            c.execute(
+                """CREATE TABLE IF NOT EXISTS messages (
+                       id INTEGER PRIMARY KEY AUTOINCREMENT,
+                       session_id TEXT NOT NULL,
+                       message_index INTEGER NOT NULL,
+                       role TEXT,
+                       content TEXT,
+                       tool_name TEXT,
+                       tool_call_id TEXT,
+                       created_at TEXT,
+                       profile TEXT DEFAULT '',
+                       UNIQUE(session_id, message_index)
+                   )"""
+            )
+            msg_cols = {r[1] for r in c.execute("PRAGMA table_info(messages)").fetchall()}
+            if "profile" not in msg_cols:
+                c.execute("ALTER TABLE messages ADD COLUMN profile TEXT DEFAULT ''")
             # full-text index over message content (graceful if FTS5 is unavailable)
             try:
+                rebuild_fts = False
                 c.execute("CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5("
-                          "content, session_id UNINDEXED, title UNINDEXED, role UNINDEXED, ts UNINDEXED)")
+                          "content, session_id UNINDEXED, title UNINDEXED, role UNINDEXED, "
+                          "ts UNINDEXED, message_id UNINDEXED, profile UNINDEXED)")
+                fts_cols = {r[1] for r in c.execute("PRAGMA table_info(messages_fts)").fetchall()}
+                if not {"message_id", "profile"} <= fts_cols:
+                    c.execute("DROP TABLE messages_fts")
+                    c.execute("CREATE VIRTUAL TABLE messages_fts USING fts5("
+                              "content, session_id UNINDEXED, title UNINDEXED, role UNINDEXED, "
+                              "ts UNINDEXED, message_id UNINDEXED, profile UNINDEXED)")
+                    rebuild_fts = True
                 self._fts = True
+                if rebuild_fts:
+                    self._rebuild_message_indexes(c)
             except sqlite3.OperationalError:
                 self._fts = False
 
+    def _rebuild_message_indexes(self, c: sqlite3.Connection) -> None:
+        rows = c.execute("SELECT * FROM sessions ORDER BY updated_at").fetchall()
+        for row in rows:
+            try:
+                session = Session.from_row(row)
+            except Exception:  # noqa: BLE001
+                continue
+            session.profile = session.profile or self.profile
+            for i, m in enumerate(session.messages):
+                c.execute(
+                    """INSERT OR IGNORE INTO messages (
+                           session_id, message_index, role, content, tool_name,
+                           tool_call_id, created_at, profile
+                       )
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        session.id,
+                        i,
+                        m.role,
+                        m.content,
+                        m.name,
+                        m.tool_call_id,
+                        session.updated_at,
+                        session.profile,
+                    ),
+                )
+                if m.role in ("user", "assistant") and m.content:
+                    msg_row = c.execute(
+                        "SELECT id FROM messages WHERE session_id=? AND message_index=?",
+                        (session.id, i),
+                    ).fetchone()
+                    c.execute(
+                        "INSERT INTO messages_fts "
+                        "(content, session_id, title, role, ts, message_id, profile) "
+                        "VALUES (?,?,?,?,?,?,?)",
+                        (
+                            m.content,
+                            session.id,
+                            session.title,
+                            m.role,
+                            session.updated_at,
+                            msg_row["id"] if msg_row else i,
+                            session.profile,
+                        ),
+                    )
+
     def save(self, session: Session) -> None:
+        session.profile = session.profile or self.profile
         row = session.to_row()
         session.updated_at = row["updated_at"]
         row["summary"] = session.meta.get("summary", "")
         with self._conn() as c:
             c.execute(
-                """INSERT INTO sessions (id, title, created_at, updated_at, summary, parent_id, data)
-                   VALUES (:id, :title, :created_at, :updated_at, :summary, :parent_id, :data)
+                """INSERT INTO sessions (id, title, created_at, updated_at, summary, parent_id, profile, data)
+                   VALUES (:id, :title, :created_at, :updated_at, :summary, :parent_id, :profile, :data)
                    ON CONFLICT(id) DO UPDATE SET
                      title=excluded.title, updated_at=excluded.updated_at,
-                     summary=excluded.summary, parent_id=excluded.parent_id, data=excluded.data""",
+                     summary=excluded.summary, parent_id=excluded.parent_id,
+                     profile=excluded.profile, data=excluded.data""",
                 row,
             )
+            c.execute("DELETE FROM messages WHERE session_id=? AND message_index>=?",
+                      (session.id, len(session.messages)))
+            for i, m in enumerate(session.messages):
+                c.execute(
+                    """INSERT INTO messages (
+                           session_id, message_index, role, content, tool_name,
+                           tool_call_id, created_at, profile
+                       )
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(session_id, message_index) DO UPDATE SET
+                           role=excluded.role, content=excluded.content,
+                           tool_name=excluded.tool_name, tool_call_id=excluded.tool_call_id,
+                           created_at=excluded.created_at, profile=excluded.profile""",
+                    (
+                        session.id,
+                        i,
+                        m.role,
+                        m.content,
+                        m.name,
+                        m.tool_call_id,
+                        session.updated_at,
+                        session.profile,
+                    ),
+                )
             if getattr(self, "_fts", False):
                 c.execute("DELETE FROM messages_fts WHERE session_id=?", (session.id,))
-                for m in session.messages:
+                fts_cols = {r[1] for r in c.execute("PRAGMA table_info(messages_fts)").fetchall()}
+                modern_fts = {"message_id", "profile"} <= fts_cols
+                for i, m in enumerate(session.messages):
                     if m.role in ("user", "assistant") and m.content:
-                        c.execute("INSERT INTO messages_fts (content, session_id, title, role, ts) "
-                                  "VALUES (?,?,?,?,?)",
-                                  (m.content, session.id, session.title, m.role, session.updated_at))
+                        if modern_fts:
+                            msg_row = c.execute(
+                                "SELECT id FROM messages WHERE session_id=? AND message_index=?",
+                                (session.id, i),
+                            ).fetchone()
+                            c.execute(
+                                "INSERT INTO messages_fts "
+                                "(content, session_id, title, role, ts, message_id, profile) "
+                                "VALUES (?,?,?,?,?,?,?)",
+                                (
+                                    m.content,
+                                    session.id,
+                                    session.title,
+                                    m.role,
+                                    session.updated_at,
+                                    msg_row["id"] if msg_row else i,
+                                    session.profile,
+                                ),
+                            )
+                        else:
+                            c.execute(
+                                "INSERT INTO messages_fts (content, session_id, title, role, ts) "
+                                "VALUES (?,?,?,?,?)",
+                                (m.content, session.id, session.title, m.role, session.updated_at),
+                            )
 
     def load(self, sid: str) -> Session | None:
         with self._conn() as c:
@@ -149,7 +279,8 @@ class SessionStore:
     def list(self, limit: int = 50) -> list[dict]:
         with self._conn() as c:
             rows = c.execute(
-                "SELECT id, title, created_at, updated_at, parent_id FROM sessions ORDER BY updated_at DESC LIMIT ?",
+                "SELECT id, title, created_at, updated_at, parent_id, profile "
+                "FROM sessions ORDER BY updated_at DESC LIMIT ?",
                 (limit,),
             ).fetchall()
             return [dict(r) for r in rows]
@@ -158,7 +289,7 @@ class SessionStore:
         """Sessions forked from ``parent_id`` (lineage chain), oldest first."""
         with self._conn() as c:
             rows = c.execute(
-                "SELECT id, title, created_at FROM sessions WHERE parent_id=? ORDER BY created_at",
+                "SELECT id, title, created_at, profile FROM sessions WHERE parent_id=? ORDER BY created_at",
                 (parent_id,),
             ).fetchall()
             return [dict(r) for r in rows]
@@ -184,6 +315,7 @@ class SessionStore:
     def delete(self, sid: str) -> bool:
         with self._conn() as c:
             cur = c.execute("DELETE FROM sessions WHERE id=?", (sid,))
+            c.execute("DELETE FROM messages WHERE session_id=?", (sid,))
             if getattr(self, "_fts", False):
                 c.execute("DELETE FROM messages_fts WHERE session_id=?", (sid,))  # no orphan rows
             return cur.rowcount > 0
@@ -215,9 +347,33 @@ class SessionStore:
             return '"' + query.replace('"', "") + '"'
         return " OR ".join(f'"{t}"' for t in toks)
 
-    @staticmethod
-    def _message_payload(index: int, message: Message, *, anchor_id: int | None = None) -> dict:
+    def _message_row_id(self, session_id: str, index: int) -> int | None:
+        try:
+            with self._conn() as c:
+                row = c.execute(
+                    "SELECT id FROM messages WHERE session_id=? AND message_index=?",
+                    (session_id, index),
+                ).fetchone()
+            return int(row["id"]) if row else None
+        except (sqlite3.OperationalError, TypeError, ValueError):
+            return None
+
+    def _message_index_for_row_id(self, row_id: int | None) -> int | None:
+        if row_id is None:
+            return None
+        try:
+            with self._conn() as c:
+                row = c.execute("SELECT message_index FROM messages WHERE id=?", (int(row_id),)).fetchone()
+            return int(row["message_index"]) if row else None
+        except (sqlite3.OperationalError, TypeError, ValueError):
+            return None
+
+    def _message_payload(self, session_id: str, index: int, message: Message,
+                         *, anchor_id: int | None = None) -> dict:
         payload: dict[str, Any] = {"id": index, "role": message.role, "content": message.content}
+        row_id = self._message_row_id(session_id, index)
+        if row_id is not None:
+            payload["message_row_id"] = row_id
         if message.name:
             payload["tool_name"] = message.name
         if message.tool_call_id:
@@ -228,11 +384,10 @@ class SessionStore:
             payload["anchor"] = True
         return payload
 
-    @classmethod
-    def _visible_messages(cls, sess: Session, *, roles: set[str] | None = None) -> list[dict]:
+    def _visible_messages(self, sess: Session, *, roles: set[str] | None = None) -> list[dict]:
         roles = roles or {"user", "assistant", "tool"}
         return [
-            cls._message_payload(i, message)
+            self._message_payload(sess.id, i, message)
             for i, message in enumerate(sess.messages)
             if message.role in roles
         ]
@@ -256,22 +411,41 @@ class SessionStore:
             try:
                 match = self._fts_query(query)
                 with self._conn() as c:
-                    rows = c.execute(
-                        "SELECT session_id, title, role, ts, "
-                        "snippet(messages_fts, 0, '[', ']', '…', 12) AS snip "
-                        "FROM messages_fts WHERE messages_fts MATCH ? ORDER BY rank LIMIT ?",
-                        (match, limit),
-                    ).fetchall()
+                    fts_cols = {r[1] for r in c.execute("PRAGMA table_info(messages_fts)").fetchall()}
+                    if {"message_id", "profile"} <= fts_cols:
+                        rows = c.execute(
+                            "SELECT session_id, title, role, ts, message_id, profile, "
+                            "snippet(messages_fts, 0, '[', ']', '…', 12) AS snip "
+                            "FROM messages_fts WHERE messages_fts MATCH ? ORDER BY rank LIMIT ?",
+                            (match, limit),
+                        ).fetchall()
+                    else:
+                        rows = c.execute(
+                            "SELECT session_id, title, role, ts, NULL AS message_id, '' AS profile, "
+                            "snippet(messages_fts, 0, '[', ']', '…', 12) AS snip "
+                            "FROM messages_fts WHERE messages_fts MATCH ? ORDER BY rank LIMIT ?",
+                            (match, limit),
+                        ).fetchall()
                 out = []
                 for r in rows:
                     sess = self.load(r["session_id"])
+                    row_message_id = r["message_id"]
+                    msg_index = self._message_index_for_row_id(row_message_id)
+                    if msg_index is None:
+                        msg_index = self._first_matching_message_id(sess, query) if sess else None
+                    try:
+                        stable_row_id = int(row_message_id) if row_message_id not in (None, "") else None
+                    except (TypeError, ValueError):
+                        stable_row_id = None
                     out.append({
                         "session": r["session_id"],
                         "title": r["title"],
                         "when": r["ts"],
                         "role": r["role"],
                         "snippet": r["snip"].replace("\n", " "),
-                        "message_id": self._first_matching_message_id(sess, query) if sess else None,
+                        "message_id": msg_index,
+                        "message_row_id": stable_row_id,
+                        "profile": r["profile"] or self.profile,
                     })
                 return out
             except sqlite3.OperationalError:
@@ -292,7 +466,9 @@ class SessionStore:
                     snippet = m.content[max(0, char_index - 80):char_index + 160].strip().replace("\n", " ")
                     out.append({"session": sess.id, "title": sess.title,
                                 "when": sess.updated_at, "role": m.role,
-                                "snippet": snippet, "message_id": msg_index})
+                                "snippet": snippet, "message_id": msg_index,
+                                "message_row_id": self._message_row_id(sess.id, msg_index),
+                                "profile": sess.profile})
                     break
             if len(out) >= limit:
                 break
@@ -342,6 +518,7 @@ class SessionStore:
             results.append({
                 "session_id": sess.id,
                 "title": sess.title,
+                "profile": sess.profile,
                 "created_at": sess.created_at,
                 "updated_at": sess.updated_at,
                 "message_count": len([m for m in sess.messages if m.role != "system"]),
@@ -369,6 +546,7 @@ class SessionStore:
                 "created_at": sess.created_at,
                 "updated_at": sess.updated_at,
                 "parent_id": sess.parent_id,
+                "profile": sess.profile,
             },
             "message_count": total,
             "truncated": truncated,
@@ -425,6 +603,7 @@ class SessionStore:
                 "created_at": sess.created_at,
                 "updated_at": sess.updated_at,
                 "parent_id": sess.parent_id,
+                "profile": sess.profile,
             },
             "window": window,
             "messages": messages,
@@ -472,9 +651,11 @@ class SessionStore:
             entry = {
                 "session_id": sid,
                 "title": sess.title,
+                "profile": sess.profile,
                 "when": sess.updated_at,
                 "matched_role": hit.get("role"),
                 "match_message_id": msg_id,
+                "match_message_row_id": hit.get("message_row_id"),
                 "snippet": hit.get("snippet", ""),
                 "bookend_start": visible[:3],
                 "messages": view.get("messages", []),

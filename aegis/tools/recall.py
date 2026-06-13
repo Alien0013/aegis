@@ -58,7 +58,7 @@ class SessionSearchTool(Tool):
             },
             "profile": {
                 "type": "string",
-                "description": "Accepted for Hermes compatibility; AEGIS currently uses one local profile.",
+                "description": "Optional AEGIS config profile to search (default searches the active profile).",
             },
         },
     }
@@ -66,8 +66,16 @@ class SessionSearchTool(Tool):
     def run(self, args, ctx: ToolContext) -> ToolResult:
         from ..session import SessionStore
 
-        store = SessionStore()
+        requested_profile = str(args.get("profile") or "").strip()
+        try:
+            store = SessionStore(profile=requested_profile) if requested_profile else SessionStore()
+        except ValueError as e:
+            data = {"success": False, "mode": "recall", "error": str(e), "profile": requested_profile}
+            content = json.dumps(data, ensure_ascii=False, indent=2)
+            return ToolResult(content=content, is_error=True, display="recall: error", data=data)
         current_session_id = getattr(getattr(ctx, "session", None), "id", None)
+        if requested_profile:
+            current_session_id = None
         query = str(args.get("query") or "").strip()
         session_id = str(args.get("session_id") or "").strip()
 
@@ -101,10 +109,7 @@ class SessionSearchTool(Tool):
                 current_session_id=current_session_id,
             )
 
-        if args.get("profile"):
-            data.setdefault("warnings", []).append(
-                "AEGIS local sessions are not profile-partitioned yet; profile was ignored."
-            )
+        data.setdefault("profile", requested_profile or store.profile or "")
         content = json.dumps(data, ensure_ascii=False, indent=2)
         mode = data.get("mode", "recall")
         count = data.get("count", len(data.get("messages", [])))

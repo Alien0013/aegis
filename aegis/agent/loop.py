@@ -199,6 +199,15 @@ def _responses_context_management(agent, native_compaction: dict) -> list[dict[s
     from ..constants import COMPACT_THRESHOLD
 
     default_threshold = agent.config.get("agent.compression.threshold", COMPACT_THRESHOLD)
+    provider_name = str(getattr(getattr(agent, "provider", None), "name", "") or "")
+    model = str(getattr(getattr(agent, "provider", None), "model", "") or "")
+    if (
+        "compact_threshold" not in native_compaction
+        and "compact_threshold_tokens" not in native_compaction
+        and provider_name in {"openai-codex", "codex", "codex-app-server"}
+        and model.startswith("gpt-5.5")
+    ):
+        default_threshold = 0.85
     raw = native_compaction.get("compact_threshold_tokens",
                                 native_compaction.get("compact_threshold", default_threshold))
     try:

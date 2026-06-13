@@ -509,6 +509,10 @@ class MemoryManager:
     def prefetch(self, query: str) -> str:
         """Relevant memory for THIS turn, fetched synchronously from the provider.
         Returned text is injected as volatile context before the model call."""
+        cached = self._provider_call("consume_prefetch", query,
+                                     session_id=getattr(self, "_session_id", "")) or ""
+        if isinstance(cached, str) and cached.strip():
+            return cached.strip()
         block = self._provider_call("prefetch", query,
                                     session_id=getattr(self, "_session_id", "")) or ""
         return block.strip() if isinstance(block, str) else ""

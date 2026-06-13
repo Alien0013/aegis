@@ -868,6 +868,18 @@ def test_responses_context_management_uses_compaction_array(monkeypatch):
     )
     assert state_default["context_management"] == [{"type": "compaction", "compact_threshold": 4000}]
 
+    cfg_codex = Config.load()
+    cfg_codex.data.setdefault("responses", {})["state"] = {"enabled": True, "store": True}
+    cfg_codex.data.setdefault("responses", {})["compaction"] = {"enabled": True}
+    state_codex = _response_state_for_agent(
+        SimpleNamespace(
+            config=cfg_codex,
+            provider=SimpleNamespace(name="openai-codex", model="gpt-5.5", context_length=8000),
+        ),
+        "sess_context_codex",
+    )
+    assert state_codex["context_management"] == [{"type": "compaction", "compact_threshold": 6800}]
+
     captured: dict = {}
 
     class FakeAuth:

@@ -37,13 +37,41 @@ def set_profile(profile: str | None) -> None:
     _PROFILE = profile
 
 
+def current_profile() -> str:
+    """Active config profile name, or ``""`` for the default home."""
+    return _clean_profile(_PROFILE)
+
+
+def _base_home() -> Path:
+    base = os.environ.get("AEGIS_HOME")
+    return Path(base).expanduser() if base else Path.home() / ".aegis"
+
+
+def _clean_profile(profile: str | None) -> str:
+    profile = (profile or "").strip()
+    if profile in {"", "default"}:
+        return ""
+    import re
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", profile) or profile in {".", ".."}:
+        raise ValueError(f"invalid profile name: {profile!r}")
+    return profile
+
+
+def profile_home(profile: str | None = None) -> Path:
+    """Runtime home for ``profile`` without mutating the active process profile."""
+    profile = _clean_profile(profile)
+    home = _base_home()
+    return home / "profiles" / profile if profile else home
+
+
+def profile_name(profile: str | None = None) -> str:
+    """Normalized persisted profile name; ``""`` means the default profile."""
+    return _clean_profile(profile)
+
+
 def get_home() -> Path:
     """Resolve the runtime home dynamically. Honors $AEGIS_HOME and active profile."""
-    base = os.environ.get("AEGIS_HOME")
-    home = Path(base).expanduser() if base else Path.home() / ".aegis"
-    if _PROFILE:
-        home = home / "profiles" / _PROFILE
-    return home
+    return profile_home(_PROFILE)
 
 
 def sub(*parts: str) -> Path:
@@ -111,9 +139,10 @@ def migrate_workspace_to_root(home: Path) -> None:
         _migrated_homes.discard(key)          # unwritable now — retry next call
 
 
-def sessions_db() -> Path:
-    ensure_dir(get_home())
-    return sub("state.db")
+def sessions_db(profile: str | None = None) -> Path:
+    home = profile_home(profile) if profile is not None else get_home()
+    ensure_dir(home)
+    return home / "state.db"
 
 
 def logs_dir() -> Path:
