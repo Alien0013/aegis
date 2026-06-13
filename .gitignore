@@ -13,6 +13,8 @@ venv/
 
 # AEGIS runtime/local
 *.png
+!aegis/desktop_app/build/
+!aegis/desktop_app/build/icon.png
 aegis_images/
 *.sock
 .env
