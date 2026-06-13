@@ -142,6 +142,31 @@ def _raw(text: str) -> None:
     sys.stdout.flush()
 
 
+# ANSI-Shadow "AEGIS" for the startup banner, drawn with a magenta→cyan gradient.
+_AEGIS_ART = [
+    " █████╗ ███████╗ ██████╗ ██╗███████╗",
+    "██╔══██╗██╔════╝██╔════╝ ██║██╔════╝",
+    "███████║█████╗  ██║  ███╗██║███████╗",
+    "██╔══██║██╔══╝  ██║   ██║██║╚════██║",
+    "██║  ██║███████╗╚██████╔╝██║███████║",
+    "╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═╝╚══════╝",
+]
+_AEGIS_ART_COLORS = ["#8b5cff", "#7d6bff", "#5b8cff", "#3ba6f0", "#2bc0e4", "#22d3ee"]
+
+
+def _tool_icon(name: str) -> str:
+    n = (name or "").lower()
+    if "read" in n or "file" in n: return "📄"
+    if "write" in n or "edit" in n: return "✎"
+    if "bash" in n or "shell" in n or "exec" in n or "command" in n: return "▷"
+    if "search" in n or "grep" in n or "glob" in n or "recall" in n: return "🔍"
+    if "web" in n or "fetch" in n or "url" in n or "browser" in n: return "🌐"
+    if "memory" in n: return "🧠"
+    if "skill" in n: return "📦"
+    if "kanban" in n or "todo" in n: return "🗂"
+    return "⚙"
+
+
 def slash_matches(query: str = "") -> list[SlashCommand]:
     q = query.strip().lower()
     if not q:
@@ -288,16 +313,20 @@ class Renderer:
                 _out(e["text"])
         elif t == "tool_start":
             args = e.get("args", {})
-            detail = args.get("command") or args.get("path") or args.get("url") or args.get("query") or ""
-            _out(f"  ⚙ {e['name']}({str(detail)[:80]})", style="cyan")
+            detail = (args.get("command") or args.get("path") or args.get("url")
+                      or args.get("query") or args.get("pattern") or args.get("name") or "")
+            _out(f"  {_tool_icon(e['name'])} {e['name']}  {str(detail)[:80]}", style="cyan")
         elif t == "tool_result":
-            if not e.get("is_error") and e.get("name") == "memory":
-                _out(f"    💾 remembered: {e['summary']}", style="magenta")
-            elif not e.get("is_error") and e.get("name") == "skill":
-                _out(f"    📝 skill: {e['summary']}", style="magenta")
+            ms = int(e.get("duration_ms") or 0)
+            secs = f"  {ms / 1000:.1f}s" if ms else ""
+            if e.get("is_error"):
+                _out(f"    ✗ {e['summary']}{secs}", style="red")
+            elif e.get("name") == "memory":
+                _out(f"    🧠 remembered: {e['summary']}{secs}", style="magenta")
+            elif e.get("name") == "skill":
+                _out(f"    📦 skill: {e['summary']}{secs}", style="magenta")
             else:
-                style = "red" if e.get("is_error") else "green"
-                _out(f"    ↳ {e['summary']}", style=style)
+                _out(f"    ✓ {e['summary']}{secs}", style="green")
         elif t == "compacting":
             _out("  … compacting context …", style="yellow")
         elif t == "budget_exhausted":
@@ -434,9 +463,13 @@ def banner(agent: Agent) -> None:
     model = getattr(agent.provider, "model", "?")
     if _console:
         from rich.text import Text
+        art = Text()
+        for line, color in zip(_AEGIS_ART, _AEGIS_ART_COLORS):
+            art.append("  " + line + "\n", style=f"bold {color}")
+        _console.print(art)
         body = Text()
-        body.append("  ▟▛ AEGIS ", style="bold magenta")
-        body.append(f"v{__version__}\n\n", style="dim")
+        body.append(f"  v{__version__}", style="dim")
+        body.append("  ·  your terminal agent\n\n", style="dim")
         body.append("  model    ", style="dim"); body.append(f"{model}\n", style="cyan")
         ctx = _context_window(agent)
         if ctx["window"]:
