@@ -1,7 +1,7 @@
 # AEGIS
 
 A self-improving, multi-provider, multi-channel **terminal agent harness** in Python —
-an open, self-hostable terminal agent harness in ~10k auditable lines.
+open, self-hostable, and built on one auditable, single-language core.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash

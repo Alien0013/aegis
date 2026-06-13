@@ -1,16 +1,16 @@
 <p align="center"><img src="assets/banner.svg" alt="AEGIS" width="760"></p>
 
 <p align="center"><b>The terminal AI agent you actually own.</b><br>
-Any model · any channel · runs on your machine · learns as it goes — in ~35k auditable lines.</p>
+Any model · any channel · runs on your machine · learns as it goes — in one auditable, single-language core.</p>
 
 <p align="center">
   <a href="https://github.com/Alien0013/aegis/actions"><img src="https://github.com/Alien0013/aegis/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="python">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
-  <img src="https://img.shields.io/badge/tests-608%20passing-brightgreen" alt="tests">
+  <img src="https://img.shields.io/badge/tests-704%20passing-brightgreen" alt="tests">
   <img src="https://img.shields.io/badge/providers-29-blueviolet" alt="providers">
-  <img src="https://img.shields.io/badge/tools-37-blueviolet" alt="tools">
-  <img src="https://img.shields.io/badge/skills-29-orange" alt="skills">
+  <img src="https://img.shields.io/badge/tools-42-blueviolet" alt="tools">
+  <img src="https://img.shields.io/badge/skills-40-orange" alt="skills">
   <img src="https://img.shields.io/badge/UI-React%20%2B%20Vite-06b6d4" alt="react">
 </p>
 
@@ -46,12 +46,12 @@ aegis            # start chatting   ·   aegis ui   # …or a clickable browser 
 
 |  | What it means |
 |---|---|
-| 🪶 **Tiny, auditable core** | ~35k lines across ~95 modules — small enough to read and trust end to end. Full-platform capability, none of the sprawl. |
+| 🪶 **Focused, auditable core** | One bounded agent loop, pure-Python, no framework sprawl — small enough to read and trust end to end. Full-platform capability without the lock-in. |
 | 🔌 **Truly model-agnostic** | **29 provider presets** (Claude, GPT, Gemini, Llama, DeepSeek, Qwen, Grok, local Ollama…) behind one interface, with **API-key *and* OAuth** auth, fallback chains, credential pools, and per-prompt routing. |
 | 🧠 **It actually learns** | **Autonomous memory** — saves your preferences, facts, and corrections as it works (no asking). Plus a background self-improvement loop that reviews finished sessions, auto-applies memory, and proposes new skills (secret-redacted; skills human-gated by default, fully autonomous with one flag). FTS5 cross-session recall. |
 | 🛡️ **Safe by default** | Permission cascade with a **hardline blocklist** (refuses `rm -rf /` even in yolo), pre-exec scanning, **fail-closed** docker/ssh/singularity/modal sandboxes, and untrusted-tool-result wrapping against prompt injection. |
 | 📡 **Everywhere you are** | One agent serving CLI, Telegram, Discord, Slack, Signal, Matrix, Email, and webhooks — with voice-memo transcription and a durable, retrying delivery queue. |
-| 🧰 **Batteries included** | **37 tools, 29 skills** + hub import, MCP (client **and** server), an OpenAI-compatible API, a web dashboard, cron, trajectory export, cost analytics, and OSV vulnerability auditing. |
+| 🧰 **Batteries included** | **42 tools, 40 skills** + hub import, MCP (client **and** server), an OpenAI-compatible API, a web dashboard, cron, trajectory export, cost analytics, and OSV vulnerability auditing. |
 | 🔓 **Yours** | MIT, self-hosted, no subscription, no lock-in. Your keys, your data, your machine. |
 
 > Design principle: do everything a full agent platform does, but keep the whole thing
@@ -66,39 +66,44 @@ permission cascade, and the same durable state.
 
 ```mermaid
 flowchart TB
-    subgraph Surfaces["Entry surfaces — all share one loop"]
-        CLI["CLI / REPL"]
-        UI["Web dashboard<br/>React + Vite (aegis ui)"]
-        GW["Gateway · 8 channels<br/>Telegram · Discord · Slack · Signal<br/>Matrix · Email · Webhook · ntfy"]
-        API["OpenAI-compatible API<br/>· SDK · JSON-RPC"]
+    CLI["💻 CLI / REPL"]:::s
+    UI["🖥️ Web dashboard<br/>React + Vite"]:::s
+    GW["📡 Gateway · 8 channels"]:::s
+    API["🔌 OpenAI API · SDK · RPC"]:::s
+
+    SR["SurfaceRunner — one entry into the loop<br/>sessions · runs · tracing · @references"]:::hub
+
+    subgraph CORE["🧠 Agent core"]
+        direction LR
+        LOOP["Bounded loop<br/>governance · compaction · budget"]:::c
+        PERM["Permission cascade<br/>hardline · scan · sandbox"]:::c
+        REG["Tool registry · 42 tools<br/>+ MCP · plugins · deferred schemas"]:::c
     end
 
-    SR["SurfaceRunner<br/>session · runs · tracing · context-refs"]
-
-    subgraph Core["Agent core"]
-        LOOP["Bounded agent loop<br/>governance · compaction · loop-guard · budget"]
-        PERM["Permission cascade<br/>hardline · groups · exec-mode · scan · sandbox"]
-        REG["Tool registry · 37 tools<br/>+ deferred schemas + MCP + plugins"]
+    subgraph PROV["⚙️ Providers"]
+        direction LR
+        TRANS["Transports<br/>anthropic · chat · responses · codex"]:::p
+        AUTH["Auth<br/>API key · OAuth · pools"]:::p
     end
 
-    subgraph Providers["Provider layer"]
-        TRANS["Transports<br/>chat_completions · anthropic · responses · codex"]
-        AUTH["Auth<br/>API key · OAuth PKCE · Codex CLI · credential pools"]
-        FB["Fallback chains · per-prompt routing · /model switch"]
+    subgraph STATE["💾 Durable state · ~/.aegis"]
+        direction LR
+        MEM["Memory<br/>MEMORY · USER · providers"]:::d
+        SK["Skills · marketplace"]:::d
+        SESS["Sessions<br/>SQLite + FTS5"]:::d
+        OBS["Observability<br/>runs · traces · cost"]:::d
     end
 
-    subgraph State["Durable state (~/.aegis)"]
-        MEM["Memory<br/>MEMORY.md · USER.md · history · provider hooks"]
-        SK["Skills (SKILL.md) · marketplace"]
-        SESS["Sessions · SQLite + FTS5 · lineage"]
-        OBS["Observability<br/>runs · traces · evals · usage/cost"]
-    end
-
-    Surfaces --> SR --> LOOP
+    CLI & UI & GW & API --> SR --> LOOP
     LOOP --> PERM --> REG
-    LOOP --> Providers
-    LOOP --> State
-    State --> LOOP
+    LOOP --> PROV
+    LOOP <--> STATE
+
+    classDef s fill:#ede9fe,stroke:#7c3aed,color:#3b0764;
+    classDef hub fill:#ddd6fe,stroke:#6d28d9,color:#3b0764,font-weight:bold;
+    classDef c fill:#cffafe,stroke:#0891b2,color:#083344;
+    classDef p fill:#e0f2fe,stroke:#0284c7,color:#082f49;
+    classDef d fill:#dcfce7,stroke:#16a34a,color:#052e16;
 ```
 
 ### The agent loop
@@ -130,42 +135,52 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    subgraph Channels
-        TG[Telegram]; DC[Discord]; SL[Slack]; SG[Signal]
-        MX[Matrix]; EM[Email]; WH[Webhook]; NT[ntfy]
+    subgraph CH["📡 Channels"]
+        direction TB
+        C1["Telegram · Discord · Slack"]:::ch
+        C2["Signal · Matrix · Email"]:::ch
+        C3["Webhook · ntfy"]:::ch
     end
-    Channels -->|normalized MessageEvent| HUB["Gateway hub<br/>routing · pairing · admin tiers<br/>busy-mode (queue·steer·interrupt)"]
-    HUB -->|per-conversation agent| AG["Agent<br/>redaction · friendly errors · PLATFORM_HINTS"]
-    AG -->|reply / MEDIA / status edit| OUT["Delivery queue<br/>durable · retrying"]
-    OUT --> Channels
-    CRON["Cron ticker<br/>recurring + one-shot + scripts"] -->|send_message| OUT
-    AG -->|live events| DASH["Dashboard (SSE)"]
-    CLI2["CLI /handoff"] -.->|adopt session| HUB
+
+    HUB["Gateway hub<br/>routing · pairing · admin tiers<br/>busy-mode: queue · steer · interrupt"]:::hub
+    AG["Per-conversation Agent<br/>redaction · friendly errors · platform hints"]:::ag
+    OUT["Delivery queue<br/>durable · retrying"]:::out
+
+    CH -->|normalized event| HUB --> AG -->|reply · media · status| OUT -->|deliver| CH
+    CRON["⏰ Cron ticker"]:::aux -->|send_message| OUT
+    AG -->|live events| DASH["📊 Dashboard · SSE"]:::aux
+    HANDOFF["CLI /handoff"]:::aux -.->|adopt session| HUB
+
+    classDef ch fill:#ede9fe,stroke:#7c3aed,color:#3b0764;
+    classDef hub fill:#ddd6fe,stroke:#6d28d9,color:#3b0764,font-weight:bold;
+    classDef ag fill:#cffafe,stroke:#0891b2,color:#083344;
+    classDef out fill:#dcfce7,stroke:#16a34a,color:#052e16;
+    classDef aux fill:#f1f5f9,stroke:#64748b,color:#0f172a;
 ```
 
-### The learning loop
+### The learning & memory loop
+
+It closes the loop: a finished session is reviewed, distilled into memory and skills,
+and folded back into the next turn's system prompt — safely (secret-redacted,
+injection-scanned, human-gated by default).
 
 ```mermaid
 flowchart LR
-    S["Finished turn / session"] --> R["Forked review agent<br/>(memory + skill tools only)"]
-    R --> C["Candidates<br/>secret-redacted · injection-scanned"]
-    C -->|auto_apply or /learn approve| M["MEMORY.md · USER.md<br/>refuse-don't-drop · fcntl locks"]
-    C -->|promote| K["Skills (SKILL.md)<br/>provenance-tracked"]
-    M --> P["Next turn's system prompt<br/>(mtime-refreshed mid-chat)"]
-    K --> P
-    K --> CUR["Curator<br/>active → stale → archived"]
-```
+    S["✅ Finished session"]:::src --> R["Forked review agent<br/>memory + skill tools only"]:::work
+    R --> C{"Candidates<br/>redacted · injection-scanned"}:::gate
+    C -->|"/learn approve · auto"| M["MEMORY · USER<br/>fcntl-locked · refuse-don't-drop"]:::store
+    C -->|promote| K["Skills · SKILL.md<br/>provenance-tracked"]:::store
+    EXT["External providers<br/>mem0 · honcho · jsonl · http"]:::ext --> SNAP
+    M --> SNAP["🧩 System-prompt snapshot<br/>cache-stable · mtime-refreshed"]:::prompt
+    K --> SNAP --> S
+    K --> CUR["Curator<br/>active → stale → archived"]:::work
 
-### Memory & state flow
-
-```mermaid
-flowchart TB
-    W["Write — memory tool · /learn · background review"] -->|fcntl lock · injection scan · dedup| F["memories/USER.md · MEMORY.md"]
-    F -->|frozen snapshot at turn start| SNAP["System-prompt snapshot<br/>(cache-stable)"]
-    F -.->|mtime change| RE["is_stale() → rebuild next turn"]
-    RE --> SNAP
-    EXT["External provider<br/>(mem0 · honcho · jsonl · http)"] -->|prefetch · sync_turn · lifecycle hooks| SNAP
-    SNAP --> PROMPT["Layered system prompt<br/>identity · rules · memory · skills"]
+    classDef src fill:#ede9fe,stroke:#7c3aed,color:#3b0764;
+    classDef work fill:#cffafe,stroke:#0891b2,color:#083344;
+    classDef gate fill:#fef9c3,stroke:#ca8a04,color:#422006;
+    classDef store fill:#dcfce7,stroke:#16a34a,color:#052e16;
+    classDef ext fill:#f1f5f9,stroke:#64748b,color:#0f172a;
+    classDef prompt fill:#ddd6fe,stroke:#6d28d9,color:#3b0764,font-weight:bold;
 ```
 
 ## 📦 Install (one line)
@@ -243,7 +258,7 @@ with localhost-callback **and** manual-paste, auto-refresh, and `auth.json` at `
 Qwen, MiniMax, and xAI OAuth are catalog scaffolds for now; they run with API keys.
 → [docs/providers.md](docs/providers.md)
 
-### Tools & permissions (37 tools)
+### Tools & permissions (42 tools)
 `read_file` · `write_file` · `edit_file` · `apply_patch` · `list_dir` · `glob` · `search` ·
 `bash` · `process` (with completion wakeups) · `web_fetch` · `web_search` · `http_request` ·
 `download` · `todo_write` · `memory` · `skill` · `clarify` (ask the user) ·
@@ -259,7 +274,7 @@ Every dangerous tool flows through:
 hardline blocklist  →  deny_groups  →  exec_mode (deny|allowlist|ask|smart|auto|full)  →  allowlist  →  approval
 ```
 
-### Skills (29 bundled) & the learning loop
+### Skills (40 bundled) & the learning loop
 `SKILL.md` packages (agentskills.io-compatible) with progressive disclosure and tiered
 precedence (workspace > personal > configured > bundled). Bundled set includes
 `code-review`, `debugging`, `write-tests`, `refactor`, `commit`, `dockerize`, `kubernetes`,
