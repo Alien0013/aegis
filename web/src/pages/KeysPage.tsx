@@ -48,6 +48,11 @@ export function KeysPage() {
   }
 
   useEffect(() => { load().catch((e) => toast(String(e), "err")); }, []);
+  useEffect(() => {
+    const query = window.location.hash.split("?", 2)[1] || "";
+    const key = new URLSearchParams(query).get("key");
+    if (key) setName(key.toUpperCase());
+  }, []);
 
   const filtered = useMemo(() => {
     const query = q.trim().toLowerCase();
@@ -94,6 +99,19 @@ export function KeysPage() {
         sub={<>stored in <span className="mono">{envPath}</span> · comma-separated provider keys form a credential pool</>}
       />
       <div className="stack">
+        <Card title="Presets">
+          <div className="key-preset-grid">
+            {[...PROVIDER_KEYS, ...CHANNEL_KEYS].map((k) => {
+              const row = keys.find((x) => x.key === k);
+              return (
+                <button className="key-preset" key={k} onClick={() => setName(k)}>
+                  <span className="mono">{k}</span>
+                  <Badge status={row?.set === false || !row ? "missing" : "set"}>{row?.set === false || !row ? "missing" : "set"}</Badge>
+                </button>
+              );
+            })}
+          </div>
+        </Card>
         <Card title="Set a key">
           <div className="grid c3" style={{ alignItems: "end" }}>
             <Field label="Name"><input value={name} onChange={(e) => setName(e.target.value.toUpperCase())} placeholder="OPENAI_API_KEY" /></Field>

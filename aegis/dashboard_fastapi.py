@@ -413,6 +413,101 @@ def _config_schema(defaults: dict[str, Any] | None = None) -> dict:
     return {"sections": sections, "fields": flatten(base), "loose": loose}
 
 
+_SAFE_RESOURCE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,80}$")
+
+
+def _safe_resource_name(name: str, kind: str = "name") -> str:
+    value = str(name or "").strip()
+    if not value or not _SAFE_RESOURCE_NAME_RE.match(value) or ".." in value:
+        raise ValueError(f"invalid {kind}")
+    return value
+
+
+def _get_config_value(config: Config, path: str) -> Any:
+    return config.get(path)
+
+
+def _config_field_map() -> dict[str, dict[str, Any]]:
+    return {field["path"]: field for field in _config_schema()["fields"]}
+
+
+def _validate_config_value(field: dict[str, Any], value: Any) -> str:
+    enum = field.get("enum")
+    if enum and value not in enum:
+        return f"value must be one of: {', '.join(str(x) or '(empty)' for x in enum)}"
+    expected = str(field.get("type") or "")
+    if expected in {"bool", "boolean"} and not isinstance(value, bool):
+        return "value must be a boolean"
+    if expected == "int" and (not isinstance(value, int) or isinstance(value, bool)):
+        return "value must be an integer"
+    if expected == "float" and (not isinstance(value, (int, float)) or isinstance(value, bool)):
+        return "value must be a number"
+    if expected == "str" and not isinstance(value, str):
+        return "value must be a string"
+    if expected == "list" and not isinstance(value, list):
+        return "value must be a list"
+    if expected == "dict" and not isinstance(value, dict):
+        return "value must be an object"
+    if expected == "null" and value is not None:
+        return "value must be null"
+    return ""
+
+
+def _config_fields_patch(config: Config, body: dict) -> dict:
+    updates = body.get("updates")
+    if isinstance(updates, dict):
+        updates = [{"path": path, "value": value} for path, value in updates.items()]
+    if not isinstance(updates, list) or not updates:
+        return {"ok": False, "error": "updates must be a non-empty list or object", "results": [], "errors": {}}
+    fields = _config_field_map()
+    dry_run = bool(body.get("dry_run", False))
+    results = []
+    errors = []
+    error_map: dict[str, str] = {}
+    for item in updates:
+        if not isinstance(item, dict):
+            result = {"ok": False, "error": "update must be an object"}
+            results.append(result)
+            errors.append(result)
+            continue
+        path = str(item.get("path") or "").strip()
+        value = item.get("value")
+        field = fields.get(path)
+        if field is None:
+            result = {"ok": False, "path": path, "error": "unknown config field"}
+            results.append(result)
+            errors.append(result)
+            error_map[path] = str(result["error"])
+            continue
+        error = _validate_config_value(field, value)
+        if error:
+            result = {"ok": False, "path": path, "error": error}
+            results.append(result)
+            errors.append(result)
+            error_map[path] = str(error)
+            continue
+        result = {
+            "ok": True,
+            "path": path,
+            "value": value,
+            "previous": _get_config_value(config, path),
+            "restart": field.get("restart", ""),
+        }
+        results.append(result)
+    if errors:
+        return {"ok": False, "dry_run": dry_run, "results": results, "errors": error_map}
+    if not dry_run:
+        for result in results:
+            config.set(str(result["path"]), result.get("value"))
+    return {
+        "ok": True,
+        "dry_run": dry_run,
+        "results": results,
+        "changed": {str(result["path"]): result.get("value") for result in results},
+        "config": dash._redacted_config(config),
+    }
+
+
 def _redacted_value(value: str) -> dict:
     if value == "":
         return {"set": True, "preview": "", "length": 0}
@@ -451,6 +546,10 @@ def _env_list() -> dict:
     return {"env_path": str(cfg.env_path()), "keys": rows}
 
 
+def _env_key_is_set(key: str) -> bool:
+    return key in _env_file_values() or bool(os.environ.get(key))
+
+
 def _delete_env_key(key: str) -> bool:
     from . import config as cfg
     from .util import atomic_write
@@ -472,6 +571,390 @@ def _delete_env_key(key: str) -> bool:
         atomic_write(path, "\n".join(kept) + ("\n" if kept else ""))
     os.environ.pop(key, None)
     return changed
+
+
+def _provider_auth_row(row: dict, config: Config) -> dict:
+    env_vars = list(row.get("env_vars") or [])
+    missing = [key for key in env_vars if not _env_key_is_set(str(key))]
+    auth = row.get("auth") if isinstance(row.get("auth"), dict) else {}
+    pool_status = None
+    try:
+        from .credentials import pool_for
+
+        pool = pool_for(str(row.get("name") or ""), env_vars, config)
+        pool_status = pool.status() if pool is not None else None
+    except Exception:  # noqa: BLE001
+        pool_status = None
+    methods = list(row.get("auth_methods") or [])
+    if missing:
+        action = "set_api_key"
+    elif "codex_cli" in methods:
+        action = "codex_login"
+    elif row.get("oauth") and row.get("oauth_status") not in {"configured", "not_applicable"}:
+        action = "oauth_setup"
+    else:
+        action = "ready" if auth.get("available") else "inspect"
+    return {
+        "name": row.get("name", ""),
+        "display_name": row.get("display_name") or row.get("name", ""),
+        "provider": row.get("name", ""),
+        "model": row.get("default_model") or row.get("model") or "",
+        "api_mode": row.get("api_mode", ""),
+        "auth": auth,
+        "auth_methods": methods,
+        "auth_scheme": row.get("auth_scheme", ""),
+        "env_vars": env_vars,
+        "missing_env_vars": missing,
+        "oauth": bool(row.get("oauth", False)),
+        "oauth_status": row.get("oauth_status", ""),
+        "oauth_notes": row.get("oauth_notes", ""),
+        "credential_pool": pool_status,
+        "capabilities": row.get("capabilities", {}),
+        "capability_summary": row.get("capability_summary", ""),
+        "suggested_action": action,
+        "ready": bool(auth.get("available")) and not missing,
+    }
+
+
+def _provider_auth_payload(config: Config, provider: str = "") -> dict:
+    from .providers import registry
+
+    report = registry.provider_report(config)
+    rows = [_provider_auth_row(row, config) for row in (report.get("provider_catalog") or [])]
+    active_name = str((report.get("active") or {}).get("name") or config.get("model.provider") or "")
+    active = next((row for row in rows if row.get("name") == active_name), None)
+    if provider:
+        match = next((row for row in rows if row.get("name") == provider), None)
+        return {"ok": bool(match), "provider": provider, "auth": match, "active": active}
+    return {"active": active, "providers": rows, "oauth_catalog": report.get("oauth_catalog", [])}
+
+
+_CHANNEL_CATALOG: list[dict[str, Any]] = [
+    {
+        "id": "telegram",
+        "label": "Telegram",
+        "env": ["TELEGRAM_BOT_TOKEN"],
+        "setup": "Create a bot with BotFather, set TELEGRAM_BOT_TOKEN, start the gateway, then approve the pairing code.",
+        "pairing": True,
+    },
+    {
+        "id": "discord",
+        "label": "Discord",
+        "env": ["DISCORD_BOT_TOKEN"],
+        "setup": "Create a Discord bot token and install the discord extra when using this adapter.",
+        "pairing": True,
+    },
+    {
+        "id": "slack",
+        "label": "Slack",
+        "env": ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"],
+        "setup": "Use Socket Mode with a bot token and app-level token.",
+        "pairing": True,
+    },
+    {
+        "id": "signal",
+        "label": "Signal",
+        "env": ["SIGNAL_CLI_ACCOUNT"],
+        "setup": "Requires signal-cli and a registered account.",
+        "pairing": False,
+    },
+    {
+        "id": "matrix",
+        "label": "Matrix",
+        "env": ["MATRIX_HOMESERVER", "MATRIX_USER", "MATRIX_PASSWORD"],
+        "setup": "Requires matrix-nio plus a Matrix homeserver, user, and password.",
+        "pairing": True,
+    },
+    {
+        "id": "email",
+        "label": "Email",
+        "env": ["EMAIL_IMAP_HOST", "EMAIL_SMTP_HOST", "EMAIL_ADDRESS", "EMAIL_PASSWORD"],
+        "setup": "Configure IMAP and SMTP so AEGIS can read and send mail.",
+        "pairing": False,
+    },
+    {
+        "id": "webhook",
+        "label": "Webhook",
+        "env": [],
+        "setup": "POST bridge events to the local webhook endpoint.",
+        "pairing": False,
+    },
+    {
+        "id": "ntfy",
+        "label": "ntfy",
+        "env": ["NTFY_TOPIC", "NTFY_TOKEN"],
+        "setup": "Use ntfy for lightweight push notifications and replies.",
+        "pairing": False,
+    },
+]
+
+
+def _channel_catalog_map() -> dict[str, dict[str, Any]]:
+    return {row["id"]: row for row in _CHANNEL_CATALOG}
+
+
+def _gateway_channel_payload(config: Config, channel: str | None = None) -> dict:
+    from .doctor import CHANNEL_PROBES
+
+    enabled = set(config.get("gateway.channels", []) or [])
+    profiles = config.get("gateway.profiles", {}) or {}
+    rows = []
+    for item in _CHANNEL_CATALOG:
+        row = dict(item)
+        env_vars = list(row.get("env") or [])
+        missing = [key for key in env_vars if not _env_key_is_set(str(key))]
+        channel_id = str(row["id"])
+        row.update({
+            "enabled": channel_id in enabled,
+            "configured": channel_id in enabled and not missing,
+            "env_vars": env_vars,
+            "missing_env_vars": missing,
+            "probe_available": channel_id in CHANNEL_PROBES,
+            "profile": profiles.get(channel_id, {}) if isinstance(profiles, dict) else {},
+        })
+        rows.append(row)
+    if channel:
+        match = next((row for row in rows if row["id"] == channel), None)
+        return {"ok": bool(match), "channel": match}
+    return {
+        "channels": rows,
+        "enabled": sorted(enabled),
+        "gateway": _gateway_status(config),
+    }
+
+
+def _set_gateway_channel(config: Config, channel: str, body: dict) -> dict:
+    channel = _safe_resource_name(channel, "channel").lower()
+    if channel not in _channel_catalog_map():
+        return {"ok": False, "error": "unknown channel", "channel": channel}
+    channels = set(config.get("gateway.channels", []) or [])
+    if "enabled" in body:
+        if bool(body.get("enabled")):
+            channels.add(channel)
+        else:
+            channels.discard(channel)
+        config.data.setdefault("gateway", {})["channels"] = sorted(channels)
+    profile_keys = {"personality", "profile", "provider", "model", "reasoning_effort", "busy_mode"}
+    overlay = {k: body[k] for k in profile_keys if k in body and body[k] not in ("", None)}
+    if overlay:
+        profiles = dict(config.get("gateway.profiles", {}) or {})
+        existing = dict(profiles.get(channel, {}) or {})
+        if "profile" in overlay and "personality" not in overlay:
+            overlay["personality"] = overlay.pop("profile")
+        existing.update(overlay)
+        profiles[channel] = existing
+        config.data.setdefault("gateway", {})["profiles"] = profiles
+    config.save()
+    return {"ok": True, **_gateway_channel_payload(config, channel)}
+
+
+def _profile_dir() -> Path:
+    from . import config as cfg
+
+    return cfg.workspace_dir() / "personalities"
+
+
+def _profile_path(name: str) -> Path:
+    safe = _safe_resource_name(name, "profile")
+    path = (_profile_dir() / f"{safe}.md").resolve()
+    if path.parent != _profile_dir().resolve():
+        raise ValueError("invalid profile")
+    return path
+
+
+def _profile_detail(config: Config, name: str) -> dict:
+    try:
+        path = _profile_path(name)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc), "name": name}
+    if not path.exists():
+        return {"ok": False, "error": "profile not found", "name": name}
+    text = path.read_text(encoding="utf-8")
+    return {
+        "ok": True,
+        "name": path.stem,
+        "active": (config.get("agent.personality") or "") == path.stem,
+        "path": str(path),
+        "content": text,
+        "preview": text[:500],
+        "bytes": len(text.encode("utf-8")),
+    }
+
+
+def _profiles_payload(config: Config) -> dict:
+    active = str(config.get("agent.personality") or "")
+    directory = _profile_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    names = sorted(path.stem for path in directory.glob("*.md"))
+    return {
+        "active": active,
+        "available": names,
+        "path": str(directory),
+        "profiles": [
+            {
+                "name": name,
+                "active": name == active,
+                "path": str(_profile_path(name)),
+            }
+            for name in names
+        ],
+    }
+
+
+def _write_profile(config: Config, name: str, content: str) -> dict:
+    path = _profile_path(name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(content or "").rstrip() + "\n", encoding="utf-8")
+    return {"ok": True, "profile": _profile_detail(config, path.stem)}
+
+
+def _skill_writable_roots() -> list[Path]:
+    from . import config as cfg
+
+    roots = [
+        Path.cwd() / ".aegis" / "skills",
+        Path.cwd() / "skills",
+        cfg.skills_dir(),
+    ]
+    seen = set()
+    resolved = []
+    for root in roots:
+        candidate = root.expanduser().resolve()
+        if candidate not in seen:
+            seen.add(candidate)
+            resolved.append(candidate)
+    return resolved
+
+
+def _skill_path_editable(path: Path) -> bool:
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return False
+    return any(resolved.is_relative_to(root) for root in _skill_writable_roots())
+
+
+def _skill_entry(skill, usage: dict, installed_lock: dict) -> dict:
+    ok, reason = skill.satisfied()
+    lock = installed_lock.get(skill.name, {}) if isinstance(installed_lock, dict) else {}
+    return {
+        "name": skill.name,
+        "description": skill.description,
+        "path": str(skill.path),
+        "tier": skill.tier,
+        "available": ok,
+        "unavailable_reason": reason,
+        "installed": bool(lock),
+        "source": lock.get("source", ""),
+        "installed_at": lock.get("installed_at", ""),
+        "editable": _skill_path_editable(skill.path),
+        "usage": usage.get(skill.name, {}) if isinstance(usage, dict) else {},
+    }
+
+
+def _skills_payload(config: Config) -> dict:
+    from . import marketplace
+    from .skills import SkillsLoader
+
+    loader = SkillsLoader(config)
+    usage = loader.usage()
+    lock = marketplace.installed()
+    rows = [_skill_entry(skill, usage, lock) for skill in sorted(loader.discover().values(), key=lambda s: s.name)]
+    return {
+        "skills": rows,
+        "count": len(rows),
+        "installed": lock,
+        "taps": marketplace.list_taps(config),
+    }
+
+
+def _skill_detail(config: Config, name: str) -> dict:
+    from .skills import SkillsLoader
+
+    try:
+        name = _safe_resource_name(name, "skill")
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc), "name": name}
+    loader = SkillsLoader(config)
+    skill = loader.discover().get(name)
+    if not skill:
+        return {"ok": False, "error": "skill not found", "name": name}
+    usage = loader.usage()
+    entry = _skill_entry(skill, usage, {})
+    return {
+        "ok": True,
+        "skill": entry,
+        "body": skill.full_body(),
+        "content": skill.path.read_text(encoding="utf-8"),
+        "support_dirs": [
+            p.name for p in skill.dir.iterdir()
+            if p.is_dir() and p.name in {"assets", "references", "scripts", "templates"}
+        ],
+    }
+
+
+def _plugin_detail(config: Config, name: str) -> dict:
+    payload = _plugins_payload(config)
+    manifests = payload.get("plugins") or []
+    match = next((row for row in manifests if row.get("name") == name), None)
+    return {"ok": bool(match), "plugin": match, **payload}
+
+
+def _validate_plugin_source(source: str) -> dict:
+    path = Path(str(source or "")).expanduser()
+    if not source:
+        return {"ok": False, "error": "source is required"}
+    if not path.exists():
+        return {"ok": False, "source": source, "error": "source does not exist"}
+    if path.is_file() and path.suffix != ".py":
+        return {"ok": False, "source": str(path), "error": "plugin file must be a .py file"}
+    if path.is_dir() and not any((path / name).exists() for name in ("plugin.json", "aegis-plugin.json")):
+        py_files = [p for p in path.glob("*.py") if not p.name.startswith("_")]
+        if not py_files:
+            return {"ok": False, "source": str(path), "error": "directory needs a plugin manifest or .py file"}
+    return {"ok": True, "source": str(path), "kind": "directory" if path.is_dir() else "file"}
+
+
+def _mcp_servers(config: Config) -> dict[str, dict]:
+    return dict(config.get("mcp.servers", {}) or {})
+
+
+def _mcp_spec_from_body(body: dict, existing: dict | None = None) -> dict:
+    spec = dict(existing or {})
+    if "url" in body:
+        spec.pop("command", None)
+        spec.pop("args", None)
+        spec["url"] = str(body.get("url") or "").strip()
+    if "command" in body:
+        raw = body.get("command")
+        if isinstance(raw, list):
+            parts = [str(x) for x in raw if str(x).strip()]
+        else:
+            parts = str(raw or "").split()
+        if parts:
+            spec.pop("url", None)
+            spec["command"] = parts[0]
+            spec["args"] = parts[1:]
+        else:
+            spec["command"] = ""
+            spec["args"] = []
+    if "args" in body and isinstance(body.get("args"), list):
+        spec["args"] = [str(x) for x in body["args"]]
+    for key in ("env", "headers", "cwd", "tool_filter"):
+        if key in body:
+            value = body.get(key)
+            if value in ("", None):
+                spec.pop(key, None)
+            else:
+                spec[key] = copy.deepcopy(value)
+    if not spec.get("command") and not spec.get("url"):
+        raise ValueError("server needs command or url")
+    return spec
+
+
+def _save_mcp_servers(config: Config, servers: dict[str, dict]) -> None:
+    config.data.setdefault("mcp", {})["servers"] = servers
+    config.save()
 
 
 def _session_export(session) -> dict:
@@ -715,6 +1198,8 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
         return dash._dashboard_models(config)
     if path == "/api/providers":
         return dash._dashboard_models(config)
+    if path == "/api/provider-auth":
+        return _provider_auth_payload(config)
     if path == "/api/analytics":
         from . import ratelimit
         from .usage_log import cost_report, daily_series
@@ -739,6 +1224,11 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
             config,
             live=(query.get("live", ["0"])[0] in {"1", "true", "yes"}),
         )
+    if path == "/api/mcp/servers":
+        return dash._dashboard_mcp_catalog(
+            config,
+            live=(query.get("live", ["0"])[0] in {"1", "true", "yes"}),
+        )
     if path == "/api/webhooks":
         from .webhook import WebhookStore
 
@@ -759,7 +1249,7 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
                 "providers": sorted(api.providers),
                 "manifests": [m.to_dict() for m in list_manifests(config)]}
     if path == "/api/profiles":
-        return dash._profiles(config)
+        return _profiles_payload(config)
     if path == "/api/system":
         return dash._system_info()
     if path == "/api/traces":
@@ -826,6 +1316,8 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
 
         return [{"name": s.name, "description": s.description}
                 for s in sorted(SkillsLoader(config).available(), key=lambda s: s.name)]
+    if path == "/api/skills/manage":
+        return _skills_payload(config)
     if path == "/api/tools":
         return dash._dashboard_tools(config)["tools"]
     return {"error": "not found"}
@@ -946,8 +1438,12 @@ def _api_post(path: str, body: dict, config: Config, chat_runner: Any) -> dict:
 
         return apply_transitions(dry_run=False)
     if path == "/api/profiles":
-        config.set("agent.personality", body.get("name") or "")
-        return {"ok": True, "active": config.get("agent.personality")}
+        name = str(body.get("name") or "").strip()
+        if not name:
+            config.set("agent.personality", "")
+        else:
+            config.set("agent.personality", _safe_resource_name(name, "profile"))
+        return {"ok": True, "active": config.get("agent.personality"), "profiles": _profiles_payload(config)}
     if path == "/api/mcp":
         servers = dict(config.get("mcp.servers", {}) or {})
         act = body.get("action")
@@ -963,16 +1459,27 @@ def _api_post(path: str, body: dict, config: Config, chat_runner: Any) -> dict:
             except Exception as exc:  # noqa: BLE001
                 return {"ok": False, "error": str(exc)}
         if act == "add" and body.get("name") and body.get("command"):
-            parts = str(body["command"]).split()
-            servers[body["name"]] = {"command": parts[0], "args": parts[1:]}
-            config.data.setdefault("mcp", {})["servers"] = servers
-            config.save()
+            servers[_safe_resource_name(str(body["name"]), "mcp server")] = _mcp_spec_from_body(body)
+            _save_mcp_servers(config, servers)
             return {"ok": True}
         if act == "remove" and body.get("name") in servers:
             servers.pop(body["name"])
-            config.data.setdefault("mcp", {})["servers"] = servers
-            config.save()
+            _save_mcp_servers(config, servers)
             return {"ok": True}
+        if act == "probe" and body.get("name"):
+            from .mcp.client import probe_server
+
+            return probe_server(config, _safe_resource_name(str(body["name"]), "mcp server"))
+        if act == "tools" and body.get("name"):
+            from .mcp.client import save_tool_checklist, tool_checklist
+
+            name = _safe_resource_name(str(body["name"]), "mcp server")
+            if "include" in body:
+                include = body.get("include") or []
+                if not isinstance(include, list):
+                    return {"ok": False, "error": "include must be a list"}
+                save_tool_checklist(config, name, [str(x) for x in include])
+            return tool_checklist(config, name)
         return {"error": "bad mcp request"}
     if path == "/api/plugins":
         act = body.get("action")
@@ -980,6 +1487,11 @@ def _api_post(path: str, body: dict, config: Config, chat_runner: Any) -> dict:
         try:
             from . import plugins as plugin_runtime
 
+            if act == "reload":
+                plugin_runtime.clear_runtime_cache()
+                return {"ok": True, **_plugins_payload(config)}
+            if act == "validate":
+                return _validate_plugin_source(str(body.get("source") or ""))
             if act == "install" and body.get("source"):
                 installed = plugin_runtime.install(
                     str(body["source"]),
@@ -1229,6 +1741,13 @@ def create_app(config: Config) -> FastAPI:
         body = await request.json()
         return JSONResponse(_api_post("/api/config", body, config, chat_runner))
 
+    @app.patch("/api/config/fields")
+    async def api_config_fields_patch(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        result = _config_fields_patch(config, body if isinstance(body, dict) else {})
+        return JSONResponse(result, status_code=200 if result.get("ok") else 400)
+
     @app.get("/api/config/defaults")
     async def api_config_defaults(request: Request) -> JSONResponse:
         _require_request(request, config)
@@ -1319,6 +1838,55 @@ def create_app(config: Config) -> FastAPI:
         _require_request(request, config)
         return JSONResponse({"ok": _delete_env_key(key), "key": key})
 
+    @app.get("/api/providers")
+    async def api_providers_get(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(dash._dashboard_models(config))
+
+    @app.post("/api/providers/probe")
+    async def api_providers_probe(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        return JSONResponse(_provider_probe(config, body if isinstance(body, dict) else {}))
+
+    @app.get("/api/provider-auth")
+    async def api_provider_auth_get(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_provider_auth_payload(config))
+
+    @app.get("/api/provider-auth/{provider}")
+    async def api_provider_auth_detail(provider: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        name = _safe_resource_name(provider, "provider")
+        payload = _provider_auth_payload(config, name)
+        return JSONResponse(payload, status_code=200 if payload.get("ok") else 404)
+
+    @app.delete("/api/provider-auth/{provider}")
+    async def api_provider_auth_delete(provider: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        name = _safe_resource_name(provider, "provider")
+        payload = _provider_auth_payload(config, name)
+        row = payload.get("auth") or {}
+        removed = []
+        for key in row.get("env_vars", []) or []:
+            if _delete_env_key(str(key)):
+                removed.append(str(key))
+        try:
+            from .providers.auth import AuthStore
+
+            AuthStore().delete(name)
+        except Exception:  # noqa: BLE001
+            pass
+        return JSONResponse({"ok": True, "provider": name, "removed_env": removed})
+
+    @app.post("/api/provider-auth/anthropic/import-claude")
+    async def api_provider_auth_import_claude(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from .providers.auth import AuthStore, import_claude_cli_login
+
+        ok, detail = import_claude_cli_login(AuthStore())
+        return JSONResponse({"ok": bool(ok), "detail": detail}, status_code=200 if ok else 400)
+
     @app.get("/api/dashboard/preferences")
     async def api_dashboard_preferences(request: Request) -> JSONResponse:
         _require_request(request, config)
@@ -1332,10 +1900,236 @@ def create_app(config: Config) -> FastAPI:
             return JSONResponse({"ok": False, "error": "preferences object required"}, status_code=400)
         return JSONResponse({"ok": True, "preferences": _set_dashboard_preferences(config, body)})
 
+    @app.get("/api/profiles")
+    async def api_profiles_get(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_profiles_payload(config))
+
+    @app.post("/api/profiles")
+    async def api_profiles_create(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        try:
+            raw_name = str((body or {}).get("name") or "").strip()
+            if not raw_name:
+                config.set("agent.personality", "")
+                return JSONResponse({"ok": True, "active": "", "profiles": _profiles_payload(config)})
+            name = _safe_resource_name(raw_name, "profile")
+            content = str((body or {}).get("content") or "")
+            if not content.strip() and _profile_path(name).exists():
+                config.set("agent.personality", name)
+                return JSONResponse({"ok": True, "active": name, "profiles": _profiles_payload(config)})
+            if not content.strip():
+                content = f"# {name}\n\n"
+            result = _write_profile(config, name, content)
+            if bool((body or {}).get("activate", False)):
+                config.set("agent.personality", name)
+            return JSONResponse({**result, "active": config.get("agent.personality") or "", "profiles": _profiles_payload(config)})
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+    @app.get("/api/profiles/{name}")
+    async def api_profile_get(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        result = _profile_detail(config, name)
+        return JSONResponse(result, status_code=200 if result.get("ok") else 404)
+
+    @app.patch("/api/profiles/{name}")
+    async def api_profile_patch(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        try:
+            existing = _profile_detail(config, name)
+            if not existing.get("ok"):
+                return JSONResponse(existing, status_code=404)
+            content = str((body or {}).get("content", existing.get("content", "")))
+            result = _write_profile(config, name, content)
+            return JSONResponse({**result, "profiles": _profiles_payload(config)})
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+    @app.delete("/api/profiles/{name}")
+    async def api_profile_delete(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        try:
+            path = _profile_path(name)
+            if not path.exists():
+                return JSONResponse({"ok": False, "error": "profile not found", "name": name}, status_code=404)
+            path.unlink()
+            if config.get("agent.personality") == path.stem:
+                config.set("agent.personality", "")
+            return JSONResponse({"ok": True, "name": path.stem, "profiles": _profiles_payload(config)})
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+    @app.post("/api/profiles/{name}/activate")
+    async def api_profile_activate(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        if name in {"default", "none", "_default"}:
+            config.set("agent.personality", "")
+            return JSONResponse({"ok": True, "active": "", "profiles": _profiles_payload(config)})
+        result = _profile_detail(config, name)
+        if not result.get("ok"):
+            return JSONResponse(result, status_code=404)
+        config.set("agent.personality", str(result["name"]))
+        return JSONResponse({"ok": True, "active": result["name"], "profiles": _profiles_payload(config)})
+
+    @app.get("/api/skills/manage")
+    async def api_skills_manage(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_skills_payload(config))
+
+    @app.get("/api/skills/marketplace/search")
+    async def api_skills_marketplace_search(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from . import marketplace
+
+        query = str(request.query_params.get("q") or request.query_params.get("query") or "")
+        try:
+            results = marketplace.search(query)
+        except Exception as exc:  # noqa: BLE001
+            results = []
+            return JSONResponse({"ok": False, "error": str(exc), "results": results}, status_code=502)
+        return JSONResponse({"ok": True, "query": query, "results": results})
+
+    @app.post("/api/skills/marketplace/install")
+    async def api_skills_marketplace_install(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from . import marketplace
+
+        body = await request.json()
+        try:
+            if body.get("hub"):
+                names = marketplace.install_hub(str(body["hub"]), config, force=bool(body.get("force", False)))
+            else:
+                source = str(body.get("source") or body.get("name") or "").strip()
+                if not source:
+                    return JSONResponse({"ok": False, "error": "source is required"}, status_code=400)
+                names = marketplace.install(source, force=bool(body.get("force", False)))
+            return JSONResponse({"ok": True, "installed": names, **_skills_payload(config)})
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+    @app.post("/api/skills")
+    async def api_skills_create(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        try:
+            from .skills import SkillsLoader
+            from .tools.skill_manage import _split_skill_content
+
+            loader = SkillsLoader(config)
+            content = body.get("content")
+            if content is not None:
+                fm, skill_body, err = _split_skill_content(str(content))
+                if err:
+                    return JSONResponse({"ok": False, "error": err}, status_code=400)
+                name = str(fm.get("name") or "").strip()
+                description = str(fm.get("description") or "").strip()
+                extra = {k: v for k, v in fm.items() if k not in {"name", "description"}}
+                path = loader.create(name, description, skill_body, extra_frontmatter=extra, origin="user")
+            else:
+                name = str(body.get("name") or "").strip()
+                description = str(body.get("description") or "").strip()
+                skill_body = str(body.get("body") or "").strip()
+                if not name or not description or not skill_body:
+                    return JSONResponse({"ok": False, "error": "name, description, and body are required"}, status_code=400)
+                path = loader.create(name, description, skill_body, origin="user")
+            return JSONResponse({"ok": True, "path": str(path), **_skills_payload(config)})
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+    @app.get("/api/skills/{name}")
+    async def api_skill_detail(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        result = _skill_detail(config, name)
+        return JSONResponse(result, status_code=200 if result.get("ok") else 404)
+
+    @app.patch("/api/skills/{name}")
+    async def api_skill_patch(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        detail = _skill_detail(config, name)
+        if not detail.get("ok"):
+            return JSONResponse(detail, status_code=404)
+        try:
+            from .tools.skill_manage import _split_skill_content
+            from .util import atomic_write
+
+            skill_path = Path(detail["skill"]["path"]).resolve()
+            if not _skill_path_editable(skill_path):
+                return JSONResponse({"ok": False, "error": "only workspace or personal skills can be edited"}, status_code=403)
+            content = str(body.get("content") or "")
+            if not content:
+                current = skill_path.read_text(encoding="utf-8")
+                content = current
+            fm, _skill_body, err = _split_skill_content(content)
+            if err:
+                return JSONResponse({"ok": False, "error": err}, status_code=400)
+            if str(fm.get("name") or "").strip() != name:
+                return JSONResponse({"ok": False, "error": "frontmatter name must match skill name"}, status_code=400)
+            atomic_write(skill_path, content.rstrip() + "\n")
+            return JSONResponse({"ok": True, **_skill_detail(config, name)})
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+    @app.delete("/api/skills/{name}")
+    async def api_skill_delete(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        import shutil
+
+        detail = _skill_detail(config, name)
+        if not detail.get("ok"):
+            return JSONResponse(detail, status_code=404)
+        skill_path = Path(detail["skill"]["path"]).resolve()
+        if not _skill_path_editable(skill_path):
+            return JSONResponse({"ok": False, "error": "only workspace or personal skills can be deleted"}, status_code=403)
+        target = skill_path.parent
+        ok = target.exists()
+        if ok:
+            shutil.rmtree(target)
+        return JSONResponse({"ok": ok, "name": detail["skill"]["name"], **_skills_payload(config)}, status_code=200 if ok else 404)
+
+    @app.post("/api/skills/{name}/pin")
+    async def api_skill_pin(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        safe = _safe_resource_name(name, "skill")
+        from . import curator
+
+        curator.pin(safe, True)
+        return JSONResponse({"ok": True, "name": safe, "pinned": True})
+
+    @app.post("/api/skills/{name}/unpin")
+    async def api_skill_unpin(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        safe = _safe_resource_name(name, "skill")
+        from . import curator
+
+        curator.pin(safe, False)
+        return JSONResponse({"ok": True, "name": safe, "pinned": False})
+
     @app.get("/api/plugins")
     async def api_plugins_list(request: Request) -> JSONResponse:
         _require_request(request, config)
         return JSONResponse(_plugins_payload(config))
+
+    @app.post("/api/plugins/reload")
+    async def api_plugins_reload(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        try:
+            from . import plugins as plugin_runtime
+
+            plugin_runtime.clear_runtime_cache()
+            return JSONResponse({"ok": True, **_plugins_payload(config)})
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+    @app.post("/api/plugins/validate")
+    async def api_plugins_validate(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        result = _validate_plugin_source(str((body or {}).get("source") or ""))
+        return JSONResponse(result, status_code=200 if result.get("ok") else 400)
 
     @app.post("/api/plugins/install")
     async def api_plugins_install(request: Request) -> JSONResponse:
@@ -1351,6 +2145,13 @@ def create_app(config: Config) -> FastAPI:
             return JSONResponse({"ok": True, "name": name, **_plugins_payload(config)})
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+    @app.get("/api/plugins/{name}")
+    async def api_plugin_detail(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        safe = _safe_resource_name(name, "plugin")
+        payload = _plugin_detail(config, safe)
+        return JSONResponse(payload, status_code=200 if payload.get("ok") else 404)
 
     @app.post("/api/plugins/{name}/enable")
     async def api_plugin_enable(name: str, request: Request) -> JSONResponse:
@@ -1375,6 +2176,118 @@ def create_app(config: Config) -> FastAPI:
 
         ok = plugin_runtime.remove(name, config)
         return JSONResponse({"ok": ok, "name": name, **_plugins_payload(config)}, status_code=200 if ok else 404)
+
+    @app.get("/api/mcp/servers")
+    async def api_mcp_servers(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        live = str(request.query_params.get("live") or "").lower() in {"1", "true", "yes"}
+        return JSONResponse(dash._dashboard_mcp_catalog(config, live=live))
+
+    @app.post("/api/mcp/servers")
+    async def api_mcp_server_create(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        try:
+            name = _safe_resource_name(str((body or {}).get("name") or ""), "mcp server")
+            servers = _mcp_servers(config)
+            if name in servers and not bool((body or {}).get("force", False)):
+                return JSONResponse({"ok": False, "error": "server already exists"}, status_code=409)
+            servers[name] = _mcp_spec_from_body(body if isinstance(body, dict) else {})
+            _save_mcp_servers(config, servers)
+            return JSONResponse({"ok": True, "name": name, **dash._dashboard_mcp_catalog(config)})
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+    @app.post("/api/mcp/catalog/{name}/install")
+    async def api_mcp_catalog_install(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        try:
+            from .mcp.client import install_from_catalog
+
+            safe = _safe_resource_name(name, "mcp catalog entry")
+            spec = install_from_catalog(config, safe)
+            target = spec.get("url") or " ".join([spec.get("command", ""), *(spec.get("args") or [])])
+            return JSONResponse({"ok": True, "name": safe, "target": target.strip(),
+                                 **dash._dashboard_mcp_catalog(config)})
+        except KeyError:
+            return JSONResponse({"ok": False, "error": "catalog entry not found"}, status_code=404)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+    @app.get("/api/mcp/servers/{name}")
+    async def api_mcp_server_detail(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        safe = _safe_resource_name(name, "mcp server")
+        live = str(request.query_params.get("live") or "").lower() in {"1", "true", "yes"}
+        payload = dash._dashboard_mcp_catalog(config, live=live)
+        match = next((row for row in payload.get("servers", []) if row.get("name") == safe), None)
+        return JSONResponse({"ok": bool(match), "server": match}, status_code=200 if match else 404)
+
+    @app.patch("/api/mcp/servers/{name}")
+    async def api_mcp_server_patch(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        try:
+            safe = _safe_resource_name(name, "mcp server")
+            servers = _mcp_servers(config)
+            if safe not in servers:
+                return JSONResponse({"ok": False, "error": "server not found"}, status_code=404)
+            servers[safe] = _mcp_spec_from_body(body if isinstance(body, dict) else {}, servers[safe])
+            _save_mcp_servers(config, servers)
+            return JSONResponse({"ok": True, "name": safe, **dash._dashboard_mcp_catalog(config)})
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+    @app.delete("/api/mcp/servers/{name}")
+    async def api_mcp_server_delete(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        safe = _safe_resource_name(name, "mcp server")
+        servers = _mcp_servers(config)
+        ok = safe in servers
+        if ok:
+            servers.pop(safe, None)
+            _save_mcp_servers(config, servers)
+        return JSONResponse({"ok": ok, "name": safe, **dash._dashboard_mcp_catalog(config)}, status_code=200 if ok else 404)
+
+    @app.post("/api/mcp/servers/{name}/probe")
+    async def api_mcp_server_probe(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        try:
+            from .mcp.client import probe_server
+
+            safe = _safe_resource_name(name, "mcp server")
+            result = probe_server(config, safe)
+            return JSONResponse(result, status_code=200 if result.get("ok") else 502)
+        except KeyError:
+            return JSONResponse({"ok": False, "error": "server not found", "name": name}, status_code=404)
+
+    @app.get("/api/mcp/servers/{name}/tools")
+    async def api_mcp_server_tools(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        try:
+            from .mcp.client import tool_checklist
+
+            safe = _safe_resource_name(name, "mcp server")
+            result = tool_checklist(config, safe)
+            return JSONResponse(result, status_code=200 if result.get("ok") else 502)
+        except KeyError:
+            return JSONResponse({"ok": False, "error": "server not found", "name": name}, status_code=404)
+
+    @app.post("/api/mcp/servers/{name}/tools")
+    async def api_mcp_server_tools_post(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        try:
+            from .mcp.client import save_tool_checklist, tool_checklist
+
+            safe = _safe_resource_name(name, "mcp server")
+            include = body.get("include", []) if isinstance(body, dict) else []
+            if not isinstance(include, list):
+                return JSONResponse({"ok": False, "error": "include must be a list"}, status_code=400)
+            save_tool_checklist(config, safe, [str(x) for x in include])
+            return JSONResponse({"ok": True, **tool_checklist(config, safe)})
+        except KeyError:
+            return JSONResponse({"ok": False, "error": "server not found", "name": name}, status_code=404)
 
     @app.get("/api/memory/providers")
     async def api_memory_providers(request: Request) -> JSONResponse:
@@ -1733,6 +2646,33 @@ def create_app(config: Config) -> FastAPI:
     async def api_gateway_status(request: Request) -> JSONResponse:
         _require_request(request, config)
         return JSONResponse(_gateway_status(config))
+
+    @app.get("/api/gateway/channels/catalog")
+    async def api_gateway_channels_catalog(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_gateway_channel_payload(config))
+
+    @app.get("/api/gateway/channels/{channel}")
+    async def api_gateway_channel_get(channel: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        safe = _safe_resource_name(channel, "channel").lower()
+        payload = _gateway_channel_payload(config, safe)
+        return JSONResponse(payload, status_code=200 if payload.get("ok") else 404)
+
+    @app.patch("/api/gateway/channels/{channel}")
+    async def api_gateway_channel_patch(channel: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        payload = _set_gateway_channel(config, channel, body if isinstance(body, dict) else {})
+        return JSONResponse(payload, status_code=200 if payload.get("ok") else 400)
+
+    @app.post("/api/gateway/channels/{channel}/probe")
+    async def api_gateway_channel_probe(channel: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        safe = _safe_resource_name(channel, "channel").lower()
+        if safe not in _channel_catalog_map():
+            return JSONResponse({"ok": False, "error": "unknown channel", "channel": safe}, status_code=404)
+        return JSONResponse(_gateway_probe({"channel": safe}))
 
     @app.post("/api/gateway/channels")
     async def api_gateway_channels(request: Request) -> JSONResponse:

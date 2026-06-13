@@ -29,6 +29,26 @@ export async function post<T = any>(path: string, body: unknown): Promise<T> {
   return r.json();
 }
 
+export async function patch<T = any>(path: string, body: unknown): Promise<T> {
+  const r = await fetch(`/api/${path}`, {
+    method: "PATCH",
+    headers: headers({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`${path}: ${r.status}`);
+  return r.json();
+}
+
+export async function put<T = any>(path: string, body: unknown): Promise<T> {
+  const r = await fetch(`/api/${path}`, {
+    method: "PUT",
+    headers: headers({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`${path}: ${r.status}`);
+  return r.json();
+}
+
 export async function apiDelete<T = any>(path: string): Promise<T> {
   const r = await fetch(`/api/${path}`, { method: "DELETE", headers: headers() });
   if (!r.ok) throw new Error(`${path}: ${r.status}`);

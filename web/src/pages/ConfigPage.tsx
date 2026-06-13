@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, post } from "../lib/api";
+import { api, patch as apiPatch, post } from "../lib/api";
+import { Badge, Button, Toolbar } from "../lib/ui";
 
 type SchemaField = {
   path: string;
@@ -42,6 +43,7 @@ const QUICK_TOGGLES = [
   "learn.auto_apply_skills",
   "memory.enabled",
 ];
+const DEFAULT_OPEN_GROUPS = new Set(["Agent", "Model", "Tools & permissions", "Gateway", "Memory", "Display"]);
 
 const FALLBACK_ENUMS: Record<string, string[]> = {
   "tools.exec_mode": ["auto", "ask", "smart", "allowlist", "deny", "full"],
@@ -82,6 +84,9 @@ export function ConfigPage() {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [edit, setEdit] = useState<Record<string, string>>({});
+  const [typeFilter, setTypeFilter] = useState("");
+  const [changedOnly, setChangedOnly] = useState(false);
+  const [restartOnly, setRestartOnly] = useState(false);
   const [newKey, setNewKey] = useState("");
   const [newValue, setNewValue] = useState("");
   const [msg, setMsg] = useState("");
@@ -109,8 +114,14 @@ export function ConfigPage() {
   const filtered = query
     ? fields.filter((f) => `${f.path} ${labelFor(f)} ${f.description || ""} ${groupTitle(f)}`.toLowerCase().includes(query))
     : fields;
+  const visible = filtered.filter((f) => {
+    if (typeFilter && (f.enum ? "enum" : f.type) !== typeFilter) return false;
+    if (restartOnly && !f.restart) return false;
+    if (changedOnly && JSON.stringify(getByPath(cfg, f.path)) === JSON.stringify(f.default)) return false;
+    return true;
+  });
   const groups: Record<string, SchemaField[]> = {};
-  for (const f of filtered) (groups[groupTitle(f)] ||= []).push(f);
+  for (const f of visible) (groups[groupTitle(f)] ||= []).push(f);
   const groupNames = Object.keys(groups).sort();
   const searching = query.length > 0;
 
@@ -130,7 +141,12 @@ export function ConfigPage() {
   }
 
   async function saveValue(key: string, value: any) {
-    try { await post("config", { key, value }); setMsg(`${key} saved`); await load(); }
+    try {
+      if (meta.has(key)) await apiPatch("config/fields", { updates: [{ path: key, value }] });
+      else await post("config", { key, value });
+      setMsg(`${key} saved`);
+      await load();
+    }
     catch (e) { setMsg("Error: " + String(e)); }
   }
 
@@ -161,11 +177,19 @@ export function ConfigPage() {
     const leaf = labelFor(field);
     const description = field.description || `Default: ${toText(field.default) || "(empty)"}`;
     const restart = field.restart ? ` · ${field.restart}` : "";
+    const changed = JSON.stringify(value) !== JSON.stringify(field.default);
+    const type = field.enum ? "enum" : field.type || typeof value;
+    const metaBadges = (
+      <span className="field-badges">
+        <Badge status={changed ? "warn" : "idle"}>{changed ? "changed" : type}</Badge>
+        {field.restart && <Badge status="warn">{field.restart}</Badge>}
+      </span>
+    );
 
     if (typeof value === "boolean") {
       return (
         <label className="field schema-field">
-          <span className="field-info"><b>{leaf}</b><small>{description}{restart}</small></span>
+          <span className="field-info"><b>{leaf}</b>{metaBadges}<small>{description}{restart}</small></span>
           <input type="checkbox" checked={value} onChange={(e) => saveValue(field.path, e.target.checked)} />
         </label>
       );
@@ -174,7 +198,7 @@ export function ConfigPage() {
       const options = enums.includes(String(value ?? "")) ? enums : [String(value ?? ""), ...enums];
       return (
         <label className="field schema-field">
-          <span className="field-info"><b>{leaf}</b><small>{description}{restart}</small></span>
+          <span className="field-info"><b>{leaf}</b>{metaBadges}<small>{description}{restart}</small></span>
           <select value={String(value ?? "")} onChange={(e) => saveValue(field.path, e.target.value)}>
             {options.map((o) => <option key={o} value={o}>{o || "(empty)"}</option>)}
           </select>
@@ -185,7 +209,7 @@ export function ConfigPage() {
       const editing = field.path in edit;
       return (
         <label className="field wide schema-field">
-          <span className="field-info"><b>{leaf}</b><small>{description}{restart}</small></span>
+          <span className="field-info"><b>{leaf}</b>{metaBadges}<small>{description}{restart}</small></span>
           {editing
             ? <span className="field-edit">
                 <textarea rows={4} value={edit[field.path]} autoFocus onChange={(e) => setEdit({ ...edit, [field.path]: e.target.value })} />
@@ -204,14 +228,19 @@ export function ConfigPage() {
     };
     return (
       <label className="field schema-field">
-        <span className="field-info"><b>{leaf}</b><small>{description}{restart}</small></span>
-        <input
-          type={typeof value === "number" ? "number" : "text"}
-          value={pending}
-          onChange={(e) => setEdit({ ...edit, [field.path]: e.target.value })}
-          onBlur={commit}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); (e.target as HTMLInputElement).blur(); } }}
-        />
+        <span className="field-info"><b>{leaf}</b>{metaBadges}<small>{description}{restart}</small></span>
+        <span className="field-edit compact">
+          <input
+            type={typeof value === "number" ? "number" : "text"}
+            value={pending}
+            onChange={(e) => setEdit({ ...edit, [field.path]: e.target.value })}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commit(); } }}
+          />
+          {pending !== cur && <>
+            <Button sm onClick={commit} icon="check">Save</Button>
+            <Button sm variant="ghost" onClick={() => setEdit((prev) => { const next = { ...prev }; delete next[field.path]; return next; })}>Cancel</Button>
+          </>}
+        </span>
       </label>
     );
   }
@@ -248,13 +277,26 @@ export function ConfigPage() {
         </div>
       </div>
 
-      <div className="panel" style={{ marginBottom: 14 }}>
-        <input placeholder="Search settings by name, group, or description..." value={q} onChange={(e) => setQ(e.target.value)} />
+      <div className="panel" style={{ marginBottom: 14, padding: 12 }}>
+        <Toolbar q={q} setQ={setQ} placeholder="Search settings by name, group, or description...">
+          <select className="compact-select" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+            <option value="">All types</option>
+            <option value="bool">Booleans</option>
+            <option value="enum">Enums</option>
+            <option value="str">Text</option>
+            <option value="int">Integers</option>
+            <option value="float">Numbers</option>
+            <option value="list">Lists</option>
+            <option value="dict">Objects</option>
+          </select>
+          <label className="inline-check"><input type="checkbox" checked={changedOnly} onChange={(e) => setChangedOnly(e.target.checked)} /> Changed</label>
+          <label className="inline-check"><input type="checkbox" checked={restartOnly} onChange={(e) => setRestartOnly(e.target.checked)} /> Restart</label>
+        </Toolbar>
         {msg && <div className="mut" style={{ marginTop: 8 }}>{msg}</div>}
       </div>
 
       {groupNames.map((g) => {
-        const isOpen = searching || open[g];
+        const isOpen = searching || (open[g] ?? DEFAULT_OPEN_GROUPS.has(g));
         return (
           <div className="panel group" key={g}>
             <button className="group-h" onClick={() => setOpen((prev) => ({ ...prev, [g]: !prev[g] }))}>

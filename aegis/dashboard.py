@@ -89,7 +89,11 @@ def _page_with_bootstrap(config: Config) -> bytes:
 def _redacted_config(config: Config) -> dict:
     """Flattened config for the UI, with secret-looking values masked (never echo keys)."""
     import re as _re
-    secret = _re.compile(r"key|token|secret|password|client_secret", _re.IGNORECASE)
+    secret = _re.compile(
+        r"(^|[._-])(api[_-]?key|token|secret|password|client[_-]?secret|"
+        r"access[_-]?token|refresh[_-]?token)($|[._-])",
+        _re.IGNORECASE,
+    )
     out: dict[str, str] = {}
 
     def walk(prefix, node):

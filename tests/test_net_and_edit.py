@@ -610,10 +610,19 @@ def test_dashboard_config_redaction_and_cron(tmp_path, monkeypatch):
     from aegis.dashboard import _redacted_config
 
     class C:
-        data = {"model": {"default": "gpt-5.5"}, "google": {"client_secret": "supersecretvalue"}}
+        data = {
+            "model": {"default": "gpt-5.5"},
+            "google": {"client_secret": "supersecretvalue"},
+            "server": {"dashboard_token": "tok_secret_value"},
+            "agent": {"compression": {"max_tool_tokens": 12000}},
+            "tools": {"max_result_tokens": 8000},
+        }
     rc = _redacted_config(C())
     assert rc["model.default"] == "gpt-5.5"
     assert "supersecret" not in str(rc["google.client_secret"]) and "••" in str(rc["google.client_secret"])
+    assert "tok_secret_value" not in str(rc["server.dashboard_token"]) and "••" in str(rc["server.dashboard_token"])
+    assert rc["agent.compression.max_tool_tokens"] == 12000
+    assert rc["tools.max_result_tokens"] == 8000
 
     import http.client
     import json

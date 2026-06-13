@@ -1,7 +1,7 @@
 // Shared UI kit — one vocabulary of primitives every page builds on, so the whole
 // dashboard stays consistent. Pure presentation; all data logic lives in the pages.
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { MouseEvent, ReactNode } from "react";
 import { Icon } from "./icons";
 
 /* ---------- page header ---------- */
@@ -28,7 +28,7 @@ export function Card({ title, actions, children, pad = true, className = "" }:
 
 /* ---------- button ---------- */
 export function Button({ children, onClick, variant = "primary", sm, disabled, icon, type }:
-  { children?: ReactNode; onClick?: () => void; variant?: "primary" | "ghost" | "danger"; sm?: boolean; disabled?: boolean; icon?: string; type?: "button" | "submit" }) {
+  { children?: ReactNode; onClick?: (event: MouseEvent<HTMLButtonElement>) => void; variant?: "primary" | "ghost" | "danger"; sm?: boolean; disabled?: boolean; icon?: string; type?: "button" | "submit" }) {
   return (
     <button type={type || "button"} className={`btn ${variant === "primary" ? "" : variant} ${sm ? "sm" : ""}`} onClick={onClick} disabled={disabled}>
       {icon && <span style={{ display: "inline-flex", width: 14, height: 14 }}><Icon n={icon} /></span>}{children}

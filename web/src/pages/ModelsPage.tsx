@@ -16,12 +16,14 @@ export function ModelsPage() {
   const [model, setModel] = useState("");
   const [q, setQ] = useState("");
   const [probe, setProbe] = useState<any>(null);
+  const [authData, setAuthData] = useState<any>(null);
   const [busy, setBusy] = useState(false);
   const toast = useToast();
 
   async function load() {
-    const d = await api("models");
+    const [d, auth] = await Promise.all([api("models"), api("provider-auth").catch(() => null)]);
     setData(d);
+    setAuthData(auth);
     setProvider(d.provider || d.current_provider || "");
     setModel(d.model || d.current_model || d.default || "");
   }
@@ -31,6 +33,7 @@ export function ModelsPage() {
   const providers: string[] = data?.providers || catalog.map((p: any) => p.name).filter(Boolean);
   const active = data?.active || {};
   const activeCatalog = catalog.find((p: any) => p.name === provider) || {};
+  const selectedAuth = (authData?.providers || []).find((p: any) => p.name === provider) || authData?.active || {};
   const presets = data?.presets || {};
   const presetRows = Object.entries(presets).flatMap(([p, models]) =>
     (Array.isArray(models) ? models : []).map((id) => ({ id, provider: p })));
@@ -57,11 +60,15 @@ export function ModelsPage() {
     setBusy(true);
     setProbe(null);
     try {
-      const r = await post("providers/test", { provider, model });
+      const r = await post("providers/probe", { provider, model });
       setProbe(r);
       toast(r.ok ? "Provider responded" : "Provider probe failed", r.ok ? "ok" : "err");
     } catch (e) { toast(String(e), "err"); }
     finally { setBusy(false); }
+  }
+
+  function addKey(key: string) {
+    window.location.hash = `#/keys?key=${encodeURIComponent(key)}`;
   }
 
   return (
@@ -85,13 +92,23 @@ export function ModelsPage() {
             {active.warning && <div className="notice warn">{active.warning}</div>}
           </Card>
           <Card title="Auth">
-            <div className="mut">{activeCatalog.auth_scheme || active.auth?.scheme || "provider auth"}</div>
+            <div className="mut">{activeCatalog.auth_scheme || selectedAuth.auth_scheme || active.auth?.scheme || "provider auth"}</div>
             <div className="pill-list">
-              {(activeCatalog.env_vars || active.auth?.env_vars || []).map((v: string) => <span className="pill mono" key={v}>{v}</span>)}
-              {activeCatalog.oauth && <span className="pill">OAuth {activeCatalog.oauth_status}</span>}
-              {!activeCatalog.env_vars?.length && !activeCatalog.oauth && <span className="pill">no key required</span>}
+              {(selectedAuth.env_vars || activeCatalog.env_vars || active.auth?.env_vars || []).map((v: string) => (
+                <button className={`pill mono key-pill ${selectedAuth.missing_env_vars?.includes(v) ? "warn" : ""}`} key={v} onClick={() => addKey(v)}>{v}</button>
+              ))}
+              {(activeCatalog.oauth || selectedAuth.oauth) && <span className="pill">OAuth {selectedAuth.oauth_status || activeCatalog.oauth_status}</span>}
+              {!selectedAuth.env_vars?.length && !activeCatalog.env_vars?.length && !activeCatalog.oauth && <span className="pill">no key required</span>}
             </div>
-            {activeCatalog.oauth_notes && <div className="mut">{activeCatalog.oauth_notes}</div>}
+            {!!selectedAuth.missing_env_vars?.length && (
+              <div className="notice warn">
+                Missing {selectedAuth.missing_env_vars.join(", ")}
+                <div className="actions" style={{ marginTop: 7 }}>
+                  {selectedAuth.missing_env_vars.map((v: string) => <Button key={v} sm variant="ghost" icon="key" onClick={() => addKey(v)}>Set {v}</Button>)}
+                </div>
+              </div>
+            )}
+            {(selectedAuth.oauth_notes || activeCatalog.oauth_notes) && <div className="mut">{selectedAuth.oauth_notes || activeCatalog.oauth_notes}</div>}
           </Card>
           <Card title="Probe result">
             {!probe && <div className="mut">Run a live one-token probe for the selected provider/model.</div>}

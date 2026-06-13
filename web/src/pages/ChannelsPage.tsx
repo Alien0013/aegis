@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, post } from "../lib/api";
+import { api, patch, post } from "../lib/api";
 import { Badge, Button, Card, Empty, PageHeader, Toggle, useToast } from "../lib/ui";
 
 const CHANNELS = [
@@ -16,15 +16,17 @@ const CHANNELS = [
 export function ChannelsPage() {
   const [pairing, setPairing] = useState<any>(null);
   const [gateway, setGateway] = useState<any>(null);
+  const [catalog, setCatalog] = useState<any>(null);
   const [env, setEnv] = useState<any[]>([]);
   const [probe, setProbe] = useState<Record<string, any>>({});
   const [busy, setBusy] = useState("");
   const toast = useToast();
 
   async function load() {
-    const [p, g, e] = await Promise.all([api("pairing"), api("gateway/status"), api("env")]);
+    const [p, g, c, e] = await Promise.all([api("pairing"), api("gateway/status"), api("gateway/channels/catalog"), api("env")]);
     setPairing(p);
     setGateway(g);
+    setCatalog(c);
     setEnv(e.keys || []);
   }
 
@@ -38,9 +40,7 @@ export function ChannelsPage() {
   async function revoke(platform: string, user_id: string) { await post("pairing", { action: "revoke", platform, user_id }); toast("Revoked"); await load(); }
 
   async function toggleChannel(id: string, enabled: boolean) {
-    const next = new Set(configured);
-    if (enabled) next.add(id); else next.delete(id);
-    await post("gateway/channels", { channels: [...next] });
+    await patch(`gateway/channels/${encodeURIComponent(id)}`, { enabled });
     toast(`${id} ${enabled ? "enabled" : "disabled"}`, "ok");
     await load();
   }
@@ -59,12 +59,18 @@ export function ChannelsPage() {
   async function probeChannel(id: string) {
     setBusy(`probe:${id}`);
     try {
-      const r = await post("gateway/probe", { channel: id });
+      const r = await post(`gateway/channels/${encodeURIComponent(id)}/probe`, {});
       setProbe((prev) => ({ ...prev, [id]: r }));
       toast(r.ok ? `${id} probe passed` : `${id} probe failed`, r.ok ? "ok" : "err");
     } catch (e) { toast(String(e), "err"); }
     finally { setBusy(""); }
   }
+
+  function addKey(key: string) {
+    window.location.hash = `#/keys?key=${encodeURIComponent(key)}`;
+  }
+
+  const channels = catalog?.channels?.length ? catalog.channels : CHANNELS;
 
   return (
     <>
@@ -89,9 +95,10 @@ export function ChannelsPage() {
 
         <Card title="Channel setup" pad={false}>
           <div className="channel-grid">
-            {CHANNELS.map((c) => {
+            {channels.map((c: any) => {
               const enabled = configured.has(c.id);
-              const missing = c.needs.filter((k) => !setKeys.has(k));
+              const needs = c.env_vars || c.needs || [];
+              const missing = c.missing_env_vars || needs.filter((k: string) => !setKeys.has(k));
               const result = probe[c.id];
               return (
                 <div className="channel-card" key={c.id}>
@@ -100,13 +107,16 @@ export function ChannelsPage() {
                     <Toggle checked={enabled} onChange={(v) => toggleChannel(c.id, v)} />
                   </div>
                   <div className="pill-list">
-                    {c.needs.length ? c.needs.map((k) => <span className={`pill mono ${setKeys.has(k) ? "" : "warn"}`} key={k}>{k}</span>) : <span className="pill">no secret required</span>}
+                    {needs.length ? needs.map((k: string) => (
+                      <button className={`pill mono key-pill ${setKeys.has(k) ? "" : "warn"}`} key={k} onClick={() => addKey(k)}>{k}</button>
+                    )) : <span className="pill">no secret required</span>}
                   </div>
                   <div className="row compact">
                     <Badge status={enabled ? "enabled" : "disabled"}>{enabled ? "enabled" : "off"}</Badge>
                     <Badge status={missing.length ? "missing" : "set"}>{missing.length ? `${missing.length} missing` : "keys set"}</Badge>
-                    <Button sm variant="ghost" onClick={() => probeChannel(c.id)} disabled={!!busy}>{c.probe ? "Probe" : "Check"}</Button>
+                    <Button sm variant="ghost" onClick={() => probeChannel(c.id)} disabled={!!busy}>{c.probe_available || c.probe ? "Probe" : "Check"}</Button>
                   </div>
+                  {!!missing.length && <div className="actions" style={{ marginTop: 8 }}>{missing.map((k: string) => <Button key={k} sm variant="ghost" icon="key" onClick={() => addKey(k)}>Set {k}</Button>)}</div>}
                   {result && <div className={`notice ${result.ok ? "ok" : "warn"}`}>{result.detail || result.error}</div>}
                 </div>
               );

@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { Icon } from "./lib/icons";
 import { api, post } from "./lib/api";
-import { Loading } from "./lib/ui";
+import { Badge, Loading } from "./lib/ui";
 import { CommandPalette } from "./CommandPalette";
 import { Tooltip, TooltipProvider } from "./lib/components/Tooltip";
 
@@ -25,6 +25,8 @@ const McpPage = lazy(() => import("./pages/McpPage").then((m) => ({ default: m.M
 const WebhooksPage = lazy(() => import("./pages/WebhooksPage").then((m) => ({ default: m.WebhooksPage })));
 const PluginsPage = lazy(() => import("./pages/PluginsPage").then((m) => ({ default: m.PluginsPage })));
 const TerminalPage = lazy(() => import("./pages/TerminalPage").then((m) => ({ default: m.TerminalPage })));
+const ProfilesPage = lazy(() => import("./pages/ProfilesPage").then((m) => ({ default: m.ProfilesPage })));
+const SkillsPage = lazy(() => import("./pages/SkillsPage").then((m) => ({ default: m.SkillsPage })));
 
 type NavItem = { id: string; label: string; icon: string; group: string };
 const NAV: NavItem[] = [
@@ -42,6 +44,7 @@ const NAV: NavItem[] = [
   { id: "channels", label: "Channels", icon: "channels", group: "Operate" },
   { id: "models", label: "Models", icon: "models", group: "Configure" },
   { id: "keys", label: "API Keys", icon: "config", group: "Configure" },
+  { id: "profiles", label: "Profiles", icon: "agents", group: "Configure" },
   { id: "memory", label: "Memory", icon: "memory", group: "Configure" },
   { id: "skills", label: "Skills", icon: "skills", group: "Configure" },
   { id: "tools", label: "Tools", icon: "tools", group: "Configure" },
@@ -78,6 +81,7 @@ function Pages({ go }: { go: (id: string) => void }) {
       <Route path="/cron" element={<CronPage />} />
       <Route path="/models" element={<ModelsPage />} />
       <Route path="/keys" element={<KeysPage />} />
+      <Route path="/profiles" element={<ProfilesPage />} />
       <Route path="/memory" element={<MemoryPage />} />
       <Route path="/channels" element={<ChannelsPage />} />
       <Route path="/system" element={<SystemPage />} />
@@ -93,8 +97,7 @@ function Pages({ go }: { go: (id: string) => void }) {
         detailEndpoint="eval" idKey="id" cols={[["name", "Eval"], ["status", "Status"], ["source", "Source"]]} />} />
       <Route path="/sessions" element={<ListPage endpoint="sessions" title="Sessions"
         detailEndpoint="session" cols={[["title", "Title"], ["updated_at", "Updated"], ["id", "ID"]]} />} />
-      <Route path="/skills" element={<ListPage endpoint="skills" title="Skills"
-        cols={[["name", "Skill"], ["description", "Description"]]} />} />
+      <Route path="/skills" element={<SkillsPage />} />
       <Route path="/tools" element={<ListPage endpoint="tools" title="Tools"
         cols={[["name", "Tool"], ["toolset", "Toolset"], ["enabled", "Enabled"], ["description", "Description"]]} />} />
       <Route path="/logs" element={<ListPage endpoint="logs" arrayKey="lines" title="Logs" cols={[["line", "Line"]]} raw />} />
@@ -111,13 +114,24 @@ export function App() {
   const [navOpen, setNavOpen] = useState(false);
   const [cmdOpen, setCmdOpen] = useState(false);
   const [status, setStatus] = useState<any>(null);
+  const [gateway, setGateway] = useState<any>(null);
   const [profiles, setProfiles] = useState<any>(null);
   const [navQuery, setNavQuery] = useState("");
   useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem("aegis_theme", theme); }, [theme]);
-  const loadStatus = () => api("status").then((s) => setStatus(s)).catch(() => setStatus({ error: true }));
+  const loadStatus = () => Promise.all([
+    api("status"),
+    api("gateway/status").catch(() => null),
+  ]).then(([s, g]) => { setStatus(s); setGateway(g); }).catch(() => setStatus({ error: true }));
   useEffect(() => {
     let mounted = true;
-    const load = () => api("status").then((s) => mounted && setStatus(s)).catch(() => mounted && setStatus({ error: true }));
+    const load = () => Promise.all([
+      api("status"),
+      api("gateway/status").catch(() => null),
+    ]).then(([s, g]) => {
+      if (!mounted) return;
+      setStatus(s);
+      setGateway(g);
+    }).catch(() => mounted && setStatus({ error: true }));
     load();
     const timer = setInterval(load, 15000);
     return () => { mounted = false; clearInterval(timer); };
@@ -192,7 +206,7 @@ export function App() {
         <div className="sidefoot">
           {profiles?.available?.length > 0 && (
             <label className="profile-switch">
-              <span>Persona</span>
+              <span>Profile</span>
               <select
                 value={profiles.active || ""}
                 onChange={async (e) => {
@@ -208,9 +222,23 @@ export function App() {
           )}
           <div className="statusbox">
             <span className={"statusdot" + (!online ? " err" : "")} />
-            <div>
-              <b>{online ? status.provider || "AEGIS" : "Backend"}</b>
-              <span>{online ? status.model || "ready" : status?.error ? "offline" : "connecting..."}</span>
+            <div className="statusgrid">
+              <div className="statusrow">
+                <b>{online ? status.provider || "AEGIS" : "Backend"}</b>
+                <span>{online ? status.model || "ready" : status?.error ? "offline" : "connecting..."}</span>
+              </div>
+              <div className="statuschips">
+                <Badge status={profiles?.active ? "active" : "idle"}>{profiles?.active || "default"}</Badge>
+                <Badge status={gateway?.configured ? "ready" : "idle"}>
+                  {gateway?.channels?.length ? `${gateway.channels.length} channel${gateway.channels.length === 1 ? "" : "s"}` : "no channels"}
+                </Badge>
+              </div>
+              {online && (
+                <div className="statusmini">
+                  <span>{status.exec_mode || "auto"} perms</span>
+                  <span>{status.reasoning_display || "summary"}/{status.reasoning_effort || "medium"}</span>
+                </div>
+              )}
             </div>
           </div>
           <div className="themebar" aria-label="Theme">

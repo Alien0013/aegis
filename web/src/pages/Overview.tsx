@@ -17,8 +17,19 @@ const QUICK: [string, string][] = [
 export function Overview({ go }: { go: (id: string) => void }) {
   const [d, setD] = useState<any>(null);
   useEffect(() => {
-    Promise.all([api("status"), api("analytics?days=30"), api("sessions"), api("runs?limit=20"), api("agents")])
-      .then(([status, an, sessions, runs, agents]) => setD({ status, an, sessions, runs, agents }))
+    Promise.all([
+      api("status"),
+      api("analytics?days=30"),
+      api("sessions"),
+      api("runs?limit=20"),
+      api("agents"),
+      api("gateway/status").catch(() => null),
+      api("profiles").catch(() => null),
+      api("plugins").catch(() => null),
+      api("mcp/servers").catch(() => null),
+      api("provider-auth").catch(() => null),
+    ])
+      .then(([status, an, sessions, runs, agents, gateway, profiles, plugins, mcp, auth]) => setD({ status, an, sessions, runs, agents, gateway, profiles, plugins, mcp, auth }))
       .catch((e) => setD({ error: String(e) }));
   }, []);
   if (!d) return <Loading />;
@@ -56,6 +67,37 @@ export function Overview({ go }: { go: (id: string) => void }) {
                 <div><div className="mb-1 text-[11px] text-mut">Spend / day</div><BarChart data={cost} color="var(--accent2)" /></div>
               </div>
             )}
+        </Card>
+      </div>
+
+      <div className="mt-3">
+        <Card title="Setup health" pad={false}>
+          <div className="setup-grid">
+            <div className="setup-item click" onClick={() => go("models")}>
+              <Badge status={d.auth?.active?.ready ? "ready" : "missing"}>{d.auth?.active?.ready ? "auth ready" : "auth missing"}</Badge>
+              <b>{d.status.provider}</b><span>{d.auth?.active?.missing_env_vars?.join(", ") || d.status.model}</span>
+            </div>
+            <div className="setup-item click" onClick={() => go("profiles")}>
+              <Badge status={d.profiles?.active ? "active" : "idle"}>{d.profiles?.active || "default"}</Badge>
+              <b>Profile</b><span>{d.profiles?.available?.length || 0} saved</span>
+            </div>
+            <div className="setup-item click" onClick={() => go("channels")}>
+              <Badge status={d.gateway?.configured ? "ready" : "idle"}>{d.gateway?.configured ? "configured" : "off"}</Badge>
+              <b>Gateway</b><span>{d.gateway?.channels?.length || 0} channels</span>
+            </div>
+            <div className="setup-item click" onClick={() => go("mcp")}>
+              <Badge status={d.mcp?.available ? "ready" : "idle"}>{d.mcp?.available ? "connected" : "none"}</Badge>
+              <b>MCP</b><span>{d.mcp?.servers?.length || 0} servers</span>
+            </div>
+            <div className="setup-item click" onClick={() => go("plugins")}>
+              <Badge status={d.plugins?.errors?.length ? "error" : "ready"}>{d.plugins?.errors?.length ? "errors" : "clean"}</Badge>
+              <b>Plugins</b><span>{(d.plugins?.plugins || []).length} installed</span>
+            </div>
+            <div className="setup-item click" onClick={() => go("config")}>
+              <Badge status="ready">editable</Badge>
+              <b>Config</b><span>{d.status.exec_mode} permissions</span>
+            </div>
+          </div>
         </Card>
       </div>
 

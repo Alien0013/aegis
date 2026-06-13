@@ -5,6 +5,8 @@ import { Badge, Button, Card, Empty, Field, PageHeader, useToast } from "../lib/
 export function PluginsPage() {
   const [data, setData] = useState<any>({ manifests: [] });
   const [source, setSource] = useState("");
+  const [q, setQ] = useState("");
+  const [validation, setValidation] = useState<any>(null);
   const [busy, setBusy] = useState(false);
   const toast = useToast();
 
@@ -15,6 +17,13 @@ export function PluginsPage() {
   useEffect(() => { load(); }, []);
 
   const plugins: any[] = data.manifests || data.plugins || (Array.isArray(data) ? data : []);
+  const filtered = plugins.filter((p) => {
+    const query = q.trim().toLowerCase();
+    return !query || `${p.name} ${p.description || ""} ${p.path || ""}`.toLowerCase().includes(query);
+  });
+  const toolsCount = Array.isArray(data.tools) ? data.tools.length : Number(data.tools || 0);
+  const channelsCount = Array.isArray(data.channels) ? data.channels.length : 0;
+  const providersCount = Array.isArray(data.providers) ? data.providers.length : 0;
 
   async function act(action: string, extra: any = {}) {
     setBusy(true);
@@ -30,12 +39,22 @@ export function PluginsPage() {
     await act("install", { source: source.trim(), force });
     setSource("");
   }
+  async function validate() {
+    if (!source.trim()) return;
+    setBusy(true);
+    try {
+      const r = await post("plugins/validate", { source: source.trim() });
+      setValidation(r);
+      toast(r.ok ? "Plugin source looks installable" : r.error || "not installable", r.ok ? "ok" : "err");
+    } finally { setBusy(false); }
+  }
 
   return (
     <>
       <PageHeader
         title="Plugins"
-        sub={`${plugins.length} installed · ${data.tools || 0} tools · ${(data.channels || []).length} channels · ${(data.providers || []).length} providers`}
+        sub={`${plugins.length} installed · ${toolsCount} tools · ${channelsCount} channels · ${providersCount} providers`}
+        actions={<Button variant="ghost" onClick={() => act("reload")} disabled={busy} icon="refresh">Reload</Button>}
       />
       <div className="stack">
         <Card title="Install a plugin">
@@ -44,16 +63,18 @@ export function PluginsPage() {
               <Field label="Source"><input value={source} onChange={(e) => setSource(e.target.value)} placeholder="local .py file or plugin directory" /></Field>
             </div>
             <span className="actions">
+              <Button onClick={validate} disabled={busy} variant="ghost" icon="check">Validate</Button>
               <Button onClick={() => install(false)} disabled={busy} icon="plus">Install</Button>
               <Button onClick={() => install(true)} disabled={busy} variant="ghost" icon="refresh">Update</Button>
             </span>
           </div>
+          {validation && <div className={`notice ${validation.ok ? "ok" : "warn"}`}>{validation.ok ? `${validation.kind} source ready` : validation.error}</div>}
         </Card>
 
         <div className="grid c3">
           <Card title="Loaded files" pad={false}>
-            {!data.loaded?.length && <Empty small>No plugin files loaded.</Empty>}
-            {(data.loaded || []).map((f: string) => <div className="row" key={f}><span className="mono">{f}</span><Badge status="ok">loaded</Badge></div>)}
+            {!data.plugins?.length && <Empty small>No plugin files loaded.</Empty>}
+            {(data.plugins || []).map((p: any) => <div className="row" key={p.path || p.name}><span className="mono">{p.entrypoint || p.path}</span><Badge status={p.enabled ? "ok" : "disabled"}>{p.enabled ? "loaded" : "off"}</Badge></div>)}
           </Card>
           <Card title="Registered capabilities">
             <div className="pill-list">
@@ -69,10 +90,10 @@ export function PluginsPage() {
           </Card>
         </div>
 
-        <Card title="Installed" pad={false}>
-          {!plugins.length && <Empty small>No plugins installed.</Empty>}
-          <div style={{ padding: plugins.length ? "2px 14px 6px" : 0 }}>
-            {plugins.map((p, i) => {
+        <Card title="Installed" actions={<input className="search compact" placeholder="Search plugins" value={q} onChange={(e) => setQ(e.target.value)} />} pad={false}>
+          {!filtered.length && <Empty small>No plugins match.</Empty>}
+          <div style={{ padding: filtered.length ? "2px 14px 6px" : 0 }}>
+            {filtered.map((p, i) => {
               const on = p.enabled !== false;
               return (
                 <div className="row" key={p.name || i}>

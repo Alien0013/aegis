@@ -262,6 +262,214 @@ def test_fastapi_provider_and_gateway_control_plane_routes(tmp_path, monkeypatch
     assert channel.json() == {"ok": True, "channel": "telegram", "detail": "bot @aegis"}
 
 
+def test_fastapi_typed_config_profile_gateway_and_plugin_routes(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    changed = asyncio.run(_request(
+        app,
+        "PATCH",
+        "/api/config/fields",
+        json={"updates": {"tools.exec_mode": "smart", "agent.compression.max_tool_tokens": 12000}},
+        headers=headers,
+    ))
+    assert changed.status_code == 200
+    body = changed.json()
+    assert body["ok"] is True
+    assert body["changed"]["tools.exec_mode"] == "smart"
+    raw_config = asyncio.run(_request(app, "GET", "/api/config/raw", headers=headers)).json()["config"]
+    assert raw_config["agent"]["compression"]["max_tool_tokens"] == 12000
+
+    bad = asyncio.run(_request(
+        app,
+        "PATCH",
+        "/api/config/fields",
+        json={"updates": {"tools.exec_mode": "root"}},
+        headers=headers,
+    ))
+    assert bad.status_code == 400
+    assert "one of" in bad.json()["errors"]["tools.exec_mode"]
+
+    created = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/profiles",
+        json={"name": "builder", "content": "Build small and verify.\n", "activate": True},
+        headers=headers,
+    ))
+    assert created.status_code == 200
+    assert created.json()["active"] == "builder"
+
+    profile = asyncio.run(_request(app, "GET", "/api/profiles/builder", headers=headers))
+    assert profile.status_code == 200
+    assert profile.json()["content"] == "Build small and verify.\n"
+
+    patched = asyncio.run(_request(
+        app,
+        "PATCH",
+        "/api/profiles/builder",
+        json={"content": "Build small, verify, then ship.\n"},
+        headers=headers,
+    ))
+    assert patched.status_code == 200
+    assert patched.json()["profile"]["content"] == "Build small, verify, then ship.\n"
+
+    activated = asyncio.run(_request(app, "POST", "/api/profiles/default/activate", headers=headers))
+    assert activated.status_code == 200
+    assert activated.json()["active"] == ""
+
+    traversal = asyncio.run(_request(app, "GET", "/api/profiles/..secret", headers=headers))
+    assert traversal.status_code in {400, 404}
+
+    catalog = asyncio.run(_request(app, "GET", "/api/gateway/channels/catalog", headers=headers))
+    assert catalog.status_code == 200
+    assert any(row["id"] == "telegram" for row in catalog.json()["channels"])
+
+    configured = asyncio.run(_request(
+        app,
+        "PATCH",
+        "/api/gateway/channels/telegram",
+        json={"enabled": True},
+        headers=headers,
+    ))
+    assert configured.status_code == 200
+    telegram = configured.json()["channel"]
+    assert telegram["id"] == "telegram"
+    assert telegram["enabled"] is True
+
+    import aegis.doctor as doctor
+
+    monkeypatch.setitem(doctor.CHANNEL_PROBES, "telegram", lambda: (True, "bot ready"))
+    probe = asyncio.run(_request(app, "POST", "/api/gateway/channels/telegram/probe", headers=headers))
+    assert probe.status_code == 200
+    assert probe.json()["detail"] == "bot ready"
+
+    plugin_dir = tmp_path / "sample_plugin"
+    plugin_dir.mkdir()
+    (plugin_dir / "sample.py").write_text("# plugin\n", encoding="utf-8")
+    valid = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/plugins/validate",
+        json={"source": str(plugin_dir)},
+        headers=headers,
+    ))
+    assert valid.status_code == 200
+    assert valid.json()["ok"] is True
+
+    missing = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/plugins/validate",
+        json={"source": str(plugin_dir / "missing")},
+        headers=headers,
+    ))
+    assert missing.status_code == 400
+
+
+def test_fastapi_typed_mcp_and_skills_routes(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    created = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/mcp/servers",
+        json={"name": "local", "command": "python -m server", "env": {"TOKEN": "x"}},
+        headers=headers,
+    ))
+    assert created.status_code == 200
+    assert created.json()["ok"] is True
+
+    detail = asyncio.run(_request(app, "GET", "/api/mcp/servers/local", headers=headers))
+    assert detail.status_code == 200
+    assert detail.json()["server"]["name"] == "local"
+
+    patched = asyncio.run(_request(
+        app,
+        "PATCH",
+        "/api/mcp/servers/local",
+        json={"args": ["-m", "patched"]},
+        headers=headers,
+    ))
+    assert patched.status_code == 200
+
+    import aegis.mcp.client as mcp_client
+
+    monkeypatch.setattr(mcp_client, "probe_server", lambda config, name: {
+        "ok": True,
+        "name": name,
+        "tools": ["read", "write"],
+    })
+    monkeypatch.setattr(mcp_client, "tool_checklist", lambda config, name: {
+        "ok": True,
+        "name": name,
+        "tools": [{"name": "read", "enabled": True}, {"name": "write", "enabled": False}],
+    })
+    saved = {}
+
+    def fake_save_tool_checklist(config, name, include):
+        saved[name] = include
+
+    monkeypatch.setattr(mcp_client, "save_tool_checklist", fake_save_tool_checklist)
+
+    probe = asyncio.run(_request(app, "POST", "/api/mcp/servers/local/probe", headers=headers))
+    assert probe.status_code == 200
+    assert probe.json()["tools"] == ["read", "write"]
+
+    tools = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/mcp/servers/local/tools",
+        json={"include": ["read"]},
+        headers=headers,
+    ))
+    assert tools.status_code == 200
+    assert saved["local"] == ["read"]
+
+    skill = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/skills",
+        json={
+            "name": "dash-test",
+            "description": "Dashboard test skill",
+            "body": "Use this skill from the dashboard.",
+        },
+        headers=headers,
+    ))
+    assert skill.status_code == 200
+    assert skill.json()["ok"] is True
+
+    detail = asyncio.run(_request(app, "GET", "/api/skills/dash-test", headers=headers))
+    assert detail.status_code == 200
+    content = detail.json()["content"]
+    assert "Dashboard test skill" in content
+
+    updated_content = content.replace("Use this skill", "Use this edited skill")
+    updated = asyncio.run(_request(
+        app,
+        "PATCH",
+        "/api/skills/dash-test",
+        json={"content": updated_content},
+        headers=headers,
+    ))
+    assert updated.status_code == 200
+    assert "edited skill" in updated.json()["body"]
+
+    pinned = asyncio.run(_request(app, "POST", "/api/skills/dash-test/pin", headers=headers))
+    assert pinned.status_code == 200
+    assert pinned.json()["pinned"] is True
+
+    deleted_skill = asyncio.run(_request(app, "DELETE", "/api/skills/dash-test", headers=headers))
+    assert deleted_skill.status_code == 200
+    assert deleted_skill.json()["ok"] is True
+
+    deleted_mcp = asyncio.run(_request(app, "DELETE", "/api/mcp/servers/local", headers=headers))
+    assert deleted_mcp.status_code == 200
+    assert deleted_mcp.json()["ok"] is True
+
+
 def test_fastapi_websocket_ticket_flow(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
     headers = {"X-Aegis-Token": "t"}

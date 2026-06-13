@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, post } from "../lib/api";
+import { api, apiDelete, post } from "../lib/api";
 import { Badge, Button, Card, Empty, Field, PageHeader, useToast } from "../lib/ui";
 
 export function McpPage() {
@@ -8,10 +8,11 @@ export function McpPage() {
   const [command, setCommand] = useState("");
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
+  const [probes, setProbes] = useState<Record<string, any>>({});
   const toast = useToast();
 
-  async function load() {
-    try { setPayload(await api("mcp/catalog")); }
+  async function load(live = false) {
+    try { setPayload(await api(`mcp/servers${live ? "?live=1" : ""}`)); }
     catch { setPayload({ servers: [], catalog: [] }); }
   }
   useEffect(() => { load(); }, []);
@@ -27,7 +28,11 @@ export function McpPage() {
   async function act(body: any, ok: string) {
     setBusy(true);
     try {
-      const r = await post("mcp", body);
+      const r = body.action === "install"
+        ? await post(`mcp/catalog/${encodeURIComponent(body.name)}/install`, {})
+        : body.action === "remove"
+          ? await apiDelete(`mcp/servers/${encodeURIComponent(body.name)}`)
+          : await post("mcp/servers", body);
       if (r.ok === false) toast(r.error || "failed", "err");
       else toast(ok, "ok");
       await load();
@@ -41,11 +46,25 @@ export function McpPage() {
     setCommand("");
   }
 
+  async function probe(name: string) {
+    setBusy(true);
+    try {
+      const r = await post(`mcp/servers/${encodeURIComponent(name)}/probe`, {});
+      setProbes((prev) => ({ ...prev, [name]: r }));
+      toast(r.ok ? `${name} probe passed` : `${name} probe failed`, r.ok ? "ok" : "err");
+    } finally { setBusy(false); }
+  }
+
+  function addKey(key: string) {
+    window.location.hash = `#/keys?key=${encodeURIComponent(key)}`;
+  }
+
   return (
     <>
       <PageHeader
         title="MCP Servers"
         sub={<><Badge status={payload.enabled === false ? "disabled" : "enabled"}>{payload.enabled === false ? "disabled" : "enabled"}</Badge> {servers.length} connected · {catalog.length} catalog entries</>}
+        actions={<Button variant="ghost" onClick={() => load(true)} disabled={busy} icon="refresh">Refresh live</Button>}
       />
       <div className="stack">
         <Card title="Connect a server">
@@ -64,11 +83,15 @@ export function McpPage() {
                 <span style={{ minWidth: 0 }}>
                   <b>{s.name}</b> <Badge status={s.status}>{s.status || "configured"}</Badge>
                   <span className="mut mono"> {[s.command, ...(s.args || [])].filter(Boolean).join(" ").slice(0, 90) || s.url || ""}</span>
-                  {!!s.env_keys?.length && <div className="pill-list">{s.env_keys.map((k: string) => <span className="pill mono" key={k}>{k}</span>)}</div>}
+                  {!!s.env_keys?.length && <div className="pill-list">{s.env_keys.map((k: string) => <button className="pill mono key-pill" key={k} onClick={() => addKey(k)}>{k}</button>)}</div>}
                   {!!s.tools?.length && <div className="mut">{s.tools.length} tools · {(s.resources || []).length} resources · {(s.prompts || []).length} prompts</div>}
                   {s.error && <div className="notice warn">{s.error}</div>}
+                  {probes[s.name] && <div className={`notice ${probes[s.name].ok ? "ok" : "warn"}`}>{probes[s.name].ok ? `${probes[s.name].tools?.length || 0} tools discovered` : probes[s.name].error}</div>}
                 </span>
-                <Button variant="danger" sm onClick={() => act({ action: "remove", name: s.name }, "Removed")}>Remove</Button>
+                <span className="actions">
+                  <Button variant="ghost" sm onClick={() => probe(s.name)} disabled={busy}>Test</Button>
+                  <Button variant="danger" sm onClick={() => act({ action: "remove", name: s.name }, "Removed")}>Remove</Button>
+                </span>
               </div>
             ))}
           </div>
