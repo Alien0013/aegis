@@ -104,12 +104,13 @@ Needed inputs:
 
 ### 3. External memory providers are thin
 
-Status: partial; Hermes-style `cronjob` tool basics implemented in this branch.
+Status: partial; first-class provider catalog/status/setup/tool surfaces implemented in this branch.
 
 AEGIS has:
 - Built-in memory close to Hermes semantics.
 - Provider interface with lifecycle hooks.
 - `jsonl`, `mem0`, `honcho`, and generic HTTP providers for openviking/supermemory/byterover/hindsight/holographic/retaindb.
+- Provider catalog, setup metadata, config schemas, redacted status checks, and provider-specific tools for status/setup/recall.
 
 Hermes has:
 - 8 first-class provider plugins: Honcho, OpenViking, Mem0, Hindsight, Holographic, RetainDB, ByteRover, Supermemory.
@@ -119,13 +120,13 @@ Implemented:
 - Added fail-soft `on_memory_write` to the provider lifecycle.
 - Mirrored successful memory add/replace/remove calls to external providers.
 - Added JSONL provider mirroring so direct memory-tool writes appear in external memory history.
-- Added regression tests for lifecycle fan-out and `handle_tool` mirroring.
+- Added JSONL recent-read tool plus fail-soft recall tools for SDK/HTTP providers.
+- Added regression tests for lifecycle fan-out, `handle_tool` mirroring, provider catalog/status/setup/schema, JSONL tools, and mocked HTTP recall/sync.
 
 Needed inputs:
-- Convert AEGIS generic HTTP adapters into plugin-quality providers with config schemas and setup commands.
-- Add provider-specific tools where useful.
+- Convert generic HTTP adapters into deeper plugin-quality providers with provider-specific setup wizards where behavior differs.
 - Add provider activation UI/CLI parity.
-- Add per-provider tests with fake SDK/server clients.
+- Add SDK-level fake-client tests for Honcho/Mem0 when those packages are available or cleanly stubbed.
 
 ### 4. Messaging gateway breadth and polish
 
@@ -278,10 +279,8 @@ P2: Cron and gateway foundations
 - Channel directory and home-target resolution.
 
 P3: Memory provider parity
-- Implement first-class Honcho provider with config/setup/tools.
-- Then Mem0 and Supermemory.
-- Done in this branch: memory-write mirroring hook and tests.
-- Still needed: per-provider setup/tools/prefetch tests.
+- Done in this branch: provider catalog/status/setup/config schemas, provider tools, JSONL recent reads, fail-soft HTTP recall/sync tests, and memory-write mirroring hook.
+- Still needed: richer provider-specific setup wizards, dashboard/CLI activation UX, and SDK fake-client tests for Honcho/Mem0/Supermemory.
 
 P4: Provider/account UX
 - Nous Portal/Tool Gateway if desired.
