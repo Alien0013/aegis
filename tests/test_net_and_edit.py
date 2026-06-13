@@ -573,7 +573,6 @@ def test_dashboard_kanban_board(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import http.client
     import json
-    import threading
     from aegis.config import Config
     from tests._dashboard_server import serve_app
 
@@ -620,7 +619,6 @@ def test_dashboard_config_redaction_and_cron(tmp_path, monkeypatch):
 
     import http.client
     import json
-    import threading
     from aegis.config import Config
     from tests._dashboard_server import serve_app
     import aegis.agent.agent as am
@@ -675,7 +673,6 @@ def test_dashboard_models_and_analytics(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import http.client
     import json
-    import threading
     from aegis.config import Config
     from tests._dashboard_server import serve_app
     from aegis import ratelimit
@@ -772,7 +769,6 @@ def test_dashboard_system_and_logs(tmp_path, monkeypatch):
     import http.client
     import json
     import os
-    import threading
     from aegis.config import Config
     from aegis.dashboard import _system_info
     from tests._dashboard_server import serve_app
@@ -801,7 +797,6 @@ def test_dashboard_mcp_and_webhooks(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import http.client
     import json
-    import threading
     from aegis.config import Config
     from tests._dashboard_server import serve_app
     cfg = Config.load()
@@ -827,7 +822,6 @@ def test_dashboard_public_plan_endpoints(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import http.client
     import json
-    import threading
     from aegis.config import Config
     from tests._dashboard_server import serve_app
     from aegis.session import Session, SessionStore
@@ -1101,7 +1095,6 @@ def test_dashboard_kanban_automation(tmp_path, monkeypatch):
     import aegis.agent.agent as agentmod
     import http.client
     import json
-    import threading
     import time
     from aegis.config import Config
     from tests._dashboard_server import serve_app
@@ -1141,7 +1134,6 @@ def test_dashboard_curator_plugins_profiles(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import http.client
     import json
-    import threading
     import aegis.config as cfg
     from aegis.config import Config
     from tests._dashboard_server import serve_app
