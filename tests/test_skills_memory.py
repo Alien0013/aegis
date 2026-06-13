@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 
 # --- skills -----------------------------------------------------------------
 def test_bundled_skills_present():
@@ -118,6 +120,91 @@ def test_skill_tool_create_updates_same_turn_prompt_index(tmp_path):
     assert len(provider.prompts) == 2
     assert "fresh-loop" not in provider.prompts[0]
     assert "fresh-loop" in provider.prompts[1]
+
+
+def _skill_manage_context(tmp_path):
+    from aegis.config import Config
+    from aegis.skills import SkillsLoader
+    from aegis.tools.base import ToolContext
+    from aegis.tools.skill_manage import SkillManageTool
+
+    cfg = Config.load()
+    loader = SkillsLoader(cfg, cwd=tmp_path)
+    return SkillManageTool(), ToolContext(cwd=tmp_path, config=cfg, skills=loader)
+
+
+def test_skill_manage_create_view_list_usage(tmp_path):
+    tool, ctx = _skill_manage_context(tmp_path)
+    content = """---
+name: managed-skill
+description: Use for testing skill_manage actions.
+---
+
+## Steps
+1. Start with the managed flow.
+"""
+
+    created = json.loads(tool.run({
+        "action": "create",
+        "name": "managed-skill",
+        "content": content,
+    }, ctx).content)
+    assert created["success"] is True
+
+    listed = tool.run({"action": "list"}, ctx).data
+    assert any(s["name"] == "managed-skill" for s in listed["skills"])
+
+    viewed = tool.run({"action": "view", "name": "managed-skill"}, ctx).data
+    assert viewed["success"] is True
+    assert "managed flow" in viewed["body"]
+
+    usage = tool.run({"action": "usage"}, ctx).data
+    assert usage["usage"]["managed-skill"]["count"] == 1
+
+
+def test_skill_manage_patch_pin_delete_report(tmp_path):
+    from aegis import config as cfg
+
+    tool, ctx = _skill_manage_context(tmp_path)
+    created = tool.run({
+        "action": "create",
+        "name": "patched-skill",
+        "description": "Use for testing patch and curator actions.",
+        "body": "## Steps\n1. Replace OLD_MARKER before finishing.",
+    }, ctx)
+    assert not created.is_error
+
+    patched = tool.run({
+        "action": "patch",
+        "name": "patched-skill",
+        "old_string": "OLD_MARKER",
+        "new_string": "NEW_MARKER",
+    }, ctx).data
+    assert patched["success"] is True
+    assert "NEW_MARKER" in (cfg.skills_dir() / "patched-skill" / "SKILL.md").read_text()
+
+    assert tool.run({"action": "pin", "name": "patched-skill"}, ctx).data["pinned"] is True
+    blocked = tool.run({"action": "delete", "name": "patched-skill"}, ctx)
+    assert blocked.is_error
+    assert "pinned" in blocked.content
+
+    assert tool.run({"action": "unpin", "name": "patched-skill"}, ctx).data["pinned"] is False
+    deleted = tool.run({"action": "delete", "name": "patched-skill"}, ctx).data
+    assert deleted["success"] is True
+    assert not (cfg.skills_dir() / "patched-skill").exists()
+    assert (cfg.sub("skills_archive") / "patched-skill").exists()
+
+    report = tool.run({"action": "report"}, ctx).data
+    assert "patched-skill" in report["archived"]
+
+
+def test_skill_manage_registered_without_changing_legacy_skill_tool():
+    from aegis.tools.registry import default_registry
+
+    reg = default_registry()
+    assert reg.get("skill_manage") is not None
+    legacy_actions = reg.get("skill").parameters["properties"]["action"]["enum"]
+    assert legacy_actions == ["list", "view", "create", "improve", "stats"]
 
 
 def test_external_skill_file_refreshes_next_agent_turn(tmp_path):

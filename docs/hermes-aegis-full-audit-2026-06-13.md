@@ -24,6 +24,7 @@ Implementation update in this branch:
 - Added typed FastAPI cron and gateway management routes for job CRUD/run/service status/control and gateway channel/service status/control.
 - Added short-lived single-use WebSocket tickets for `/api/ws` and `/api/pty`.
 - Added dashboard username/password login, signed session cookies, logout, Basic auth, non-loopback fail-closed startup, and host/peer guards.
+- Added Hermes-style `skill_manage` with list/view/create/patch/delete/usage/pin/unpin/report and curator-backed archive safety.
 - Added regression tests for recall behavior and memory write mirroring.
 
 ## Executive Verdict
@@ -167,12 +168,14 @@ Needed inputs:
 
 ### 6. Skills and learning loop need Hermes tool parity
 
-Status: fairly strong, but missing mature tooling.
+Status: fairly strong; Hermes-style `skill_manage` basics implemented in this branch.
 
 AEGIS has:
 - 32 bundled skills.
 - Progressive SKILL.md disclosure.
 - `skill` tool, `learn review/list/apply/reject`, background review on by default, auto memory/skill application, curator review/prune/archive/restore.
+- `skill_manage` tool with list/view/create/patch/delete/usage/pin/unpin/report.
+- Curator-backed safe delete by archive, pinned-skill protection, and dry-run reports.
 
 Hermes has:
 - Larger bundled/optional skill ecosystem and hub.
@@ -180,9 +183,8 @@ Hermes has:
 - Stronger background review and curator: snapshots, pin/unpin, rollback, reports, safe consolidation/pruning, cron reference rewrites, auxiliary model routing.
 
 Needed inputs:
-- Add Hermes-compatible `skill_manage` action schema.
-- Add support files under skill dirs (`references/`, `scripts/`, templates) through the tool.
-- Add curator run reports, backups, rollback, pin/unpin CLI and dashboard.
+- Add support-file creation/write flows under skill dirs (`references/`, `scripts/`, templates); patch already allows safe edits there.
+- Add curator backups, rollback, pin/unpin CLI and dashboard.
 - Add skill hub scan/preview/update/install parity.
 - Add skill nudge text to prompt, not only terminal UI event.
 
@@ -212,8 +214,8 @@ Needed inputs:
 
 Status: partial.
 
-AEGIS has 37 built-in tools:
-`agent_state`, `apply_patch`, `bash`, `browser`, `clarify`, `cloud_browser`, `cloud_image`, `computer`, `dependency_audit`, `download`, `edit_file`, `execute_code`, `generate_image`, `github`, `glob`, `http_request`, `kanban`, `list_dir`, `lsp`, `memory`, `mixture_of_agents`, `process`, `read_file`, `schedule_task`, `search`, `send_message`, `session_search`, `skill`, `spawn_subagent`, `speak`, `system_status`, `todo_write`, `tool_search`, `transcribe`, `web_fetch`, `web_search`, `write_file`.
+AEGIS has 38 built-in tools:
+`agent_state`, `apply_patch`, `bash`, `browser`, `clarify`, `cloud_browser`, `cloud_image`, `computer`, `dependency_audit`, `download`, `edit_file`, `execute_code`, `generate_image`, `github`, `glob`, `http_request`, `kanban`, `list_dir`, `lsp`, `memory`, `mixture_of_agents`, `process`, `read_file`, `schedule_task`, `search`, `send_message`, `session_search`, `skill`, `skill_manage`, `spawn_subagent`, `speak`, `system_status`, `todo_write`, `tool_search`, `transcribe`, `web_fetch`, `web_search`, `write_file`.
 
 Hermes has a larger registry and explicit toolsets including browser, clarify, code_execution, cronjob, delegation, file, image, kanban, memory, messaging, MCP, MoA, process registry, safe, search, session_search, skills, terminal, todo, TTS, video, vision, web, X search, and platform tools.
 
@@ -284,9 +286,8 @@ P4: Provider/account UX
 - OAuth setup UI.
 
 P5: Skills/curator polish
-- `skill_manage` schema.
-- Skill backups/rollback/reports/pin.
-- Hub scan/preview/update parity.
+- Done in this branch: `skill_manage` schema, create/view/list/patch/delete, usage, report, pin/unpin, safe archive delete.
+- Still needed: skill hub scan/preview/update/install, support-file write/create, backups/rollback, dashboard/CLI curator UX.
 
 ## Bottom Line
 
