@@ -36,6 +36,9 @@ const GROUP_TITLES: Record<string, string> = {
   server: "Dashboard & server", mcp: "MCP", cron: "Scheduled tasks", goals: "Goals",
   onboarding: "Onboarding", lsp: "Language server",
 };
+// title-case any group we don't have an explicit label for (custom_providers → Custom providers)
+const groupTitle = (g: string) =>
+  GROUP_TITLES[g] || g.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
 
 export function ConfigPage() {
   const [cfg, setCfg] = useState<any>(undefined);
@@ -159,7 +162,7 @@ export function ConfigPage() {
         return (
           <div className="panel group" key={g}>
             <div className="group-h" onClick={() => setOpen((o) => ({ ...o, [g]: !o[g] }))}>
-              <b>{GROUP_TITLES[g] || g}</b>
+              <b>{groupTitle(g)}</b>
               <span className="mut">{groups[g].length} · {isOpen ? "▾" : "▸"}</span>
             </div>
             {isOpen && <div className="fields">{groups[g].map(([k, v]) => <Field k={k} v={v} key={k} />)}</div>}
