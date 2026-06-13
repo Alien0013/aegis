@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+
 from ..types import ToolSchema
 from .base import Tool
+
+logger = logging.getLogger(__name__)
 
 
 class ToolRegistry:
@@ -13,6 +17,26 @@ class ToolRegistry:
     def register(self, tool: Tool) -> None:
         if not tool.name:
             raise ValueError("Tool must have a name")
+        existing = self._tools.get(tool.name)
+        if existing is not None:
+            source = str(getattr(tool, "source", "") or "")
+            allow_shadow = bool(getattr(tool, "allow_shadow", False))
+            if source in {"memory_provider", "plugin"} and not allow_shadow:
+                logger.warning(
+                    "Tool registration ignored: %s tool '%s' would shadow existing tool",
+                    source,
+                    tool.name,
+                )
+                return
+            if existing.toolset != tool.toolset and not allow_shadow:
+                logger.warning(
+                    "Tool registration ignored: tool '%s' from toolset '%s' would shadow "
+                    "existing toolset '%s'",
+                    tool.name,
+                    tool.toolset,
+                    existing.toolset,
+                )
+                return
         self._tools[tool.name] = tool
 
     def register_all(self, tools: list[Tool]) -> None:

@@ -69,6 +69,28 @@ def profile_name(profile: str | None = None) -> str:
     return _clean_profile(profile)
 
 
+def available_profiles() -> list[str]:
+    """Profiles with an existing runtime home, default profile first.
+
+    This is intentionally read-only: it does not create profile directories or
+    databases while tools are only trying to locate an existing session.
+    """
+    base = _base_home()
+    profiles: list[str] = [""]
+    named_root = base / "profiles"
+    if named_root.is_dir():
+        for child in sorted(named_root.iterdir(), key=lambda p: p.name):
+            if not child.is_dir():
+                continue
+            try:
+                name = _clean_profile(child.name)
+            except ValueError:
+                continue
+            if name and (child / "state.db").exists():
+                profiles.append(name)
+    return profiles
+
+
 def get_home() -> Path:
     """Resolve the runtime home dynamically. Honors $AEGIS_HOME and active profile."""
     return profile_home(_PROFILE)

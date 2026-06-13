@@ -112,6 +112,7 @@ def test_sync_turn_supports_hermes_style_provider_signature(tmp_path, monkeypatc
         Message.user("latest user"),
         Message.assistant("latest answer"),
     ])
+    assert mm.flush_pending(timeout=1)
 
     assert provider.calls == [(
         "latest user",
@@ -124,6 +125,41 @@ def test_sync_turn_supports_hermes_style_provider_signature(tmp_path, monkeypatc
             {"role": "assistant", "content": "latest answer"},
         ],
     )]
+
+
+def test_sync_turn_runs_on_background_worker(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    config = _cfg(tmp_path, monkeypatch)
+    from aegis.memory import MemoryManager
+    from aegis.types import Message
+
+    class SlowProvider:
+        def __init__(self):
+            self.started = threading.Event()
+            self.release = threading.Event()
+            self.calls = []
+
+        def sync_turn(self, messages):
+            self.started.set()
+            self.release.wait(timeout=1)
+            self.calls.append([m.content for m in messages])
+
+    provider = SlowProvider()
+    mm = MemoryManager(config, external=provider)
+
+    before = time.monotonic()
+    mm.sync_turn([Message.user("slow write")])
+    elapsed = time.monotonic() - before
+
+    assert elapsed < 0.1
+    assert provider.started.wait(timeout=1)
+    assert not mm.flush_pending(timeout=0.01)
+    provider.release.set()
+    assert mm.flush_pending(timeout=1)
+    assert provider.calls == [["slow write"]]
+    mm.shutdown()
 
 
 def test_memory_tool_writes_mirror_to_external_provider(tmp_path, monkeypatch):
@@ -336,6 +372,7 @@ def test_prefetch_is_wire_only_not_persisted(tmp_path, monkeypatch):
     agent = Agent(config=config, provider=provider, session=Session.create(),
                   memory=MemoryManager(config, external=external), cwd=tmp_path)
     agent.run("what did we decide?")
+    assert agent.memory.flush_pending(timeout=1)
 
     assert "<retrieved_memory>" in provider.wire_user
     assert "RELEVANT PAST FACT" in provider.wire_user
@@ -380,6 +417,7 @@ def test_sync_turn_fires_for_empty_assistant_response(tmp_path, monkeypatch):
                   memory=MemoryManager(config, external=external), cwd=tmp_path)
 
     result = agent.run("say nothing")
+    assert agent.memory.flush_pending(timeout=1)
 
     assert result.content == ""
     assert len(external.synced) == 1

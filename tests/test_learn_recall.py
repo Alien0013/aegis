@@ -121,6 +121,7 @@ def test_session_search_tool_browse_discover_read_and_scroll():
 
 
 def test_session_search_can_read_explicit_profile():
+    from aegis import config as cfg
     from aegis.session import Session, SessionStore
     from aegis.tools.base import ToolContext
     from aegis.tools.recall import SessionSearchTool
@@ -141,6 +142,15 @@ def test_session_search_can_read_explicit_profile():
     default_result = json.loads(tool.run({"query": "xylophonemark"}, ctx).content)
     work_result = json.loads(tool.run({"query": "xylophonemark", "profile": "work"}, ctx).content)
     read_work = json.loads(tool.run({"session_id": work.id[:12], "profile": "work"}, ctx).content)
+    read_work_bare = json.loads(tool.run({"session_id": work.id[:12]}, ctx).content)
+    read_work_link = json.loads(tool.run({"session_id": f"@session:work/{work.id[:12]}"}, ctx).content)
+    cfg.set_profile("work")
+    try:
+        read_default_link = json.loads(
+            tool.run({"session_id": f"@session:default/{default.id[:12]}"}, ctx).content
+        )
+    finally:
+        cfg.set_profile(None)
 
     assert default_result["results"] == []
     assert work_result["profile"] == "work"
@@ -149,6 +159,12 @@ def test_session_search_can_read_explicit_profile():
     assert work_result["results"][0]["match_message_row_id"]
     assert read_work["session_meta"]["profile"] == "work"
     assert read_work["messages"][0]["message_row_id"]
+    assert read_work_bare["profile"] == "work"
+    assert read_work_bare["session_id"] == work.id
+    assert read_work_link["profile"] == "work"
+    assert read_work_link["session_id"] == work.id
+    assert read_default_link["profile"] == ""
+    assert read_default_link["session_id"] == default.id
 
 
 def test_system_prompt_guides_prior_session_recall(tmp_path):

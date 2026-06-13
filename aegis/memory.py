@@ -8,9 +8,11 @@ session/compaction rebuild.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 import json
 from pathlib import Path
 import inspect
+import threading
 
 from . import config as cfg
 from .constants import MEMORY_CHAR_LIMIT, MEMORY_DELIM, USER_CHAR_LIMIT
@@ -376,6 +378,8 @@ class MemoryManager:
         # provider prompt blocks are frozen here too; per-turn recall belongs in prefetch().
         self._snapshot = self._capture_snapshot()
         self._snapshot_mtimes = self._memory_mtimes()
+        self._sync_executor: ThreadPoolExecutor | None = None
+        self._sync_executor_lock = threading.Lock()
 
     def _sanitized(self, target: str) -> str:
         """Hermes-rendered snapshot block: ═ separators + a header with the usage gauge,
@@ -522,8 +526,12 @@ class MemoryManager:
         return block.strip() if isinstance(block, str) else ""
 
     def queue_prefetch(self, query: str) -> None:
-        self._provider_call("queue_prefetch", query,
-                            session_id=getattr(self, "_session_id", ""))
+        session_id = getattr(self, "_session_id", "")
+
+        def _run() -> None:
+            self._provider_call("queue_prefetch", query, session_id=session_id)
+
+        self._submit_background(_run)
 
     @staticmethod
     def _message_wire(messages) -> list[dict]:
@@ -566,21 +574,74 @@ class MemoryManager:
         fn(self._last_content(messages, "user"), self._last_content(messages, "assistant"), **kw)
 
     def sync_turn(self, messages) -> None:
+        snapshot = list(messages or [])
+
+        def _run() -> None:
+            try:
+                self._sync_turn_compat(snapshot)
+            except Exception:  # noqa: BLE001
+                from ._log import log_exc
+                log_exc("memory provider sync_turn failed")
+
+        self._submit_background(_run)
+
+    def _get_sync_executor(self) -> ThreadPoolExecutor | None:
+        if self.external is None:
+            return None
+        if self._sync_executor is not None:
+            return self._sync_executor
+        with self._sync_executor_lock:
+            if self._sync_executor is None:
+                try:
+                    self._sync_executor = ThreadPoolExecutor(
+                        max_workers=1,
+                        thread_name_prefix="memory-sync",
+                    )
+                except Exception:  # pragma: no cover - resource exhaustion
+                    return None
+            return self._sync_executor
+
+    def _submit_background(self, fn) -> None:
+        executor = self._get_sync_executor()
+        if executor is None:
+            fn()
+            return
         try:
-            self._sync_turn_compat(messages)
-        except Exception:  # noqa: BLE001
-            from ._log import log_exc
-            log_exc("memory provider sync_turn failed")
+            executor.submit(fn)
+        except RuntimeError:
+            fn()
+
+    def flush_pending(self, timeout: float | None = None) -> bool:
+        """Wait until already-queued provider work has drained."""
+        executor = self._sync_executor
+        if executor is None:
+            return True
+        try:
+            fut = executor.submit(lambda: None)
+            fut.result(timeout=timeout)
+            return True
+        except TimeoutError:
+            return False
+        except RuntimeError:
+            return True
 
     def provider_tools(self) -> list:
         tools = self._provider_call("tools")
-        return list(tools) if tools else []
+        out = list(tools) if tools else []
+        for tool in out:
+            if not getattr(tool, "source", ""):
+                try:
+                    tool.source = "memory_provider"
+                except Exception:  # noqa: BLE001
+                    pass
+        return out
 
     def on_turn_start(self, turn_number: int, message: str, **kw) -> None:
         kw.setdefault("session_id", getattr(self, "_session_id", ""))
         self._provider_call("on_turn_start", turn_number, message, **kw)
 
     def on_session_end(self, messages) -> None:
+        self.flush_pending(timeout=5)
         self._provider_call("on_session_end", messages)
 
     def on_pre_compress(self, messages) -> str:
@@ -610,7 +671,15 @@ class MemoryManager:
         )
 
     def shutdown(self) -> None:
+        self.flush_pending(timeout=5)
         self._provider_call("shutdown")
+        executor = self._sync_executor
+        self._sync_executor = None
+        if executor is not None:
+            try:
+                executor.shutdown(wait=False)
+            except Exception:  # noqa: BLE001
+                pass
 
     def handle_tool(self, args: dict):
         from .tools.base import ToolResult

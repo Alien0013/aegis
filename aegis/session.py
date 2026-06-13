@@ -68,19 +68,28 @@ class Session:
 
 
 class SessionStore:
-    def __init__(self, profile: str | None = None):
+    def __init__(self, profile: str | None = None, *, read_only: bool = False):
         self.profile = cfg.current_profile() if profile is None else cfg.profile_name(profile)
-        self.db = cfg.sessions_db(profile)
-        self._init()
+        self.read_only = read_only
+        self.db = (
+            cfg.profile_home(profile if profile is not None else self.profile) / "state.db"
+            if self.read_only else cfg.sessions_db(profile)
+        )
+        if not self.read_only:
+            self._init()
 
     def _conn(self) -> sqlite3.Connection:
         # 30s busy timeout + WAL so concurrent gateway threads don't hit
         # "database is locked" under load.
-        conn = sqlite3.connect(self.db, timeout=30)
+        if self.read_only:
+            conn = sqlite3.connect(f"file:{self.db}?mode=ro", timeout=30, uri=True)
+        else:
+            conn = sqlite3.connect(self.db, timeout=30)
         conn.row_factory = sqlite3.Row
         try:
-            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA busy_timeout=30000")
+            if not self.read_only:
+                conn.execute("PRAGMA journal_mode=WAL")
         except sqlite3.OperationalError:
             pass
         return conn
