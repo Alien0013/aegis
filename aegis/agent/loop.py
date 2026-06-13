@@ -667,10 +667,11 @@ def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
     if getattr(agent, "_compact_stuck", False):
         return session
     engine = _engine(agent)
+    comp = agent.config.get("agent.compression", {}) or {}
+    threshold = comp.get("threshold")   # for the record's reason text; the engine applies it
     if not engine.should_compress(session.messages, agent.provider.context_length, schema_tokens):
         return session
     emit({"type": "compacting"})
-    comp = agent.config.get("agent.compression", {}) or {}
     pre_compress_context = _memory_pre_compress_context(agent, session)
     try:
         from .context_engine import call_hook
@@ -692,10 +693,11 @@ def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
     still_over = engine.should_compress(compressed, agent.provider.context_length, schema_tokens)
     from ..constants import COMPACT_THRESHOLD
     from ..util import now_iso
+    pct = int((COMPACT_THRESHOLD if threshold is None else threshold) * 100)
     rec = {"at": now_iso(), "iteration": budget.api_call_count,
            "messages_before": before_n, "messages_after": len(compressed),
            "tokens_before": before_tok, "tokens_after": after_tok,
-           "reason": f"context exceeded {int(COMPACT_THRESHOLD * 100)}% of the window"}
+           "reason": f"context exceeded {pct}% of the window"}
     if still_over:
         agent._compact_stuck = True
         rec["stuck"] = True

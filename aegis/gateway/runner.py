@@ -486,6 +486,12 @@ class GatewayRunner:
             agent.thread_id = ev.thread_id or ""
             agent.message_id = ev.message_id or ""
             try:
+                # Safety net: a gateway session can accumulate messages between turns
+                # (overnight Telegram/Discord) and blow past the window before the agent's
+                # in-loop compactor runs. Force a pre-turn compaction when it's grown large.
+                session = self._gateway_hygiene(agent, session) or session
+                self._sessions[key] = session
+
                 learned: list[str] = []
 
                 from ..eventbus import BUS
@@ -572,6 +578,35 @@ class GatewayRunner:
                 return reply
             except Exception as e:  # noqa: BLE001
                 return f"⚠ error: {type(e).__name__}: {e}"
+
+    def _gateway_hygiene(self, agent, session):
+        """Pre-turn compaction safety net (Hermes "session hygiene"). Fires only when a
+        session has grown large between turns — crossing the hygiene token threshold OR a
+        hard message ceiling — at a higher bar than the agent's own in-loop compactor so it
+        doesn't compact on every turn. Returns the active session (may be a compaction child)."""
+        comp = self.config.get("agent.compression", {}) or {}
+        msgs = session.messages
+        if len(msgs) < 4:
+            return session
+        hard = int(comp.get("hard_message_limit", 400) or 0)
+        over_count = hard > 0 and len(msgs) >= hard
+        over_tokens = False
+        ctx = getattr(getattr(agent, "provider", None), "context_length", 0) or 0
+        if ctx > 0:
+            from ..agent import compaction
+            frac = float(comp.get("gateway_hygiene_threshold", 0.85) or 0.85)
+            over_tokens = compaction.estimated_tokens(msgs) > ctx * frac
+        if not (over_count or over_tokens):
+            return session
+        try:
+            from ..agent.loop import compact_now
+            new_session = compact_now(agent, session=session, reason="gateway_hygiene")
+            if new_session is not None:
+                session = new_session
+                self.store.save(session)
+        except Exception:  # noqa: BLE001 — never let hygiene crash a turn
+            pass
+        return session
 
     def _maybe_transcribe(self, ev: MessageEvent, text: str) -> str:
         audio = next((a for a in (ev.attachments or [])

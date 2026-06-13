@@ -41,9 +41,13 @@ class DefaultContextEngine:
 
     name = "default"
 
+    def __init__(self, threshold: float | None = None):
+        # Fraction of the window that triggers compaction (None = built-in default).
+        self._threshold = threshold
+
     def should_compress(self, messages: list, context_length: int, overhead_tokens: int = 0) -> bool:
         from . import compaction
-        return compaction.should_compress(messages, context_length, overhead_tokens)
+        return compaction.should_compress(messages, context_length, overhead_tokens, self._threshold)
 
     def compress(self, messages: list, provider: Any, **kw) -> list:
         from . import compaction
@@ -73,7 +77,11 @@ def register(name: str, engine_cls: type) -> None:
 def get_engine(config) -> "ContextEngine":
     """Resolve the configured context engine (falls back to the default)."""
     name = (config.get("agent.context_engine", "default") if config else "default") or "default"
-    return _ENGINES.get(name, DefaultContextEngine)()
+    cls = _ENGINES.get(name, DefaultContextEngine)
+    if cls is DefaultContextEngine:
+        threshold = config.get("agent.compression.threshold") if config else None
+        return DefaultContextEngine(threshold=threshold)
+    return cls()
 
 
 def call_hook(engine: Any, name: str, *args: Any, **kwargs: Any) -> None:

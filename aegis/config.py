@@ -190,9 +190,17 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "reasoning_effort": "off",   # off|minimal|low|medium|high|xhigh
         "subdir_hints": True,        # inject a subdir's rule files when the agent first works there
         "compression": {"preserve_first": 3, "preserve_last": 20, "max_tool_tokens": 600,
+                        # in-loop compaction fires when history fills this fraction of the
+                        # model's window (Hermes-aligned default 0.50)
+                        "threshold": 0.50,
                         # tail protected by a TOKEN budget = this fraction of the model's
                         # window (scales with the model; preserve_last is the legacy fallback)
                         "tail_fraction": 0.25,
+                        # gateway-only safety net (runs before the agent, between turns):
+                        # force a compaction when a session that accumulated between turns
+                        # crosses this fraction of the window OR this many messages
+                        "gateway_hygiene_threshold": 0.85,
+                        "hard_message_limit": 400,
                         # when the window fills, roll into a fresh child session (parent kept
                         # intact, lineage chained) instead of editing history in place
                         "split_sessions": True},
@@ -251,6 +259,17 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "paths": [],                 # extra skill dirs
         "autogen": True,
     },
+    "curator": {                     # background maintenance of agent-created skills
+        "enabled": True,
+        "interval_hours": 168,       # minimum time between automatic runs (7 days)
+        "min_idle_hours": 2,         # only run after the agent has been idle this long
+        "stale_after_days": 30,      # active -> stale
+        "archive_after_days": 90,    # stale -> archived (Hermes-aligned; never deleted)
+        "backup": {
+            "enabled": True,
+            "keep": 5,               # tar.gz snapshots of skills/ retained before each run
+        },
+    },
     "cron": {
         "approval": "deny",          # headless approval for scheduled jobs: deny (safe) | approve (auto-run)
     },
@@ -304,9 +323,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "learn": {
         "auto": True,                # auto-review sessions on exit to propose memory/skill candidates
         "background": True,           # forked self-improvement review after substantial turns (on by default)
-        "memory_every": 6,            # run a memory review every N turns
+        "memory_every": 10,           # run a memory review every N turns (Hermes-aligned)
         "flush_min_turns": 6,          # run a final memory review on session end after N user turns
-        "skill_every_iters": 5,       # run a skill review when a turn used >= N tool iterations
+        "skill_every_iters": 10,      # run a skill review when a turn used >= N tool iterations (Hermes-aligned)
         "auto_apply": True,           # auto-write reviewed MEMORY (low risk); False = queue candidates
         "auto_apply_skills": True,    # auto-write reviewed SKILLS too (full autonomy; False = human-gated)
     },

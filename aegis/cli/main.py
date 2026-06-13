@@ -68,6 +68,14 @@ def cmd_chat(args, config: Config) -> int:
             _print("(not a git repo — worktree skipped)")
 
     store = SessionStore()
+
+    # Gated, idle-aware background skill maintenance (no-op unless it's actually due).
+    try:
+        from .. import curator as _curator
+        _curator.maybe_run_background(config)
+    except Exception:  # noqa: BLE001
+        pass
+
     session = _terminal_session(args, store)
     if isinstance(session, int):
         return session
@@ -1352,9 +1360,13 @@ def build_parser() -> argparse.ArgumentParser:
     cu = sub.add_parser("curator", help="background skill maintenance")
     cu.add_argument("action", nargs="?",
                     choices=["status", "review", "prune", "archive", "restore",
-                             "transitions", "pin", "unpin"], default="status")
+                             "transitions", "pin", "unpin", "run", "backup", "rollback",
+                             "list-archived"], default="status")
     cu.add_argument("name", nargs="?")
     cu.add_argument("--apply", action="store_true", help="apply changes (transitions/prune)")
+    cu.add_argument("--dry-run", action="store_true", help="preview a run without mutating")
+    cu.add_argument("--id", help="snapshot id (rollback)")
+    cu.add_argument("--list", action="store_true", help="list snapshots (rollback)")
     cu.set_defaults(func=_curator.cmd_curator)
 
     for _name in ("dashboard", "ui"):       # `aegis ui` is the friendly alias

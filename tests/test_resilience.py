@@ -97,6 +97,10 @@ def test_compaction_split_records_session_provenance(tmp_path):
     session.messages = [Message.user(("prior context " * 2000) + str(i)) for i in range(80)]
     provider = Windowed([LLMResponse(text="summary"), LLMResponse(text="final")])
     a = _agent(provider, tmp_path, store=store)
+    # Exercise the split path: this fixture is sized so the post-compaction window drops
+    # below 0.75 (but not below the default 0.50) — pin the threshold to keep it deterministic.
+    a.config.data["agent"]["compression"]["threshold"] = 0.75
+    a._context_engine = None   # rebuild the engine so it picks up the pinned threshold
     a.session = session
     a.tool_context.session = session
 

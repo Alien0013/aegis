@@ -15,8 +15,9 @@ MAX_PARALLEL_TOOLS = 8
 MIN_CONTEXT_LENGTH = 64_000          # reject models below this at startup (override per-model)
 DEFAULT_CONTEXT_LENGTH = 128_000
 # Fraction of the context window we allow message history to fill before
-# triggering compaction.
-COMPACT_THRESHOLD = 0.75
+# triggering compaction. Hermes-aligned default (0.50); override via
+# agent.compression.threshold in config.
+COMPACT_THRESHOLD = 0.50
 
 # --- Memory -----------------------------------------------------------------
 # Hermes-matched defaults: char limits (not tokens — model-independent), overridable

@@ -198,7 +198,7 @@ def test_compaction_splits_into_child_session(tmp_path, monkeypatch):
     # deterministic: over the threshold on the first check, under it after compaction
     calls = {"n": 0}
 
-    def fake_should(messages, ctx, overhead=0):
+    def fake_should(messages, ctx, overhead=0, threshold=None):
         calls["n"] += 1
         return calls["n"] == 1
     monkeypatch.setattr(compaction, "should_compress", fake_should)

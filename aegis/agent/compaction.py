@@ -61,8 +61,10 @@ def estimated_tokens(messages: list[Message]) -> int:
                for m in messages)
 
 
-def should_compress(messages: list[Message], context_length: int, overhead_tokens: int = 0) -> bool:
-    return estimated_tokens(messages) + overhead_tokens > context_length * COMPACT_THRESHOLD
+def should_compress(messages: list[Message], context_length: int, overhead_tokens: int = 0,
+                    threshold: float | None = None) -> bool:
+    frac = COMPACT_THRESHOLD if threshold is None else threshold
+    return estimated_tokens(messages) + overhead_tokens > context_length * frac
 
 
 def _msg_tokens(m: Message) -> int:

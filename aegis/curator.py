@@ -184,7 +184,7 @@ def review(stale_after_days: int = STALE_AFTER_DAYS) -> dict:
     }
 
 
-ARCHIVE_AFTER_DAYS = 60
+ARCHIVE_AFTER_DAYS = 90
 
 
 def prune(dry_run: bool = True, stale_after_days: int = STALE_AFTER_DAYS) -> list[str]:
@@ -208,18 +208,19 @@ def prune(dry_run: bool = True, stale_after_days: int = STALE_AFTER_DAYS) -> lis
     return archived
 
 
-def apply_transitions(dry_run: bool = True) -> dict[str, list[str]]:
-    """Walk curatable skills and classify by the lifecycle clock: active → stale (>30d) →
-    archived (>60d). With ``dry_run=False`` the archive-eligible ones are archived (never
-    deleted — archive is recoverable). Pinned/protected/user skills bypass entirely."""
+def apply_transitions(dry_run: bool = True, stale_after_days: int = STALE_AFTER_DAYS,
+                      archive_after_days: int = ARCHIVE_AFTER_DAYS) -> dict[str, list[str]]:
+    """Walk curatable skills and classify by the lifecycle clock: active → stale → archived.
+    With ``dry_run=False`` the archive-eligible ones are archived (never deleted — archive is
+    recoverable). Pinned/protected/user skills bypass entirely."""
     from . import provenance
     stale, to_archive = [], []
     for s in _scan():
         if s.malformed or not provenance.curatable(s.name):
             continue
-        if s.age_days >= ARCHIVE_AFTER_DAYS:
+        if s.age_days >= archive_after_days:
             to_archive.append(s.name)
-        elif s.age_days >= STALE_AFTER_DAYS:
+        elif s.age_days >= stale_after_days:
             stale.append(s.name)
     archived: list[str] = []
     if not dry_run:
@@ -278,6 +279,195 @@ def archived() -> list[str]:
     if not root.exists():
         return []
     return sorted(p.name for p in root.iterdir() if p.is_dir())
+
+
+# --------------------------------------------------------------------------- #
+# run-gating state, backups/rollback, periodic run
+# --------------------------------------------------------------------------- #
+def _state_path() -> Path:
+    return cfg.sub("curator", "state.json")
+
+
+def _load_state() -> dict:
+    import json
+    raw = read_text(_state_path())
+    if not raw.strip():
+        return {}
+    try:
+        d = json.loads(raw)
+        return d if isinstance(d, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def _save_state(data: dict) -> None:
+    import json
+    _state_path().parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(_state_path(), json.dumps(data, indent=2, sort_keys=True))
+
+
+def _idle_hours(now: datetime | None = None) -> float:
+    """Hours since the agent was last active. Proxy = newest of the session DB mtime and the
+    most recent recorded skill use; large when the machine has been quiet."""
+    now = now or datetime.now(timezone.utc)
+    latest: datetime | None = None
+    db = cfg.sessions_db()
+    if db.exists():
+        latest = datetime.fromtimestamp(db.stat().st_mtime, tz=timezone.utc)
+    for u in _load_usage().values():
+        dt = _parse_iso(u.get("last_used", ""))
+        if dt and (latest is None or dt > latest):
+            latest = dt
+    if latest is None:
+        return 1e9   # nothing on record -> treat as fully idle
+    return max(0.0, (now - latest).total_seconds() / 3600)
+
+
+def _backups_dir() -> Path:
+    return cfg.sub("curator", "backups")
+
+
+def backup(reason: str = "auto", keep: int = 5) -> Path | None:
+    """Snapshot skills/ to curator/backups/<utc-iso>/skills.tar.gz; prune to ``keep``."""
+    import json
+    import tarfile
+    src = cfg.skills_dir()
+    if not src.exists():
+        return None
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ")
+    dest = _backups_dir() / stamp
+    dest.mkdir(parents=True, exist_ok=True)
+    tar = dest / "skills.tar.gz"
+    with tarfile.open(tar, "w:gz") as tf:
+        tf.add(src, arcname="skills")
+    atomic_write(dest / "manifest.json",
+                 json.dumps({"at": now_iso(), "reason": reason}, indent=2))
+    _prune_backups(keep)
+    return tar
+
+
+def _prune_backups(keep: int) -> None:
+    root = _backups_dir()
+    if not root.exists():
+        return
+    snaps = sorted((p for p in root.iterdir() if p.is_dir()),
+                   key=lambda p: p.name, reverse=True)
+    for old in snaps[max(0, keep):]:
+        shutil.rmtree(old, ignore_errors=True)
+
+
+def list_backups() -> list[dict]:
+    import json
+    root = _backups_dir()
+    if not root.exists():
+        return []
+    out: list[dict] = []
+    for p in sorted((d for d in root.iterdir() if d.is_dir()),
+                    key=lambda p: p.name, reverse=True):
+        m: dict = {}
+        try:
+            m = json.loads(read_text(p / "manifest.json") or "{}")
+        except json.JSONDecodeError:
+            pass
+        out.append({"id": p.name, "reason": m.get("reason", ""), "at": m.get("at", "")})
+    return out
+
+
+def rollback(snapshot_id: str | None = None) -> str | None:
+    """Restore skills/ from a snapshot (newest if id omitted). Takes a pre-rollback snapshot
+    first so the rollback itself is reversible. Returns the restored id, or None."""
+    import tarfile
+    snaps = list_backups()
+    if not snaps:
+        return None
+    target = snapshot_id or snaps[0]["id"]
+    tar = _backups_dir() / target / "skills.tar.gz"
+    if not tar.exists():
+        return None
+    backup(reason=f"pre-rollback to {target}")   # so a mistaken rollback can be undone
+    skills = cfg.skills_dir()
+    if skills.exists():
+        shutil.rmtree(skills, ignore_errors=True)
+    skills.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(tar, "r:gz") as tf:
+        tf.extractall(skills.parent)   # archive root is "skills/"
+    return target
+
+
+def _write_report(result: dict, stale_days: int, archive_days: int) -> Path:
+    import json
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    d = cfg.logs_dir() / "curator" / stamp
+    d.mkdir(parents=True, exist_ok=True)
+    atomic_write(d / "run.json", json.dumps(result, indent=2, sort_keys=True))
+    lines = [
+        f"# Curator run {stamp}", "",
+        f"- archived: {', '.join(result.get('archived', [])) or 'none'}",
+        f"- consolidated (near-duplicate survives): {', '.join(result.get('consolidated', [])) or 'none'}",
+        f"- pruned (stale, no overlap): {', '.join(result.get('pruned', [])) or 'none'}",
+        f"- now stale (>{stale_days}d, watching): {', '.join(result.get('stale', [])) or 'none'}",
+        f"- archive-after: {archive_days}d",
+    ]
+    atomic_write(d / "REPORT.md", "\n".join(lines) + "\n")
+    return d
+
+
+def run(config=None, *, dry_run: bool = False) -> dict:
+    """Run a full curator pass: snapshot skills/, apply lifecycle transitions, write a report,
+    and stamp ``last_run_at``. Returns the transition result (plus report path)."""
+    stale_days, archive_days = STALE_AFTER_DAYS, ARCHIVE_AFTER_DAYS
+    backup_keep, backup_enabled = 5, True
+    if config is not None:
+        stale_days = int(config.get("curator.stale_after_days", stale_days) or stale_days)
+        archive_days = int(config.get("curator.archive_after_days", archive_days) or archive_days)
+        backup_keep = int(config.get("curator.backup.keep", backup_keep) or backup_keep)
+        backup_enabled = bool(config.get("curator.backup.enabled", True))
+    if not dry_run and backup_enabled:
+        backup(reason="pre-curator", keep=backup_keep)
+    result = apply_transitions(dry_run=dry_run, stale_after_days=stale_days,
+                               archive_after_days=archive_days)
+    if not dry_run:
+        result["report"] = str(_write_report(result, stale_days, archive_days))
+        state = _load_state()
+        state["last_run_at"] = now_iso()
+        _save_state(state)
+    return result
+
+
+def maybe_run(config) -> dict | None:
+    """Gated automatic run (Hermes-style): fires only if enabled, the configured interval has
+    elapsed since the last run, and the agent has been idle long enough. On a brand-new install
+    the first observation seeds the clock and defers the first real pass by one full interval."""
+    if config is None or not bool(config.get("curator.enabled", True)):
+        return None
+    interval_h = float(config.get("curator.interval_hours", 168) or 168)
+    min_idle_h = float(config.get("curator.min_idle_hours", 2) or 0)
+    state = _load_state()
+    now = datetime.now(timezone.utc)
+    last = _parse_iso(state.get("last_run_at", ""))
+    if last is None:
+        # First time we've ever observed: seed the clock and defer one full interval.
+        state["last_run_at"] = now_iso()
+        _save_state(state)
+        return None
+    if (now - last).total_seconds() / 3600 < interval_h:
+        return None
+    if min_idle_h > 0 and _idle_hours(now) < min_idle_h:
+        return None
+    return run(config, dry_run=False)
+
+
+def maybe_run_background(config) -> None:
+    """Fire :func:`maybe_run` in a daemon thread so session start never blocks on it."""
+    import threading
+
+    def _go():
+        try:
+            maybe_run(config)
+        except Exception:  # noqa: BLE001 — maintenance must never crash a session
+            pass
+
+    threading.Thread(target=_go, daemon=True).start()
 
 
 # --------------------------------------------------------------------------- #
@@ -377,6 +567,41 @@ def cmd_curator(args, config) -> int:
             return 1
         pin(name, False)
         print(f"unpinned {name}")
+        return 0
+
+    if action == "run":
+        dry = bool(getattr(args, "dry_run", False))
+        r = run(config, dry_run=dry)
+        if dry:
+            print(f"  would archive (>{config.get('curator.archive_after_days', ARCHIVE_AFTER_DAYS)}d): "
+                  + (', '.join(r.get('to_archive', [])) or 'none'))
+            print(f"  now stale: {', '.join(r.get('stale', [])) or 'none'}")
+        else:
+            print(f"  archived: {', '.join(r.get('archived', [])) or 'none'}")
+            print(f"  report: {r.get('report', '')}")
+        return 0
+
+    if action == "backup":
+        path = backup(reason=getattr(args, "name", None) or "manual",
+                      keep=int(config.get("curator.backup.keep", 5) or 5))
+        print(f"snapshot: {path}" if path else "no skills/ to back up")
+        return 0
+
+    if action == "rollback":
+        snaps = list_backups()
+        if getattr(args, "list", False) or (not snaps):
+            if not snaps:
+                print("  no snapshots.")
+            for s in snaps:
+                print(f"  {s['id']}  {s['reason']}  {s['at']}")
+            return 0
+        restored = rollback(getattr(args, "id", None))
+        print(f"restored skills/ from {restored}" if restored else "rollback failed (no matching snapshot)")
+        return 0 if restored else 1
+
+    if action == "list-archived":
+        arc = archived()
+        print("  " + (", ".join(arc) if arc else "none archived"))
         return 0
 
     print(f"error: unknown action '{action}'")
