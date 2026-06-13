@@ -516,9 +516,8 @@ def banner(agent: Agent) -> None:
         )
         body.append("  cwd      ", style="dim"); body.append(f"{agent.cwd}\n", style="white")
         body.append("  session  ", style="dim"); body.append(f"{agent.session.id}\n\n", style="white")
-        body.append("  Other ways in:\n", style="bold")
-        body.append("    aegis tui", style="cyan"); body.append("   full-screen terminal app\n", style="dim")
-        body.append("    aegis ui", style="cyan");  body.append("    web control panel in your browser\n\n", style="dim")
+        body.append("  Control plane:\n", style="bold")
+        body.append("    aegis ui", style="cyan");  body.append("     web dashboard\n\n", style="dim")
         body.append("  Try:  ", style="dim")
         body.append("/help", style="green"); body.append(" commands · ", style="dim")
         body.append("@file.py", style="green"); body.append(" attach a file · ", style="dim")
@@ -537,7 +536,7 @@ def banner(agent: Agent) -> None:
               f"{getattr(agent, 'reasoning', 'off')} · permissions "
               f"{agent.config.get('tools.exec_mode', 'auto')}")
         print(f"cwd: {agent.cwd}")
-        print("Other ways in:  aegis tui (full-screen)  ·  aegis ui (web panel)")
+        print("Control plane:  aegis ui (web dashboard)")
         print("Try: /help · @file · /goal · /quit")
         print("=" * 60)
 
@@ -659,7 +658,7 @@ def _run_terminal_turn_active_session(
     meta: dict | None = None,
     include_wakeups: bool = True,
 ):
-    """Run one terminal-surface turn with the same REPL/TUI lifecycle.
+    """Run one terminal-surface turn with the same REPL lifecycle.
 
     This is the Hermes-style terminal path: prompt preparation, shared
     SurfaceRunner execution, goal continuation, first-run tips, and persistence

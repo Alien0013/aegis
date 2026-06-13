@@ -113,10 +113,10 @@ class PtyBridge:
             pass
 
 
-def dashboard_tui_argv(resume: str | None = None) -> list[str]:
+def dashboard_terminal_argv(resume: str | None = None) -> list[str]:
     """Return the command used for the embedded dashboard terminal."""
     exe = os.environ.get("AEGIS_BIN") or shutil.which("aegis")
-    argv = [exe, "tui"] if exe else [sys.executable, "-m", "aegis.cli.main", "tui"]
+    argv = [exe] if exe else [sys.executable, "-m", "aegis.cli.main"]
     if resume:
-        argv.extend(["--resume", resume])
+        argv.extend(["chat", "--resume", resume])
     return argv

@@ -59,7 +59,7 @@ aegis            # start chatting   ·   aegis ui   # …or a clickable browser 
 
 ## 🏗 Architecture
 
-**One agent core, every surface.** Each entry point — terminal, full-screen TUI, React
+**One agent core, every surface.** Each entry point — terminal, React
 web UI, an 8-channel gateway, an OpenAI-compatible API, a Python SDK and a JSON-RPC bridge —
 routes through the *same* `SurfaceRunner → Agent.run` loop, the same providers, the same
 permission cascade, and the same durable state.
@@ -68,7 +68,6 @@ permission cascade, and the same durable state.
 flowchart TB
     subgraph Surfaces["Entry surfaces — all share one loop"]
         CLI["CLI / REPL"]
-        TUI["Full-screen TUI<br/>(aegis tui)"]
         UI["Web dashboard<br/>React + Vite (aegis ui)"]
         GW["Gateway · 8 channels<br/>Telegram · Discord · Slack · Signal<br/>Matrix · Email · Webhook · ntfy"]
         API["OpenAI-compatible API<br/>· SDK · JSON-RPC"]
@@ -217,7 +216,6 @@ aegis model set qwen qwen-max                  # Qwen API-compatible provider
 aegis model set ollama llama3.1               # …or fully local, no key
 
 aegis                                         # interactive REPL (streaming + slash cmds)
-aegis tui                                     # full-screen terminal cockpit
 aegis chat -q "summarize the files here"      # one-shot
 aegis chat --continue                         # resume last session
 aegis ui                                      # ← clickable browser UI (great for beginners)
@@ -360,7 +358,7 @@ aegis/                          the Python package (~35k LOC, ~95 modules)
 ├─ gateway/          runner · 8 channel adapters · pairing · delivery queue · service
 ├─ mcp/              client (stdio+HTTP) · server
 ├─ lsp/              persistent client · 13-language servers · edit diagnostics
-├─ cli/              main (47 subcommands) · repl · tui (full-screen) · menu
+├─ cli/              main · repl · menu
 ├─ builtin_skills/   29 SKILL.md packages
 ├─ static/web_dist/  built React dashboard (served at /)
 ├─ memory.py · session.py · skills.py · learn.py · curator.py · surface.py

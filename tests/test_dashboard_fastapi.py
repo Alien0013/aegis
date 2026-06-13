@@ -634,7 +634,7 @@ def test_fastapi_websocket_auth_and_resize_protocol(tmp_path, monkeypatch):
 
 
 def test_dashboard_pty_argv_uses_aegis_binary(monkeypatch):
-    from aegis.dashboard_pty import dashboard_tui_argv
+    from aegis.dashboard_pty import dashboard_terminal_argv
 
     monkeypatch.setenv("AEGIS_BIN", "/tmp/aegis-test")
-    assert dashboard_tui_argv("sess") == ["/tmp/aegis-test", "tui", "--resume", "sess"]
+    assert dashboard_terminal_argv("sess") == ["/tmp/aegis-test", "chat", "--resume", "sess"]

@@ -4,24 +4,21 @@ Run any command with `-h` for details. `aegis` alone opens the REPL.
 
 ## Chat
 - `aegis [chat]` — interactive REPL
-- `aegis tui` — full-screen terminal cockpit with transcript, activity stream,
-  composer, status footer, slash commands, and REPL fallback (`--resume`,
-  `--continue`, `--model`, `--provider`)
 - `aegis chat -q "…"` — one-shot (`--model`, `--provider`, `--image`, `--resume`,
   `--continue`, `--worktree/-w`, `--yolo`)
 - `aegis batch FILE` — run a prompt per line
 
-Prompt references work in REPL, one-shot, TUI-backed surfaces, SDK/API/gateway,
+Prompt references work in REPL, one-shot, SDK/API/gateway,
 and automation: `@file:path[:10-20]`, `@folder:path`, `@diff`, `@staged`,
 `@git:<ref>`, `@url:https://...`, and `@mcp:<server>:<resource-uri>`. Each
 expansion records metadata on the session for replay/debugging.
 
-REPL and one-shot CLI turns use the same shared surface runner as TUI, SDK,
+REPL and one-shot CLI turns use the same shared surface runner as SDK,
 dashboard chat, gateway, cron, webhooks, and `aegis serve`, so terminal turns
 also write durable run rows, trace ids, surface metadata, and prompt-part
 debugging metadata.
 
-The REPL and TUI share the same terminal turn lifecycle: `/goal` startup,
+The REPL uses the same terminal turn lifecycle everywhere: `/goal` startup,
 automatic goal continuations, `/retry`, manual `/compress`, run history,
 context-reference expansion, and persistence all go through the shared runner.
 

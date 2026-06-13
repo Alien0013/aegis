@@ -807,7 +807,7 @@ def run_control_action(
 ) -> SurfaceRun:
     """Record a non-chat control-plane action as a durable run and trace.
 
-    REPL/TUI/gateway actions such as manual compaction do not call the model as
+    REPL/gateway actions such as manual compaction do not call the model as
     ordinary user turns, but they still change runtime state. This wrapper makes
     those actions visible to runs, traces, dashboards, eval replay, and status
     breadcrumbs.

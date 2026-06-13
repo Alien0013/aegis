@@ -18,7 +18,7 @@ These four are **NOT** flagged below even where evidence appears:
 3. Default alignment (agent compaction 0.50, curator archive-after 90d, self-improvement intervals memory=10 / skills=10).
 4. (Folded into #2/#3.)
 
-Cosmetic/UX-only surfaces (TUI skins, desktop chrome, LaTeX rendering, light-terminal detection) are noted **DEFERRED** and carry no effort.
+Cosmetic/UX-only surfaces (desktop chrome, LaTeX rendering, light-terminal detection) are noted **DEFERRED** and carry no effort. The standalone alternate terminal surface was removed; `aegis` is the terminal app.
 
 ---
 
@@ -99,7 +99,7 @@ Secondary but real: session schema lacks normalized message rows + billing/token
 | 55 | Event hooks (gateway/plugin/shell) | H:14005-15340 | `hooks.py`,`eventbus.py` | DIVERGES (verify shell-hook + gateway lifecycle events) | M |
 | 56 | Batch processing / trajectories / evals | H:15341-15571, H:29737 | `evals.py`,`trajectory.py`,`runs.py` | PARITY | — |
 | 57 | i18n | (minimal in Hermes) | (none) | DEFERRED | — |
-| 58 | TUI / desktop chrome | H:2693-2987 | `cli/tui.py`,`desktop.py` | DEFERRED | — |
+| 58 | Desktop chrome | H:2693-2987 | `desktop.py` | DEFERRED | — |
 
 ---
 
@@ -257,7 +257,7 @@ Effort key: **S** ≈ ≤1 day, **M** ≈ 2–4 days, **L** ≈ 1–2 weeks.
 - **Video gen / x_search / deliverable-mode tool** (M) — only if user-driven (§N).
 
 ### Deferred (cosmetic / low ROI)
-- TUI skins, desktop chrome, LaTeX rendering, i18n.
+- Desktop chrome, LaTeX rendering, i18n.
 
 ---
 

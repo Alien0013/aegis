@@ -111,7 +111,7 @@ export function TerminalPage() {
     <>
       <PageHeader
         title="Terminal"
-        sub={<span className="terminal-sub"><Badge status={status}>{status}</Badge><span>AEGIS TUI over WebSocket PTY</span></span>}
+        sub={<span className="terminal-sub"><Badge status={status}>{status}</Badge><span>AEGIS terminal over WebSocket PTY</span></span>}
         actions={
           <>
             <Button variant="ghost" icon="refresh" onClick={reconnect}>Reconnect</Button>

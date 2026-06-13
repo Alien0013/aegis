@@ -93,7 +93,7 @@ offset. AEGIS only reuses a stored response id when the active provider and
 model still match the stored state, so prompt routing or model switches start a
 fresh provider-native chain instead of cross-wiring incompatible state.
 During streaming Responses calls, AEGIS captures the active response id when
-the provider emits it; terminal/TUI/gateway interrupts then issue a best-effort
+the provider emits it; terminal/gateway interrupts then issue a best-effort
 provider-side cancel while still stopping locally.
 
 If `responses.compaction.enabled` is true, AEGIS sends Responses

@@ -16,7 +16,7 @@ SKILL.md skills engine, and a multi-channel gateway.
 
 ## Entry surfaces (`surface.py`)
 `SurfaceRunner` is the shared factory for terminal and service surfaces: REPL
-turns, one-shot CLI prompts, TUI, batch runs, Python SDK, OpenAI-compatible
+turns, one-shot CLI prompts, batch runs, Python SDK, OpenAI-compatible
 `serve`, JSON-RPC stdio (`aegis rpc`), ACP/IDE sessions, dashboard chat, cron,
 webhooks, and background jobs. It standardizes
 `SessionStore`, working directory, MCP loading, platform/chat metadata, event
@@ -28,7 +28,7 @@ same runner/run-log/trace path instead of bypassing the core loop.
 
 Prompt context references are part of this shared surface layer. `@file:path`,
 `@folder:path`, `@diff`, `@staged`, `@git:<ref>`, and `@url:https://...` expand
-through `context_refs.py` for the REPL, TUI, SDK, OpenAI-compatible API, ACP,
+through `context_refs.py` for the REPL, SDK, OpenAI-compatible API, ACP,
 gateway, cron, webhooks, and background jobs. Each turn records reference count,
 warnings, and injected character totals in `session.meta.last_context_references`
 and run metadata.

@@ -1837,10 +1837,10 @@ def create_app(config: Config) -> FastAPI:
             return
         await ws.accept()
         try:
-            from .dashboard_pty import PtyBridge, dashboard_tui_argv
+            from .dashboard_pty import PtyBridge, dashboard_terminal_argv
 
             bridge = PtyBridge.spawn(
-                dashboard_tui_argv(ws.query_params.get("resume") or None),
+                dashboard_terminal_argv(ws.query_params.get("resume") or None),
                 cwd=os.getcwd(),
                 cols=int(ws.query_params.get("cols") or 100),
                 rows=int(ws.query_params.get("rows") or 30),

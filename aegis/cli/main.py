@@ -572,21 +572,6 @@ def cmd_plugins(args, config: Config) -> int:
     return 1 if action == "doctor" and inv.errors else 0
 
 
-def cmd_tui(args, config: Config) -> int:
-    """Full terminal UI entry point."""
-    from ..session import SessionStore
-    from .tui import run_fullscreen
-
-    store = SessionStore()
-    session = _terminal_session(args, store)
-    if isinstance(session, int):
-        return session
-    config.data.setdefault("display", {})["status_footer"] = True
-    run_fullscreen(config, model=args.model, provider_name=args.provider,
-                   session=session, store=store, auto=args.yolo)
-    return 0
-
-
 def cmd_trace(args, config: Config) -> int:
     try:
         from ..tracing import TraceStore
@@ -1145,7 +1130,7 @@ def cmd_batch(args, config: Config) -> int:
     return 0
 
 
-_CMDS = ("chat tui desktop model auth setup onboard status update skills plugins mcp serve rpc cron tools memory "
+_CMDS = ("chat desktop model auth setup onboard status update skills plugins mcp serve rpc cron tools memory "
          "config sessions gateway doctor completion backup import insights webhook "
          "hooks kanban curator dashboard daemon acp pairing checkpoints background trace eval")
 
@@ -1271,14 +1256,6 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--worktree", "-w", action="store_true", help="run in an isolated git worktree")
     c.add_argument("--image", action="append", help="attach an image for vision (repeatable)")
     c.set_defaults(func=cmd_chat)
-
-    tui = sub.add_parser("tui", help="open the richer terminal agent surface")
-    tui.add_argument("-m", "--model")
-    tui.add_argument("--provider")
-    tui.add_argument("--resume", help="resume a session id/title")
-    tui.add_argument("--continue", dest="cont", action="store_true", help="continue the latest session")
-    tui.add_argument("--yolo", action="store_true", help="auto-approve all tools")
-    tui.set_defaults(func=cmd_tui)
 
     m = sub.add_parser("model", help="show/set the model")
     m.add_argument("action", nargs="?", choices=["list", "set", "doctor"])

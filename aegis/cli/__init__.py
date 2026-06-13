@@ -1,1 +1,1 @@
-"""Command-line interface: argparse subcommands + interactive REPL/TUI."""
+"""Command-line interface: argparse subcommands + interactive REPL."""

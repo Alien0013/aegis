@@ -7,7 +7,6 @@ def test_cli_parser_exposes_upgrade_commands():
     from aegis.cli.main import build_parser
 
     parser = build_parser()
-    assert parser.parse_args(["tui"]).command == "tui"
     assert parser.parse_args(["trace", "list"]).command == "trace"
     assert parser.parse_args(["eval", "list"]).command == "eval"
     assert parser.parse_args(["plugins", "install", "./plug.py"]).action == "install"
@@ -20,33 +19,6 @@ def test_cli_parser_exposes_upgrade_commands():
     assert parser.parse_args(["eval", "show", "eval_1"]).action == "show"
     assert parser.parse_args(["rpc"]).command == "rpc"
     assert parser.parse_args(["model", "doctor"]).action == "doctor"
-
-
-def test_tui_command_invokes_fullscreen_surface(monkeypatch):
-    from argparse import Namespace
-
-    from aegis.cli import main
-    from aegis.cli import tui
-    from aegis.config import Config
-
-    seen = {}
-
-    def fake_run(config, **kwargs):
-        seen["config"] = config
-        seen.update(kwargs)
-
-    monkeypatch.setattr(tui, "run_fullscreen", fake_run)
-
-    rc = main.cmd_tui(
-        Namespace(model="m1", provider="p1", resume=None, cont=False, yolo=True),
-        Config.load(),
-    )
-
-    assert rc == 0
-    assert seen["model"] == "m1"
-    assert seen["provider_name"] == "p1"
-    assert seen["auto"] is True
-    assert seen["session"].id
 
 
 def test_model_doctor_prints_resolver_report(capsys):
@@ -267,80 +239,6 @@ def test_batch_nonstream_prints_each_result_once(monkeypatch, tmp_path, capsys):
     assert out.count("batch two") == 1
 
 
-def test_tui_formats_events_and_captures_slash():
-    from aegis.cli import tui
-
-    assert tui._event_line({"type": "iteration", "n": 2, "max": 5}) == "iteration 2/5"
-    assert "tool start" in tui._event_line({
-        "type": "tool_start",
-        "name": "bash",
-        "args": {"command": "pytest"},
-    })
-    assert "tool ok" in tui._event_line({
-        "type": "tool_result",
-        "name": "bash",
-        "summary": "done",
-        "is_error": False,
-    })
-    result, output = tui._capture_slash("/help", object())
-    assert result == ""
-    assert "/trace" in output and "/evals" in output
-
-
-def test_tui_busy_input_modes():
-    from aegis.cli import tui
-    from aegis.config import Config
-
-    cfg = Config.load()
-
-    class Agent:
-        def __init__(self):
-            self.steered = []
-            self.cancelled = 0
-
-        def steer(self, text):
-            self.steered.append(text)
-            return True
-
-        def cancel(self):
-            self.cancelled += 1
-
-    agent = Agent()
-    pending = []
-
-    cfg.data.setdefault("gateway", {})["busy_mode"] = "queue"
-    assert tui._handle_busy_input("next", agent, cfg, pending) == "queued"
-    assert pending == ["next"] and agent.steered == [] and agent.cancelled == 0
-
-    cfg.data["gateway"]["busy_mode"] = "steer"
-    assert tui._handle_busy_input("guide", agent, cfg, pending) == "steered"
-    assert agent.steered == ["guide"] and pending == ["next"]
-
-    cfg.data["gateway"]["busy_mode"] = "interrupt"
-    assert tui._handle_busy_input("replace", agent, cfg, pending) == "interrupt"
-    assert pending == ["replace"] and agent.cancelled == 1
-
-    assert tui._handle_busy_input("stop", agent, cfg, pending) == "cancelled"
-    assert pending == ["replace"] and agent.cancelled == 2
-
-
-def test_tui_session_signature_tracks_switch_and_rewrite():
-    from aegis.cli import tui
-    from aegis.session import Session
-    from aegis.types import Message
-
-    alpha = Session.create("alpha")
-    alpha.messages = [Message.user("alpha prompt"), Message.assistant("alpha answer")]
-    beta = Session.create("beta")
-    beta.messages = [Message.user("beta prompt")]
-
-    assert tui._session_signature(alpha) != tui._session_signature(beta)
-    before = tui._session_signature(alpha)
-    alpha.messages[-1] = Message.assistant("changed answer")
-    assert tui._session_signature(alpha) != before
-    assert tui._render_session(alpha) == "user> alpha prompt\n\nassistant> changed answer"
-
-
 def test_terminal_slash_help_is_searchable():
     from aegis.cli import repl
 
@@ -448,10 +346,10 @@ def test_terminal_session_picker_resume_and_branch(monkeypatch):
     assert agent.session.id == alpha.id
     assert agent.tool_context.session.id == alpha.id
 
-    assert repl.handle_slash("/branch alpha experiment", agent, store=store, surface="tui") == ""
+    assert repl.handle_slash("/branch alpha experiment", agent, store=store, surface="terminal") == ""
     assert agent.session.parent_id == alpha.id
     assert agent.session.title == "alpha experiment"
-    assert agent.session.meta["branch_surface"] == "tui"
+    assert agent.session.meta["branch_surface"] == "terminal"
     assert store.load(agent.session.id).parent_id == alpha.id
 
 
@@ -514,7 +412,7 @@ def test_terminal_goal_continuation_uses_surface_runner(monkeypatch):
         agent,
         runner,
         store,
-        surface="tui",
+        surface="terminal",
         on_event=lambda _event: None,
         notify=lambda _line: None,
     )
@@ -522,7 +420,7 @@ def test_terminal_goal_continuation_uses_surface_runner(monkeypatch):
     assert provider.calls == 2
     assert goals.get(agent.session) is None
     runs = RunStore().list(session_id=agent.session.id, limit=10)
-    assert len([r for r in runs if r["surface"] == "tui"]) == 2
+    assert len([r for r in runs if r["surface"] == "terminal"]) == 2
     assert any("[Continuing toward your standing goal]" in r["prompt_preview"] for r in runs)
     assert agent.session.meta["last_run_id"] in {r["id"] for r in runs}
 
@@ -734,15 +632,15 @@ def test_terminal_goal_command_returns_start_prompt(monkeypatch):
     lines = []
 
     prompt = repl.handle_goal_command(
-        "/goal polish the TUI",
+        "/goal polish the terminal",
         agent,
         store,
         out=lambda text, _style=None: lines.append(text),
     )
 
-    assert prompt == "polish the TUI"
+    assert prompt == "polish the terminal"
     assert "Goal set" in lines[0]
-    assert store.load(agent.session.id).meta["goal"]["text"] == "polish the TUI"
+    assert store.load(agent.session.id).meta["goal"]["text"] == "polish the terminal"
 
 
 def test_terminal_runtime_controls_persist_and_resume(monkeypatch):
@@ -1282,8 +1180,8 @@ def test_dashboard_models_exposes_resolver_report():
                for row in data["provider_catalog"])
 
 
-def test_tui_retry_uses_shared_surface_runner(monkeypatch):
-    from aegis.cli import tui
+def test_terminal_retry_uses_shared_surface_runner(monkeypatch):
+    from aegis.cli import repl
     from aegis.config import Config
     from aegis.providers import registry
     from aegis.runs import RunStore
@@ -1302,26 +1200,29 @@ def test_tui_retry_uses_shared_surface_runner(monkeypatch):
     session.messages = [Message.user("try this"), Message.assistant("old answer")]
     agent = runner.make_agent(session=session, include_mcp=False)
 
-    result, output = tui._capture_slash(
+    output = []
+    monkeypatch.setattr(repl, "_out", lambda text, style=None: output.append(str(text)))
+
+    result = repl.handle_slash(
         "/retry",
         agent,
         runner=runner,
         store=store,
-        surface="tui",
+        surface="terminal",
         on_event=lambda _event: None,
     )
 
     assert result == ""
-    assert "trace" in output
+    assert any("trace" in line for line in output)
     assert provider.calls == 1
     assert agent.session.messages[-1].content == "retried"
     runs = RunStore().list(session_id=agent.session.id, limit=10)
-    assert len([r for r in runs if r["surface"] == "tui"]) == 1
+    assert len([r for r in runs if r["surface"] == "terminal"]) == 1
 
 
-def test_tui_compress_uses_context_engine_hooks(monkeypatch, tmp_path):
+def test_terminal_compress_uses_context_engine_hooks(monkeypatch, tmp_path):
     from aegis.agent import context_engine
-    from aegis.cli import tui
+    from aegis.cli import repl
     from aegis.config import Config
     from aegis.providers import registry
     from aegis.runs import RunStore
@@ -1376,17 +1277,20 @@ def test_tui_compress_uses_context_engine_hooks(monkeypatch, tmp_path):
     agent = runner.make_agent(session=session, include_mcp=False)
     parent_id = agent.session.id
 
-    result, output = tui._capture_slash(
+    output = []
+    monkeypatch.setattr(repl, "_out", lambda text, style=None: output.append(str(text)))
+
+    result = repl.handle_slash(
         "/compress focus parity",
         agent,
         runner=runner,
         store=store,
-        surface="tui",
+        surface="terminal",
         on_event=lambda event: events.append((event["type"], event)),
     )
 
     assert result == ""
-    assert "context compressed" in output
+    assert any("context compressed" in line for line in output)
     assert agent.session.id != parent_id
     assert store.load(parent_id).meta["end_reason"] == "manual_compression"
     assert store.load(agent.session.id).parent_id == parent_id
@@ -1395,7 +1299,7 @@ def test_tui_compress_uses_context_engine_hooks(monkeypatch, tmp_path):
     assert any(e[0] == "compress" and e[1]["focus"] == "parity" for e in events)
     assert any(e[0] == "compacted" for e in events)
     runs = [r for r in RunStore().list(session_id=agent.session.id, limit=10)
-            if r["surface"] == "tui" and r["kind"] == "compaction"]
+            if r["surface"] == "terminal" and r["kind"] == "compaction"]
     assert len(runs) == 1
     assert agent.session.meta["last_run_id"] == runs[0]["id"]
     assert agent.session.meta["last_trace_id"] == runs[0]["trace_id"]
@@ -2466,8 +2370,8 @@ def test_dashboard_run_detail_uses_configured_trace_path(tmp_path):
         session_id=session.id,
     )
     run = RunStore().start(
-        surface="tui",
-        kind="tui",
+        surface="terminal",
+        kind="terminal",
         title="custom trace run",
         session_id=session.id,
         trace_id="trace_custom",
