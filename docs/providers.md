@@ -45,8 +45,9 @@ aegis auth login google        # Google sign-in
 ```
 
 OpenAI API OAuth login may succeed without the `model.request` scope required for
-model inference. `aegis auth status` reports that state; use `OPENAI_API_KEY` for
-the OpenAI API path, or use `codex` + `codex login` for ChatGPT
+model inference. `aegis auth status` reports that state; use
+`aegis secret set OPENAI_API_KEY` for the OpenAI API path, or use `codex` +
+`codex login` for ChatGPT
 subscription-backed Codex inference.
 
 Qwen, MiniMax, and xAI are discoverable OpenAI-compatible providers today and
@@ -57,7 +58,7 @@ same reason: it needs a dedicated GitHub/Copilot OAuth token exchange before it
 can be selected as a model provider.
 
 A comma-separated env value is a **credential pool** that rotates on 429/401:
-`OPENAI_API_KEY=sk-1,sk-2,sk-3`.
+enter `sk-1,sk-2,sk-3` at the hidden `aegis secret set OPENAI_API_KEY` prompt.
 
 ## Reasoning, routing, fallback
 

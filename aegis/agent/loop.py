@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
 
 from ..constants import MAX_PARALLEL_TOOLS
+from ..redact import redact_secret_values, redact_secrets
 from ..tools.base import ToolContext, ToolResult
 from ..types import Message, ToolCall, new_id
 from . import compaction, governance
@@ -412,7 +413,8 @@ class ToolExecutor:
     def execute_one_raw(self, call: ToolCall) -> ToolResult:
         import time
         started = time.perf_counter()
-        self.emit({"type": "tool_start", "id": call.id, "name": call.name, "args": call.arguments})
+        safe_args = redact_secret_values(call.arguments)
+        self.emit({"type": "tool_start", "id": call.id, "name": call.name, "args": safe_args})
         trace_span = None
         trace_store = getattr(getattr(self.ctx, "agent", None), "_trace_store", None)
         trace_ctx = getattr(getattr(self.ctx, "agent", None), "_trace_context", None) or {}
@@ -425,11 +427,11 @@ class ToolExecutor:
                     parent_span_id=trace_ctx.get("turn_span_id", ""),
                     kind="tool",
                     tool_name=call.name,
-                    data={"args": call.arguments},
+                    data={"args": safe_args},
                 )
             except Exception:  # noqa: BLE001
                 trace_span = None
-        self._run_hooks("pre_tool", {"tool": call.name, "args": str(call.arguments)[:300]})
+        self._run_hooks("pre_tool", {"tool": call.name, "args": str(safe_args)[:300]})
         self._maybe_checkpoint(call)
         blocked = self.guard.check(call.name, call.arguments) if self.guard else None
         tool = self.registry.get(call.name)
@@ -452,25 +454,28 @@ class ToolExecutor:
                 res.content = (res.content or "") + "\n\n" + warn
         duration_ms = int((time.perf_counter() - started) * 1000)
         artifact_ref = _artifact_ref(res.data)
+        safe_summary = redact_secrets(res.summary)
+        safe_preview = _preview(redact_secrets(res.content))
+        safe_data = redact_secret_values(res.data) if isinstance(res.data, dict) else None
         self.emit({"type": "tool_result", "id": call.id, "name": call.name,
-                   "summary": res.summary, "is_error": res.is_error,
+                   "summary": safe_summary, "is_error": res.is_error,
                    "classification": res.classification,
-                   "preview": _preview(res.content),
+                   "preview": safe_preview,
                    "duration_ms": duration_ms,
                    "artifact_ref": artifact_ref,
-                   "data": res.data if isinstance(res.data, dict) else None})
+                   "data": safe_data})
         if trace_store and trace_span:
             try:
                 span_data = {
-                    "summary": res.summary,
+                    "summary": safe_summary,
                     "classification": res.classification,
-                    "preview": _preview(res.content),
+                    "preview": safe_preview,
                     "is_error": bool(res.is_error),
                     "duration_ms": duration_ms,
                     "artifact_ref": artifact_ref,
                 }
-                if isinstance(res.data, dict):
-                    span_data["result"] = res.data
+                if safe_data is not None:
+                    span_data["result"] = safe_data
                 trace_store.finish_span(
                     trace_span["span_id"],
                     status="error" if res.is_error else "ok",
@@ -517,7 +522,7 @@ class ToolExecutor:
 
     def _run_one(self, call: ToolCall) -> Message:
         res = self.execute_one_raw(call)
-        content = self._maybe_spill(call, res.content, res.is_error)
+        content = self._maybe_spill(call, redact_secrets(res.content), res.is_error)
         # Wrap results from external/untrusted sources so the model treats them as DATA,
         # not instructions (prompt-injection defense).
         tool = self.registry.get(call.name)
@@ -1221,12 +1226,14 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
         from .governance import strip_reasoning
         resp.text = strip_reasoning(resp.text)   # drop any inlined <think>…</think> blocks
         assistant_msg = resp.to_message()
+        for tool_call in assistant_msg.tool_calls:
+            tool_call.arguments = redact_secret_values(tool_call.arguments)
         session.messages.append(assistant_msg)
         if resp.reasoning and not reasoned_live["v"]:    # blocking path: emit once at the end
             emit({"type": "reasoning_delta", "text": resp.reasoning})
         reasoned_live["v"] = False
         emit({"type": "assistant_message", "text": resp.text,
-              "tool_calls": [tc.to_dict() for tc in resp.tool_calls]})
+              "tool_calls": [tc.to_dict() for tc in assistant_msg.tool_calls]})
 
         if not resp.tool_calls:
             # Auto-continue a response truncated by the output token limit (up to 3x).

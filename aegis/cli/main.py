@@ -854,6 +854,32 @@ def cmd_config(args, config: Config) -> int:
     return 0
 
 
+def cmd_secret(args, config: Config) -> int:
+    from ..secret_capture import capture_secret_interactive, store_secret_value, validate_secret_key
+
+    if args.action == "path":
+        _print(str(cfg.env_path()))
+        return 0
+    if args.action == "set":
+        if not args.key:
+            return _die("usage: aegis secret set <ENV_KEY>")
+        try:
+            key = validate_secret_key(args.key)
+        except ValueError as exc:
+            return _die(str(exc))
+        if getattr(args, "stdin", False):
+            value = sys.stdin.read().rstrip("\n")
+            result = store_secret_value(key, value)
+        else:
+            result = capture_secret_interactive(key, f"Enter {key}")
+        if result.get("skipped"):
+            _print(f"secret setup skipped for {key}")
+        else:
+            _print(f"secret stored as {key} -> {cfg.env_path()}")
+        return 0
+    return _die("usage: aegis secret set <ENV_KEY> | aegis secret path")
+
+
 def cmd_sessions(args, config: Config) -> int:
     from ..session import SessionStore
 
@@ -1544,6 +1570,12 @@ def build_parser() -> argparse.ArgumentParser:
     cf.add_argument("key", nargs="?")
     cf.add_argument("value", nargs="?")
     cf.set_defaults(func=cmd_config)
+
+    sc = sub.add_parser("secret", help="store a local secret in ~/.aegis/.env with hidden input")
+    sc.add_argument("action", nargs="?", choices=["set", "path"], default="set")
+    sc.add_argument("key", nargs="?")
+    sc.add_argument("--stdin", action="store_true", help="read the value from stdin instead of prompting")
+    sc.set_defaults(func=cmd_secret)
 
     se = sub.add_parser("sessions", help="list/show/remove sessions")
     se.add_argument("action", nargs="?", choices=["list", "show", "rm", "summarize", "search"],

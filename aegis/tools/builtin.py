@@ -579,6 +579,65 @@ class SystemStatusTool(Tool):
 
 
 # --------------------------------------------------------------------------- #
+# Secrets
+# --------------------------------------------------------------------------- #
+class SecretTool(Tool):
+    name = "secret"
+    description = (
+        "Safely capture a local secret into ~/.aegis/.env. Pass only the env var name "
+        "and a prompt; never pass the secret value as a tool argument."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "key": {
+                "type": "string",
+                "description": "Uppercase env var name to store, e.g. TELEGRAM_BOT_TOKEN.",
+            },
+            "prompt": {
+                "type": "string",
+                "description": "Human prompt shown beside the hidden input.",
+            },
+        },
+        "required": ["key"],
+    }
+
+    def run(self, args, ctx) -> ToolResult:
+        extra = set(args) - {"key", "prompt"}
+        if extra:
+            return ToolResult.error(
+                "secret values must not be passed as tool arguments; call secret with key/prompt only"
+            )
+        key = str(args.get("key") or "").strip()
+        prompt = str(args.get("prompt") or f"Enter {key}").strip()
+        try:
+            from ..secret_capture import validate_secret_key
+
+            key = validate_secret_key(key)
+        except ValueError as exc:
+            return ToolResult.error(str(exc))
+        if ctx.secret_capture is None:
+            return ToolResult.error(
+                "secret capture is unavailable on this surface; run "
+                f"`aegis secret set {key}` or use the dashboard Keys page"
+            )
+        result = ctx.secret_capture(key, prompt, {"tool": "secret"})
+        if result.get("skipped"):
+            return ToolResult.ok(
+                f"Secret setup skipped for {key}.",
+                display=f"secret skipped {key}",
+                data={"key": key, "skipped": True},
+            )
+        if result.get("success"):
+            return ToolResult.ok(
+                f"Secret stored securely as {key}. The value was not exposed to the model.",
+                display=f"secret stored {key}",
+                data={"key": key, "stored": True},
+            )
+        return ToolResult.error(str(result.get("message") or "secret capture failed"))
+
+
+# --------------------------------------------------------------------------- #
 # Web
 # --------------------------------------------------------------------------- #
 _TAG_RE = re.compile(r"<(script|style)[^>]*>.*?</\1>", re.S | re.I)
@@ -866,6 +925,7 @@ def all_builtin_tools() -> list[Tool]:
         ReadFileTool(), WriteFileTool(), EditFileTool(), ListDirTool(), GlobTool(), SearchTool(),
         BashTool(),
         SystemStatusTool(),
+        SecretTool(),
         WebFetchTool(), WebSearchTool(),
         TodoWriteTool(),
         MemoryTool(),

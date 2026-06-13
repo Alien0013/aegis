@@ -65,6 +65,9 @@ class ToolContext:
     # callback(question:str, choices:list[str])->str for the clarify tool (CLI prompts inline,
     # other surfaces may leave it None — clarify then returns the question for the next turn)
     asker: Callable[[str, list[str]], str] | None = None
+    # callback(var_name, prompt, metadata)->dict for local hidden secret capture.
+    # The secret value must not be returned to the model or transcript.
+    secret_capture: Callable[[str, str, dict[str, Any] | None], dict[str, Any]] | None = None
     # callback(event:dict) for streaming tool events to the UI
     emit: Callable[[dict], None] | None = None
 

@@ -209,9 +209,9 @@ Update with `aegis update`; remove with `./uninstall.sh` (`--purge` also deletes
 ```bash
 aegis setup                                   # guided onboarding (re-runnable)
 # …or configure directly:
-aegis config set ANTHROPIC_API_KEY sk-ant-…   # Claude (API key)
-aegis config set OPENAI_API_KEY    sk-…       # OpenAI (API key)
-aegis config set QWEN_API_KEY      sk-…       # Qwen / DashScope-compatible API key
+aegis secret set ANTHROPIC_API_KEY            # Claude (hidden input)
+aegis secret set OPENAI_API_KEY               # OpenAI (hidden input)
+aegis secret set QWEN_API_KEY                 # Qwen / DashScope-compatible API key
 codex login && aegis model set codex gpt-5.5  # ChatGPT subscription
 aegis model set qwen qwen-max                  # Qwen API-compatible provider
 aegis model set ollama llama3.1               # …or fully local, no key
@@ -291,7 +291,7 @@ pairing, mention gating, per-channel session isolation, voice-memo transcription
 durable retrying delivery queue. → [docs/gateway.md](docs/gateway.md)
 
 ```bash
-export TELEGRAM_BOT_TOKEN=…
+aegis secret set TELEGRAM_BOT_TOKEN
 aegis gateway --channels telegram,discord,slack
 ```
 

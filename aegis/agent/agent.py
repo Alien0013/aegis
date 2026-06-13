@@ -92,6 +92,7 @@ class Agent:
         skills: SkillsLoader | None = None,
         cwd: Path | None = None,
         approver: Callable[[str], bool] | None = None,
+        secret_capture: Callable[[str, str, dict | None], dict] | None = None,
         store: SessionStore | None = None,
     ):
         self.config = config
@@ -139,6 +140,7 @@ class Agent:
         self.tool_context = ToolContext(
             cwd=self.cwd, config=config, memory=self.memory, skills=self.skills,
             session=self.session, agent=self, approver=approver,
+            secret_capture=secret_capture,
             task_id=self._terminal_task_id,
         )
         if self._context_engine is not None:
@@ -159,6 +161,7 @@ class Agent:
         provider_name: str | None = None,
         cwd: Path | None = None,
         approver: Callable[[str], bool] | None = None,
+        secret_capture: Callable[[str, str, dict | None], dict] | None = None,
         store: SessionStore | None = None,
         include_mcp: bool = False,
         registry: ToolRegistry | None = None,
@@ -168,7 +171,8 @@ class Agent:
         provider = build_with_fallbacks(config, model=model, name=provider_name)
         session = session or Session.create()
         agent = cls(config=config, provider=provider, session=session, cwd=cwd,
-                    approver=approver, store=store, registry=registry, memory=memory)
+                    approver=approver, secret_capture=secret_capture, store=store,
+                    registry=registry, memory=memory)
         if include_mcp:
             agent.load_mcp()
         return agent

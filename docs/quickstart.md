@@ -4,9 +4,9 @@
 aegis setup                                   # interactive: provider + key/OAuth + exec mode
 aegis setup --non-interactive --accept-risk --json
 # or pick directly:
-aegis config set ANTHROPIC_API_KEY sk-ant-…   # API key
-aegis config set OPENAI_API_KEY sk-…          # OpenAI API key
-aegis config set QWEN_API_KEY sk-…            # Qwen / DashScope-compatible API key
+aegis secret set ANTHROPIC_API_KEY            # hidden API-key prompt
+aegis secret set OPENAI_API_KEY               # hidden OpenAI API-key prompt
+aegis secret set QWEN_API_KEY                 # hidden Qwen / DashScope prompt
 codex login                                    # ChatGPT subscription auth
 aegis model set codex gpt-5.5                  # stateless Codex backend
 aegis model set qwen qwen-max                  # Qwen API-compatible provider

@@ -21,6 +21,7 @@ from .types import Message, Usage, new_id
 OnEvent = Callable[[dict[str, Any]], None]
 Approver = Callable[[str], bool | str]
 Asker = Callable[[str, list[str]], str]
+SecretCapture = Callable[[str, str, dict[str, Any] | None], dict[str, Any]]
 
 
 @dataclass
@@ -129,6 +130,7 @@ class SurfaceRunner:
         provider_name: str | None = None,
         approver: Approver | None = None,
         asker: Asker | None = None,
+        secret_capture: SecretCapture | None = None,
         platform: str | None = None,
         chat_id: str | None = None,
         include_mcp: bool | None = None,
@@ -150,6 +152,7 @@ class SurfaceRunner:
             model=effective_model,
             provider_name=effective_provider,
             approver=approver,
+            secret_capture=secret_capture,
             include_mcp=self.include_mcp if include_mcp is None else include_mcp,
             registry=registry,
         )
@@ -160,6 +163,8 @@ class SurfaceRunner:
             agent.chat_id = chat_id
         if asker is not None:
             agent.tool_context.asker = asker
+        if secret_capture is not None:
+            agent.tool_context.secret_capture = secret_capture
         return agent
 
     def run_prompt(
@@ -175,6 +180,7 @@ class SurfaceRunner:
         cwd: str | Path | None = None,
         approver: Approver | None = None,
         asker: Asker | None = None,
+        secret_capture: SecretCapture | None = None,
         platform: str | None = None,
         chat_id: str | None = None,
         include_mcp: bool | None = None,
@@ -285,6 +291,7 @@ class SurfaceRunner:
             provider_name=provider_name,
             approver=approver,
             asker=asker,
+            secret_capture=secret_capture,
             include_mcp=include_mcp,
             config=self.config,
         )
@@ -300,6 +307,7 @@ class SurfaceRunner:
                         provider_name=provider_name,
                         approver=approver,
                         asker=asker,
+                        secret_capture=secret_capture,
                         platform=platform,
                         chat_id=chat_id,
                         include_mcp=include_mcp,
@@ -315,6 +323,7 @@ class SurfaceRunner:
                     provider_name=provider_name,
                     approver=approver,
                     asker=asker,
+                    secret_capture=secret_capture,
                     platform=platform,
                     chat_id=chat_id,
                     include_mcp=include_mcp,
@@ -463,6 +472,7 @@ class SurfaceRunner:
         provider_name: str | None,
         approver: Approver | None,
         asker: Asker | None,
+        secret_capture: SecretCapture | None,
         include_mcp: bool | None,
         config: Config,
     ) -> tuple[Any, ...]:
@@ -481,6 +491,7 @@ class SurfaceRunner:
             mcp,
             id(approver) if approver is not None else None,
             id(asker) if asker is not None else None,
+            id(secret_capture) if secret_capture is not None else None,
             id(config),
         )
 
@@ -510,6 +521,9 @@ class SurfaceRunner:
             asker = kwargs.get("asker")
             if asker is not None:
                 agent.tool_context.asker = asker
+            secret_capture = kwargs.get("secret_capture")
+            if secret_capture is not None:
+                agent.tool_context.secret_capture = secret_capture
         return agent
 
     def _evict_locked(self) -> None:

@@ -84,6 +84,7 @@ SLASH_COMMANDS = (
     SlashCommand("/skill", "learning", "create or extract a skill", "/skill [new <name> [description]]"),
     SlashCommand("/memory", "learning", "show memory and user profile files"),
     SlashCommand("/personality", "learning", "set the active persona", "/personality <name>"),
+    SlashCommand("/secret", "setup", "store a local secret with hidden input", "/secret set <ENV_KEY>"),
     SlashCommand("/handoff", "channels", "hand this session to a gateway channel", "/handoff <platform> <chat_id>"),
     SlashCommand("/diff", "workspace", "show changes since the last checkpoint", "/diff [checkpoint-id]"),
     SlashCommand("/rollback", "workspace", "restore files from a checkpoint", "/rollback [checkpoint-id]"),
@@ -252,6 +253,17 @@ def make_asker():
             return choices[int(ans) - 1]
         return ans
     return asker
+
+
+def make_secret_capture():
+    """Hidden local prompt for tools that need to store a secret safely."""
+    def capture(key: str, prompt: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+        with _approve_lock:
+            from ..secret_capture import capture_secret_interactive
+
+            return capture_secret_interactive(key, prompt, metadata)
+
+    return capture
 
 
 class Renderer:
@@ -1048,6 +1060,21 @@ def handle_slash(
         if agent.memory:
             _out("# MEMORY\n" + (agent.memory.store.raw("memory") or "(empty)"))
             _out("# USER\n" + (agent.memory.store.raw("user") or "(empty)"))
+    elif name == "/secret":
+        sub = parts[1].lower() if len(parts) > 1 else ""
+        key = parts[2].strip() if len(parts) > 2 else ""
+        if sub != "set" or not key:
+            _out("usage: /secret set <ENV_KEY>")
+        else:
+            try:
+                result = make_secret_capture()(key, f"Enter {key}", {"slash": "/secret"})
+            except ValueError as exc:
+                _out(str(exc), style="red")
+            else:
+                if result.get("skipped"):
+                    _out(f"secret setup skipped for {key}", style="yellow")
+                else:
+                    _out(f"secret stored as {key}", style="green")
     elif name == "/usage":
         u = agent.budget.usage
         _out(f"tokens this session — input: {u.input_tokens:,}  output: {u.output_tokens:,}", style="cyan")
@@ -1424,6 +1451,7 @@ def run_once(config: Config, prompt: str, *, model=None, provider_name=None,
         provider_name=provider_name,
         approver=make_approver(auto),
         asker=make_asker(),
+        secret_capture=make_secret_capture(),
         surface=surface,
         meta=meta,
         on_event=Renderer(config),
@@ -1442,6 +1470,7 @@ def interactive(config: Config, *, model=None, provider_name=None,
         provider_name=provider_name,
         approver=make_approver(auto),
         asker=make_asker(),
+        secret_capture=make_secret_capture(),
         include_mcp=True,
     )
     store.save(agent.session)

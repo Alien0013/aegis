@@ -3,6 +3,7 @@
 One agent serving many surfaces.
 
 ```bash
+aegis secret set TELEGRAM_BOT_TOKEN
 aegis gateway --channels telegram,discord,slack,signal,matrix,email,webhook
 ```
 
