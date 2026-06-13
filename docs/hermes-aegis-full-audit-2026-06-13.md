@@ -26,6 +26,7 @@ Implementation update in this branch:
 - Added dashboard username/password login, signed session cookies, logout, Basic auth, non-loopback fail-closed startup, and host/peer guards.
 - Added Hermes-style `cronjob` tool with create/list/update/delete/pause/resume/run/status/service actions and dashboard cron name support.
 - Added Hermes-style `skill_manage` with list/view/create/patch/delete/usage/pin/unpin/report and curator-backed archive safety.
+- Added typed FastAPI routes for config export, session patch/rename/message CRUD, memory provider catalog/setup/schema/status, dashboard preferences/plugins, and audio voices/TTS/transcribe.
 - Added regression tests for recall behavior and memory write mirroring.
 
 ## Executive Verdict
@@ -78,12 +79,13 @@ Hermes has:
 - Profile-aware dashboard management and remote dashboard support.
 
 Implemented:
-- Added typed FastAPI routes for `/api/health`, `/api/auth/me`, config defaults/schema/raw/import, env list/set/reveal/delete, and sessions list/search/stats/detail/export/prune/delete.
+- Added typed FastAPI routes for `/api/health`, `/api/auth/me`, config defaults/schema/raw/import/export, env list/set/reveal/delete, and sessions list/search/stats/detail/export/prune/delete/patch/rename/message CRUD.
 - Added typed FastAPI routes for cron jobs/service control and gateway status/channels/service control.
+- Added typed FastAPI routes for memory provider catalog/status/setup/schema, dashboard preferences/plugins, and audio voices/TTS/transcribe.
 - Added `/api/auth/ws-ticket` and ticket validation for dashboard WebSockets.
 - Added `/login`, `/auth/login`, `/auth/logout`, `/api/auth/login`, `/api/auth/logout`, signed session cookies, Basic auth, non-loopback fail-closed startup, and host/peer request guards.
 - Kept the generic dispatcher as a compatibility shim for the existing dashboard app.
-- Added FastAPI regression tests for route registration, config/env safety, session search/detail/export/delete, auth status, login/session/logout, fail-closed binding, host/peer guards, WebSocket tickets, cron job management, and gateway controls.
+- Added FastAPI regression tests for route registration, config/env safety/export, session search/detail/export/delete/patch/rename/message CRUD, auth status, login/session/logout, fail-closed binding, host/peer guards, WebSocket tickets, cron job management, memory providers, preferences/plugins, audio, and gateway controls.
 
 Needed inputs:
 - Continue replacing the generic dispatcher with typed FastAPI routes for remaining parity-critical surfaces.
@@ -91,14 +93,10 @@ Needed inputs:
   - OAuth login providers
   - richer browser UX around the current token/basic/session auth
 - Add missing route groups:
-  - config export
   - provider OAuth start/submit/poll/revoke
-  - sessions patch/rename/message-level APIs
   - cron run logs/blueprints and richer scheduler state
   - gateway pairing/channel setup details and platform-specific status probes
-  - audio transcribe/TTS/voices
   - self-update check/apply
-  - dashboard themes/fonts/plugins
   - ops doctor/security-audit/backup/import/migrate/dump
 - Make profile selection a first-class URL-scoped dashboard concept.
 
@@ -269,8 +267,8 @@ P0: Fix recall behavior
 - Done in this branch: `SESSION_SEARCH_GUIDANCE`-style prompt guidance, browse/discover/read/scroll, and regression tests.
 
 P1: Make the dashboard a real control plane
-- Done in this branch: typed routes for auth status, health, config, env, sessions, cron, gateway, login/session/logout auth, non-loopback fail-closed policy, host/peer guards, and WebSocket tickets while keeping old paths as compatibility shims.
-- Still needed: dashboard OAuth login UX, provider OAuth, audio, self-update, ops, and profile-aware management.
+- Done in this branch: typed routes for auth status, health, config import/export, env, sessions including message CRUD, cron, gateway, memory providers, dashboard preferences/plugins, audio, login/session/logout auth, non-loopback fail-closed policy, host/peer guards, and WebSocket tickets while keeping old paths as compatibility shims.
+- Still needed: dashboard OAuth login UX, provider OAuth, self-update, ops, richer gateway onboarding/probes, and profile-aware management.
 
 P2: Cron and gateway foundations
 - Done in this branch: Hermes-style `cronjob` tool action surface and cron job names.

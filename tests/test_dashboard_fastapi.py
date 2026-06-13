@@ -278,6 +278,63 @@ def test_fastapi_sessions_control_plane(tmp_path, monkeypatch):
     assert detail.json()["found"] is True
     assert detail.json()["messages"][0]["content"] == "remember the typed route migration"
 
+    renamed = asyncio.run(_request(
+        app,
+        "POST",
+        f"/api/sessions/{session.id}/rename",
+        json={"title": "renamed typed session"},
+        headers=headers,
+    ))
+    assert renamed.status_code == 200
+    assert renamed.json()["title"] == "renamed typed session"
+
+    patched = asyncio.run(_request(
+        app,
+        "PATCH",
+        f"/api/sessions/{session.id}",
+        json={"meta": {"dashboard": True}},
+        headers=headers,
+    ))
+    assert patched.status_code == 200
+    assert patched.json()["session"]["meta"]["dashboard"] is True
+
+    messages = asyncio.run(_request(app, "GET", f"/api/sessions/{session.id}/messages", headers=headers))
+    assert messages.status_code == 200
+    assert messages.json()["count"] == 2
+
+    added = asyncio.run(_request(
+        app,
+        "POST",
+        f"/api/sessions/{session.id}/messages",
+        json={"role": "user", "content": "message api append"},
+        headers=headers,
+    ))
+    assert added.status_code == 200
+    assert added.json()["message"]["index"] == 2
+
+    msg = asyncio.run(_request(app, "GET", f"/api/sessions/{session.id}/messages/2", headers=headers))
+    assert msg.status_code == 200
+    assert msg.json()["message"]["content"] == "message api append"
+
+    msg_patch = asyncio.run(_request(
+        app,
+        "PATCH",
+        f"/api/sessions/{session.id}/messages/2",
+        json={"content": "message api patched"},
+        headers=headers,
+    ))
+    assert msg_patch.status_code == 200
+    assert msg_patch.json()["message"]["content"] == "message api patched"
+
+    msg_delete = asyncio.run(_request(
+        app,
+        "DELETE",
+        f"/api/sessions/{session.id}/messages/2",
+        headers=headers,
+    ))
+    assert msg_delete.status_code == 200
+    assert msg_delete.json()["count"] == 2
+
     export = asyncio.run(_request(app, "GET", f"/api/sessions/{session.id}/export", headers=headers))
     assert export.status_code == 200
     assert export.json()["messages"][0]["content"] == "remember the typed route migration"
@@ -286,6 +343,95 @@ def test_fastapi_sessions_control_plane(tmp_path, monkeypatch):
     deleted = asyncio.run(_request(app, "DELETE", f"/api/sessions/{session.id}", headers=headers))
     assert deleted.status_code == 200
     assert deleted.json()["ok"] is True
+
+
+def test_fastapi_config_preferences_memory_provider_and_plugins(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    exported = asyncio.run(_request(app, "GET", "/api/config/export", headers=headers))
+    assert exported.status_code == 200
+    assert exported.json()["ok"] is True
+    assert "attachment" in exported.headers["content-disposition"]
+    assert "config" in exported.json()
+
+    prefs = asyncio.run(_request(app, "GET", "/api/dashboard/preferences", headers=headers))
+    assert prefs.status_code == 200
+    assert prefs.json()["theme"] == "system"
+
+    updated = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/dashboard/preferences",
+        json={"theme": "dark", "tool_progress": "detailed"},
+        headers=headers,
+    ))
+    assert updated.status_code == 200
+    assert updated.json()["preferences"]["theme"] == "dark"
+    assert updated.json()["preferences"]["tool_progress"] == "detailed"
+
+    providers = asyncio.run(_request(app, "GET", "/api/memory/providers", headers=headers))
+    assert providers.status_code == 200
+    assert any(row["name"] == "jsonl" for row in providers.json()["provider_catalog"])
+
+    jsonl = asyncio.run(_request(app, "GET", "/api/memory/providers/jsonl", headers=headers))
+    assert jsonl.status_code == 200
+    assert jsonl.json()["name"] == "jsonl"
+
+    setup = asyncio.run(_request(app, "GET", "/api/memory/providers/jsonl/setup", headers=headers))
+    assert setup.status_code == 200
+    assert setup.json()["known"] is True
+
+    schema = asyncio.run(_request(app, "GET", "/api/memory/providers/jsonl/schema", headers=headers))
+    assert schema.status_code == 200
+    assert schema.json()["properties"]["memory.provider"]["const"] == "jsonl"
+
+    plugins = asyncio.run(_request(app, "GET", "/api/plugins", headers=headers))
+    assert plugins.status_code == 200
+    assert "plugins" in plugins.json()
+    assert "errors" in plugins.json()
+
+
+def test_fastapi_audio_control_plane(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    from aegis.tools.base import ToolResult
+
+    monkeypatch.setattr(
+        "aegis.tools.voice.SpeakTool.run",
+        lambda self, args, ctx: ToolResult.ok("saved speech to /tmp/speech.mp3", display="tts"),
+    )
+    monkeypatch.setattr(
+        "aegis.tools.voice.TranscribeTool.run",
+        lambda self, args, ctx: ToolResult.ok("transcribed words", display="transcribed"),
+    )
+
+    voices = asyncio.run(_request(app, "GET", "/api/audio/voices", headers=headers))
+    assert voices.status_code == 200
+    assert "alloy" in voices.json()["voices"]
+
+    tts = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/audio/tts",
+        json={"text": "hello", "voice": "alloy"},
+        headers=headers,
+    ))
+    assert tts.status_code == 200
+    assert tts.json()["ok"] is True
+    assert "speech" in tts.json()["content"]
+
+    transcribed = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/audio/transcribe",
+        data={"model": "whisper-1"},
+        files={"file": ("clip.wav", b"RIFF", "audio/wav")},
+        headers=headers,
+    ))
+    assert transcribed.status_code == 200
+    assert transcribed.json()["text"] == "transcribed words"
 
 
 def test_fastapi_cron_control_plane(tmp_path, monkeypatch):

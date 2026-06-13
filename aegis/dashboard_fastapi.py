@@ -12,6 +12,7 @@ import os
 import queue
 import re
 import secrets
+import tempfile
 import time
 import threading
 from datetime import datetime, timedelta, timezone
@@ -358,6 +359,95 @@ def _session_export(session) -> dict:
         "todos": session.todos,
         "meta": session.meta,
     }
+
+
+def _load_session(session_id: str):
+    from .session import SessionStore
+
+    store = SessionStore()
+    return store, store.load(session_id)
+
+
+def _message_payload(message, index: int) -> dict:
+    row = message.to_dict()
+    row["id"] = index
+    row["index"] = index
+    return row
+
+
+def _message_from_payload(body: dict):
+    from .types import Message
+
+    if not isinstance(body, dict):
+        raise ValueError("message object required")
+    role = str(body.get("role") or "").strip()
+    if role not in {"system", "user", "assistant", "tool"}:
+        raise ValueError("role must be system, user, assistant, or tool")
+    payload = {
+        key: copy.deepcopy(body[key])
+        for key in ("role", "content", "tool_calls", "tool_call_id", "name",
+                    "reasoning", "thinking_blocks", "images")
+        if key in body
+    }
+    payload.setdefault("content", "")
+    return Message.from_dict(payload)
+
+
+def _patched_message(message, body: dict):
+    payload = message.to_dict()
+    for key in ("role", "content", "tool_calls", "tool_call_id", "name",
+                "reasoning", "thinking_blocks", "images"):
+        if key in body:
+            payload[key] = copy.deepcopy(body[key])
+    return _message_from_payload(payload)
+
+
+def _plugins_payload(config: Config) -> dict:
+    from .plugins import list_manifests, load_plugins
+
+    api = load_plugins(quiet=True, config=config)
+    return {
+        "plugins": [m.to_dict() for m in list_manifests(config)],
+        "tools": [getattr(t, "name", "") for t in api.tools],
+        "channels": sorted(api.channels.keys()),
+        "providers": list(api.providers),
+        "errors": [{"path": str(path), "error": error} for path, error in api.errors],
+        "enabled": config.get("plugins.enabled", []) or [],
+        "disabled": config.get("plugins.disabled", []) or [],
+        "allowlist": config.get("plugins.allowlist", []) or [],
+    }
+
+
+def _dashboard_preferences(config: Config) -> dict:
+    return {
+        "theme": config.get("display.theme", "system"),
+        "reasoning": config.get("display.reasoning", "summary"),
+        "status_footer": bool(config.get("display.status_footer", True)),
+        "tool_progress": config.get("display.tool_progress", "compact"),
+        "frontend": config.get("dashboard.frontend", "static"),
+        "cockpit": bool(config.get("dashboard.cockpit", True)),
+    }
+
+
+def _set_dashboard_preferences(config: Config, body: dict) -> dict:
+    mapping = {
+        "theme": "display.theme",
+        "reasoning": "display.reasoning",
+        "status_footer": "display.status_footer",
+        "tool_progress": "display.tool_progress",
+        "frontend": "dashboard.frontend",
+        "cockpit": "dashboard.cockpit",
+    }
+    for key, config_key in mapping.items():
+        if key in body:
+            config.set(config_key, body[key])
+    return _dashboard_preferences(config)
+
+
+def _voice_tool_context(config: Config):
+    from .tools.base import ToolContext
+
+    return ToolContext(cwd=Path.cwd(), config=config)
 
 
 def _session_stats() -> dict:
@@ -989,6 +1079,27 @@ def create_app(config: Config) -> FastAPI:
         _require_request(request, config)
         return JSONResponse({"config": copy.deepcopy(config.data)})
 
+    @app.get("/api/config/export")
+    async def api_config_export(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from . import config as cfg
+
+        payload = {
+            "ok": True,
+            "config": copy.deepcopy(config.data),
+            "redacted_config": dash._redacted_config(config),
+            "env": _env_list(),
+            "paths": {
+                "home": str(cfg.get_home()),
+                "config": str(cfg.config_path()),
+                "env": str(cfg.env_path()),
+            },
+        }
+        return JSONResponse(
+            payload,
+            headers={"Content-Disposition": 'attachment; filename="aegis-config-export.json"'},
+        )
+
     @app.put("/api/config/raw")
     async def api_config_raw_put(request: Request) -> JSONResponse:
         _require_request(request, config)
@@ -1041,6 +1152,150 @@ def create_app(config: Config) -> FastAPI:
         _require_request(request, config)
         return JSONResponse({"ok": _delete_env_key(key), "key": key})
 
+    @app.get("/api/dashboard/preferences")
+    async def api_dashboard_preferences(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_dashboard_preferences(config))
+
+    @app.put("/api/dashboard/preferences")
+    async def api_dashboard_preferences_put(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "preferences object required"}, status_code=400)
+        return JSONResponse({"ok": True, "preferences": _set_dashboard_preferences(config, body)})
+
+    @app.get("/api/plugins")
+    async def api_plugins_list(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_plugins_payload(config))
+
+    @app.post("/api/plugins/install")
+    async def api_plugins_install(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        source = str(body.get("source") or "").strip()
+        if not source:
+            return JSONResponse({"ok": False, "error": "source is required"}, status_code=400)
+        try:
+            from . import plugins as plugin_runtime
+
+            name = plugin_runtime.install(source, config, force=bool(body.get("force", False)))
+            return JSONResponse({"ok": True, "name": name, **_plugins_payload(config)})
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+    @app.post("/api/plugins/{name}/enable")
+    async def api_plugin_enable(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from . import plugins as plugin_runtime
+
+        ok = plugin_runtime.enable(name, config)
+        return JSONResponse({"ok": ok, "name": name, **_plugins_payload(config)}, status_code=200 if ok else 404)
+
+    @app.post("/api/plugins/{name}/disable")
+    async def api_plugin_disable(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from . import plugins as plugin_runtime
+
+        ok = plugin_runtime.disable(name, config)
+        return JSONResponse({"ok": ok, "name": name, **_plugins_payload(config)}, status_code=200 if ok else 404)
+
+    @app.delete("/api/plugins/{name}")
+    async def api_plugin_delete(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from . import plugins as plugin_runtime
+
+        ok = plugin_runtime.remove(name, config)
+        return JSONResponse({"ok": ok, "name": name, **_plugins_payload(config)}, status_code=200 if ok else 404)
+
+    @app.get("/api/memory/providers")
+    async def api_memory_providers(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from .memory_providers import memory_provider_report
+
+        return JSONResponse(memory_provider_report(config))
+
+    @app.get("/api/memory/provider")
+    async def api_memory_provider_active(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from .memory_providers import memory_provider_report
+
+        return JSONResponse(memory_provider_report(config)["active"])
+
+    @app.get("/api/memory/providers/{name}")
+    async def api_memory_provider_status(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from .memory_providers import memory_provider_status
+
+        status = memory_provider_status(name, config)
+        return JSONResponse(status, status_code=200 if status.get("known") else 404)
+
+    @app.get("/api/memory/providers/{name}/setup")
+    async def api_memory_provider_setup(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from .memory_providers import memory_provider_setup
+
+        setup = memory_provider_setup(name)
+        return JSONResponse(setup, status_code=200 if setup.get("known") else 404)
+
+    @app.get("/api/memory/providers/{name}/schema")
+    async def api_memory_provider_schema(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from .memory_providers import memory_provider_config_schema
+
+        schema = memory_provider_config_schema(name)
+        return JSONResponse(schema, status_code=200 if schema.get("known") else 404)
+
+    @app.get("/api/audio/voices")
+    async def api_audio_voices(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse({
+            "voices": ["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"],
+            "transcription_models": ["whisper-1", "gpt-4o-mini-transcribe", "gpt-4o-transcribe"],
+            "tts_models": ["tts-1", "tts-1-hd", "gpt-4o-mini-tts"],
+            "provider": config.get("model.provider"),
+        })
+
+    @app.post("/api/audio/tts")
+    async def api_audio_tts(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        if not str(body.get("text") or "").strip():
+            return JSONResponse({"ok": False, "error": "text is required"}, status_code=400)
+        from .tools.voice import SpeakTool
+
+        result = SpeakTool().run(body, _voice_tool_context(config))
+        return JSONResponse(
+            {"ok": not result.is_error, "content": result.content, "display": result.display, "data": result.data},
+            status_code=502 if result.is_error else 200,
+        )
+
+    @app.post("/api/audio/transcribe")
+    async def api_audio_transcribe(request: Request,
+                                   file: Annotated[UploadFile, File()],
+                                   model: Annotated[str, Form()] = "whisper-1") -> JSONResponse:
+        _require_request(request, config)
+        suffix = Path(file.filename or "audio").suffix or ".audio"
+        temp_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(prefix="aegis-audio-", suffix=suffix, delete=False) as tmp:
+                temp_path = tmp.name
+                tmp.write(await file.read())
+            from .tools.voice import TranscribeTool
+
+            result = TranscribeTool().run({"path": temp_path, "model": model}, _voice_tool_context(config))
+            return JSONResponse(
+                {"ok": not result.is_error, "text": result.content, "display": result.display},
+                status_code=502 if result.is_error else 200,
+            )
+        finally:
+            if temp_path:
+                try:
+                    Path(temp_path).unlink()
+                except OSError:
+                    pass
+
     @app.get("/api/sessions")
     async def api_sessions_list(request: Request) -> JSONResponse:
         _require_request(request, config)
@@ -1086,6 +1341,110 @@ def create_app(config: Config) -> FastAPI:
     async def api_session_detail(session_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
         return JSONResponse(dash._dashboard_session_detail(session_id, config))
+
+    @app.patch("/api/sessions/{session_id}")
+    async def api_session_patch(session_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        store, session = _load_session(session_id)
+        if session is None:
+            return JSONResponse({"ok": False, "error": "session not found", "id": session_id}, status_code=404)
+        if "title" in body:
+            title = str(body.get("title") or "").strip()
+            if not title:
+                return JSONResponse({"ok": False, "error": "title cannot be empty"}, status_code=400)
+            session.title = title
+        if "meta" in body:
+            if not isinstance(body["meta"], dict):
+                return JSONResponse({"ok": False, "error": "meta must be an object"}, status_code=400)
+            session.meta.update(copy.deepcopy(body["meta"]))
+        if "todos" in body:
+            if not isinstance(body["todos"], list):
+                return JSONResponse({"ok": False, "error": "todos must be a list"}, status_code=400)
+            session.todos = copy.deepcopy(body["todos"])
+        store.save(session)
+        return JSONResponse({"ok": True, "session": _session_export(session)})
+
+    @app.post("/api/sessions/{session_id}/rename")
+    async def api_session_rename(session_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        title = str(body.get("title") or body.get("name") or "").strip()
+        if not title:
+            return JSONResponse({"ok": False, "error": "title is required"}, status_code=400)
+        store, session = _load_session(session_id)
+        if session is None:
+            return JSONResponse({"ok": False, "error": "session not found", "id": session_id}, status_code=404)
+        session.title = title
+        store.save(session)
+        return JSONResponse({"ok": True, "id": session.id, "title": session.title})
+
+    @app.get("/api/sessions/{session_id}/messages")
+    async def api_session_messages(session_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        _store, session = _load_session(session_id)
+        if session is None:
+            return JSONResponse({"ok": False, "error": "session not found", "id": session_id}, status_code=404)
+        return JSONResponse({
+            "ok": True,
+            "id": session.id,
+            "count": len(session.messages),
+            "messages": [_message_payload(message, i) for i, message in enumerate(session.messages)],
+        })
+
+    @app.post("/api/sessions/{session_id}/messages")
+    async def api_session_message_add(session_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        store, session = _load_session(session_id)
+        if session is None:
+            return JSONResponse({"ok": False, "error": "session not found", "id": session_id}, status_code=404)
+        try:
+            message = _message_from_payload(body)
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        session.messages.append(message)
+        store.save(session)
+        index = len(session.messages) - 1
+        return JSONResponse({"ok": True, "id": session.id, "message": _message_payload(message, index)})
+
+    @app.get("/api/sessions/{session_id}/messages/{index}")
+    async def api_session_message_get(session_id: str, index: int, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        _store, session = _load_session(session_id)
+        if session is None:
+            return JSONResponse({"ok": False, "error": "session not found", "id": session_id}, status_code=404)
+        if index < 0 or index >= len(session.messages):
+            return JSONResponse({"ok": False, "error": "message not found", "index": index}, status_code=404)
+        return JSONResponse({"ok": True, "message": _message_payload(session.messages[index], index)})
+
+    @app.patch("/api/sessions/{session_id}/messages/{index}")
+    async def api_session_message_patch(session_id: str, index: int, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        store, session = _load_session(session_id)
+        if session is None:
+            return JSONResponse({"ok": False, "error": "session not found", "id": session_id}, status_code=404)
+        if index < 0 or index >= len(session.messages):
+            return JSONResponse({"ok": False, "error": "message not found", "index": index}, status_code=404)
+        try:
+            session.messages[index] = _patched_message(session.messages[index], body)
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        store.save(session)
+        return JSONResponse({"ok": True, "message": _message_payload(session.messages[index], index)})
+
+    @app.delete("/api/sessions/{session_id}/messages/{index}")
+    async def api_session_message_delete(session_id: str, index: int, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        store, session = _load_session(session_id)
+        if session is None:
+            return JSONResponse({"ok": False, "error": "session not found", "id": session_id}, status_code=404)
+        if index < 0 or index >= len(session.messages):
+            return JSONResponse({"ok": False, "error": "message not found", "index": index}, status_code=404)
+        removed = session.messages.pop(index)
+        store.save(session)
+        return JSONResponse({"ok": True, "removed": _message_payload(removed, index), "count": len(session.messages)})
 
     @app.get("/api/sessions/{session_id}/export")
     async def api_session_export(session_id: str, request: Request) -> JSONResponse:
