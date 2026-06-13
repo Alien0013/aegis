@@ -10,7 +10,7 @@ aegis              # chat after onboarding
 
 ## What you get
 
-- **Any model** — 29 provider presets (Anthropic, OpenAI, Google, OpenRouter, Groq,
+- **Any model** — 28 provider presets (Anthropic, OpenAI, Google, OpenRouter, Groq,
   DeepSeek, Mistral, xAI, Together, Ollama, …) with **API-key *and* OAuth** auth,
   fallback chains, credential pools, and per-prompt routing.
 - **Tools** — 35 built-ins for fs, shell, web (multi-backend search), browser, computer-use, image,

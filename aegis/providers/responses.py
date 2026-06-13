@@ -1,8 +1,9 @@
 """OpenAI Responses API transport.
 
-This covers both the public OpenAI Responses endpoint and the advanced direct
-Codex/ChatGPT backend. Normal ChatGPT subscription auth uses the Codex
-app-server transport instead.
+This covers both the public OpenAI Responses endpoint and the direct
+Codex/ChatGPT backend. The default ChatGPT subscription path uses this
+transport with ``store: false``; the Codex app-server runtime is an explicit
+opt-in provider.
 """
 
 from __future__ import annotations

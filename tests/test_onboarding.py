@@ -49,8 +49,8 @@ def test_onboarding_can_select_oauth(monkeypatch):
     from aegis.onboarding import run_onboarding
 
     monkeypatch.setattr(
-        "aegis.onboarding._ensure_codex_cli_login",
-        lambda _input_func, _out: True,
+        "aegis.onboarding._oauth_login",
+        lambda _provider, _spec, _out: True,
     )
     cfg = Config.load()
     answers = iter([
@@ -77,16 +77,16 @@ def test_onboarding_can_select_oauth(monkeypatch):
     assert Config.load().get("model.provider") == "codex"
     text = "\n".join(out)
     assert "Choose authentication method" in text
-    assert "ChatGPT subscription via Codex CLI" in text
+    assert "ChatGPT subscription via Codex OAuth" in text
     assert "Auth:            codex" in text
 
 
-def test_onboarding_codex_login_failure_aborts_setup(monkeypatch):
+def test_onboarding_codex_oauth_failure_aborts_setup(monkeypatch):
     from aegis.config import Config
     from aegis.onboarding import run_onboarding
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.setattr("aegis.onboarding._ensure_codex_cli_login", lambda *_args: False)
+    monkeypatch.setattr("aegis.onboarding._oauth_login", lambda *_args: False)
     cfg = Config.load()
     answers = iter([
         "y",           # security notice
@@ -117,11 +117,11 @@ def test_onboarding_codex_login_failure_aborts_setup(monkeypatch):
     assert Config.load().get("model.provider") == "anthropic"
 
 
-def test_onboarding_codex_login_failure_does_not_probe(monkeypatch):
+def test_onboarding_codex_oauth_failure_does_not_probe(monkeypatch):
     from aegis.config import Config
     from aegis.onboarding import run_onboarding
 
-    monkeypatch.setattr("aegis.onboarding._ensure_codex_cli_login", lambda *_args: False)
+    monkeypatch.setattr("aegis.onboarding._oauth_login", lambda *_args: False)
 
     def fail_probe(*_args):
         raise AssertionError("probe should not run without usable credentials")
@@ -326,6 +326,34 @@ def test_noninteractive_provider_uses_provider_default_model(capsys):
     default = get_spec("openai").default_model
     assert data["model"]["model"] == default
     assert Config.load().get("model.default") == default
+
+
+def test_noninteractive_codex_auth_uses_stateless_provider(capsys):
+    import json
+
+    from aegis.cli.main import main
+    from aegis.config import Config
+    from aegis.providers.auth import AuthStore
+
+    AuthStore().save("openai-codex", {"access_token": "token", "token_type": "Bearer"})
+
+    rc = main([
+        "setup",
+        "--noninteractive",
+        "--accept-risk",
+        "--json",
+        "--provider",
+        "openai",
+        "--auth",
+        "codex",
+        "--no-services",
+    ])
+
+    assert rc == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["model"]["provider"] == "codex"
+    assert data["model"]["auth"] == "codex"
+    assert Config.load().get("model.provider") == "codex"
 
 
 def test_noninteractive_api_key_requires_env(monkeypatch, capsys):

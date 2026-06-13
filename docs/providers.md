@@ -1,7 +1,7 @@
 # Providers & Auth
 
-27 presets: `codex`, `anthropic`, `openai`, `google`, `openrouter`, `groq`, `deepseek`, `xai`,
-`mistral`, `together`, `huggingface`, `novita`, `zai`, `kimi`, `minimax`, `nvidia`,
+28 presets: `codex`, `codex-app-server`, `anthropic`, `openai`, `google`, `openrouter`,
+`groq`, `deepseek`, `xai`, `mistral`, `together`, `huggingface`, `novita`, `zai`, `kimi`, `minimax`, `nvidia`,
 `dashscope`, `stepfun`, `cerebras`, `perplexity`, `fireworks`, `hyperbolic`, `sambanova`,
 `ollama`, `lmstudio`, `vllm` — plus any OpenAI-compatible endpoint via
 `model.base_url` / `custom_providers`.
@@ -9,6 +9,7 @@
 ```bash
 aegis model list
 aegis model set codex gpt-5.5
+aegis model set codex-app-server gpt-5.5
 aegis model doctor
 aegis model set openai gpt-4o
 aegis auth status
@@ -23,9 +24,14 @@ dynamic tools.
 
 ## Auth
 
-Use `codex` for ChatGPT/Codex subscription auth. It delegates turns to the local
-`codex app-server`, so run `codex login` first. Use `openai` for OpenAI Platform
-API-key auth through `OPENAI_API_KEY`.
+Use `codex` for ChatGPT/Codex subscription auth with the Hermes-style stateless
+Responses backend. Run `aegis auth login codex` first; AEGIS sends `store: false`
+unless you explicitly enable provider-native response state. Use `openai` for
+OpenAI Platform API-key auth through `OPENAI_API_KEY`.
+
+Use `codex-app-server` only when you intentionally want Codex's native runtime,
+tooling, sandbox, plugins, and Codex-owned thread history. That path delegates
+turns to the local `codex app-server`, so it requires `codex login`.
 
 Per API provider, AEGIS resolves: explicit `base_url` → API key → OAuth login.
 API keys win when both are present because some OAuth tokens are identity-only.
@@ -38,10 +44,10 @@ aegis auth login openai        # OpenAI API OAuth (localhost:1455)
 aegis auth login google        # Google sign-in
 ```
 
-OpenAI OAuth login may succeed without the `model.request` scope required for model
-inference. `aegis auth status` reports that state; use `OPENAI_API_KEY` for the
-OpenAI API path, or use `codex` + `codex login` for ChatGPT subscription-backed
-Codex inference.
+OpenAI API OAuth login may succeed without the `model.request` scope required for
+model inference. `aegis auth status` reports that state; use `OPENAI_API_KEY` for
+the OpenAI API path, or use `codex` + `aegis auth login codex` for ChatGPT
+subscription-backed Codex inference.
 
 A comma-separated env value is a **credential pool** that rotates on 429/401:
 `OPENAI_API_KEY=sk-1,sk-2,sk-3`.

@@ -1175,8 +1175,8 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
             elif "not a chat model" in low or ("model" in low and ("404" in low or "does not exist" in low)):
                 msg += ("\n  → That model isn't available on this endpoint/auth. Pick another with "
                         "`aegis model set <provider> <model>` (e.g. gpt-5.2-chat-latest for an API "
-                        "key), or use the `codex` provider + `codex login` for ChatGPT-subscription "
-                        "models like gpt-5.5.")
+                        "key), or use `aegis auth login codex` + `aegis model set codex gpt-5.5` "
+                        "for ChatGPT-subscription models.")
             emit({"type": "error", "message": msg})
             err = Message.assistant(f"[provider error] {msg}")
             session.messages.append(err)

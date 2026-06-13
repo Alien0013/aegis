@@ -4,7 +4,7 @@ Auth precedence (per provider):
   1. explicit ``base_url`` override in config -> treat as custom/local (api-key or none)
   2. an API key in the environment            -> API key
   3. a valid OAuth login in auth.json         -> OAuth
-  4. Codex subscription auth                  -> the separate ``codex`` provider
+  4. Codex app-server auth                    -> the separate ``codex-app-server`` provider
 API keys win when both are configured because OAuth scopes can be identity-only.
 ``aegis auth status`` prints the resolution.
 """
@@ -123,7 +123,11 @@ PROVIDERS: dict[str, ProviderSpec] = {
         "gpt-5.5", 400_000, ["OPENAI_API_KEY"], oauth=OPENAI_OAUTH,
     ),
     "codex": ProviderSpec(
-        "codex", ApiMode.CODEX_APP_SERVER, "codex://app-server",
+        "codex", ApiMode.RESPONSES, "https://chatgpt.com/backend-api/codex",
+        "gpt-5.5", 272_000, [], oauth=OPENAI_CODEX_OAUTH,
+    ),
+    "codex-app-server": ProviderSpec(
+        "codex-app-server", ApiMode.CODEX_APP_SERVER, "codex://app-server",
         "gpt-5.5", 272_000, [], "codex-cli",
     ),
     "openai-codex": ProviderSpec(
@@ -233,6 +237,7 @@ _PLUGIN_BOOTSTRAPPING = False
 _STRICT_MODEL_PRESET_PROVIDERS = {
     "anthropic",
     "codex",
+    "codex-app-server",
     "deepseek",
     "google",
     "groq",

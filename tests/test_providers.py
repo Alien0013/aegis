@@ -1046,7 +1046,7 @@ def test_provider_count_and_oauth():
     from aegis.providers import list_providers
     from aegis.providers import registry
     assert len(list_providers()) >= 20
-    assert all(registry.get_spec(p).oauth for p in ("anthropic", "openai", "openai-codex", "google"))
+    assert all(registry.get_spec(p).oauth for p in ("anthropic", "openai", "codex", "openai-codex", "google"))
 
 
 def test_provider_report_exposes_chain_routing_and_catalog():
@@ -1149,7 +1149,24 @@ def test_openai_codex_builds_oauth_responses_provider():
     assert provider.base_url == "https://chatgpt.com/backend-api/codex"
 
 
-def test_codex_builds_app_server_provider(monkeypatch):
+def test_codex_builds_stateless_oauth_responses_provider():
+    from aegis.config import Config
+    from aegis.providers import build_provider
+    from aegis.providers.base import ApiMode
+    from aegis.providers.responses import ResponsesTransport
+
+    cfg = Config.load()
+    cfg.data["model"]["provider"] = "codex"
+    cfg.data["model"]["default"] = "gpt-5.5"
+    provider = build_provider(cfg)
+
+    assert provider.api_mode == ApiMode.RESPONSES
+    assert isinstance(provider.transport, ResponsesTransport)
+    assert provider.auth.describe() == "oauth (openai-codex: not logged in)"
+    assert provider.base_url == "https://chatgpt.com/backend-api/codex"
+
+
+def test_codex_app_server_builds_app_server_provider(monkeypatch):
     from aegis.config import Config
     from aegis.providers import build_provider
     from aegis.providers.base import ApiMode
@@ -1164,7 +1181,7 @@ def test_codex_builds_app_server_provider(monkeypatch):
     monkeypatch.setattr("aegis.providers.auth.subprocess.run", lambda *_args, **_kwargs: Status())
 
     cfg = Config.load()
-    cfg.data["model"]["provider"] = "codex"
+    cfg.data["model"]["provider"] = "codex-app-server"
     cfg.data["model"]["default"] = "gpt-5.5"
     provider = build_provider(cfg)
 

@@ -103,6 +103,14 @@ MODEL_PRESETS: dict[str, list[tuple[str, str]]] = {
         ("gpt-5.2", "GPT-5.2"),
         ("codex-auto-review", "Codex auto review"),
     ],
+    "codex-app-server": [
+        ("gpt-5.5", "GPT-5.5 Codex (most capable)"),
+        ("gpt-5.4", "GPT-5.4 Codex"),
+        ("gpt-5.4-mini", "GPT-5.4 mini Codex"),
+        ("gpt-5.3-codex", "GPT-5.3 Codex"),
+        ("gpt-5.2", "GPT-5.2"),
+        ("codex-auto-review", "Codex auto review"),
+    ],
     "openai-codex": [
         ("gpt-5.5", "GPT-5.5 Codex (most capable)"),
         ("gpt-5.4", "GPT-5.4 Codex"),
@@ -311,11 +319,20 @@ def run_onboarding_noninteractive(
     if auth == "local" and spec.auth_scheme != "none":
         return fail(f"provider {provider_name} is not a local/no-auth provider")
     if auth == "codex":
-        if spec.auth_scheme != "codex-cli":
-            return fail(f"provider {provider_name} does not use Codex CLI auth")
-        ok, detail = _codex_login_status()
-        if not ok:
-            return fail(f"Codex CLI auth is not ready: {detail}")
+        if spec.auth_scheme == "codex-cli":
+            ok, detail = _codex_login_status()
+            if not ok:
+                return fail(f"Codex CLI auth is not ready: {detail}")
+        elif spec.oauth and spec.oauth.provider == "openai-codex":
+            from .providers.auth import AuthStore, OAuthAuth
+            oauth = OAuthAuth(spec.oauth, AuthStore())
+            if not oauth.available():
+                return fail(
+                    "Codex OAuth auth is not ready: run `aegis auth login codex` "
+                    "or use --auth api-key/skip"
+                )
+        else:
+            return fail(f"provider {provider_name} does not use Codex subscription auth")
     if auth == "api-key":
         if not spec.env_vars:
             return fail(f"provider {provider_name} does not use API-key auth")
@@ -706,7 +723,7 @@ def _configure_model(
 
     def abort_required_auth(message: str) -> bool:
         out(message)
-        out("  Re-run `aegis setup` after fixing Codex CLI, or choose OpenAI API key / Skip credentials.")
+        out("  Re-run `aegis setup` after configuring auth, or choose OpenAI API key / Skip credentials.")
         config.set("model.provider", previous_provider)
         config.set("model.default", previous_model)
         return False
@@ -743,7 +760,7 @@ def _configure_model(
         auth_method = _choose(
             "Choose authentication method:",
             [
-                ("codex", "ChatGPT subscription via Codex CLI"),
+                ("codex", "ChatGPT subscription via Codex OAuth"),
                 ("api_key", f"OpenAI API key ({env_name})"),
                 ("skip", "Skip credentials for now"),
             ],
@@ -762,7 +779,7 @@ def _configure_model(
                 spec = codex_spec
                 state.provider = provider
                 config.set("model.provider", provider)
-                auth_ready = _ensure_codex_cli_login(input_func, out)
+                auth_ready = _oauth_login(provider, spec, out)
                 if not auth_ready:
                     state.auth_method = "skipped"
                     return abort_required_auth("! ChatGPT subscription setup did not finish.")

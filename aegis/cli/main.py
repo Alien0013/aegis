@@ -165,7 +165,9 @@ def cmd_auth(args, config: Config) -> int:
             api = "set" if any(__import__("os").environ.get(v) for v in spec.env_vars) else "—"
             if spec.oauth:
                 oauth_auth = OAuthAuth(spec.oauth, store)
-                oauth = oauth_auth.describe().removeprefix(f"oauth ({name}: ").removesuffix(")")
+                oauth = oauth_auth.describe().removeprefix(
+                    f"oauth ({spec.oauth.provider}: "
+                ).removesuffix(")")
             else:
                 oauth = "—"
             codex = CodexCliAuth().describe() if spec.auth_scheme == "codex-cli" else "—"
