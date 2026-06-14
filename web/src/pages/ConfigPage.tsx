@@ -90,6 +90,7 @@ export function ConfigPage() {
   const [newKey, setNewKey] = useState("");
   const [newValue, setNewValue] = useState("");
   const [msg, setMsg] = useState("");
+  const [active, setActive] = useState("");
   const toast = useToast();
 
   async function load() {
@@ -300,28 +301,46 @@ export function ConfigPage() {
         {msg && <div className="mut" style={{ marginTop: 8 }}>{msg}</div>}
       </div>
 
-      {groupNames.map((g) => {
-        const isOpen = searching || (open[g] ?? DEFAULT_OPEN_GROUPS.has(g));
-        return (
-          <div className="panel group" key={g}>
-            <button className="group-h" onClick={() => setOpen((prev) => ({ ...prev, [g]: !prev[g] }))}>
-              <b>{g}</b>
-              <span className="mut">{groups[g].length} · {isOpen ? "open" : "closed"}</span>
-            </button>
-            {isOpen && <div className="fields">{groups[g].map((field) => <FieldRow field={field} key={field.path} />)}</div>}
+      {searching
+        ? groupNames.map((g) => (
+            <div className="panel group" key={g}>
+              <div className="group-h" style={{ cursor: "default" }}><b>{g}</b><span className="mut">{groups[g].length}</span></div>
+              <div className="fields">{groups[g].map((field) => <FieldRow field={field} key={field.path} />)}</div>
+            </div>
+          ))
+        : (
+          <div className="config-layout">
+            <aside className="config-rail">
+              <div className="list-subhead" style={{ marginTop: 0 }}>Sections</div>
+              {groupNames.map((g) => (
+                <button key={g} className={"config-sec" + ((active || groupNames[0]) === g ? " active" : "")} onClick={() => setActive(g)}>
+                  <span>{g}</span><span className="pill">{groups[g].length}</span>
+                </button>
+              ))}
+            </aside>
+            <div className="config-main">
+              {(() => {
+                const sec = groupNames.includes(active) ? active : groupNames[0];
+                if (!sec) return <div className="card"><div className="empty small">No settings.</div></div>;
+                return (
+                  <div className="panel group">
+                    <div className="group-h" style={{ cursor: "default" }}><b>{sec}</b><span className="mut">{groups[sec].length} fields · saves instantly</span></div>
+                    <div className="fields">{groups[sec].map((field) => <FieldRow field={field} key={field.path} />)}</div>
+                  </div>
+                );
+              })()}
+              <div className="panel" style={{ marginTop: 12 }}>
+                <h3>Add a custom setting</h3>
+                <div className="grid c3" style={{ gap: 10, alignItems: "end" }}>
+                  <label>Key<input value={newKey} onChange={(e) => setNewKey(e.target.value)} placeholder="tools.exec_mode" /></label>
+                  <label>Value<input value={newValue} onChange={(e) => setNewValue(e.target.value)} placeholder='true, 3, "text", ["core"]' /></label>
+                  <button className="btn" onClick={addSetting}>Save</button>
+                </div>
+                <div className="mut" style={{ marginTop: 8 }}>Secrets belong in API Keys.</div>
+              </div>
+            </div>
           </div>
-        );
-      })}
-
-      <div className="panel" style={{ marginTop: 14 }}>
-        <h3>Add a custom setting</h3>
-        <div className="grid c3" style={{ gap: 10, alignItems: "end" }}>
-          <label>Key<input value={newKey} onChange={(e) => setNewKey(e.target.value)} placeholder="tools.exec_mode" /></label>
-          <label>Value<input value={newValue} onChange={(e) => setNewValue(e.target.value)} placeholder='true, 3, "text", ["core"]' /></label>
-          <button className="btn" onClick={addSetting}>Save</button>
-        </div>
-        <div className="mut" style={{ marginTop: 8 }}>Secrets belong in API Keys.</div>
-      </div>
+        )}
     </>
   );
 }
