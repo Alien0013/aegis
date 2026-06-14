@@ -45,11 +45,9 @@ def test_renderer_handles_full_event_stream(capsys, monkeypatch):
         {"type": "tool_result", "name": "bash", "summary": "Error: exit 1", "duration_ms": 900},
         {"type": "compacting"},
         {"type": "compacted", "tokens_before": 100_000, "tokens_after": 25_000},
-        {"type": "skill_nudge"},
     ):
         r(e)
     out = capsys.readouterr().out
     assert "read" in out and "✓ read 12 lines" in out
     assert "✗ Error: exit 1" in out                 # non-is_error failure still flagged
     assert "freed" in out and "75%" in out           # compaction delta line
-    assert "skill" in out                            # nudge rendered

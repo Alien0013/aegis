@@ -474,9 +474,6 @@ class Renderer:
                  style="yellow")
         elif t == "budget_exhausted":
             _out("  ⋯ step limit reached; summarizing progress so far …", style="yellow")
-        elif t == "skill_nudge":
-            _out("  💡 tip: you've repeated this flow — save it as a reusable skill with "
-                 "/skill new (or ask me to).", style=TERM_CYAN)
         elif t == "review_started":
             _out(f"  🧠 reflecting on this session ({e.get('kind', '')})…", style="bright_black")
         elif t == "review_done":

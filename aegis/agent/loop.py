@@ -1640,14 +1640,9 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                     "You returned an empty reply after using tools. Continue: take the next "
                     "action, or give the final answer."))
                 continue
-            # Periodic skill-save nudge: every N tool-uses across a long session (not once-ever).
-            from ..constants import SKILL_AUTOGEN_THRESHOLD
-            interval = int(agent.config.get("learn.skill_nudge_interval", SKILL_AUTOGEN_THRESHOLD) or 0)
-            last = int(agent.session.meta.get("_last_skill_nudge", 0))
-            if (interval > 0 and agent.config.get("skills.autogen", True)
-                    and agent.tools_used - last >= interval):
-                agent.session.meta["_last_skill_nudge"] = agent.tools_used
-                emit({"type": "skill_nudge"})
+            # No manual "save this as a skill" nudge: the forked background review
+            # (agent/review.py) already creates skills automatically (learn.auto_apply_skills),
+            # so prompting the user to do it by hand would be redundant and contradictory.
             final_text = resp.text
             if not (final_text or "").strip() and agent.tools_used > 0:
                 # Nudges exhausted but still empty — hand back the last substantive reply

@@ -26,10 +26,6 @@ MEMORY_CHAR_LIMIT = 2_200
 USER_CHAR_LIMIT = 1_375
 MEMORY_DELIM = "\n§\n"
 
-# --- Skills -----------------------------------------------------------------
-# Auto-generate a skill suggestion after this many successful tool calls in a turn.
-SKILL_AUTOGEN_THRESHOLD = 6
-
 # --- Defaults ---------------------------------------------------------------
 DEFAULT_PROVIDER = "anthropic"
 DEFAULT_MODEL = "claude-sonnet-4-6"

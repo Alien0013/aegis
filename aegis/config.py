@@ -328,7 +328,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "hooks": {},                     # event -> [shell commands]: session_start, pre_tool, ...
     "skills": {
         "paths": [],                 # extra skill dirs
-        "autogen": True,
     },
     "curator": {                     # background maintenance of agent-created skills
         "enabled": True,
