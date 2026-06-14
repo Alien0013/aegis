@@ -1,258 +1,96 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
-import { Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import { Icon } from "./lib/icons";
-import { api, post } from "./lib/api";
-import { Badge, Loading } from "./lib/ui";
-import { CommandPalette } from "./CommandPalette";
-import { Tooltip, TooltipProvider } from "./lib/components/Tooltip";
+// App shell: sidebar + top bar + routed content. Routes come from lib/nav so the
+// sidebar and router never drift. Pages not yet rebuilt fall back to Placeholder.
 
-// Pages are code-split: each loads as its own chunk on first visit so the initial
-// bundle stays small. Components are named exports, so map them to `default` for lazy().
-const Overview = lazy(() => import("./pages/Overview").then((m) => ({ default: m.Overview })));
+import { lazy, Suspense } from "react";
+import { HashRouter, Route, Routes, useLocation } from "react-router-dom";
+import { Sidebar } from "./components/Sidebar";
+import { ThemeSwitcher } from "./components/ThemeSwitcher";
+import { ErrorBoundary } from "./components/ErrorBoundary";
+import { Loading, Toaster } from "./components/ui";
+import { NAV_ITEMS } from "./lib/nav";
+import { Overview } from "./pages/Overview";
+import { Sessions } from "./pages/Sessions";
+import { Models } from "./pages/Models";
+import { Memory } from "./pages/Memory";
+import { Tools } from "./pages/Tools";
+import { Skills } from "./pages/Skills";
+import { Config } from "./pages/Config";
+import { Cron } from "./pages/Cron";
+import { Mcp } from "./pages/Mcp";
+import { Channels } from "./pages/Channels";
+import { Webhooks } from "./pages/Webhooks";
+import { Keys } from "./pages/Keys";
+import { Plugins } from "./pages/Plugins";
+import { Profiles } from "./pages/Profiles";
+import { Files } from "./pages/Files";
+import { Logs } from "./pages/Logs";
+import { System } from "./pages/System";
+import { Analytics } from "./pages/Analytics";
+import { Placeholder } from "./pages/Placeholder";
+
+// Code-split heavy pages (e.g. Chat pulls in xterm) so they load on demand.
 const Chat = lazy(() => import("./pages/Chat").then((m) => ({ default: m.Chat })));
-const ListPage = lazy(() => import("./pages/ListPage").then((m) => ({ default: m.ListPage })));
-const ConfigPage = lazy(() => import("./pages/ConfigPage").then((m) => ({ default: m.ConfigPage })));
-const SystemPage = lazy(() => import("./pages/SystemPage").then((m) => ({ default: m.SystemPage })));
-const CronPage = lazy(() => import("./pages/CronPage").then((m) => ({ default: m.CronPage })));
-const KanbanPage = lazy(() => import("./pages/KanbanPage").then((m) => ({ default: m.KanbanPage })));
-const ModelsPage = lazy(() => import("./pages/ModelsPage").then((m) => ({ default: m.ModelsPage })));
-const KeysPage = lazy(() => import("./pages/KeysPage").then((m) => ({ default: m.KeysPage })));
-const MemoryPage = lazy(() => import("./pages/MemoryPage").then((m) => ({ default: m.MemoryPage })));
-const ChannelsPage = lazy(() => import("./pages/ChannelsPage").then((m) => ({ default: m.ChannelsPage })));
-const AgentsPage = lazy(() => import("./pages/AgentsPage").then((m) => ({ default: m.AgentsPage })));
-const FilesPage = lazy(() => import("./pages/FilesPage").then((m) => ({ default: m.FilesPage })));
-const McpPage = lazy(() => import("./pages/McpPage").then((m) => ({ default: m.McpPage })));
-const WebhooksPage = lazy(() => import("./pages/WebhooksPage").then((m) => ({ default: m.WebhooksPage })));
-const PluginsPage = lazy(() => import("./pages/PluginsPage").then((m) => ({ default: m.PluginsPage })));
-const TerminalPage = lazy(() => import("./pages/TerminalPage").then((m) => ({ default: m.TerminalPage })));
-const ProfilesPage = lazy(() => import("./pages/ProfilesPage").then((m) => ({ default: m.ProfilesPage })));
-const SkillsPage = lazy(() => import("./pages/SkillsPage").then((m) => ({ default: m.SkillsPage })));
-const ToolsPage = lazy(() => import("./pages/ToolsPage").then((m) => ({ default: m.ToolsPage })));
 
-type NavItem = { id: string; label: string; icon: string; group: string };
-const NAV: NavItem[] = [
-  { id: "overview", label: "Home", icon: "overview", group: "Home" },
-  { id: "chat", label: "Chat", icon: "chat", group: "Home" },
-  { id: "terminal", label: "Terminal", icon: "system", group: "Home" },
-  { id: "agents", label: "Agents", icon: "agents", group: "Observe" },
-  { id: "sessions", label: "Sessions", icon: "sessions", group: "Observe" },
-  { id: "runs", label: "Runs", icon: "sessions", group: "Observe" },
-  { id: "traces", label: "Traces", icon: "logs", group: "Observe" },
-  { id: "logs", label: "Logs", icon: "logs", group: "Observe" },
-  { id: "kanban", label: "Kanban", icon: "kanban", group: "Operate" },
-  { id: "cron", label: "Cron", icon: "cron", group: "Operate" },
-  { id: "webhooks", label: "Webhooks", icon: "channels", group: "Operate" },
-  { id: "channels", label: "Channels", icon: "channels", group: "Operate" },
-  { id: "models", label: "Models", icon: "models", group: "Configure" },
-  { id: "keys", label: "API Keys", icon: "config", group: "Configure" },
-  { id: "profiles", label: "Profiles", icon: "agents", group: "Configure" },
-  { id: "memory", label: "Memory", icon: "memory", group: "Configure" },
-  { id: "skills", label: "Skills", icon: "skills", group: "Configure" },
-  { id: "tools", label: "Tools", icon: "tools", group: "Configure" },
-  { id: "mcp", label: "MCP", icon: "tools", group: "Configure" },
-  { id: "plugins", label: "Plugins", icon: "skills", group: "Configure" },
-  { id: "files", label: "Files", icon: "logs", group: "Workspace" },
-  { id: "projects", label: "Projects", icon: "system", group: "Workspace" },
-  { id: "worktrees", label: "Worktrees", icon: "sessions", group: "Workspace" },
-  { id: "evals", label: "Evals", icon: "logs", group: "Workspace" },
-  { id: "config", label: "Config", icon: "config", group: "System" },
-  { id: "system", label: "System", icon: "system", group: "System" },
-];
-const THEMES = ["dark", "hacker", "paper", "mono"];
-
-// Current view id, derived from the router so nav highlighting and the topbar title
-// stay in sync with the URL (e.g. #/sessions -> "sessions").
-const viewFromPath = (pathname: string) => pathname.replace(/^\/+/, "").split("/")[0] || "overview";
-
-function Pages({ go }: { go: (id: string) => void }) {
+function TopBar() {
+  const loc = useLocation();
+  const current = NAV_ITEMS.find(
+    (i) => i.path === loc.pathname || (i.path !== "/" && loc.pathname.startsWith(i.path)),
+  );
   return (
-    <Routes>
-      <Route path="/" element={<Overview go={go} />} />
-      <Route path="/overview" element={<Overview go={go} />} />
-      <Route path="/cockpit" element={<Overview go={go} />} />
-      <Route path="/chat" element={<Chat />} />
-      <Route path="/terminal" element={<TerminalPage />} />
-      <Route path="/runs" element={<ListPage endpoint="runs?limit=100" arrayKey="runs" title="Runs"
-        detailEndpoint="run" cols={[["title", "Run"], ["status", "Status"], ["surface", "Surface"], ["updated_at", "Updated"]]} />} />
-      <Route path="/traces" element={<ListPage endpoint="traces?limit=100" arrayKey="traces" title="Traces"
-        detailEndpoint="trace" cols={[["id", "Trace"], ["status", "Status"], ["source", "Source"], ["spans.span_count", "Spans"]]} />} />
-      <Route path="/agents" element={<AgentsPage />} />
-      <Route path="/kanban" element={<KanbanPage />} />
-      <Route path="/config" element={<ConfigPage />} />
-      <Route path="/cron" element={<CronPage />} />
-      <Route path="/models" element={<ModelsPage />} />
-      <Route path="/keys" element={<KeysPage />} />
-      <Route path="/profiles" element={<ProfilesPage />} />
-      <Route path="/memory" element={<MemoryPage />} />
-      <Route path="/channels" element={<ChannelsPage />} />
-      <Route path="/system" element={<SystemPage />} />
-      <Route path="/files" element={<FilesPage />} />
-      <Route path="/mcp" element={<McpPage />} />
-      <Route path="/webhooks" element={<WebhooksPage />} />
-      <Route path="/plugins" element={<PluginsPage />} />
-      <Route path="/projects" element={<ListPage endpoint="projects" arrayKey="projects" title="Projects"
-        cols={[["name", "Project"], ["kind", "Kind"], ["path", "Path"]]} />} />
-      <Route path="/worktrees" element={<ListPage endpoint="worktrees" arrayKey="worktrees" title="Worktrees"
-        cols={[["worktree", "Worktree"], ["branch", "Branch"], ["path", "Path"]]} />} />
-      <Route path="/evals" element={<ListPage endpoint="evals" arrayKey="evals" title="Evals"
-        detailEndpoint="eval" idKey="id" cols={[["name", "Eval"], ["status", "Status"], ["source", "Source"]]} />} />
-      <Route path="/sessions" element={<ListPage endpoint="sessions" title="Sessions"
-        detailEndpoint="session" cols={[["title", "Title"], ["updated_at", "Updated"], ["id", "ID"]]} />} />
-      <Route path="/skills" element={<SkillsPage />} />
-      <Route path="/tools" element={<ToolsPage />} />
-      <Route path="/logs" element={<ListPage endpoint="logs" arrayKey="lines" title="Logs" cols={[["line", "Line"]]} raw />} />
-      <Route path="*" element={<Overview go={go} />} />
-    </Routes>
+    <header className="flex h-14 shrink-0 items-center justify-between border-b border-border bg-surface/40 px-[var(--pad)] backdrop-blur">
+      <div className="text-sm font-medium text-dim">{current?.label || "AEGIS"}</div>
+      <ThemeSwitcher />
+    </header>
+  );
+}
+
+function Routed() {
+  const loc = useLocation();
+  return (
+    <div className="mx-auto max-w-6xl animate-fade-in">
+      <ErrorBoundary key={loc.pathname}>
+        <Suspense fallback={<Loading />}>
+          <Routes>
+            <Route path="/" element={<Overview />} />
+            <Route path="/chat" element={<Chat />} />
+            <Route path="/sessions" element={<Sessions />} />
+            <Route path="/models" element={<Models />} />
+            <Route path="/memory" element={<Memory />} />
+            <Route path="/tools" element={<Tools />} />
+            <Route path="/skills" element={<Skills />} />
+            <Route path="/config" element={<Config />} />
+            <Route path="/cron" element={<Cron />} />
+            <Route path="/mcp" element={<Mcp />} />
+            <Route path="/channels" element={<Channels />} />
+            <Route path="/webhooks" element={<Webhooks />} />
+            <Route path="/keys" element={<Keys />} />
+            <Route path="/plugins" element={<Plugins />} />
+            <Route path="/profiles" element={<Profiles />} />
+            <Route path="/files" element={<Files />} />
+            <Route path="/logs" element={<Logs />} />
+            <Route path="/system" element={<System />} />
+            <Route path="/analytics" element={<Analytics />} />
+            <Route path="*" element={<Placeholder title="Not found" />} />
+          </Routes>
+        </Suspense>
+      </ErrorBoundary>
+    </div>
   );
 }
 
 export function App() {
-  const navigate = useNavigate();
-  const location = useLocation();
-  const view = viewFromPath(location.pathname);
-  const [theme, setTheme] = useState(localStorage.getItem("aegis_theme") || "dark");
-  const [navOpen, setNavOpen] = useState(false);
-  const [cmdOpen, setCmdOpen] = useState(false);
-  const [status, setStatus] = useState<any>(null);
-  const [gateway, setGateway] = useState<any>(null);
-  const [profiles, setProfiles] = useState<any>(null);
-  const [navQuery, setNavQuery] = useState("");
-  useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem("aegis_theme", theme); }, [theme]);
-  const loadStatus = () => Promise.all([
-    api("status"),
-    api("gateway/status").catch(() => null),
-  ]).then(([s, g]) => { setStatus(s); setGateway(g); }).catch(() => setStatus({ error: true }));
-  useEffect(() => {
-    let mounted = true;
-    const load = () => Promise.all([
-      api("status"),
-      api("gateway/status").catch(() => null),
-    ]).then(([s, g]) => {
-      if (!mounted) return;
-      setStatus(s);
-      setGateway(g);
-    }).catch(() => mounted && setStatus({ error: true }));
-    load();
-    const timer = setInterval(load, 15000);
-    return () => { mounted = false; clearInterval(timer); };
-  }, []);
-  useEffect(() => {
-    api("profiles").then(setProfiles).catch(() => setProfiles(null));
-  }, []);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        setCmdOpen(true);
-      }
-      if (e.key === "Escape") setCmdOpen(false);
-    };
-    addEventListener("keydown", onKey);
-    return () => removeEventListener("keydown", onKey);
-  }, []);
-  const go = (id: string) => { navigate("/" + id); setNavOpen(false); };
-  const visibleNav = useMemo(() => {
-    const q = navQuery.trim().toLowerCase();
-    if (!q) return NAV;
-    return NAV.filter((n) => `${n.label} ${n.group} ${n.id}`.toLowerCase().includes(q));
-  }, [navQuery]);
-  const groups = [...new Set(visibleNav.map((n) => n.group))];
-  const current = NAV.find((n) => n.id === view);
-  const online = status && !status.error;
   return (
-    <TooltipProvider>
-    <div className="app">
-      <header className="topbar">
-        <Tooltip label="Menu"><button className="iconbtn" aria-label="Open navigation" onClick={() => setNavOpen(true)}><Icon n="menu" /></button></Tooltip>
-        <div>
-          <b>{current?.label || "AEGIS Agent"}</b>
-          <span>{online ? `${status.provider || "provider"} / ${status.model || "model"}` : "dashboard"}</span>
+    <HashRouter>
+      <div className="flex h-screen overflow-hidden bg-bg text-text">
+        <Sidebar />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <TopBar />
+          <main className="scroll-thin flex-1 overflow-y-auto p-[var(--pad)] md:p-6">
+            <Routed />
+          </main>
         </div>
-        <Tooltip label="Command palette  ·  Ctrl K"><button className="iconbtn topcmd" aria-label="Open command palette" onClick={() => setCmdOpen(true)}><Icon n="search" /></button></Tooltip>
-      </header>
-      <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} go={go} reload={loadStatus} />
-      {navOpen && <button className="scrim" aria-label="Close navigation" onClick={() => setNavOpen(false)} />}
-      <aside className={"side" + (navOpen ? " open" : "")}>
-        <div className="brand">
-          <span className="mark">A</span>
-          <div>
-            <b>AEGIS Agent</b>
-            <span>Operator workspace</span>
-          </div>
-        </div>
-        <div className="navsearch">
-          <Icon n="search" />
-          <input
-            aria-label="Filter navigation"
-            value={navQuery}
-            onChange={(e) => setNavQuery(e.target.value)}
-            placeholder="Find page"
-          />
-        </div>
-        <button className="cmd-trigger" onClick={() => setCmdOpen(true)}>
-          <Icon n="search" /><span>Command palette</span><kbd>Ctrl K</kbd>
-        </button>
-        {groups.map((group) => (
-          <div className="navgroup" key={group}>
-            <div className="navlabel">{group}</div>
-            {visibleNav.filter((n) => n.group === group).map((n) => (
-              <button key={n.id} className={"nav" + (view === n.id ? " active" : "")} onClick={() => go(n.id)}>
-                <Icon n={n.icon} /> <span>{n.label}</span>
-              </button>
-            ))}
-          </div>
-        ))}
-        {!visibleNav.length && <div className="empty small">No pages match</div>}
-        <div className="sidefoot">
-          {profiles?.available?.length > 0 && (
-            <label className="profile-switch">
-              <span>Profile</span>
-              <select
-                value={profiles.active || ""}
-                onChange={async (e) => {
-                  await post("profiles", { name: e.target.value });
-                  const next = await api("profiles");
-                  setProfiles(next);
-                }}
-              >
-                <option value="">Default</option>
-                {profiles.available.map((name: string) => <option key={name} value={name}>{name}</option>)}
-              </select>
-            </label>
-          )}
-          <div className="statusbox">
-            <span className={"statusdot" + (!online ? " err" : "")} />
-            <div className="statusgrid">
-              <div className="statusrow">
-                <b>{online ? status.provider || "AEGIS" : "Backend"}</b>
-                <span>{online ? status.model || "ready" : status?.error ? "offline" : "connecting..."}</span>
-              </div>
-              <div className="statuschips">
-                <Badge status={profiles?.active ? "active" : "idle"}>{profiles?.active || "default"}</Badge>
-                <Badge status={gateway?.configured ? "ready" : "idle"}>
-                  {gateway?.channels?.length ? `${gateway.channels.length} channel${gateway.channels.length === 1 ? "" : "s"}` : "no channels"}
-                </Badge>
-              </div>
-              {online && (
-                <div className="statusmini">
-                  <span>{status.exec_mode || "auto"} perms</span>
-                  <span>{status.reasoning_display || "summary"}/{status.reasoning_effort || "medium"}</span>
-                </div>
-              )}
-            </div>
-          </div>
-          <div className="themebar" aria-label="Theme">
-            {THEMES.map((t) => (
-              <button key={t} className={theme === t ? "active" : ""} onClick={() => setTheme(t)}>
-                <span className={`swatch ${t}`} />
-                {t}
-              </button>
-            ))}
-          </div>
-        </div>
-      </aside>
-      <main className="main"><Suspense fallback={<Loading />}><Pages go={go} /></Suspense></main>
-    </div>
-    </TooltipProvider>
+        <Toaster />
+      </div>
+    </HashRouter>
   );
 }
