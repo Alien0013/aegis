@@ -530,7 +530,138 @@ def _ops_action(action: str, body: dict, config: Config) -> dict:
         return {"ok": bool(r.ok), "message": r.message}
     if action == "update_check":
         return _update_check()
+    if action == "doctor":
+        from .cli.main import cmd_doctor
+        return _capture_cli(lambda: cmd_doctor(type("A", (), {"fix": False})(), config))
+    if action == "security_audit":
+        from .ops import cmd_security_audit
+        return _capture_cli(lambda: cmd_security_audit(type("A", (), {"fail_on": None})(), config))
     return {"error": f"unknown operation: {action}"}
+
+
+def _config_raw(config: Config) -> dict:
+    """The effective config serialized to YAML text + path, for the YAML editor mode. Serializing
+    config.data (not the on-disk file) means the editor shows the live config even before any
+    overrides have been written to disk."""
+    import yaml
+
+    from . import config as cfg
+    return {"path": str(cfg.config_path()), "raw": yaml.safe_dump(config.data, sort_keys=False)}
+
+
+def _config_backup_now() -> dict:
+    """Copy the current config.yaml to a timestamped .bak sibling. Returns the backup path."""
+    from datetime import datetime, timezone
+
+    from . import config as cfg
+    from .util import atomic_write, read_text
+    path = cfg.config_path()
+    raw = read_text(path)
+    if not raw.strip():
+        return {"ok": True, "backup": "", "note": "config is empty"}
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    bak = path.with_name(f"{path.stem}.{stamp}.yaml.bak")
+    atomic_write(bak, raw)
+    return {"ok": True, "backup": str(bak)}
+
+
+def _config_write_raw(text: str, config: Config) -> dict:
+    """Validate YAML, back up the current file, then atomically write the new config. Keeps the
+    in-memory config in sync so the next read reflects the save."""
+    import yaml
+
+    from . import config as cfg
+    from .util import atomic_write
+    try:
+        parsed = yaml.safe_load(text) if text.strip() else {}
+    except yaml.YAMLError as exc:
+        return {"ok": False, "error": f"invalid YAML: {exc}"}
+    if not isinstance(parsed, dict):
+        return {"ok": False, "error": "top-level YAML must be a mapping"}
+    backup = _config_backup_now().get("backup", "")
+    atomic_write(cfg.config_path(), yaml.safe_dump(parsed, sort_keys=False))
+    config.data = parsed
+    return {"ok": True, "backup": backup}
+
+
+def _config_reset_section(section: str, config: Config) -> dict:
+    """Reset one top-level config section to its default (or drop it when there's no default).
+    Backs up first."""
+    import copy
+
+    from .config import DEFAULT_CONFIG
+    section = (section or "").strip()
+    if not section:
+        return {"ok": False, "error": "section required"}
+    backup = _config_backup_now().get("backup", "")
+    default = DEFAULT_CONFIG.get(section)
+    if default is None:
+        config.data.pop(section, None)
+    else:
+        config.data[section] = copy.deepcopy(default)
+    config.save()
+    return {"ok": True, "section": section, "backup": backup}
+
+
+def _system_stats() -> dict:
+    """Live host stats for the System page — CPU/RAM/disk/uptime/load — read from os + /proc
+    so there's no psutil dependency. Fields degrade to absent on non-Linux."""
+    import os
+    import platform
+    import shutil
+
+    from . import config as cfg
+    home = cfg.get_home()
+    du = shutil.disk_usage(str(home))
+    out: dict = {
+        "os": f"{platform.system()} {platform.release()}",
+        "arch": platform.machine(),
+        "host": platform.node(),
+        "python": platform.python_version(),
+        "cpu_count": os.cpu_count() or 0,
+        "disk_used_gb": round((du.total - du.free) / 1e9, 1),
+        "disk_total_gb": round(du.total / 1e9, 1),
+        "disk_percent": round(100 * (du.total - du.free) / du.total, 1) if du.total else 0,
+    }
+    try:
+        out["load_avg"] = [round(x, 2) for x in os.getloadavg()]
+    except (OSError, AttributeError):
+        pass
+    try:
+        mem = {}
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            key, _, val = line.partition(":")
+            mem[key.strip()] = int(val.strip().split()[0])      # kB
+        total = mem.get("MemTotal", 0) / 1e6                     # GB
+        avail = mem.get("MemAvailable", 0) / 1e6
+        if total:
+            out.update(mem_total_gb=round(total, 1), mem_used_gb=round(total - avail, 1),
+                       mem_percent=round(100 * (total - avail) / total, 1))
+    except (OSError, ValueError):
+        pass
+    try:
+        secs = int(float(Path("/proc/uptime").read_text().split()[0]))
+        days, rem = divmod(secs, 86400)
+        hours, rem = divmod(rem, 3600)
+        out["uptime"] = f"{days}d {hours}h {rem // 60}m" if days else f"{hours}h {rem // 60}m"
+    except (OSError, ValueError):
+        pass
+    return out
+
+
+def _capture_cli(fn) -> dict:
+    """Run a CLI command function, capturing its stdout into an ``output`` string for the
+    dashboard's action console."""
+    import contextlib
+    import io
+
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            rc = fn()
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc), "output": buf.getvalue()}
+    return {"ok": rc in (None, 0), "output": buf.getvalue()}
 
 
 def _int_param(query: dict, name: str, default: int, *, lo: int = 1, hi: int = 200) -> int:

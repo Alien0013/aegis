@@ -1252,6 +1252,8 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
         return _profiles_payload(config)
     if path == "/api/system":
         return dash._system_info()
+    if path == "/api/system/stats":
+        return dash._system_stats()
     if path == "/api/ops":
         return dash._ops_status(config)
     if path == "/api/traces":
@@ -1376,6 +1378,10 @@ def _api_post(path: str, body: dict, config: Config, chat_runner: Any) -> dict:
             config.set(key, val)
             return {"ok": True}
         return {"error": "missing key"}
+    if path == "/api/config/backup":
+        return dash._config_backup_now()
+    if path == "/api/config/reset":
+        return dash._config_reset_section(str(body.get("section") or ""), config)
     if path == "/api/models":
         from .providers import registry
 
@@ -1775,6 +1781,18 @@ def create_app(config: Config) -> FastAPI:
     async def api_config_raw(request: Request) -> JSONResponse:
         _require_request(request, config)
         return JSONResponse({"config": copy.deepcopy(config.data)})
+
+    @app.get("/api/config/yaml")
+    async def api_config_yaml(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(dash._config_raw(config))
+
+    @app.post("/api/config/yaml")
+    async def api_config_yaml_put(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        result = dash._config_write_raw(str(body.get("raw") or "") if isinstance(body, dict) else "", config)
+        return JSONResponse(result, status_code=200 if result.get("ok") else 400)
 
     @app.get("/api/config/export")
     async def api_config_export(request: Request) -> JSONResponse:

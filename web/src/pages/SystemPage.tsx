@@ -9,16 +9,18 @@ type Confirm = { action: string; body?: any; title: string; word: string; desc: 
 
 export function SystemPage() {
   const [info, setInfo] = useState<any>();
+  const [stats, setStats] = useState<any>();
   const [ops, setOps] = useState<any>();
   const [busy, setBusy] = useState("");
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [typed, setTyped] = useState("");
+  const [console_, setConsole] = useState<{ title: string; text: string } | null>(null);
   const toast = useToast();
 
   async function load() {
     try {
-      const [i, o] = await Promise.all([api("system"), api("ops")]);
-      setInfo(i); setOps(o);
+      const [i, o, s] = await Promise.all([api("system"), api("ops"), api("system/stats").catch(() => null)]);
+      setInfo(i); setOps(o); setStats(s);
     } catch (e) { setInfo({ __err: String(e) }); }
   }
   useEffect(() => { load(); }, []);
@@ -27,7 +29,9 @@ export function SystemPage() {
     setBusy(action + (body.op || ""));
     try {
       const r: any = await post("ops", { action, ...body });
-      if (r && r.ok === false) toast(r.error || r.message || "Failed", "err");
+      if (action === "doctor" || action === "security_audit") {
+        setConsole({ title: action === "doctor" ? "Doctor" : "Security audit", text: r.output || r.error || "(no output)" });
+      } else if (r && r.ok === false) toast(r.error || r.message || "Failed", "err");
       else if (action === "update_check") toast(r.update_available ? "Update available" : "Up to date", "ok");
       else if (action === "backup") toast("Backup created", "ok");
       else if (action === "curator_run") toast("Curator pass complete", "ok");
@@ -55,6 +59,36 @@ export function SystemPage() {
         <Stat label="Python" value={info.python} sub={info.platform} />
         <Stat label="Disk free" value={`${info.disk_free_gb} GB`} sub={`of ${info.disk_total_gb} GB`} />
         <Stat label="Curator" value={cur.enabled ? "on" : "paused"} sub={cur.last_run_at ? `last ${compact(cur.last_run_at, 16)}` : "never run"} />
+      </div>
+
+      {stats && (
+        <>
+          <div className="section-title">Host</div>
+          <div className="grid c4">
+            <Stat label="OS" value={stats.arch} sub={stats.os} />
+            <Stat label="CPU" value={`${stats.cpu_count} cores`} sub={stats.load_avg ? `load ${stats.load_avg.join(" · ")}` : stats.host} />
+            <Stat label="Memory" value={stats.mem_total_gb ? `${stats.mem_used_gb}/${stats.mem_total_gb} GB` : "—"} sub={stats.mem_percent != null ? `${stats.mem_percent}% used` : ""} />
+            <Stat label="Uptime" value={stats.uptime || "—"} sub={`disk ${stats.disk_percent}% · ${stats.host}`} />
+          </div>
+        </>
+      )}
+
+      <div className="section-title">Diagnostics</div>
+      <div className="ops-grid">
+        <div className="ops-card">
+          <div className="ops-h">{ico("check")}<div><b>Doctor</b><div className="meta">install &amp; provider health</div></div></div>
+          <div className="ops-desc">Run the full health check — providers, auth, tools, workspace, daemon.</div>
+          <div className="ops-actions">
+            <Button sm icon="check" disabled={busy === "doctor"} onClick={() => run("doctor")}>Run doctor</Button>
+          </div>
+        </div>
+        <div className="ops-card">
+          <div className="ops-h">{ico("system")}<div><b>Security audit</b><div className="meta">deps · MCP · plugins · skills</div></div></div>
+          <div className="ops-desc">Scan dependencies, MCP commands, plugins, and skills for risks.</div>
+          <div className="ops-actions">
+            <Button sm variant="ghost" icon="system" disabled={busy === "security_audit"} onClick={() => run("security_audit")}>Run audit</Button>
+          </div>
+        </div>
       </div>
 
       <div className="section-title">Operations</div>
@@ -164,6 +198,14 @@ export function SystemPage() {
         }>
         <p className="mut" style={{ marginTop: 0, fontSize: 13 }}>{confirm?.desc}</p>
         <input autoFocus value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={confirm?.word} />
+      </Dialog>
+
+      <Dialog open={!!console_} onOpenChange={(v) => !v && setConsole(null)} title={console_?.title}
+        footer={<div className="row-flex" style={{ justifyContent: "flex-end" }}>
+          <Button sm variant="ghost" onClick={() => { navigator.clipboard?.writeText(console_?.text || ""); toast("Copied", "ok"); }}>Copy</Button>
+          <Button sm onClick={() => setConsole(null)}>Close</Button>
+        </div>}>
+        <pre className="mono" style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: 12, maxHeight: "56vh", overflow: "auto", lineHeight: 1.5 }}>{console_?.text}</pre>
       </Dialog>
     </>
   );

@@ -91,7 +91,33 @@ export function ConfigPage() {
   const [newValue, setNewValue] = useState("");
   const [msg, setMsg] = useState("");
   const [active, setActive] = useState("");
+  const [yaml, setYaml] = useState(false);
+  const [raw, setRaw] = useState("");
   const toast = useToast();
+
+  async function openYaml() {
+    try { const r: any = await api("config/yaml"); setRaw(r.raw || ""); setYaml(true); }
+    catch (e) { toast(String(e), "err"); }
+  }
+  async function saveYaml() {
+    try {
+      const r: any = await post("config/yaml", { raw });
+      if (r.ok) { toast(r.backup ? "Saved (backed up)" : "Saved", "ok"); setYaml(false); await load(); }
+      else toast(r.error || "Save failed", "err");
+    } catch (e) { toast(String(e), "err"); }
+  }
+  async function backupConfig() {
+    try { const r: any = await post("config/backup", {}); toast(r.backup ? "Config backed up" : "Nothing to back up", "ok"); }
+    catch (e) { toast(String(e), "err"); }
+  }
+  async function resetSection(key: string, label: string) {
+    if (!key || !confirm(`Reset all "${label}" settings to defaults? A backup is saved first.`)) return;
+    try {
+      const r: any = await post("config/reset", { section: key });
+      if (r.ok) { toast(`${label} reset to defaults`, "ok"); await load(); }
+      else toast(r.error || "Reset failed", "err");
+    } catch (e) { toast(String(e), "err"); }
+  }
 
   async function load() {
     const [nextCfg, nextSchema] = await Promise.all([api("config"), api("config/schema")]);
@@ -254,6 +280,21 @@ export function ConfigPage() {
   return (
     <>
       <Head count={filtered.length} />
+      <div className="toolbar" style={{ marginBottom: 12 }}>
+        <Button sm variant={yaml ? "primary" : "ghost"} icon="config" onClick={() => (yaml ? setYaml(false) : openYaml())}>
+          {yaml ? "Form view" : "Edit YAML"}
+        </Button>
+        <Button sm variant="ghost" icon="bolt" onClick={backupConfig}>Backup config</Button>
+        {yaml && <Button sm icon="check" onClick={saveYaml}>Save YAML</Button>}
+      </div>
+      {yaml ? (
+        <div className="panel" style={{ padding: 12 }}>
+          <textarea value={raw} onChange={(e) => setRaw(e.target.value)} spellCheck={false}
+            style={{ width: "100%", minHeight: "62vh", fontFamily: "var(--mono)", fontSize: 12, lineHeight: 1.5 }} />
+          <div className="mut" style={{ marginTop: 8 }}>Edits the whole config.yaml. Validated and backed up before saving.</div>
+        </div>
+      ) : (
+      <>
       <div className="panel" style={{ marginBottom: 14 }}>
         <h3>Quick settings</h3>
         <div className="quick-grid">
@@ -324,7 +365,13 @@ export function ConfigPage() {
                 if (!sec) return <div className="card"><div className="empty small">No settings.</div></div>;
                 return (
                   <div className="panel group">
-                    <div className="group-h" style={{ cursor: "default" }}><b>{sec}</b><span className="mut">{groups[sec].length} fields · saves instantly</span></div>
+                    <div className="group-h" style={{ cursor: "default" }}>
+                      <b>{sec}</b>
+                      <span className="row-flex" style={{ gap: 10 }}>
+                        <span className="mut">{groups[sec].length} fields · saves instantly</span>
+                        <Button sm variant="ghost" onClick={() => resetSection((groups[sec][0]?.path || "").split(".")[0], sec)}>Reset section</Button>
+                      </span>
+                    </div>
                     <div className="fields">{groups[sec].map((field) => <FieldRow field={field} key={field.path} />)}</div>
                   </div>
                 );
@@ -341,6 +388,8 @@ export function ConfigPage() {
             </div>
           </div>
         )}
+      </>
+      )}
     </>
   );
 }
