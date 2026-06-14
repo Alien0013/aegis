@@ -116,7 +116,7 @@ def reduce_long_context_tier(provider, exc: Exception, *, target_context: int = 
     if current <= target_context:
         return None
     try:
-        setattr(active, "context_length", target_context)
+        active.context_length = target_context
     except Exception:  # noqa: BLE001
         return None
     return {
