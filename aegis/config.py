@@ -338,6 +338,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "llm_review": True,          # phase-2 aux-model consolidation pass (uses auxiliary.curator)
         "prune_empty_sessions": True,    # session lifecycle: drop empty 'ghost' sessions during maintenance
         "session_retention_days": 7,     # only prune empty sessions untouched this long
+        "prune_spent_cron": True,        # cron lifecycle: retire fired one-shots + jobs past max_runs
         "backup": {
             "enabled": True,
             "keep": 5,               # tar.gz snapshots of skills/ retained before each run

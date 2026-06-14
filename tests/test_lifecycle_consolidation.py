@@ -243,6 +243,35 @@ def test_session_retention_window(home):
     assert s.id in st.prune_empty(older_than_days=0, dry_run=True)       # no window
 
 
+# --- cron job lifecycle ----------------------------------------------------
+
+def test_cron_max_runs_auto_retires_recurring_job(home):
+    """A recurring job retires (disables) itself after max_runs fires (Hermes repeat.times)."""
+    import time
+    from aegis.cron import CronStore
+    st = CronStore()
+    j = st.add(schedule="@every 1h", prompt="ping", max_runs=2)
+    now = time.time()
+    st.record_run(j.id, now, ok=True)
+    assert st.get(j.id).enabled is True and st.get(j.id).run_count == 1
+    st.record_run(j.id, now + 10, ok=True)
+    done = st.get(j.id)
+    assert done.run_count == 2 and done.enabled is False     # retired at the limit
+
+
+def test_cron_prune_spent_removes_dead_jobs(home):
+    import time
+    from aegis.cron import CronStore
+    st = CronStore()
+    spent = st.add(schedule="@every 1h", prompt="x", max_runs=1)
+    st.record_run(spent.id, time.time(), ok=True)            # hits limit -> disabled
+    active = st.add(schedule="@every 1h", prompt="y")        # still running
+    assert spent.id in st.prune_spent(dry_run=True)
+    assert active.id not in st.prune_spent(dry_run=True)
+    st.prune_spent(dry_run=False)
+    assert st.get(spent.id) is None and st.get(active.id) is not None
+
+
 def test_kanban_archived_lifecycle_state(home):
     from aegis.config import Config
     from aegis.tools.base import ToolContext

@@ -48,6 +48,7 @@ class CronJobTool(Tool):
             "skills": {"type": "array", "items": {"type": "string"}},
             "skill": {"type": "string", "description": "Compatibility alias for one skill"},
             "enabled": {"type": "boolean", "description": "Set enabled/paused state on update"},
+            "max_runs": {"type": "integer", "description": "Retire (disable) a recurring job after this many runs (0 = unlimited)"},
             "include_disabled": {"type": "boolean", "description": "Include paused jobs in list (default true)"},
             "service_action": {
                 "type": "string",
@@ -109,6 +110,7 @@ class CronJobTool(Tool):
             skills=skills,
             name=str(args.get("name") or "").strip(),
             no_agent=bool(args.get("no_agent", False)),
+            max_runs=int(args.get("max_runs", 0) or 0),
         )
         data = {
             "success": True,

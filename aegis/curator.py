@@ -734,6 +734,13 @@ def run(config=None, *, dry_run: bool = False) -> dict:
                 older_than_days=retention, dry_run=dry_run)
         except Exception:  # noqa: BLE001 — maintenance must never crash
             pass
+    # ...and retire spent cron jobs (fired one-shots, recurring jobs past max_runs).
+    if config is not None and bool(config.get("curator.prune_spent_cron", True)):
+        try:
+            from .cron import CronStore
+            result["pruned_cron"] = CronStore().prune_spent(dry_run=dry_run)
+        except Exception:  # noqa: BLE001
+            pass
     if not dry_run and do_llm and config is not None:
         result["llm_review"] = llm_review(config, dry_run=False)
     if not dry_run:

@@ -71,6 +71,8 @@ class CronJob:
     last_error: str = ""       # last failure message ("" when healthy)
     next_run: float = 0.0      # epoch of the next expected fire (advisory; computed on each run)
     runs: list = field(default_factory=list)          # recent run records (capped), newest last
+    run_count: int = 0         # total times this job has fired
+    max_runs: int = 0          # >0: retire (disable) the job after this many runs (Hermes repeat.times)
 
 
 _VALID_STATES = {"idle", "running", "ok", "error"}
@@ -228,6 +230,8 @@ def _normalize_job_record(raw: dict, *, index: int = 0, seen: set[str] | None = 
         "last_error": _coerce_text(raw.get("last_error")).strip()[:500],
         "next_run": _coerce_float(raw.get("next_run"), 0.0),
         "runs": runs[-10:],
+        "run_count": max(0, int(_coerce_float(raw.get("run_count"), 0.0))),
+        "max_runs": max(0, int(_coerce_float(raw.get("max_runs"), 0.0))),
     }
 
 
@@ -441,11 +445,11 @@ class CronStore:
 
     def add(self, schedule: str, prompt: str, channel: str = "", script: str = "",
             skills: list[str] | None = None, deliver: str = "", name: str = "",
-            no_agent: bool = False) -> CronJob:
+            no_agent: bool = False, max_runs: int = 0) -> CronJob:
         run_at = _parse_oneshot(schedule, time.time()) or 0.0
         job = CronJob(id=new_id("cron"), schedule=schedule, prompt=prompt, name=name, channel=channel,
                       run_at=run_at, script=script, skills=skills or [], deliver=deliver,
-                      no_agent=no_agent)
+                      no_agent=no_agent, max_runs=max(0, int(max_runs or 0)))
         with _JOBS_LOCK:
             jobs = self._load()
             jobs.append(job.__dict__)
@@ -472,6 +476,27 @@ class CronStore:
             self._save(jobs)
             return True
 
+    def prune_spent(self, *, dry_run: bool = True) -> list[str]:
+        """Retire jobs that have run their course and can never fire again: fired
+        one-shots (``run_at`` set, disabled, already run) and recurring jobs disabled
+        after hitting ``max_runs``. Keeps the cron store from accumulating dead jobs —
+        the cron-side of the lifecycle cleanup the curator runs for skills/sessions.
+        Returns the ids pruned (or that would be, when ``dry_run``)."""
+        with _JOBS_LOCK:
+            jobs = self._load()
+            spent: list[str] = []
+            for j in jobs:
+                if j.get("enabled", True):
+                    continue                       # still active — never prune
+                one_shot_done = bool(j.get("run_at")) and float(j.get("last_run", 0) or 0) > 0
+                hit_limit = (int(j.get("max_runs", 0) or 0) > 0
+                             and int(j.get("run_count", 0) or 0) >= int(j.get("max_runs", 0)))
+                if one_shot_done or hit_limit:
+                    spent.append(j.get("id", ""))
+            if not dry_run and spent:
+                self._save([j for j in jobs if j.get("id") not in spent])
+            return [s for s in spent if s]
+
     def update(self, job_id: str, **updates) -> CronJob | None:
         with _JOBS_LOCK:
             jobs = self._load()
@@ -479,7 +504,7 @@ class CronStore:
             if index is None:
                 return None
             allowed = {"schedule", "prompt", "name", "channel", "enabled", "script", "skills",
-                       "deliver", "no_agent"}
+                       "deliver", "no_agent", "max_runs"}
             now = time.time()
             found = jobs[index]
             for key, value in updates.items():
@@ -532,8 +557,13 @@ class CronStore:
                 j["last_run"] = when
                 j["state"] = "ok" if ok else "error"
                 j["last_error"] = "" if ok else (error or "unknown error")[:500]
+                j["run_count"] = int(j.get("run_count", 0)) + 1
+                max_runs = int(j.get("max_runs", 0) or 0)
                 if j.get("run_at"):              # one-shot is done after a single fire
                     j["enabled"] = False
+                    j["next_run"] = 0.0
+                elif max_runs > 0 and j["run_count"] >= max_runs:
+                    j["enabled"] = False         # recurring job hit its run limit — retire it
                     j["next_run"] = 0.0
                 else:
                     j["next_run"] = _compute_next_run(CronJob(**j), when)
