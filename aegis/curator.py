@@ -26,6 +26,7 @@ from pathlib import Path
 import yaml
 
 from . import config as cfg
+from .skills import validate_skill_name
 from .util import atomic_write, now_iso, read_text
 
 # A skill unused for longer than this is considered stale.
@@ -249,11 +250,16 @@ def _classify_removed(names: list[str]) -> tuple[list[str], list[str]]:
 def pin(name: str, pinned: bool = True) -> None:
     """Pin a skill so the curator never auto-archives it (it can still be improved)."""
     from . import provenance
+    name = validate_skill_name(name)
     provenance.pin(name, pinned)
 
 
 def archive(name: str) -> bool:
     """Move a skill dir from skills/ to skills_archive/. Returns False if absent."""
+    try:
+        name = validate_skill_name(name)
+    except ValueError:
+        return False
     src = cfg.skills_dir() / name
     if not src.is_dir():
         return False
@@ -267,6 +273,10 @@ def archive(name: str) -> bool:
 
 def restore(name: str) -> bool:
     """Move a skill dir back from skills_archive/ to skills/. False if absent."""
+    try:
+        name = validate_skill_name(name)
+    except ValueError:
+        return False
     src = _archive_dir() / name
     if not src.is_dir():
         return False

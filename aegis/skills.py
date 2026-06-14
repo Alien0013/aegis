@@ -17,6 +17,7 @@ Discovery precedence (higher tier shadows same-named lower tier):
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -24,6 +25,33 @@ import yaml
 
 from . import config as cfg
 from .util import read_text
+
+SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+def validate_skill_name(name: str) -> str:
+    value = str(name or "").strip()
+    if not SKILL_NAME_RE.match(value):
+        raise ValueError("skill name must be lowercase-with-hyphens")
+    return value
+
+
+def normalize_skill_name(name: str) -> str:
+    return validate_skill_name(str(name or "").strip().lower())
+
+
+def resolve_skill_relative_path(skill_dir: Path, rel: str) -> Path:
+    candidate = Path(str(rel or ""))
+    if candidate.is_absolute():
+        raise ValueError("path must be relative to the skill directory")
+    if not candidate.parts or any(part in ("", ".", "..") for part in candidate.parts):
+        raise ValueError("path must not contain empty, '.', or '..' components")
+    target = skill_dir / candidate
+    try:
+        target.resolve().relative_to(skill_dir.resolve())
+    except (OSError, ValueError) as exc:
+        raise ValueError("path escapes the skill directory") from exc
+    return target
 
 
 @dataclass
@@ -52,7 +80,7 @@ class Skill:
         return raw.strip()
 
     def reference(self, rel: str) -> str:
-        return read_text(self.dir / rel)
+        return read_text(resolve_skill_relative_path(self.dir, rel))
 
     def satisfied(self) -> tuple[bool, str]:
         """Check requires.env / requires.bins / requires.os gating."""
@@ -255,12 +283,9 @@ class SkillsLoader:
                extra_frontmatter: dict | None = None, origin: str = "user") -> Path:
         """Write a new personal skill. ``origin='agent'`` marks it curatable (self-improvement
         path); ``origin='user'`` (default, manual/CLI) keeps it protected from auto-curation."""
-        import re as _re
         from .util import atomic_write
 
-        name = name.strip().lower()
-        if not _re.match(r"^[a-z0-9]+(?:-[a-z0-9]+)*$", name):
-            raise ValueError("skill name must be lowercase-with-hyphens")
+        name = normalize_skill_name(name)
         d = cfg.skills_dir() / name
         d.mkdir(parents=True, exist_ok=True)
         fm = {"name": name, "description": description.strip(), "version": "1.0.0"}

@@ -15,6 +15,7 @@ import contextvars
 import json
 
 from . import config as cfg
+from .skills import validate_skill_name
 from .util import atomic_write, now_iso, read_text
 
 # Active write-origin for the current execution context. The background review thread
@@ -54,6 +55,7 @@ def _save(data: dict[str, dict]) -> None:
 def record(name: str, origin: str) -> None:
     """origin: 'agent' (curatable) or 'user' (protected)."""
     from ._locks import STORE_LOCK
+    name = validate_skill_name(name)
     with STORE_LOCK:                       # serialize read-modify-write on provenance.json
         data = _load()
         entry = data.setdefault(name, {})
@@ -63,11 +65,16 @@ def record(name: str, origin: str) -> None:
 
 
 def is_agent_created(name: str) -> bool:
+    try:
+        name = validate_skill_name(name)
+    except ValueError:
+        return False
     return _load().get(name, {}).get("origin") == "agent"
 
 
 def pin(name: str, pinned: bool = True) -> None:
     from ._locks import STORE_LOCK
+    name = validate_skill_name(name)
     with STORE_LOCK:
         data = _load()
         data.setdefault(name, {"origin": "user", "at": now_iso()})["pinned"] = pinned
@@ -75,16 +82,28 @@ def pin(name: str, pinned: bool = True) -> None:
 
 
 def is_pinned(name: str) -> bool:
+    try:
+        name = validate_skill_name(name)
+    except ValueError:
+        return False
     return bool(_load().get(name, {}).get("pinned"))
 
 
 def is_bundled(name: str) -> bool:
     from .skills import _bundled_dir
+    try:
+        name = validate_skill_name(name)
+    except ValueError:
+        return False
     return (_bundled_dir() / name / "SKILL.md").exists()
 
 
 def is_hub_installed(name: str) -> bool:
     """Skills installed via the marketplace (~/.aegis/skills/.lock.json)."""
+    try:
+        name = validate_skill_name(name)
+    except ValueError:
+        return False
     raw = read_text(cfg.skills_dir() / ".lock.json")
     try:
         return name in (json.loads(raw) if raw.strip() else {})

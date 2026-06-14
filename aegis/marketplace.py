@@ -24,12 +24,41 @@ from pathlib import Path
 import httpx
 
 from . import config as cfg
+from .skills import validate_skill_name
 from .util import atomic_write, now_iso, read_text
 
-NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 # Curated registry index URLs (well-known agentskills format). Override via config.
 DEFAULT_REGISTRIES = [
     "https://agentskills.io/.well-known/agent-skills/index.json",
+]
+MAX_SKILL_FILE_COUNT = 100
+MAX_SKILL_TOTAL_BYTES = 2 * 1024 * 1024
+MAX_SKILL_SINGLE_FILE_BYTES = 512 * 1024
+SCANNABLE_EXTENSIONS = {
+    ".bash", ".cfg", ".conf", ".css", ".html", ".ini", ".js", ".json", ".md",
+    ".php", ".pl", ".py", ".rb", ".r", ".sh", ".toml", ".ts", ".txt", ".xml",
+    ".yaml", ".yml",
+}
+SUSPICIOUS_BINARY_EXTENSIONS = {
+    ".app", ".bin", ".com", ".dat", ".deb", ".dll", ".dmg", ".dylib", ".exe",
+    ".msi", ".rpm", ".so",
+}
+SKILL_THREAT_PATTERNS = [
+    (re.compile(r"\b(?:curl|wget)\b[^\n]*\$\{?\w*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)", re.I),
+     "network command interpolates a secret environment variable"),
+    (re.compile(r"\b(?:requests|httpx)\.(?:get|post|put|patch)\s*\([^\n]*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)", re.I),
+     "HTTP client code references a secret variable"),
+    (re.compile(r"\bos\.environ\s*\.get\s*\(\s*['\"][^'\"]*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)", re.I),
+     "Python code reads a secret environment variable"),
+    (re.compile(r"\brm\s+-rf\s+/", re.I), "recursive delete from filesystem root"),
+    (re.compile(r"\b(?:nc|ncat)\s+-[lp]|\bsocat\b|/dev/tcp/", re.I),
+     "possible reverse shell or raw network tunnel"),
+    (re.compile(r"\b(?:crontab|systemctl\s+enable|launchctl\s+load)\b", re.I),
+     "modifies persistent startup jobs"),
+    (re.compile(r"authorized_keys|/etc/sudoers|NOPASSWD", re.I),
+     "possible SSH or sudo persistence"),
+    (re.compile(r"AGENTS\.md|CLAUDE\.md|\.cursorrules|\.clinerules|\.codex/config", re.I),
+     "references persistent agent instruction/config files"),
 ]
 
 
@@ -64,9 +93,10 @@ def _validate_skill_dir(d: Path) -> str:
     fm = read_text(md)
     m = re.search(r"name:\s*(.+)", fm)
     name = (m.group(1).strip() if m else d.name)
-    if not NAME_RE.match(name):
-        raise ValueError(f"invalid skill name '{name}' (must be lowercase-with-hyphens)")
-    return name
+    try:
+        return validate_skill_name(name)
+    except ValueError as exc:
+        raise ValueError(f"invalid skill name '{name}' (must be lowercase-with-hyphens)") from exc
 
 
 def _git_clone(repo: str, ref: str | None, subdir: str | None) -> list[Path]:
@@ -88,21 +118,75 @@ def _git_clone(repo: str, ref: str | None, subdir: str | None) -> list[Path]:
     return found[:500]
 
 
-def _scan_skill(skill_dir: Path) -> str | None:
-    """Security-scan a SKILL.md for prompt-injection/exfiltration. Returns a reason if flagged."""
+def _scan_body(body: str, rel: str = "SKILL.md") -> str | None:
     try:
-        from .security_scan import scan_text
-        flagged, reason = scan_text(read_text(skill_dir / "SKILL.md"))
-        return reason if flagged else None
+        from .security_scan import scan_findings, scan_text_findings
+        findings = scan_text_findings(body) + scan_findings(body)
     except Exception:  # noqa: BLE001
-        return None
+        findings = []
+    if findings:
+        return f"{rel}: {findings[0]}"
+    for pattern, reason in SKILL_THREAT_PATTERNS:
+        if pattern.search(body):
+            return f"{rel}: {reason}"
+    return None
+
+
+def _hard_block_skill_tree(skill_dir: Path) -> str | None:
+    """Return a non-overridable install blocker for path escapes."""
+    root = skill_dir.resolve()
+    for path in skill_dir.rglob("*"):
+        if not path.is_symlink():
+            continue
+        try:
+            path.resolve(strict=True).relative_to(root)
+        except FileNotFoundError:
+            return f"{path.relative_to(skill_dir)}: broken symlink"
+        except ValueError:
+            return f"{path.relative_to(skill_dir)}: symlink escapes skill directory"
+    return None
+
+
+def _scan_skill(skill_dir: Path) -> str | None:
+    """Security-scan all text/support files in a skill package."""
+    hard = _hard_block_skill_tree(skill_dir)
+    if hard:
+        return hard
+
+    count = 0
+    total = 0
+    for path in sorted(skill_dir.rglob("*"), key=lambda p: str(p)):
+        if not path.is_file():
+            continue
+        count += 1
+        if count > MAX_SKILL_FILE_COUNT:
+            return f"too many files in skill package (>{MAX_SKILL_FILE_COUNT})"
+        try:
+            size = path.stat().st_size
+        except OSError:
+            continue
+        total += size
+        rel = str(path.relative_to(skill_dir))
+        if size > MAX_SKILL_SINGLE_FILE_BYTES:
+            return f"{rel}: file is too large for a skill package"
+        if path.suffix.lower() in SUSPICIOUS_BINARY_EXTENSIONS:
+            return f"{rel}: suspicious binary file in skill package"
+        if total > MAX_SKILL_TOTAL_BYTES:
+            return f"skill package is too large (>{MAX_SKILL_TOTAL_BYTES // 1024}KB)"
+        if path.suffix.lower() not in SCANNABLE_EXTENSIONS:
+            continue
+        try:
+            reason = _scan_body(path.read_text(encoding="utf-8"), rel)
+        except UnicodeDecodeError:
+            continue
+        if reason:
+            return reason
+    return None
 
 
 def _scan_skill_text(body: str) -> str | None:
     try:
-        from .security_scan import scan_text
-        flagged, reason = scan_text(body)
-        return reason if flagged else None
+        return _scan_body(body, "SKILL.md")
     except Exception:  # noqa: BLE001
         return None
 
@@ -124,6 +208,9 @@ def install(source: str, force: bool = False) -> list[str]:
             raise ValueError(f"no SKILL.md packages under {local}")
         for d in dirs:
             name = _validate_skill_dir(d)
+            hard_block = _hard_block_skill_tree(d)
+            if hard_block:
+                raise ValueError(f"blocked '{name}': security scan flagged ({hard_block})")
             flagged = _scan_skill(d)
             if flagged and not force:
                 print(f"  ⚠ skipped '{name}': security scan flagged ({flagged}); use --force")
@@ -140,8 +227,10 @@ def install(source: str, force: bool = False) -> list[str]:
         body = httpx.get(source, timeout=30, follow_redirects=True).text
         m = re.search(r"name:\s*(.+)", body)
         name = m.group(1).strip() if m else "downloaded-skill"
-        if not NAME_RE.match(name):
-            raise ValueError(f"invalid skill name '{name}' (must be lowercase-with-hyphens)")
+        try:
+            name = validate_skill_name(name)
+        except ValueError as exc:
+            raise ValueError(f"invalid skill name '{name}' (must be lowercase-with-hyphens)") from exc
         flagged = _scan_skill_text(body)
         if flagged and not force:
             print(f"  ⚠ skipped '{name}': security scan flagged ({flagged}); use --force")
@@ -163,6 +252,9 @@ def install(source: str, force: bool = False) -> list[str]:
 
     for skill_dir in _git_clone(repo, ref, subdir):
         name = _validate_skill_dir(skill_dir)
+        hard_block = _hard_block_skill_tree(skill_dir)
+        if hard_block:
+            raise ValueError(f"blocked '{name}': security scan flagged ({hard_block})")
         flagged = _scan_skill(skill_dir)
         if flagged and not force:
             print(f"  ⚠ skipped '{name}': security scan flagged ({flagged}); use --force to install")
@@ -179,6 +271,10 @@ def install(source: str, force: bool = False) -> list[str]:
 
 
 def remove(name: str) -> bool:
+    try:
+        name = validate_skill_name(name)
+    except ValueError:
+        return False
     target = cfg.skills_dir() / name
     if target.exists():
         shutil.rmtree(target)

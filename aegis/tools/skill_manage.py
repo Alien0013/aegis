@@ -10,6 +10,7 @@ import yaml
 
 from .. import config as cfg
 from .. import curator, provenance
+from ..skills import validate_skill_name
 from ..util import atomic_write, read_text
 from .base import Tool, ToolContext, ToolResult
 
@@ -107,6 +108,16 @@ def _require_name(args: dict[str, Any], action: str) -> str | None:
     return name or None
 
 
+def _require_safe_name(args: dict[str, Any], action: str) -> tuple[str | None, ToolResult | None]:
+    name = _require_name(args, action)
+    if not name:
+        return None, _json_error(f"name is required for {action}.")
+    try:
+        return validate_skill_name(name), None
+    except ValueError as exc:
+        return None, _json_error(str(exc))
+
+
 def _resolve_patch_target(skill_dir: Path, file_path: str | None) -> tuple[Path | None, str | None]:
     if not file_path:
         return skill_dir / "SKILL.md", None
@@ -183,9 +194,9 @@ def _create(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
 
 
 def _view(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-    name = _require_name(args, "view")
-    if not name:
-        return _json_error("name is required for view.")
+    name, err = _require_safe_name(args, "view")
+    if err:
+        return err
     skill = ctx.skills.discover().get(name)
     if not skill:
         return _json_error(f"skill '{name}' not found.")
@@ -226,9 +237,9 @@ def _usage(ctx: ToolContext) -> ToolResult:
 
 
 def _patch(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-    name = _require_name(args, "patch")
-    if not name:
-        return _json_error("name is required for patch.")
+    name, err = _require_safe_name(args, "patch")
+    if err:
+        return err
     old = args.get("old_string", args.get("old_text"))
     new = args.get("new_string", args.get("new_text"))
     if not old:
@@ -280,9 +291,9 @@ def _patch(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
 
 
 def _write_file(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-    name = _require_name(args, "write_file")
-    if not name:
-        return _json_error("name is required for write_file.")
+    name, err = _require_safe_name(args, "write_file")
+    if err:
+        return err
     content = args.get("content")
     if content is None:
         return _json_error("content is required for write_file.")
@@ -328,9 +339,9 @@ def _write_file(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
 
 
 def _delete(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
-    name = _require_name(args, "delete")
-    if not name:
-        return _json_error("name is required for delete.")
+    name, err = _require_safe_name(args, "delete")
+    if err:
+        return err
     if provenance.is_pinned(name):
         return _json_error(f"skill '{name}' is pinned; unpin it before delete.")
 
@@ -356,9 +367,10 @@ def _delete(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
 
 
 def _pin(args: dict[str, Any], ctx: ToolContext, pinned: bool) -> ToolResult:
-    name = _require_name(args, "pin" if pinned else "unpin")
-    if not name:
-        return _json_error(f"name is required for {'pin' if pinned else 'unpin'}.")
+    action = "pin" if pinned else "unpin"
+    name, err = _require_safe_name(args, action)
+    if err:
+        return err
     if name not in ctx.skills.discover():
         return _json_error(f"skill '{name}' not found.")
     curator.pin(name, pinned)
