@@ -7,7 +7,7 @@ import json
 
 
 def _serve(cfg):
-    from tests._dashboard_server import serve_app
+    from _dashboard_server import serve_app
     return serve_app(cfg)
 
 

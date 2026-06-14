@@ -502,7 +502,7 @@ def test_dashboard_sse_streams_events(tmp_path, monkeypatch):
     import threading
     import time
     from aegis.config import Config
-    from tests._dashboard_server import serve_app
+    from _dashboard_server import serve_app
     from aegis.eventbus import BUS
 
     cfg = Config.load()
@@ -591,7 +591,7 @@ def test_dashboard_kanban_board(tmp_path, monkeypatch):
     import http.client
     import json
     from aegis.config import Config
-    from tests._dashboard_server import serve_app
+    from _dashboard_server import serve_app
 
     cfg = Config.load()
     cfg.set("dashboard.token", "")
@@ -637,7 +637,7 @@ def test_dashboard_config_redaction_and_cron(tmp_path, monkeypatch):
     import http.client
     import json
     from aegis.config import Config
-    from tests._dashboard_server import serve_app
+    from _dashboard_server import serve_app
     import aegis.agent.agent as am
 
     class A:
@@ -691,7 +691,7 @@ def test_dashboard_models_and_analytics(tmp_path, monkeypatch):
     import http.client
     import json
     from aegis.config import Config
-    from tests._dashboard_server import serve_app
+    from _dashboard_server import serve_app
     from aegis import ratelimit
     from aegis import usage_log
     from aegis.types import Usage
@@ -735,7 +735,7 @@ def test_dashboard_keys_pairing_and_port(tmp_path, monkeypatch):
     import time
     from aegis.config import Config
     from aegis import dashboard
-    from tests._dashboard_server import serve_app
+    from _dashboard_server import serve_app
 
     cfg = Config.load()
     cfg.set("dashboard.token", "")
@@ -788,7 +788,7 @@ def test_dashboard_system_and_logs(tmp_path, monkeypatch):
     import os
     from aegis.config import Config
     from aegis.dashboard import _system_info
-    from tests._dashboard_server import serve_app
+    from _dashboard_server import serve_app
 
     assert {"version", "platform", "disk_total_gb", "checkpoints"} <= set(_system_info())
     cfg = Config.load()
@@ -815,7 +815,7 @@ def test_dashboard_mcp_and_webhooks(tmp_path, monkeypatch):
     import http.client
     import json
     from aegis.config import Config
-    from tests._dashboard_server import serve_app
+    from _dashboard_server import serve_app
     cfg = Config.load()
     cfg.set("dashboard.token", "")
     srv, port = serve_app(cfg)
@@ -840,7 +840,7 @@ def test_dashboard_public_plan_endpoints(tmp_path, monkeypatch):
     import http.client
     import json
     from aegis.config import Config
-    from tests._dashboard_server import serve_app
+    from _dashboard_server import serve_app
     from aegis.session import Session, SessionStore
     from aegis.types import Message, ToolCall
     from aegis.tools.agentic import _REGISTRY, _REG_LOCK, _register
@@ -1114,7 +1114,7 @@ def test_dashboard_kanban_automation(tmp_path, monkeypatch):
     import json
     import time
     from aegis.config import Config
-    from tests._dashboard_server import serve_app
+    from _dashboard_server import serve_app
 
     class FakeResp:
         def __init__(self, c): self.content = c
@@ -1153,7 +1153,7 @@ def test_dashboard_curator_plugins_profiles(tmp_path, monkeypatch):
     import json
     import aegis.config as cfg
     from aegis.config import Config
-    from tests._dashboard_server import serve_app
+    from _dashboard_server import serve_app
     pdir = cfg.workspace_dir() / "personalities"
     pdir.mkdir(parents=True, exist_ok=True)
     (pdir / "pirate.md").write_text("arr")

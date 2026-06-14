@@ -117,7 +117,7 @@ def test_dashboard_serves(monkeypatch):
     import http.client
     from aegis.config import Config
     from aegis.dashboard import _page
-    from tests._dashboard_server import serve_app
+    from _dashboard_server import serve_app
 
     page = _page().decode()
     # the served shell is the React app (api calls live in the bundle) — or the
