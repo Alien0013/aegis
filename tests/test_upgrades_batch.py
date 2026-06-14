@@ -172,6 +172,33 @@ def test_references_ranges_and_sensitive(tmp_path):
     assert "refused" in expand_references("@file:~/.ssh/id_rsa", tmp_path)
 
 
+def test_read_file_blocks_secret_files(tmp_path):
+    from aegis import config as cfg
+    from aegis.config import Config
+    from aegis.tools.base import ToolContext
+    from aegis.tools.builtin import ReadFileTool
+
+    env = tmp_path / ".env"
+    env.write_text("API_KEY=secret\n")
+    example = tmp_path / ".env.example"
+    example.write_text("API_KEY=\n")
+    config = Config.load()
+    ctx = ToolContext(cwd=tmp_path, config=config)
+
+    denied = ReadFileTool().run({"path": ".env"}, ctx)
+    assert denied.is_error and "sensitive path" in denied.content
+    assert not ReadFileTool().run({"path": ".env.example"}, ctx).is_error
+
+    auth = cfg.get_home() / "auth.json"
+    auth.write_text("{}")
+    denied_auth = ReadFileTool().run({"path": str(auth)}, ctx)
+    assert denied_auth.is_error and "agent credential" in denied_auth.content
+
+    config.data["tools"]["sensitive_read_allow"] = [str(env)]
+    allowed = ReadFileTool().run({"path": ".env"}, ctx)
+    assert not allowed.is_error and "API_KEY=secret" in allowed.content
+
+
 # --- snapshots ---------------------------------------------------------------
 def test_snapshot_create_and_restore(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))

@@ -291,6 +291,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "loop_block_after": 5,       # hard-block an identical failing call after N repeats
         "todo_nudge_after": 15,      # remind to update the todo list after N tool uses
         "sensitive_write_allow": [], # absolute paths exempt from file-write safety gating
+        "sensitive_read_allow": [],  # absolute paths exempt from secret-file read gating
         "defer_schemas": True,       # ship rarely-used tools name-only; tool_search loads them
         "deferred": [                # schemas withheld until tool_search activates them
             "generate_image", "cloud_image", "cloud_browser", "dependency_audit",

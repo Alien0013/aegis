@@ -46,6 +46,10 @@ class ReadFileTool(Tool):
                 return ToolResult.error(f"No such file: {path}")
             if path.is_dir():
                 return ToolResult.error(f"{path} is a directory (use list_dir).")
+            from . import file_safety
+            denied = file_safety.authorize_read(path, ctx)
+            if denied:
+                return ToolResult.error(denied)
         try:
             text = fs.read_text(str(path)) if fs else path.read_text(encoding="utf-8", errors="replace")
             lines = text.splitlines()
