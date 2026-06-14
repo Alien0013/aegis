@@ -37,7 +37,7 @@ def test_config_defaults_are_hermes_aligned():
     assert c.get("agent.compression.gateway_hygiene_threshold") == 0.85
     assert c.get("agent.compression.hard_message_limit") == 400
     assert c.get("learn.memory_every") == 10
-    assert c.get("learn.skill_every_iters") == 10
+    assert c.get("learn.skill_every_iters") == 15      # user-configured skill nudge cadence
     assert c.get("curator.archive_after_days") == 90
     assert c.get("curator.interval_hours") == 168
     assert c.get("curator.min_idle_hours") == 2

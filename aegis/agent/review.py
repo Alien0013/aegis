@@ -174,7 +174,7 @@ def maybe_review(agent, tools_this_turn: int) -> bool:
     meta["_turns_since_memory"] = turns
 
     memory_every = int(cfg.get("learn.memory_every", 10) or 0)
-    skill_iters = int(cfg.get("learn.skill_every_iters", 10) or 0)
+    skill_iters = int(cfg.get("learn.skill_every_iters", 15) or 0)
     review_memory = memory_every > 0 and turns >= memory_every
     review_skill = skill_iters > 0 and tools_this_turn >= skill_iters
     if not (review_memory or review_skill):

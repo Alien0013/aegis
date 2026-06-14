@@ -290,8 +290,12 @@ class SkillsLoader:
         d.mkdir(parents=True, exist_ok=True)
         fm = {"name": name, "description": description.strip(), "version": "1.0.0"}
         fm.update(extra_frontmatter or {})
-        front = "\n".join(f"{k}: {v}" if not isinstance(v, (dict, list))
-                          else f"{k}: {yaml.safe_dump(v).strip()}" for k, v in fm.items())
+        # Serialize the whole mapping with yaml.safe_dump so values containing colons,
+        # quotes, or newlines (e.g. "description: Operations: do X") are quoted/escaped
+        # into valid YAML — naive "key: value" interpolation produced unparseable
+        # frontmatter ("mapping values are not allowed here").
+        front = yaml.safe_dump(fm, sort_keys=False, allow_unicode=True,
+                               default_flow_style=False).strip()
         atomic_write(d / "SKILL.md", f"---\n{front}\n---\n\n{body.strip()}\n")
         self.invalidate()
         try:

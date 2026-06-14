@@ -536,9 +536,9 @@ def test_trajectory_auto_capture_wired(tmp_path):
     cfg.data["tools"]["exec_mode"] = "full"
     Agent(config=cfg, provider=FakeProvider(), session=Session.create()).run("hi there")
     assert os.path.exists(c.sub("trajectories.jsonl"))
-    # disabled by default -> nothing written for a fresh home
+    # trajectory capture is enabled by default (user-configured)
     cfg2 = Config.load()
-    assert cfg2.get("trajectory.enabled") is False
+    assert cfg2.get("trajectory.enabled") is True
 
 
 def test_mcp_enabled_flag_respected():

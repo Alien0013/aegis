@@ -6,6 +6,24 @@ import json
 
 
 # --- skills -----------------------------------------------------------------
+def test_skill_create_frontmatter_with_colon_is_valid_yaml():
+    """A description containing a colon must round-trip as valid YAML frontmatter
+    (regression: naive 'key: value' produced 'mapping values are not allowed here')."""
+    import yaml
+
+    from aegis.config import Config
+    from aegis.skills import SkillsLoader
+    sl = SkillsLoader(Config.load())
+    p = sl.create("aegis-operations", "Operations: deploy, monitor, and roll back",
+                  "# aegis-operations\n\nSteps.")
+    raw = p.read_text()
+    fm = yaml.safe_load(raw.split("---")[1])         # the curator/_frontmatter parse path
+    assert fm["name"] == "aegis-operations"
+    assert fm["description"] == "Operations: deploy, monitor, and roll back"
+    # and the loader discovers it without a 'malformed' flag
+    assert "aegis-operations" in {s.name for s in sl.discover().values()}
+
+
 def test_bundled_skills_present():
     from aegis.config import Config
     from aegis.skills import SkillsLoader

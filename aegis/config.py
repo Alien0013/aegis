@@ -351,12 +351,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "subagent_auto_approve": False,  # Hermes parity: child approval prompts auto-deny unless opted in
     },
     "trajectory": {
-        "enabled": False,            # auto-record each turn during agent runs
+        "enabled": True,             # auto-record each turn during agent runs
         "path": "trajectories.jsonl", # output file (relative to AEGIS_HOME unless absolute)
         "format": "jsonl",           # jsonl(native) | openai | hf | sharegpt
         "include_tool_results": True,
         "include_reasoning": False,  # include model reasoning/thinking
-        "compress": False,           # prune/summarize large tool outputs before writing
+        "compress": True,            # prune/summarize large tool outputs before writing
     },
     "display": {
         "reasoning": "summary",      # off | summary | live
@@ -402,7 +402,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "background": True,           # forked self-improvement review after substantial turns (on by default)
         "memory_every": 10,           # run a memory review every N turns (Hermes-aligned)
         "flush_min_turns": 6,          # run a final memory review on session end after N user turns
-        "skill_every_iters": 10,      # run a skill review when a turn used >= N tool iterations (Hermes-aligned)
+        "skill_every_iters": 15,      # run a skill review/creation nudge when a turn used >= N tool iterations
         "auto_apply": True,           # auto-write reviewed MEMORY (low risk); False = queue candidates
         "auto_apply_skills": True,    # auto-write reviewed SKILLS too (full autonomy; False = human-gated)
     },
