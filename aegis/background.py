@@ -51,8 +51,14 @@ class BackgroundManager:
             **(session_meta or {}),
         }
 
+        try:
+            timeout = max(0.0, float(config.get("delegation.child_timeout_seconds", 0) or 0))
+        except (TypeError, ValueError):
+            timeout = 0.0
+
         def _work():
             runner = None
+            watchdog = None
             try:
                 runner = SurfaceRunner(config, cwd=cwd, include_mcp=include_mcp)
                 session = runner.load_or_create_session(
@@ -68,6 +74,16 @@ class BackgroundManager:
                     registry=registry,
                     approver=approver,
                 )
+                if timeout > 0:                  # wall-clock budget: cancel at the next safe point
+                    def _expire(a=agent, t=task):
+                        t.error = t.error or f"child timed out after {timeout:g}s"
+                        try:
+                            a.cancel()
+                        except Exception:  # noqa: BLE001
+                            pass
+                    watchdog = threading.Timer(timeout, _expire)
+                    watchdog.daemon = True
+                    watchdog.start()
                 result = runner.run_prompt(
                     prompt,
                     session=session,
@@ -84,6 +100,8 @@ class BackgroundManager:
                     task.error = f"{type(e).__name__}: {e}"
                     task.status = "error"
             finally:
+                if watchdog is not None:
+                    watchdog.cancel()
                 close = getattr(runner, "close", None)
                 if callable(close):
                     try:

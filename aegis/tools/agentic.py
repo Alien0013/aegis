@@ -90,32 +90,51 @@ def _register_terminal_backend_override(sid: str, backend: str) -> None:
         pass
 
 
+def _delegation_model(config) -> tuple[str, str]:
+    """Default (provider, model) for delegated subagents — config delegation.provider /
+    delegation.model. Lets subagents run on a cheaper/faster model than the parent."""
+    try:
+        provider = str(config.get("delegation.provider", "") or "").strip()
+        model = str(config.get("delegation.model", "") or "").strip()
+    except Exception:  # noqa: BLE001
+        return "", ""
+    return provider, model
+
+
 def _child_config_for_toolsets(config, requested_toolsets):
-    if not requested_toolsets:
+    deleg_provider, deleg_model = _delegation_model(config)
+    if not requested_toolsets and not deleg_provider and not deleg_model:
         return config
     try:
         from ..config import Config
     except Exception:  # noqa: BLE001
         return config
 
-    requested = [
-        str(item).strip()
-        for item in requested_toolsets
-        if isinstance(item, str) and str(item).strip()
-    ]
-    if not requested:
-        requested = _NO_TOOLSETS
-    parent_toolsets = [
-        str(item).strip()
-        for item in (config.get("tools.toolsets", []) or ["core"])
-        if isinstance(item, str) and str(item).strip()
-    ]
-    parent_enabled = set(parent_toolsets)
-    child_toolsets = requested if "all" in parent_enabled else [
-        item for item in requested if item in parent_enabled
-    ]
     data = copy.deepcopy(getattr(config, "data", {}) or {})
-    data.setdefault("tools", {})["toolsets"] = child_toolsets or list(_NO_TOOLSETS)
+    if requested_toolsets:
+        requested = [
+            str(item).strip()
+            for item in requested_toolsets
+            if isinstance(item, str) and str(item).strip()
+        ]
+        if not requested:
+            requested = _NO_TOOLSETS
+        parent_toolsets = [
+            str(item).strip()
+            for item in (config.get("tools.toolsets", []) or ["core"])
+            if isinstance(item, str) and str(item).strip()
+        ]
+        parent_enabled = set(parent_toolsets)
+        child_toolsets = requested if "all" in parent_enabled else [
+            item for item in requested if item in parent_enabled
+        ]
+        data.setdefault("tools", {})["toolsets"] = child_toolsets or list(_NO_TOOLSETS)
+    if deleg_provider or deleg_model:        # run delegated work on the configured model
+        model_cfg = data.setdefault("model", {})
+        if deleg_provider:
+            model_cfg["provider"] = deleg_provider
+        if deleg_model:
+            model_cfg["default"] = deleg_model
     return Config(data)
 
 
@@ -124,6 +143,30 @@ def _max_spawn_depth(config) -> int:
         return max(1, int(config.get("agent.max_spawn_depth", 1) or 1))
     except Exception:  # noqa: BLE001
         return 1
+
+
+def _subagent_concurrency(config) -> int:
+    """How many parallel subagents may run at once. Honors delegation.max_concurrent_children
+    (Hermes name), falling back to the existing agent.subagent_concurrency (default 4)."""
+    for key in ("delegation.max_concurrent_children", "agent.subagent_concurrency"):
+        try:
+            val = config.get(key)
+        except Exception:  # noqa: BLE001
+            val = None
+        if val:
+            try:
+                return max(1, int(val))
+            except (TypeError, ValueError):
+                continue
+    return 4
+
+
+def _child_timeout(config) -> float:
+    """Per-child wall-clock budget in seconds (delegation.child_timeout_seconds); 0 = unlimited."""
+    try:
+        return max(0.0, float(config.get("delegation.child_timeout_seconds", 0) or 0))
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _truthy(value) -> bool:
@@ -462,7 +505,7 @@ class SubagentTool(Tool):
             sid, out = _one(tasks[0])
             return ToolResult.ok(f"{out}\n\n(subagent id: {sid} — pass continue_id to follow up)",
                                  display=f"{atype} subagent finished")
-        cap = max(1, int(config.get("agent.subagent_concurrency", 4) or 1))
+        cap = _subagent_concurrency(config)
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=min(cap, len(tasks))) as ex:
             results = list(ex.map(_one, tasks))
