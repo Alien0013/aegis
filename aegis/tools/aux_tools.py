@@ -66,17 +66,14 @@ class VisionAnalyzeTool(Tool):
         if src.startswith(("http://", "https://")):
             import base64
 
-            import httpx
-            from ..net_safety import guard
-            blocked = guard(src, getattr(ctx, "config", None))
+            from .. import net_safety
+            blocked = net_safety.guard(src, getattr(ctx, "config", None))
             if blocked:
                 raise ValueError(blocked)
-            with httpx.Client(timeout=30, follow_redirects=True,
-                              headers={"User-Agent": "Mozilla/5.0 (AEGIS)"}) as c:
-                r = c.get(src)
-                r.raise_for_status()
-                mime = r.headers.get("content-type", "image/png").split(";")[0]
-                b64 = base64.b64encode(r.content).decode()
+            r = net_safety.request("GET", src, getattr(ctx, "config", None), timeout=30)
+            r.raise_for_status()
+            mime = r.headers.get("content-type", "image/png").split(";")[0]
+            b64 = base64.b64encode(r.content).decode()
             return f"data:{mime};base64,{b64}"
         from ..util import encode_image
         path = Path(src).expanduser()
@@ -109,18 +106,17 @@ class WebExtractTool(Tool):
             return ToolResult.error("url is required.")
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
-        from ..net_safety import guard
-        blocked = guard(url, getattr(ctx, "config", None))
+        from .. import net_safety
+        blocked = net_safety.guard(url, getattr(ctx, "config", None))
         if blocked:
             return ToolResult.error(blocked)
         try:
-            import httpx
-            with httpx.Client(timeout=30, follow_redirects=True,
-                              headers={"User-Agent": "Mozilla/5.0 (AEGIS)"}) as c:
-                r = c.get(url)
-                r.raise_for_status()
-                ctype = r.headers.get("content-type", "")
-                body = r.text
+            r = net_safety.request("GET", url, getattr(ctx, "config", None), timeout=30)
+            r.raise_for_status()
+            ctype = r.headers.get("content-type", "")
+            body = r.text
+        except net_safety.BlockedURL as e:
+            return ToolResult.error(str(e))
         except Exception as e:  # noqa: BLE001
             return ToolResult.error(f"fetch failed: {e}")
         from .builtin import _html_to_text

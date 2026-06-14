@@ -62,8 +62,8 @@ class DownloadTool(Tool):
 
     def run(self, args, ctx: ToolContext) -> ToolResult:
         url = args["url"]
-        from ..net_safety import guard
-        blocked = guard(url, getattr(ctx, "config", None))
+        from .. import net_safety
+        blocked = net_safety.guard(url, getattr(ctx, "config", None))
         if blocked:
             return ToolResult.error(blocked)
         dest = Path(args["path"]) if args.get("path") else \
@@ -71,11 +71,12 @@ class DownloadTool(Tool):
         if not dest.is_absolute():
             dest = ctx.cwd / dest
         try:
-            with httpx.Client(timeout=120, follow_redirects=True) as c:
-                r = c.get(url)
-                r.raise_for_status()
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_bytes(r.content)
+            r = net_safety.request("GET", url, getattr(ctx, "config", None), timeout=120)
+            r.raise_for_status()
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(r.content)
+        except net_safety.BlockedURL as e:
+            return ToolResult.error(str(e))
         except Exception as e:  # noqa: BLE001
             return ToolResult.error(f"download failed: {e}")
         return ToolResult.ok(f"downloaded {len(r.content)} bytes to {dest}", display=f"↓ {dest.name}")
@@ -97,14 +98,16 @@ class HttpRequestTool(Tool):
     }
 
     def run(self, args, ctx: ToolContext) -> ToolResult:
-        from ..net_safety import guard
-        blocked = guard(args["url"], getattr(ctx, "config", None))
+        from .. import net_safety
+        blocked = net_safety.guard(args["url"], getattr(ctx, "config", None))
         if blocked:
             return ToolResult.error(blocked)
         try:
-            with httpx.Client(timeout=60, follow_redirects=True) as c:
-                r = c.request(args.get("method", "GET"), args["url"],
-                              headers=args.get("headers"), content=args.get("body"))
+            r = net_safety.request(args.get("method", "GET"), args["url"],
+                                   getattr(ctx, "config", None), timeout=60,
+                                   headers=args.get("headers"), content=args.get("body"))
+        except net_safety.BlockedURL as e:
+            return ToolResult.error(str(e))
         except Exception as e:  # noqa: BLE001
             return ToolResult.error(f"request failed: {e}")
         return ToolResult(

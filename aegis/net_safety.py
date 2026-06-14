@@ -111,3 +111,38 @@ def guard(url: str, config=None) -> str | None:
         return None
     return (f"blocked for safety: {why}. (SSRF protection — set "
             f"security.allow_private_urls=true to allow private hosts.)")
+
+
+class BlockedURL(Exception):
+    """Raised by :func:`request` when a URL (or a redirect target) is unsafe."""
+
+
+def request(method: str, url: str, config=None, *, headers=None, content=None,
+            timeout: float = 30.0, max_redirects: int = 5):
+    """A guarded HTTP request that re-validates EVERY redirect hop against the SSRF
+    policy. ``httpx`` with ``follow_redirects=True`` would jump to a redirected
+    Location without re-checking it, so a public URL could 302 to a private/metadata
+    host. We follow manually and call :func:`guard` on each hop. Returns the final
+    ``httpx.Response``; raises :class:`BlockedURL` if any hop is unsafe."""
+    import httpx
+
+    reason = guard(url, config)
+    if reason:
+        raise BlockedURL(reason)
+    method = method.upper()
+    current = url
+    with httpx.Client(timeout=timeout, follow_redirects=False,
+                      headers={"User-Agent": "Mozilla/5.0 (AEGIS)", **(headers or {})}) as client:
+        for _ in range(max_redirects + 1):
+            resp = client.request(method, current, content=content)
+            location = resp.headers.get("location") if resp.is_redirect else None
+            if not location:
+                return resp
+            nxt = str(resp.url.join(location))
+            reason = guard(nxt, config)
+            if reason:
+                raise BlockedURL(reason)
+            current = nxt
+            if resp.status_code in (301, 302, 303) and method not in ("GET", "HEAD"):
+                method, content = "GET", None
+    raise BlockedURL("too many redirects")

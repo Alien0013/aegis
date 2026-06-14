@@ -50,7 +50,9 @@ def test_config_reset_section():
 
 def test_config_backup_now_creates_file():
     cfg = _cfg()
-    cfg.set("model.provider", "anthropic")
+    # Use a genuinely non-default value so the delta-only save writes a non-empty
+    # config.yaml (setting a value equal to its default is now a no-op on disk).
+    cfg.set("agent.max_iterations", 999)
     res = dash._config_backup_now()
     assert res["ok"] and res["backup"].endswith(".yaml.bak")
     from pathlib import Path

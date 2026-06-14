@@ -512,9 +512,11 @@ class Config:
         return cls(_deep_merge(DEFAULT_CONFIG, user))
 
     def save(self) -> None:
-        # Only persist keys that differ from defaults would be ideal; for clarity
-        # we persist the full effective config.
-        atomic_write(config_path(), yaml.safe_dump(self.data, sort_keys=False))
+        # Persist only the delta from defaults (user overrides + custom keys), not
+        # the full merged tree. Writing the whole tree would freeze every default
+        # into config.yaml, silently masking future upgrades that change defaults.
+        delta = _config_delta(self.data, DEFAULT_CONFIG)
+        atomic_write(config_path(), yaml.safe_dump(delta, sort_keys=False) if delta else "")
 
     def get(self, dotted: str, default: Any = None) -> Any:
         node: Any = self.data
@@ -541,6 +543,23 @@ class Config:
         node[parts[-1]] = _coerce(value)
         self.save()
         return f"config.yaml ({dotted})"
+
+
+def _config_delta(data: dict, defaults: dict) -> dict:
+    """Return only the entries of ``data`` that differ from ``defaults`` (recursing
+    into nested dicts). Keys not present in defaults are kept verbatim. This is what
+    gets written to config.yaml so the file holds overrides only, like Hermes."""
+    out: dict[str, Any] = {}
+    for key, value in data.items():
+        if key not in defaults:
+            out[key] = value
+        elif isinstance(value, dict) and isinstance(defaults[key], dict):
+            sub = _config_delta(value, defaults[key])
+            if sub:
+                out[key] = sub
+        elif value != defaults[key]:
+            out[key] = value
+    return out
 
 
 def _coerce(value: Any) -> Any:

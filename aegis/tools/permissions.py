@@ -29,6 +29,14 @@ HARDLINE_PATTERNS = [
 
 _DANGER_TARGETS = {"/", "~", "/*", "$HOME", "/.", "~/", "/root", "/home"}
 
+# Shell operators that chain separate commands — allowlist matching splits on these
+# so every chained command must independently match (no bypass via `&&`/`|`/`;`).
+_SHELL_SPLIT_RE = re.compile(r"&&|\|\||[;|\n]")
+
+
+def _command_segments(command: str) -> list[str]:
+    return [seg.strip() for seg in _SHELL_SPLIT_RE.split(command) if seg.strip()]
+
 
 def _dangerous_rm(cmd: str) -> bool:
     """Catch a recursive+force rm aimed at a catastrophic target, in any flag order."""
@@ -101,15 +109,26 @@ class PermissionEngine:
         return str(args.get("command") or args.get("cmd") or tool.name).strip()
 
     def _matches_allowlist(self, tool: Tool, args: dict) -> bool:
-        target = self._target(tool, args)
-        # Runtime allow-always grants (added when the user picks "always" at a prompt);
-        # session-scoped, never persisted unless the user also edits config.
-        runtime = getattr(self, "_runtime_allow", None)
-        if runtime and (target in runtime or any(target.startswith(p) for p in runtime)):
-            return True
-        if not self.allowlist:
+        prefixes = list(self.allowlist) + list(getattr(self, "_runtime_allow", None) or set())
+        if not prefixes:
             return False
-        return any(target.startswith(prefix) for prefix in self.allowlist)
+        command = str(args.get("command") or args.get("cmd") or "").strip()
+        if not command:
+            # Non-shell tool: match against the tool name as before.
+            return any(tool.name == p or tool.name.startswith(p) for p in prefixes)
+        # Command substitution can smuggle an arbitrary command inside an allowlisted
+        # one (`git log $(rm -rf x)`), so never prefix-allow when it's present.
+        if "$(" in command or "`" in command or "<(" in command:
+            return False
+        # Allowlist auto-approval requires EVERY shell segment to match — otherwise
+        # `git log && rm -rf ~` would slip through on the `git ` prefix (chaining bypass).
+        segments = _command_segments(command)
+        if not segments:
+            return False
+        return all(
+            any(seg == p.strip() or seg.startswith(p) for p in prefixes)
+            for seg in segments
+        )
 
     def allow_always(self, tool: Tool, args: dict) -> None:
         """Remember this tool/command so ``ask`` mode stops re-prompting for it this session."""

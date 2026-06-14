@@ -815,17 +815,17 @@ class WebFetchTool(Tool):
         url = args["url"]
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
-        from ..net_safety import guard
-        blocked = guard(url, getattr(ctx, "config", None))
+        from .. import net_safety
+        blocked = net_safety.guard(url, getattr(ctx, "config", None))
         if blocked:
             return ToolResult.error(blocked)
         try:
-            with httpx.Client(timeout=30, follow_redirects=True,
-                              headers={"User-Agent": "Mozilla/5.0 (AEGIS)"}) as c:
-                r = c.get(url)
-                r.raise_for_status()
-                ctype = r.headers.get("content-type", "")
-                body = r.text
+            r = net_safety.request("GET", url, getattr(ctx, "config", None), timeout=30)
+            r.raise_for_status()
+            ctype = r.headers.get("content-type", "")
+            body = r.text
+        except net_safety.BlockedURL as e:
+            return ToolResult.error(str(e))
         except Exception as e:  # noqa: BLE001
             return ToolResult.error(f"fetch failed: {e}")
         text = _html_to_text(body) if "html" in ctype else body
