@@ -39,10 +39,15 @@ class DiscordAdapter(BasePlatformAdapter):
                 return
             if self.allowed and str(message.author.id) not in self.allowed:
                 return
+            reference = getattr(message, "reference", None)
+            replied = getattr(reference, "resolved", None) if reference is not None else None
             ev = MessageEvent(
                 platform="discord", chat_id=str(message.channel.id),
                 text=message.content, user_id=str(message.author.id),
                 user_name=str(message.author),
+                message_id=str(getattr(message, "id", "") or "") or None,
+                reply_to_message_id=str(getattr(replied, "id", "") or "") or None,
+                reply_to_text=getattr(replied, "content", None),
             )
             ev._discord_channel = message.channel
             ev._discord_loop = self._loop

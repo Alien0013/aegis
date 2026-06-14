@@ -76,12 +76,16 @@ class TelegramAdapter(BasePlatformAdapter):
                 if self.allowed and not (names & self.allowed):
                     self.send(str(msg["chat"]["id"]), "⛔ not authorized.")
                     continue
+                reply_to = msg.get("reply_to_message") or {}
                 ev = MessageEvent(
                     platform="telegram",
                     chat_id=str(msg["chat"]["id"]),
                     text=_with_group_context(msg),   # prefix sender in groups; DMs untouched
                     user_id=user_id,
                     user_name=username,
+                    message_id=str(msg.get("message_id") or "") or None,
+                    reply_to_message_id=str(reply_to.get("message_id") or "") or None,
+                    reply_to_text=reply_to.get("text") or reply_to.get("caption"),
                 )
                 self._submit_inbound(ev, raw_text=msg["text"])
 

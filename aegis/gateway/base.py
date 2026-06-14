@@ -21,6 +21,8 @@ class MessageEvent:
     user_name: str | None = None
     thread_id: str | None = None
     message_id: str | None = None
+    reply_to_message_id: str | None = None
+    reply_to_text: str | None = None
     session_key: str | None = None
     internal: bool = False
     attachments: list[dict] = field(default_factory=list)
@@ -231,6 +233,8 @@ class BasePlatformAdapter:
                     "user_name": ev.user_name or "",
                     "thread_id": ev.thread_id or "",
                     "message_id": ev.message_id or "",
+                    "reply_to_message_id": ev.reply_to_message_id or "",
+                    "has_reply_context": bool(ev.reply_to_text),
                     "session_key": ev.session_key or "",
                     "internal": bool(ev.internal),
                     "attachment_count": len(ev.attachments or []),

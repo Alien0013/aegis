@@ -53,6 +53,7 @@ class MatrixAdapter(BasePlatformAdapter):
                     platform="matrix", chat_id=room.room_id,
                     text=event.body, user_id=event.sender,
                     user_name=room.user_name(event.sender),
+                    message_id=str(getattr(event, "event_id", "") or "") or None,
                 )
                 self._submit_inbound(ev)
 

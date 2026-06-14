@@ -141,6 +141,64 @@ def test_agent_cache_eviction_closes_cached_agent(tmp_path, monkeypatch):
     assert closed == [(key1, "end"), (key1, "memory"), (key1, "transport")]
 
 
+def test_gateway_reply_context_prefixes_prompt(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from aegis.gateway.base import MessageEvent
+    from aegis.types import Message
+    import aegis.gateway.runner as rmod
+
+    r = _runner(tmp_path, monkeypatch)
+    captured = {}
+
+    class FakeAgent:
+        def __init__(self, session):
+            self.session = session
+            self.budget = SimpleNamespace(api_call_count=0)
+
+    monkeypatch.setattr(rmod.Agent, "create",
+                        staticmethod(lambda *args, **kwargs: FakeAgent(kwargs["session"])))
+
+    def fake_run_prompt(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return SimpleNamespace(message=Message.assistant("ok"), session=kwargs["session"])
+
+    monkeypatch.setattr(r._surface_runner, "run_prompt", fake_run_prompt)
+    ev = MessageEvent(
+        platform="telegram",
+        chat_id="c1",
+        text="What's the best time to go?",
+        user_id="u1",
+        user_name="alien",
+        reply_to_message_id="42",
+        reply_to_text="Japan is great for culture, food, and efficiency.",
+    )
+
+    assert r.dispatch(ev) == "ok"
+    assert captured["prompt"].startswith(
+        '[Replying to: "Japan is great for culture, food, and efficiency."]\n'
+    )
+    assert "What's the best time to go?" in captured["prompt"]
+
+
+def test_reply_pointer_truncates_and_escapes_quotes():
+    from aegis.gateway.base import MessageEvent
+    from aegis.gateway.runner import _with_reply_pointer
+
+    ev = MessageEvent(
+        platform="telegram",
+        chat_id="c1",
+        text="follow up",
+        reply_to_text='"' + ("x" * 800),
+    )
+
+    out = _with_reply_pointer(ev, "follow up")
+
+    assert out.startswith('[Replying to: "\\"' + ("x" * 499) + '"]')
+    assert "x" * 500 not in out
+    assert out.endswith("\nfollow up")
+
+
 def test_model_session_override(tmp_path, monkeypatch):
     r = _runner(tmp_path, monkeypatch)
     key = r._key(_ev("x"))

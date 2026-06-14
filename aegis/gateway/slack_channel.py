@@ -38,6 +38,7 @@ class SlackAdapter(BasePlatformAdapter):
                 platform="slack", chat_id=event["channel"],
                 text=event.get("text", ""), user_id=event.get("user"),
                 thread_id=event.get("thread_ts"),
+                message_id=str(event.get("ts") or "") or None,
             )
             self._submit_inbound(ev)
 

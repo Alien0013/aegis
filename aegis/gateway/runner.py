@@ -17,6 +17,16 @@ def _sync_control_session(proxy, session: Session, reply: str) -> str:
     return reply
 
 
+def _with_reply_pointer(ev: MessageEvent, text: str, *, limit: int = 500) -> str:
+    quoted = " ".join(str(getattr(ev, "reply_to_text", "") or "").split())
+    if not quoted:
+        return text
+    if len(quoted) > limit:
+        quoted = quoted[:limit]
+    quoted = quoted.replace('"', '\\"')
+    return f'[Replying to: "{quoted}"]\n{text}'
+
+
 class GatewayRunner:
     """Hub-and-spoke. Each (platform, chat[, user]) maps to one persistent session."""
 
@@ -444,6 +454,7 @@ class GatewayRunner:
 
         # Voice memos / audio attachments -> transcribe and prepend.
         text = self._maybe_transcribe(ev, text)
+        text = _with_reply_pointer(ev, text)
 
         # Very first message ever -> one-shot, consent-gated profile-build offer.
         if not is_internal:
