@@ -67,6 +67,9 @@ SLASH_COMMANDS = (
     SlashCommand("/branch", "sessions", "fork this conversation into a named child session", "/branch [title]"),
     SlashCommand("/new", "sessions", "start a fresh session"),
     SlashCommand("/clear", "sessions", "start a fresh session"),
+    SlashCommand("/plan", "planning", "draft a plan without making changes", "/plan <task>"),
+    SlashCommand("/proceed", "planning", "execute the plan from the last /plan"),
+    SlashCommand("/context", "context", "show the token budget breakdown (system, history, tools)"),
     SlashCommand("/compress", "context", "compact context now", "/compress [here N|focus topic]"),
     SlashCommand("/retry", "context", "rerun the last user turn"),
     SlashCommand("/undo", "context", "remove the last user turn and its response"),
@@ -476,6 +479,69 @@ def _context_window(agent: Any) -> dict[str, int]:
     return {"used": used, "window": window, "remaining": remaining, "percent": percent}
 
 
+def _context_breakdown(agent: Any) -> dict[str, Any]:
+    """Token accounting for the active context window: system prompt (with its parts),
+    conversation history, and the live tool schemas — so the user can see what fills the window."""
+    import json
+
+    from ..agent.compaction import estimated_tokens
+    from ..util import estimate_tokens
+
+    session = getattr(agent, "session", None)
+    msgs = list(getattr(session, "messages", []) or [])
+    window = int(getattr(getattr(agent, "provider", None), "context_length", 0) or 0)
+    sys_msg = msgs[0] if msgs and msgs[0].role == "system" else None
+    system = estimate_tokens(sys_msg.content) if sys_msg and sys_msg.content else 0
+    non_system = [m for m in msgs if m.role != "system"]
+    history = int(estimated_tokens(non_system))
+    parts = [
+        {"name": p.get("name", "?"), "tier": p.get("tier", ""), "tokens": int(p.get("tokens", 0) or 0)}
+        for p in (getattr(session, "meta", {}) or {}).get("prompt_parts", []) or []
+    ]
+    tools = tool_count = 0
+    try:
+        sel = agent.registry.available(
+            agent.config.get("tools.toolsets", ["core"]),
+            disabled=agent.config.get("tools.disabled", []),
+        )
+        tool_count = len(sel)
+        schemas = agent.registry.schemas(sel)
+        tools = int(estimate_tokens(json.dumps(
+            schemas, default=lambda o: getattr(o, "__dict__", str(o)))))
+    except Exception:  # noqa: BLE001
+        pass
+    used = system + history + tools
+    return {"window": window, "system": system, "history": history, "tools": tools,
+            "tool_count": tool_count, "parts": parts, "used": used, "messages": len(non_system)}
+
+
+def _render_context(agent: Any) -> list[str]:
+    b = _context_breakdown(agent)
+    win = b["window"]
+    rows = [
+        ("system prompt", b["system"], f"{len(b['parts'])} parts"),
+        ("conversation", b["history"], f"{b['messages']} messages"),
+        ("tool schemas", b["tools"], f"{b['tool_count']} enabled"),
+    ]
+    peak = max(1, max(v for _, v, _ in rows))
+    lines: list[str] = []
+    if win:
+        pct = int(100 * b["used"] / max(1, win))
+        lines.append(f"Context window — {_fmt_token_count(b['used'])} / {_fmt_token_count(win)} ({pct}%)")
+        free = max(0, win - b["used"])
+        fill = min(28, round(28 * b["used"] / win))
+        lines.append("  [" + "█" * fill + "·" * (28 - fill) + f"]  {_fmt_token_count(free)} free")
+    else:
+        lines.append(f"Context — {_fmt_token_count(b['used'])} tokens (window unknown)")
+    for label, val, note in rows:
+        bar = "▇" * max(1, round(16 * val / peak)) if val else ""
+        lines.append(f"  {label:<14} {_fmt_token_count(val):>8}  {bar} {note}")
+    big = sorted(b["parts"], key=lambda p: -p["tokens"])[:5]
+    if big:
+        lines.append("  largest prompt parts: " + ", ".join(f"{p['name']} {_fmt_token_count(p['tokens'])}" for p in big))
+    return lines
+
+
 def _record_terminal_run(agent: Any, run: Any) -> None:
     meta = getattr(getattr(agent, "session", None), "meta", None)
     if not isinstance(meta, dict):
@@ -615,8 +681,41 @@ def banner(agent: Agent) -> None:
               f"{agent.config.get('tools.exec_mode', 'auto')}")
         print(f"cwd: {agent.cwd}")
         print("Control plane:  aegis ui (web dashboard)")
-        print("Try: /help · @file · #remember · /goal · /quit")
+        print("Try: /help · @file · #remember · /plan · /context · /quit")
         print("=" * 60)
+
+
+def handle_plan_command(text: str, agent: Any) -> str | None:
+    """Plan mode. ``/plan <task>`` runs a planning turn (investigate read-only, draft a numbered
+    plan, change nothing) and stashes the task; ``/proceed`` runs the stashed task for real.
+    Returns the prompt to run as this turn, or None when there's nothing to run."""
+    parts = text.strip().split(maxsplit=1)
+    name = parts[0].lower()
+    arg = parts[1].strip() if len(parts) > 1 else ""
+    meta = getattr(getattr(agent, "session", None), "meta", None)
+    if name == "/plan":
+        if not arg:
+            _out("usage: /plan <task> — draft a plan first, then /proceed to execute", style="yellow")
+            return None
+        if isinstance(meta, dict):
+            meta["pending_plan"] = arg
+        _out("📋 plan mode — drafting a plan (no changes yet). Review, then /proceed.", style="cyan")
+        return (
+            "<system-reminder>PLAN MODE. Produce a concise, numbered step-by-step plan for the task "
+            "below. You MAY investigate with read-only tools (read/search/list), but do NOT edit "
+            "files, run side-effecting commands, or make any changes yet. End by telling the user to "
+            "run /proceed to execute.</system-reminder>\n\n" + arg
+        )
+    # /proceed
+    task = meta.pop("pending_plan", "") if isinstance(meta, dict) else ""
+    if not task:
+        _out("nothing to proceed with — run /plan <task> first", style="yellow")
+        return None
+    _out("▶ executing the approved plan…", style="green")
+    return (
+        "<system-reminder>The user approved the plan. Execute it now end-to-end — make the changes "
+        "and run the commands needed to finish, then verify.</system-reminder>\n\n" + task
+    )
 
 
 def handle_goal_command(
@@ -1144,6 +1243,9 @@ def handle_slash(
             _out(f"reasoning effort → {value}", style="green")
         else:
             _out("usage: /reasoning off|none|summary|live|minimal|low|medium|high|xhigh")
+    elif name == "/context":
+        for line in _render_context(agent):
+            _out(line)
     elif name == "/busy":
         mode = arg or agent.config.get("gateway.busy_mode", "queue")
         if mode not in ("queue", "steer", "interrupt"):
@@ -1641,7 +1743,12 @@ def interactive(config: Config, *, model=None, provider_name=None,
                 continue
             if quick_memory(user, agent):    # '#' saves a memory instantly, no model turn
                 continue
-            if user.startswith(("/goal", "/subgoal")):
+            if user.startswith(("/plan", "/proceed")):
+                plan_prompt = handle_plan_command(user, agent)
+                if not plan_prompt:
+                    continue
+                user = plan_prompt   # run the planning/execution turn
+            elif user.startswith(("/goal", "/subgoal")):
                 goal_prompt = handle_goal_command(user, agent, store)
                 if not goal_prompt:
                     continue
