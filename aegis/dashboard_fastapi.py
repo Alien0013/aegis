@@ -1426,6 +1426,10 @@ def _api_post(path: str, body: dict, config: Config, chat_runner: Any) -> dict:
         return {"error": "unknown system action"}
     if path == "/api/ops":
         return dash._ops_action(str(body.get("action") or ""), body, config)
+    if path == "/api/tools":
+        if body.get("toolset") is not None:
+            return dash._dashboard_toolset_toggle(body, config)
+        return dash._dashboard_tool_toggle(body, config)
     if path == "/api/session":
         act = body.get("action")
         sid = (body.get("id") or body.get("session_id") or "").strip()

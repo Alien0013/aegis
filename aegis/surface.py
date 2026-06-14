@@ -1004,7 +1004,7 @@ def tool_inventory(config: Config) -> ToolInventory:
 
     reg = default_registry()
     toolsets = list(config.get("tools.toolsets", []) or ["core"])
-    enabled = reg.available(toolsets)
+    enabled = reg.available(toolsets, disabled=config.get("tools.disabled", []))
     enabled_ids = {id(t) for t in enabled}
     disabled_sets: dict[str, int] = {}
     for tool in reg.all():

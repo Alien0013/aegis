@@ -49,12 +49,18 @@ class ToolRegistry:
     def all(self) -> list[Tool]:
         return list(self._tools.values())
 
-    def available(self, toolsets: list[str], *, only_usable: bool = True) -> list[Tool]:
+    def available(self, toolsets: list[str], *, only_usable: bool = True,
+                  disabled: list[str] | set[str] | None = None) -> list[Tool]:
         """Tools in the enabled toolsets. With ``only_usable`` (default) also drops tools
-        whose environment deps are missing, so the model never sees a tool it can't run."""
+        whose environment deps are missing, so the model never sees a tool it can't run.
+        ``disabled`` is a per-tool denylist (config ``tools.disabled``) that hides individual
+        tools even when their toolset is active — the dashboard's per-tool on/off switch."""
         enabled = set(toolsets) or {"core"}
+        deny = set(disabled or ())
         out = []
         for t in self._tools.values():
+            if t.name in deny:
+                continue
             if not (t.toolset in enabled or "all" in enabled):
                 continue
             if only_usable and not t.available()[0]:

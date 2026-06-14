@@ -209,7 +209,7 @@ class Agent:
                 auth_state = "unknown"
 
         toolsets = list(self.config.get("tools.toolsets", ["core"]) or ["core"])
-        enabled_tools = self.registry.available(toolsets)
+        enabled_tools = self.registry.available(toolsets, disabled=self.config.get("tools.disabled", []))
         recall_guidance = ""
         if any(tool.name == "session_search" for tool in enabled_tools):
             recall_guidance = (

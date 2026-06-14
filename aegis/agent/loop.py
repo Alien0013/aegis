@@ -1256,7 +1256,10 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
             except Exception:  # noqa: BLE001
                 pass
 
-    available = agent.registry.available(agent.config.get("tools.toolsets", ["core"]))
+    available = agent.registry.available(
+        agent.config.get("tools.toolsets", ["core"]),
+        disabled=agent.config.get("tools.disabled", []),
+    )
 
     def _live_schemas():
         """Schemas for this iteration — deferred tools ship name-only (system-prompt

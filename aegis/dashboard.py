@@ -156,26 +156,71 @@ def _dashboard_tools(config: Config) -> dict:
 
     reg = default_registry()
     toolsets = list(config.get("tools.toolsets", []) or ["core"])
-    enabled = {t.name for t in reg.available(toolsets, only_usable=False)}
+    disabled = set(config.get("tools.disabled", []) or [])
+    enabled = {t.name for t in reg.available(toolsets, only_usable=False, disabled=disabled)}
     rows = []
     for tool in reg.all():
         available, reason = tool.available()
+        in_toolset = tool.toolset in toolsets or "all" in toolsets
         rows.append({
             "name": tool.name,
             "description": tool.description.splitlines()[0] if tool.description else "",
             "groups": list(tool.groups or []),
             "toolset": tool.toolset,
             "enabled": tool.name in enabled,
+            "toolset_active": in_toolset,
+            "off": tool.name in disabled,            # explicitly switched off (vs toolset inactive)
             "available": bool(available),
             "unavailable_reason": "" if available else str(reason),
             "schema": _jsonable(tool.schema()),
         })
     return {
         "toolsets": toolsets,
+        "disabled": sorted(disabled),
         "deny_groups": list(config.get("tools.deny_groups", []) or []),
         "allowlist": list(config.get("tools.allowlist", []) or []),
         "tools": sorted(rows, key=lambda row: (row["toolset"], row["name"])),
     }
+
+
+def _dashboard_tool_toggle(body: dict, config: Config) -> dict:
+    """Turn an individual tool on/off from the dashboard. Disabling adds the tool to the
+    ``tools.disabled`` denylist; enabling removes it and, if the tool's toolset isn't active,
+    activates that toolset so the switch actually makes the tool model-visible."""
+    from .tools.registry import default_registry
+
+    name = str(body.get("name") or "").strip()
+    if not name:
+        return {"ok": False, "error": "tool name required"}
+    tool = default_registry().get(name)
+    if tool is None:
+        return {"ok": False, "error": f"unknown tool: {name}"}
+    enable = bool(body.get("enabled"))
+    disabled = [t for t in (config.get("tools.disabled", []) or []) if t != name]
+    toolsets = list(config.get("tools.toolsets", []) or ["core"])
+    if enable:
+        if tool.toolset not in toolsets and "all" not in toolsets:
+            toolsets.append(tool.toolset)
+            config.set("tools.toolsets", toolsets)
+    else:
+        disabled.append(name)
+    config.set("tools.disabled", sorted(set(disabled)))
+    return {"ok": True, "name": name, "enabled": enable, "toolsets": toolsets}
+
+
+def _dashboard_toolset_toggle(body: dict, config: Config) -> dict:
+    """Enable or disable a whole toolset (the bulk switch on each Tools group)."""
+    name = str(body.get("toolset") or "").strip()
+    if not name:
+        return {"ok": False, "error": "toolset required"}
+    enable = bool(body.get("enabled"))
+    toolsets = list(config.get("tools.toolsets", []) or ["core"])
+    if enable and name not in toolsets:
+        toolsets.append(name)
+    elif not enable:
+        toolsets = [t for t in toolsets if t != name]
+    config.set("tools.toolsets", toolsets)
+    return {"ok": True, "toolset": name, "enabled": enable, "toolsets": toolsets}
 
 
 def _dashboard_status(config: Config) -> dict:
