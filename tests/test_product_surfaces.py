@@ -1957,6 +1957,62 @@ def test_manifest_plugin_enable_disable_and_remove(tmp_path):
     assert plugins.list_manifests(cfg) == []
 
 
+def test_plugin_module_is_registered_during_import_and_cleaned_up():
+    import sys
+    from aegis import config as cfg_paths
+    from aegis import plugins
+    from aegis.config import Config
+
+    cfg = Config.load()
+    base = cfg_paths.sub("plugins")
+    base.mkdir(parents=True, exist_ok=True)
+    path = base / "module_probe.py"
+    path.write_text(
+        "import sys\n"
+        "SEEN_DURING_IMPORT = __name__ in sys.modules\n"
+        "def register(api):\n"
+        "    class T:\n"
+        "        name='module_probe_tool'\n"
+        "        seen_during_import=SEEN_DURING_IMPORT\n"
+        "    api.register_tool(T())\n",
+        encoding="utf-8",
+    )
+
+    plugins.clear_runtime_cache()
+    module_name = plugins._module_name_for(path)
+    api = plugins.load_plugins(config=cfg)
+
+    assert api.tools[0].seen_during_import is True
+    assert module_name in sys.modules
+    plugins.clear_runtime_cache()
+    assert module_name not in sys.modules
+
+
+def test_manifest_plugin_entrypoint_cannot_escape_package_dir():
+    from aegis import config as cfg_paths
+    from aegis import plugins
+    from aegis.config import Config
+
+    cfg = Config.load()
+    base = cfg_paths.sub("plugins")
+    pkg = base / "escape_pkg"
+    pkg.mkdir(parents=True, exist_ok=True)
+    (cfg_paths.sub("escape.py")).write_text(
+        "def register(api):\n"
+        "    class T: name='escape_tool'\n"
+        "    api.register_tool(T())\n",
+        encoding="utf-8",
+    )
+    (pkg / "plugin.json").write_text(
+        '{"name":"escape","entrypoint":"../../escape.py"}',
+        encoding="utf-8",
+    )
+
+    manifest = next(m for m in plugins.list_manifests(cfg) if m.name == "escape")
+    assert manifest.entrypoint is None
+    assert "escape_tool" not in {t.name for t in plugins.load_plugins(config=cfg).tools}
+
+
 def test_plugin_enable_does_not_allowlist_unrelated_plugins():
     from aegis import config as cfg_paths
     from aegis import plugins

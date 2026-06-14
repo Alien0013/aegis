@@ -19,6 +19,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from .base import BasePlatformAdapter, Dispatch, MessageEvent
 
 
+def _max_channel_webhook_bytes() -> int:
+    try:
+        value = int(os.environ.get("WEBHOOK_CHANNEL_MAX_BYTES", "10000000") or "10000000")
+    except (TypeError, ValueError):
+        return 10_000_000
+    return value if value > 0 else 10_000_000
+
+
+MAX_CHANNEL_WEBHOOK_BYTES = _max_channel_webhook_bytes()
+
+
 class WebhookChannel(BasePlatformAdapter):
     name = "webhook"
 
@@ -40,7 +51,16 @@ class WebhookChannel(BasePlatformAdapter):
                     self.send_response(401)
                     self.end_headers()
                     return
-                n = int(self.headers.get("content-length", 0))
+                try:
+                    n = int(self.headers.get("content-length", 0) or 0)
+                except (TypeError, ValueError):
+                    self.send_response(400)
+                    self.end_headers()
+                    return
+                if n < 0 or n > MAX_CHANNEL_WEBHOOK_BYTES:
+                    self.send_response(413 if n > MAX_CHANNEL_WEBHOOK_BYTES else 400)
+                    self.end_headers()
+                    return
                 try:
                     body = json.loads(self.rfile.read(n) or b"{}")
                 except json.JSONDecodeError:

@@ -26,6 +26,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from . import config as cfg
 from .util import atomic_write, read_text, truncate
 
+MAX_WEBHOOK_BYTES = 10_000_000
+
 
 def _webhooks_path():
     return cfg.sub("webhooks.json")
@@ -46,7 +48,20 @@ class WebhookStore:
 
     def _load(self) -> list[dict]:
         raw = read_text(_webhooks_path())
-        return json.loads(raw) if raw.strip() else []
+        if not raw.strip():
+            return []
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(data, list):
+            return []
+        hooks: list[dict] = []
+        for item in data:
+            hook = _normalize_hook_record(item)
+            if hook is not None:
+                hooks.append(hook)
+        return hooks
 
     def _save(self, hooks: list[dict]) -> None:
         atomic_write(_webhooks_path(), json.dumps(hooks, indent=2))
@@ -75,6 +90,31 @@ class WebhookStore:
         kept = [h for h in hooks if h["name"] != name]
         self._save(kept)
         return len(kept) != len(hooks)
+
+
+def _list_of_strings(value) -> list[str]:
+    if isinstance(value, str):
+        return [p.strip() for p in value.split(",") if p.strip()]
+    if isinstance(value, list):
+        return [str(p).strip() for p in value if str(p).strip()]
+    return []
+
+
+def _normalize_hook_record(item) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    name = str(item.get("name") or "").strip()
+    prompt = str(item.get("prompt") or "").strip()
+    if not name or not prompt:
+        return None
+    return {
+        "name": name,
+        "prompt": prompt,
+        "secret": str(item.get("secret") or ""),
+        "deliver": str(item.get("deliver") or ""),
+        "events": _list_of_strings(item.get("events")),
+        "skills": _list_of_strings(item.get("skills")),
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -118,6 +158,19 @@ class _SafeDict(dict):
         return "{" + key + "}"
 
 
+def _request_length(headers) -> tuple[int, str]:
+    raw = headers.get("content-length", "0") or "0"
+    try:
+        size = int(raw)
+    except (TypeError, ValueError):
+        return 0, "invalid"
+    if size < 0:
+        return 0, "invalid"
+    if size > MAX_WEBHOOK_BYTES:
+        return size, "too_large"
+    return size, ""
+
+
 # --------------------------------------------------------------------------- #
 # server
 # --------------------------------------------------------------------------- #
@@ -150,7 +203,11 @@ def make_handler(config, store: WebhookStore):
             if hook is None:
                 return self._json(404, {"error": f"unknown hook: {name}"})
 
-            n = int(self.headers.get("content-length", 0) or 0)
+            n, length_error = _request_length(self.headers)
+            if length_error == "invalid":
+                return self._json(400, {"error": "invalid content-length"})
+            if length_error == "too_large":
+                return self._json(413, {"error": "payload too large", "limit": MAX_WEBHOOK_BYTES})
             body = self.rfile.read(n) if n else b""
             sig = self.headers.get("X-Hub-Signature-256", "")
             if not verify_signature(hook.secret, body, sig):

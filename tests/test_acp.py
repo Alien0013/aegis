@@ -152,6 +152,48 @@ def test_acp_lists_details_searches_and_forks_sessions(monkeypatch, tmp_path):
     assert forked["sessionId"] in server.sessions
 
 
+def test_acp_load_replays_reasoning_and_tool_pairs(monkeypatch, tmp_path):
+    from aegis.session import Session, SessionStore
+    from aegis.types import Message, ToolCall
+
+    server, out = _server(monkeypatch, tmp_path, "")
+    store = SessionStore()
+    session = Session.create("ACP replay")
+    session.messages = [
+        Message.user("inspect"),
+        Message(
+            role="assistant",
+            content="I will search.",
+            reasoning="Need to inspect the file first.",
+            tool_calls=[ToolCall("call_search", "read_file", {"path": "README.md"})],
+        ),
+        Message.tool("call_search", "read_file", "file contents"),
+        Message.assistant("done"),
+    ]
+    store.save(session)
+
+    server._handle({"jsonrpc": "2.0", "id": 1, "method": "session/load",
+                    "params": {"sessionId": session.id}})
+
+    updates = [m["params"]["update"] for m in _lines(out)
+               if m.get("method") == "session/update"]
+    kinds = [u["sessionUpdate"] for u in updates]
+
+    assert kinds == [
+        "user_message_chunk",
+        "agent_thought_chunk",
+        "agent_message_chunk",
+        "tool_call",
+        "tool_call_update",
+        "agent_message_chunk",
+    ]
+    assert updates[1]["content"]["text"] == "Need to inspect the file first."
+    assert updates[3]["toolCallId"] == "call_search"
+    assert updates[3]["rawInput"] == {"path": "README.md"}
+    assert updates[4]["toolCallId"] == "call_search"
+    assert updates[4]["content"][0]["text"] == "file contents"
+
+
 def test_acp_permission_request_supports_allow_session(monkeypatch, tmp_path):
     server, _out = _server(monkeypatch, tmp_path, "")
     calls = []

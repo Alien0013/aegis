@@ -16,9 +16,11 @@ Example ``~/.aegis/plugins/hello_tool.py``::
 
 from __future__ import annotations
 
+import hashlib
 import json
 import importlib.util
 import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -74,6 +76,7 @@ class PluginAPI:
 _HOOKS: dict[str, list] = {}
 _PLUGIN_HOOKS: dict[Path, list[tuple[str, Any]]] = {}
 _PLUGIN_PROVIDERS: dict[Path, list[str]] = {}
+_PLUGIN_MODULES: dict[Path, str] = {}
 
 
 MANIFEST_NAMES = ("aegis-plugin.json", "plugin.json")
@@ -119,6 +122,14 @@ def _plugin_base() -> Path:
     return cfg.sub("plugins")
 
 
+def _contained_path(root: Path, path: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
 def _read_manifest(path: Path, config=None) -> PluginManifest | None:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -128,7 +139,12 @@ def _read_manifest(path: Path, config=None) -> PluginManifest | None:
         return None
     name = str(data.get("name") or path.parent.name)
     entry = data.get("entrypoint") or data.get("main") or ""
-    entrypoint = (path.parent / str(entry)).resolve() if entry else None
+    entrypoint = None
+    if entry:
+        root = path.parent.resolve()
+        candidate = (path.parent / str(entry)).resolve()
+        if _contained_path(root, candidate):
+            entrypoint = candidate
     disabled = set((config.get("plugins.disabled", []) if config else []) or [])
     allowlist = set((config.get("plugins.allowlist", []) if config else []) or [])
     enabled = name not in disabled and (not allowlist or name in allowlist)
@@ -172,6 +188,9 @@ def list_manifests(config=None) -> list[PluginManifest]:
 
 
 def _clear_plugin_side_effects(path: Path) -> None:
+    module_name = _PLUGIN_MODULES.pop(path, None)
+    if module_name:
+        sys.modules.pop(module_name, None)
     for event, fn in _PLUGIN_HOOKS.pop(path, []):
         hooks = _HOOKS.get(event, [])
         _HOOKS[event] = [h for h in hooks if h is not fn]
@@ -187,13 +206,27 @@ def _clear_plugin_side_effects(path: Path) -> None:
             pass
 
 
+def _module_name_for(path: Path) -> str:
+    digest = hashlib.sha1(str(path.resolve()).encode("utf-8")).hexdigest()[:12]
+    return f"aegis_plugin_{path.stem}_{digest}"
+
+
 def _load_plugin_file(api: PluginAPI, path: Path, *, quiet: bool) -> None:
     api.files.append(path)
     _clear_plugin_side_effects(path)
     try:
-        spec = importlib.util.spec_from_file_location(f"aegis_plugin_{path.stem}", path)
+        module_name = _module_name_for(path)
+        spec = importlib.util.spec_from_file_location(module_name, path)
+        if spec is None or spec.loader is None:
+            raise ValueError("could not load plugin module")
         module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)  # type: ignore[union-attr]
+        sys.modules[module_name] = module
+        try:
+            spec.loader.exec_module(module)  # type: ignore[union-attr]
+        except Exception:
+            sys.modules.pop(module_name, None)
+            raise
+        _PLUGIN_MODULES[path] = module_name
         if hasattr(module, "register"):
             api._current_plugin = path
             try:
@@ -295,6 +328,8 @@ def clear_runtime_cache() -> None:
     for path in list(_PLUGIN_HOOKS):
         _clear_plugin_side_effects(path)
     for path in list(_PLUGIN_PROVIDERS):
+        _clear_plugin_side_effects(path)
+    for path in list(_PLUGIN_MODULES):
         _clear_plugin_side_effects(path)
 
 

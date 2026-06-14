@@ -134,6 +134,45 @@ def test_webhook_prepends_skills(monkeypatch, tmp_path):
     assert "Load these skills first: github-review" in seen["prompt"]
 
 
+def test_webhook_store_normalizes_malformed_rows(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis import config as cfg
+    from aegis.webhook import WebhookStore
+
+    cfg.sub("webhooks.json").write_text(json.dumps([
+        {"name": "ci", "prompt": "go", "events": "push,pull_request", "skills": ["github", 7]},
+        {"name": "missing-prompt"},
+        "bad-row",
+    ]))
+
+    hooks = WebhookStore().list()
+
+    assert len(hooks) == 1
+    assert hooks[0].name == "ci"
+    assert hooks[0].events == ["push", "pull_request"]
+    assert hooks[0].skills == ["github", "7"]
+
+
+def test_webhook_rejects_oversized_content_length(monkeypatch, tmp_path):
+    cfg, store, make_handler = _webhook_server(monkeypatch, tmp_path)
+    _fake_agent(monkeypatch)
+    store.add("ci", "review")
+    srv, port = _serve(make_handler, cfg, store)
+    try:
+        from aegis.webhook import MAX_WEBHOOK_BYTES
+        status, body = _post(
+            port,
+            "/hook/ci",
+            b"{}",
+            {"Content-Length": str(MAX_WEBHOOK_BYTES + 1)},
+        )
+    finally:
+        srv.shutdown()
+
+    assert status == 413
+    assert body["error"] == "payload too large"
+
+
 # --- TASK 2: cron script / skills / multi-deliver / [SILENT] ----------------
 def _fake_cron_agent(monkeypatch, reply):
     import aegis.agent.agent as am

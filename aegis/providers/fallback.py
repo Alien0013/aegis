@@ -33,10 +33,25 @@ _OVERFLOW_HINTS = ("context length", "maximum context", "context_length_exceeded
 _POLICY_HINTS = ("content policy", "content_policy", "content_filter", "moderation", "safety",
                  "flagged", "responsibleai")
 _QUOTA_HINTS = ("insufficient_quota", "quota exceeded", "exceeded your current quota", "billing")
+_LONG_CONTEXT_TIER_HINTS = ("extra usage", "long context")
 # Anthropic rejects a request whose signed thinking/redacted_thinking blocks were mutated
 # upstream (compaction, normalization, reload). Recovery: resend without thinking blocks.
 _THINKING_SIG_HINTS = ("thinking or redacted_thinking", "thinking blocks", "cannot be modified",
                        "invalid signature", "signature is invalid")
+
+
+def is_long_context_tier_error(exc: Exception, *, model: str | None = None) -> bool:
+    """Anthropic's gated Sonnet 1M tier reports as a 429, not a 400 overflow."""
+    from .chat_completions import ProviderHTTPError
+
+    if not isinstance(exc, ProviderHTTPError) or exc.status != 429:
+        return False
+    body = (getattr(exc, "body", "") or "").lower()
+    if not all(h in body for h in _LONG_CONTEXT_TIER_HINTS):
+        return False
+    if model:
+        return "sonnet" in str(model).lower()
+    return True
 
 
 def classify_provider_error(exc: Exception) -> str:
@@ -48,6 +63,10 @@ def classify_provider_error(exc: Exception) -> str:
         s = exc.status
         body = (getattr(exc, "body", "") or "").lower()
         if s == 429:
+            # Anthropic Sonnet's gated long-context tier reports as a 429, but
+            # retrying or failing over does not fix the request; compacting does.
+            if is_long_context_tier_error(exc):
+                return "context_overflow"
             return "billing" if any(h in body for h in _QUOTA_HINTS) else "rate_limit"
         if s == 401:
             return "auth"
@@ -78,6 +97,35 @@ def classify_provider_error(exc: Exception) -> str:
 def recovery_action(reason: str) -> str:
     """The recovery action for a failure class (see ``RECOVERY_ACTION``)."""
     return RECOVERY_ACTION.get(reason, "retry")
+
+
+def reduce_long_context_tier(provider, exc: Exception, *, target_context: int = 200_000) -> dict | None:
+    """Drop a gated long-context Sonnet route to the broadly available 200k tier.
+
+    The reduction is deliberately runtime-only: subscription tier failures should not
+    rewrite model metadata or the user's configured context length.
+    """
+    active = getattr(provider, "active", provider)
+    model = str(getattr(active, "model", "") or getattr(provider, "model", "") or "")
+    if not is_long_context_tier_error(exc, model=model):
+        return None
+    try:
+        current = int(getattr(active, "context_length", getattr(provider, "context_length", 0)) or 0)
+    except (TypeError, ValueError):
+        current = 0
+    if current <= target_context:
+        return None
+    try:
+        setattr(active, "context_length", target_context)
+    except Exception:  # noqa: BLE001
+        return None
+    return {
+        "model": model,
+        "old_context_length": current,
+        "new_context_length": target_context,
+        "persisted": False,
+        "reason": "long_context_tier_429",
+    }
 
 
 class FallbackProvider:

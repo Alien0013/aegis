@@ -226,12 +226,7 @@ class AcpServer:
         cwd = Path(params.get("cwd") or Path.cwd()).expanduser()
         self.sessions[stored.id] = _SessionEntry(session=stored, cwd=cwd)
         for m in stored.messages:
-            if m.role == "user":
-                self._update(stored.id, {"sessionUpdate": "user_message_chunk",
-                                         "content": {"type": "text", "text": m.content}})
-            elif m.role == "assistant" and m.content:
-                self._update(stored.id, {"sessionUpdate": "agent_message_chunk",
-                                         "content": {"type": "text", "text": m.content}})
+            self._replay_loaded_message(stored.id, m)
         return {}
 
     def _session_list(self, req_id, params: dict[str, Any]) -> dict[str, Any]:
@@ -354,6 +349,49 @@ class AcpServer:
         if text:
             self._update(sid, {"sessionUpdate": "agent_message_chunk",
                                "content": {"type": "text", "text": text}})
+
+    def _send_thought(self, sid: str, text: str) -> None:
+        if text and text.strip():
+            self._update(sid, {"sessionUpdate": "agent_thought_chunk",
+                               "content": {"type": "text", "text": text}})
+
+    def _replay_loaded_message(self, sid: str, message: Message) -> None:
+        """Replay a persisted message into ACP updates when session/load restores history."""
+        if message.role == "user":
+            self._update(sid, {"sessionUpdate": "user_message_chunk",
+                               "content": {"type": "text", "text": message.content}})
+            return
+        if message.role == "assistant":
+            self._send_thought(sid, str(getattr(message, "reasoning", "") or ""))
+            if message.content:
+                self._update(sid, {"sessionUpdate": "agent_message_chunk",
+                                   "content": {"type": "text", "text": message.content}})
+            for tc in message.tool_calls or []:
+                args = tc.arguments if isinstance(tc.arguments, dict) else {}
+                raw_input = {k: v for k, v in args.items() if isinstance(v, (str, int, bool, float))}
+                update: dict[str, Any] = {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": str(tc.id or tc.name),
+                    "title": tc.name,
+                    "status": "in_progress",
+                    "kind": _TOOL_KIND.get(tc.name, "other"),
+                }
+                if raw_input:
+                    update["rawInput"] = raw_input
+                self._update(sid, update)
+            return
+        if message.role == "tool":
+            name = message.name or "tool"
+            update: dict[str, Any] = {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": str(message.tool_call_id or name),
+                "title": name,
+                "status": "completed",
+                "kind": _TOOL_KIND.get(name, "other"),
+            }
+            if message.content:
+                update["content"] = [{"type": "text", "text": str(message.content)[:4000]}]
+            self._update(sid, update)
 
     def _request_permission(self, sid: str, description: str) -> bool | str:
         """Ask the editor to approve a tool action (runs on the prompt worker)."""

@@ -1436,7 +1436,11 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
         except Exception as e:  # noqa: BLE001
             agent._active_response_id = ""
             from .._log import log_exc
-            from ..providers.fallback import classify_provider_error, recovery_action
+            from ..providers.fallback import (
+                classify_provider_error,
+                recovery_action,
+                reduce_long_context_tier,
+            )
             action = recovery_action(classify_provider_error(e))
             provider_duration_ms = int((time.perf_counter() - provider_started) * 1000)
             emit({
@@ -1481,22 +1485,29 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                 continue
             # context_overflow -> compact the session and retry once, instead of failing the turn.
             if (action == "compress" and not getattr(agent, "_overflow_retried", False)):
+                context_reduction = reduce_long_context_tier(agent.provider, e)
                 if trace_store and provider_span:
                     try:
+                        data = {
+                            "error": f"{type(e).__name__}: {e}",
+                            "error_type": type(e).__name__,
+                            "recovery": "compress",
+                            "duration_ms": provider_duration_ms,
+                        }
+                        if context_reduction:
+                            data["context_reduction"] = context_reduction
                         trace_store.finish_span(
                             provider_span["span_id"],
                             status="retrying",
-                            data={
-                                "error": f"{type(e).__name__}: {e}",
-                                "error_type": type(e).__name__,
-                                "recovery": "compress",
-                                "duration_ms": provider_duration_ms,
-                            },
+                            data=data,
                         )
                     except Exception:  # noqa: BLE001
                         pass
                 agent._overflow_retried = True
-                emit({"type": "compacting", "reason": "context_overflow"})
+                event = {"type": "compacting", "reason": "context_overflow"}
+                if context_reduction:
+                    event["context_reduction"] = context_reduction
+                emit(event)
                 session = _force_compact(agent, session)
                 continue
             if trace_store and provider_span:

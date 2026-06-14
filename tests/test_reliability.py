@@ -21,6 +21,9 @@ def test_error_classifier_taxonomy_and_actions():
     assert c(_err(429, "You exceeded your current quota (insufficient_quota)")) == "billing"
     assert c(_err(402, "payment required")) == "billing"
     assert a("billing") == "rotate"
+    # Anthropic Sonnet's gated long-context tier is returned as a 429, but
+    # recovery is compaction/context reduction rather than ordinary rate-limit retry.
+    assert c(_err(429, "Extra usage is required for long context requests.")) == "context_overflow"
     # plain rate limit -> retry; auth -> rotate; 5xx -> retry; other 4xx -> abort
     assert c(_err(429, "rate limit reached")) == "rate_limit" and a("rate_limit") == "retry"
     assert c(_err(401, "bad key")) == "auth" and a("auth") == "rotate"
@@ -68,6 +71,46 @@ def test_context_overflow_retry_trace_is_recovered(tmp_path):
     assert trace["compactions"] == 1
     compaction = next(s for s in trace["spans"] if s["kind"] == "compaction")
     assert compaction["data"]["recovery"] is True
+
+
+def test_long_context_tier_429_reduces_runtime_context_window(tmp_path):
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.providers.chat_completions import ProviderHTTPError
+    from aegis.session import Session
+    from aegis.tracing import TraceStore
+    from aegis.types import LLMResponse
+
+    class Provider:
+        context_length = 1_000_000
+        name = "anthropic"
+        model = "claude-sonnet-4.6"
+        api_mode = None
+        auth = None
+
+        def __init__(self):
+            self.calls = 0
+
+        def complete(self, messages, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise ProviderHTTPError(429, "Extra usage is required for long context requests.")
+            return LLMResponse(text="recovered")
+
+    provider = Provider()
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = False
+    agent = Agent(config=cfg, provider=provider, session=Session.create(), cwd=tmp_path)
+
+    out = agent.run("work")
+    trace = TraceStore.from_config(cfg).get_trace(agent._trace_context["trace_id"])
+    retry_span = next(s for s in trace["spans"]
+                      if s["kind"] == "provider_call" and s["status"] == "retrying")
+
+    assert out.content == "recovered"
+    assert provider.context_length == 200_000
+    assert retry_span["data"]["context_reduction"]["persisted"] is False
+    assert retry_span["data"]["context_reduction"]["old_context_length"] == 1_000_000
 
 
 def test_steer_folds_into_last_tool_message():
