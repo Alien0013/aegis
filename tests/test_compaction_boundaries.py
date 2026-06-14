@@ -103,7 +103,7 @@ def test_tool_call_args_truncated_in_kept_window():
     assert args["content"].startswith("X" * _TOOL_ARG_HEAD_CHARS)
     assert args["content"].endswith("…[truncated]")
     assert len(args["content"]) < len(big)
-    calls[0].arguments["content"] is not args["content"]  # original not mutated
+    assert calls[0].arguments["content"] is not args["content"]  # original not mutated
 
     # nothing oversized -> no copy, no change
     small = [ToolCall(id="c2", name="bash", arguments={"command": "ls"})]
