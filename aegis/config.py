@@ -419,6 +419,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "max_url_chars": 20_000,
         "max_folder_entries": 200,
         "include_warnings": True,
+        "remove_tokens": True,        # remove consumed @refs from the active prompt text
+        "allow_outside_cwd": False,   # keep prompt attachments inside the active workspace
     },
     "server": {
         "host": "127.0.0.1",

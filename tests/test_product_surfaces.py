@@ -1391,6 +1391,24 @@ def test_context_references_shared_across_surfaces(tmp_path):
     assert result.expanded is True
     assert "2: beta" in result.text and "3: gamma" in result.text
     assert result.references[0].kind == "file"
+    assert result.text.split("\n\n<file", 1)[0] == "review"
+
+    spaced = tmp_path / "two words.md"
+    spaced.write_text("first\nsecond\nthird\n", encoding="utf-8")
+    quoted = expand_reference_result('inspect @file:"two words.md":2 please', tmp_path)
+    assert quoted.text.split("\n\n<file", 1)[0] == "inspect please"
+    assert "2: second" in quoted.text and "first" not in quoted.text
+
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+    blocked = expand_reference_result(f"review @file:{outside}", tmp_path)
+    assert "outside workspace" in blocked.text
+
+    binary = tmp_path / "image.bin"
+    binary.write_bytes(b"\x00abc")
+    binary_result = expand_reference_result("@file:image.bin", tmp_path)
+    assert 'binary="true"' in binary_result.text
+    assert "Binary file not inlined" in binary_result.text
 
     message = expand_prompt(Message.user("review @notes.md", images=["data:image/png;base64,abc"]), tmp_path)
     assert isinstance(message, Message)

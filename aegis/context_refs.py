@@ -2,8 +2,8 @@
 
 AEGIS supports lightweight inline references in user prompts:
 
-``@path``, ``@file:path[:10-20]``, ``@folder:path``, ``@diff``,
-``@staged``, ``@git:<ref>``, ``@url:https://...``, and
+``@path``, ``@file:path[:10-20]``, ``@file:"path with spaces":10``,
+``@folder:path``, ``@diff``, ``@staged``, ``@git:<ref>``, ``@url:https://...``, and
 ``@mcp:<server>:<resource-uri>``.
 
 The REPL had this behavior first; keeping it here makes SDK/API/gateway/cron
@@ -12,6 +12,8 @@ turns behave the same way without each surface growing its own parser.
 
 from __future__ import annotations
 
+import mimetypes
+import os
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -21,8 +23,15 @@ from typing import Any
 from .types import Message
 
 
-_AT_RE = re.compile(r"@([^\s]+)")
-_RANGE_RE = re.compile(r"^(.*?):(\d+)-(\d+)$")
+_QUOTED_REFERENCE_VALUE = r'(?:`[^`\n]+`|"[^"\n]+"|\'[^\'\n]+\')'
+_AT_RE = re.compile(
+    rf"(?<![\w/])@(?:(?P<simple>diff|staged)\b|"
+    rf"(?P<kind>file|folder|git|url|mcp):"
+    rf"(?P<value>{_QUOTED_REFERENCE_VALUE}(?::\d+(?:-\d+)?)?|\S+)|"
+    rf"(?P<bare>{_QUOTED_REFERENCE_VALUE}|\S+))"
+)
+_RANGE_RE = re.compile(r"^(.*?):(\d+)(?:-(\d+))?$")
+_TRAILING_PUNCTUATION = ",.;!?"
 _SENSITIVE_REF = (
     ".ssh",
     ".aws",
@@ -36,6 +45,18 @@ _SENSITIVE_REF = (
     "authorized_keys",
     ".git-credentials",
 )
+_TEXT_SUFFIXES = {
+    ".css", ".csv", ".go", ".html", ".ini", ".java", ".js", ".json", ".jsx",
+    ".log", ".md", ".py", ".rs", ".sh", ".toml", ".ts", ".tsx", ".txt", ".xml",
+    ".yaml", ".yml",
+}
+
+
+@dataclass(frozen=True)
+class _ReferenceToken:
+    raw: str
+    start: int
+    end: int
 
 
 @dataclass
@@ -95,8 +116,9 @@ def expand_reference_result(text: str, cwd: str | Path, config: Any = None) -> R
     max_url = _int_config(config, "context_references.max_url_chars", 20_000)
     max_folder = _int_config(config, "context_references.max_folder_entries", 200)
 
-    for match in _AT_RE.finditer(text):
-        raw = match.group(1).rstrip(",.;!?")
+    consumed: list[_ReferenceToken] = []
+    for token in _iter_reference_tokens(text):
+        raw = token.raw
         block, ref = _expand_one(
             raw,
             cwd_path,
@@ -110,6 +132,8 @@ def expand_reference_result(text: str, cwd: str | Path, config: Any = None) -> R
             refs.append(ref)
             if ref.warning:
                 warnings.append(ref.warning)
+            if block or ref.warning:
+                consumed.append(token)
         if not block:
             continue
         if injected + len(block) > max_total:
@@ -122,7 +146,12 @@ def expand_reference_result(text: str, cwd: str | Path, config: Any = None) -> R
 
     if not extras and not warnings:
         return ReferenceExpansion(original=text, text=text, references=refs)
-    expanded = text + "".join(extras)
+    base_text = (
+        _remove_reference_tokens(text, consumed)
+        if consumed and _bool_config(config, "context_references.remove_tokens", True)
+        else text
+    )
+    expanded = base_text + "".join(extras)
     if warnings and _bool_config(config, "context_references.include_warnings", True):
         expanded += "\n\n<context-reference-warnings>\n"
         expanded += "\n".join(f"- {w}" for w in warnings[:20])
@@ -134,6 +163,77 @@ def expand_reference_result(text: str, cwd: str | Path, config: Any = None) -> R
         warnings=warnings,
         injected_chars=injected,
     )
+
+
+def _iter_reference_tokens(text: str) -> list[_ReferenceToken]:
+    tokens: list[_ReferenceToken] = []
+    for match in _AT_RE.finditer(text):
+        simple = match.group("simple")
+        if simple:
+            tokens.append(_ReferenceToken(raw=simple, start=match.start(), end=match.end()))
+            continue
+        kind = match.group("kind")
+        if kind:
+            value = _strip_trailing_punctuation(match.group("value") or "")
+            tokens.append(_ReferenceToken(raw=f"{kind}:{value}", start=match.start(), end=match.end()))
+            continue
+        bare = _strip_trailing_punctuation(match.group("bare") or "")
+        if bare:
+            tokens.append(_ReferenceToken(raw=bare, start=match.start(), end=match.end()))
+    return tokens
+
+
+def _strip_trailing_punctuation(value: str) -> str:
+    if len(value) >= 2 and value[0] in "`\"'" and value[0] == value[-1]:
+        return value
+    stripped = value.rstrip(_TRAILING_PUNCTUATION)
+    while stripped.endswith((")", "]", "}")):
+        closer = stripped[-1]
+        opener = {")": "(", "]": "[", "}": "{"}[closer]
+        if stripped.count(closer) > stripped.count(opener):
+            stripped = stripped[:-1]
+            continue
+        break
+    return stripped
+
+
+def _strip_reference_wrappers(value: str) -> str:
+    if len(value) >= 2 and value[0] in "`\"'" and value[0] == value[-1]:
+        return value[1:-1]
+    return value
+
+
+def _parse_target_range(target: str) -> tuple[str, int | None, int | None]:
+    quoted = re.match(
+        r'^(?P<quote>`|"|\')(?P<path>.+?)(?P=quote)(?::(?P<start>\d+)(?:-(?P<end>\d+))?)?$',
+        target,
+    )
+    if quoted:
+        start = quoted.group("start")
+        end = quoted.group("end")
+        return (
+            quoted.group("path"),
+            int(start) if start is not None else None,
+            int(end or start) if start is not None else None,
+        )
+    rng = _RANGE_RE.match(target)
+    if rng:
+        start = int(rng.group(2))
+        return _strip_reference_wrappers(rng.group(1)), start, int(rng.group(3) or start)
+    return _strip_reference_wrappers(target), None, None
+
+
+def _remove_reference_tokens(text: str, tokens: list[_ReferenceToken]) -> str:
+    pieces: list[str] = []
+    cursor = 0
+    for token in tokens:
+        pieces.append(text[cursor:token.start])
+        cursor = token.end
+    pieces.append(text[cursor:])
+    stripped = "".join(pieces)
+    stripped = re.sub(r"\s{2,}", " ", stripped)
+    stripped = re.sub(r"\s+([,.;:!?])", r"\1", stripped)
+    return stripped.strip()
 
 
 def _expand_one(
@@ -154,12 +254,14 @@ def _expand_one(
         body = _git(cwd, "diff", "--cached")[:max_git]
         return f"\n\n<git-staged>\n{body}\n</git-staged>", ContextReference(raw=raw, kind="staged", chars=len(body))
     if kind == "git" and sep and value:
+        value = _strip_reference_wrappers(value)
         body = _git(cwd, "show", "--stat", value)[:max_git]
         return (
             f'\n\n<git-show ref="{_xml_attr(value)}">\n{body}\n</git-show>',
             ContextReference(raw=raw, kind="git", target=value, chars=len(body)),
         )
-    if kind == "url" and sep and value.startswith(("http://", "https://")):
+    if kind == "url" and sep and _strip_reference_wrappers(value).startswith(("http://", "https://")):
+        value = _strip_reference_wrappers(value)
         body = _fetch_url(value, max_url)
         return (
             f'\n\n<url-content href="{_xml_attr(value)}">\n{body}\n</url-content>',
@@ -170,17 +272,14 @@ def _expand_one(
 
     target = value if kind in ("file", "folder") and sep else raw
     explicit = kind in ("file", "folder") and sep
+    target, start, end = _parse_target_range(target)
     if _ref_sensitive(target):
         warning = f"reference @{raw} refused: sensitive path"
         return "", ContextReference(raw=raw, kind=kind if explicit else "path", target=target, warning=warning)
 
-    start = end = None
-    rng = _RANGE_RE.match(target)
-    if rng:
-        target, start, end = rng.group(1), int(rng.group(2)), int(rng.group(3))
-    path = Path(target).expanduser()
-    if not path.is_absolute():
-        path = cwd / path
+    path, warning = _resolve_reference_path(target, cwd, raw, config)
+    if warning:
+        return "", ContextReference(raw=raw, kind=kind if explicit else "path", target=target, warning=warning)
 
     if kind == "folder" or path.is_dir():
         if not path.exists() or not path.is_dir():
@@ -200,6 +299,12 @@ def _expand_one(
     if not path.is_file():
         warning = f"reference @{raw}: file not found" if explicit else ""
         return "", ContextReference(raw=raw, kind="file" if explicit else "path", target=target, warning=warning)
+    if _is_binary_file(path):
+        body = _binary_reference_block(path)
+        return (
+            f'\n\n<file path="{_xml_attr(target)}" binary="true">\n{body}\n</file>',
+            ContextReference(raw=raw, kind="file", target=target, chars=len(body)),
+        )
     try:
         body = path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
@@ -222,6 +327,51 @@ def _git(cwd: Path, *argv: str) -> str:
         return (out.stdout or out.stderr or "").strip()
     except Exception as exc:  # noqa: BLE001
         return f"(git failed: {exc})"
+
+
+def _resolve_reference_path(
+    target: str,
+    cwd: Path,
+    raw: str,
+    config: Any,
+) -> tuple[Path, str]:
+    try:
+        path = Path(os.path.expanduser(target))
+        if not path.is_absolute():
+            path = cwd / path
+        resolved = path.resolve()
+    except (OSError, ValueError) as exc:
+        return Path(target), f"reference @{raw}: {exc}"
+
+    if not _bool_config(config, "context_references.allow_outside_cwd", False):
+        try:
+            resolved.relative_to(cwd.expanduser().resolve())
+        except ValueError:
+            return resolved, f"reference @{raw} refused: path outside workspace"
+    return resolved, ""
+
+
+def _is_binary_file(path: Path) -> bool:
+    mime, _ = mimetypes.guess_type(path.name)
+    if mime and not mime.startswith("text/") and path.suffix.lower() not in _TEXT_SUFFIXES:
+        return True
+    try:
+        return b"\x00" in path.read_bytes()[:4096]
+    except OSError:
+        return False
+
+
+def _binary_reference_block(path: Path) -> str:
+    mime, _ = mimetypes.guess_type(path.name)
+    mime = mime or "application/octet-stream"
+    try:
+        size = path.stat().st_size
+    except OSError:
+        size = 0
+    return (
+        f"Binary file not inlined as text ({mime}, {size:,} bytes). "
+        f"It is available on disk at {path}. Use tools to inspect, convert, or render it."
+    )
 
 
 def _fetch_url(url: str, max_chars: int) -> str:
@@ -297,7 +447,7 @@ def _int_config(config: Any, key: str, default: int) -> int:
 
 
 def _ref_sensitive(raw: str) -> bool:
-    low = raw.lower()
+    low = _strip_reference_wrappers(raw).lower()
     return any(part in low for part in _SENSITIVE_REF)
 
 
