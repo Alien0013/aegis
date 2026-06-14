@@ -286,6 +286,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "max_result_tokens": 4000,   # spill a single tool output larger than this (tokens; 0 = never)
         "max_turn_result_tokens": 50000, # spill largest outputs when a tool batch exceeds this
         "turn_result_preview_chars": 1500, # inline preview for aggregate-budget spills
+        "max_output_chars": 30000,   # direct tool output character cap before model-side spill
+        "file_read_max_chars": 100000, # refuse single read_file results larger than this
+        "file_read_max_lines": 2000, # clamp read_file limit to avoid accidental huge reads
+        "file_read_max_line_length": 2000, # truncate individual lines in read_file output
         "loop_warn_after": 3,        # warn after N identical tool failures/results in a turn
         "loop_same_tool_warn_after": 3, # warn when one tool keeps failing with varied args
         "loop_block_after": 5,       # hard-block an identical failing call after N repeats

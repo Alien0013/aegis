@@ -30,6 +30,31 @@ _AEGIS_SECRET_FILES = {
     "config.yaml",
     "webhook_subscriptions.json",
 }
+_SYSTEM_WRITE_PREFIXES = (
+    "/etc",
+    "/boot",
+    "/usr/lib/systemd",
+    "/private/etc",
+    "/private/var",
+)
+_SYSTEM_WRITE_EXACT = {
+    "/var/run/docker.sock",
+    "/run/docker.sock",
+}
+_BLOCKED_DEVICE_PATHS = frozenset({
+    "/dev/zero",
+    "/dev/random",
+    "/dev/urandom",
+    "/dev/full",
+    "/dev/stdin",
+    "/dev/tty",
+    "/dev/console",
+    "/dev/stdout",
+    "/dev/stderr",
+    "/dev/fd/0",
+    "/dev/fd/1",
+    "/dev/fd/2",
+})
 
 
 def _aegis_home() -> Path:
@@ -37,22 +62,88 @@ def _aegis_home() -> Path:
     return cfg.get_home()
 
 
+def _real(path) -> Path | None:
+    try:
+        return Path(os.path.realpath(str(Path(path).expanduser())))
+    except (OSError, ValueError):
+        return None
+
+
+def _inside_or_same(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return path == root
+
+
+def _allowed_by_list(path: Path, entries) -> bool:
+    for raw in entries or []:
+        target = _real(raw)
+        if target is not None and _inside_or_same(path, target):
+            return True
+    return False
+
+
+def _configured_safe_root() -> Path | None:
+    raw = os.environ.get("AEGIS_WRITE_SAFE_ROOT") or os.environ.get("HERMES_WRITE_SAFE_ROOT") or ""
+    raw = raw.strip()
+    if not raw:
+        return None
+    return _real(raw)
+
+
+def _safe_root_denial(path: Path) -> str:
+    root = _configured_safe_root()
+    if root is None or _inside_or_same(path, root):
+        return ""
+    return str(root)
+
+
+def _is_blocked_device_path(path: str) -> bool:
+    normalized = os.path.expanduser(path)
+    if normalized in _BLOCKED_DEVICE_PATHS:
+        return True
+    if normalized.startswith("/proc/") and normalized.endswith(("/fd/0", "/fd/1", "/fd/2")):
+        return True
+    if normalized.startswith("/proc/") and normalized.endswith(("/environ", "/cmdline", "/maps")):
+        return True
+    return False
+
+
+def is_blocked_read_path(path) -> bool:
+    """True when a read would target a blocking device or sensitive proc file."""
+    normalized = os.path.expanduser(str(path))
+    if _is_blocked_device_path(normalized):
+        return True
+    try:
+        resolved = os.path.realpath(normalized)
+    except (OSError, ValueError):
+        return False
+    return resolved != normalized and _is_blocked_device_path(resolved)
+
+
 def is_sensitive(path) -> str:
     """'' when fine; else a short reason why this path needs explicit approval."""
-    try:
-        p = Path(os.path.realpath(str(Path(path).expanduser())))
-    except (OSError, ValueError):
+    p = _real(path)
+    if p is None:
         return ""
+    p_str = str(p)
+    if p_str in _SYSTEM_WRITE_EXACT:
+        return f"system control path ({p_str})"
+    for prefix in _SYSTEM_WRITE_PREFIXES:
+        root = Path(prefix)
+        if p == root or _inside_or_same(p, root):
+            return f"sensitive system path ({prefix})"
     home = Path.home()
     for d in _HOME_DIRS:
         target = home / d
-        if p == target or str(p).startswith(str(target) + os.sep):
+        if _inside_or_same(p, target):
             return f"credentials/keys location (~/{d})"
     if p.parent == home and p.name in _HOME_FILES:
         return f"shell/login configuration (~/{p.name})"
     ah = _aegis_home()
-    inside = str(p).startswith(str(ah) + os.sep)
-    if inside:
+    if _inside_or_same(p, ah) and p != ah:
         rel = p.relative_to(ah)
         first = rel.parts[0] if rel.parts else ""
         # the agent's own config/secrets/auth are off-limits; its workspace is not
@@ -64,11 +155,18 @@ def is_sensitive(path) -> str:
 def authorize_write(path, ctx) -> str:
     """'' to proceed, else an error message for the tool result."""
     cfg_obj = getattr(ctx, "config", None)
-    allow = [str(Path(a).expanduser()) for a in
-             ((cfg_obj.get("tools.sensitive_write_allow", []) if cfg_obj else []) or [])]
-    real = os.path.realpath(str(Path(str(path)).expanduser()))
-    if any(real == a or real.startswith(a + os.sep) for a in allow):
+    p = _real(path)
+    if p is None:
         return ""
+    allow = (cfg_obj.get("tools.sensitive_write_allow", []) if cfg_obj else []) or []
+    if _allowed_by_list(p, allow):
+        return ""
+    safe_root = _safe_root_denial(p)
+    if safe_root:
+        return (
+            f"blocked: {path} is outside the configured write safe root ({safe_root}). "
+            "Unset AEGIS_WRITE_SAFE_ROOT/HERMES_WRITE_SAFE_ROOT or choose a path under it."
+        )
     reason = is_sensitive(path)
     if not reason:
         return ""
@@ -86,16 +184,16 @@ def authorize_write(path, ctx) -> str:
 
 def read_denial(path) -> str:
     """'' when fine; else a defense-in-depth reason this file should not be read."""
-    try:
-        p = Path(os.path.realpath(str(Path(path).expanduser())))
-    except (OSError, ValueError):
+    p = _real(path)
+    if p is None:
         return ""
+    if is_blocked_read_path(path):
+        return "device/proc path that can block indefinitely or expose process internals"
     if p.name in _PROJECT_ENV_FILES:
         return ("secret-bearing environment file; read .env.example instead if you need "
                 "the variable shape")
     ah = _aegis_home()
-    inside = str(p).startswith(str(ah) + os.sep)
-    if inside:
+    if _inside_or_same(p, ah) and p != ah:
         rel = p.relative_to(ah)
         if rel.parts and rel.parts[0] in {"mcp-tokens", "pairing"}:
             return f"agent credential/control directory ({ah.name}/{rel.parts[0]})"
@@ -109,10 +207,11 @@ def read_denial(path) -> str:
 def authorize_read(path, ctx) -> str:
     """'' to proceed, else an error message for read_file."""
     cfg_obj = getattr(ctx, "config", None)
-    allow = [str(Path(a).expanduser()) for a in
-             ((cfg_obj.get("tools.sensitive_read_allow", []) if cfg_obj else []) or [])]
-    real = os.path.realpath(str(Path(str(path)).expanduser()))
-    if any(real == a or real.startswith(a + os.sep) for a in allow):
+    p = _real(path)
+    if p is None:
+        return ""
+    allow = (cfg_obj.get("tools.sensitive_read_allow", []) if cfg_obj else []) or []
+    if _allowed_by_list(p, allow):
         return ""
     reason = read_denial(path)
     if not reason:

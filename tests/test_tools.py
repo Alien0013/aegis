@@ -19,6 +19,80 @@ def test_read_write_edit(tmp_path):
     assert (tmp_path / "a.txt").read_text().endswith("2")
 
 
+def test_read_file_blocks_devices_binary_and_oversized_results(tmp_path):
+    from aegis.config import Config
+    from aegis.tools.base import ToolContext
+    from aegis.tools.builtin import ReadFileTool
+    from aegis.tools.file_safety import is_blocked_read_path
+
+    tool = ReadFileTool()
+    ctx = ToolContext(cwd=tmp_path, config=Config.load())
+    assert tool.run({"path": "/dev/zero"}, ctx).is_error
+    assert is_blocked_read_path("/proc/self/environ")
+
+    binary = tmp_path / "bin.dat"
+    binary.write_bytes(b"abc\x00def")
+    assert "binary file" in tool.run({"path": "bin.dat"}, ctx).content
+
+    big = tmp_path / "big.txt"
+    big.write_text("x" * 80)
+    ctx.config.data["tools"]["file_read_max_chars"] = 40
+    res = tool.run({"path": "big.txt"}, ctx)
+    assert res.is_error and "safety limit" in res.content and "offset and limit" in res.content
+
+
+def test_file_tools_preserve_bom_mode_and_crlf(tmp_path, monkeypatch):
+    import os
+    import stat
+
+    from aegis.tools.builtin import EditFileTool, WriteFileTool
+
+    bom = "\ufeff".encode("utf-8")
+    target = tmp_path / "bom.txt"
+    target.write_bytes(bom + b"old\r\n")
+    os.chmod(target, 0o640)
+
+    ctx = _ctx(tmp_path)
+    assert not WriteFileTool().run({"path": "bom.txt", "content": "new\n"}, ctx).is_error
+    assert target.read_bytes() == bom + b"new\r\n"
+    assert stat.S_IMODE(target.stat().st_mode) == 0o640
+
+    assert not EditFileTool().run(
+        {"path": "bom.txt", "old_string": "new\n", "new_string": "next\nline\n"},
+        ctx,
+    ).is_error
+    assert target.read_bytes() == bom + b"next\r\nline\r\n"
+
+    original = target.read_bytes()
+
+    def fail_replace(*_args, **_kwargs):
+        raise OSError("replace failed")
+
+    monkeypatch.setattr("aegis.tools.builtin.os.replace", fail_replace)
+    failed = WriteFileTool().run({"path": "bom.txt", "content": "corrupt"}, ctx)
+    assert failed.is_error
+    assert target.read_bytes() == original
+
+
+def test_write_file_safe_root_and_sensitive_system_paths(tmp_path, monkeypatch):
+    from aegis.tools.builtin import WriteFileTool
+    from aegis.tools.file_safety import is_sensitive
+
+    safe = tmp_path / "workspace"
+    outside = tmp_path / "workspace-evil" / "x.txt"
+    monkeypatch.setenv("AEGIS_WRITE_SAFE_ROOT", str(safe))
+
+    ctx = _ctx(tmp_path)
+    inside = WriteFileTool().run({"path": str(safe / "ok.txt"), "content": "ok"}, ctx)
+    blocked = WriteFileTool().run({"path": str(outside), "content": "no"}, ctx)
+
+    assert not inside.is_error
+    assert blocked.is_error and "write safe root" in blocked.content
+    assert not outside.exists()
+    assert is_sensitive("/private/etc/hosts")
+    assert is_sensitive("/run/docker.sock")
+
+
 def test_edit_ambiguous_requires_replace_all(tmp_path):
     from aegis.tools.builtin import EditFileTool, WriteFileTool
     ctx = _ctx(tmp_path)

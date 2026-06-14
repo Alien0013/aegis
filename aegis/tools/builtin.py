@@ -7,6 +7,8 @@ import os
 import re
 import shutil
 import subprocess
+import stat
+import tempfile
 from pathlib import Path
 
 import httpx
@@ -15,11 +17,114 @@ from ..util import truncate
 from .base import Tool, ToolContext, ToolResult
 
 MAX_OUTPUT = 30_000
+DEFAULT_FILE_READ_MAX_CHARS = 100_000
+DEFAULT_FILE_READ_MAX_LINES = 2000
+DEFAULT_FILE_READ_MAX_LINE_LENGTH = 2000
+_UTF8_BOM = "\ufeff"
 
 
 def _resolve(ctx: ToolContext, path: str) -> Path:
     p = Path(path).expanduser()
     return p if p.is_absolute() else (ctx.cwd / p)
+
+
+def _cfg_int(ctx: ToolContext, dotted: str, default: int) -> int:
+    cfg = getattr(ctx, "config", None)
+    try:
+        value = cfg.get(dotted, default) if cfg is not None else default
+        value = int(value)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def _max_output_chars(ctx: ToolContext) -> int:
+    return _cfg_int(ctx, "tools.max_output_chars", MAX_OUTPUT)
+
+
+def _file_read_max_chars(ctx: ToolContext) -> int:
+    return _cfg_int(ctx, "tools.file_read_max_chars", DEFAULT_FILE_READ_MAX_CHARS)
+
+
+def _file_read_max_lines(ctx: ToolContext) -> int:
+    return _cfg_int(ctx, "tools.file_read_max_lines", DEFAULT_FILE_READ_MAX_LINES)
+
+
+def _file_read_max_line_length(ctx: ToolContext) -> int:
+    return _cfg_int(ctx, "tools.file_read_max_line_length", DEFAULT_FILE_READ_MAX_LINE_LENGTH)
+
+
+def _coerce_int(value, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _strip_bom(text: str) -> tuple[str, bool]:
+    if text.startswith(_UTF8_BOM):
+        return text[len(_UTF8_BOM):], True
+    return text, False
+
+
+def _restore_bom(text: str, had_bom: bool) -> str:
+    if not had_bom:
+        return text
+    return text if text.startswith(_UTF8_BOM) else _UTF8_BOM + text
+
+
+def _detect_line_ending(text: str) -> str | None:
+    head = text[:4096]
+    if "\r\n" in head:
+        return "\r\n"
+    if "\n" in head:
+        return "\n"
+    return None
+
+
+def _normalize_line_endings(text: str, ending: str | None) -> str:
+    if ending not in ("\n", "\r\n"):
+        return text
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    return normalized if ending == "\n" else normalized.replace("\n", "\r\n")
+
+
+def _read_text_for_edit(path: Path) -> tuple[str, bool, str | None]:
+    with open(path, "r", encoding="utf-8", errors="replace", newline="") as handle:
+        text = handle.read()
+    text, had_bom = _strip_bom(text)
+    return text, had_bom, _detect_line_ending(text)
+
+
+def _atomic_write_local(path: Path, content: str) -> None:
+    mode = None
+    try:
+        if path.exists():
+            mode = stat.S_IMODE(path.stat().st_mode)
+    except OSError:
+        mode = None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if mode is not None:
+            os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+
+def _line_for_read(line: str, max_len: int) -> str:
+    if len(line) <= max_len:
+        return line
+    return line[:max_len] + " ... [line truncated]"
 
 
 # --------------------------------------------------------------------------- #
@@ -50,19 +155,39 @@ class ReadFileTool(Tool):
             denied = file_safety.authorize_read(path, ctx)
             if denied:
                 return ToolResult.error(denied)
+            try:
+                with open(path, "rb") as sample:
+                    sample_bytes = sample.read(1000)
+                if b"\0" in sample_bytes:
+                    return ToolResult.error(
+                        f"Cannot read {path}: binary file - use an appropriate tool instead."
+                    )
+            except OSError:
+                pass
         try:
             text = fs.read_text(str(path)) if fs else path.read_text(encoding="utf-8", errors="replace")
+            text, _had_bom = _strip_bom(text)
             lines = text.splitlines()
         except Exception as e:  # noqa: BLE001
             return ToolResult.error(f"Could not read {path}: {e}")
-        offset = max(1, int(args.get("offset", 1)))
-        limit = int(args.get("limit", 2000))
+        offset = max(1, _coerce_int(args.get("offset", 1), 1))
+        limit = _coerce_int(args.get("limit", DEFAULT_FILE_READ_MAX_LINES), DEFAULT_FILE_READ_MAX_LINES)
+        limit = max(1, min(limit, _file_read_max_lines(ctx)))
+        max_line = _file_read_max_line_length(ctx)
         chunk = lines[offset - 1: offset - 1 + limit]
-        body = "\n".join(f"{offset + i:6d}\t{ln}" for i, ln in enumerate(chunk))
+        body = "\n".join(f"{offset + i:6d}\t{_line_for_read(ln, max_line)}" for i, ln in enumerate(chunk))
+        if len(body) > _file_read_max_chars(ctx):
+            return ToolResult.error(
+                f"read_file result exceeds safety limit ({_file_read_max_chars(ctx)} chars). "
+                f"Use offset and limit to read a smaller section. total_lines={len(lines)}"
+            )
         if fs is None:
             from . import file_state
             file_state.note(path)            # freshness stamp for later stale-write checks
-        return ToolResult.ok(truncate(body, MAX_OUTPUT), display=f"read {path.name} ({len(chunk)} lines)")
+        return ToolResult.ok(
+            truncate(body, _max_output_chars(ctx)),
+            display=f"read {path.name} ({len(chunk)} lines)",
+        )
 
 
 class WriteFileTool(Tool):
@@ -93,8 +218,13 @@ class WriteFileTool(Tool):
             if fs:                           # delegate to the editor (ACP fs/write_text_file)
                 fs.write_text(str(path), args["content"])
             else:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(args["content"], encoding="utf-8")
+                had_bom = False
+                ending = None
+                if path.exists():
+                    old_text, had_bom, ending = _read_text_for_edit(path)
+                    del old_text
+                content = _normalize_line_endings(str(args["content"]), ending)
+                _atomic_write_local(path, _restore_bom(content, had_bom))
         except Exception as e:  # noqa: BLE001
             return ToolResult.error(f"Could not write {path}: {e}")
         if fs is None:
@@ -129,10 +259,17 @@ class EditFileTool(Tool):
         if denied:
             return ToolResult.error(denied)
         stale = file_state.stale_warning(path)
-        text = path.read_text(encoding="utf-8", errors="replace")
+        text, had_bom, ending = _read_text_for_edit(path)
         old, new = args["old_string"], args["new_string"]
         via = ""
         count = text.count(old)
+        if count == 0 and ending:
+            old_eol = _normalize_line_endings(old, ending)
+            if old_eol != old:
+                count = text.count(old_eol)
+                if count:
+                    old = old_eol
+                    new = _normalize_line_endings(new, ending)
         if count == 0:
             # Fuzzy recovery: whitespace/indentation drift is the usual cause. Only a
             # UNIQUE fuzzy match is trusted; ambiguity falls through to the error.
@@ -143,11 +280,13 @@ class EditFileTool(Tool):
             matched, strategy = hit
             old, new = matched, reindent(new, matched, old)
             count, via = 1, f" (matched via {strategy} — whitespace drift auto-recovered)"
+        if ending:
+            new = _normalize_line_endings(new, ending)
         if count > 1 and not args.get("replace_all"):
             return ToolResult.error(f"old_string appears {count}× — pass replace_all=true or add context.")
         _lsp_snapshot(ctx, path)
         text = text.replace(old, new) if args.get("replace_all") else text.replace(old, new, 1)
-        path.write_text(text, encoding="utf-8")
+        _atomic_write_local(path, _restore_bom(text, had_bom))
         file_state.note(path)
         return ToolResult.ok(f"Edited {path} ({count if args.get('replace_all') else 1} replacement(s))."
                              + via + _lsp_delta(ctx, path) + stale,
@@ -273,7 +412,7 @@ class SearchTool(Tool):
             try:
                 out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
                 body = out.stdout or out.stderr or "(no matches)"
-                return ToolResult.ok(truncate(body, MAX_OUTPUT), display="ripgrep search")
+                return ToolResult.ok(truncate(body, _max_output_chars(ctx)), display="ripgrep search")
             except subprocess.TimeoutExpired:
                 return ToolResult.error("search timed out")
         # python fallback
@@ -457,7 +596,7 @@ class BashTool(Tool):
         out = out.strip() or "(no output)"
         tail = f"\n[exit {code}]"
         return ToolResult(
-            content=truncate(out, MAX_OUTPUT) + tail,
+            content=truncate(out, _max_output_chars(ctx)) + tail,
             is_error=code != 0,
             display=f"$ {args['command'][:60]} (exit {code})",
         )
@@ -685,7 +824,7 @@ class WebFetchTool(Tool):
         except Exception as e:  # noqa: BLE001
             return ToolResult.error(f"fetch failed: {e}")
         text = _html_to_text(body) if "html" in ctype else body
-        return ToolResult.ok(truncate(text, MAX_OUTPUT), display=f"fetched {url[:60]}")
+        return ToolResult.ok(truncate(text, _max_output_chars(ctx)), display=f"fetched {url[:60]}")
 
 
 class WebSearchTool(Tool):

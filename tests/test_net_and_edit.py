@@ -24,6 +24,8 @@ def test_ssrf_metadata_blocked_even_when_private_allowed():
     # private becomes allowed, but cloud metadata stays blocked
     assert is_safe_url("http://10.0.0.5/", Cfg())[0] is True
     assert is_safe_url("http://169.254.169.254/", Cfg())[0] is False
+    assert is_safe_url("http://[::ffff:169.254.169.254]/", Cfg())[0] is False
+    assert is_safe_url("http://[::ffff:100.100.100.200]/", Cfg())[0] is False
 
 
 def test_web_fetch_tool_refuses_metadata():

@@ -24,8 +24,12 @@ _METADATA_IPS = frozenset(ipaddress.ip_address(x) for x in (
     "fd00:ec2::254",          # AWS metadata (IPv6)
     "100.100.100.200",        # Alibaba Cloud metadata
     "::ffff:169.254.169.254", "::ffff:169.254.170.2", "::ffff:169.254.169.253",
+    "::ffff:100.100.100.200",
 ))
-_METADATA_NETS = (ipaddress.ip_network("169.254.0.0/16"),)   # entire link-local range
+_METADATA_NETS = (
+    ipaddress.ip_network("169.254.0.0/16"),          # entire link-local range
+    ipaddress.ip_network("::ffff:169.254.0.0/112"),  # IPv4-mapped link-local
+)
 _CGNAT = ipaddress.ip_network("100.64.0.0/10")               # carrier-grade NAT (not is_private)
 
 
