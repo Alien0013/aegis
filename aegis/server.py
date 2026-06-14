@@ -134,6 +134,8 @@ def make_handler(config: Config):
             self.wfile.write(json.dumps(obj).encode())
 
         def do_GET(self):  # noqa: N802
+            if not self._authed():
+                return self._json(401, {"error": "unauthorized"})
             if self.path.rstrip("/") == "/v1/models":
                 return self._json(200, {"object": "list", "data": _models(config)})
             return self._json(404, {"error": "not found"})
@@ -143,8 +145,16 @@ def make_handler(config: Config):
                 return self._json(401, {"error": "unauthorized"})
             if self.path.rstrip("/") != "/v1/chat/completions":
                 return self._json(404, {"error": "not found"})
-            n = int(self.headers.get("content-length", 0))
-            body = json.loads(self.rfile.read(n) or b"{}")
+            try:
+                n = int(self.headers.get("content-length", 0))
+            except ValueError:
+                return self._json(400, {"error": "invalid content-length"})
+            if n < 0:
+                return self._json(400, {"error": "invalid content-length"})
+            try:
+                body = json.loads(self.rfile.read(n) or b"{}")
+            except json.JSONDecodeError:
+                return self._json(400, {"error": "invalid json"})
             history, last_user = _convert(body.get("messages", []))
             model = body.get("model")
             stream = bool(body.get("stream"))

@@ -41,8 +41,12 @@ class ProcessTool(Tool):
     def run(self, args, ctx: ToolContext) -> ToolResult:
         action = args["action"]
         if action == "start":
-            if not args.get("command"):
-                return ToolResult.error("start needs a command")
+            from .command_utils import rewrite_compound_background, validate_command
+
+            command, command_error = validate_command(args.get("command"))
+            if command_error:
+                return ToolResult.error(command_error)
+            command = rewrite_compound_background(command)
             from .backends import create_environment, effective_backend
 
             agent = getattr(ctx, "agent", None)
@@ -71,7 +75,7 @@ class ProcessTool(Tool):
             backend = effective_backend(backend, task_id)
             if backend == "local":
                 proc = process_registry.spawn_local(
-                    args["command"],
+                    command,
                     cwd=ctx.cwd,
                     task_id=task_id,
                     notify_on_complete=notify_on_complete,
@@ -91,7 +95,7 @@ class ProcessTool(Tool):
                     return ToolResult.error(error)
                 proc = process_registry.spawn_via_env(
                     env,
-                    args["command"],
+                    command,
                     cwd=str(ctx.cwd),
                     task_id=task_id,
                     notify_on_complete=notify_on_complete,
@@ -104,7 +108,7 @@ class ProcessTool(Tool):
                         f"background process failed to start on {backend}: "
                         f"{proc.output_buffer or proc.exit_code}"
                     )
-            lines = [f"started {proc.id} (pid {proc.pid}): {args['command']}"]
+            lines = [f"started {proc.id} (pid {proc.pid}): {command}"]
             lines.append(f"backend: {backend}")
             if proc.pty:
                 lines.append("pty: true")

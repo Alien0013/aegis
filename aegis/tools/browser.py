@@ -17,7 +17,7 @@ from .base import Tool, ToolContext, ToolResult
 
 # Safety gates (from computer-use research): refuse destructive key combos / typed payloads.
 _BLOCKED_KEYS = {"cmd+shift+backspace", "cmd+option+backspace", "cmd+ctrl+q", "cmd+shift+q"}
-_BLOCKED_TYPE = [r"curl\s*\|\s*(bash|sh)", r"wget\s*\|\s*(bash|sh)", r"sudo\s+rm\s+-[rf]",
+_BLOCKED_TYPE = [r"\bcurl\b[^\n|]*\|\s*(bash|sh)", r"\bwget\b[^\n|]*\|\s*(bash|sh)", r"sudo\s+rm\s+-[rf]",
                  r"rm\s+-rf\s+/", r":\(\)\{:\|:&\};"]
 
 
@@ -74,12 +74,19 @@ class BrowserTool(Tool):
         action = args["action"]
         with self._lock:
             try:
+                if action == "navigate":
+                    url = str(args.get("url", ""))
+                    from ..net_safety import guard
+
+                    blocked = guard(url, getattr(ctx, "config", None))
+                    if blocked:
+                        return ToolResult.error(blocked)
                 self._ensure(ctx)
                 page = self._page
                 if action == "navigate":
-                    page.goto(args["url"], wait_until="domcontentloaded", timeout=30000)
+                    page.goto(url, wait_until="domcontentloaded", timeout=30000)
                     return ToolResult.ok(f"navigated to {page.url}\ntitle: {page.title()}",
-                                         display=f"browser → {args['url'][:50]}")
+                                         display=f"browser -> {url[:50]}")
                 if action == "text":
                     body = page.inner_text("body")
                     return ToolResult.ok(truncate(body, 20_000), display="page text")
@@ -92,9 +99,14 @@ class BrowserTool(Tool):
                     page.fill(args["selector"], args.get("text", ""))
                     return ToolResult.ok(f"typed into {args['selector']}", display="type")
                 if action == "screenshot":
-                    path = Path(args.get("path") or (ctx.cwd / f"screenshot-{int(time.time())}.png"))
+                    path = _resolve_output_path(ctx, args.get("path"), f"screenshot-{int(time.time())}.png")
+                    from . import file_safety
+
+                    denied = file_safety.authorize_write(path, ctx)
+                    if denied:
+                        return ToolResult.error(denied)
                     page.screenshot(path=str(path), full_page=False)
-                    return ToolResult.ok(f"saved screenshot to {path}", display=f"shot → {path.name}")
+                    return ToolResult.ok(f"saved screenshot to {path}", display=f"shot -> {path.name}")
                 if action == "back":
                     page.go_back()
                     return ToolResult.ok(f"back to {page.url}", display="back")
@@ -138,7 +150,12 @@ class ComputerTool(Tool):
         action = args["action"]
         try:
             if action == "screenshot":
-                path = Path(args.get("path") or (ctx.cwd / f"screen-{int(time.time())}.png"))
+                path = _resolve_output_path(ctx, args.get("path"), f"screen-{int(time.time())}.png")
+                from . import file_safety
+
+                denied = file_safety.authorize_write(path, ctx)
+                if denied:
+                    return ToolResult.error(denied)
                 pyautogui.screenshot(str(path))
                 return ToolResult.ok(f"saved screen to {path}", display="screenshot")
             if action == "click":
@@ -149,7 +166,7 @@ class ComputerTool(Tool):
                 return ToolResult.ok("moved", display="move")
             if action == "type":
                 t = args.get("text", "")
-                if any(re.search(p, t) for p in _BLOCKED_TYPE):
+                if any(re.search(p, t, re.I) for p in _BLOCKED_TYPE):
                     return ToolResult.error("blocked: dangerous payload")
                 pyautogui.typewrite(t, interval=0.01)
                 return ToolResult.ok("typed", display="type")
@@ -169,3 +186,9 @@ class ComputerTool(Tool):
 
 def browser_tools() -> list[Tool]:
     return [BrowserTool(), ComputerTool()]
+
+
+def _resolve_output_path(ctx: ToolContext, raw, default_name: str) -> Path:
+    path = Path(str(raw)) if raw else (Path(ctx.cwd) / default_name)
+    path = path.expanduser()
+    return path if path.is_absolute() else (Path(ctx.cwd) / path)

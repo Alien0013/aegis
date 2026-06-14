@@ -87,3 +87,108 @@ def test_mcp_empty_include_filter_surfaces_no_tools():
     saved = save_tool_checklist(cfg, "local", [])
     assert saved["tool_filter"]["include"] == []
     assert _filter_tools(tools, saved["tool_filter"]) == []
+
+
+def test_mcp_url_validation_fails_fast():
+    import pytest
+
+    from aegis.mcp.client import InvalidMCPUrlError, _validate_remote_mcp_url
+
+    assert _validate_remote_mcp_url("ctx", " https://example.com/mcp ") == "https://example.com/mcp"
+    for bad in (None, "", "example.com/mcp", "file:///etc/passwd", "https:///path"):
+        with pytest.raises(InvalidMCPUrlError):
+            _validate_remote_mcp_url("ctx", bad)
+
+
+def test_mcp_stdio_env_filters_parent_secrets(monkeypatch):
+    from aegis.mcp.client import _safe_subprocess_env
+
+    monkeypatch.setenv("PATH", "/bin")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-not-forwarded")
+    monkeypatch.setenv("XDG_CACHE_HOME", "/tmp/cache")
+
+    env = _safe_subprocess_env({"EXPLICIT_TOKEN": "forward-me"})
+
+    assert env["PATH"] == "/bin"
+    assert env["XDG_CACHE_HOME"] == "/tmp/cache"
+    assert "OPENAI_API_KEY" not in env
+    assert env["EXPLICIT_TOKEN"] == "forward-me"
+
+
+def test_mcp_schema_normalization_and_safe_names():
+    from aegis.mcp.client import MCPClient, MCPTool
+
+    tool = MCPTool(
+        MCPClient("my-server"),
+        {
+            "name": "submit-form",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "payload": {"$ref": "#/definitions/Payload"},
+                    "optional": {
+                        "anyOf": [{"type": "string"}, {"type": "null"}],
+                        "default": None,
+                    },
+                    "nested": {
+                        "type": "object",
+                        "properties": {"kept": {"type": "string"}},
+                        "required": ["kept", "ghost"],
+                    },
+                },
+                "required": ["payload", "ghost"],
+                "definitions": {
+                    "Payload": {"type": "object", "properties": {"q": {"type": "string"}}}
+                },
+            },
+        },
+    )
+
+    assert tool.name == "mcp__my_server__submit_form"
+    assert tool.parameters["properties"]["payload"]["$ref"] == "#/$defs/Payload"
+    assert "$defs" in tool.parameters
+    assert "definitions" not in tool.parameters
+    assert tool.parameters["required"] == ["payload"]
+    assert tool.parameters["properties"]["optional"]["nullable"] is True
+    assert tool.parameters["properties"]["nested"]["required"] == ["kept"]
+
+
+def test_mcp_call_preserves_structured_and_image_content(tmp_path, monkeypatch):
+    import base64
+    from types import MethodType
+
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.mcp.client import MCPClient
+
+    png = base64.b64encode(
+        base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
+    ).decode()
+    client = MCPClient("vision")
+
+    def fake_request(self, method, params=None, notify=False):
+        assert method == "tools/call"
+        return {
+            "result": {
+                "content": [
+                    {"type": "text", "text": "ok"},
+                    {"type": "image", "data": png, "mimeType": "image/png"},
+                ],
+                "structuredContent": {
+                    "fileName": "shot.png",
+                    "api_key": "sk-SECRETSECRETSECRETSECRET",
+                },
+            }
+        }
+
+    client._request = MethodType(fake_request, client)
+    content, is_error = client.call_tool("screenshot", {})
+
+    assert is_error is False
+    assert "ok" in content
+    assert "MEDIA:" in content and ".png" in content
+    assert "<structuredContent>" in content
+    assert "shot.png" in content
+    assert "sk-SECRET" not in content
+    assert "[REDACTED]" in content

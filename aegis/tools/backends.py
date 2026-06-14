@@ -35,6 +35,7 @@ from .environments import (
     SSHEnvironment,
     SingularityEnvironment,
 )
+from .command_utils import rewrite_compound_background, validate_command
 
 __all__ = [
     "cleanup_all_environments",
@@ -75,6 +76,10 @@ def run_command(
     returncode is ``124`` (the conventional ``timeout(1)`` code). Unknown or
     unavailable backends fall back to ``local`` with an explanatory note.
     """
+    command, error = validate_command(command)
+    if error:
+        return error, -1
+    command = rewrite_compound_background(command)
     backend = effective_backend(backend, task_id)
     if backend == "docker":
         return _run_docker(command, cwd, timeout, config, task_id)

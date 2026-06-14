@@ -15,22 +15,38 @@ Config (config.yaml ``mcp.servers`` or ``~/.aegis/mcp.json`` Claude-Desktop form
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
+import mimetypes
 import os
+import re
 import selectors
 import subprocess
+from urllib.parse import urlparse
 
 import httpx
 
 from .. import config as cfg
+from ..redact import redact_secret_values, redact_secrets
 from ..tools.base import Tool, ToolContext, ToolResult
-from ..util import read_text, truncate
+from ..util import ensure_dir, read_text, truncate
 
 PROTOCOL_VERSION = "2025-06-18"
 CLIENT_INFO = {"name": "aegis", "version": "0.1.0"}
+_SAFE_ENV_KEYS = {
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TEMP", "TMP",
+    "LANG", "LC_ALL", "LC_CTYPE", "PYTHONIOENCODING", "SYSTEMROOT", "WINDIR",
+}
+_SAFE_ENV_KEYS_UPPER = {k.upper() for k in _SAFE_ENV_KEYS}
+_NAME_PART_RE = re.compile(r"[^A-Za-z0-9_]")
 
 
 class MCPError(RuntimeError):
+    pass
+
+
+class InvalidMCPUrlError(ValueError):
     pass
 
 
@@ -61,7 +77,7 @@ class MCPClient:
 
     # -- transport ----------------------------------------------------------
     def _spawn(self) -> None:
-        env = {**os.environ, **self.env}
+        env = _safe_subprocess_env(self.env)
         self._proc = subprocess.Popen(
             [self.command, *self.args],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -111,7 +127,7 @@ class MCPClient:
         with httpx.Client(timeout=timeout) as c:
             r = c.post(self.url, headers=headers, json=payload)
             if r.status_code >= 400:
-                raise MCPError(f"{self.name}: HTTP {r.status_code}: {r.text[:200]}")
+                raise MCPError(redact_secrets(f"{self.name}: HTTP {r.status_code}: {r.text[:200]}"))
             if "MCP-Session-Id" in r.headers:
                 self._session_id = r.headers["MCP-Session-Id"]
             if "id" not in payload:
@@ -134,7 +150,8 @@ class MCPClient:
             payload["params"] = params
         resp = self._http_request(payload) if self.is_http else self._stdio_request(payload)
         if resp and "error" in resp:
-            raise MCPError(f"{self.name}: {resp['error'].get('message', resp['error'])}")
+            message = resp["error"].get("message", resp["error"])
+            raise MCPError(redact_secrets(f"{self.name}: {_nonempty_exc_text(message)}"))
         return resp
 
     # -- lifecycle ----------------------------------------------------------
@@ -212,12 +229,31 @@ class MCPClient:
         for block in result.get("content", []):
             if block.get("type") == "text":
                 parts.append(block.get("text", ""))
+            elif block.get("type") == "image":
+                tag = _cache_mcp_image_block(block)
+                if tag:
+                    parts.append(tag)
+                else:
+                    mime = block.get("mimeType") or block.get("mime_type") or "image/*"
+                    data_len = len(str(block.get("data") or ""))
+                    parts.append(f"[image content: {mime}, {data_len} base64 chars]")
             elif block.get("type") == "resource":
                 res = block.get("resource", {})
                 parts.append(res.get("text") or f"[resource {res.get('uri')}]")
             else:
                 parts.append(f"[{block.get('type')} content]")
-        return "\n".join(parts) or "(no content)", bool(result.get("isError"))
+        text = "\n".join(part for part in parts if part) or ""
+        structured = result.get("structuredContent")
+        if structured is None:
+            structured = result.get("structured_content")
+        if structured is not None:
+            structured = redact_secret_values(structured)
+            rendered = json.dumps(structured, ensure_ascii=False, indent=2)
+            if text:
+                text = f"{text}\n\n<structuredContent>\n{rendered}\n</structuredContent>"
+            else:
+                text = rendered
+        return text or "(no content)", bool(result.get("isError"))
 
     def close(self) -> None:
         if self._proc:
@@ -241,17 +277,17 @@ class MCPTool(Tool):
     def __init__(self, client: MCPClient, tool_def: dict):
         self._client = client
         self._remote = tool_def["name"]
-        self.name = f"mcp__{client.name}__{tool_def['name']}"
+        self.name = f"mcp__{_safe_name_part(client.name)}__{_safe_name_part(tool_def['name'])}"
         self.source = "mcp"
         self.server_name = client.name
         self.description = tool_def.get("description", "") or f"MCP tool {self._remote}"
-        self.parameters = tool_def.get("inputSchema") or {"type": "object", "properties": {}}
+        self.parameters = _normalize_mcp_input_schema(tool_def.get("inputSchema"))
 
     def run(self, args, ctx: ToolContext) -> ToolResult:
         try:
             content, is_err = self._client.call_tool(self._remote, args)
         except Exception as e:  # noqa: BLE001
-            return ToolResult.error(f"mcp call failed: {e}")
+            return ToolResult.error(f"mcp call failed: {redact_secrets(_nonempty_exc_text(e))}")
         return ToolResult(content=truncate(content, 30_000), is_error=is_err,
                           display=f"mcp:{self._client.name}/{self._remote}")
 
@@ -262,7 +298,7 @@ class MCPReadResourceTool(Tool):
 
     def __init__(self, client: MCPClient, resources: list[dict]):
         self._client = client
-        self.name = f"mcp__{client.name}__read_resource"
+        self.name = f"mcp__{_safe_name_part(client.name)}__read_resource"
         self.source = "mcp"
         self.server_name = client.name
         preview = _capability_preview(resources, "uri")
@@ -296,7 +332,7 @@ class MCPGetPromptTool(Tool):
 
     def __init__(self, client: MCPClient, prompts: list[dict]):
         self._client = client
-        self.name = f"mcp__{client.name}__get_prompt"
+        self.name = f"mcp__{_safe_name_part(client.name)}__get_prompt"
         self.source = "mcp"
         self.server_name = client.name
         preview = _capability_preview(prompts, "name")
@@ -365,6 +401,155 @@ class MCPManager:
     def close_all(self) -> None:
         for c in self.clients:
             c.close()
+
+
+def _safe_subprocess_env(user_env: dict | None = None) -> dict[str, str]:
+    """Return a minimal stdio-server env plus explicitly configured values."""
+    env: dict[str, str] = {}
+    for key, value in os.environ.items():
+        if key in _SAFE_ENV_KEYS or key.upper() in _SAFE_ENV_KEYS_UPPER or key.startswith("XDG_"):
+            env[key] = value
+    for key, value in (user_env or {}).items():
+        env[str(key)] = str(value)
+    return env
+
+
+def _nonempty_exc_text(value) -> str:
+    text = str(value).strip()
+    return text if text else repr(value)
+
+
+def _safe_name_part(value: str) -> str:
+    text = _NAME_PART_RE.sub("_", str(value or "")).strip("_")
+    return text or "unnamed"
+
+
+def _normalize_mcp_input_schema(schema) -> dict:
+    """Repair common MCP JSON Schema shapes before exposing them to model APIs."""
+    if not isinstance(schema, dict) or not schema:
+        return {"type": "object", "properties": {}}
+
+    def rewrite_refs(node):
+        if isinstance(node, list):
+            return [rewrite_refs(item) for item in node]
+        if not isinstance(node, dict):
+            return node
+        out = {}
+        for key, value in node.items():
+            out_key = "$defs" if key == "definitions" else key
+            out[out_key] = rewrite_refs(value)
+        ref = out.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/definitions/"):
+            out["$ref"] = "#/$defs/" + ref[len("#/definitions/"):]
+        return out
+
+    def collapse_nullable(node):
+        if isinstance(node, list):
+            return [collapse_nullable(item) for item in node]
+        if not isinstance(node, dict):
+            return node
+        for union_key in ("anyOf", "oneOf"):
+            choices = node.get(union_key)
+            if isinstance(choices, list) and len(choices) == 2:
+                non_null = [choice for choice in choices if not (
+                    isinstance(choice, dict) and choice.get("type") == "null"
+                )]
+                if len(non_null) == 1:
+                    collapsed = collapse_nullable(non_null[0])
+                    if isinstance(collapsed, dict):
+                        out = {
+                            k: collapse_nullable(v)
+                            for k, v in node.items()
+                            if k not in {"anyOf", "oneOf"}
+                        }
+                        out.update(collapsed)
+                        out["nullable"] = True
+                        return out
+        return {key: collapse_nullable(value) for key, value in node.items()}
+
+    def repair_objects(node):
+        if isinstance(node, list):
+            return [repair_objects(item) for item in node]
+        if not isinstance(node, dict):
+            return node
+        repaired = {key: repair_objects(value) for key, value in node.items()}
+        if not repaired.get("type") and ("properties" in repaired or "required" in repaired):
+            repaired["type"] = "object"
+        if repaired.get("type") == "object":
+            if not isinstance(repaired.get("properties"), dict):
+                repaired["properties"] = {}
+            required = repaired.get("required")
+            if isinstance(required, list):
+                props = repaired.get("properties") or {}
+                valid = [name for name in required if isinstance(name, str) and name in props]
+                if valid:
+                    repaired["required"] = valid
+                else:
+                    repaired.pop("required", None)
+        return repaired
+
+    normalized = repair_objects(collapse_nullable(rewrite_refs(schema)))
+    if not isinstance(normalized, dict):
+        return {"type": "object", "properties": {}}
+    if not normalized.get("type") and ("properties" in normalized or "required" in normalized):
+        normalized["type"] = "object"
+    if normalized.get("type") == "object" and not isinstance(normalized.get("properties"), dict):
+        normalized["properties"] = {}
+    return normalized
+
+
+def _mcp_image_extension_for_mime_type(mime_type: str) -> str:
+    normalized = (mime_type or "").split(";", 1)[0].strip().lower()
+    if normalized in {"image/jpeg", "image/jpg"}:
+        return ".jpg"
+    return mimetypes.guess_extension(normalized) or ".png"
+
+
+def _looks_like_image(data: bytes) -> bool:
+    return (
+        data.startswith(b"\x89PNG\r\n\x1a\n")
+        or data.startswith(b"\xff\xd8\xff")
+        or data.startswith(b"GIF87a")
+        or data.startswith(b"GIF89a")
+        or (data.startswith(b"RIFF") and data[8:12] == b"WEBP")
+    )
+
+
+def _cache_mcp_image_block(block: dict) -> str:
+    mime_type = str(block.get("mimeType") or block.get("mime_type") or "").split(";", 1)[0].lower()
+    if not mime_type.startswith("image/") or not block.get("data"):
+        return ""
+    try:
+        raw = base64.b64decode(str(block.get("data")), validate=True)
+    except (TypeError, ValueError):
+        return ""
+    if not _looks_like_image(raw):
+        return ""
+    ext = _mcp_image_extension_for_mime_type(mime_type)
+    digest = hashlib.sha256(raw).hexdigest()[:16]
+    out_dir = ensure_dir(cfg.sub("tool_outputs", "mcp_images"))
+    out = out_dir / f"mcp_{digest}{ext}"
+    if not out.exists():
+        out.write_bytes(raw)
+    return f"MEDIA:{out}"
+
+
+def _validate_remote_mcp_url(server_name: str, url) -> str:
+    if not isinstance(url, str):
+        raise InvalidMCPUrlError(
+            f"MCP server '{server_name}' expected a string url, got {type(url).__name__}"
+        )
+    stripped = url.strip()
+    if not stripped:
+        raise InvalidMCPUrlError(f"MCP server '{server_name}' has an empty url")
+    parsed = urlparse(stripped)
+    if parsed.scheme not in {"http", "https"}:
+        raise InvalidMCPUrlError(
+            f"MCP server '{server_name}' url scheme must be http or https"
+        )
+    if not parsed.hostname:
+        raise InvalidMCPUrlError(f"MCP server '{server_name}' url is missing host")
+    return stripped
 
 
 def _server_configs(config) -> dict:
@@ -565,9 +750,12 @@ def build_manager(config) -> MCPManager:
 
 
 def _client_from_spec(name: str, spec: dict) -> MCPClient:
+    url = spec.get("url")
+    if url is not None:
+        url = _validate_remote_mcp_url(name, url)
     return MCPClient(
         name, command=spec.get("command"), args=spec.get("args"),
-        env=spec.get("env"), url=spec.get("url"), headers=spec.get("headers"),
+        env=spec.get("env"), url=url, headers=spec.get("headers"),
         cwd=spec.get("cwd"), tool_filter=spec.get("tool_filter"),
     )
 

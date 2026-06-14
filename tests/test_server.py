@@ -16,11 +16,21 @@ def _serve(handler):
     return srv, srv.server_address[1]
 
 
-def _request(port: int, method: str, path: str, body: dict | None = None):
+def _request(port: int, method: str, path: str, body: dict | None = None, headers: dict | None = None):
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
     payload = json.dumps(body or {}).encode()
-    headers = {"Content-Type": "application/json"} if body is not None else {}
-    conn.request(method, path, body=payload if body is not None else None, headers=headers)
+    req_headers = {"Content-Type": "application/json"} if body is not None else {}
+    req_headers.update(headers or {})
+    conn.request(method, path, body=payload if body is not None else None, headers=req_headers)
+    resp = conn.getresponse()
+    data = resp.read().decode()
+    conn.close()
+    return resp.status, data
+
+
+def _raw_request(port: int, method: str, path: str, body: bytes, headers: dict | None = None):
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    conn.request(method, path, body=body, headers=headers or {})
     resp = conn.getresponse()
     data = resp.read().decode()
     conn.close()
@@ -105,6 +115,43 @@ def test_openai_models_lists_model_ids_not_only_provider_names(monkeypatch, tmp_
     assert "gpt-5.5" in ids
     assert "localtest" not in ids
     assert "serverplug" not in ids
+
+
+def test_openai_server_auth_protects_models_and_rejects_bad_json(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.config import Config
+    from aegis.server import make_handler
+
+    cfg = Config.load()
+    cfg.data.setdefault("server", {})["api_key"] = "serve-secret"
+    srv, port = _serve(make_handler(cfg))
+    try:
+        status, _data = _request(port, "GET", "/v1/models")
+        authed_status, authed_data = _request(
+            port,
+            "GET",
+            "/v1/models",
+            headers={"Authorization": "Bearer serve-secret"},
+        )
+        bad_status, bad_data = _raw_request(
+            port,
+            "POST",
+            "/v1/chat/completions",
+            b"{",
+            headers={
+                "Authorization": "Bearer serve-secret",
+                "Content-Type": "application/json",
+            },
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 401
+    assert authed_status == 200
+    assert json.loads(authed_data)["object"] == "list"
+    assert bad_status == 400
+    assert json.loads(bad_data)["error"] == "invalid json"
 
 
 def test_openai_chat_completions_http_nonstream_records_run_metadata(monkeypatch, tmp_path):

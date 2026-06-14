@@ -483,7 +483,12 @@ class BashTool(Tool):
 
     def run(self, args, ctx) -> ToolResult:
         from .backends import create_environment, effective_backend, run_command
+        from .command_utils import rewrite_compound_background, validate_command
 
+        command, command_error = validate_command(args.get("command"))
+        if command_error:
+            return ToolResult.error(command_error)
+        command = rewrite_compound_background(command)
         timeout = min(int(args.get("timeout", 120)), 600)
         backend = ctx.config.get("tools.terminal_backend", "local") if ctx.config else "local"
         task_id = getattr(ctx, "task_id", "") or ""
@@ -513,7 +518,7 @@ class BashTool(Tool):
             }
             if backend == "local":
                 proc = process_registry.spawn_local(
-                    args["command"],
+                    command,
                     cwd=ctx.cwd,
                     task_id=task_id,
                     notify_on_complete=notify_on_complete,
@@ -533,7 +538,7 @@ class BashTool(Tool):
                     return ToolResult.error(error)
                 proc = process_registry.spawn_via_env(
                     env,
-                    args["command"],
+                    command,
                     cwd=str(ctx.cwd),
                     task_id=task_id,
                     notify_on_complete=notify_on_complete,
@@ -586,7 +591,7 @@ class BashTool(Tool):
                 data=data,
             )
         out, code = run_command(
-            args["command"],
+            command,
             str(ctx.cwd),
             timeout,
             backend,
@@ -598,7 +603,7 @@ class BashTool(Tool):
         return ToolResult(
             content=truncate(out, _max_output_chars(ctx)) + tail,
             is_error=code != 0,
-            display=f"$ {args['command'][:60]} (exit {code})",
+            display=f"$ {command[:60]} (exit {code})",
         )
 
 
