@@ -34,6 +34,13 @@ STALE_AFTER_DAYS = 30
 # Two skills whose descriptions match above this ratio are flagged as duplicates.
 DUP_THRESHOLD = 0.82
 
+# Lifecycle states (Hermes-parity state machine): a skill is ACTIVE until it goes
+# unused past stale_after_days (-> STALE), then archived past archive_after_days
+# (-> ARCHIVED); using it again reactivates it. Pinned skills never transition.
+STATE_ACTIVE = "active"
+STATE_STALE = "stale"
+STATE_ARCHIVED = "archived"
+
 
 # --------------------------------------------------------------------------- #
 # paths
@@ -78,6 +85,21 @@ def record_use(name: str) -> None:
     _save_usage(data)
 
 
+def _set_state(name: str, state: str) -> None:
+    """Persist a skill's lifecycle state in usage.json so it's visible/queryable
+    between curator runs (the state machine is stored, not recomputed each time)."""
+    data = _load_usage()
+    entry = data.get(name, {"count": 0, "last_used": ""})
+    entry["state"] = state
+    data[name] = entry
+    _save_usage(data)
+
+
+def skill_state(name: str) -> str:
+    """Current persisted lifecycle state for ``name`` (defaults to active)."""
+    return (_load_usage().get(name) or {}).get("state", STATE_ACTIVE)
+
+
 def _parse_iso(value: str) -> datetime | None:
     if not value:
         return None
@@ -102,6 +124,7 @@ class SkillInfo:
     patch_count: int = 0             # skill_manage patch/edit/write_file/remove_file
     last_used: str = ""              # iso, "" if never
     age_days: float = 0.0            # days since last_used (or dir mtime)
+    state: str = STATE_ACTIVE        # persisted lifecycle state
 
 
 def _frontmatter(raw: str) -> dict | None:
@@ -143,6 +166,7 @@ def _scan(now: datetime | None = None) -> list[SkillInfo]:
         info.view_count = int(u.get("view_count", 0))
         info.patch_count = int(u.get("patch_count", 0))
         info.last_used = u.get("last_used", "")
+        info.state = u.get("state", STATE_ACTIVE)
         ref = _parse_iso(info.last_used)
         if ref is None:
             ref = datetime.fromtimestamp(md.stat().st_mtime if md.exists()
@@ -214,28 +238,47 @@ def prune(dry_run: bool = True, stale_after_days: int = STALE_AFTER_DAYS) -> lis
 
 
 def apply_transitions(dry_run: bool = True, stale_after_days: int = STALE_AFTER_DAYS,
-                      archive_after_days: int = ARCHIVE_AFTER_DAYS) -> dict[str, list[str]]:
-    """Walk curatable skills and classify by the lifecycle clock: active → stale → archived.
-    With ``dry_run=False`` the archive-eligible ones are archived (never deleted — archive is
-    recoverable). Pinned/protected/user skills bypass entirely."""
+                      archive_after_days: int = ARCHIVE_AFTER_DAYS) -> dict:
+    """Walk curatable skills and move them through the lifecycle state machine:
+    ``active → stale → archived`` by the inactivity clock, ``stale → active`` when a
+    skill is used again (reactivation). Pinned/protected/user skills bypass entirely.
+
+    With ``dry_run=False`` the new state is persisted to usage.json and archive-eligible
+    skills are archived (never deleted — archive is recoverable). Returns the per-name
+    lists plus a Hermes-style ``counts`` dict (checked/marked_stale/reactivated/archived).
+    """
     from . import provenance
-    stale, to_archive = [], []
+    stale, to_archive, reactivated = [], [], []
+    counts = {"checked": 0, "marked_stale": 0, "reactivated": 0, "archived": 0}
     for s in _scan():
         if s.malformed or not provenance.curatable(s.name):
             continue
+        counts["checked"] += 1
         if s.age_days >= archive_after_days:
             to_archive.append(s.name)
         elif s.age_days >= stale_after_days:
             stale.append(s.name)
+            if not dry_run and s.state != STATE_STALE:
+                _set_state(s.name, STATE_STALE)
+                counts["marked_stale"] += 1
+        elif s.state == STATE_STALE:
+            # Used again after being marked stale — reactivate.
+            reactivated.append(s.name)
+            if not dry_run:
+                _set_state(s.name, STATE_ACTIVE)
+                counts["reactivated"] += 1
     archived: list[str] = []
     if not dry_run:
         consolidated, pruned = _classify_removed(to_archive)
         for name in to_archive:
             if archive(name):
+                _set_state(name, STATE_ARCHIVED)
                 archived.append(name)
-        return {"stale": stale, "archived": archived,
-                "consolidated": consolidated, "pruned": pruned}
-    return {"stale": stale, "to_archive": to_archive}
+        counts["archived"] = len(archived)
+        return {"stale": stale, "archived": archived, "reactivated": reactivated,
+                "consolidated": consolidated, "pruned": pruned, "counts": counts}
+    return {"stale": stale, "to_archive": to_archive, "reactivated": reactivated,
+            "counts": counts}
 
 
 def _classify_removed(names: list[str]) -> tuple[list[str], list[str]]:
@@ -284,6 +327,60 @@ def restore(name: str) -> bool:
     if dest.exists():
         return False  # refuse to clobber a live skill
     shutil.move(str(src), str(dest))
+    return True
+
+
+def consolidation_candidates() -> list[dict]:
+    """Near-duplicate skill pairs worth merging, oriented from→into: the less-used
+    (or newer) skill folds into the more-established one. Only curatable skills."""
+    from . import provenance
+    by_name = {s.name: s for s in _scan()}
+    out: list[dict] = []
+    for pair in _find_duplicates(list(by_name.values())):
+        a, b = by_name.get(pair["a"]), by_name.get(pair["b"])
+        if a is None or b is None:
+            continue
+        if not (provenance.curatable(a.name) or provenance.curatable(b.name)):
+            continue
+        # Keep the more-used skill; fold the weaker one into it. Prefer to remove a
+        # curatable skill (never fold away a pinned/user skill).
+        weaker, stronger = (a, b) if (a.count, a.last_used) <= (b.count, b.last_used) else (b, a)
+        if not provenance.curatable(weaker.name):
+            weaker, stronger = stronger, weaker
+        if not provenance.curatable(weaker.name):
+            continue                                  # both protected — skip
+        out.append({"from": weaker.name, "into": stronger.name,
+                    "similarity": pair["similarity"]})
+    return out
+
+
+def consolidate(from_name: str, into_name: str) -> bool:
+    """Merge skill ``from_name`` into ``into_name``: copy its SKILL.md body into the
+    survivor's ``references/`` directory (so the detail is preserved, Hermes-style), then
+    archive ``from_name`` with a pointer back to the survivor. Returns False if either
+    skill is missing or ``from_name`` isn't safe to remove."""
+    from . import provenance
+    try:
+        from_name = validate_skill_name(from_name)
+        into_name = validate_skill_name(into_name)
+    except ValueError:
+        return False
+    if from_name == into_name or not provenance.curatable(from_name):
+        return False
+    src, dst = cfg.skills_dir() / from_name, cfg.skills_dir() / into_name
+    if not (src.is_dir() and dst.is_dir()):
+        return False
+    body = read_text(src / "SKILL.md")
+    refs = dst / "references"
+    refs.mkdir(parents=True, exist_ok=True)
+    atomic_write(refs / f"consolidated-{from_name}.md",
+                 f"# Consolidated from '{from_name}'\n\n"
+                 f"(folded in by the curator on {now_iso()})\n\n{body.strip()}\n")
+    if not archive(from_name):
+        return False
+    _set_state(from_name, STATE_ARCHIVED)
+    # Leave a pointer in the archived copy so a restore knows where its content went.
+    atomic_write(_archive_dir() / from_name / ".consolidated_into", into_name + "\n")
     return True
 
 

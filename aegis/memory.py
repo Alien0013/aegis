@@ -264,6 +264,40 @@ class MemoryStore:
             self._write_entries(target, entries)
         return f"removed 1 entry from {_FILES[target]} ({self.usage(target)})"
 
+    def consolidate(self, target: str, threshold: float = 0.9) -> dict:
+        """Deterministic dedup safety net for the bounded store: drop entries that are
+        exact/substring duplicates or near-duplicates (similarity >= ``threshold``) of
+        another, keeping the longer/more-informative one. Complements the LLM memory
+        review (which merges semantically) so the small budget never fills with
+        near-duplicates. Returns ``{before, after, removed}``."""
+        from difflib import SequenceMatcher
+
+        from ._locks import STORE_LOCK, file_lock
+        with STORE_LOCK, file_lock(self._path(target)):
+            if self._detect_drift(target):
+                return {"before": 0, "after": 0, "removed": []}
+            entries = self.entries(target)
+            kept: list[str] = []
+            removed: list[str] = []
+            for e in entries:
+                dup_idx = None
+                for i, k in enumerate(kept):
+                    el, kl = e.strip().lower(), k.strip().lower()
+                    if el == kl or el in kl or kl in el or \
+                            SequenceMatcher(None, el, kl).ratio() >= threshold:
+                        dup_idx = i
+                        break
+                if dup_idx is None:
+                    kept.append(e)
+                elif len(e) > len(kept[dup_idx]):
+                    removed.append(kept[dup_idx])     # keep the longer of the pair
+                    kept[dup_idx] = e
+                else:
+                    removed.append(e)
+            if removed:
+                self._write_entries(target, kept)
+        return {"before": len(entries), "after": len(kept), "removed": removed}
+
 
 class History:
     """Append-only conversation log (history.jsonl), durable with fsync."""

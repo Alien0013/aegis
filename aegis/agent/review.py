@@ -56,6 +56,8 @@ _SKILL_PROMPT = (
     "  - `assets/<name>`: small static assets the skill needs.\n\n"
     "Do NOT edit bundled or hub-installed skills. Pinned skills can be improved; pinning "
     "only blocks archival/consolidation, not content fixes.\n\n"
+    "If two existing skills clearly overlap, note it in your reply — the background "
+    "curator handles consolidation at scale (merging the weaker into the stronger).\n\n"
     "Do NOT capture environment-dependent failures, missing binaries, unconfigured "
     "credentials, negative claims like 'tool X is broken', transient errors that "
     "resolved, or one-off task narratives. If setup state caused a failure, capture the "
@@ -72,6 +74,10 @@ _MEMORY_PROMPT = (
     "details, resolved temporary errors, or facts already obvious from the repository. "
     "If a correction is about how to do a class of task, it may belong in a skill as "
     "well as memory.\n\n"
+    "Consolidate as you go: if the store already holds entries that overlap or are "
+    "superseded by what you're saving, merge them — use the memory tool's `replace` to "
+    "fold several notes into one durable fact, or `remove` a now-redundant entry. Memory "
+    "is a small budget; keep it deduplicated rather than letting near-duplicates pile up.\n\n"
     "If something stands out, save it with the `memory` tool. If nothing qualifies, "
     "say 'Nothing to save.' and stop."
 )
@@ -185,6 +191,7 @@ def maybe_review(agent, tools_this_turn: int) -> bool:
     def _run():
         try:
             if review_memory:
+                _consolidate_memory(agent, on_ev)                 # deterministic dedup first
                 if auto_apply:
                     run_review(agent, "memory", on_event=on_ev)   # writes directly + reports back
                 else:
@@ -206,3 +213,21 @@ def _propose_only(agent, kind: str) -> None:
     """Human-gated default: use the candidate reviewer instead of writing directly."""
     from .. import learn
     learn.review_session(agent.config, agent.session.id)
+
+
+def _consolidate_memory(agent, on_ev=None) -> None:
+    """Deterministic memory dedup before the LLM memory review: drop near-duplicate
+    entries from MEMORY.md/USER.md so the small budget never fills with redundancy
+    (the LLM review then merges what remains semantically)."""
+    store = getattr(getattr(agent, "memory", None), "store", None)
+    if store is None:
+        return
+    for target in ("memory", "user"):
+        try:
+            res = store.consolidate(target)
+        except Exception:  # noqa: BLE001
+            continue
+        if res.get("removed") and on_ev:
+            on_ev({"type": "review_done", "kind": "memory",
+                   "actions": [f"consolidated {len(res['removed'])} redundant memory entr"
+                               f"{'y' if len(res['removed']) == 1 else 'ies'}"]})
