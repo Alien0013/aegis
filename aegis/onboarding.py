@@ -52,7 +52,7 @@ def _hdr(out: Output, title: str) -> None:
         tag = f"[{_STEP.n}/{_STEP.total}] "
     line = f"{tag}{title}"
     out("")
-    out(_paint(f"━━ {line} " + "━" * max(0, 53 - len(line)), "1;36", out))
+    out(_paint(f"━━ {line} " + "━" * max(0, 53 - len(line)), "1;38;2;214;161;94", out))
 
 
 def _truecolor(out: Output) -> bool:
@@ -60,11 +60,11 @@ def _truecolor(out: Output) -> bool:
 
 
 def _gradient_line(line: str, out: Output) -> str:
-    """Paint one banner line with a horizontal violet→cyan gradient (AEGIS brand).
+    """Paint one banner line with the warm AEGIS desktop gradient.
     Truecolor terminals get the real gradient; others get the flat accent."""
     if not _truecolor(out):
-        return _paint(line, "1;36", out)
-    a, b = (160, 107, 255), (107, 224, 255)
+        return _paint(line, "1;33", out)
+    a, b = (214, 161, 94), (126, 207, 143)
     n = max(1, len(line) - 1)
     chars = []
     for i, ch in enumerate(line):
@@ -89,8 +89,8 @@ def _banner(out: Output) -> None:
         out(_gradient_line(line, out))
     out(_paint("   ─────────────────────────────────", "2", out))
     out("   " + _paint(f"v{__version__}", "1", out)
-        + _paint("  ·  your personal agent harness", "2", out)
-        + _paint("  ·  29 providers · 30+ tools · 8 channels", "2", out))
+        + _paint("  ·  local agent desktop", "2", out)
+        + _paint("  ·  providers · tools · channels", "2", out))
     out("")
 
 
@@ -424,7 +424,11 @@ def _ask(prompt: str, default: str | None, input_func: Input) -> str:
 def _confirm(prompt: str, default: bool, input_func: Input, output_func: Output) -> bool:
     suffix = "Y/n" if default else "y/N"
     while True:
-        raw = input_func(f"? {prompt} ({suffix}) ").strip().lower()
+        try:
+            raw = input_func(f"? {prompt} ({suffix}) ").strip().lower()
+        except KeyboardInterrupt:
+            output_func("")
+            return False
         if not raw:
             return default
         if raw in ("y", "yes"):

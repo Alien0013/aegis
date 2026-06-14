@@ -11,6 +11,8 @@ metadata:
 The task is more than a one-line edit: a feature, a refactor, a real bug, or anything where a wrong guess is expensive. The goal is not to *look* finished — it's to *be* finished, with evidence. This loop trades a little speed for far fewer rewrites. For a trivial change, skip it and just make the edit.
 
 ## Procedure
+> **This is execution, not demonstration.** Do the task on the real workspace — actually create/modify the real files and run real commands. A sample, a stub, a skeleton, or an "here's how you would do it" example instead of the finished work is a failure. Keep going until the task itself is done.
+
 1. **Turn the task into a verifiable goal.** Restate the request as a success criterion you can check, not a vibe. "Add validation" → "these invalid inputs are rejected with these errors, proven by a test." If the goal is ambiguous or has multiple readings, surface that and pick the most likely one explicitly before coding.
 2. **Understand before touching.** Read the surrounding code, the call sites, and one existing example of the thing you're about to write. Match the project's style, naming, and error handling. Find every site a change must touch (a bug class usually has siblings).
 3. **Plan in steps, each with its own check.** Write a short numbered plan where every step names how you'll verify it. A plan whose steps can't be checked is a wish, not a plan. Keep it visible (a todo list) and update it as reality intrudes.

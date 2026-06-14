@@ -117,7 +117,7 @@ def _prompt_session_supported() -> bool:
     return False
 
 
-def _read_repl_input(ps, prompt: str = ">>> ") -> str:
+def _read_repl_input(ps, prompt: Any = "aegis > ") -> str:
     """Read one REPL line, falling back when prompt_toolkit cannot run safely.
 
     The event-loop state can change after startup: a provider or UI integration may
@@ -125,7 +125,7 @@ def _read_repl_input(ps, prompt: str = ">>> ") -> str:
     here prevents PromptSession.prompt() from crashing with asyncio.run() errors.
     """
     if ps is None or not _prompt_session_supported():
-        return input(prompt)
+        return input(prompt if isinstance(prompt, str) else "aegis > ")
     try:
         return ps.prompt(prompt)
     except RuntimeError as exc:
@@ -147,7 +147,17 @@ def _raw(text: str) -> None:
     sys.stdout.flush()
 
 
-# ANSI-Shadow "AEGIS" for the startup banner, drawn with a magenta→cyan gradient.
+# Warm AEGIS terminal palette: charcoal + amber + moss green + quiet cyan.
+TERM_AMBER = "#d6a15e"
+TERM_AMBER_DARK = "#8d6735"
+TERM_GREEN = "#7ecf8f"
+TERM_CYAN = "#6fb7d8"
+TERM_PANEL = "#262a31"
+TERM_MUTED = "#8f968f"
+TERM_TEXT = "#f3f1e8"
+
+
+# ANSI-Shadow "AEGIS" for the startup banner, drawn with the AEGIS desktop palette.
 _AEGIS_ART = [
     " █████╗ ███████╗ ██████╗ ██╗███████╗",
     "██╔══██╗██╔════╝██╔════╝ ██║██╔════╝",
@@ -156,7 +166,7 @@ _AEGIS_ART = [
     "██║  ██║███████╗╚██████╔╝██║███████║",
     "╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═╝╚══════╝",
 ]
-_AEGIS_ART_COLORS = ["#8b5cff", "#7d6bff", "#5b8cff", "#3ba6f0", "#2bc0e4", "#22d3ee"]
+_AEGIS_ART_COLORS = [TERM_AMBER, "#c9aa6b", TERM_GREEN, "#78c7a5", TERM_CYAN, "#8aa0a4"]
 
 
 def _tool_icon(name: str) -> str:
@@ -578,8 +588,8 @@ def _status_line(agent: Agent, progress: TerminalStatusState | None = None) -> s
     if trace:
         suffix += f" · trace {trace[:12]}"
     return (
-        f"  [{model} · {ctx_text} · tokens in {input_tokens:,} "
-        f"out {output_tokens:,} · reasoning {reasoning} · perms {perms}{suffix}]"
+        f"  AEGIS · {model} · {ctx_text} · tokens in {input_tokens:,} "
+        f"out {output_tokens:,} · reasoning {reasoning} · perms {perms}{suffix}"
     )
 
 
@@ -609,10 +619,28 @@ def _bottom_toolbar(agent: Agent):
     else:
         ctx_text = _fmt_token_count(ctx["used"])
     return HTML(
-        f" <b>{escape(model)}</b>  "
-        f"ctx {escape(ctx_text)}  "
-        f"reasoning {escape(reasoning)}  "
-        f"perms {escape(perms)} "
+        f" <style fg='{TERM_AMBER}'><b>AEGIS</b></style> "
+        f"<style fg='{TERM_TEXT}'>{escape(model)}</style>  "
+        f"<style fg='{TERM_MUTED}'>ctx</style> <style fg='{TERM_GREEN}'>{escape(ctx_text)}</style>  "
+        f"<style fg='{TERM_MUTED}'>reasoning</style> <style fg='{TERM_TEXT}'>{escape(reasoning)}</style>  "
+        f"<style fg='{TERM_MUTED}'>perms</style> <style fg='{TERM_TEXT}'>{escape(perms)}</style> "
+    )
+
+
+def _prompt_message(agent: Agent):
+    """Prompt shown by the local terminal surface."""
+    try:
+        from prompt_toolkit.formatted_text import HTML
+    except Exception:  # noqa: BLE001
+        return "aegis > "
+    label = "aegis"
+    profile = str(agent.config.get("agent.personality") or "").strip()
+    if profile:
+        label += f":{profile}"
+    from html import escape
+    return HTML(
+        f"<style fg='{TERM_AMBER}'><b>{escape(label)}</b></style>"
+        f"<style fg='{TERM_MUTED}'> › </style>"
     )
 
 
@@ -633,46 +661,57 @@ def banner(agent: Agent) -> None:
             art.append("  " + line + "\n", style=f"bold {color}")
         _console.print(art)
         body = Text()
-        body.append(f"  v{__version__}", style="dim")
-        body.append("  ·  your terminal agent\n\n", style="dim")
-        body.append("  model    ", style="dim")
-        body.append(f"{model}\n", style="cyan")
+        body.append("  AEGIS local runtime", style=f"bold {TERM_AMBER}")
+        body.append(f"  ·  v{__version__}\n", style=f"{TERM_MUTED}")
+        body.append("  terminal agent + operator desktop\n\n", style=f"{TERM_MUTED}")
+        body.append("  provider ", style=f"{TERM_MUTED}")
+        body.append(f"{agent.config.get('model.provider', 'provider')}\n", style=f"bold {TERM_TEXT}")
+        body.append("  model    ", style=f"{TERM_MUTED}")
+        body.append(f"{model}\n", style=f"bold {TERM_GREEN}")
         ctx = _context_window(agent)
         if ctx["window"]:
-            body.append("  context  ", style="dim")
+            body.append("  context  ", style=f"{TERM_MUTED}")
             body.append(
+                f"{_ctx_bar(ctx['percent'], 14)}  "
                 f"{_fmt_token_count(ctx['used'])}/{_fmt_token_count(ctx['window'])} "
                 f"({ctx['remaining']:,} left)\n",
-                style="white",
+                style=f"bold {TERM_TEXT}",
             )
-        body.append("  controls ", style="dim")
+        body.append("  controls ", style=f"{TERM_MUTED}")
         body.append(
             f"reasoning {agent.config.get('display.reasoning', 'summary')}/"
             f"{getattr(agent, 'reasoning', 'off')} · permissions "
             f"{agent.config.get('tools.exec_mode', 'auto')}\n",
-            style="white",
+            style=f"{TERM_TEXT}",
         )
-        body.append("  cwd      ", style="dim")
-        body.append(f"{agent.cwd}\n", style="white")
-        body.append("  session  ", style="dim")
-        body.append(f"{agent.session.id}\n\n", style="white")
-        body.append("  Control plane:\n", style="bold")
-        body.append("    aegis ui", style="cyan")
-        body.append("     web dashboard\n\n", style="dim")
-        body.append("  Try:  ", style="dim")
-        body.append("/help", style="green")
+        body.append("  cwd      ", style=f"{TERM_MUTED}")
+        body.append(f"{agent.cwd}\n", style=f"{TERM_TEXT}")
+        body.append("  session  ", style=f"{TERM_MUTED}")
+        body.append(f"{agent.session.id}\n\n", style=f"{TERM_TEXT}")
+        body.append("  Surfaces\n", style=f"bold {TERM_AMBER}")
+        body.append("    aegis ui", style=f"bold {TERM_GREEN}")
+        body.append("   browser control panel\n", style=f"{TERM_MUTED}")
+        body.append("    aegis tui", style=f"bold {TERM_GREEN}")
+        body.append("  full-screen terminal app\n\n", style=f"{TERM_MUTED}")
+        body.append("  Try  ", style=f"{TERM_MUTED}")
+        body.append("/help", style=f"bold {TERM_GREEN}")
         body.append(" commands · ", style="dim")
-        body.append("@file.py", style="green")
+        body.append("@file.py", style=f"bold {TERM_GREEN}")
         body.append(" attach a file · ", style="dim")
-        body.append("/goal", style="green")
+        body.append("/goal", style=f"bold {TERM_GREEN}")
         body.append(" run to completion · ", style="dim")
-        body.append("/quit", style="green")
+        body.append("/quit", style=f"bold {TERM_GREEN}")
         body.append(" exit", style="dim")
-        _console.print(Panel(body, title="[bold magenta]your agent harness[/]",
-                             border_style="magenta", padding=(0, 1)))
+        _console.print(Panel(
+            body,
+            title=f"[bold {TERM_AMBER}]agent desktop[/]",
+            subtitle=f"[{TERM_MUTED}]ready for local work[/]",
+            border_style=TERM_AMBER_DARK,
+            padding=(0, 1),
+        ))
     else:
         print("=" * 60)
-        print(f"AEGIS v{__version__}  ·  {model}  ·  session {agent.session.id}")
+        print(f"AEGIS local runtime v{__version__} · {model} · session {agent.session.id}")
         ctx = _context_window(agent)
         if ctx["window"]:
             print(f"context: {_fmt_token_count(ctx['used'])}/{_fmt_token_count(ctx['window'])} "
@@ -681,8 +720,8 @@ def banner(agent: Agent) -> None:
               f"{getattr(agent, 'reasoning', 'off')} · permissions "
               f"{agent.config.get('tools.exec_mode', 'auto')}")
         print(f"cwd: {agent.cwd}")
-        print("Control plane:  aegis ui (web dashboard)")
-        print("Try: /help · @file · #remember · /ultracode · /context · /quit")
+        print("Surfaces:  aegis ui (browser control panel) · aegis tui (terminal app)")
+        print("Try: /help · @file · /goal · /ultracode · /context · /quit")
         print("=" * 60)
 
 
@@ -715,12 +754,16 @@ def handle_ultracode_command(text: str, agent: Any) -> str | None:
     return (
         skill_block
         + "<system-reminder>Run the ultracode loop above end to end for the task below, "
-        "autonomously. Restate the goal as a checkable success criterion; plan in verifiable "
-        "steps with todo_write; for behavioral changes write a FAILING test first; make the "
-        "smallest change that satisfies the goal; then RUN the build/tests/linter and read the "
-        "real output. Do NOT declare the task done until that success criterion is met and proven "
-        "by tool output you actually ran and observed. If something blocks the real path, say so "
-        "honestly and try another route — never fabricate results.</system-reminder>\n\n" + arg
+        "autonomously. This is EXECUTION on the real workspace, not a demonstration: actually "
+        "create and modify the real files and run real commands in this session NOW. Producing a "
+        "sample, a stub, a skeleton, or an illustrative example INSTEAD of doing the task is a "
+        "failure — keep going until the task itself is actually done. Restate the goal as a "
+        "checkable success criterion; plan in verifiable steps with todo_write; for behavioral "
+        "changes write a FAILING test first; make the smallest change that satisfies the goal; "
+        "then RUN the build/tests/linter and read the real output. Do NOT declare the task done "
+        "until that success criterion is met and proven by tool output you actually ran and "
+        "observed. If something blocks the real path, say so honestly and try another route — "
+        "never fabricate results.</system-reminder>\n\n" + arg
     )
 
 
@@ -1764,7 +1807,7 @@ def interactive(config: Config, *, model=None, provider_name=None,
     try:
         while True:
             try:
-                user = _read_repl_input(ps)
+                user = _read_repl_input(ps, _prompt_message(agent))
             except (EOFError, KeyboardInterrupt):
                 _out("\nbye.")
                 if config.get("learn.auto") and len(agent.session.messages) > 4:

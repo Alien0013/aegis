@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import sys
 
-CYAN = "\x1b[36m"
+AMBER = "\x1b[38;2;214;161;94m"
 DIM = "\x1b[2m"
-REV = "\x1b[7m"
-GREEN = "\x1b[32m"
+REV = "\x1b[48;2;42;36;27m\x1b[38;2;243;241;232m"
+GREEN = "\x1b[38;2;126;207;143m"
 BOLD = "\x1b[1m"
 RST = "\x1b[0m"
 
@@ -68,14 +68,14 @@ def select_one(prompt: str, options: list[tuple[str, str]], default: int = 0) ->
         return None
     n = len(options)
     idx = max(0, min(default, n - 1))
-    sys.stdout.write(f"{BOLD}{CYAN}? {prompt}{RST}  {DIM}(↑/↓ then Enter){RST}\r\n")
+    sys.stdout.write(f"{BOLD}{AMBER}? {prompt}{RST}  {DIM}(↑/↓ then Enter){RST}\r\n")
 
     def draw(first=False):
         if not first:
             sys.stdout.write(f"\x1b[{n}A")
         for i, (_, label) in enumerate(options):
             if i == idx:
-                sys.stdout.write(f"\x1b[2K  {CYAN}❯{RST} {REV} {label} {RST}\r\n")
+                sys.stdout.write(f"\x1b[2K  {AMBER}❯{RST} {REV} {label} {RST}\r\n")
             else:
                 sys.stdout.write(f"\x1b[2K    {label}\r\n")
         sys.stdout.flush()
@@ -109,7 +109,7 @@ def select_many(prompt: str, options: list[tuple[str, str]],
     pre = set(preselected or [])
     chosen = {i for i, (v, _) in enumerate(options) if v in pre}
     idx = 0
-    sys.stdout.write(f"{BOLD}{CYAN}? {prompt}{RST}  "
+    sys.stdout.write(f"{BOLD}{AMBER}? {prompt}{RST}  "
                      f"{DIM}(↑/↓ move · Space toggle · Enter confirm){RST}\r\n")
 
     def draw(first=False):
@@ -118,7 +118,7 @@ def select_many(prompt: str, options: list[tuple[str, str]],
         for i, (_, label) in enumerate(options):
             box = f"{GREEN}◉{RST}" if i in chosen else "◯"
             label_txt = f"{REV} {label} {RST}" if i == idx else f" {label}"
-            pointer = f"{CYAN}❯{RST}" if i == idx else " "
+            pointer = f"{AMBER}❯{RST}" if i == idx else " "
             sys.stdout.write(f"\x1b[2K  {pointer} {box}{label_txt}\r\n")
         sys.stdout.flush()
 
