@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any, Callable
 
 from ..constants import MAX_PARALLEL_TOOLS
@@ -17,6 +20,23 @@ OnEvent = Callable[[dict], None]
 _PERSISTED_OUTPUT_TAG = "<persisted-output>"
 _PERSISTED_OUTPUT_CLOSE = "</persisted-output>"
 _SPILL_MARKER = "truncated to protect context"
+_NEVER_PARALLEL_TOOLS = frozenset({
+    "bash", "clarify", "execute_code", "process", "send_message", "memory",
+    "todo_write", "skill_manage", "browser", "computer", "github", "cronjob",
+    "schedule_task", "download", "http_request",
+})
+_PARALLEL_SAFE_TOOLS = frozenset({
+    "agent_state", "dependency_audit", "glob", "list_dir", "read_file",
+    "search", "session_search", "skill", "system_status", "tool_search",
+    "vision_analyze", "web_extract", "web_fetch", "web_search",
+})
+_PATH_SCOPED_TOOLS = frozenset({"apply_patch", "edit_file", "list_dir", "read_file", "write_file"})
+_DESTRUCTIVE_COMMAND_RE = re.compile(
+    r"""(?:^|\s|&&|\|\||;|`)(?:rm\s|rmdir\s|cp\s|install\s|mv\s|sed\s+-i|
+        truncate\s|dd\s|shred\s|git\s+(?:reset|clean|checkout)\s)""",
+    re.VERBOSE,
+)
+_REDIRECT_OVERWRITE_RE = re.compile(r"[^>]>[^>]|^>[^>]")
 
 
 def _without_thinking(m: Message) -> Message:
@@ -596,6 +616,70 @@ class ToolExecutor:
             total += estimate_tokens(replacement) - tokens
         return messages
 
+    def _scope_paths(self, call: ToolCall) -> list[Path] | None:
+        if call.name not in _PATH_SCOPED_TOOLS:
+            return []
+        raw_paths: list[str] = []
+        if call.name == "apply_patch":
+            raw_paths = self._edit_paths(call)
+        else:
+            raw = call.arguments.get("path")
+            if isinstance(raw, str) and raw.strip():
+                raw_paths = [raw]
+        if not raw_paths:
+            return None
+        scoped: list[Path] = []
+        cwd = Path(getattr(self.ctx, "cwd", ".") or ".")
+        for raw in raw_paths:
+            expanded = Path(str(raw)).expanduser()
+            if expanded.is_absolute():
+                scoped.append(Path(os.path.abspath(str(expanded))))
+            else:
+                scoped.append(Path(os.path.abspath(str(cwd / expanded))))
+        return scoped
+
+    @staticmethod
+    def _paths_overlap(left: Path, right: Path) -> bool:
+        left_parts = left.parts
+        right_parts = right.parts
+        if not left_parts or not right_parts:
+            return bool(left_parts) == bool(right_parts) and bool(left_parts)
+        common_len = min(len(left_parts), len(right_parts))
+        return left_parts[:common_len] == right_parts[:common_len]
+
+    @staticmethod
+    def _destructive_command(command: str) -> bool:
+        return bool(
+            command
+            and (_DESTRUCTIVE_COMMAND_RE.search(command) or _REDIRECT_OVERWRITE_RE.search(command))
+        )
+
+    def _should_parallelize(self, calls: list[ToolCall]) -> bool:
+        """Run only read-only or independent path-scoped batches concurrently."""
+        if len(calls) <= 1:
+            return False
+        reserved: list[Path] = []
+        for call in calls:
+            name = call.name
+            if name in _NEVER_PARALLEL_TOOLS:
+                return False
+            if name == "bash" and self._destructive_command(str(call.arguments.get("command") or "")):
+                return False
+            if name in _PATH_SCOPED_TOOLS:
+                scoped = self._scope_paths(call)
+                if scoped is None:
+                    return False
+                for path in scoped:
+                    if any(self._paths_overlap(path, existing) for existing in reserved):
+                        return False
+                reserved.extend(scoped)
+                continue
+            if name.startswith("mcp__"):
+                return False
+            if name not in _PARALLEL_SAFE_TOOLS:
+                return False
+        return True
+
     def _run_one(self, call: ToolCall) -> Message:
         res = self.execute_one_raw(call)
         content = self._maybe_spill(call, redact_secrets(res.content), res.is_error)
@@ -623,6 +707,8 @@ class ToolExecutor:
             return []
         if len(calls) == 1:
             return self._enforce_turn_result_budget([self._run_one(calls[0])])
+        if not self._should_parallelize(calls):
+            return self._enforce_turn_result_budget([self._run_one(c) for c in calls])
         # Preserve order in results while running concurrently.
         results: list[Message | None] = [None] * len(calls)
         with ThreadPoolExecutor(max_workers=min(MAX_PARALLEL_TOOLS, len(calls))) as pool:
@@ -1170,6 +1256,10 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
     from .guardrails import ToolLoopGuard
     guard = ToolLoopGuard(
         warn_after=int(agent.config.get("tools.loop_warn_after", 3)),
+        same_tool_warn_after=int(agent.config.get(
+            "tools.loop_same_tool_warn_after",
+            agent.config.get("tools.loop_warn_after", 3),
+        )),
         block_after=int(agent.config.get("tools.loop_block_after", 5)),
     )
     executor = ToolExecutor(agent.registry, agent.permissions, agent.tool_context, emit, guard)

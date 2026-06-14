@@ -287,6 +287,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "max_turn_result_tokens": 50000, # spill largest outputs when a tool batch exceeds this
         "turn_result_preview_chars": 1500, # inline preview for aggregate-budget spills
         "loop_warn_after": 3,        # warn after N identical tool failures/results in a turn
+        "loop_same_tool_warn_after": 3, # warn when one tool keeps failing with varied args
         "loop_block_after": 5,       # hard-block an identical failing call after N repeats
         "todo_nudge_after": 15,      # remind to update the todo list after N tool uses
         "sensitive_write_allow": [], # absolute paths exempt from file-write safety gating

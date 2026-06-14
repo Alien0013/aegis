@@ -27,6 +27,38 @@ def test_loop_guard_no_progress_on_success():
     assert g.record("read_file", a, "same content", False) is None
     assert "identical result 2" in g.record("read_file", a, "same content", False)
     assert g.check("read_file", a) is None        # success loops warn but never block
+    assert g.record("write_file", {"path": "x"}, "wrote", False) is None
+    assert g.record("write_file", {"path": "x"}, "wrote", False) is None
+
+
+def test_loop_guard_warns_same_tool_failures_with_varied_args():
+    from aegis.agent.guardrails import ToolLoopGuard
+    g = ToolLoopGuard(warn_after=3, block_after=5, same_tool_warn_after=2)
+    assert g.record("bash", {"command": "bad-one"}, "err-a", True) is None
+    warning = g.record("bash", {"command": "bad-two"}, "err-b", True)
+    assert warning and "bash has failed 2 times this turn" in warning
+    assert "pwd && ls -la" in warning
+
+
+def test_tool_executor_parallelizes_only_safe_batches(tmp_path):
+    from aegis.agent.loop import ToolExecutor
+    from aegis.config import Config
+    from aegis.tools.base import ToolContext
+    from aegis.types import ToolCall
+
+    ex = ToolExecutor(None, None, ToolContext(cwd=tmp_path, config=Config.load()), lambda e: None)
+    assert ex._should_parallelize([
+        ToolCall("r1", "read_file", {"path": "a.txt"}),
+        ToolCall("r2", "list_dir", {"path": "subdir"}),
+    ])
+    assert not ex._should_parallelize([
+        ToolCall("w1", "write_file", {"path": "a.txt", "content": "x"}),
+        ToolCall("r1", "read_file", {"path": "a.txt"}),
+    ])
+    assert not ex._should_parallelize([
+        ToolCall("b1", "bash", {"command": "pwd && ls -la"}),
+        ToolCall("r1", "read_file", {"path": "a.txt"}),
+    ])
 
 
 # --- fuzzy edit matching -----------------------------------------------------

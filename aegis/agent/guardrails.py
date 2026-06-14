@@ -17,6 +17,40 @@ from __future__ import annotations
 import hashlib
 import json
 
+IDEMPOTENT_TOOLS = frozenset({
+    "agent_state",
+    "dependency_audit",
+    "glob",
+    "list_dir",
+    "read_file",
+    "search",
+    "session_search",
+    "skill",
+    "system_status",
+    "tool_search",
+    "vision_analyze",
+    "web_extract",
+    "web_fetch",
+    "web_search",
+})
+MUTATING_TOOLS = frozenset({
+    "apply_patch",
+    "bash",
+    "browser",
+    "computer",
+    "cronjob",
+    "edit_file",
+    "execute_code",
+    "github",
+    "memory",
+    "process",
+    "schedule_task",
+    "send_message",
+    "skill_manage",
+    "todo_write",
+    "write_file",
+})
+
 
 def _sig(name: str, arguments: dict) -> str:
     try:
@@ -30,13 +64,26 @@ def _hash(text: str) -> str:
     return hashlib.sha1((text or "").encode("utf-8", "replace")).hexdigest()[:16]
 
 
+def _same_tool_failure_hint(name: str, count: int) -> str:
+    common = (f"[loop guard] {name} has failed {count} times this turn. Diagnose before "
+              "retrying: inspect the latest error/output, verify assumptions, and change "
+              "arguments or tool strategy.")
+    if name == "bash":
+        return (common + " For shell failures, try a small diagnostic such as `pwd && ls -la`, "
+                "then use an absolute path, simpler command, or a file tool if appropriate.")
+    return common
+
+
 class ToolLoopGuard:
     """One instance per turn (created in run_conversation)."""
 
-    def __init__(self, warn_after: int = 3, block_after: int = 5):
+    def __init__(self, warn_after: int = 3, block_after: int = 5,
+                 same_tool_warn_after: int | None = None):
         self.warn_after = warn_after
         self.block_after = block_after
+        self.same_tool_warn_after = same_tool_warn_after or max(warn_after + 1, 3)
         self._failures: dict[str, tuple[str, int]] = {}    # sig -> (err_hash, count)
+        self._tool_failures: dict[str, int] = {}            # tool name -> failed count
         self._results: dict[str, tuple[str, int]] = {}     # sig -> (result_hash, count)
 
     def check(self, name: str, arguments: dict) -> str | None:
@@ -60,12 +107,20 @@ class ToolLoopGuard:
             prev = self._failures.get(sig)
             count = prev[1] + 1 if prev and prev[0] == h else 1
             self._failures[sig] = (h, count)
+            tool_count = self._tool_failures.get(name, 0) + 1
+            self._tool_failures[name] = tool_count
             if count >= self.warn_after:
                 return (f"[loop guard] identical {name} call failed the same way {count} "
                         f"time(s). It will be blocked after {self.block_after}. Change "
                         "strategy instead of retrying unchanged.")
+            if tool_count >= self.same_tool_warn_after:
+                return _same_tool_failure_hint(name, tool_count)
             return None
         self._failures.pop(sig, None)              # success resets the failure streak
+        self._tool_failures.pop(name, None)
+        if name in MUTATING_TOOLS or (name not in IDEMPOTENT_TOOLS and not name.startswith("mcp__")):
+            self._results.pop(sig, None)
+            return None
         prev = self._results.get(sig)
         count = prev[1] + 1 if prev and prev[0] == h else 1
         self._results[sig] = (h, count)
