@@ -62,15 +62,18 @@ def _iter_history(cutoff: datetime | None) -> list[tuple[datetime, str]]:
     return out
 
 
-def _iter_sessions(cutoff: datetime | None) -> tuple[int, list[tuple[datetime, str]]]:
-    """Return (session_count, [(timestamp, content), ...]) within the window.
+def _iter_sessions(
+    cutoff: datetime | None,
+) -> tuple[int, list[tuple[datetime, str]], Counter]:
+    """Return (session_count, [(timestamp, content), ...], tool_call_counts) within the window.
 
-    Loads each session's full message list; sessions are attributed to the day
-    they were last updated, and every message's content contributes to tokens.
+    Loads each session's full message list; sessions are attributed to the day they were last
+    updated, every message's content contributes to tokens, and each tool call is tallied by name.
     """
     store = SessionStore()
     session_count = 0
     msgs: list[tuple[datetime, str]] = []
+    tool_counts: Counter[str] = Counter()
     for meta in store.list(limit=10_000):
         updated = _parse_ts(meta.get("updated_at", "")) or _parse_ts(meta.get("created_at", ""))
         if updated is None or (cutoff is not None and updated < cutoff):
@@ -80,10 +83,12 @@ def _iter_sessions(cutoff: datetime | None) -> tuple[int, list[tuple[datetime, s
         if session is None:
             continue
         for m in session.messages:
+            for tc in getattr(m, "tool_calls", None) or []:
+                tool_counts[tc.name] += 1
             content = m.content or ""
             if content:
                 msgs.append((updated, content))
-    return session_count, msgs
+    return session_count, msgs, tool_counts
 
 
 def insights(days: int = 30, source: str | None = None) -> dict[str, Any]:
@@ -101,10 +106,11 @@ def insights(days: int = 30, source: str | None = None) -> dict[str, Any]:
 
     events: list[tuple[datetime, str]] = []
     total_sessions = 0
+    tool_counts: Counter[str] = Counter()
     if source in (None, "history"):
         events.extend(_iter_history(cutoff))
     if source in (None, "sessions"):
-        total_sessions, session_msgs = _iter_sessions(cutoff)
+        total_sessions, session_msgs, tool_counts = _iter_sessions(cutoff)
         events.extend(session_msgs)
 
     per_day: Counter[str] = Counter()
@@ -120,6 +126,21 @@ def insights(days: int = 30, source: str | None = None) -> dict[str, Any]:
         for d, c in sorted(per_day.items(), key=lambda kv: (-kv[1], kv[0]))[:10]
     ]
 
+    # Real billed usage from the per-turn usage log (input/output/cache tokens, cost, per model)
+    # — distinct from the char-estimated ``approx_tokens`` over message content above.
+    from . import usage_log
+
+    cost = usage_log.cost_report(days if days and days > 0 else 36_500)
+    by_model = cost.get("by_model", {})
+    usage = {
+        "calls": cost.get("calls", 0),
+        "input_tokens": sum(int(m.get("input", 0)) for m in by_model.values()),
+        "output_tokens": sum(int(m.get("output", 0)) for m in by_model.values()),
+        "cache_read_tokens": int(cost.get("cache_read_tokens", 0)),
+        "cost_usd": cost.get("total_cost_usd", 0.0),
+        "by_model": by_model,
+    }
+
     return {
         "days": days,
         "source": source or "all",
@@ -128,6 +149,9 @@ def insights(days: int = 30, source: str | None = None) -> dict[str, Any]:
         "messages_per_day": dict(sorted(per_day.items())),
         "top_active_days": top_active_days,
         "approx_tokens": total_chars // CHARS_PER_TOKEN,
+        "tool_calls": sum(tool_counts.values()),
+        "top_tools": [{"name": n, "count": c} for n, c in tool_counts.most_common(10)],
+        "usage": usage,
         "first_activity": min(timestamps).isoformat() if timestamps else None,
         "last_activity": max(timestamps).isoformat() if timestamps else None,
     }
@@ -149,6 +173,31 @@ def render(d: dict[str, Any]) -> str:
         lines.append(f"  first active  {first[:19].replace('T', ' '):>19}")
     if last:
         lines.append(f"  last active   {last[:19].replace('T', ' '):>19}")
+
+    usage = d.get("usage") or {}
+    if usage.get("calls"):
+        lines += [
+            "",
+            "  Model usage (billed):",
+            f"    api calls     {usage['calls']:>8,}",
+            f"    input tokens  {usage['input_tokens']:>8,}",
+            f"    output tokens {usage['output_tokens']:>8,}",
+            f"    cache reads   {usage['cache_read_tokens']:>8,}",
+            f"    est. cost     {('$' + format(usage['cost_usd'], '.2f')):>8}",
+        ]
+        by_model = usage.get("by_model") or {}
+        for model, m in sorted(by_model.items(), key=lambda kv: -kv[1].get("cost_usd", 0))[:5]:
+            lines.append(f"      {model[:28]:<28} ${m.get('cost_usd', 0):>7.2f}"
+                         f"  ({m.get('input', 0):,}/{m.get('output', 0):,} tok)")
+
+    tools = d.get("top_tools") or []
+    if tools:
+        peak = max(t["count"] for t in tools) or 1
+        lines.append("")
+        lines.append(f"  Top tools ({d.get('tool_calls', 0):,} calls):")
+        for t in tools:
+            bar = "█" * max(1, round(16 * t["count"] / peak))
+            lines.append(f"    {t['name'][:22]:<22} {t['count']:>6,}  {bar}")
 
     top = d.get("top_active_days") or []
     if top:
