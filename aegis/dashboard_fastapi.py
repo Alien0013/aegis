@@ -1252,6 +1252,8 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
         return _profiles_payload(config)
     if path == "/api/system":
         return dash._system_info()
+    if path == "/api/ops":
+        return dash._ops_status(config)
     if path == "/api/traces":
         return dash._dashboard_traces(query, config)
     if path == "/api/trace":
@@ -1422,6 +1424,8 @@ def _api_post(path: str, body: dict, config: Config, chat_runner: Any) -> dict:
 
             return {"ok": True, "path": str(create_backup())}
         return {"error": "unknown system action"}
+    if path == "/api/ops":
+        return dash._ops_action(str(body.get("action") or ""), body, config)
     if path == "/api/session":
         act = body.get("action")
         sid = (body.get("id") or body.get("session_id") or "").strip()

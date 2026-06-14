@@ -357,6 +357,137 @@ def _system_info() -> dict:
     }
 
 
+def _ops_status(config: Config) -> dict:
+    """Operational state for the System → Operations panel: curator schedule, memory-store
+    sizes, and (when systemd user services are present) gateway/cron service status."""
+    from .memory import MemoryStore
+    curator_state: dict = {}
+    try:
+        from .curator import _load_state
+        curator_state = _load_state() or {}
+    except Exception:  # noqa: BLE001
+        curator_state = {}
+    store = MemoryStore()
+    memory: dict[str, dict] = {}
+    for target in ("memory", "user"):
+        try:
+            memory[target] = {"chars": len(store.raw(target)), "entries": len(store.entries(target))}
+        except Exception:  # noqa: BLE001
+            memory[target] = {"chars": 0, "entries": 0}
+    services: dict = {"systemd": False}
+    try:
+        from . import daemon
+        if daemon.systemd_available():
+            services = {
+                "systemd": True,
+                "gateway": daemon.gateway_service_status(),
+                "cron": daemon.cron_service_status(),
+            }
+    except Exception:  # noqa: BLE001
+        services = {"systemd": False}
+    return {
+        "version": __version__,
+        "curator": {
+            "enabled": bool(config.get("curator.enabled", True)),
+            "interval_hours": float(config.get("curator.interval_hours", 168) or 168),
+            "last_run_at": curator_state.get("last_run_at", ""),
+        },
+        "memory": memory,
+        "services": services,
+    }
+
+
+def _reset_memory_file(target: str) -> dict:
+    """Back up MEMORY.md / USER.md to a timestamped sibling, then truncate it. Destructive —
+    the dashboard gates this behind a typed confirmation."""
+    from datetime import datetime, timezone
+
+    from .memory import MemoryStore
+    if target not in ("memory", "user"):
+        return {"ok": False, "error": "target must be 'memory' or 'user'"}
+    store = MemoryStore()
+    path = store._path(target)
+    prev = store.raw(target)
+    if not prev:
+        return {"ok": True, "target": target, "backup": "", "note": "already empty"}
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    backup_path = path.with_name(f"{path.stem}.bak-{stamp}{path.suffix}")
+    try:
+        backup_path.write_text(prev, encoding="utf-8")
+        path.write_text("", encoding="utf-8")
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "target": target, "backup": str(backup_path)}
+
+
+def _update_check() -> dict:
+    """Best-effort, network-free update status: installed version, package location, and (if the
+    install is a git checkout) how far the local branch is from its already-fetched upstream."""
+    import subprocess
+    pkg_dir = Path(__file__).resolve().parent.parent
+    info: dict = {"version": __version__, "path": str(pkg_dir)}
+
+    def _git(*args: str) -> str:
+        try:
+            r = subprocess.run(["git", "-C", str(pkg_dir), *args],
+                               capture_output=True, text=True, timeout=2.0, check=False)
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        return r.stdout.strip() if r.returncode == 0 else ""
+
+    if _git("rev-parse", "--is-inside-work-tree") == "true":
+        branch = _git("rev-parse", "--abbrev-ref", "HEAD")
+        upstream = _git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+        behind = ahead = 0
+        if upstream:
+            counts = _git("rev-list", "--left-right", "--count", f"{upstream}...HEAD").split()
+            if len(counts) == 2:
+                behind, ahead = int(counts[0]), int(counts[1])
+        info.update({"install": "git", "branch": branch, "upstream": upstream,
+                     "behind": behind, "ahead": ahead,
+                     "update_available": behind > 0,
+                     "hint": f"git -C {pkg_dir} pull" if behind else "up to date with fetched upstream"})
+    else:
+        info.update({"install": "package", "update_available": None,
+                     "hint": "pip install -U aegis (or your package manager)"})
+    return info
+
+
+def _ops_action(action: str, body: dict, config: Config) -> dict:
+    """Execute a System → Operations action. Destructive ones (memory/user reset) are gated by
+    a typed confirmation on the client; service control needs systemd user units."""
+    if action == "curator_run":
+        from .curator import run
+        res = run(config, dry_run=False)
+        keep = {k: res[k] for k in ("promoted", "archived", "deleted", "report", "llm_review")
+                if k in res}
+        return {"ok": True, "result": keep}
+    if action in ("curator_pause", "curator_resume"):
+        enabled = action == "curator_resume"
+        config.set("curator.enabled", enabled)
+        return {"ok": True, "enabled": enabled}
+    if action == "backup":
+        from .backup import create_backup
+        return {"ok": True, "path": str(create_backup())}
+    if action == "memory_reset":
+        return _reset_memory_file("memory")
+    if action == "user_reset":
+        return _reset_memory_file("user")
+    if action in ("gateway", "cron"):
+        op = str(body.get("op") or "").strip()
+        if op not in {"start", "stop", "restart"}:
+            return {"ok": False, "error": "op must be start, stop, or restart"}
+        from . import daemon
+        if not daemon.systemd_available():
+            return {"ok": False, "error": "systemd user services are not available on this host"}
+        ctl = daemon.control_gateway_service if action == "gateway" else daemon.control_cron_service
+        r = ctl(op)
+        return {"ok": bool(r.ok), "message": r.message}
+    if action == "update_check":
+        return _update_check()
+    return {"error": f"unknown operation: {action}"}
+
+
 def _int_param(query: dict, name: str, default: int, *, lo: int = 1, hi: int = 200) -> int:
     try:
         n = int((query.get(name, [str(default)])[0]) or default)
