@@ -32,16 +32,17 @@
    One vocabulary of primitives (.card / .table / .badge / .field / .btn / .stat)
    shared by every page via lib/ui.tsx, so the whole app stays consistent. */
 :root{
-  --bg:#08090c; --panel:#0e1014; --panel2:#15181f; --panel3:#1c2029;
-  --line:#1d212a; --line2:#2c313c;
-  --text:#e9ebf0; --mut:#8d94a4; --faint:#586071;
-  --accent:#6e8bff; --accent2:#37d4cf; --grad:linear-gradient(135deg,#8b5cff,#5b8cff 55%,#22d3ee);
-  --ok:#3fd089; --warn:#f5b13d; --err:#ff5f56; --info:#6e8bff;
-  --radius:9px; --side:240px;
+  --bg:#070a12; --panel:#0d111a; --panel2:#141a27; --panel3:#1c2433;
+  --line:#202838; --line2:#303b52;
+  --text:#eef1f8; --mut:#949db5; --faint:#5b657e;
+  --accent:#7c8cff; --accent2:#36e0d0; --grad:linear-gradient(135deg,#a855f7,#6366f1 48%,#22d3ee);
+  --ok:#34d399; --warn:#f5b13d; --err:#ff6168; --info:#7c8cff;
+  --radius:12px; --side:250px;
   --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;
   --focus:0 0 0 2px var(--bg),0 0 0 4px color-mix(in srgb,var(--accent) 70%,transparent);
-  --shadow:0 1px 2px rgba(0,0,0,.3),0 0 0 1px color-mix(in srgb,var(--line) 80%,transparent);
-  --shadow-lg:0 18px 50px -12px rgba(0,0,0,.55),0 0 0 1px var(--line2);
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 0 0 1px color-mix(in srgb,var(--line) 75%,transparent);
+  --shadow-lg:0 24px 60px -16px rgba(0,0,0,.62),0 0 0 1px var(--line2);
+  --glow:0 0 0 1px color-mix(in srgb,var(--accent) 32%,transparent),0 8px 30px -10px color-mix(in srgb,var(--accent) 45%,transparent);
 }
 [data-theme="paper"]{--bg:#f4f4f2;--panel:#ffffff;--panel2:#f2f2ef;--panel3:#e9e9e5;--line:#e4e4df;--line2:#cdcdc6;--text:#13151a;--mut:#5b616c;--faint:#969ca7;--accent:#4f6bff;--accent2:#0c8f88;--shadow:0 1px 2px rgba(20,20,30,.06),0 0 0 1px var(--line);--shadow-lg:0 20px 50px -14px rgba(30,30,40,.22),0 0 0 1px var(--line2);}
 [data-theme="mono"]{--bg:#0a0a0a;--panel:#101010;--panel2:#181818;--panel3:#222;--line:#262626;--line2:#3a3a3a;--text:#f2f2f2;--mut:#9a9a9a;--faint:#646464;--accent:#e8e8e8;--accent2:#b4b4b4;--grad:linear-gradient(135deg,#fff,#888);}
@@ -102,7 +103,10 @@ kbd{background:var(--panel2);border:1px solid var(--line);border-radius:5px;padd
 .swatch.paper{background:linear-gradient(135deg,#fff,#0c8f88)}.swatch.mono{background:linear-gradient(135deg,#fff,#555)}.swatch.hacker{background:linear-gradient(135deg,#27e06a,#9bff4d)}
 .themebar{grid-template-columns:repeat(4,1fr)}
 
-.main{overflow:auto;padding:22px 26px 60px;min-width:0}
+.main{overflow:auto;padding:24px 30px 64px;min-width:0;
+  background:
+    radial-gradient(900px 480px at 88% -8%, color-mix(in srgb,var(--accent) 13%,transparent), transparent 70%),
+    radial-gradient(760px 460px at -6% 4%, color-mix(in srgb,var(--accent2) 10%,transparent), transparent 68%)}
 .topbar{display:none}.scrim{display:none}
 
 /* ───────── page header ───────── */
@@ -368,5 +372,120 @@ table.tbl td.mono,table.tbl td .mono{font-family:var(--mono);color:var(--mut);fo
 .kanban-col > h3{margin:0;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--faint);display:flex;justify-content:space-between;padding:2px}
 .kanban-card{background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:9px 10px;display:flex;flex-direction:column;gap:6px}
 .kanban-card b{font-size:12.5px;font-weight:600}
+
+/* ════════════════════════════════════════════════════════════════════════
+   AEGIS · elevation layer — a premium pass over the base primitives. Loaded
+   last so it wins the cascade; restyles the most-seen surfaces (shell, nav,
+   cards, stats, buttons) and defines the Overview hero + Operations panel.
+   ════════════════════════════════════════════════════════════════════════ */
+@keyframes auroraSpin{to{transform:rotate(360deg)}}
+@keyframes floatUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes shimmer{to{background-position:200% 0}}
+
+/* shell + sidebar */
+.app{background:
+  radial-gradient(1100px 600px at 100% -10%, color-mix(in srgb,var(--accent) 8%,transparent), transparent 60%),
+  var(--bg)}
+.side{background:linear-gradient(180deg, color-mix(in srgb,var(--panel) 92%,var(--accent) 4%), var(--panel) 22%);
+  border-right:1px solid var(--line);box-shadow:1px 0 0 color-mix(in srgb,var(--accent) 8%,transparent)}
+.brand .mark{position:relative;background:var(--grad);background-size:160% 160%;animation:auroraSpin 14s linear infinite;
+  box-shadow:0 6px 20px -4px color-mix(in srgb,var(--accent) 55%,transparent),inset 0 1px 0 rgba(255,255,255,.35)}
+.brand b{background:linear-gradient(90deg,var(--text),color-mix(in srgb,var(--text) 55%,var(--accent)));
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+
+/* nav — gradient active pill + glow rail */
+.nav{border-radius:8px;transition:background .14s,color .14s,box-shadow .14s}
+.nav.active{background:linear-gradient(90deg, color-mix(in srgb,var(--accent) 20%,transparent), color-mix(in srgb,var(--accent) 4%,transparent));
+  color:var(--text);box-shadow:inset 2px 0 0 var(--accent),0 2px 14px -8px color-mix(in srgb,var(--accent) 80%,transparent)}
+.nav.active svg{color:var(--accent);filter:drop-shadow(0 0 6px color-mix(in srgb,var(--accent) 60%,transparent))}
+
+/* cards — glassy fill, top highlight, hover lift */
+.card,.panel{background:linear-gradient(180deg, color-mix(in srgb,var(--panel2) 55%,var(--panel)), var(--panel));
+  border:1px solid color-mix(in srgb,var(--line) 70%,transparent);
+  box-shadow:0 1px 0 color-mix(in srgb,#fff 4%,transparent) inset,0 10px 30px -20px rgba(0,0,0,.8);
+  transition:border-color .16s,box-shadow .16s,transform .16s}
+.card:hover{border-color:color-mix(in srgb,var(--line2) 80%,transparent)}
+
+/* stat tiles — accent rail, big gradient number, hover lift */
+.stat{position:relative;overflow:hidden}
+.stat::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--grad);opacity:.85}
+.stat .val{font-size:25px;background:linear-gradient(180deg,var(--text),color-mix(in srgb,var(--text) 78%,var(--accent)));
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.stat.click{transition:transform .16s,box-shadow .16s,border-color .16s}
+.stat.click:hover{transform:translateY(-2px);box-shadow:var(--glow);border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
+
+/* primary button — gradient + glow */
+.btn{background:var(--grad);background-size:140% 140%;color:#fff;font-weight:600;
+  box-shadow:0 6px 18px -8px color-mix(in srgb,var(--accent) 70%,transparent)}
+.btn:hover{filter:brightness(1.06);box-shadow:0 8px 26px -8px color-mix(in srgb,var(--accent) 85%,transparent)}
+.btn.ghost{background:color-mix(in srgb,var(--panel2) 70%,transparent);color:var(--text);box-shadow:none;
+  border-color:var(--line);backdrop-filter:blur(6px)}
+.btn.ghost:hover{background:var(--panel3);filter:none}
+.btn.danger{background:transparent;box-shadow:none}
+
+/* page header — oversized gradient title */
+.head h1{font-size:23px;background:linear-gradient(92deg,var(--text) 30%,color-mix(in srgb,var(--text) 60%,var(--accent)));
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+
+/* ───────── Overview: hero + KPI + lists ───────── */
+.hero{position:relative;overflow:hidden;border-radius:16px;padding:22px 24px;margin-bottom:18px;
+  background:
+    radial-gradient(680px 240px at 12% -40%, color-mix(in srgb,var(--accent) 30%,transparent), transparent 70%),
+    radial-gradient(560px 240px at 96% 140%, color-mix(in srgb,var(--accent2) 22%,transparent), transparent 70%),
+    linear-gradient(180deg, color-mix(in srgb,var(--panel2) 70%,var(--panel)), var(--panel));
+  border:1px solid color-mix(in srgb,var(--accent) 22%,var(--line));
+  box-shadow:0 24px 60px -30px color-mix(in srgb,var(--accent) 60%,transparent)}
+.hero::after{content:"";position:absolute;inset:0;background:linear-gradient(115deg,transparent 40%,color-mix(in srgb,#fff 5%,transparent) 50%,transparent 60%);
+  background-size:200% 100%;animation:shimmer 7s linear infinite;pointer-events:none}
+.hero-row{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;position:relative;z-index:1}
+.hero h1{margin:0;font-size:27px;font-weight:750;letter-spacing:-.03em}
+.hero .sub{color:var(--mut);font-size:13px;margin-top:6px;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.hero-chips{display:flex;gap:7px;flex-wrap:wrap;margin-top:13px}
+.hero-chip{display:inline-flex;align-items:center;gap:7px;padding:6px 11px;border-radius:999px;font-size:12px;
+  background:color-mix(in srgb,var(--panel) 60%,transparent);border:1px solid var(--line);backdrop-filter:blur(8px)}
+.hero-chip b{font-weight:650;color:var(--text)}
+.hero-chip .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 8px var(--ok)}
+.hero-chip .dot.off{background:var(--faint);box-shadow:none}
+
+.kpi-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:13px}
+@media(max-width:1100px){.kpi-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:560px){.kpi-grid{grid-template-columns:1fr}}
+.kpi{position:relative;overflow:hidden;padding:15px 16px;border-radius:14px;cursor:pointer;animation:floatUp .4s both;
+  background:linear-gradient(180deg, color-mix(in srgb,var(--panel2) 60%,var(--panel)), var(--panel));
+  border:1px solid var(--line);transition:transform .16s,box-shadow .16s,border-color .16s}
+.kpi:hover{transform:translateY(-3px);border-color:color-mix(in srgb,var(--accent) 45%,var(--line));box-shadow:var(--glow)}
+.kpi-top{display:flex;align-items:center;justify-content:space-between;color:var(--mut);font-size:11px;font-weight:650;text-transform:uppercase;letter-spacing:.06em}
+.kpi-top .ic{display:grid;place-items:center;width:28px;height:28px;border-radius:8px;color:var(--accent);
+  background:color-mix(in srgb,var(--accent) 14%,transparent)}
+.kpi-top .ic svg{width:15px;height:15px}
+.kpi .val{font-size:28px;font-weight:760;letter-spacing:-.03em;line-height:1.05;margin-top:10px;
+  background:linear-gradient(180deg,var(--text),color-mix(in srgb,var(--text) 70%,var(--accent)));
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.kpi .sub{color:var(--faint);font-size:12px;margin-top:4px}
+.kpi-spark{position:absolute;right:0;bottom:0;left:0;height:34px;opacity:.5;pointer-events:none}
+
+.section-title{display:flex;align-items:center;gap:8px;margin:22px 2px 12px;font-size:12px;font-weight:700;
+  text-transform:uppercase;letter-spacing:.08em;color:var(--faint)}
+.section-title::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--line),transparent)}
+
+/* ───────── System → Operations panel ───────── */
+.ops-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:13px}
+.ops-card{display:flex;flex-direction:column;gap:11px;padding:15px 16px;border-radius:14px;
+  background:linear-gradient(180deg, color-mix(in srgb,var(--panel2) 55%,var(--panel)), var(--panel));
+  border:1px solid var(--line)}
+.ops-card.danger{border-color:color-mix(in srgb,var(--err) 30%,var(--line))}
+.ops-h{display:flex;align-items:center;gap:10px}
+.ops-h .ic{display:grid;place-items:center;width:32px;height:32px;border-radius:9px;color:var(--accent);
+  background:color-mix(in srgb,var(--accent) 14%,transparent);flex:0 0 auto}
+.ops-card.danger .ops-h .ic{color:var(--err);background:color-mix(in srgb,var(--err) 12%,transparent)}
+.ops-h .ic svg{width:17px;height:17px}
+.ops-h b{font-size:13.5px;font-weight:650}
+.ops-h .meta{color:var(--faint);font-size:11.5px;margin-top:1px}
+.ops-desc{color:var(--mut);font-size:12px;line-height:1.45;flex:1}
+.ops-actions{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+.ops-state{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--mut);
+  padding:3px 9px;border-radius:999px;background:var(--panel2);border:1px solid var(--line)}
+.ops-state .dot{width:7px;height:7px;border-radius:50%;background:var(--ok)}
+.ops-state.off .dot{background:var(--faint)}
 .kanban-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;color:var(--faint);font-size:11px}
 .kanban-actions{display:flex;gap:5px;flex-wrap:wrap}

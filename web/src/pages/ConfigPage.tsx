@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, patch as apiPatch, post } from "../lib/api";
-import { Badge, Button, Toolbar } from "../lib/ui";
+import { Badge, Button, Toolbar, useToast } from "../lib/ui";
 
 type SchemaField = {
   path: string;
@@ -90,6 +90,7 @@ export function ConfigPage() {
   const [newKey, setNewKey] = useState("");
   const [newValue, setNewValue] = useState("");
   const [msg, setMsg] = useState("");
+  const toast = useToast();
 
   async function load() {
     const [nextCfg, nextSchema] = await Promise.all([api("config"), api("config/schema")]);
@@ -144,10 +145,12 @@ export function ConfigPage() {
     try {
       if (meta.has(key)) await apiPatch("config/fields", { updates: [{ path: key, value }] });
       else await post("config", { key, value });
+      const leaf = key.split(".").slice(1).join(".") || key;
       setMsg(`${key} saved`);
+      toast(`${leaf} → ${typeof value === "boolean" ? (value ? "on" : "off") : JSON.stringify(value)}`, "ok");
       await load();
     }
-    catch (e) { setMsg("Error: " + String(e)); }
+    catch (e) { setMsg("Error: " + String(e)); toast("Couldn't save " + key, "err"); }
   }
 
   async function saveText(key: string, raw: string): Promise<boolean> {
@@ -156,11 +159,13 @@ export function ConfigPage() {
     try {
       await post("config", { key, value });
       setMsg(`${key} saved`);
+      toast(`${key} saved`, "ok");
       setEdit((prev) => { const next = { ...prev }; delete next[key]; return next; });
       await load();
       return true;
     } catch (e) {
       setMsg("Error: " + String(e));
+      toast("Couldn't save " + key, "err");
       return false;
     }
   }
