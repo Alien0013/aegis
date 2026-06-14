@@ -90,6 +90,8 @@ def test_write_file_safe_root_and_sensitive_system_paths(tmp_path, monkeypatch):
     assert blocked.is_error and "write safe root" in blocked.content
     assert not outside.exists()
     assert is_sensitive("/private/etc/hosts")
+    assert not is_sensitive("/private/var/folders/aegis-test/file.txt")
+    assert is_sensitive("/private/var/db/aegis-test/file.txt")
     assert is_sensitive("/run/docker.sock")
 
 

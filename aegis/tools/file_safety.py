@@ -35,7 +35,8 @@ _SYSTEM_WRITE_PREFIXES = (
     "/boot",
     "/usr/lib/systemd",
     "/private/etc",
-    "/private/var",
+    "/private/var/db",
+    "/private/var/root",
 )
 _SYSTEM_WRITE_EXACT = {
     "/var/run/docker.sock",
@@ -59,7 +60,7 @@ _BLOCKED_DEVICE_PATHS = frozenset({
 
 def _aegis_home() -> Path:
     from .. import config as cfg
-    return cfg.get_home()
+    return _real(cfg.get_home()) or cfg.get_home()
 
 
 def _real(path) -> Path | None:
