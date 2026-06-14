@@ -98,6 +98,18 @@ def _preview(text: str, limit: int = 500) -> str:
     return one_line[:limit].rstrip() + " …"
 
 
+def _last_nonempty_assistant_text(messages: list[Message], *, exclude: Message | None = None) -> str:
+    """Most recent assistant text with real content — used to hand back earlier output when a
+    final reply comes back empty, instead of returning nothing (Hermes parity)."""
+    for m in reversed(messages):
+        if m is exclude or getattr(m, "role", "") != "assistant":
+            continue
+        text = (getattr(m, "content", "") or "").strip()
+        if text:
+            return text
+    return ""
+
+
 def _artifact_ref(data) -> str:
     if isinstance(data, str):
         return data
@@ -1626,9 +1638,17 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                     and agent.tools_used - last >= interval):
                 agent.session.meta["_last_skill_nudge"] = agent.tools_used
                 emit({"type": "skill_nudge"})
-            emit({"type": "final", "text": resp.text})
-            _finish_turn("ok", data={"text": resp.text})
-            return assistant_msg
+            final_text = resp.text
+            if not (final_text or "").strip() and agent.tools_used > 0:
+                # Nudges exhausted but still empty — hand back the last substantive reply
+                # rather than nothing (Hermes parity). The empty turn stays in the transcript.
+                reused = _last_nonempty_assistant_text(session.messages, exclude=assistant_msg)
+                if reused:
+                    final_text = reused
+                    emit({"type": "empty_reuse"})
+            emit({"type": "final", "text": final_text})
+            _finish_turn("ok", data={"text": final_text})
+            return assistant_msg if final_text == resp.text else Message.assistant(final_text)
 
         results = executor.execute(resp.tool_calls)
         session.messages.extend(results)
@@ -1774,6 +1794,13 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                 pass
         gm = Message.assistant(f"[step limit reached; summary failed: {e}]")
     session.messages.append(gm)
-    emit({"type": "final", "text": gm.content})
-    _finish_turn("budget_exhausted", data={"text": gm.content})
-    return gm
+    grace_text = gm.content
+    if not (grace_text or "").strip():
+        # Grace summary came back empty — reuse the last substantive reply (Hermes parity).
+        reused = _last_nonempty_assistant_text(session.messages, exclude=gm)
+        if reused:
+            grace_text = reused
+            emit({"type": "empty_reuse"})
+    emit({"type": "final", "text": grace_text})
+    _finish_turn("budget_exhausted", data={"text": grace_text})
+    return Message.assistant(grace_text) if grace_text != gm.content else gm

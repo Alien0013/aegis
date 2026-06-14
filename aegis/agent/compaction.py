@@ -18,7 +18,7 @@ import dataclasses
 import re
 
 from ..constants import COMPACT_THRESHOLD, DEFAULT_CONTEXT_LENGTH
-from ..types import Message
+from ..types import Message, ToolCall
 from ..util import estimate_tokens
 
 _IMG_DATA_URI = re.compile(r"data:image/[a-zA-Z.+-]+;base64,[A-Za-z0-9+/=\s]{200,}")
@@ -33,6 +33,8 @@ _SUMMARY_END_MARKER = (
 )
 # Tokens of recent conversation to protect by default when a caller doesn't pass a budget.
 _DEFAULT_TAIL_TOKENS = 6000
+# Head slice kept from oversized string values in a tool call's arguments during compaction.
+_TOOL_ARG_HEAD_CHARS = 200
 
 
 class CompressionAborted(RuntimeError):
@@ -76,14 +78,43 @@ def _prune_tool_output(text: str, max_tokens: int) -> str:
     return head.rstrip() + " …[truncated]"
 
 
+def _prune_tool_call_args(calls: list[ToolCall],
+                          head_chars: int = _TOOL_ARG_HEAD_CHARS) -> tuple[list[ToolCall], bool]:
+    """Shrink oversized string values in tool-call arguments to a head slice. Large embedded
+    payloads (file contents, code blocks passed as args) bloat the kept window even after the
+    middle is summarized; the arg structure and non-string values are preserved so the call
+    stays legible. The tool RESULT is pruned separately and carries continuity."""
+    changed = False
+    out: list[ToolCall] = []
+    for tc in calls:
+        args = tc.arguments
+        if isinstance(args, dict) and any(
+                isinstance(v, str) and len(v) > head_chars for v in args.values()):
+            new_args = {
+                k: (v[:head_chars] + "…[truncated]")
+                if isinstance(v, str) and len(v) > head_chars else v
+                for k, v in args.items()
+            }
+            out.append(dataclasses.replace(tc, arguments=new_args))
+            changed = True
+        else:
+            out.append(tc)
+    return out, changed
+
+
 def _prune_messages(messages: list[Message], max_tool_tokens: int) -> list[Message]:
-    """Return copies of any tool messages whose output exceeds the budget, pruned."""
+    """Return copies of tool messages whose output exceeds the budget (pruned) and assistant
+    messages whose tool-call arguments carry oversized string payloads (truncated)."""
     out: list[Message] = []
     for m in messages:
         if m.role == "tool" and m.content and estimate_tokens(m.content) > max_tool_tokens:
             pruned = _prune_tool_output(m.content, max_tool_tokens)
             if pruned != m.content:
                 m = Message.tool(m.tool_call_id, m.name, pruned)
+        elif m.role == "assistant" and m.tool_calls:
+            new_calls, changed = _prune_tool_call_args(m.tool_calls)
+            if changed:
+                m = dataclasses.replace(m, tool_calls=new_calls)
         out.append(m)
     return out
 

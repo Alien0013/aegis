@@ -87,6 +87,48 @@ def test_structured_summary_template_used():
     assert "REFERENCE ONLY" in seen["system"]
 
 
+def test_tool_call_args_truncated_in_kept_window():
+    """Oversized string args (a whole file passed to write) are head-sliced in the kept
+    head/tail; short args and non-string values are left intact, structure preserved."""
+    from aegis.agent.compaction import _TOOL_ARG_HEAD_CHARS, _prune_tool_call_args
+
+    big = "X" * 5000
+    calls = [ToolCall(id="c1", name="write_file",
+                      arguments={"path": "a.py", "content": big, "mode": 644, "overwrite": True})]
+    out, changed = _prune_tool_call_args(calls)
+    assert changed
+    args = out[0].arguments
+    assert args["path"] == "a.py"                       # short string untouched
+    assert args["mode"] == 644 and args["overwrite"] is True   # non-strings intact
+    assert args["content"].startswith("X" * _TOOL_ARG_HEAD_CHARS)
+    assert args["content"].endswith("…[truncated]")
+    assert len(args["content"]) < len(big)
+    calls[0].arguments["content"] is not args["content"]  # original not mutated
+
+    # nothing oversized -> no copy, no change
+    small = [ToolCall(id="c2", name="bash", arguments={"command": "ls"})]
+    out2, changed2 = _prune_tool_call_args(small)
+    assert not changed2 and out2 == small
+
+
+def test_tool_call_args_truncation_via_compress():
+    """compress() applies arg truncation to the protected tail through _prune_messages."""
+    from aegis.agent.compaction import compress
+
+    msgs = [Message.system("sys"), Message.user("go")]
+    for i in range(20):
+        msgs += _tool_turn(i)
+    # a recent assistant turn carrying a huge code arg lands in the protected tail
+    msgs += [Message(role="assistant", content="",
+                     tool_calls=[ToolCall(id="huge", name="execute_code",
+                                          arguments={"code": "print('hi')\n" + "Z" * 4000})]),
+             Message.tool("huge", "execute_code", "hi")]
+    out = compress(msgs, FakeProvider(), preserve_first=3, preserve_last=4)
+    huge = next(tc for m in out for tc in m.tool_calls if tc.id == "huge")
+    assert huge.arguments["code"].endswith("…[truncated]")
+    assert len(huge.arguments["code"]) < 4000
+
+
 def test_history_rotation(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     from aegis.memory import History
