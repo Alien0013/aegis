@@ -100,6 +100,17 @@ def skill_state(name: str) -> str:
     return (_load_usage().get(name) or {}).get("state", STATE_ACTIVE)
 
 
+def _seed_record(name: str) -> None:
+    """Persist a baseline record anchoring a skill's lifecycle clock to now — called
+    the first time the curator sees a skill with no usage record, so its stale/archive
+    clock measures non-use from first-sight, not from an old directory mtime."""
+    data = _load_usage()
+    if name in data:
+        return
+    data[name] = {"count": 0, "last_used": "", "created_at": now_iso(), "state": STATE_ACTIVE}
+    _save_usage(data)
+
+
 def _parse_iso(value: str) -> datetime | None:
     if not value:
         return None
@@ -123,7 +134,8 @@ class SkillInfo:
     view_count: int = 0              # skill_manage view
     patch_count: int = 0             # skill_manage patch/edit/write_file/remove_file
     last_used: str = ""              # iso, "" if never
-    age_days: float = 0.0            # days since last_used (or dir mtime)
+    created_at: str = ""             # iso, first-sight anchor for the lifecycle clock
+    age_days: float = 0.0            # days since last_used (or created_at, or dir mtime)
     state: str = STATE_ACTIVE        # persisted lifecycle state
 
 
@@ -166,8 +178,12 @@ def _scan(now: datetime | None = None) -> list[SkillInfo]:
         info.view_count = int(u.get("view_count", 0))
         info.patch_count = int(u.get("patch_count", 0))
         info.last_used = u.get("last_used", "")
+        info.created_at = u.get("created_at", "")
         info.state = u.get("state", STATE_ACTIVE)
-        ref = _parse_iso(info.last_used)
+        # Anchor the inactivity clock to: last real use → first-sight created_at →
+        # (only as a last resort) the dir mtime. The created_at anchor stops a
+        # never-used-but-valid skill from being archived on an old directory mtime.
+        ref = _parse_iso(info.last_used) or _parse_iso(info.created_at)
         if ref is None:
             ref = datetime.fromtimestamp(md.stat().st_mtime if md.exists()
                                          else d.stat().st_mtime, tz=timezone.utc)
@@ -249,11 +265,20 @@ def apply_transitions(dry_run: bool = True, stale_after_days: int = STALE_AFTER_
     """
     from . import provenance
     stale, to_archive, reactivated = [], [], []
-    counts = {"checked": 0, "marked_stale": 0, "reactivated": 0, "archived": 0}
+    counts = {"checked": 0, "marked_stale": 0, "reactivated": 0, "archived": 0, "seeded": 0}
+    usage = _load_usage()
     for s in _scan():
         if s.malformed or not provenance.curatable(s.name):
             continue
         counts["checked"] += 1
+        # First time the curator sees this skill with no usage record at all: anchor
+        # its clock to now and defer one full pass, so an old directory mtime can't
+        # archive a skill the curator has only just noticed (Hermes seed_record_if_missing).
+        if s.name not in usage and not s.last_used:
+            if not dry_run:
+                _seed_record(s.name)
+                counts["seeded"] += 1
+            continue
         if s.age_days >= archive_after_days:
             to_archive.append(s.name)
         elif s.age_days >= stale_after_days:

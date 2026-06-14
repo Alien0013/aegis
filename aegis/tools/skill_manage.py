@@ -18,7 +18,8 @@ from .base import Tool, ToolContext, ToolResult
 MAX_SKILL_CONTENT_CHARS = 100_000
 ALLOWED_SUPPORT_DIRS = {"assets", "references", "scripts", "templates"}
 _ACTIONS = (
-    "list", "view", "create", "patch", "write_file", "delete", "usage", "pin", "unpin", "report"
+    "list", "view", "create", "patch", "write_file", "delete", "usage", "pin", "unpin",
+    "report", "consolidate"
 )
 
 
@@ -385,25 +386,43 @@ def _report(ctx: ToolContext) -> ToolResult:
         "success": True,
         "review": curator.review(),
         "transitions": curator.apply_transitions(dry_run=True),
+        "consolidation_candidates": curator.consolidation_candidates(),
         "archived": curator.archived(),
         "usage": ctx.skills.usage(),
     }
     return _json_result(payload, "skill curator report")
 
 
+def _consolidate(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+    """Fold one skill into another: ``name`` is absorbed into ``into`` (its SKILL.md is
+    filed under the survivor's references/) and then archived with a pointer."""
+    name = (args.get("name") or "").strip()
+    into = (args.get("into") or "").strip()
+    if not name or not into:
+        return _json_error("consolidate requires 'name' (folded away) and 'into' (survivor).")
+    if curator.consolidate(name, into):
+        _refresh_agent_prompt(ctx)
+        return _json_result({"success": True, "from": name, "into": into},
+                            f"consolidated '{name}' into '{into}'")
+    return _json_error(
+        f"could not consolidate '{name}' into '{into}' — check both exist and '{name}' is "
+        "agent-created (bundled/hub/user/pinned skills are protected).")
+
+
 class SkillManageTool(Tool):
     name = "skill_manage"
     description = (
         "Manage skills with a Hermes-style action schema. Actions: list, view, create, "
-        "patch, write_file, delete, usage, pin, unpin, report. Uses Aegis SkillsLoader for "
-        "discovery/create/view/usage and the curator for pinning, reports, and "
-        "recoverable delete-by-archive."
+        "patch, write_file, delete, usage, pin, unpin, report, consolidate. Uses Aegis "
+        "SkillsLoader for discovery/create/view/usage and the curator for pinning, reports, "
+        "recoverable delete-by-archive, and consolidating overlapping skills into one."
     )
     parameters = {
         "type": "object",
         "properties": {
             "action": {"type": "string", "enum": list(_ACTIONS)},
-            "name": {"type": "string", "description": "Skill name for view/create/patch/write_file/delete/pin/unpin."},
+            "name": {"type": "string", "description": "Skill name for view/create/patch/write_file/delete/pin/unpin; the skill to fold away for consolidate."},
+            "into": {"type": "string", "description": "Survivor skill that absorbs `name` for consolidate (its content is filed under the survivor's references/)."},
             "content": {
                 "type": "string",
                 "description": "Full SKILL.md content for create, including YAML frontmatter.",
@@ -452,6 +471,8 @@ class SkillManageTool(Tool):
             return _pin(args, ctx, False)
         if action == "report":
             return _report(ctx)
+        if action == "consolidate":
+            return _consolidate(args, ctx)
         return _json_error(f"unknown action '{action}'. Use: {', '.join(_ACTIONS)}")
 
 

@@ -141,3 +141,35 @@ def test_usage_json_persists_state(home):
     curator._set_state("statey", curator.STATE_STALE)
     raw = json.loads((cfg.skills_dir() / "usage.json").read_text())
     assert raw["statey"]["state"] == "stale"
+
+
+def test_seed_prevents_premature_archive_on_old_mtime(home):
+    """A never-used skill whose directory mtime is ancient must NOT be archived the
+    first time the curator sees it — its clock is seeded to first-sight (Hermes parity)."""
+    import os
+    from aegis import curator
+    d = _make_skill("ancient", "old but valid, never loaded")
+    os.utime(d / "SKILL.md", (0, 0))                 # epoch mtime
+    os.utime(d, (0, 0))
+    res = curator.apply_transitions(dry_run=False, stale_after_days=30, archive_after_days=90)
+    assert "ancient" not in res["archived"] and res["counts"]["seeded"] >= 1
+    raw = json.loads((cfg.skills_dir() / "usage.json").read_text())
+    assert raw["ancient"]["created_at"]              # clock anchored to now
+
+
+def test_skill_manage_consolidate_action(home):
+    """The consolidate action is reachable by the agent/curator (not just a Python helper)."""
+    from aegis.config import Config
+    from aegis.skills import SkillsLoader
+    from aegis.tools.base import ToolContext
+    from aegis.tools.skill_manage import SkillManageTool
+    conf = Config.load()
+    _make_skill("ship-a", "build and ship the release")
+    _make_skill("ship-b", "build and ship the release")
+    ctx = ToolContext(cwd=cfg.skills_dir(), skills=SkillsLoader(conf), config=conf)
+    out = SkillManageTool().run({"action": "consolidate", "name": "ship-b", "into": "ship-a"}, ctx)
+    assert not out.is_error and "ship-a" in out.content
+    assert (cfg.skills_dir() / "ship-a" / "references" / "consolidated-ship-b.md").exists()
+    # missing args are rejected
+    bad = SkillManageTool().run({"action": "consolidate", "name": "ship-a"}, ctx)
+    assert bad.is_error
