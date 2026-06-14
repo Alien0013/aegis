@@ -173,3 +173,30 @@ def test_skill_manage_consolidate_action(home):
     # missing args are rejected
     bad = SkillManageTool().run({"action": "consolidate", "name": "ship-a"}, ctx)
     assert bad.is_error
+
+
+# --- suppression list ------------------------------------------------------
+
+def test_suppression_keeps_archived_skill_archived_across_reseed(home):
+    """A curator-archived/consolidated skill must stay archived even if it reappears
+    (e.g. re-seeded by an update) — until the user explicitly restores it."""
+    from aegis import curator
+    _make_skill("a", "do the a thing")
+    _make_skill("b", "do the a thing")          # overlaps a
+    assert curator.consolidate("a", "b") is True
+    assert "a" in curator.read_suppressed()
+
+    _make_skill("a", "do the a thing")          # re-seeded back into live skills
+    res = curator.apply_transitions(dry_run=False, stale_after_days=30, archive_after_days=90)
+    assert "a" in res["resuppressed"]
+    assert not (cfg.skills_dir() / "a").exists()    # re-archived, not resurrected
+
+
+def test_restore_clears_suppression(home):
+    from aegis import curator
+    _make_skill("gone", "a skill")
+    curator.add_suppressed("gone")
+    # archive it so restore has something to move back
+    curator.archive("gone")
+    assert curator.restore("gone") is True
+    assert "gone" not in curator.read_suppressed()

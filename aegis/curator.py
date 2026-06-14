@@ -111,6 +111,38 @@ def _seed_record(name: str) -> None:
     _save_usage(data)
 
 
+# --------------------------------------------------------------------------- #
+# suppression list — keeps a curator-archived skill archived across re-seeds
+# (e.g. a bundled skill re-shipped by an update). One name per line in
+# skills/.curator_suppressed. Cleared by an explicit restore. (Hermes parity.)
+# --------------------------------------------------------------------------- #
+def _suppressed_path() -> Path:
+    return cfg.skills_dir() / ".curator_suppressed"
+
+
+def read_suppressed() -> set[str]:
+    raw = read_text(_suppressed_path())
+    return {ln.strip() for ln in raw.splitlines() if ln.strip()} if raw else set()
+
+
+def _write_suppressed(names: set[str]) -> None:
+    atomic_write(_suppressed_path(), "\n".join(sorted(names)) + "\n" if names else "")
+
+
+def add_suppressed(name: str) -> None:
+    names = read_suppressed()
+    if name not in names:
+        names.add(name)
+        _write_suppressed(names)
+
+
+def remove_suppressed(name: str) -> None:
+    names = read_suppressed()
+    if name in names:
+        names.discard(name)
+        _write_suppressed(names)
+
+
 def _parse_iso(value: str) -> datetime | None:
     if not value:
         return None
@@ -264,13 +296,22 @@ def apply_transitions(dry_run: bool = True, stale_after_days: int = STALE_AFTER_
     lists plus a Hermes-style ``counts`` dict (checked/marked_stale/reactivated/archived).
     """
     from . import provenance
-    stale, to_archive, reactivated = [], [], []
-    counts = {"checked": 0, "marked_stale": 0, "reactivated": 0, "archived": 0, "seeded": 0}
+    stale, to_archive, reactivated, resuppressed = [], [], [], []
+    counts = {"checked": 0, "marked_stale": 0, "reactivated": 0, "archived": 0,
+              "seeded": 0, "resuppressed": 0}
     usage = _load_usage()
+    suppressed = read_suppressed()
     for s in _scan():
         if s.malformed or not provenance.curatable(s.name):
             continue
         counts["checked"] += 1
+        # A skill the curator previously archived has reappeared as live (e.g. re-seeded
+        # by an update): keep it archived unless the user explicitly restored it.
+        if s.name in suppressed:
+            if not dry_run and archive(s.name):
+                resuppressed.append(s.name)
+                counts["resuppressed"] += 1
+            continue
         # First time the curator sees this skill with no usage record at all: anchor
         # its clock to now and defer one full pass, so an old directory mtime can't
         # archive a skill the curator has only just noticed (Hermes seed_record_if_missing).
@@ -298,10 +339,12 @@ def apply_transitions(dry_run: bool = True, stale_after_days: int = STALE_AFTER_
         for name in to_archive:
             if archive(name):
                 _set_state(name, STATE_ARCHIVED)
+                add_suppressed(name)         # stay archived across future re-seeds
                 archived.append(name)
         counts["archived"] = len(archived)
         return {"stale": stale, "archived": archived, "reactivated": reactivated,
-                "consolidated": consolidated, "pruned": pruned, "counts": counts}
+                "consolidated": consolidated, "pruned": pruned,
+                "resuppressed": resuppressed, "counts": counts}
     return {"stale": stale, "to_archive": to_archive, "reactivated": reactivated,
             "counts": counts}
 
@@ -352,6 +395,7 @@ def restore(name: str) -> bool:
     if dest.exists():
         return False  # refuse to clobber a live skill
     shutil.move(str(src), str(dest))
+    remove_suppressed(name)              # an explicit restore overrides suppression
     return True
 
 
@@ -404,6 +448,7 @@ def consolidate(from_name: str, into_name: str) -> bool:
     if not archive(from_name):
         return False
     _set_state(from_name, STATE_ARCHIVED)
+    add_suppressed(from_name)            # a merged-away skill stays archived across re-seeds
     # Leave a pointer in the archived copy so a restore knows where its content went.
     atomic_write(_archive_dir() / from_name / ".consolidated_into", into_name + "\n")
     return True
@@ -550,18 +595,35 @@ def _write_report(result: dict, stale_days: int, archive_days: int) -> Path:
 
 
 _CONSOLIDATION_PROMPT = (
-    "You are the skill curator. Review the agent-created skills listed below and improve the "
-    "library using the `skill_manage` tool (view with `skill`). Priorities, in order:\n"
-    "  1. CONSOLIDATE near-duplicate or overlapping skills — patch the best survivor to absorb "
-    "the key steps/pitfalls of the others, then archive the others (skill_manage delete; archival "
-    "is recoverable).\n"
-    "  2. PATCH skills that are thin, stale, or have drifted from reality.\n"
-    "  3. ARCHIVE skills that are obsolete or fully redundant.\n"
-    "Package integrity: if a skill has references/, scripts/, templates/, or relative links to "
-    "them, either keep it standalone, re-home the support files and rewrite the paths, or archive "
-    "the whole package — never flatten only SKILL.md into another skill.\n"
-    "Do NOT touch bundled, hub-installed, pinned, or user-created skills. Make your edits, then "
-    "stop. If the library is already clean, say so and stop."
+    "You are the skill curator running an UMBRELLA-BUILDING consolidation pass — not a "
+    "passive audit. The target shape is a few broad CLASS-LEVEL umbrella skills, each with a "
+    "rich SKILL.md and a references/ directory, NOT a long flat list of narrow one-task skills. "
+    "Cluster the skills below by the class of task they serve (match on what they DO, from their "
+    "descriptions — not on exact names) and merge each cluster into one umbrella.\n\n"
+    "Anti-laziness rules:\n"
+    "  - DO NOT skip a merge because the skills have different usage counts — a rarely-used "
+    "sibling still belongs under its umbrella.\n"
+    "  - DO NOT reject consolidation on the grounds that 'each skill is slightly distinct'. "
+    "Near-duplicate purpose is enough; the distinct detail becomes a subsection or a "
+    "references/ file under the umbrella.\n"
+    "  - Most passes over a cluttered library SHOULD merge something. A pass that does nothing "
+    "is only right when the library is already a small set of clean umbrellas.\n\n"
+    "Three ways to consolidate — pick the right one per cluster:\n"
+    "  1. PROMOTE: one skill is already broad enough to be the umbrella — patch it to absorb the "
+    "siblings' steps/pitfalls, then fold each sibling in with `skill_manage action=consolidate "
+    "name=<sibling> into=<umbrella>` (files its SKILL.md under the umbrella's references/ and "
+    "archives it).\n"
+    "  2. MERGE INTO EXISTING: a suitable umbrella already exists — consolidate the cluster into it.\n"
+    "  3. CREATE NEW UMBRELLA: no existing skill covers the class — `skill_manage action=create` a "
+    "class-level umbrella (name must be class-level, never a PR number / error string / codename / "
+    "one-off task), then consolidate the siblings into it.\n\n"
+    "Package integrity: if a skill has references/, scripts/, templates/, or relative links, the "
+    "`consolidate` action preserves them under the survivor's references/ — never flatten only "
+    "SKILL.md into another skill by hand.\n"
+    "Iterate: after one cluster is merged, scan the remaining skills for the NEXT umbrella "
+    "opportunity. Don't stop after one.\n"
+    "Do NOT touch bundled, hub-installed, pinned, or user-created skills. When the library is a "
+    "clean set of umbrellas, say so and stop."
 )
 
 
@@ -616,10 +678,23 @@ def llm_review(config, *, dry_run: bool = False, max_iterations: int = 8) -> dic
     child.tool_context.approver = lambda *a, **k: True   # autonomous maintenance, never blocks
     child.budget.max_iterations = max_iterations
     actions: list[str] = []
+    consolidations: list[dict] = []
+    pending: dict = {}
 
     def _capture(ev):
-        if ev.get("type") == "tool_result" and ev.get("name") == "skill_manage":
+        # Record a structured consolidations block (Hermes parity): pair the consolidate
+        # call's args (from tool_start) with its success (from tool_result) so downstream
+        # tooling can distinguish a merge from a plain archive.
+        if ev.get("type") == "tool_start" and ev.get("name") == "skill_manage":
+            args = ev.get("args") or {}
+            if args.get("action") == "consolidate" and args.get("name") and args.get("into"):
+                pending.clear()
+                pending.update({"from": args["name"], "into": args["into"]})
+        elif ev.get("type") == "tool_result" and ev.get("name") == "skill_manage":
             actions.append(ev.get("summary", "skill_manage"))
+            if pending and not ev.get("is_error"):
+                consolidations.append(dict(pending))
+            pending.clear()
 
     prompt = _CONSOLIDATION_PROMPT + "\n\nAGENT-CREATED SKILLS:\n" + "\n".join(summaries)
     try:
@@ -629,8 +704,9 @@ def llm_review(config, *, dry_run: bool = False, max_iterations: int = 8) -> dic
                 title="curator review", meta={"curator": True}, on_event=_capture,
             )
     except Exception as e:  # noqa: BLE001
-        return {"ran": True, "actions": actions, "error": f"{type(e).__name__}: {e}"}
-    return {"ran": True, "actions": actions}
+        return {"ran": True, "actions": actions, "consolidations": consolidations,
+                "error": f"{type(e).__name__}: {e}"}
+    return {"ran": True, "actions": actions, "consolidations": consolidations}
 
 
 def run(config=None, *, dry_run: bool = False) -> dict:
