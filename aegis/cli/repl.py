@@ -615,7 +615,7 @@ def banner(agent: Agent) -> None:
               f"{agent.config.get('tools.exec_mode', 'auto')}")
         print(f"cwd: {agent.cwd}")
         print("Control plane:  aegis ui (web dashboard)")
-        print("Try: /help · @file · /goal · /quit")
+        print("Try: /help · @file · #remember · /goal · /quit")
         print("=" * 60)
 
 
@@ -939,6 +939,33 @@ def _parse_model_override(arg: str) -> tuple[str, str]:
         provider, model = raw.split("/", 1)
         return provider.strip(), model.strip()
     return "", raw
+
+
+def quick_memory(raw: str, agent: Agent) -> bool:
+    """Quick-memory shortcut: a line starting with ``#`` is saved straight to memory with no
+    model turn. ``# user: <fact>`` routes to the USER profile instead of MEMORY. Returns True
+    when the line was a quick-memory directive (so the REPL skips the model)."""
+    if not raw.startswith("#"):
+        return False
+    body = raw[1:].strip()
+    target = "memory"
+    if body.lower().startswith("user:"):
+        target, body = "user", body[5:].strip()
+    if not body:
+        _out("  # <fact>   — remember a fact instantly  ·  # user: <fact> for your profile",
+             style="yellow")
+        return True
+    mem = getattr(agent, "memory", None)
+    store = getattr(mem, "store", None) if mem is not None else None
+    if store is None:
+        _out("  memory is disabled — set memory.enabled: true to use #", style="yellow")
+        return True
+    try:
+        store.add(target, body)
+        _out(f"  ✓ remembered → {'USER.md' if target == 'user' else 'MEMORY.md'}", style="green")
+    except Exception as e:  # noqa: BLE001
+        _out(f"  couldn't save memory: {e}", style="red")
+    return True
 
 
 def handle_slash(
@@ -1611,6 +1638,8 @@ def interactive(config: Config, *, model=None, provider_name=None,
                 break
             user = user.strip()
             if not user:
+                continue
+            if quick_memory(user, agent):    # '#' saves a memory instantly, no model turn
                 continue
             if user.startswith(("/goal", "/subgoal")):
                 goal_prompt = handle_goal_command(user, agent, store)
