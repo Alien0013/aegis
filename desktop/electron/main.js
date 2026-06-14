@@ -5,7 +5,10 @@
 // splash) -> open the main window and swap it in when loaded. The backend is
 // kept alive (restart-on-crash) and stopped cleanly on quit. Logs are captured
 // so a failed boot can show the real error and an "Open logs" button.
-const { app, BrowserWindow, Menu, shell, clipboard, ipcMain, nativeTheme } = require("electron");
+const {
+  app, BrowserWindow, Menu, Tray, Notification, shell, clipboard, ipcMain,
+  nativeTheme, globalShortcut, powerMonitor, dialog,
+} = require("electron");
 const { spawn } = require("child_process");
 const net = require("net");
 const http = require("http");
@@ -30,6 +33,11 @@ let dashboardUrl = "";
 let quitting = false;
 let crashRestarts = 0;
 let logFd = null;
+let tray = null;                       // system-tray presence
+const extraWindows = new Set();        // secondary session windows (multi-window)
+const GLOBAL_SHOW_SHORTCUT = "CommandOrControl+Shift+A";
+const DEEP_LINK_SCHEME = "aegis";      // aegis://chat , aegis://config , ...
+let pendingDeepLink = "";              // a deep link that arrived before the window existed
 
 /* ---------- paths & logging ---------- */
 const logPath = () => path.join(app.getPath("userData"), "desktop.log");
@@ -157,8 +165,103 @@ function createWindow() {
   if (st.maximized) win.maximize();
   win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: "deny" }; });
   for (const ev of ["resize", "move", "close"]) win.on(ev, saveState);
+  // Closing the window hides to the tray (the agent keeps running in the background);
+  // quit explicitly from the tray/menu. Falls back to a real close if the tray is absent.
+  win.on("close", (e) => {
+    if (!quitting && tray) { e.preventDefault(); win.hide(); }
+  });
   win.on("closed", () => { win = null; });
   return win;
+}
+
+/* ---------- native shell features ---------- */
+function iconPath() {
+  return path.join(__dirname, "..", "build", "icon.png");
+}
+
+// Native OS notification (e.g. backend ready / crashed). Clicking focuses the app
+// and optionally navigates to a dashboard route.
+function notify(title, body, gotoRoute) {
+  try {
+    if (!Notification.isSupported()) return;
+    const n = new Notification({ title, body, icon: iconPath(), silent: false });
+    n.on("click", () => { showMainWindow(); if (gotoRoute && win) win.loadURL(route(gotoRoute)); });
+    n.show();
+  } catch { /* ignore */ }
+}
+
+function showMainWindow() {
+  if (!win || win.isDestroyed()) { if (!splash) run(); return; }
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+}
+
+function toggleMainWindow() {
+  if (win && !win.isDestroyed() && win.isVisible() && win.isFocused()) win.hide();
+  else showMainWindow();
+}
+
+// A second dashboard window — work two sessions/views side by side.
+function openExtraWindow(p) {
+  if (!dashboardUrl) return;
+  const w = new BrowserWindow({
+    width: 1100, height: 780, minWidth: 820, minHeight: 540, show: false,
+    backgroundColor: "#0b0d10", title: "AEGIS",
+    webPreferences: { contextIsolation: true, nodeIntegration: false },
+  });
+  w.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: "deny" }; });
+  w.loadURL(route(p || "/"));
+  w.once("ready-to-show", () => w.show());
+  w.on("closed", () => extraWindows.delete(w));
+  extraWindows.add(w);
+  return w;
+}
+
+function createTray() {
+  if (tray) return;
+  try {
+    tray = new Tray(iconPath());
+  } catch (e) { log(`tray unavailable: ${e.message}`); return; }
+  tray.setToolTip("AEGIS");
+  const menu = Menu.buildFromTemplate([
+    { label: "Show AEGIS", click: () => showMainWindow() },
+    { label: "New Window", click: () => openExtraWindow("/") },
+    { type: "separator" },
+    { label: "Chat", click: () => { showMainWindow(); win && win.loadURL(route("/chat")); } },
+    { label: "Sessions", click: () => { showMainWindow(); win && win.loadURL(route("/sessions")); } },
+    { type: "separator" },
+    { label: "Open in Browser", click: () => dashboardUrl && shell.openExternal(dashboardUrl) },
+    { label: "Restart Backend", click: () => restartFromScratch() },
+    { label: "Quit AEGIS", click: () => { quitting = true; app.quit(); } },
+  ]);
+  tray.setContextMenu(menu);
+  tray.on("click", () => toggleMainWindow());
+}
+
+// aegis://chat  ->  route "/chat". Tolerates aegis://chat, aegis:///chat, aegis://go/chat.
+function deepLinkToRoute(url) {
+  try {
+    const rest = String(url).replace(/^aegis:\/+/i, "").replace(/^go\//i, "");
+    const p = "/" + rest.replace(/^\/+/, "").split(/[?#]/)[0];
+    return p === "/" ? "/" : p.replace(/\/+$/, "");
+  } catch { return "/"; }
+}
+
+function handleDeepLink(url) {
+  if (!url) return;
+  const p = deepLinkToRoute(url);
+  if (!dashboardUrl || !win || win.isDestroyed()) { pendingDeepLink = p; showMainWindow(); return; }
+  showMainWindow();
+  win.loadURL(route(p));
+}
+
+function registerGlobalShortcut() {
+  try {
+    if (!globalShortcut.isRegistered(GLOBAL_SHOW_SHORTCUT)) {
+      globalShortcut.register(GLOBAL_SHOW_SHORTCUT, () => toggleMainWindow());
+    }
+  } catch (e) { log(`global shortcut failed: ${e.message}`); }
 }
 
 /* ---------- boot sequence ---------- */
@@ -177,6 +280,10 @@ async function run() {
     win.show();
     if (splash && !splash.isDestroyed()) { splash.close(); splash = null; }
     installMenu();
+    createTray();
+    registerGlobalShortcut();
+    if (crashRestarts === 0) notify("AEGIS is ready", "Your agent is online. ⌘/Ctrl+Shift+A to summon.");
+    if (pendingDeepLink) { win.loadURL(route(pendingDeepLink)); pendingDeepLink = ""; }
   } catch (e) {
     log(`boot failed: ${e.message}`);
     const bin = aegisCommand();
@@ -203,6 +310,7 @@ function installMenu() {
       { label: "Sessions", accelerator: "CmdOrCtrl+3", click: () => go("/sessions") },
       { label: "Settings", accelerator: "CmdOrCtrl+,", click: () => go("/config") },
       { type: "separator" },
+      { label: "New Window", accelerator: "CmdOrCtrl+N", click: () => openExtraWindow("/") },
       { label: "Open in Browser", click: () => dashboardUrl && shell.openExternal(dashboardUrl) },
       { label: "Copy Dashboard URL", click: () => dashboardUrl && clipboard.writeText(dashboardUrl) },
       { label: "Restart Backend", click: () => restartFromScratch() },
@@ -245,19 +353,53 @@ ipcMain.on("boot:retry", () => restartFromScratch());
 ipcMain.on("boot:openLogs", () => shell.openPath(logPath()));
 ipcMain.on("boot:quit", () => { quitting = true; app.quit(); });
 
+/* ---------- deep links (aegis://) ---------- */
+function pickDeepLink(argv) {
+  return (argv || []).find((a) => typeof a === "string" && a.startsWith(`${DEEP_LINK_SCHEME}://`)) || "";
+}
+try {
+  if (process.defaultApp && process.argv.length >= 2) {
+    app.setAsDefaultProtocolClient(DEEP_LINK_SCHEME, process.execPath, [path.resolve(process.argv[1])]);
+  } else {
+    app.setAsDefaultProtocolClient(DEEP_LINK_SCHEME);
+  }
+} catch { /* ignore */ }
+
 /* ---------- app lifecycle ---------- */
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on("second-instance", () => {
+  app.on("second-instance", (_e, argv) => {
+    const link = pickDeepLink(argv);
+    if (link) { handleDeepLink(link); return; }
     const w = win || splash;
-    if (w) { if (w.isMinimized()) w.restore(); w.focus(); }
+    if (w) { if (w.isMinimized()) w.restore(); w.focus(); } else { showMainWindow(); }
   });
+  app.on("open-url", (e, url) => { e.preventDefault(); handleDeepLink(url); });  // macOS deep links
   app.setAboutPanelOptions({ applicationName: "AEGIS", applicationVersion: app.getVersion(),
     copyright: "MIT · Alien0013" });
   nativeTheme.themeSource = "dark";
-  app.whenReady().then(run);
-  app.on("activate", () => { if (!win && !splash) run(); });
-  app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
-  app.on("before-quit", () => { quitting = true; try { backend && backend.kill(); } catch { /* ignore */ } });
+  app.whenReady().then(() => {
+    run();
+    // Pause/resume the backend health story around sleep so a resumed laptop
+    // re-probes instead of assuming the agent is still reachable.
+    try {
+      powerMonitor.on("resume", () => { log("system resumed"); if (win && !win.isDestroyed()) win.webContents.reloadIgnoringCache(); });
+      powerMonitor.on("suspend", () => log("system suspended"));
+    } catch { /* ignore */ }
+    const startupLink = pickDeepLink(process.argv);
+    if (startupLink) pendingDeepLink = deepLinkToRoute(startupLink);
+  });
+  app.on("activate", () => { if (!win && !splash) run(); else showMainWindow(); });
+  app.on("window-all-closed", () => {
+    // With a tray we stay resident (the agent keeps running); without one, quit.
+    if (!tray && process.platform !== "darwin") app.quit();
+  });
+  app.on("will-quit", () => { try { globalShortcut.unregisterAll(); } catch { /* ignore */ } });
+  app.on("before-quit", () => {
+    quitting = true;
+    try { globalShortcut.unregisterAll(); } catch { /* ignore */ }
+    try { tray && tray.destroy(); } catch { /* ignore */ }
+    try { backend && backend.kill(); } catch { /* ignore */ }
+  });
 }
