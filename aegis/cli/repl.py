@@ -67,6 +67,7 @@ SLASH_COMMANDS = (
     SlashCommand("/branch", "sessions", "fork this conversation into a named child session", "/branch [title]"),
     SlashCommand("/new", "sessions", "start a fresh session"),
     SlashCommand("/clear", "sessions", "start a fresh session"),
+    SlashCommand("/ultracode", "planning", "run the rigorous autonomous plan→implement→verify loop", "/ultracode <task>"),
     SlashCommand("/plan", "planning", "draft a plan without making changes", "/plan <task>"),
     SlashCommand("/proceed", "planning", "execute the plan from the last /plan"),
     SlashCommand("/context", "context", "show the token budget breakdown (system, history, tools)"),
@@ -681,8 +682,46 @@ def banner(agent: Agent) -> None:
               f"{agent.config.get('tools.exec_mode', 'auto')}")
         print(f"cwd: {agent.cwd}")
         print("Control plane:  aegis ui (web dashboard)")
-        print("Try: /help · @file · #remember · /plan · /context · /quit")
+        print("Try: /help · @file · #remember · /ultracode · /context · /quit")
         print("=" * 60)
+
+
+def _ultracode_skill_body(agent: Any) -> str:
+    """The ultracode SKILL.md body, loaded directly so the loop is guaranteed in context
+    instead of waiting for the model to choose the skill."""
+    loader = getattr(agent, "skills", None)
+    if loader is None:
+        return ""
+    try:
+        skill = next((s for s in loader.available() if s.name == "ultracode"), None)
+        return skill.full_body() if skill is not None else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def handle_ultracode_command(text: str, agent: Any) -> str | None:
+    """First-class ultracode: ``/ultracode <task>`` force-loads the ultracode skill and runs the
+    task through the full autonomous plan→implement→verify loop. Returns the prompt to run, or
+    None when there's nothing to run. Unlike /plan it doesn't pause for approval — it's the
+    rigorous one-shot loop, gated on real, observed verification before it can claim done."""
+    parts = text.strip().split(maxsplit=1)
+    arg = parts[1].strip() if len(parts) > 1 else ""
+    if not arg:
+        _out("usage: /ultracode <task> — run the rigorous plan → implement → verify loop", style="yellow")
+        return None
+    _out("🚀 ultracode — autonomous loop: plan → test → implement → verify.", style="cyan")
+    body = _ultracode_skill_body(agent)
+    skill_block = f"<system-reminder>ULTRACODE SKILL — follow this loop exactly:\n{body}\n</system-reminder>\n\n" if body else ""
+    return (
+        skill_block
+        + "<system-reminder>Run the ultracode loop above end to end for the task below, "
+        "autonomously. Restate the goal as a checkable success criterion; plan in verifiable "
+        "steps with todo_write; for behavioral changes write a FAILING test first; make the "
+        "smallest change that satisfies the goal; then RUN the build/tests/linter and read the "
+        "real output. Do NOT declare the task done until that success criterion is met and proven "
+        "by tool output you actually ran and observed. If something blocks the real path, say so "
+        "honestly and try another route — never fabricate results.</system-reminder>\n\n" + arg
+    )
 
 
 def handle_plan_command(text: str, agent: Any) -> str | None:
@@ -1743,7 +1782,12 @@ def interactive(config: Config, *, model=None, provider_name=None,
                 continue
             if quick_memory(user, agent):    # '#' saves a memory instantly, no model turn
                 continue
-            if user.startswith(("/plan", "/proceed")):
+            if user.startswith("/ultracode"):
+                uc_prompt = handle_ultracode_command(user, agent)
+                if not uc_prompt:
+                    continue
+                user = uc_prompt   # run the full autonomous loop
+            elif user.startswith(("/plan", "/proceed")):
                 plan_prompt = handle_plan_command(user, agent)
                 if not plan_prompt:
                     continue
