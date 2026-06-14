@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from ..cron import CronJob, CronStore, _interval_seconds, is_due, run_job
+from ..cron import CronJob, CronStore, _interval_seconds, _scan_cron_prompt, is_due, run_job
 from .base import Tool, ToolContext, ToolResult
 
 
@@ -91,6 +91,9 @@ class CronJobTool(Tool):
             return _error("schedule is required for create")
         if not prompt and not skills:
             return _error("create requires prompt or skills")
+        prompt_error = _scan_cron_prompt(prompt)
+        if prompt_error:
+            return _error(prompt_error)
         deliver, deliver_error = _normalize_deliver(
             args.get("deliver") if "deliver" in args else None,
             ctx,
@@ -133,6 +136,10 @@ class CronJobTool(Tool):
         for key in ("schedule", "prompt", "name", "script"):
             if key in args and args.get(key) is not None:
                 updates[key] = str(args.get(key) or "").strip()
+        if "prompt" in updates:
+            prompt_error = _scan_cron_prompt(updates["prompt"])
+            if prompt_error:
+                return _error(prompt_error)
         if "enabled" in args and args.get("enabled") is not None:
             updates["enabled"] = bool(args.get("enabled"))
         if "no_agent" in args and args.get("no_agent") is not None:

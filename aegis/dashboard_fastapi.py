@@ -1350,11 +1350,14 @@ def _api_post(path: str, body: dict, config: Config, chat_runner: Any) -> dict:
             return {"ok": True, "started": True}
         return {"error": "bad kanban request"}
     if path == "/api/cron":
-        from .cron import CronStore, build_delivery_sink, run_job
+        from .cron import CronStore, _scan_cron_prompt, build_delivery_sink, run_job
 
         cs = CronStore()
         act = body.get("action")
         if act == "add" and body.get("schedule") and body.get("prompt"):
+            prompt_error = _scan_cron_prompt(str(body.get("prompt") or ""))
+            if prompt_error:
+                return {"ok": False, "error": prompt_error}
             j = cs.add(body["schedule"], body["prompt"], body.get("channel", ""))
             return {"id": j.id}
         if act == "remove" and body.get("id"):
@@ -2558,11 +2561,14 @@ def create_app(config: Config) -> FastAPI:
         body = await request.json()
         if not body.get("schedule") or not body.get("prompt"):
             return JSONResponse({"ok": False, "error": "schedule and prompt are required"}, status_code=400)
-        from .cron import CronStore
+        from .cron import CronStore, _scan_cron_prompt
 
         skills = body.get("skills") or []
         if isinstance(skills, str):
             skills = [s.strip() for s in skills.split(",") if s.strip()]
+        prompt_error = _scan_cron_prompt(str(body.get("prompt") or ""))
+        if prompt_error:
+            return JSONResponse({"ok": False, "error": prompt_error}, status_code=400)
         job = CronStore().add(
             str(body["schedule"]),
             str(body["prompt"]),
@@ -2585,12 +2591,16 @@ def create_app(config: Config) -> FastAPI:
     async def api_cron_job_patch(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
         body = await request.json()
-        from .cron import CronStore
+        from .cron import CronStore, _scan_cron_prompt
 
         updates = {key: body[key] for key in (
             "schedule", "prompt", "name", "channel", "enabled", "script", "skills", "deliver",
             "no_agent"
         ) if key in body}
+        if "prompt" in updates:
+            prompt_error = _scan_cron_prompt(str(updates.get("prompt") or ""))
+            if prompt_error:
+                return JSONResponse({"ok": False, "error": prompt_error}, status_code=400)
         job = CronStore().update(job_id, **updates)
         if job is None:
             return JSONResponse({"ok": False, "error": "cron job not found", "id": job_id}, status_code=404)

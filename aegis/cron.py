@@ -9,12 +9,14 @@ import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from . import config as cfg
 from .types import new_id
 from .util import atomic_write, read_text
 
 _TICK_LOCAL = threading.local()
+_JOBS_LOCK = threading.RLock()
 
 
 def _cron_path():
@@ -69,6 +71,223 @@ class CronJob:
     last_error: str = ""       # last failure message ("" when healthy)
     next_run: float = 0.0      # epoch of the next expected fire (advisory; computed on each run)
     runs: list = field(default_factory=list)          # recent run records (capped), newest last
+
+
+_VALID_STATES = {"idle", "running", "ok", "error"}
+_SAFE_JOB_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
+_SECRET_ENV_RE = re.compile(r"\$(?:[A-Z0-9_]*?(?:API[_-]?KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL)[A-Z0-9_]*)\b")
+_SECRET_PATH_RE = re.compile(
+    r"(?:^|[\s'\"`])(?:[~\w./-]*/)?(?:\.env(?:\.[\w.-]+)?|\.netrc|\.aws/(?:credentials|config)|"
+    r"\.ssh/(?:id_rsa|id_ed25519|id_dsa|id_ecdsa)|id_rsa|id_ed25519|\.git-credentials|"
+    r"\.npmrc|\.pypirc|\.docker/config\.json|\.kube/config)\b",
+    re.IGNORECASE,
+)
+_GITHUB_API_RE = re.compile(r"https?://(?:api\.)?github\.com(?:[/'\"\s]|$)", re.IGNORECASE)
+_CRON_PROMPT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(r"\bdisregard\b[^\n]{0,50}\b(?:your|the|all)?\s*(?:rules|instructions|system|policy)\b",
+                   re.IGNORECASE),
+        "prompt-injection phrasing",
+    ),
+    (
+        re.compile(r"\b(?:system\s+prompt\s+override|override\s+(?:the\s+)?system\s+prompt)\b",
+                   re.IGNORECASE),
+        "system prompt override directive",
+    ),
+    (
+        re.compile(r"\bdo\s+not\s+(?:tell|inform|notify|mention\s+to)\s+(?:the\s+)?user\b",
+                   re.IGNORECASE),
+        "concealment directive",
+    ),
+    (
+        re.compile(r"\b(?:write|append|add|install)\b[^\n]{0,80}\bauthorized_keys\b", re.IGNORECASE),
+        "ssh backdoor persistence",
+    ),
+    (
+        re.compile(r"\b(?:edit|write|append|modify)\b[^\n]{0,80}/etc/sudoers\b", re.IGNORECASE),
+        "sudoers modification",
+    ),
+    (
+        re.compile(r"\brm\s+-[^\n]*r[^\n]*f[^\n]*(?:/|~|\$HOME)\b|\brm\s+-rf\s+/", re.IGNORECASE),
+        "destructive recursive delete",
+    ),
+)
+
+
+class CronPromptInjectionBlocked(RuntimeError):
+    """Raised when an assembled unattended cron prompt looks injected."""
+
+
+def _coerce_text(value, fallback: str = "") -> str:
+    if value is None:
+        return fallback
+    return str(value)
+
+
+def _coerce_bool(value, fallback: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "on", "enabled"}:
+            return True
+        if text in {"0", "false", "no", "off", "disabled"}:
+            return False
+    return fallback
+
+
+def _coerce_float(value, fallback: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _coerce_list(value) -> list:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, (tuple, set)):
+        return list(value)
+    return [value]
+
+
+def _safe_job_id(value) -> str:
+    text = _coerce_text(value).strip()
+    unsafe = (
+        not text
+        or text in {".", ".."}
+        or "/" in text
+        or "\\" in text
+        or "\x00" in text
+        or Path(text).is_absolute()
+        or bool(Path(text).drive)
+        or _SAFE_JOB_ID_RE.fullmatch(text) is None
+    )
+    if not unsafe:
+        return text
+    cleaned = re.sub(r"[^A-Za-z0-9_.:-]+", "_", text).strip("._:-")
+    if not cleaned or cleaned in {".", ".."}:
+        cleaned = "unknown"
+    return f"cron_legacy_{cleaned[:40]}"
+
+
+def _schedule_text(value) -> str:
+    if isinstance(value, dict):
+        for key in ("display", "value", "expr", "run_at"):
+            text = _coerce_text(value.get(key)).strip()
+            if text:
+                return text
+        return ""
+    return _coerce_text(value).strip()
+
+
+def _normalize_job_record(raw: dict, *, index: int = 0, seen: set[str] | None = None) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    skills: list[str] = []
+    for item in _coerce_list(raw.get("skills")):
+        text = _coerce_text(item).strip()
+        if text and text not in skills:
+            skills.append(text)
+    job_id = _safe_job_id(raw.get("id"))
+    if seen is not None and job_id in seen:
+        base = job_id
+        suffix = max(1, index)
+        while job_id in seen:
+            job_id = f"{base}_{suffix}"
+            suffix += 1
+    if seen is not None:
+        seen.add(job_id)
+    prompt = _coerce_text(raw.get("prompt"))
+    script = _coerce_text(raw.get("script")).strip()
+    name = _coerce_text(raw.get("name")).strip()
+    if not name:
+        name = (prompt[:50] or (skills[0] if skills else "") or script or job_id).strip()
+    state = _coerce_text(raw.get("state"), "idle").strip().lower()
+    if state not in _VALID_STATES:
+        state = "idle"
+    runs = [item for item in _coerce_list(raw.get("runs")) if isinstance(item, dict)]
+    return {
+        "id": job_id,
+        "schedule": _schedule_text(raw.get("schedule")),
+        "prompt": prompt,
+        "name": name,
+        "channel": _coerce_text(raw.get("channel")).strip(),
+        "last_run": _coerce_float(raw.get("last_run"), 0.0),
+        "enabled": _coerce_bool(raw.get("enabled"), True),
+        "run_at": _coerce_float(raw.get("run_at"), 0.0),
+        "script": script,
+        "skills": skills,
+        "deliver": _coerce_text(raw.get("deliver")).strip(),
+        "no_agent": _coerce_bool(raw.get("no_agent"), False),
+        "state": state,
+        "last_error": _coerce_text(raw.get("last_error")).strip()[:500],
+        "next_run": _coerce_float(raw.get("next_run"), 0.0),
+        "runs": runs[-10:],
+    }
+
+
+def _find_unique_job_index(jobs: list[dict], job_id: str) -> int | None:
+    ref = _coerce_text(job_id).strip()
+    if not ref:
+        return None
+    exact = [i for i, job in enumerate(jobs) if job.get("id") == ref]
+    if len(exact) == 1:
+        return exact[0]
+    if exact:
+        return None
+    matches = [i for i, job in enumerate(jobs) if _coerce_text(job.get("id")).startswith(ref)]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _scan_cron_prompt(prompt: str) -> str:
+    from .security_scan import scan_text_findings
+
+    text = prompt or ""
+    findings = scan_text_findings(_strip_allowed_emoji_joiners(text))
+    if not findings:
+        for pattern, reason in _CRON_PROMPT_PATTERNS:
+            if pattern.search(text):
+                findings.append(reason)
+                break
+    if not findings and _SECRET_PATH_RE.search(text):
+        findings.append("secret file read in unattended cron prompt")
+    if not findings and re.search(r"\b(?:curl|wget)\b", text, re.IGNORECASE) and _SECRET_ENV_RE.search(text):
+        if not _GITHUB_API_RE.search(text):
+            findings.append("secret-bearing network request in unattended cron prompt")
+    if not findings:
+        return ""
+    return f"cron prompt blocked by injection scanner: {findings[0]}"
+
+
+def _scan_assembled_cron_prompt(prompt: str, job: CronJob) -> str:
+    error = _scan_cron_prompt(prompt)
+    if error:
+        label = job.name or job.id
+        raise CronPromptInjectionBlocked(f"{label}: {error}")
+    return prompt
+
+
+def _strip_allowed_emoji_joiners(text: str) -> str:
+    chars: list[str] = []
+    for index, char in enumerate(text):
+        if char != "\u200d":
+            chars.append(char)
+            continue
+        prev = text[index - 1] if index else ""
+        nxt = text[index + 1] if index + 1 < len(text) else ""
+        if _looks_emojiish(prev) or _looks_emojiish(nxt):
+            continue
+        chars.append(char)
+    return "".join(chars)
+
+
+def _looks_emojiish(char: str) -> bool:
+    return char == "\ufe0f" or bool(char and ord(char) >= 0x1F000)
 
 
 _INTERVAL_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -183,19 +402,41 @@ def is_due(job: CronJob, now: float) -> bool:
 
 class CronStore:
     def _load(self) -> list[dict]:
-        raw = read_text(_cron_path())
-        return json.loads(raw) if raw.strip() else []
+        with _JOBS_LOCK:
+            raw = read_text(_cron_path())
+            if not raw.strip():
+                return []
+            try:
+                loaded = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                return []
+            if not isinstance(loaded, list):
+                return []
+            seen: set[str] = set()
+            jobs: list[dict] = []
+            for index, item in enumerate(loaded):
+                normalized = _normalize_job_record(item, index=index, seen=seen)
+                if normalized is not None:
+                    jobs.append(normalized)
+            return jobs
 
     def _save(self, jobs: list[dict]) -> None:
-        atomic_write(_cron_path(), json.dumps(jobs, indent=2))
+        with _JOBS_LOCK:
+            seen: set[str] = set()
+            normalized = [
+                job for index, item in enumerate(jobs)
+                if (job := _normalize_job_record(item, index=index, seen=seen)) is not None
+            ]
+            atomic_write(_cron_path(), json.dumps(normalized, indent=2))
 
     def list(self) -> list[CronJob]:
         return [CronJob(**j) for j in self._load()]
 
     def get(self, job_id: str) -> CronJob | None:
-        for job in self.list():
-            if job.id == job_id or job.id.startswith(job_id):
-                return job
+        jobs = self._load()
+        index = _find_unique_job_index(jobs, job_id)
+        if index is not None:
+            return CronJob(**jobs[index])
         return None
 
     def add(self, schedule: str, prompt: str, channel: str = "", script: str = "",
@@ -205,56 +446,61 @@ class CronStore:
         job = CronJob(id=new_id("cron"), schedule=schedule, prompt=prompt, name=name, channel=channel,
                       run_at=run_at, script=script, skills=skills or [], deliver=deliver,
                       no_agent=no_agent)
-        jobs = self._load()
-        jobs.append(job.__dict__)
-        self._save(jobs)
+        with _JOBS_LOCK:
+            jobs = self._load()
+            jobs.append(job.__dict__)
+            self._save(jobs)
         return job
 
     def remove(self, job_id: str) -> bool:
-        jobs = self._load()
-        kept = [j for j in jobs if not j["id"].startswith(job_id)]
-        self._save(kept)
-        return len(kept) != len(jobs)
+        with _JOBS_LOCK:
+            jobs = self._load()
+            index = _find_unique_job_index(jobs, job_id)
+            if index is None:
+                return False
+            del jobs[index]
+            self._save(jobs)
+            return True
 
     def set_enabled(self, job_id: str, enabled: bool) -> bool:
-        jobs = self._load()
-        hit = False
-        for j in jobs:
-            if j["id"] == job_id or j["id"].startswith(job_id):
-                j["enabled"] = enabled
-                hit = True
-        self._save(jobs)
-        return hit
+        with _JOBS_LOCK:
+            jobs = self._load()
+            index = _find_unique_job_index(jobs, job_id)
+            if index is None:
+                return False
+            jobs[index]["enabled"] = enabled
+            self._save(jobs)
+            return True
 
     def update(self, job_id: str, **updates) -> CronJob | None:
-        jobs = self._load()
-        allowed = {"schedule", "prompt", "name", "channel", "enabled", "script", "skills",
-                   "deliver", "no_agent"}
-        found: dict | None = None
-        now = time.time()
-        for j in jobs:
-            if j["id"] == job_id or j["id"].startswith(job_id):
-                for key, value in updates.items():
-                    if key not in allowed:
-                        continue
-                    if key == "skills" and value is None:
-                        continue
-                    j[key] = value
-                if "schedule" in updates:
-                    j["run_at"] = _parse_oneshot(str(j.get("schedule", "")), now) or 0.0
-                    j["last_run"] = 0.0
-                    j["next_run"] = 0.0
-                found = j
-                break
-        if found is None:
-            return None
-        self._save(jobs)
-        return CronJob(**found)
+        with _JOBS_LOCK:
+            jobs = self._load()
+            index = _find_unique_job_index(jobs, job_id)
+            if index is None:
+                return None
+            allowed = {"schedule", "prompt", "name", "channel", "enabled", "script", "skills",
+                       "deliver", "no_agent"}
+            now = time.time()
+            found = jobs[index]
+            for key, value in updates.items():
+                if key not in allowed:
+                    continue
+                if key == "skills" and value is None:
+                    continue
+                found[key] = value
+            if "schedule" in updates:
+                found["run_at"] = _parse_oneshot(str(found.get("schedule", "")), now) or 0.0
+                found["last_run"] = 0.0
+                found["next_run"] = 0.0
+            self._save(jobs)
+            return CronJob(**_normalize_job_record(found))
 
     def mark_run(self, job_id: str, when: float) -> None:
-        jobs = self._load()
-        for j in jobs:
-            if j["id"] == job_id:
+        with _JOBS_LOCK:
+            jobs = self._load()
+            index = _find_unique_job_index(jobs, job_id)
+            if index is not None:
+                j = jobs[index]
                 j["last_run"] = when
                 j["state"] = "ok"
                 j["last_error"] = ""
@@ -263,39 +509,39 @@ class CronStore:
                     j["next_run"] = 0.0
                 else:
                     j["next_run"] = _compute_next_run(CronJob(**j), when)
-        self._save(jobs)
+            self._save(jobs)
 
     def mark_running(self, job_id: str) -> None:
-        jobs = self._load()
-        for j in jobs:
-            if j["id"] == job_id:
-                j["state"] = "running"
-                j["last_error"] = ""
-                break
-        self._save(jobs)
+        with _JOBS_LOCK:
+            jobs = self._load()
+            index = _find_unique_job_index(jobs, job_id)
+            if index is not None:
+                jobs[index]["state"] = "running"
+                jobs[index]["last_error"] = ""
+            self._save(jobs)
 
     def record_run(self, job_id: str, when: float, *, ok: bool, error: str = "",
                    reply: str = "", keep: int = 10) -> None:
         """Persist a typed run outcome: last_run, state, last_error, next_run, and a capped
         ``runs`` history (newest last)."""
-        jobs = self._load()
-        for j in jobs:
-            if j["id"] != job_id:
-                continue
-            j["last_run"] = when
-            j["state"] = "ok" if ok else "error"
-            j["last_error"] = "" if ok else (error or "unknown error")[:500]
-            if j.get("run_at"):              # one-shot is done after a single fire
-                j["enabled"] = False
-                j["next_run"] = 0.0
-            else:
-                j["next_run"] = _compute_next_run(CronJob(**j), when)
-            runs = list(j.get("runs", []))
-            runs.append({"at": when, "ok": ok, "error": error[:200] if error else "",
-                         "chars": len(reply or "")})
-            j["runs"] = runs[-keep:]
-            break
-        self._save(jobs)
+        with _JOBS_LOCK:
+            jobs = self._load()
+            index = _find_unique_job_index(jobs, job_id)
+            if index is not None:
+                j = jobs[index]
+                j["last_run"] = when
+                j["state"] = "ok" if ok else "error"
+                j["last_error"] = "" if ok else (error or "unknown error")[:500]
+                if j.get("run_at"):              # one-shot is done after a single fire
+                    j["enabled"] = False
+                    j["next_run"] = 0.0
+                else:
+                    j["next_run"] = _compute_next_run(CronJob(**j), when)
+                runs = list(j.get("runs", []))
+                runs.append({"at": when, "ok": ok, "error": error[:200] if error else "",
+                             "chars": len(reply or "")})
+                j["runs"] = runs[-keep:]
+            self._save(jobs)
 
 
 def _run_script_only(script: str, timeout: int = 120) -> tuple[bool, str, str]:
@@ -373,6 +619,7 @@ def run_job(config, job: CronJob | str, *, sink=None, store: "CronStore | None" 
             if config and config.get("cron.approval", "deny") == "approve":
                 agent.permissions._mode_override = "auto"
             prompt = build_prompt(job.prompt, skills=job.skills, script=job.script)
+            prompt = _scan_assembled_cron_prompt(prompt, job)
             result = runner.run_prompt(
                 prompt,
                 session=session,

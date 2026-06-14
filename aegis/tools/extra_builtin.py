@@ -130,7 +130,7 @@ class ScheduleTaskTool(Tool):
     }
 
     def run(self, args, ctx: ToolContext) -> ToolResult:
-        from ..cron import CronStore
+        from ..cron import CronStore, _scan_cron_prompt
         agent = getattr(ctx, "agent", None)
         deliver = (args.get("deliver") or "").strip()
         if not deliver:
@@ -138,6 +138,9 @@ class ScheduleTaskTool(Tool):
             chat_id = getattr(agent, "chat_id", None)
             if platform and chat_id:
                 deliver = f"{platform}:{chat_id}"
+        prompt_error = _scan_cron_prompt(str(args.get("prompt") or ""))
+        if prompt_error:
+            return ToolResult.error(prompt_error)
         job = CronStore().add(args["schedule"], args["prompt"], deliver=deliver)
         target = f" -> {deliver}" if deliver else ""
         return ToolResult.ok(f"scheduled {job.id} [{job.schedule}]{target} "
