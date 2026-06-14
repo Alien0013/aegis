@@ -13,6 +13,22 @@ from .types import Message, new_id
 from .util import now_iso, slugify
 
 
+def _session_source(meta: dict[str, Any]) -> str:
+    """Classify a session as user-facing ('') or internal. Internal = the forked
+    self-improvement sessions (memory/skill review, curator) that aren't real
+    conversations — the dashboard's session list hides them (Hermes source scoping).
+    Compaction-child sessions are NOT internal: they carry the user's conversation forward."""
+    if not isinstance(meta, dict):
+        return ""
+    if meta.get("review_kind") or meta.get("curator") or meta.get("review"):
+        return "internal"
+    if str(meta.get("creator_kind") or "") in {"review", "curator"}:
+        return "internal"
+    if str(meta.get("surface") or "") in {"review", "curator"}:
+        return "internal"
+    return ""
+
+
 @dataclass
 class Session:
     id: str
@@ -117,6 +133,15 @@ class SessionStore:
                 c.execute("ALTER TABLE sessions ADD COLUMN profile TEXT DEFAULT ''")
             if "archived" not in cols:
                 c.execute("ALTER TABLE sessions ADD COLUMN archived INTEGER DEFAULT 0")
+            if "source" not in cols:
+                c.execute("ALTER TABLE sessions ADD COLUMN source TEXT DEFAULT ''")
+                # Backfill: tag the internal forked sessions already on disk so they
+                # drop out of the default (user-facing) list immediately.
+                c.execute(
+                    "UPDATE sessions SET source='internal' WHERE title IN "
+                    "('[review]','[curator]','memory review','skill review',"
+                    "'combined review','curator review')"
+                )
             c.execute(
                 """CREATE TABLE IF NOT EXISTS messages (
                        id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -214,14 +239,15 @@ class SessionStore:
         row = session.to_row()
         session.updated_at = row["updated_at"]
         row["summary"] = session.meta.get("summary", "")
+        row["source"] = _session_source(session.meta)
         with self._conn() as c:
             c.execute(
-                """INSERT INTO sessions (id, title, created_at, updated_at, summary, parent_id, profile, data)
-                   VALUES (:id, :title, :created_at, :updated_at, :summary, :parent_id, :profile, :data)
+                """INSERT INTO sessions (id, title, created_at, updated_at, summary, parent_id, profile, data, source)
+                   VALUES (:id, :title, :created_at, :updated_at, :summary, :parent_id, :profile, :data, :source)
                    ON CONFLICT(id) DO UPDATE SET
                      title=excluded.title, updated_at=excluded.updated_at,
                      summary=excluded.summary, parent_id=excluded.parent_id,
-                     profile=excluded.profile, data=excluded.data""",
+                     profile=excluded.profile, data=excluded.data, source=excluded.source""",
                 row,
             )
             c.execute("DELETE FROM messages WHERE session_id=? AND message_index>=?",
@@ -399,11 +425,15 @@ class SessionStore:
             row = c.execute("SELECT * FROM sessions ORDER BY updated_at DESC LIMIT 1").fetchone()
             return Session.from_row(row) if row else None
 
-    def list(self, limit: int = 50) -> list[dict]:
+    def list(self, limit: int = 50, *, include_internal: bool = False) -> list[dict]:
+        """Recent sessions, newest first. Internal forked sessions (memory/skill review,
+        curator) are hidden by default so the user-facing list shows real conversations
+        only; pass ``include_internal=True`` to see everything."""
+        where = "" if include_internal else "WHERE COALESCE(source,'') NOT IN ('internal','review','curator')"
         with self._conn() as c:
             rows = c.execute(
                 "SELECT id, title, created_at, updated_at, parent_id, profile "
-                "FROM sessions ORDER BY updated_at DESC LIMIT ?",
+                f"FROM sessions {where} ORDER BY updated_at DESC LIMIT ?",
                 (limit,),
             ).fetchall()
             return [dict(r) for r in rows]

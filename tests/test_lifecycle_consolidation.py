@@ -233,6 +233,31 @@ def test_session_archived_is_protected_from_prune(home):
     assert s.id in st.prune_empty(dry_run=True)
 
 
+def test_internal_sessions_hidden_from_default_list(home):
+    """Forked review/curator sessions are tagged 'internal' at save and excluded from
+    the default (user-facing) session list — only real conversations show."""
+    from aegis.session import Session, SessionStore, _session_source
+    from aegis.types import Message
+    st = SessionStore()
+    chat = Session.create(title="real chat")
+    chat.meta["surface"] = "chat"
+    chat.messages = [Message.user("hi")]
+    st.save(chat)
+    review = Session.create(title="memory review")
+    review.meta.update({"surface": "review", "review_kind": "memory"})
+    st.save(review)
+    curator = Session.create(title="curator review")
+    curator.meta.update({"surface": "curator", "curator": True})
+    st.save(curator)
+
+    assert _session_source(chat.meta) == "" and _session_source(review.meta) == "internal"
+    default_ids = {r["id"] for r in st.list(50)}
+    assert chat.id in default_ids
+    assert review.id not in default_ids and curator.id not in default_ids
+    all_ids = {r["id"] for r in st.list(50, include_internal=True)}
+    assert {chat.id, review.id, curator.id} <= all_ids
+
+
 def test_session_retention_window(home):
     """older_than_days only prunes sessions untouched for the window (recent ghosts stay)."""
     from aegis.session import Session, SessionStore

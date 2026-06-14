@@ -1,20 +1,20 @@
 // Chat = the real AEGIS TUI embedded in an xterm terminal over the /api/pty
 // WebSocket (the Hermes approach). The TUI renders the conversation, tool trail,
 // and reasoning cleanly — no raw scaffolding — because it's the actual agent CLI.
+// Just the terminal: session browsing lives on the Sessions page (Hermes keeps
+// Chat and Sessions separate). Opening a session there deep-links to /chat?id=…,
+// which resumes it here.
 
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { TOKEN, api } from "../lib/api";
-import { ago, compact } from "../lib/format";
-import { cn } from "../lib/cn";
+import { TOKEN } from "../lib/api";
+import { compact } from "../lib/format";
 import { useTheme } from "../themes/ThemeProvider";
 import { Badge } from "../components/ui";
 import { Icon } from "../components/icons";
-
-interface SessionRow { id: string; title?: string; updated_at?: string }
 
 function ptyUrl(term: Terminal, resume: string): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -36,11 +36,13 @@ export function Chat() {
   const [status, setStatus] = useState<"connecting" | "connected" | "closed" | "error">("connecting");
   const [generation, setGeneration] = useState(0);
   const [resume, setResume] = useState(params.get("id") || "");
-  const [sessions, setSessions] = useState<SessionRow[]>([]);
 
+  // Deep-link from the Sessions page: /chat?id=<sid> resumes that session.
   useEffect(() => {
-    api<SessionRow[]>("sessions").then((s) => setSessions(Array.isArray(s) ? s : [])).catch(() => setSessions([]));
-  }, [generation]);
+    const id = params.get("id") || "";
+    if (id && id !== resume) { setResume(id); setGeneration((n) => n + 1); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -90,30 +92,11 @@ export function Chat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [generation, theme]);
 
-  function open(id: string) { setResume(id); setGeneration((n) => n + 1); }
   function fresh() { setResume(""); setGeneration((n) => n + 1); }
 
   return (
-    <div className="flex h-[calc(100vh-7rem)] gap-[var(--gap)]">
-      <aside className="hidden w-60 shrink-0 flex-col rounded-[calc(var(--radius)+2px)] border border-border bg-surface lg:flex">
-        <div className="flex items-center justify-between border-b border-border px-3 py-2.5">
-          <span className="text-xs font-semibold uppercase tracking-wide text-faint">Sessions</span>
-          <button onClick={fresh} className="text-dim hover:text-text" title="New chat"><Icon name="plus" size={15} /></button>
-        </div>
-        <div className="scroll-thin flex-1 overflow-y-auto p-1.5">
-          {!sessions.length && <div className="px-2 py-6 text-center text-xs text-faint">No sessions yet.</div>}
-          {sessions.slice(0, 40).map((s) => (
-            <button key={s.id} onClick={() => open(s.id)}
-              className={cn("block w-full rounded-[var(--radius)] px-2.5 py-1.5 text-left hover:bg-surface-2",
-                resume === s.id && "bg-surface-2")}>
-              <div className="truncate text-sm text-text">{compact(s.title || s.id, 28)}</div>
-              <div className="text-[11px] text-faint">{ago(s.updated_at)}</div>
-            </button>
-          ))}
-        </div>
-      </aside>
-
-      <section className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-[calc(var(--radius)+2px)] border border-border bg-surface">
+    <div className="h-[calc(100vh-7rem)]">
+      <section className="flex h-full min-w-0 flex-col overflow-hidden rounded-[calc(var(--radius)+2px)] border border-border bg-surface">
         <div className="flex items-center justify-between border-b border-border px-3 py-2">
           <div className="flex items-center gap-2 text-xs text-dim">
             <Icon name="terminal" size={14} />
@@ -121,6 +104,9 @@ export function Chat() {
           </div>
           <div className="flex items-center gap-2">
             <Badge status={status === "connected" ? "ok" : status === "error" ? "error" : "pending"}>{status}</Badge>
+            <button onClick={fresh} className="text-dim hover:text-text" title="New session">
+              <Icon name="plus" size={15} />
+            </button>
             <button onClick={() => setGeneration((n) => n + 1)} className="text-dim hover:text-text" title="Reconnect">
               <Icon name="refresh" size={14} />
             </button>
