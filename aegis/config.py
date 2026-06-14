@@ -336,6 +336,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "stale_after_days": 30,      # active -> stale
         "archive_after_days": 90,    # stale -> archived (Hermes-aligned; never deleted)
         "llm_review": True,          # phase-2 aux-model consolidation pass (uses auxiliary.curator)
+        "prune_empty_sessions": True,    # session lifecycle: drop empty 'ghost' sessions during maintenance
+        "session_retention_days": 7,     # only prune empty sessions untouched this long
         "backup": {
             "enabled": True,
             "keep": 5,               # tar.gz snapshots of skills/ retained before each run

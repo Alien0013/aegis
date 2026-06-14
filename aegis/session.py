@@ -115,6 +115,8 @@ class SessionStore:
                 c.execute("ALTER TABLE sessions ADD COLUMN parent_id TEXT")
             if "profile" not in cols:
                 c.execute("ALTER TABLE sessions ADD COLUMN profile TEXT DEFAULT ''")
+            if "archived" not in cols:
+                c.execute("ALTER TABLE sessions ADD COLUMN archived INTEGER DEFAULT 0")
             c.execute(
                 """CREATE TABLE IF NOT EXISTS messages (
                        id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -440,6 +442,44 @@ class SessionStore:
             if getattr(self, "_fts", False):
                 c.execute("DELETE FROM messages_fts WHERE session_id=?", (sid,))  # no orphan rows
             return cur.rowcount > 0
+
+    def set_archived(self, sid: str, archived: bool = True) -> bool:
+        """Archive (or unarchive) a session — archived sessions are kept but excluded
+        from pruning and from the default session list (Hermes set_session_archived)."""
+        with self._conn() as c:
+            cur = c.execute("UPDATE sessions SET archived=? WHERE id=?",
+                            (1 if archived else 0, sid))
+            return cur.rowcount > 0
+
+    def prune_empty(self, *, older_than_days: float = 0.0, dry_run: bool = True,
+                    protect: "tuple[str, ...]" = ()) -> list[str]:
+        """Delete 'ghost' sessions — ones with no user/assistant turns (only a system
+        prompt, or nothing) — that aren't archived or protected. Lifecycle cleanup so the
+        store doesn't accumulate empty sessions (Hermes prune_empty_ghost_sessions). With
+        ``older_than_days`` only prunes sessions untouched for that long. Returns the ids
+        pruned (or that would be pruned, when ``dry_run``)."""
+        from datetime import datetime, timedelta, timezone
+        guard = set(protect or ())
+        cutoff = ((datetime.now(timezone.utc) - timedelta(days=older_than_days)).isoformat()
+                  if older_than_days > 0 else None)
+        victims: list[str] = []
+        with self._conn() as c:
+            for r in c.execute("SELECT id, updated_at, archived FROM sessions").fetchall():
+                sid = r["id"]
+                if sid in guard or (r["archived"] or 0):
+                    continue
+                if cutoff and (r["updated_at"] or "") > cutoff:
+                    continue
+                substantive = c.execute(
+                    "SELECT COUNT(*) FROM messages WHERE session_id=? AND role IN ('user','assistant')",
+                    (sid,),
+                ).fetchone()[0]
+                if substantive == 0:
+                    victims.append(sid)
+        if not dry_run:
+            for sid in victims:
+                self.delete(sid)
+        return victims
 
     def search(self, query: str, limit: int = 20) -> list[dict]:
         with self._conn() as c:

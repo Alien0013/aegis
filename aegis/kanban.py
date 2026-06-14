@@ -21,7 +21,7 @@ from .types import new_id
 from .util import now_iso, truncate
 
 # status flow: ready -> in_progress -> done, plus blocked
-STATUSES = ("ready", "in_progress", "done", "blocked")
+STATUSES = ("ready", "in_progress", "done", "blocked", "archived")
 
 
 @dataclass

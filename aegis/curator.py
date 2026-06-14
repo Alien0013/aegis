@@ -724,6 +724,16 @@ def run(config=None, *, dry_run: bool = False) -> dict:
         backup(reason="pre-curator", keep=backup_keep)
     result = apply_transitions(dry_run=dry_run, stale_after_days=stale_days,
                                archive_after_days=archive_days)
+    # Whole-agent lifecycle maintenance: prune empty 'ghost' sessions (no user/assistant
+    # turns) older than the retention window, so the session store doesn't accumulate cruft.
+    if config is not None and bool(config.get("curator.prune_empty_sessions", True)):
+        try:
+            from .session import SessionStore
+            retention = float(config.get("curator.session_retention_days", 7) or 0)
+            result["pruned_sessions"] = SessionStore().prune_empty(
+                older_than_days=retention, dry_run=dry_run)
+        except Exception:  # noqa: BLE001 — maintenance must never crash
+            pass
     if not dry_run and do_llm and config is not None:
         result["llm_review"] = llm_review(config, dry_run=False)
     if not dry_run:

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from .base import Tool, ToolContext, ToolResult
 
-_STATUSES = ("ready", "in_progress", "done", "blocked")
+_STATUSES = ("ready", "in_progress", "done", "blocked", "archived")
 
 
 class KanbanTool(Tool):
@@ -15,8 +15,8 @@ class KanbanTool(Tool):
         "Manage your task board (persists across turns/sessions). action: "
         "list | create | move | complete | block | comment | show. "
         "Use for multi-step work you want to track: create cards, move them through "
-        "ready→in_progress→done, block with a reason, or comment progress. "
-        "move needs id + status (ready|in_progress|done|blocked)."
+        "ready→in_progress→done, block with a reason, archive finished cards, or comment "
+        "progress. move needs id + status (ready|in_progress|done|blocked|archived)."
     )
     groups = ["automation"]
     toolset = "core"

@@ -200,3 +200,56 @@ def test_restore_clears_suppression(home):
     curator.archive("gone")
     assert curator.restore("gone") is True
     assert "gone" not in curator.read_suppressed()
+
+
+# --- session lifecycle -----------------------------------------------------
+
+def test_session_prune_empty_keeps_real_drops_ghost(home):
+    """Empty 'ghost' sessions (no user/assistant turns) are pruned; real ones survive."""
+    from aegis.session import Session, SessionStore
+    from aegis.types import Message
+    st = SessionStore()
+    ghost = Session.create(title="ghost")
+    st.save(ghost)
+    real = Session.create(title="real")
+    real.messages = [Message.user("hi"), Message.assistant("hello")]
+    st.save(real)
+
+    assert ghost.id in st.prune_empty(dry_run=True)
+    assert real.id not in st.prune_empty(dry_run=True)
+    pruned = st.prune_empty(dry_run=False)
+    ids = {row["id"] for row in st.list()}
+    assert ghost.id in pruned and ghost.id not in ids and real.id in ids
+
+
+def test_session_archived_is_protected_from_prune(home):
+    from aegis.session import Session, SessionStore
+    st = SessionStore()
+    s = Session.create(title="keep-me-empty")
+    st.save(s)
+    assert st.set_archived(s.id, True) is True
+    assert s.id not in st.prune_empty(dry_run=True)     # archived → not a prune target
+    st.set_archived(s.id, False)
+    assert s.id in st.prune_empty(dry_run=True)
+
+
+def test_session_retention_window(home):
+    """older_than_days only prunes sessions untouched for the window (recent ghosts stay)."""
+    from aegis.session import Session, SessionStore
+    st = SessionStore()
+    s = Session.create(title="recent-ghost")
+    st.save(s)
+    assert s.id not in st.prune_empty(older_than_days=7, dry_run=True)   # too recent
+    assert s.id in st.prune_empty(older_than_days=0, dry_run=True)       # no window
+
+
+def test_kanban_archived_lifecycle_state(home):
+    from aegis.config import Config
+    from aegis.tools.base import ToolContext
+    from aegis.tools.kanban_tool import KanbanTool
+    ctx = ToolContext(cwd=home, config=Config.load())
+    t = KanbanTool()
+    cid = t.run({"action": "create", "title": "ship it"}, ctx).content.split()[1].rstrip(":")
+    t.run({"action": "move", "id": cid, "status": "done"}, ctx)
+    out = t.run({"action": "move", "id": cid, "status": "archived"}, ctx)
+    assert "archived" in out.content and not out.is_error
