@@ -184,10 +184,13 @@ def make_handler(config, store: WebhookStore):
             pass
 
         def _json(self, code: int, obj: dict) -> None:
+            payload = json.dumps(obj).encode()
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
-            self.wfile.write(json.dumps(obj).encode())
+            self.wfile.write(payload)
+            self.wfile.flush()
 
         def do_GET(self):  # noqa: N802
             if self.path.rstrip("/") in ("/health", ""):
