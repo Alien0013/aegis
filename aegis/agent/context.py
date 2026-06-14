@@ -215,6 +215,7 @@ class ContextBuilder:
         skills_index: str = "",
         memory_block: str = "",
         runtime_block: str = "",
+        coding_block: str = "",
         identity: str | None = None,
         platform: str | None = None,
     ) -> PromptBuild:
@@ -240,6 +241,8 @@ class ContextBuilder:
         rules = self.workspace.rules()
         if rules:
             parts.append(PromptPart("context", "project_rules", "# Project & global rules\n" + rules))
+        if coding_block:                          # coding posture: brief + one-time git snapshot
+            parts.append(PromptPart("context", "coding_workspace", coding_block))
 
         # --- volatile tier ---
         if memory_block:

@@ -233,6 +233,19 @@ class Agent:
             f"{recall_guidance}"
         )
 
+    def _coding_workspace_block(self) -> str:
+        """Coding posture block, captured once per session and cached so the prompt prefix
+        stays cache-stable (the working tree changes every edit). Reset on session switch."""
+        cached = getattr(self, "_coding_block", None)
+        if cached is None:
+            try:
+                from .coding_context import coding_workspace_block
+                cached = coding_workspace_block(self.cwd, self.config)
+            except Exception:  # noqa: BLE001 — workspace probing must never break prompt build
+                cached = ""
+            self._coding_block = cached
+        return cached
+
     def deferred_tool_names(self, available=None) -> set[str]:
         """Tools shipped name-only this turn (schema withheld until tool_search loads it).
         Config-driven (tools.deferred); activation via tool_search is session-sticky."""
@@ -271,6 +284,7 @@ class Agent:
             skills_index=skills_index,
             memory_block=memory_block,
             runtime_block=runtime,
+            coding_block=self._coding_workspace_block(),
             platform=getattr(self, "platform", None),
         )
         role_part = self._subagent_role_prompt_part()
@@ -361,6 +375,7 @@ class Agent:
                 delattr(self, "_subdir_hints")
             except AttributeError:
                 pass
+            self._coding_block = None       # re-snapshot the workspace for the new session
         if self.memory and new_id != old_id:
             try:
                 self.memory.on_session_switch(
