@@ -574,14 +574,30 @@ class Workspace:
     def __init__(self, cwd: Path | None = None):
         self.cwd = cwd or Path.cwd()
 
+    @staticmethod
+    def _context_text(path: Path, label: str) -> str:
+        body = read_text(path).strip()
+        if not body:
+            return ""
+        try:
+            from .security_scan import scan_text_findings
+            findings = scan_text_findings(body)
+        except Exception:  # noqa: BLE001
+            findings = []
+        if findings:
+            reason = findings[0].split(":", 1)[0]
+            return (f"[BLOCKED: {label} contained potential prompt injection "
+                    f"({reason}). Content not loaded.]")
+        return body
+
     def soul(self) -> str:
-        return read_text(workspace_dir() / "SOUL.md").strip()
+        return self._context_text(workspace_dir() / "SOUL.md", "SOUL.md")
 
     def rules(self) -> str:
         """Merge global workspace rules + project rules (project appended last)."""
         blocks: list[str] = []
         for name in self.RULE_FILES:
-            g = read_text(workspace_dir() / name).strip()
+            g = self._context_text(workspace_dir() / name, f"global:{name}")
             if g:
                 blocks.append(f"<!-- global:{name} -->\n{g}")
                 break
@@ -592,7 +608,7 @@ class Workspace:
         project_blocks: list[tuple[Path, str, str]] = []
         for _ in range(40):
             for name in self.RULE_FILES:
-                p = read_text(d / name).strip()
+                p = self._context_text(d / name, f"project:{name} ({d})")
                 if p:
                     project_blocks.append((d, name, p))
                     break
