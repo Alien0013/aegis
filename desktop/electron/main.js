@@ -35,6 +35,10 @@ let logFd = null;
 const logPath = () => path.join(app.getPath("userData"), "desktop.log");
 const stateFile = () => path.join(app.getPath("userData"), "window-state.json");
 
+// The dashboard is a HashRouter SPA: deep-links must be `#/path` (leading slash).
+// route("/") -> Overview; route("/chat") -> Chat, etc.
+const route = (p) => dashboardUrl + "#" + (p && p.startsWith("/") ? p : "/" + (p || ""));
+
 function log(line) {
   try {
     if (logFd === null) logFd = fs.openSync(logPath(), "a");
@@ -72,7 +76,7 @@ function saveState() {
 function createSplash() {
   splash = new BrowserWindow({
     width: 460, height: 340, frame: false, resizable: false, show: false,
-    backgroundColor: "#0a0b0e", center: true, transparent: false, alwaysOnTop: true,
+    backgroundColor: "#0b0d10", center: true, transparent: false, alwaysOnTop: true,
     webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false },
   });
   splash.loadFile(path.join(__dirname, "boot.html"));
@@ -135,7 +139,7 @@ async function onBackendCrash() {
   try {
     await startBackend();
     await probe(`http://127.0.0.1:${port}/`, 50);
-    if (win && !win.isDestroyed()) win.loadURL(dashboardUrl + "#overview");
+    if (win && !win.isDestroyed()) win.loadURL(route("/"));
   } catch (e) { log(`restart failed: ${e.message}`); onBackendCrash(); }
 }
 
@@ -145,7 +149,7 @@ function createWindow() {
   win = new BrowserWindow({
     width: st.width || 1320, height: st.height || 880,
     x: st.x, y: st.y, minWidth: 940, minHeight: 600, show: false,
-    backgroundColor: "#0a0b0e", title: "AEGIS",
+    backgroundColor: "#0b0d10", title: "AEGIS",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     icon: process.platform === "linux" ? path.join(__dirname, "..", "build", "icon.png") : undefined,
     webPreferences: { contextIsolation: true, nodeIntegration: false },
@@ -168,7 +172,7 @@ async function run() {
       boot({ pct: 30 + Math.round((done / total) * 55), message: "Waiting for the agent to come online…" }));
     boot({ pct: 90, message: "Opening dashboard…" });
     createWindow();
-    await win.loadURL(dashboardUrl + "#overview");
+    await win.loadURL(route("/"));
     boot({ pct: 100, message: "Ready" });
     win.show();
     if (splash && !splash.isDestroyed()) { splash.close(); splash = null; }
@@ -191,13 +195,13 @@ async function restartFromScratch() {
 
 /* ---------- menu ---------- */
 function installMenu() {
-  const go = (hash) => win && win.loadURL(dashboardUrl + hash);
+  const go = (p) => win && win.loadURL(route(p));
   const template = [
     { label: "AEGIS", submenu: [
-      { label: "Home", accelerator: "CmdOrCtrl+1", click: () => go("#overview") },
-      { label: "Chat", accelerator: "CmdOrCtrl+2", click: () => go("#chat") },
-      { label: "Agents", accelerator: "CmdOrCtrl+3", click: () => go("#agents") },
-      { label: "Settings", accelerator: "CmdOrCtrl+,", click: () => go("#config") },
+      { label: "Home", accelerator: "CmdOrCtrl+1", click: () => go("/") },
+      { label: "Chat", accelerator: "CmdOrCtrl+2", click: () => go("/chat") },
+      { label: "Sessions", accelerator: "CmdOrCtrl+3", click: () => go("/sessions") },
+      { label: "Settings", accelerator: "CmdOrCtrl+,", click: () => go("/config") },
       { type: "separator" },
       { label: "Open in Browser", click: () => dashboardUrl && shell.openExternal(dashboardUrl) },
       { label: "Copy Dashboard URL", click: () => dashboardUrl && clipboard.writeText(dashboardUrl) },
@@ -205,6 +209,26 @@ function installMenu() {
       { label: "Open Logs", click: () => shell.openPath(logPath()) },
       { type: "separator" },
       { role: process.platform === "darwin" ? "close" : "quit" },
+    ]},
+    { label: "Go", submenu: [
+      { label: "Overview", click: () => go("/") },
+      { label: "Chat", click: () => go("/chat") },
+      { label: "Sessions", click: () => go("/sessions") },
+      { type: "separator" },
+      { label: "Models", click: () => go("/models") },
+      { label: "Tools", click: () => go("/tools") },
+      { label: "Skills", click: () => go("/skills") },
+      { label: "Memory", click: () => go("/memory") },
+      { type: "separator" },
+      { label: "Scheduled (Cron)", click: () => go("/cron") },
+      { label: "MCP Servers", click: () => go("/mcp") },
+      { label: "Channels", click: () => go("/channels") },
+      { label: "API Keys", click: () => go("/keys") },
+      { label: "Files", click: () => go("/files") },
+      { type: "separator" },
+      { label: "Analytics", click: () => go("/analytics") },
+      { label: "Logs", click: () => go("/logs") },
+      { label: "System", click: () => go("/system") },
     ]},
     { label: "View", submenu: [
       { role: "reload" }, { role: "forceReload" }, { role: "toggleDevTools" },

@@ -30,6 +30,8 @@ _PROJECT_MARKERS = (
 _BRIEF = """\
 # Coding workspace
 You're operating inside a code repository — work like a careful engineer:
+- On an unfamiliar repo, call `repo_map` first to see which files matter and what they
+  define, then read the few that are relevant — don't read everything blindly.
 - Read before you edit; match the surrounding style, naming, and structure.
 - Make the smallest change that satisfies the request; no speculative refactors or features.
 - After editing, verify — run the relevant build/tests/linter and report real output, not claims.

@@ -190,6 +190,66 @@ def _tool_icon(name: str) -> str:
     return "⚙"
 
 
+# Short aligned verbs so the tool trail reads as a tidy column rather than raw
+# tool names — Hermes-style. Falls back to the tool's own name when unmapped.
+_TOOL_VERBS = {
+    "read_file": "read", "read": "read", "write_file": "write", "write": "write",
+    "edit_file": "edit", "edit": "edit", "patch": "edit", "apply_patch": "edit",
+    "bash": "run", "shell": "run", "terminal": "run", "execute_code": "code",
+    "search_files": "search", "grep": "search", "glob": "glob", "ripgrep": "search",
+    "recall": "recall", "session_search": "recall", "web_search": "search",
+    "web_fetch": "fetch", "web_extract": "fetch", "download": "fetch",
+    "http_request": "http", "browser": "browse", "memory": "memory",
+    "skill": "skill", "skill_manage": "skill", "kanban": "tasks", "todo": "tasks",
+    "delegate_task": "delegate", "clarify": "ask", "vision_analyze": "vision",
+}
+
+
+def _tool_verb(name: str) -> str:
+    n = (name or "").lower()
+    if n in _TOOL_VERBS:
+        return _TOOL_VERBS[n]
+    for key, verb in _TOOL_VERBS.items():
+        if key in n:
+            return verb
+    return n[:9] or "tool"
+
+
+def _oneline(text: str, limit: int = 72) -> str:
+    """Collapse whitespace to single spaces and truncate for one-line previews."""
+    s = " ".join(str(text).split())
+    return (s[: limit - 1] + "…") if len(s) > limit else s
+
+
+def _tool_preview(name: str, args: dict) -> str:
+    """A short, human-readable preview of a tool call's primary argument — the same
+    idea as Hermes' per-tool previews, so the trail says *what* each call does."""
+    args = args or {}
+    n = (name or "").lower()
+    if n in ("memory",):
+        act = args.get("action", "")
+        return _oneline(f"{act} {args.get('content') or args.get('match') or ''}", 64)
+    if "skill" in n:
+        return _oneline(args.get("name") or args.get("action") or "", 48)
+    if n in ("kanban", "todo"):
+        return _oneline(args.get("action") or "update tasks", 48)
+    if "web" in n or "fetch" in n or "http" in n or "download" in n:
+        url = args.get("url") or (args.get("urls") or [""])[0] if isinstance(args.get("urls"), list) else args.get("url", "")
+        url = url or args.get("query", "")
+        return _oneline(str(url).replace("https://", "").replace("http://", ""), 56)
+    detail = (args.get("command") or args.get("path") or args.get("url")
+              or args.get("query") or args.get("pattern") or args.get("name")
+              or args.get("goal") or args.get("question") or "")
+    return _oneline(detail, 72)
+
+
+def _result_is_failure(summary: str) -> bool:
+    """Heuristic failure detection for tool results that didn't set is_error but
+    whose summary still reports a problem (exit codes, error text)."""
+    s = (summary or "").lower()
+    return s.startswith("error") or "exit 1" in s or "exit code" in s and "exit code 0" not in s
+
+
 def slash_matches(query: str = "") -> list[SlashCommand]:
     q = query.strip().lower()
     if not q:
@@ -380,27 +440,43 @@ class Renderer:
                     style=style,
                 )
         elif t == "tool_start":
-            args = e.get("args", {})
-            detail = (args.get("command") or args.get("path") or args.get("url")
-                      or args.get("query") or args.get("pattern") or args.get("name") or "")
-            _out(f"  {_tool_icon(e['name'])} {e['name']}  {str(detail)[:80]}", style="cyan")
+            name = e["name"]
+            preview = _tool_preview(name, e.get("args", {}))
+            gutter = f"  {_tool_icon(name)} {_tool_verb(name):<8}"
+            _out(f"{gutter} {preview}".rstrip(), style=TERM_AMBER)
         elif t == "tool_result":
             ms = int(e.get("duration_ms") or 0)
             secs = f"  {ms / 1000:.1f}s" if ms else ""
-            if e.get("is_error"):
-                _out(f"    ✗ {e['summary']}{secs}", style="red")
+            summary = _oneline(e.get("summary") or "", 76)
+            failure = e.get("is_error") or _result_is_failure(summary)
+            if failure:
+                _out(f"    ✗ {summary}{secs}", style="red")
             elif e.get("name") == "memory":
-                _out(f"    🧠 remembered: {e['summary']}{secs}", style="magenta")
+                _out(f"    🧠 {summary}{secs}", style=TERM_AMBER)
             elif e.get("name") == "skill":
-                _out(f"    📦 skill: {e['summary']}{secs}", style="magenta")
+                _out(f"    📦 {summary}{secs}", style=TERM_AMBER)
             else:
-                _out(f"    ✓ {e['summary']}{secs}", style="green")
+                _out(f"    ✓ {summary}{secs}", style=TERM_GREEN)
         elif t == "compacting":
-            _out("  … compacting context …", style="yellow")
+            _out("  ⋯ context filling up — compacting older turns to free room …", style="yellow")
+        elif t == "compacted":
+            before = int(e.get("tokens_before") or 0)
+            after = int(e.get("tokens_after") or 0)
+            if before and after and before > after:
+                freed = before - after
+                pct = int(100 * freed / before)
+                _out(f"  ✓ compacted — freed {_fmt_token_count(freed)} tokens "
+                     f"({_fmt_token_count(after)} kept, {pct}% lighter)", style=TERM_GREEN)
+            else:
+                _out("  ✓ compacted context", style=TERM_GREEN)
+        elif t == "compaction_aborted":
+            _out(f"  ⚠ compaction couldn't shrink further — {e.get('error') or 'tail is the floor'}",
+                 style="yellow")
         elif t == "budget_exhausted":
-            _out("  … step limit reached; summarizing …", style="yellow")
+            _out("  ⋯ step limit reached; summarizing progress so far …", style="yellow")
         elif t == "skill_nudge":
-            _out("  💡 tip: save this workflow as a skill (`skill` create) so you can reuse it.", style="magenta")
+            _out("  💡 tip: you've repeated this flow — save it as a reusable skill with "
+                 "/skill new (or ask me to).", style=TERM_CYAN)
         elif t == "review_started":
             _out(f"  🧠 reflecting on this session ({e.get('kind', '')})…", style="bright_black")
         elif t == "review_done":
@@ -723,6 +799,25 @@ def banner(agent: Agent) -> None:
         print("Surfaces:  aegis ui (browser control panel) · aegis tui (terminal app)")
         print("Try: /help · @file · /goal · /ultracode · /context · /quit")
         print("=" * 60)
+
+
+def _skill_scaffold(name: str, description: str) -> str:
+    """A self-documenting SKILL.md body for `/skill new`, so a fresh skill reads like a
+    usable procedure (trigger → steps → done-check) instead of an empty stub."""
+    return (
+        f"# {name}\n\n"
+        f"{description}\n\n"
+        "## When to use\n"
+        "Describe the trigger — the kind of request or situation where this skill applies.\n"
+        "Keep it specific; this is what the agent matches against.\n\n"
+        "## Procedure\n"
+        "1. First step — be concrete and verifiable.\n"
+        "2. Next step.\n"
+        "3. …\n\n"
+        "## Done when\n"
+        "State the success check (e.g. tests pass, file exists, output matches) so the agent\n"
+        "knows it has finished rather than guessing.\n"
+    )
 
 
 def _ultracode_skill_body(agent: Any) -> str:
@@ -1142,10 +1237,20 @@ def quick_memory(raw: str, agent: Agent) -> bool:
         _out("  memory is disabled — set memory.enabled: true to use #", style="yellow")
         return True
     try:
-        store.add(target, body)
-        _out(f"  ✓ remembered → {'USER.md' if target == 'user' else 'MEMORY.md'}", style="green")
+        result = store.add(target, body)
     except Exception as e:  # noqa: BLE001
         _out(f"  couldn't save memory: {e}", style="red")
+        return True
+    # store.add() returns a human message — surface it honestly instead of always
+    # claiming success: it may refuse an injection pattern, dedup, or hit the limit.
+    low = result.lower()
+    if low.startswith("refused") or "limit" in low or "drift" in low:
+        _out(f"  ⚠ {result}", style="yellow")
+    elif low.startswith("already"):
+        _out(f"  ↺ {result}", style="bright_black")
+    else:
+        _out(f"  ✓ remembered → {'USER.md' if target == 'user' else 'MEMORY.md'}  ·  {result}",
+             style="green")
     return True
 
 
@@ -1353,10 +1458,10 @@ def handle_slash(
             else:
                 sname = parts[2]
                 desc = " ".join(parts[3:]) or f"{sname} skill"
-                path = agent.skills.create(
-                    sname, desc, "## When to Use\n\n## Procedure\n1. \n")
+                path = agent.skills.create(sname, desc, _skill_scaffold(sname, desc))
                 agent.refresh_volatile()
-                _out(f"✓ created scaffold → {path}\n  edit it to add the procedure.", style="green")
+                _out(f"✓ created scaffold → {path}\n  edit the Procedure section, then it "
+                     "loads automatically when its trigger matches.", style="green")
         else:  # /skill (save): auto-write a skill from what we just did
             from .. import learn
             _out("extracting a reusable skill from this session…", style="cyan")
