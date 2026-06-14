@@ -49,7 +49,7 @@ export function Memory() {
                 {entries.map((e, i) => (
                   <div key={i} className="flex items-start justify-between gap-3 border-b border-border px-[var(--pad)] py-2 last:border-0">
                     <span className="min-w-0 whitespace-pre-wrap break-words text-sm text-text">{e}</span>
-                    <button onClick={() => remove(t, e.slice(0, 60))} className="shrink-0 text-faint hover:text-danger" title="Delete">
+                    <button onClick={() => remove(t, e)} className="shrink-0 text-faint hover:text-danger" title="Delete">
                       <Icon name="trash" size={14} />
                     </button>
                   </div>

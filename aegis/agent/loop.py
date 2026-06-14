@@ -789,9 +789,16 @@ def _ensure_compression_feasibility(agent, engine, comp: dict, emit: OnEvent | N
     the main model threshold, lower the live default-engine threshold for this
     session so compaction starts while the summarizer can still read the window.
     """
-    if getattr(agent, "_compression_feasibility_checked", False):
+    # Memoize per provider identity, not once per session: a mid-session model
+    # switch changes the context window, so the preflight must re-run for the new
+    # model instead of staying pinned to the first model's feasibility decision.
+    provider_id = (
+        getattr(agent.provider, "model", None),
+        int(getattr(agent.provider, "context_length", 0) or 0),
+    )
+    if getattr(agent, "_compression_feasibility_checked", None) == provider_id:
         return
-    agent._compression_feasibility_checked = True
+    agent._compression_feasibility_checked = provider_id
     main_ctx = int(getattr(agent.provider, "context_length", 0) or 0)
     if main_ctx <= 0:
         return

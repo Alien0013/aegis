@@ -70,38 +70,56 @@ def check_domain_policy(host: str, config) -> str:
     return ""
 
 
-def is_safe_url(url: str, config=None) -> tuple[bool, str]:
-    """Return (ok, reason). Resolves DNS and checks the actual target IP(s)."""
+def resolve_safe(url: str, config=None) -> tuple[str | None, str | None, str]:
+    """Resolve ``url`` and validate every resolved IP against the SSRF policy.
+
+    Returns ``(host, pinned_ip, reason)``. On success ``reason`` is empty and
+    ``pinned_ip`` is a validated address the caller should connect to directly
+    (closing the DNS-rebinding TOCTOU window — the host is resolved once here and
+    the connection is pinned to this IP rather than re-resolved at connect time).
+    On failure ``pinned_ip`` is ``None`` and ``reason`` explains why.
+    """
     try:
         parsed = urlparse(url)
         host = (parsed.hostname or "").strip().lower().rstrip(".")
         scheme = (parsed.scheme or "").strip().lower()
     except Exception as e:  # noqa: BLE001
-        return False, f"unparseable URL: {e}"
+        return None, None, f"unparseable URL: {e}"
     if scheme not in ("http", "https"):
-        return False, f"unsupported scheme '{scheme or '∅'}' (only http/https)"
+        return host or None, None, f"unsupported scheme '{scheme or '∅'}' (only http/https)"
     if not host:
-        return False, "no host in URL"
+        return None, None, "no host in URL"
     policy = check_domain_policy(host, config)
     if policy:
-        return False, policy
+        return host, None, policy
     if host in _METADATA_HOSTS:
-        return False, "cloud-metadata hostname"
+        return host, None, "cloud-metadata hostname"
     allow = _allow_private(config)
     try:
         infos = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
     except socket.gaierror:
-        return False, "DNS resolution failed"        # fail closed
+        return host, None, "DNS resolution failed"        # fail closed
+    pinned: str | None = None
     for *_rest, sockaddr in infos:
         try:
             ip = ipaddress.ip_address(sockaddr[0])
         except ValueError:
             continue
         if ip in _METADATA_IPS or any(ip in n for n in _METADATA_NETS):
-            return False, f"cloud-metadata address ({ip})"
+            return host, None, f"cloud-metadata address ({ip})"
         if not allow and _is_private_ip(ip):
-            return False, f"private/internal address ({ip})"
-    return True, ""
+            return host, None, f"private/internal address ({ip})"
+        if pinned is None:
+            pinned = str(ip)
+    if pinned is None:
+        return host, None, "DNS resolution failed"
+    return host, pinned, ""
+
+
+def is_safe_url(url: str, config=None) -> tuple[bool, str]:
+    """Return (ok, reason). Resolves DNS and checks the actual target IP(s)."""
+    _host, pinned, reason = resolve_safe(url, config)
+    return (pinned is not None), reason
 
 
 def guard(url: str, config=None) -> str | None:
@@ -117,31 +135,53 @@ class BlockedURL(Exception):
     """Raised by :func:`request` when a URL (or a redirect target) is unsafe."""
 
 
+def _pin_request_url(url: str, pinned_ip: str):
+    """Return (connect_url, host) with the hostname swapped for the validated IP so
+    the socket connects to the address we checked, not a re-resolved one. IPv6 gets
+    bracketed. The original host is returned for the Host header / TLS SNI."""
+    import httpx
+
+    u = httpx.URL(url)
+    host = u.host
+    literal = f"[{pinned_ip}]" if ":" in pinned_ip else pinned_ip
+    return u.copy_with(host=literal), host
+
+
 def request(method: str, url: str, config=None, *, headers=None, content=None,
             timeout: float = 30.0, max_redirects: int = 5):
     """A guarded HTTP request that re-validates EVERY redirect hop against the SSRF
-    policy. ``httpx`` with ``follow_redirects=True`` would jump to a redirected
-    Location without re-checking it, so a public URL could 302 to a private/metadata
-    host. We follow manually and call :func:`guard` on each hop. Returns the final
+    policy AND pins each connection to the IP it validated.
+
+    ``httpx`` with ``follow_redirects=True`` would jump to a redirected Location
+    without re-checking it (a public URL could 302 to a private/metadata host), and
+    even a single checked URL is re-resolved by the socket at connect time — a
+    DNS-rebinding server can answer the second lookup with an internal IP. We follow
+    redirects manually, call :func:`resolve_safe` on each hop, and connect to the
+    exact validated IP (carrying the original Host header and TLS SNI so virtual
+    hosting and certificate verification still work). Returns the final
     ``httpx.Response``; raises :class:`BlockedURL` if any hop is unsafe."""
     import httpx
 
-    reason = guard(url, config)
-    if reason:
-        raise BlockedURL(reason)
     method = method.upper()
     current = url
-    with httpx.Client(timeout=timeout, follow_redirects=False,
-                      headers={"User-Agent": "Mozilla/5.0 (AEGIS)", **(headers or {})}) as client:
+    base_headers = {"User-Agent": "Mozilla/5.0 (AEGIS)", **(headers or {})}
+    with httpx.Client(timeout=timeout, follow_redirects=False) as client:
         for _ in range(max_redirects + 1):
-            resp = client.request(method, current, content=content)
+            host, pinned_ip, reason = resolve_safe(current, config)
+            if reason or pinned_ip is None:
+                raise BlockedURL(reason or "could not resolve a safe address")
+            connect_url, real_host = _pin_request_url(current, pinned_ip)
+            req_headers = dict(base_headers)
+            if real_host:
+                req_headers["Host"] = real_host
+            extensions = {"sni_hostname": real_host} if real_host else None
+            resp = client.request(method, connect_url, content=content,
+                                  headers=req_headers, extensions=extensions)
             location = resp.headers.get("location") if resp.is_redirect else None
             if not location:
                 return resp
-            nxt = str(resp.url.join(location))
-            reason = guard(nxt, config)
-            if reason:
-                raise BlockedURL(reason)
+            # Resolve the next hop relative to the *real* URL, not the IP-pinned one.
+            nxt = str(httpx.URL(current).join(location))
             current = nxt
             if resp.status_code in (301, 302, 303) and method not in ("GET", "HEAD"):
                 method, content = "GET", None

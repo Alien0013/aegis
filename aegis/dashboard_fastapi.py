@@ -54,7 +54,9 @@ def _authorized_token(config: Config, *, query: str = "", header: str = "",
     if not token:
         return not _basic_auth_configured() and not _remote_bind_requires_auth(config)
     bearer = auth.removeprefix("Bearer ").strip() if auth.startswith("Bearer ") else ""
-    return token in (query, header, bearer, cookie)
+    # Constant-time compare against each candidate so a timing side-channel can't
+    # be used to recover the token byte-by-byte (matches the basic-auth/session path).
+    return any(hmac.compare_digest(token, candidate) for candidate in (query, header, bearer, cookie))
 
 
 def _basic_auth_credentials() -> tuple[str, str]:
