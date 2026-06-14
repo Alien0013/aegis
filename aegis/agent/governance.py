@@ -14,7 +14,11 @@ from ..types import Message
 # Reasoning models (deepseek-r1, qwen, some OpenRouter routes) sometimes inline their
 # chain-of-thought as <think>…</think> in the reply content instead of a separate field.
 # Strip closed reasoning blocks so they never reach the user.
-_THINK_RE = re.compile(r"<(think|thinking|reasoning)>.*?</\1>", re.DOTALL | re.IGNORECASE)
+_THINK_RE = re.compile(
+    r"<(think|thinking|reasoning|thought|REASONING_SCRATCHPAD)>.*?</\1>",
+    re.DOTALL | re.IGNORECASE,
+)
+_SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
 
 
 def strip_reasoning(text: str) -> str:
@@ -25,18 +29,40 @@ def strip_reasoning(text: str) -> str:
 
 
 def _strip_surrogates(s: str) -> str:
-    """Remove lone UTF-16 surrogates that crash JSON/UTF-8 serialization."""
+    """Replace lone UTF-16 surrogates that crash JSON/UTF-8 serialization."""
     if not s:
         return s
-    return "".join(c for c in s if not 0xD800 <= ord(c) <= 0xDFFF)
+    return _SURROGATE_RE.sub("\ufffd", s)
+
+
+def _sanitize_value(value):
+    if isinstance(value, str):
+        return _strip_surrogates(value)
+    if isinstance(value, list):
+        return [_sanitize_value(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _sanitize_value(v) for k, v in value.items()}
+    return value
+
+
+def _sanitize_message(m: Message) -> None:
+    m.content = _sanitize_value(m.content)
+    m.tool_call_id = _sanitize_value(m.tool_call_id)
+    m.name = _sanitize_value(m.name)
+    m.reasoning = _sanitize_value(m.reasoning)
+    m.thinking_blocks = _sanitize_value(m.thinking_blocks)
+    m.images = _sanitize_value(m.images)
+    for tc in m.tool_calls:
+        tc.id = _sanitize_value(tc.id)
+        tc.name = _sanitize_value(tc.name)
+        tc.arguments = _sanitize_value(tc.arguments)
 
 
 def normalize(messages: list[Message]) -> list[Message]:
-    # Defensive: scrub lone surrogates a model may have emitted (would crash the
-    # next request's JSON encode). Mutate in place.
+    # Defensive: scrub lone surrogates a model may have emitted in any field that
+    # can reach provider wire JSON. Mutate in place so ids stay paired.
     for m in messages:
-        if m.content and any(0xD800 <= ord(c) <= 0xDFFF for c in m.content):
-            m.content = _strip_surrogates(m.content)
+        _sanitize_message(m)
     # Pass 1: drop tool results whose call id was never requested before them.
     seen_call_ids: set[str] = set()
     pass1: list[Message] = []

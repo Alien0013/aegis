@@ -227,6 +227,31 @@ def test_governance_normalizes():
     assert ("tool", "c1") in ids
 
 
+def test_governance_scrubs_nested_surrogates_and_reasoning_tags():
+    import json
+    from aegis.agent import governance
+    from aegis.types import Message, ToolCall
+
+    msgs = [
+        Message.assistant(
+            "ok\ud800",
+            [ToolCall("c\ud800", "bad\udfff", {"x": "y\ud800", "nested": ["z\udfff"]})],
+        ),
+        Message.tool("c\ud800", "bad\udfff", "result\ud800"),
+    ]
+    msgs[0].reasoning = "why\udfff"
+    msgs[0].thinking_blocks = [{"type": "thinking", "thinking": "deep\ud800"}]
+
+    out = governance.normalize(msgs)
+    dumped = json.dumps([m.to_dict() for m in out], ensure_ascii=False)
+
+    assert "\ud800" not in dumped and "\udfff" not in dumped
+    assert out[0].tool_calls[0].id == out[1].tool_call_id
+    assert "visible" == governance.strip_reasoning(
+        "<thought>hidden</thought> visible <REASONING_SCRATCHPAD>x</REASONING_SCRATCHPAD>"
+    )
+
+
 def test_compaction_preserves_head_tail():
     from aegis.agent import compaction
     from aegis.types import Message
