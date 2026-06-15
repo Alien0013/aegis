@@ -115,5 +115,18 @@ def cmd_desktop(args, config) -> int:  # noqa: ARG001
 
     env = os.environ.copy()
     env.setdefault("AEGIS_BIN", _aegis_bin())
+
+    package = getattr(args, "package", None)
+    if package:
+        script = {"auto": "dist", "linux": "dist:linux", "win": "dist:win",
+                  "mac": "dist:mac"}.get(str(package).lower())
+        if script is None:
+            return _die(f"unknown --package target '{package}' (use linux, win, or mac).")
+        _print(f"building installable app ({package}) — this can take a few minutes...")
+        rc = subprocess.run([npm, "run", script], cwd=target, env=env).returncode
+        if rc == 0:
+            _print(f"done — installer(s) written to {target / 'release'}")
+        return rc
+
     run_cmd = [npm, "run", "start:sandbox"] if getattr(args, "sandbox", False) else [npm, "start"]
     return subprocess.run(run_cmd, cwd=target, env=env).returncode

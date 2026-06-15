@@ -1411,6 +1411,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="run npm install even if dependencies already exist")
         ds.add_argument("--sandbox", action="store_true",
                         help="opt into Electron's Chromium sandbox on Linux")
+        ds.add_argument("--package", metavar="TARGET", nargs="?", const="auto",
+                        help="build an installable app instead of launching "
+                             "(auto = this OS; or linux/win/mac). Output in the app's release/ dir.")
         ds.set_defaults(func=_desktop.cmd_desktop)
 
     from ..daemon import cmd_daemon as _cmd_daemon
