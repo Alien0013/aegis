@@ -1367,10 +1367,11 @@ def build_parser() -> argparse.ArgumentParser:
     hk.add_argument("event", nargs="?")
     hk.set_defaults(func=_hooks.cmd_hooks)
 
-    kb = sub.add_parser("kanban", help="multi-agent task board")
+    kb = sub.add_parser("kanban", help="multi-agent task board (dependency graph + workers)")
     kb.add_argument("action", nargs="?",
-                    choices=["create", "list", "show", "claim", "complete", "assign", "dispatch",
-                             "decompose", "run"],
+                    choices=["create", "list", "show", "claim", "complete", "assign", "block",
+                             "unblock", "promote", "archive", "link", "runs", "heartbeat",
+                             "stats", "dispatch", "decompose", "run"],
                     default="list")
     kb.add_argument("title", nargs="?")
     kb.add_argument("--id")
@@ -1379,6 +1380,15 @@ def build_parser() -> argparse.ArgumentParser:
     kb.add_argument("--status")
     kb.add_argument("--assignee")
     kb.add_argument("--worker")
+    kb.add_argument("--parent", action="append", help="parent task id (repeatable)")
+    kb.add_argument("--child", help="child task id (link)")
+    kb.add_argument("--tenant", help="tenant namespace")
+    kb.add_argument("--workspace", help="scratch | dir:<path> | worktree")
+    kb.add_argument("--reason", help="reason text (block)")
+    kb.add_argument("--summary", help="completion summary (complete)")
+    kb.add_argument("--note", help="heartbeat note")
+    kb.add_argument("--no-spawn", action="store_true", dest="no_spawn",
+                    help="dispatch: reclaim + promote only, don't spawn workers")
     kb.set_defaults(func=_kanban.cmd_kanban)
 
     cu = sub.add_parser("curator", help="background skill maintenance")

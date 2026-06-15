@@ -353,6 +353,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "delegation": {
         "subagent_auto_approve": False,  # Hermes parity: child approval prompts auto-deny unless opted in
     },
+    "kanban": {
+        "workers": 1,                    # parallel lane workers for `kanban run`
+        "dispatch_stale_timeout_seconds": 14400,  # reclaim a silent in_progress task after this (4h)
+    },
     "embeddings": {                  # semantic code index (code_search tool); OpenAI-compatible
         "base_url": "",              # "" = OpenAI; or any /embeddings endpoint (OpenRouter, local)
         "model": "",                 # "" = text-embedding-3-small

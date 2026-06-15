@@ -146,9 +146,10 @@ def _dashboard_kanban() -> dict:
     return {s: [{"id": t.id, "title": t.title, "body": t.body,
                  "assignee": t.assignee, "priority": t.priority,
                  "run_id": t.run_id, "session_id": t.session_id,
-                 "trace_id": t.trace_id}
+                 "trace_id": t.trace_id, "tenant": t.tenant,
+                 "parents": ks.parents(t.id), "status": t.status}
                 for t in ks.list(status=s)]
-            for s in ("ready", "in_progress", "done", "blocked")}
+            for s in ("todo", "ready", "in_progress", "review", "done", "blocked")}
 
 
 def _dashboard_tools(config: Config) -> dict:

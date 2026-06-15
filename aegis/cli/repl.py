@@ -86,6 +86,7 @@ SLASH_COMMANDS = (
     SlashCommand("/background", "agents", "launch a background agent task", "/background <prompt>"),
     SlashCommand("/tasks", "agents", "list background tasks"),
     SlashCommand("/agents", "agents", "list background agents"),
+    SlashCommand("/kanban", "agents", "multi-agent task board", "/kanban [list|create <title>|show <id>|dispatch|stats]"),
     SlashCommand("/learn", "learning", "review this session for reusable memories or skills"),
     SlashCommand("/skill", "learning", "create or extract a skill", "/skill [new <name> [description]]"),
     SlashCommand("/memory", "learning", "show memory and user profile files"),
@@ -1738,6 +1739,23 @@ def handle_slash(
             _out("(no background agents)")
         for t in tasks:
             _out(f"  {t['id']}  [{t['status']}]  {t['prompt'][:80]}")
+    elif name == "/kanban":
+        from argparse import Namespace
+
+        from ..kanban import cmd_kanban
+        parts2 = arg.split(maxsplit=1)
+        action = (parts2[0] or "list") if parts2 else "list"
+        rest = parts2[1].strip() if len(parts2) > 1 else ""
+        ns = Namespace(action=action, title=None, id=None, body=None, priority=None,
+                       status=None, assignee=None, worker=None, parent=None, child=None,
+                       tenant=None, workspace=None, reason=None, summary=None, note=None,
+                       no_spawn=False)
+        # the single free-form arg is a title for create/decompose, otherwise an id
+        if action in ("create", "decompose"):
+            ns.title = rest or None
+        else:
+            ns.id = rest or None
+        cmd_kanban(ns, agent.config)
     elif name == "/handoff":
         parts = (arg or "").split()
         if len(parts) < 2:
