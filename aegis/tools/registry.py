@@ -85,6 +85,7 @@ def default_registry(*, include_plugins: bool = True) -> ToolRegistry:
     from .lsp import lsp_tools
     from .process import process_tools
     from .kanban_tool import kanban_tools
+    from .code_search_tool import code_search_tools
     from .recall import recall_tools
     from .repomap_tool import repomap_tools
     from .skill_manage import skill_manage_tools
@@ -102,6 +103,7 @@ def default_registry(*, include_plugins: bool = True) -> ToolRegistry:
     reg.register_all(lsp_tools())
     reg.register_all(recall_tools())
     reg.register_all(repomap_tools())
+    reg.register_all(code_search_tools())
     reg.register_all(skill_manage_tools())
     reg.register_all(kanban_tools())
     reg.register_all(state_tools())

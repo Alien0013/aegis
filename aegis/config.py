@@ -352,6 +352,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "delegation": {
         "subagent_auto_approve": False,  # Hermes parity: child approval prompts auto-deny unless opted in
     },
+    "embeddings": {                  # semantic code index (code_search tool); OpenAI-compatible
+        "base_url": "",              # "" = OpenAI; or any /embeddings endpoint (OpenRouter, local)
+        "model": "",                 # "" = text-embedding-3-small
+        "api_key": "",               # "" = env EMBEDDINGS_API_KEY / OPENAI_API_KEY
+        "chunk_lines": 60,           # source lines per indexed chunk
+    },
     "trajectory": {
         "enabled": True,             # auto-record each turn during agent runs
         "path": "trajectories.jsonl", # output file (relative to AEGIS_HOME unless absolute)
