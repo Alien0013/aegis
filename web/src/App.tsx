@@ -6,6 +6,9 @@ import { HashRouter, Route, Routes, useLocation } from "react-router-dom";
 import { Sidebar } from "./components/Sidebar";
 import { ThemeSwitcher } from "./components/ThemeSwitcher";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { TitleBar } from "./components/TitleBar";
+import { CommandPalette, openCommandPalette } from "./components/CommandPalette";
+import { Icon } from "./components/icons";
 import { Loading, Toaster } from "./components/ui";
 import { NAV_ITEMS } from "./lib/nav";
 import { Overview } from "./pages/Overview";
@@ -44,6 +47,14 @@ function TopBar() {
     <header className="flex h-14 shrink-0 items-center justify-between border-b border-border bg-surface/40 px-[var(--pad)] backdrop-blur">
       <div className="text-sm font-medium text-dim">{current?.label || "AEGIS"}</div>
       <div className="flex items-center gap-2">
+        <button
+          onClick={openCommandPalette}
+          title="Command palette (Ctrl/⌘ K)"
+          className="flex items-center gap-1.5 rounded-[var(--radius)] border border-border bg-surface px-2.5 py-1.5 text-xs text-dim hover:text-text"
+        >
+          <Icon name="search" size={13} /> Search
+          <kbd className="rounded border border-border bg-surface-2 px-1 py-px font-mono text-[10px] text-faint">⌘K</kbd>
+        </button>
         <a
           href="#/app"
           title="Open the focused chat app"
@@ -93,7 +104,7 @@ function Routed() {
 
 function AdminShell() {
   return (
-    <div className="flex h-screen overflow-hidden bg-bg text-text">
+    <div className="flex h-full overflow-hidden bg-bg text-text">
       <Sidebar />
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar />
@@ -109,14 +120,22 @@ function AdminShell() {
 export function App() {
   return (
     <HashRouter>
-      <Suspense fallback={<Loading />}>
-        <Routes>
-          {/* The desktop app's chat-first surface — its own full-screen chrome. */}
-          <Route path="/app" element={<DesktopShell />} />
-          {/* Everything else is the admin control panel. */}
-          <Route path="/*" element={<AdminShell />} />
-        </Routes>
-      </Suspense>
+      {/* Column root: the custom titlebar (desktop only) sits above the routed
+          surface; the command palette overlays everything. */}
+      <div className="flex h-screen flex-col overflow-hidden bg-bg text-text">
+        <TitleBar />
+        <div className="min-h-0 flex-1">
+          <Suspense fallback={<Loading />}>
+            <Routes>
+              {/* The desktop app's chat-first surface — its own full-screen chrome. */}
+              <Route path="/app" element={<DesktopShell />} />
+              {/* Everything else is the admin control panel. */}
+              <Route path="/*" element={<AdminShell />} />
+            </Routes>
+          </Suspense>
+        </div>
+        <CommandPalette />
+      </div>
     </HashRouter>
   );
 }

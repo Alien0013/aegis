@@ -160,13 +160,23 @@ function createWindow() {
     width: st.width || 1320, height: st.height || 880,
     x: st.x, y: st.y, minWidth: 940, minHeight: 600, show: false,
     backgroundColor: "#0b0d10", title: "AEGIS",
+    // Frameless on Linux/Windows — the React UI draws its own titlebar + window
+    // controls for a native, on-brand feel. macOS keeps the inset traffic lights.
+    frame: process.platform === "darwin",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
+    trafficLightPosition: process.platform === "darwin" ? { x: 14, y: 12 } : undefined,
     icon: process.platform === "linux" ? path.join(__dirname, "..", "build", "icon.png") : undefined,
-    webPreferences: { contextIsolation: true, nodeIntegration: false },
+    webPreferences: {
+      preload: path.join(__dirname, "preload-app.js"),
+      contextIsolation: true, nodeIntegration: false,
+    },
   });
   if (st.maximized) win.maximize();
   win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: "deny" }; });
   for (const ev of ["resize", "move", "close"]) win.on(ev, saveState);
+  const emitMax = () => { try { win.webContents.send("win:maximized", win.isMaximized()); } catch { /* ignore */ } };
+  win.on("maximize", emitMax);
+  win.on("unmaximize", emitMax);
   // Closing the window hides to the tray (the agent keeps running in the background);
   // quit explicitly from the tray/menu. Falls back to a real close if the tray is absent.
   win.on("close", (e) => {
@@ -210,9 +220,18 @@ function openExtraWindow(p) {
   const w = new BrowserWindow({
     width: 1100, height: 780, minWidth: 820, minHeight: 540, show: false,
     backgroundColor: "#0b0d10", title: "AEGIS",
-    webPreferences: { contextIsolation: true, nodeIntegration: false },
+    frame: process.platform === "darwin",
+    titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
+    trafficLightPosition: process.platform === "darwin" ? { x: 14, y: 12 } : undefined,
+    webPreferences: {
+      preload: path.join(__dirname, "preload-app.js"),
+      contextIsolation: true, nodeIntegration: false,
+    },
   });
   w.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: "deny" }; });
+  const emitMax = () => { try { w.webContents.send("win:maximized", w.isMaximized()); } catch { /* ignore */ } };
+  w.on("maximize", emitMax);
+  w.on("unmaximize", emitMax);
   w.loadURL(route(p || "/"));
   w.once("ready-to-show", () => w.show());
   w.on("closed", () => extraWindows.delete(w));
@@ -388,6 +407,20 @@ function installMenu() {
 ipcMain.on("boot:retry", () => restartFromScratch());
 ipcMain.on("boot:openLogs", () => shell.openPath(logPath()));
 ipcMain.on("boot:quit", () => { quitting = true; app.quit(); });
+
+/* ---------- ipc from the frameless titlebar ---------- */
+// Operate on whichever window sent the event so secondary windows work too.
+const senderWindow = (e) => BrowserWindow.fromWebContents(e.sender);
+ipcMain.on("win:minimize", (e) => { const w = senderWindow(e); if (w) w.minimize(); });
+ipcMain.on("win:maximizeToggle", (e) => {
+  const w = senderWindow(e);
+  if (!w) return;
+  if (w.isMaximized()) w.unmaximize(); else w.maximize();
+});
+ipcMain.on("win:close", (e) => { const w = senderWindow(e); if (w) w.close(); });
+ipcMain.handle("win:isMaximized", (e) => !!(senderWindow(e) && senderWindow(e).isMaximized()));
+ipcMain.on("win:openExternal", (_e, url) => { if (url && /^https?:/i.test(String(url))) shell.openExternal(url); });
+ipcMain.on("win:restartBackend", () => restartFromScratch());
 
 /* ---------- deep links (aegis://) ---------- */
 function pickDeepLink(argv) {

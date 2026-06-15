@@ -68,6 +68,11 @@ a { color: var(--primary); text-decoration: none; }
 /* Thin scrollbar utility for inner panes. */
 .scroll-thin { scrollbar-width: thin; }
 
+/* Frameless-window drag regions: the custom titlebar is draggable; interactive
+   controls inside it opt back out so clicks land instead of moving the window. */
+.app-drag { -webkit-app-region: drag; }
+.app-no-drag { -webkit-app-region: no-drag; }
+
 input, textarea, select, button { font-family: inherit; font-size: inherit; }
 
 @keyframes spin { to { transform: rotate(360deg); } }

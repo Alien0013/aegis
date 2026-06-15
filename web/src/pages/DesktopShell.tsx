@@ -7,7 +7,9 @@
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useApi } from "../lib/useApi";
 import { Icon } from "../components/icons";
+import { Mark } from "../components/Mark";
 import { ThemeSwitcher } from "../components/ThemeSwitcher";
+import { openCommandPalette } from "../components/CommandPalette";
 import { Toaster } from "../components/ui";
 import { ago, compact } from "../lib/format";
 import { GraphicalChat } from "./GraphicalChat";
@@ -17,23 +19,6 @@ interface SessionRow {
   title?: string;
   updated_at?: string;
   message_count?: number;
-}
-
-function Mark() {
-  return (
-    <svg width="22" height="22" viewBox="0 0 256 256" aria-hidden>
-      <defs>
-        <linearGradient id="dsmark" x1="78" y1="56" x2="178" y2="208" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor="#f2c878" />
-          <stop offset="0.55" stopColor="#d8913f" />
-          <stop offset="1" stopColor="#7ecf8f" />
-        </linearGradient>
-      </defs>
-      <path d="M128 50 196 76 V128 C196 168 166 196 128 210 C90 196 60 168 60 128 V76 Z" fill="url(#dsmark)" />
-      <path d="M104 104 L128 128 L104 152" fill="none" stroke="#14100a" strokeWidth="13" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M134 152 H158" fill="none" stroke="#14100a" strokeWidth="13" strokeLinecap="round" />
-    </svg>
-  );
 }
 
 export function DesktopShell() {
@@ -53,11 +38,18 @@ export function DesktopShell() {
   };
 
   return (
-    <div className="flex h-screen overflow-hidden bg-bg text-text">
+    <div className="flex h-full overflow-hidden bg-bg text-text">
       <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-surface/50">
         <div className="flex h-14 items-center gap-2 border-b border-border px-4">
-          <Mark />
+          <Mark size={22} />
           <span className="font-semibold tracking-wide">AEGIS</span>
+          <button
+            onClick={openCommandPalette}
+            title="Command palette (Ctrl/⌘ K)"
+            className="ml-auto rounded-[var(--radius)] p-1.5 text-faint transition hover:bg-surface-2 hover:text-text"
+          >
+            <Icon name="search" size={15} />
+          </button>
         </div>
 
         <div className="p-3">

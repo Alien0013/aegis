@@ -8,7 +8,15 @@
 import { useEffect, useRef, useState } from "react";
 import { postStream } from "../lib/api";
 import { Icon } from "../components/icons";
+import { Mark } from "../components/Mark";
 import { Markdown } from "../components/Markdown";
+
+const SUGGESTIONS = [
+  "Summarize this repository's structure",
+  "What can you do?",
+  "Run the tests and report failures",
+  "Find and explain the entry point",
+];
 
 interface ToolEvent {
   id: string;
@@ -66,6 +74,19 @@ export function GraphicalChat({
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [turns, busy]);
+
+  // Auto-grow the composer with its content (capped), shrinking back after send.
+  useEffect(() => {
+    const ta = taRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
+  }, [input]);
+
+  const fill = (text: string) => {
+    setInput(text);
+    taRef.current?.focus();
+  };
 
   const send = async () => {
     const text = input.trim();
@@ -158,10 +179,23 @@ export function GraphicalChat({
       <div ref={scrollRef} className="scroll-thin flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-3xl px-4 py-6">
           {turns.length === 0 && (
-            <div className="mt-24 text-center text-dim">
-              <div className="mb-3 flex justify-center opacity-80"><Icon name="chat" size={28} /></div>
-              <div className="text-lg font-medium text-text">Start a conversation</div>
-              <div className="mt-1 text-sm text-faint">Ask anything — the agent can read files, run commands, search, and more.</div>
+            <div className="mt-20 flex flex-col items-center text-center">
+              <div className="mb-4 opacity-90"><Mark size={48} /></div>
+              <div className="text-xl font-semibold text-text">How can I help?</div>
+              <div className="mt-1.5 text-sm text-faint">
+                Ask anything — the agent can read files, run commands, search the web, and more.
+              </div>
+              <div className="mt-6 grid w-full max-w-lg grid-cols-1 gap-2 sm:grid-cols-2">
+                {SUGGESTIONS.map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => fill(s)}
+                    className="rounded-[var(--radius)] border border-border bg-surface/60 px-3 py-2.5 text-left text-sm text-dim transition-colors hover:border-border-2 hover:bg-surface-2/60 hover:text-text"
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
           {turns.map((t, i) => (
