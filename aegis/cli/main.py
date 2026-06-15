@@ -1544,6 +1544,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("slug", nargs="?")
     sp.set_defaults(func=_cmd_spec)
 
+    from ..governor import cmd_budget as _cmd_budget
+    bg2 = sub.add_parser("budget", help="cost & latency governor: spend vs caps, auto-downshift")
+    bg2.add_argument("action", nargs="?", choices=["status"], default="status")
+    bg2.set_defaults(func=_cmd_budget)
+
     sv = sub.add_parser("serve", help="run an OpenAI-compatible API server")
     sv.add_argument("--host")
     sv.add_argument("--port", type=int)

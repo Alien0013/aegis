@@ -571,6 +571,39 @@ class Agent:
                 continue
         self._restore_prompt_route_base()
 
+    def _apply_budget_governor(self, text: str, on_event: OnEvent | None) -> None:
+        """Per-turn cost governor: emit a spend warning near/over the cap, and downshift a
+        simple turn to the cheap model when ``budget.auto_downshift`` is on. Best-effort and
+        only swaps the model when no prompt-routing override already took effect."""
+        try:
+            from ..governor import budget_status, downshift_model
+            st = budget_status(self.config, session_spend=self._session_spend_usd())
+            if st.warning and on_event:
+                on_event({"type": "budget_warning", "message": st.warning,
+                          "over": st.over, "blocked": st.should_block})
+            if self.session.meta.get("_prompt_route_runtime"):
+                return                       # an explicit routing rule wins over downshift
+            cheap = downshift_model(text, self.config)
+            if cheap and str(getattr(self.provider, "model", "")) != cheap:
+                from ..providers.fallback import build_with_fallbacks
+                self.provider = build_with_fallbacks(self.config, model=cheap)
+                if on_event:
+                    on_event({"type": "model_downshift", "model": cheap})
+        except Exception:  # noqa: BLE001 — governor must never break a turn
+            pass
+
+    def _session_spend_usd(self) -> float:
+        """Approximate USD spent on this session so far (from logged turn usage)."""
+        try:
+            from ..usage_log import _price
+            u = self.budget.usage
+            pin, pout = _price(str(getattr(self.provider, "model", "")), self.config)
+            fresh = max(0, u.input_tokens - getattr(u, "cache_read", 0))
+            return (fresh * pin + getattr(u, "cache_read", 0) * pin * 0.1
+                    + u.output_tokens * pout) / 1_000_000
+        except Exception:  # noqa: BLE001
+            return 0.0
+
     def cancel(self) -> None:
         """Request the current run to stop at the next safe point (interrupt-aware loop)."""
         self.cancel_event.set()
@@ -624,6 +657,7 @@ class Agent:
                 pass
         msg = user_input if isinstance(user_input, Message) else Message.user(user_input)
         self._apply_routing(msg.content)
+        self._apply_budget_governor(msg.content, on_event)
         self.session.maybe_title_from(msg.content)
         provider_query = msg.content
         if self.memory:

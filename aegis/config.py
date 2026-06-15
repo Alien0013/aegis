@@ -357,6 +357,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "workers": 1,                    # parallel lane workers for `kanban run`
         "dispatch_stale_timeout_seconds": 14400,  # reclaim a silent in_progress task after this (4h)
     },
+    "budget": {                          # cost & latency governor (all opt-in)
+        "enabled": False,
+        "daily_usd": 0,                  # hard cap on spend per rolling day (0 = no cap)
+        "session_usd": 0,                # hard cap on spend per session (0 = no cap)
+        "enforce": "warn",               # off | warn | block (block refuses a turn over cap)
+        "auto_downshift": False,         # route simple turns to a cheaper model
+        "cheap_model": "",               # model for downshifted (simple) turns
+    },
     "embeddings": {                  # semantic code index (code_search tool); OpenAI-compatible
         "base_url": "",              # "" = OpenAI; or any /embeddings endpoint (OpenRouter, local)
         "model": "",                 # "" = text-embedding-3-small
