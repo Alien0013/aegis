@@ -12,6 +12,9 @@
     "dist:win": "electron-builder --win nsis",
     "dist:mac": "electron-builder --mac dmg"
   },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  },
   "devDependencies": {
     "electron": "^33.0.0",
     "electron-builder": "^25.0.0"
@@ -22,7 +25,8 @@
     "artifactName": "AEGIS-${version}-${os}-${arch}.${ext}",
     "icon": "build/icon.png",
     "directories": { "output": "release", "buildResources": "build" },
-    "files": ["electron/**", "package.json"],
+    "publish": [{ "provider": "github", "owner": "Alien0013", "repo": "aegis" }],
+    "files": ["electron/**", "package.json", "node_modules/**"],
     "extraResources": [{ "from": "build/icon.png", "to": "icon.png" }],
     "mac": {
       "category": "public.app-category.developer-tools",

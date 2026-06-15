@@ -264,6 +264,37 @@ function registerGlobalShortcut() {
   } catch (e) { log(`global shortcut failed: ${e.message}`); }
 }
 
+// Auto-update from GitHub Releases (electron-updater). Only meaningful in the
+// packaged app; a source-run / dev build has no update feed. `manual` = the user
+// asked from the menu, so report "up to date" / errors visibly.
+function initAutoUpdate(manual) {
+  if (!app.isPackaged) {
+    if (manual) notify("AEGIS updates", "Auto-update runs in the installed app only.");
+    return;
+  }
+  let autoUpdater;
+  try { ({ autoUpdater } = require("electron-updater")); }
+  catch (e) { log(`electron-updater unavailable: ${e.message}`); return; }
+  autoUpdater.autoDownload = true;
+  autoUpdater.removeAllListeners();
+  autoUpdater.on("update-available", (info) => {
+    log(`update available: ${info.version}`);
+    if (manual) notify("AEGIS update", `Downloading ${info.version}…`);
+  });
+  autoUpdater.on("update-not-available", () => { if (manual) notify("AEGIS", "You're on the latest version."); });
+  autoUpdater.on("error", (e) => { log(`updater error: ${e && e.message}`); if (manual) notify("AEGIS update failed", String(e && e.message)); });
+  autoUpdater.on("update-downloaded", (info) => {
+    log(`update downloaded: ${info.version}`);
+    const choice = dialog.showMessageBoxSync(win && !win.isDestroyed() ? win : undefined, {
+      type: "info", buttons: ["Restart now", "Later"], defaultId: 0, cancelId: 1,
+      title: "Update ready", message: `AEGIS ${info.version} is ready to install.`,
+      detail: "Restart AEGIS to apply the update.",
+    });
+    if (choice === 0) { quitting = true; autoUpdater.quitAndInstall(); }
+  });
+  autoUpdater.checkForUpdates().catch((e) => log(`checkForUpdates failed: ${e && e.message}`));
+}
+
 /* ---------- boot sequence ---------- */
 async function run() {
   createSplash();
@@ -284,6 +315,7 @@ async function run() {
     registerGlobalShortcut();
     if (crashRestarts === 0) notify("AEGIS is ready", "Your agent is online. ⌘/Ctrl+Shift+A to summon.");
     if (pendingDeepLink) { win.loadURL(route(pendingDeepLink)); pendingDeepLink = ""; }
+    setTimeout(() => initAutoUpdate(false), 4000);   // quiet check shortly after launch
   } catch (e) {
     log(`boot failed: ${e.message}`);
     const bin = aegisCommand();
@@ -314,6 +346,7 @@ function installMenu() {
       { label: "Open in Browser", click: () => dashboardUrl && shell.openExternal(dashboardUrl) },
       { label: "Copy Dashboard URL", click: () => dashboardUrl && clipboard.writeText(dashboardUrl) },
       { label: "Restart Backend", click: () => restartFromScratch() },
+      { label: "Check for Updates…", click: () => initAutoUpdate(true) },
       { label: "Open Logs", click: () => shell.openPath(logPath()) },
       { type: "separator" },
       { role: process.platform === "darwin" ? "close" : "quit" },
