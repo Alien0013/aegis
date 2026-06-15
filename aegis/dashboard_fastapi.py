@@ -836,7 +836,7 @@ def _skill_path_editable(path: Path) -> bool:
     return any(resolved.is_relative_to(root) for root in _skill_writable_roots())
 
 
-def _skill_entry(skill, usage: dict, installed_lock: dict) -> dict:
+def _skill_entry(skill, usage: dict, installed_lock: dict, disabled: set | None = None) -> dict:
     ok, reason = skill.satisfied()
     lock = installed_lock.get(skill.name, {}) if isinstance(installed_lock, dict) else {}
     return {
@@ -846,6 +846,7 @@ def _skill_entry(skill, usage: dict, installed_lock: dict) -> dict:
         "tier": skill.tier,
         "available": ok,
         "unavailable_reason": reason,
+        "enabled": skill.name not in (disabled or set()),
         "installed": bool(lock),
         "source": lock.get("source", ""),
         "installed_at": lock.get("installed_at", ""),
@@ -861,12 +862,16 @@ def _skills_payload(config: Config) -> dict:
     loader = SkillsLoader(config)
     usage = loader.usage()
     lock = marketplace.installed()
-    rows = [_skill_entry(skill, usage, lock) for skill in sorted(loader.discover().values(), key=lambda s: s.name)]
+    disabled = set(config.get("skills.disabled", []) or [])
+    rows = [_skill_entry(skill, usage, lock, disabled)
+            for skill in sorted(loader.discover().values(), key=lambda s: s.name)]
     return {
         "skills": rows,
         "count": len(rows),
+        "enabled_count": sum(1 for r in rows if r["enabled"]),
         "installed": lock,
         "taps": marketplace.list_taps(config),
+        "registries": marketplace.list_registries(config),
     }
 
 
@@ -2048,6 +2053,19 @@ def create_app(config: Config) -> FastAPI:
             return JSONResponse({"ok": True, "installed": names, **_skills_payload(config)})
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+    @app.post("/api/skills/marketplace/uninstall")
+    async def api_skills_marketplace_uninstall(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from . import marketplace
+
+        body = await request.json()
+        name = str(body.get("name") or "").strip()
+        if not name:
+            return JSONResponse({"ok": False, "error": "name is required"}, status_code=400)
+        ok = marketplace.remove(name)
+        return JSONResponse({"ok": ok, "name": name, **_skills_payload(config)},
+                            status_code=200 if ok else 404)
 
     @app.post("/api/skills")
     async def api_skills_create(request: Request) -> JSONResponse:

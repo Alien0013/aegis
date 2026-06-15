@@ -15,11 +15,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 
@@ -295,11 +297,34 @@ DEFAULT_TAPS = {
     "anthropic": "anthropics/skills",
 }
 
+# GitHub repos searched/installed by the Browse Hub. Each holds SKILL.md packages
+# under `path/`. These are the same official sources Hermes pulls from.
+GITHUB_SKILL_REPOS = [
+    {"hub": "anthropic", "repo": "anthropics/skills", "path": "skills"},
+    {"hub": "openai", "repo": "openai/skills", "path": "skills/.curated"},
+]
+
 
 def list_taps(config) -> dict:
     taps = dict(DEFAULT_TAPS)
     taps.update(config.get("skills.taps", {}) or {})
     return taps
+
+
+def list_registries(config) -> list[dict]:
+    """The skill sources the Browse Hub searches/installs from (drives the UI chips).
+    Defaults: agentskills.io (well-known) + the official GitHub repos; extend via
+    ``skills.registries`` (well-known index URLs) and ``skills.taps`` (git repos)."""
+    regs: list[dict] = [{"name": "agentskills", "kind": "well-known", "ref": DEFAULT_REGISTRIES[0]}]
+    for g in GITHUB_SKILL_REPOS:
+        regs.append({"name": g["hub"], "kind": "github", "ref": g["repo"]})
+    for url in (config.get("skills.registries", []) or []):
+        regs.append({"name": (urlparse(url).hostname or url), "kind": "well-known", "ref": url})
+    known = {g["hub"] for g in GITHUB_SKILL_REPOS}
+    for name, repo in (list_taps(config) or {}).items():
+        if name not in known:
+            regs.append({"name": name, "kind": "github", "ref": repo})
+    return regs
 
 
 def install_hub(name: str, config, force: bool = False) -> list[str]:
@@ -310,20 +335,95 @@ def install_hub(name: str, config, force: bool = False) -> list[str]:
     return install(f"git:{taps[name]}", force=force)
 
 
-def search(query: str, registries: list[str] | None = None) -> list[dict]:
-    """Search well-known registry indexes. Returns [{name, description, source}]."""
+def _github_headers() -> dict:
+    h = {"Accept": "application/vnd.github+json", "User-Agent": "aegis-marketplace"}
+    tok = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if tok:
+        h["Authorization"] = f"Bearer {tok}"
+    return h
+
+
+def _github_search(repo: str, path: str, query: str, hub: str, limit: int = 40) -> list[dict]:
+    """List SKILL.md packages under ``repo/path`` via the GitHub tree API, filtered
+    by ``query`` (name match). Each result installs via ``git:repo/<dir>``."""
+    meta = httpx.get(f"https://api.github.com/repos/{repo}", headers=_github_headers(), timeout=15)
+    meta.raise_for_status()
+    branch = meta.json().get("default_branch", "main")
+    tree = httpx.get(f"https://api.github.com/repos/{repo}/git/trees/{branch}?recursive=1",
+                     headers=_github_headers(), timeout=25)
+    tree.raise_for_status()
+    base = path.rstrip("/")
+    q = query.lower()
     out: list[dict] = []
+    for node in tree.json().get("tree", []):
+        p = node.get("path", "")
+        if not p.endswith("/SKILL.md"):
+            continue
+        skill_dir = p[: -len("/SKILL.md")]
+        if base and not (skill_dir == base or skill_dir.startswith(base + "/")):
+            continue
+        name = skill_dir.rsplit("/", 1)[-1]
+        if name.startswith("."):
+            continue
+        if q and q not in name.lower():
+            continue
+        out.append({
+            "name": name,
+            "description": "",
+            "source": f"git:{repo}/{skill_dir}",
+            "hub": hub,
+            "detail_url": f"https://github.com/{repo}/tree/{branch}/{skill_dir}",
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _wellknown_search(url: str, query: str, hub: str = "agentskills") -> list[dict]:
+    data = httpx.get(url, timeout=20, follow_redirects=True).json()
+    q = query.lower()
+    out: list[dict] = []
+    for sk in data.get("skills", []):
+        blob = f"{sk.get('name', '')} {sk.get('description', '')}".lower()
+        if q in blob:
+            out.append({
+                "name": sk.get("name"),
+                "description": sk.get("description", ""),
+                "source": sk.get("source") or sk.get("repository") or url,
+                "hub": hub,
+                "detail_url": sk.get("homepage") or sk.get("source") or "",
+            })
+    return out
+
+
+def search(query: str, registries: list[str] | None = None) -> list[dict]:
+    """Aggregate skill search across the connected sources — well-known registry
+    indexes + the official GitHub repos. Per-source failures (timeouts, rate
+    limits) are swallowed so one slow hub doesn't sink the search. Each result is
+    tagged with its ``hub`` and an ``installed`` flag; ``source`` feeds install()."""
+    have = set(installed().keys())
+    out: list[dict] = []
+    seen: set[str] = set()
+
+    def _add(items: list[dict]) -> None:
+        for it in items:
+            nm = it.get("name") or ""
+            key = f"{it.get('hub')}/{nm}"
+            if not nm or key in seen:
+                continue
+            seen.add(key)
+            it["installed"] = nm in have
+            out.append(it)
+
     for url in (registries or DEFAULT_REGISTRIES):
         try:
-            data = httpx.get(url, timeout=20, follow_redirects=True).json()
+            _add(_wellknown_search(url, query))
         except Exception:  # noqa: BLE001
             continue
-        for sk in data.get("skills", []):
-            blob = f"{sk.get('name','')} {sk.get('description','')}".lower()
-            if query.lower() in blob:
-                out.append({
-                    "name": sk.get("name"),
-                    "description": sk.get("description", ""),
-                    "source": sk.get("source") or sk.get("repository") or url,
-                })
+    if registries is None:
+        for g in GITHUB_SKILL_REPOS:
+            try:
+                _add(_github_search(g["repo"], g["path"], query, g["hub"]))
+            except Exception:  # noqa: BLE001
+                continue
     return out
