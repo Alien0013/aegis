@@ -1,4 +1,4 @@
-"""Hermes-parity batch: configurable compaction threshold, gateway hygiene safety-net,
+"""AEGIS-parity batch: configurable compaction threshold, gateway hygiene safety-net,
 curator run-gating + backups/rollback + reports, and the aligned default values."""
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ def test_should_compress_honors_threshold():
     ctx = int(toks / 0.7)                 # history fills ~70% of the window
     assert compaction.should_compress(msgs, ctx, 0, threshold=0.50) is True
     assert compaction.should_compress(msgs, ctx, 0, threshold=0.85) is False
-    # default (no threshold passed) now uses the Hermes-aligned 0.50 constant
+    # default (no threshold passed) now uses the AEGIS-aligned 0.50 constant
     assert compaction.should_compress(msgs, ctx, 0) is True
 
 
@@ -29,7 +29,7 @@ def test_should_compress_unknown_context_uses_default_window():
     assert compaction.should_compress(msgs, 0, 0) is False
 
 
-def test_config_defaults_are_hermes_aligned():
+def test_config_defaults_are_aegis_aligned():
     c = Config.load()
     assert c.get("agent.reasoning_effort") == "medium"
     assert c.get("agent.compression.threshold") == 0.50

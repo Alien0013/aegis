@@ -34,7 +34,7 @@ STALE_AFTER_DAYS = 30
 # Two skills whose descriptions match above this ratio are flagged as duplicates.
 DUP_THRESHOLD = 0.82
 
-# Lifecycle states (Hermes-parity state machine): a skill is ACTIVE until it goes
+# Lifecycle states (AEGIS-parity state machine): a skill is ACTIVE until it goes
 # unused past stale_after_days (-> STALE), then archived past archive_after_days
 # (-> ARCHIVED); using it again reactivates it. Pinned skills never transition.
 STATE_ACTIVE = "active"
@@ -114,7 +114,7 @@ def _seed_record(name: str) -> None:
 # --------------------------------------------------------------------------- #
 # suppression list — keeps a curator-archived skill archived across re-seeds
 # (e.g. a bundled skill re-shipped by an update). One name per line in
-# skills/.curator_suppressed. Cleared by an explicit restore. (Hermes parity.)
+# skills/.curator_suppressed. Cleared by an explicit restore.
 # --------------------------------------------------------------------------- #
 def _suppressed_path() -> Path:
     return cfg.skills_dir() / ".curator_suppressed"
@@ -293,7 +293,7 @@ def apply_transitions(dry_run: bool = True, stale_after_days: int = STALE_AFTER_
 
     With ``dry_run=False`` the new state is persisted to usage.json and archive-eligible
     skills are archived (never deleted — archive is recoverable). Returns the per-name
-    lists plus a Hermes-style ``counts`` dict (checked/marked_stale/reactivated/archived).
+    lists plus a structured ``counts`` dict (checked/marked_stale/reactivated/archived).
     """
     from . import provenance
     stale, to_archive, reactivated, resuppressed = [], [], [], []
@@ -314,7 +314,7 @@ def apply_transitions(dry_run: bool = True, stale_after_days: int = STALE_AFTER_
             continue
         # First time the curator sees this skill with no usage record at all: anchor
         # its clock to now and defer one full pass, so an old directory mtime can't
-        # archive a skill the curator has only just noticed (Hermes seed_record_if_missing).
+        # archive a skill the curator has only just noticed (AEGIS seed_record_if_missing).
         if s.name not in usage and not s.last_used:
             if not dry_run:
                 _seed_record(s.name)
@@ -425,7 +425,7 @@ def consolidation_candidates() -> list[dict]:
 
 def consolidate(from_name: str, into_name: str) -> bool:
     """Merge skill ``from_name`` into ``into_name``: copy its SKILL.md body into the
-    survivor's ``references/`` directory (so the detail is preserved, Hermes-style), then
+    survivor's ``references/`` directory so the detail is preserved, then
     archive ``from_name`` with a pointer back to the survivor. Returns False if either
     skill is missing or ``from_name`` isn't safe to remove."""
     from . import provenance
@@ -648,7 +648,7 @@ def _curatable_summaries() -> list[str]:
 
 
 def llm_review(config, *, dry_run: bool = False, max_iterations: int = 8) -> dict:
-    """Phase-2 curator (Hermes parity): fork an aux-model agent restricted to skill tools that
+    """Phase-2 curator: fork an aux-model agent restricted to skill tools that
     reads the agent-created skills and consolidates/patches/archives them. No-op (never raises)
     when there are no curatable skills or no provider is available."""
     summaries = _curatable_summaries()
@@ -682,7 +682,7 @@ def llm_review(config, *, dry_run: bool = False, max_iterations: int = 8) -> dic
     pending: dict = {}
 
     def _capture(ev):
-        # Record a structured consolidations block (Hermes parity): pair the consolidate
+        # Record a structured consolidations block: pair the consolidate
         # call's args (from tool_start) with its success (from tool_result) so downstream
         # tooling can distinguish a merge from a plain archive.
         if ev.get("type") == "tool_start" and ev.get("name") == "skill_manage":
@@ -761,7 +761,7 @@ def run(config=None, *, dry_run: bool = False) -> dict:
 
 
 def maybe_run(config) -> dict | None:
-    """Gated automatic run (Hermes-style): fires only if enabled, the configured interval has
+    """Gated automatic run: fires only if enabled, the configured interval has
     elapsed since the last run, and the agent has been idle long enough. On a brand-new install
     the first observation seeds the clock and defers the first real pass by one full interval."""
     if config is None or not bool(config.get("curator.enabled", True)):

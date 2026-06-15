@@ -194,7 +194,7 @@ def _tool_icon(name: str) -> str:
 
 
 # Short aligned verbs so the tool trail reads as a tidy column rather than raw
-# tool names — Hermes-style. Falls back to the tool's own name when unmapped.
+# tool names. Falls back to the tool's own name when unmapped.
 _TOOL_VERBS = {
     "read_file": "read", "read": "read", "write_file": "write", "write": "write",
     "edit_file": "edit", "edit": "edit", "patch": "edit", "apply_patch": "edit",
@@ -226,7 +226,7 @@ def _oneline(text: str, limit: int = 72) -> str:
 
 def _tool_preview(name: str, args: dict) -> str:
     """A short, human-readable preview of a tool call's primary argument — the same
-    idea as Hermes' per-tool previews, so the trail says *what* each call does."""
+    idea as AEGIS' per-tool previews, so the trail says *what* each call does."""
     args = args or {}
     n = (name or "").lower()
     if n in ("memory",):
@@ -1142,7 +1142,7 @@ def _run_terminal_turn_active_session(
 ):
     """Run one terminal-surface turn with the same REPL lifecycle.
 
-    This is the Hermes-style terminal path: prompt preparation, shared
+    This is the terminal path: prompt preparation, shared
     SurfaceRunner execution, goal continuation, first-run tips, and persistence
     live in one place instead of being reimplemented per UI.
     """

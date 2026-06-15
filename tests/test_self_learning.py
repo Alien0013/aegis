@@ -198,7 +198,7 @@ def test_forked_review_uses_local_memory_without_external_provider_side_effects(
     assert external.prefetch_sessions[-1] == parent_session.id
 
 
-def test_review_prompts_include_hermes_style_learning_rules():
+def test_review_prompts_include_adapter_style_learning_rules():
     from aegis.agent import review
 
     assert "FIRST-CLASS skill signals" in review._SKILL_PROMPT

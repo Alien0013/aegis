@@ -1,6 +1,6 @@
 """Base classes for AEGIS execution environments.
 
-AEGIS follows Hermes' terminal model here: each command gets a fresh shell
+AEGIS keeps terminal execution simple here: each command gets a fresh shell
 process, while per-task state lives in a small shell snapshot and cwd marker.
 """
 

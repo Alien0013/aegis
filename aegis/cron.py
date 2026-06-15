@@ -72,7 +72,7 @@ class CronJob:
     next_run: float = 0.0      # epoch of the next expected fire (advisory; computed on each run)
     runs: list = field(default_factory=list)          # recent run records (capped), newest last
     run_count: int = 0         # total times this job has fired
-    max_runs: int = 0          # >0: retire (disable) the job after this many runs (Hermes repeat.times)
+    max_runs: int = 0          # >0: retire (disable) the job after this many runs (AEGIS repeat.times)
 
 
 _VALID_STATES = {"idle", "running", "ok", "error"}

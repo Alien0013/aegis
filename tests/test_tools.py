@@ -245,7 +245,7 @@ def test_bash_tool_rejects_non_string_command(tmp_path):
     assert "NoneType" in res.content
 
 
-def test_compound_background_rewrite_matches_hermes_regression():
+def test_compound_background_rewrite_matches_aegis_regression():
     from aegis.tools.command_utils import rewrite_compound_background as rewrite
 
     assert rewrite("A && B &") == "A && { B & }"

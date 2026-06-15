@@ -16,7 +16,7 @@ from .util import now_iso, slugify
 def _session_source(meta: dict[str, Any]) -> str:
     """Classify a session as user-facing ('') or internal. Internal = the forked
     self-improvement sessions (memory/skill review, curator) that aren't real
-    conversations — the dashboard's session list hides them (Hermes source scoping).
+    conversations — the dashboard's session list hides them (dashboard source scoping).
     Compaction-child sessions are NOT internal: they carry the user's conversation forward."""
     if not isinstance(meta, dict):
         return ""
@@ -475,7 +475,7 @@ class SessionStore:
 
     def set_archived(self, sid: str, archived: bool = True) -> bool:
         """Archive (or unarchive) a session — archived sessions are kept but excluded
-        from pruning and from the default session list (Hermes set_session_archived)."""
+        from pruning and from the default session list (AEGIS set_session_archived)."""
         with self._conn() as c:
             cur = c.execute("UPDATE sessions SET archived=? WHERE id=?",
                             (1 if archived else 0, sid))
@@ -485,7 +485,7 @@ class SessionStore:
                     protect: "tuple[str, ...]" = ()) -> list[str]:
         """Delete 'ghost' sessions — ones with no user/assistant turns (only a system
         prompt, or nothing) — that aren't archived or protected. Lifecycle cleanup so the
-        store doesn't accumulate empty sessions (Hermes prune_empty_ghost_sessions). With
+        store doesn't accumulate empty sessions (AEGIS prune_empty_ghost_sessions). With
         ``older_than_days`` only prunes sessions untouched for that long. Returns the ids
         pruned (or that would be pruned, when ``dry_run``)."""
         from datetime import datetime, timedelta, timezone
@@ -745,7 +745,7 @@ class SessionStore:
         return cur
 
     def browse_sessions(self, limit: int = 10, *, current_session_id: str | None = None) -> dict:
-        """Hermes-style browse shape: recent sessions without needing a query."""
+        """Browse shape: recent sessions without needing a query."""
         limit = max(1, min(int(limit or 10), 50))
         current_root = self._lineage_root(current_session_id)
         results = []
@@ -779,7 +779,7 @@ class SessionStore:
         return {"success": True, "mode": "browse", "results": results, "count": len(results)}
 
     def read_session(self, sid: str, *, head: int = 20, tail: int = 10) -> dict:
-        """Hermes-style read shape: bounded transcript dump by session id/title/prefix."""
+        """Read shape: bounded transcript dump by session id/title/prefix."""
         sess = self._resolve_session(sid)
         if not sess:
             return {"success": False, "mode": "read", "error": f"session_id not found: {sid}"}
@@ -812,7 +812,7 @@ class SessionStore:
     def messages_around(self, sid: str, around_message_id: int, *, window: int = 5,
                         current_session_id: str | None = None,
                         anchor_is_row_id: bool = False) -> dict:
-        """Hermes-style scroll shape: a bounded message window centered on an anchor id."""
+        """Scroll shape: a bounded message window centered on an anchor id."""
         sess = self._resolve_session(sid)
         if not sess:
             return {"success": False, "mode": "scroll", "error": f"session_id not found: {sid}"}
@@ -907,7 +907,7 @@ class SessionStore:
                           role_filter: list[str] | None = None,
                           sort: str | None = None,
                           current_session_id: str | None = None) -> dict:
-        """Hermes-style discovery shape: search plus message windows and bookends."""
+        """Discovery shape: search plus message windows and bookends."""
         limit = max(1, min(int(limit or 3), 10))
         roles = {r for r in (role_filter or ["user", "assistant"]) if r}
         hits = self.search_messages(query, limit=limit * 8)

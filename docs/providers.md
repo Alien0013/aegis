@@ -24,7 +24,7 @@ dynamic tools.
 
 ## Auth
 
-Use `codex` for ChatGPT/Codex subscription auth with the Hermes-style stateless
+Use `codex` for ChatGPT/Codex subscription auth with the stateless
 Responses backend. Run `codex login` first; AEGIS sends `store: false`
 unless you explicitly enable provider-native response state. Use `openai` for
 OpenAI Platform API-key auth through `OPENAI_API_KEY`.

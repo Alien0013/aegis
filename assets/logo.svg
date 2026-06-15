@@ -1,31 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200" role="img" aria-label="AEGIS">
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240" role="img" aria-label="AEGIS logo">
   <defs>
-    <linearGradient id="grad" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#8b5cff"/>
-      <stop offset=".55" stop-color="#5b8cff"/>
-      <stop offset="1" stop-color="#22d3ee"/>
+    <linearGradient id="tile" x1="34" y1="26" x2="206" y2="214" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#15181d"/>
+      <stop offset="1" stop-color="#0b0d10"/>
     </linearGradient>
-    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#ffffff" stop-opacity=".22"/>
-      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    <linearGradient id="gold" x1="58" y1="42" x2="182" y2="198" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f0c078"/>
+      <stop offset="1" stop-color="#d8913f"/>
     </linearGradient>
-    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
-      <feGaussianBlur stdDeviation="5" result="b"/>
-      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
-    </filter>
   </defs>
-  <!-- app tile -->
-  <rect width="200" height="200" rx="44" fill="#0b0c10"/>
-  <rect x="1" y="1" width="198" height="198" rx="43" fill="none" stroke="url(#grad)" stroke-opacity=".25"/>
-  <!-- shield -->
-  <g filter="url(#glow)">
-    <path d="M100 30 L154 50 V96 C154 128 130 150 100 162 C70 150 46 128 46 96 V50 Z"
-          fill="none" stroke="url(#grad)" stroke-width="7" stroke-linejoin="round"/>
-  </g>
-  <path d="M100 30 L154 50 V96 C154 128 130 150 100 162 C70 150 46 128 46 96 V50 Z" fill="url(#sheen)"/>
-  <!-- monogram A formed inside the shield -->
-  <path d="M100 60 L124 126 H112 L107 112 H93 L88 126 H76 Z M97 100 H103 L100 86 Z"
-        fill="url(#grad)"/>
-  <!-- core spark -->
-  <circle cx="100" cy="74" r="4.5" fill="#fff"/>
+  <rect x="16" y="16" width="208" height="208" rx="48" fill="url(#tile)"/>
+  <rect x="17.5" y="17.5" width="205" height="205" rx="46.5" fill="none" stroke="#2d333d"/>
+  <rect x="54" y="44" width="132" height="132" rx="30" fill="url(#gold)"/>
+  <path d="M120 68 156 82v30c0 31-20 51-36 58-16-7-36-27-36-58V82l36-14Z" fill="none" stroke="#1a1206" stroke-width="10" stroke-linejoin="round"/>
+  <path d="M120 91v48" stroke="#1a1206" stroke-width="10" stroke-linecap="round"/>
+  <path d="M98 114h44" stroke="#1a1206" stroke-width="10" stroke-linecap="round"/>
 </svg>

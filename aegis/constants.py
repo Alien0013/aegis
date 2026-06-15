@@ -15,12 +15,12 @@ MAX_PARALLEL_TOOLS = 8
 MIN_CONTEXT_LENGTH = 64_000          # reject models below this at startup (override per-model)
 DEFAULT_CONTEXT_LENGTH = 128_000
 # Fraction of the context window we allow message history to fill before
-# triggering compaction. Hermes-aligned default (0.50); override via
+# triggering compaction. AEGIS-aligned default (0.50); override via
 # agent.compression.threshold in config.
 COMPACT_THRESHOLD = 0.50
 
 # --- Memory -----------------------------------------------------------------
-# Hermes-matched defaults: char limits (not tokens — model-independent), overridable
+# AEGIS-matched defaults: char limits (not tokens — model-independent), overridable
 # via memory.memory_char_limit / memory.user_char_limit in config.
 MEMORY_CHAR_LIMIT = 2_200
 USER_CHAR_LIMIT = 1_375

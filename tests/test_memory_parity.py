@@ -1,4 +1,4 @@
-"""Hermes-parity memory semantics: limits, delimiter, drift guard, ambiguity, render."""
+"""AEGIS-parity memory semantics: limits, delimiter, drift guard, ambiguity, render."""
 
 from __future__ import annotations
 
@@ -12,12 +12,12 @@ def store(tmp_path):
     return MemoryStore(base=tmp_path)
 
 
-def test_default_limits_match_hermes(store):
+def test_default_limits_match_aegis(store):
     assert store._limit("memory") == 2200 and store._limit("user") == 1375
 
 
 def test_full_delimiter_split_keeps_inline_section_sign(store):
-    """A bare '§' inside an entry must not split it (Hermes splits on '\\n§\\n' only)."""
+    """A bare '§' inside an entry must not split it (AEGIS splits on '\\n§\\n' only)."""
     assert "remembered" in store.add("memory", "uses § as a delimiter in notes")
     assert store.entries("memory") == ["uses § as a delimiter in notes"]
 
@@ -83,7 +83,7 @@ def test_usage_gauge_format(store):
     assert "/1,375 chars" in store.usage("user")
 
 
-def test_snapshot_renders_hermes_headers(tmp_path, monkeypatch):
+def test_snapshot_renders_aegis_headers(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     from aegis.config import Config
     from aegis.memory import MemoryManager
@@ -103,7 +103,7 @@ def test_tool_old_text_alias_and_no_match_errors(tmp_path, monkeypatch):
     from aegis.memory import MemoryManager
     mm = MemoryManager(Config.load())
     mm.handle_tool({"action": "add", "target": "memory", "content": "fact one"})
-    # Hermes param name old_text works; legacy 'match' still accepted
+    # legacy param name old_text works; legacy 'match' still accepted
     assert not mm.handle_tool({"action": "replace", "target": "memory",
                                "old_text": "fact one", "content": "fact 1"}).is_error
     assert not mm.handle_tool({"action": "remove", "target": "memory",
@@ -118,6 +118,6 @@ def test_tool_old_text_alias_and_no_match_errors(tmp_path, monkeypatch):
     assert mm.store.raw("memory") == before
 
 
-def test_memory_tool_schema_exposes_only_hermes_actions():
+def test_memory_tool_schema_exposes_only_aegis_actions():
     from aegis.tools.builtin import MemoryTool
     assert MemoryTool.parameters["properties"]["action"]["enum"] == ["add", "replace", "remove"]

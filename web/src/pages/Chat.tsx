@@ -1,7 +1,7 @@
 // Chat = the real AEGIS TUI embedded in an xterm terminal over the /api/pty
-// WebSocket (the Hermes approach). The TUI renders the conversation, tool trail,
+// WebSocket (the dashboard terminal approach). The TUI renders the conversation, tool trail,
 // and reasoning cleanly — no raw scaffolding — because it's the actual agent CLI.
-// Just the terminal: session browsing lives on the Sessions page (Hermes keeps
+// Just the terminal: session browsing lives on the Sessions page (AEGIS keeps
 // Chat and Sessions separate). Opening a session there deep-links to /chat?id=…,
 // which resumes it here.
 

@@ -1,5 +1,5 @@
 """The terminal tool-trail rendering: per-tool verbs/previews, failure detection,
-and the Hermes-style compaction/skill nudges. We drive the Renderer with events
+and the compaction/skill nudges. We drive the Renderer with events
 and assert it produces the right text without raising."""
 
 from aegis.cli import repl

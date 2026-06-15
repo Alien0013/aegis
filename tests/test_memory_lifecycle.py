@@ -90,19 +90,19 @@ def test_manager_fans_out_every_hook(tmp_path, monkeypatch):
     assert turn_start[3]["model"] == "fake-model"
 
 
-def test_sync_turn_supports_hermes_style_provider_signature(tmp_path, monkeypatch):
+def test_sync_turn_supports_adapter_style_provider_signature(tmp_path, monkeypatch):
     config = _cfg(tmp_path, monkeypatch)
     from aegis.memory import MemoryManager
     from aegis.types import Message
 
-    class HermesStyleProvider:
+    class AEGISStyleProvider:
         def __init__(self):
             self.calls = []
 
         def sync_turn(self, user_content, assistant_content, *, session_id="", messages=None):
             self.calls.append((user_content, assistant_content, session_id, messages))
 
-    provider = HermesStyleProvider()
+    provider = AEGISStyleProvider()
     mm = MemoryManager(config, external=provider)
     mm.initialize("sess-sync")
 
@@ -246,11 +246,11 @@ def test_external_prompt_block_refreshes_on_session_switch(tmp_path, monkeypatch
     assert "session-bound old" not in block
 
 
-def test_session_switch_supports_hermes_style_provider_signature(tmp_path, monkeypatch):
+def test_session_switch_supports_adapter_style_provider_signature(tmp_path, monkeypatch):
     config = _cfg(tmp_path, monkeypatch)
     from aegis.memory import MemoryManager
 
-    class HermesStyleProvider:
+    class AEGISStyleProvider:
         def __init__(self):
             self.calls = []
 
@@ -277,7 +277,7 @@ def test_session_switch_supports_hermes_style_provider_signature(tmp_path, monke
         def system_prompt_block(self):
             return "ok"
 
-    provider = HermesStyleProvider()
+    provider = AEGISStyleProvider()
     mm = MemoryManager(config, external=provider)
 
     mm.on_session_switch(

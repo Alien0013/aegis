@@ -1,4 +1,4 @@
-"""Hermes-style skill management tool backed by Aegis skills and curator."""
+"""Action-style skill management tool backed by AEGIS skills and curator."""
 
 from __future__ import annotations
 
@@ -201,7 +201,7 @@ def _view(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
     skill = ctx.skills.discover().get(name)
     if not skill:
         return _json_error(f"skill '{name}' not found.")
-    ctx.skills.record_view(name)               # Hermes view_count telemetry
+    ctx.skills.record_view(name)               # AEGIS view_count telemetry
     content = ctx.skills.activate(name)
     return _json_result(
         {
@@ -276,7 +276,7 @@ def _patch(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
             return _json_error(f"patch would break SKILL.md structure: {split_err}")
 
     atomic_write(target, new_text)
-    ctx.skills.record_patch(name)              # Hermes patch_count telemetry
+    ctx.skills.record_patch(name)              # AEGIS patch_count telemetry
     ctx.skills.invalidate()
     _refresh_agent_prompt(ctx)
     rel = str(target.relative_to(skill.dir))
@@ -412,8 +412,8 @@ def _consolidate(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
 class SkillManageTool(Tool):
     name = "skill_manage"
     description = (
-        "Manage skills with a Hermes-style action schema. Actions: list, view, create, "
-        "patch, write_file, delete, usage, pin, unpin, report, consolidate. Uses Aegis "
+        "Manage skills with an action-style schema. Actions: list, view, create, "
+        "patch, write_file, delete, usage, pin, unpin, report, consolidate. Uses AEGIS "
         "SkillsLoader for discovery/create/view/usage and the curator for pinning, reports, "
         "recoverable delete-by-archive, and consolidating overlapping skills into one."
     )

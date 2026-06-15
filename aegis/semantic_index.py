@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import math
+import struct
 from pathlib import Path
 
 from . import config as cfg
@@ -87,13 +89,17 @@ def _chunk_file(text: str, chunk_lines: int) -> list[tuple[int, int, str]]:
 
 
 def _normalize(vec: list[float]) -> bytes:
-    import numpy as np
-
-    arr = np.asarray(vec, dtype="float32")
-    norm = float(np.linalg.norm(arr))
+    values = [float(v) for v in vec]
+    norm = math.sqrt(sum(v * v for v in values))
     if norm > 0:
-        arr = arr / norm
-    return arr.tobytes()
+        values = [v / norm for v in values]
+    return struct.pack(f"<{len(values)}f", *values)
+
+
+def _decode_vector(blob: bytes) -> tuple[float, ...]:
+    if len(blob) % 4 != 0:
+        return ()
+    return struct.unpack(f"<{len(blob) // 4}f", blob)
 
 
 def build(root: Path, config, *, force: bool = False) -> dict:
@@ -131,7 +137,7 @@ def build(root: Path, config, *, force: bool = False) -> dict:
             conn.executemany(
                 "INSERT INTO chunks (path, start, end, text, mtime, vec) VALUES (?,?,?,?,?,?)",
                 [(rel, c[0], c[1], c[2], st.st_mtime, _normalize(v))
-                 for c, v in zip(chunks, vectors)])
+                 for c, v in zip(chunks, vectors, strict=True)])
             conn.commit()
             indexed += 1
             chunk_count += len(chunks)
@@ -157,8 +163,6 @@ def _is_relative(p: Path, root: Path) -> bool:
 def search(root: Path, query: str, config, *, k: int = 8) -> list[dict]:
     """Top-``k`` code chunks most similar to ``query`` (cosine). Builds the index first
     if it's empty. Returns [{path, start, end, score, snippet}]."""
-    import numpy as np
-
     if not embeddings_available(config):
         return []
     conn = _connect()
@@ -172,13 +176,17 @@ def search(root: Path, query: str, config, *, k: int = 8) -> list[dict]:
         conn.close()
     if not rows:
         return []
-    qv = np.asarray(_embed([query], config)[0], dtype="float32")
-    qn = np.linalg.norm(qv)
-    if qn > 0:
-        qv = qv / qn
-    mat = np.frombuffer(b"".join(r[4] for r in rows), dtype="float32").reshape(len(rows), -1)
-    scores = mat @ qv
-    top = np.argsort(-scores)[:k]
-    return [{"path": rows[i][0], "start": rows[i][1], "end": rows[i][2],
-             "score": round(float(scores[i]), 3),
-             "snippet": rows[i][3][:600]} for i in top]
+    qv = _decode_vector(_normalize(_embed([query], config)[0]))
+    if not qv:
+        return []
+    scored = []
+    for row in rows:
+        vec = _decode_vector(row[4])
+        if len(vec) != len(qv):
+            continue
+        score = sum(a * b for a, b in zip(vec, qv, strict=True))
+        scored.append((score, row))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [{"path": row[0], "start": row[1], "end": row[2],
+             "score": round(float(score), 3),
+             "snippet": row[3][:600]} for score, row in scored[:k]]

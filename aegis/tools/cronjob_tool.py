@@ -1,4 +1,4 @@
-"""Hermes-compatible action-style cron job management tool."""
+"""Action-style cron job management tool."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Hermes-compatible cronjob tool surface."""
+"""Cronjob tool surface."""
 
 from __future__ import annotations
 
@@ -110,7 +110,7 @@ def test_cronjob_create_blocks_prompt_injection(tmp_path):
     assert CronStore().list() == []
 
 
-def test_cron_prompt_scanner_matches_hermes_edges():
+def test_cron_prompt_scanner_matches_aegis_edges():
     from aegis.cron import _scan_cron_prompt
 
     assert _scan_cron_prompt("Run pytest and report results") == ""

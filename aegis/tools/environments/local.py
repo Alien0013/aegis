@@ -122,7 +122,7 @@ def _prepend_shell_init(command: str, files: list[str]) -> str:
 
 
 class LocalEnvironment(BaseEnvironment):
-    """Run commands on the host with Hermes-style per-task shell state."""
+    """Run commands on the host with per-task shell state."""
 
     def __init__(
         self,

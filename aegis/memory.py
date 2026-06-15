@@ -62,8 +62,8 @@ def scan_entry(text: str) -> str | None:
     Memory enters the system prompt on every future session, so it gets the BROADEST
     scan: the shared security_scan text scanner (invisible/bidi unicode, exfil via
     curl/wget/cat-of-secrets, SSH-backdoor/persistence, HTML-comment injection) PLUS the
-    memory-specific phrase patterns below. This is AEGIS's equivalent of Hermes's
-    'strict' threat-pattern scope used for memory + skills."""
+    memory-specific phrase patterns below. This is the strict threat-pattern
+    scope used for memory + skills."""
     if not text:
         return None
     try:
@@ -80,7 +80,7 @@ def scan_entry(text: str) -> str | None:
 
 
 class MemoryStore:
-    """Bounded curated memory, Hermes-matched: §-delimited entries, whole-store char
+    """Bounded curated memory: §-delimited entries, whole-store char
     budgets, exact-dup rejection, multi-match ambiguity guards, and external-drift
     detection (a file the tool couldn't round-trip is backed up and the write refused
     instead of silently clobbering hand-added content)."""
@@ -116,7 +116,7 @@ class MemoryStore:
 
     def entries(self, target: str) -> list[str]:
         """Parse entries: split on the FULL delimiter (a bare '§' inside an entry's
-        content must not split it — Hermes semantics), deduplicate preserving order."""
+        content must not split it), deduplicate preserving order."""
         raw = self.raw(target)
         if not raw:
             return []
@@ -180,7 +180,7 @@ class MemoryStore:
 
     @staticmethod
     def _ambiguous(matches: list[tuple[int, str]]) -> str:
-        """Hermes guard: multiple DIFFERENT entries matching a substring is an error
+        """AEGIS guard: multiple DIFFERENT entries matching a substring is an error
         (be more specific); identical duplicates are safe to act on (first one)."""
         if len(matches) <= 1 or len({e for _, e in matches}) == 1:
             return ""
@@ -205,7 +205,7 @@ class MemoryStore:
                 return self._drift_message(_FILES[target], bak)
             entries = self.entries(target)
             if content in entries:
-                return "already remembered"          # exact duplicate (Hermes parity)
+                return "already remembered"          # exact duplicate
             current_total = len(MEMORY_DELIM.join(entries))
             entries.append(content)
             over = self._over_limit(target, entries, current_total=current_total)
@@ -437,7 +437,7 @@ class MemoryManager:
         self._sync_executor_lock = threading.Lock()
 
     def _sanitized(self, target: str) -> str:
-        """Hermes-rendered snapshot block: ═ separators + a header with the usage gauge,
+        """Rendered snapshot block: ═ separators + a header with the usage gauge,
         entries §-joined. Injection-matching entries are masked in the SNAPSHOT only —
         disk state is untouched, so the memory tool still shows the original and the
         user can inspect and remove it (silently hiding it would hide the attack)."""
@@ -535,7 +535,7 @@ class MemoryManager:
             return ""
         parts: list[str] = []
         mem = self._snapshot.get("memory", "")
-        if mem:                                   # blocks carry their own Hermes headers
+        if mem:                                   # blocks carry their own headers
             parts.append(mem)
         if self.user_enabled and self._snapshot.get("user"):
             parts.append(self._snapshot["user"])
@@ -628,7 +628,7 @@ class MemoryManager:
         ]
         accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
         accepts_varargs = any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params.values())
-        # Existing AEGIS providers use sync_turn(messages). Hermes-style providers
+        # Existing AEGIS providers use sync_turn(messages). Two-argument providers
         # use sync_turn(user_content, assistant_content, session_id=..., messages=...).
         if len(positional) <= 1 and not accepts_varargs and "user_content" not in params:
             fn(messages)
@@ -753,13 +753,13 @@ class MemoryManager:
                 return
             if positional:
                 first = positional[0].name
-                hermes_style = (
+                adapter_style = (
                     first in {"new_session_id", "session_id"}
                     or "parent_session_id" in params
                     or "reset" in params
                     or "rewound" in params
                 )
-                if hermes_style:
+                if adapter_style:
                     kw_values = {
                         k: v for k, v in values.items()
                         if k not in {"new_session_id"}
@@ -832,7 +832,7 @@ class MemoryManager:
 
         action = args.get("action")
         target = args.get("target", "memory")
-        match = args.get("old_text") or args.get("match")    # Hermes name + legacy alias
+        match = args.get("old_text") or args.get("match")    # old_text preferred; match is legacy
         if target not in _FILES:
             return ToolResult.error("target must be 'memory' or 'user'")
         if action == "add":

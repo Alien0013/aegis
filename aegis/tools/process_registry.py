@@ -1,7 +1,7 @@
 """Task-aware background process registry.
 
 This is the AEGIS narrow waist for long-running commands, modeled after the
-Hermes process registry: tools spawn managed ``ProcessSession`` objects, then
+AEGIS process registry: tools spawn managed ``ProcessSession`` objects, then
 poll/read/wait/kill them through one registry instead of each tool owning a
 private subprocess table.
 """
@@ -423,7 +423,7 @@ class ProcessRegistry:
             self._queue_completion(session)
 
     def _check_watch_patterns(self, session: ProcessSession, new_text: str) -> None:
-        """Scan freshly streamed output for Hermes-style watch pattern notifications."""
+        """Scan freshly streamed output for watch pattern notifications."""
         if not session.watch_patterns or session._watch_disabled or session.exited:
             return
         matched_lines: list[str] = []

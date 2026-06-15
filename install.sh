@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AEGIS one-line installer (Hermes-style): isolated venv + global `aegis` command.
+# AEGIS one-line installer: isolated venv + global `aegis` command.
 #
 #   curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash
 #   # or, from a clone:

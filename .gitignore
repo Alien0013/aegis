@@ -13,6 +13,8 @@ venv/
 
 # AEGIS runtime/local
 *.png
+!assets/dashboard.png
+!assets/terminal.png
 !aegis/desktop_app/build/
 !aegis/desktop_app/build/icon.png
 aegis_images/

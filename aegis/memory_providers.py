@@ -629,7 +629,7 @@ class ProviderSurfaceMixin:
         return lock
 
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
-        """Hermes-style non-blocking warm recall. Providers still expose synchronous
+        """Non-blocking warm recall. Providers still expose synchronous
         ``prefetch``; this caches a best-effort result that a later turn can consume."""
         query = str(query or "")
         session_id = session_id or str(getattr(self, "_session_id", "") or "")

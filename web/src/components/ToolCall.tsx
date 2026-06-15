@@ -1,7 +1,7 @@
 // Collapsible tool-call row for the chat transcript. One row per tool call:
 //   ▸ ⚡ read_file  path=/foo            ✓ 2.3s
 // Click to expand args / streaming preview / result / error. Errors auto-expand.
-// Original implementation (Hermes-inspired pattern, AEGIS event model).
+// Original implementation for the AEGIS event model.
 
 import { useEffect, useState } from "react";
 import { cn } from "../lib/cn";

@@ -302,7 +302,7 @@ def _environment_matches_state_dir(env: Any, state_dir: Path) -> bool:
 def register_task_env_overrides(task_id: str, overrides: dict[str, Any]) -> None:
     """Register per-task terminal environment overrides.
 
-    Supported keys are intentionally small and Hermes-compatible:
+    Supported keys are intentionally small:
     ``cwd``, ``terminal_backend``, ``docker_image``, ``singularity_image``,
     and ``modal_pip``.
     """

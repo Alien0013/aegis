@@ -164,13 +164,13 @@ def test_session_search_rebinds_row_anchor_to_child_lineage():
     assert rebound["around_message_id"] == 1
     assert rebound["messages"][1]["anchor"] is True
 
-    hermes_style = json.loads(tool.run({
+    adapter_style = json.loads(tool.run({
         "session_id": parent.id,
         "around_message_id": child_row_id,
         "window": 1,
     }, ToolContext()).content)
-    assert hermes_style["session_id"] == child.id
-    assert hermes_style["around_message_id"] == 1
+    assert adapter_style["session_id"] == child.id
+    assert adapter_style["around_message_id"] == 1
 
     active_reject = json.loads(tool.run({
         "session_id": parent.id,

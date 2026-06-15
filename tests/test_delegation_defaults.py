@@ -1,4 +1,4 @@
-"""Global delegation defaults: a distinct subagent model, a parallel-children cap (Hermes name
+"""Global delegation defaults: a distinct subagent model, a parallel-children cap (legacy name
 falling back to the existing knob), and a per-child wall-clock timeout."""
 
 from __future__ import annotations

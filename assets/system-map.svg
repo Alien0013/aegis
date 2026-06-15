@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="660" viewBox="0 0 1120 660" role="img" aria-label="AEGIS architecture map">
+  <defs>
+    <linearGradient id="sysBg" x1="0" y1="0" x2="1120" y2="660" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#071115"/>
+      <stop offset="1" stop-color="#111a22"/>
+    </linearGradient>
+    <linearGradient id="sysLine" x1="120" y1="0" x2="980" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#36e2c0"/>
+      <stop offset="0.52" stop-color="#e8ba66"/>
+      <stop offset="1" stop-color="#7ab7ff"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#7d969e"/>
+    </marker>
+    <style>
+      .title{font:800 32px Inter,ui-sans-serif,Segoe UI,sans-serif;fill:#edf8f5}
+      .sub{font:500 15px Inter,ui-sans-serif,Segoe UI,sans-serif;fill:#8fa4ac}
+      .h{font:800 15px Inter,ui-sans-serif,Segoe UI,sans-serif;fill:#edf8f5}
+      .p{font:500 12px Inter,ui-sans-serif,Segoe UI,sans-serif;fill:#a9bdc4}
+      .mono{font:600 12px ui-monospace,Menlo,Consolas,monospace;fill:#8fa4ac}
+      .box{fill:#0c2026;stroke:#27464e;stroke-width:1.2}
+      .core{fill:#102a31;stroke:url(#sysLine);stroke-width:2}
+      .link{stroke:#7d969e;stroke-width:1.7;fill:none;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1120" height="660" rx="24" fill="url(#sysBg)"/>
+  <text x="56" y="64" class="title">AEGIS architecture</text>
+  <text x="56" y="92" class="sub">One agent loop, many surfaces, shared safety, shared state.</text>
+  <rect x="56" y="130" width="240" height="430" rx="16" class="box"/>
+  <text x="82" y="164" class="h">Surfaces</text>
+  <text x="82" y="192" class="p">Terminal REPL and one-shot chat</text>
+  <text x="82" y="222" class="p">React dashboard and desktop app</text>
+  <text x="82" y="252" class="p">Gateway: Telegram, Discord, Slack,</text>
+  <text x="82" y="270" class="p">Signal, Matrix, Email, Webhook, ntfy</text>
+  <text x="82" y="300" class="p">OpenAI-compatible API server</text>
+  <text x="82" y="330" class="p">Python SDK, JSON-RPC, ACP for IDEs</text>
+  <text x="82" y="360" class="p">MCP client and AEGIS MCP server</text>
+  <path d="M82 390h188" stroke="#27464e"/>
+  <text x="82" y="424" class="mono">aegis</text>
+  <text x="82" y="452" class="mono">aegis ui</text>
+  <text x="82" y="480" class="mono">aegis gateway</text>
+  <text x="82" y="508" class="mono">aegis serve</text>
+  <rect x="414" y="114" width="292" height="94" rx="18" class="core"/>
+  <text x="456" y="151" class="h">SurfaceRunner</text>
+  <text x="456" y="177" class="p">Normalizes messages, sessions, events,</text>
+  <text x="456" y="195" class="p">context references, controls, and tracing.</text>
+  <rect x="374" y="250" width="372" height="154" rx="20" class="core"/>
+  <text x="424" y="290" class="h">Agent.run</text>
+  <text x="424" y="318" class="p">Bounded loop with governance, compaction,</text>
+  <text x="424" y="338" class="p">thinking recovery, cost caps, and routing.</text>
+  <g>
+    <rect x="398" y="362" width="140" height="28" rx="14" fill="#0b171c" stroke="#315961"/>
+    <text x="424" y="381" class="mono">context build</text>
+    <rect x="552" y="362" width="160" height="28" rx="14" fill="#0b171c" stroke="#315961"/>
+    <text x="574" y="381" class="mono">tool execution</text>
+  </g>
+  <rect x="356" y="456" width="166" height="104" rx="16" class="box"/>
+  <text x="382" y="490" class="h">Providers</text>
+  <text x="382" y="518" class="p">29 presets</text>
+  <text x="382" y="538" class="p">API key, OAuth, pools, fallback</text>
+  <rect x="598" y="456" width="166" height="104" rx="16" class="box"/>
+  <text x="624" y="490" class="h">Permission gate</text>
+  <text x="624" y="518" class="p">Hardline blocklist</text>
+  <text x="624" y="538" class="p">Scan, approval, sandbox</text>
+  <rect x="824" y="130" width="240" height="430" rx="16" class="box"/>
+  <text x="850" y="164" class="h">Execution and state</text>
+  <text x="850" y="192" class="p">45 registered tools, 37 visible by default</text>
+  <text x="850" y="222" class="p">Files, shell, browser, LSP, GitHub,</text>
+  <text x="850" y="240" class="p">processes, semantic code search, cloud</text>
+  <text x="850" y="270" class="p">MCP and plugin tools</text>
+  <text x="850" y="300" class="p">Local, Docker, SSH, Singularity, Modal</text>
+  <path d="M850 328h188" stroke="#27464e"/>
+  <text x="850" y="360" class="p">Sessions, traces, evals, trajectories</text>
+  <text x="850" y="390" class="p">Memory, skills, curator, learning loop</text>
+  <text x="850" y="420" class="p">Cron, kanban workers, gateway queue</text>
+  <text x="850" y="450" class="p">Cost analytics, snapshots, backups</text>
+  <text x="850" y="500" class="mono">~/.aegis</text>
+  <text x="850" y="528" class="mono">config.yaml | auth.json | sessions</text>
+  <path d="M296 344C346 344 346 161 414 161" class="link"/>
+  <path d="M560 208v42" class="link"/>
+  <path d="M500 404v52" class="link"/>
+  <path d="M640 404v52" class="link"/>
+  <path d="M746 328C786 328 786 344 824 344" class="link"/>
+  <path d="M764 508C790 508 796 508 824 508" class="link"/>
+  <rect x="200" y="596" width="720" height="34" rx="17" fill="#0c2026" stroke="#27464e"/>
+  <text x="234" y="618" class="mono">Same context rules, same providers, same tool permissions, same durable state across every entry point.</text>
+</svg>

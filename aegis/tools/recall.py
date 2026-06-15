@@ -9,7 +9,7 @@ from .base import Tool, ToolContext, ToolResult
 
 
 def _session_ref(raw: str) -> tuple[bool, str, str]:
-    """Return (has_profile, profile, session_id) for Hermes-style references."""
+    """Return (has_profile, profile, session_id) for session references."""
     ref = (raw or "").strip()
     if ref.startswith("@session:"):
         ref = ref[len("@session:"):]

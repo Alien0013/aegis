@@ -60,7 +60,7 @@ def test_run_task_fails_on_solver_crash(task):
 def test_run_suite_aggregates_and_scores(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path / "home"))
     root = tmp_path / "benchmarks"
-    for name, fixed in (("a", True), ("b", False)):
+    for name, _fixed in (("a", True), ("b", False)):
         d = root / name
         d.mkdir(parents=True)
         (d / "task.yaml").write_text(textwrap.dedent(f"""

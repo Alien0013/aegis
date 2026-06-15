@@ -239,16 +239,16 @@ class SkillsLoader:
             atomic_write(self._usage_path(), json.dumps(data, indent=2))
 
     def record_use(self, name: str) -> None:
-        # Hermes use_count: skill loaded into a conversation's prompt. `count`/`last_used`
+        # AEGIS use_count: skill loaded into a conversation's prompt. `count`/`last_used`
         # stay the canonical use counters for back-compat with existing readers.
         self._bump(name, "count", "last_used")
 
     def record_view(self, name: str) -> None:
-        # Hermes view_count: the agent inspected the skill via skill_manage view.
+        # AEGIS view_count: the agent inspected the skill via skill_manage view.
         self._bump(name, "view_count", "last_viewed_at")
 
     def record_patch(self, name: str) -> None:
-        # Hermes patch_count: skill_manage patch/edit/write_file/remove_file ran on the skill.
+        # AEGIS patch_count: skill_manage patch/edit/write_file/remove_file ran on the skill.
         self._bump(name, "patch_count", "last_patched_at")
 
     def improve(self, name: str, note: str) -> Path | None:

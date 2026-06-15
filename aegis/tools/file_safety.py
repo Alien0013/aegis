@@ -87,7 +87,7 @@ def _allowed_by_list(path: Path, entries) -> bool:
 
 
 def _configured_safe_root() -> Path | None:
-    raw = os.environ.get("AEGIS_WRITE_SAFE_ROOT") or os.environ.get("HERMES_WRITE_SAFE_ROOT") or ""
+    raw = os.environ.get("AEGIS_WRITE_SAFE_ROOT") or ""
     raw = raw.strip()
     if not raw:
         return None
@@ -166,7 +166,7 @@ def authorize_write(path, ctx) -> str:
     if safe_root:
         return (
             f"blocked: {path} is outside the configured write safe root ({safe_root}). "
-            "Unset AEGIS_WRITE_SAFE_ROOT/HERMES_WRITE_SAFE_ROOT or choose a path under it."
+            "Unset AEGIS_WRITE_SAFE_ROOT or choose a path under it."
         )
     reason = is_sensitive(path)
     if not reason:

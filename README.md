@@ -1,418 +1,251 @@
-<p align="center"><img src="assets/banner.svg" alt="AEGIS" width="760"></p>
+<p align="center"><img src="assets/banner.svg" alt="AEGIS" width="900"></p>
 
 <p align="center"><b>The terminal AI agent you actually own.</b><br>
-Any model · any channel · runs on your machine · learns as it goes — in one auditable, single-language core.</p>
+Any model, many surfaces, local-first state, one auditable Python core.</p>
 
 <p align="center">
   <a href="https://github.com/Alien0013/aegis/actions"><img src="https://github.com/Alien0013/aegis/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/python-3.10%2B-blue" alt="python">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
-  <img src="https://img.shields.io/badge/tests-704%20passing-brightgreen" alt="tests">
-  <img src="https://img.shields.io/badge/providers-29-blueviolet" alt="providers">
-  <img src="https://img.shields.io/badge/tools-42-blueviolet" alt="tools">
-  <img src="https://img.shields.io/badge/skills-40-orange" alt="skills">
-  <img src="https://img.shields.io/badge/UI-React%20%2B%20Vite-06b6d4" alt="react">
+  <img src="https://img.shields.io/badge/tests-973%20passing-brightgreen" alt="tests">
+  <img src="https://img.shields.io/badge/providers-29-d8913f" alt="providers">
+  <img src="https://img.shields.io/badge/tools-45-6fb7d8" alt="tools">
+  <img src="https://img.shields.io/badge/skills-41-7ecf8f" alt="skills">
 </p>
 
-<p align="center"><img src="assets/wordmark.svg" alt="AEGIS" width="380"></p>
-
 <p align="center">
-  <a href="#-install-one-line">Install</a> ·
-  <a href="#-quickstart">Quickstart</a> ·
-  <a href="#-architecture">Architecture</a> ·
-  <a href="#-features">Features</a> ·
-  <a href="docs/index.md">Docs</a> ·
-  <a href="assets/onepager.html">One-pager</a>
+  <a href="#install">Install</a> ·
+  <a href="#quickstart">Quickstart</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="#features">Features</a> ·
+  <a href="docs/index.md">Docs</a>
 </p>
 
 ---
 
-**One command installs a complete AI agent that lives in your terminal, talks to any
-model, runs on your machine, and learns as it goes.** AEGIS packs the capabilities of a
-full agent platform — multi-provider, multi-channel, self-improving — into an open,
-self-hostable core small enough to read in an afternoon.
+AEGIS is a self-hostable agent harness for people who want the power of a coding
+agent without handing the whole workflow to a remote black box. It runs from your
+terminal, browser, desktop app, messaging channels, API clients, and MCP tools,
+while sharing the same provider routing, permissions, memory, sessions, traces,
+and local state.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash
-aegis            # start chatting   ·   aegis ui   # …or a clickable browser UI
+aegis            # terminal agent
+aegis ui         # local browser dashboard
 ```
 
-<p align="center"><img src="assets/screenshot.svg" alt="AEGIS session" width="720"></p>
+<p align="center"><img src="assets/terminal.png" alt="AEGIS terminal" width="860"></p>
 
-<p align="center"><img src="assets/dashboard.svg" alt="AEGIS web dashboard" width="760"><br>
-<sub><code>aegis ui</code> — React control panel: streaming chat, cron/model/keys editors, sessions, skills, memory, tools, logs · 3 themes · token-gated</sub></p>
+<p align="center"><img src="assets/dashboard.png" alt="AEGIS dashboard" width="860"><br>
+<sub>The real local dashboard: Overview, Chat, Sessions, Models, Tools, Skills, Memory, Schedules, MCP, Channels, Webhooks, Plugins, Keys, Files, Logs, Profiles, System, Config, and Analytics.</sub></p>
 
-## ✨ Why AEGIS is different
+## Why AEGIS
 
-|  | What it means |
+| Capability | What it means |
 |---|---|
-| 🪶 **Focused, auditable core** | One bounded agent loop, pure-Python, no framework sprawl — small enough to read and trust end to end. Full-platform capability without the lock-in. |
-| 🔌 **Truly model-agnostic** | **29 provider presets** (Claude, GPT, Gemini, Llama, DeepSeek, Qwen, Grok, local Ollama…) behind one interface, with **API-key *and* OAuth** auth, fallback chains, credential pools, and per-prompt routing. |
-| 🧠 **It actually learns** | **Autonomous memory** — saves your preferences, facts, and corrections as it works (no asking). Plus a background self-improvement loop that reviews finished sessions, auto-applies memory, and proposes new skills (secret-redacted; skills human-gated by default, fully autonomous with one flag). FTS5 cross-session recall. |
-| 🛡️ **Safe by default** | Permission cascade with a **hardline blocklist** (refuses `rm -rf /` even in yolo), pre-exec scanning, **fail-closed** docker/ssh/singularity/modal sandboxes, and untrusted-tool-result wrapping against prompt injection. |
-| 📡 **Everywhere you are** | One agent serving CLI, Telegram, Discord, Slack, Signal, Matrix, Email, and webhooks — with voice-memo transcription and a durable, retrying delivery queue. |
-| 🧰 **Batteries included** | **42 tools, 40 skills** + hub import, MCP (client **and** server), an OpenAI-compatible API, a web dashboard, cron, trajectory export, cost analytics, and OSV vulnerability auditing. |
-| 🔓 **Yours** | MIT, self-hosted, no subscription, no lock-in. Your keys, your data, your machine. |
+| **Local-first control** | Sessions, memory, config, auth, traces, evals, and tool outputs live under `~/.aegis` or `$AEGIS_HOME`. |
+| **Model choice** | 29 provider presets: Anthropic, OpenAI, Codex, Google, OpenRouter, Groq, DeepSeek, Qwen/DashScope, xAI, MiniMax, Mistral, Together, Ollama, LM Studio, vLLM, and more. |
+| **One runtime** | CLI, dashboard, desktop, gateway, OpenAI-compatible API, JSON-RPC, Python SDK, ACP, and MCP all use the same agent loop. |
+| **Practical toolset** | 45 registered tools, with 37 visible by default on a bare install and optional browser/computer/LSP/voice/vision tools enabled by toolset. |
+| **Memory and learning** | Durable `MEMORY.md`/`USER.md`, FTS5 session recall, external memory providers, session review, and skill promotion. |
+| **Safety rails** | Hardline command blocklist, pre-exec security scanning, permission modes, sensitive file guards, sandbox backends, checkpoints, diff, rollback, and redaction. |
+| **Public-ready operations** | Doctor, backup/import/snapshot, update/uninstall, security audit, cost analytics, traces, evals, bench tasks, AB replay, ambient test watch, and budget governance. |
 
-> Design principle: do everything a full agent platform does, but keep the whole thing
-> small enough to understand — and verify — in one sitting.
+## Architecture
 
-## 🏗 Architecture
+<p align="center"><img src="assets/system-map.svg" alt="AEGIS architecture map" width="900"></p>
 
-**One agent core, every surface.** Each entry point — terminal, React
-web UI, an 8-channel gateway, an OpenAI-compatible API, a Python SDK and a JSON-RPC bridge —
-routes through the *same* `SurfaceRunner → Agent.run` loop, the same providers, the same
-permission cascade, and the same durable state.
+Every surface enters through the same `SurfaceRunner` and `Agent.run` loop. That
+keeps behavior consistent: a tool disabled in the dashboard is disabled for the
+CLI; a session started in the terminal can be searched later; a gateway reply,
+cron job, API call, and desktop chat all see the same memory and permissions.
 
-```mermaid
-flowchart TB
-    CLI["💻 CLI / REPL"]:::s
-    UI["🖥️ Web dashboard<br/>React + Vite"]:::s
-    GW["📡 Gateway · 8 channels"]:::s
-    API["🔌 OpenAI API · SDK · RPC"]:::s
+<p align="center"><img src="assets/runtime-loop.svg" alt="AEGIS runtime loop" width="900"></p>
 
-    SR["SurfaceRunner — one entry into the loop<br/>sessions · runs · tracing · @references"]:::hub
+The loop builds context from rules, memory, skills, and references; routes to the
+selected model; runs tool calls through policy; wraps untrusted results; emits
+events; persists traces and usage; and can review completed work for memory or
+skill candidates.
 
-    subgraph CORE["🧠 Agent core"]
-        direction LR
-        LOOP["Bounded loop<br/>governance · compaction · budget"]:::c
-        PERM["Permission cascade<br/>hardline · scan · sandbox"]:::c
-        REG["Tool registry · 42 tools<br/>+ MCP · plugins · deferred schemas"]:::c
-    end
-
-    subgraph PROV["⚙️ Providers"]
-        direction LR
-        TRANS["Transports<br/>anthropic · chat · responses · codex"]:::p
-        AUTH["Auth<br/>API key · OAuth · pools"]:::p
-    end
-
-    subgraph STATE["💾 Durable state · ~/.aegis"]
-        direction LR
-        MEM["Memory<br/>MEMORY · USER · providers"]:::d
-        SK["Skills · marketplace"]:::d
-        SESS["Sessions<br/>SQLite + FTS5"]:::d
-        OBS["Observability<br/>runs · traces · cost"]:::d
-    end
-
-    CLI & UI & GW & API --> SR --> LOOP
-    LOOP --> PERM --> REG
-    LOOP --> PROV
-    LOOP <--> STATE
-
-    classDef s fill:#ede9fe,stroke:#7c3aed,color:#3b0764;
-    classDef hub fill:#ddd6fe,stroke:#6d28d9,color:#3b0764,font-weight:bold;
-    classDef c fill:#cffafe,stroke:#0891b2,color:#083344;
-    classDef p fill:#e0f2fe,stroke:#0284c7,color:#082f49;
-    classDef d fill:#dcfce7,stroke:#16a34a,color:#052e16;
-```
-
-### The agent loop
-
-```mermaid
-sequenceDiagram
-    participant U as User / channel
-    participant A as Agent loop
-    participant M as Memory
-    participant P as Provider
-    participant T as Tools (≤8 concurrent)
-    U->>A: message
-    A->>M: prefetch relevant memory (wire-only)
-    loop until final answer or budget
-        A->>A: refresh memory if changed · normalize · compact if near window
-        A->>P: complete(messages, tool schemas) — cached prefix
-        P-->>A: text + tool calls (+ thinking)
-        alt has tool calls
-            A->>T: loop-guard → authorize → run (permission cascade)
-            T-->>A: results · classified · untrusted-wrapped · subdir hints
-        else final
-            A-->>U: answer
-        end
-    end
-    A->>A: persist · usage/cost · trace spans · background learn · trajectory
-```
-
-### Multi-channel gateway
-
-```mermaid
-flowchart LR
-    subgraph CH["📡 Channels"]
-        direction TB
-        C1["Telegram · Discord · Slack"]:::ch
-        C2["Signal · Matrix · Email"]:::ch
-        C3["Webhook · ntfy"]:::ch
-    end
-
-    HUB["Gateway hub<br/>routing · pairing · admin tiers<br/>busy-mode: queue · steer · interrupt"]:::hub
-    AG["Per-conversation Agent<br/>redaction · friendly errors · platform hints"]:::ag
-    OUT["Delivery queue<br/>durable · retrying"]:::out
-
-    CH -->|normalized event| HUB --> AG -->|reply · media · status| OUT -->|deliver| CH
-    CRON["⏰ Cron ticker"]:::aux -->|send_message| OUT
-    AG -->|live events| DASH["📊 Dashboard · SSE"]:::aux
-    HANDOFF["CLI /handoff"]:::aux -.->|adopt session| HUB
-
-    classDef ch fill:#ede9fe,stroke:#7c3aed,color:#3b0764;
-    classDef hub fill:#ddd6fe,stroke:#6d28d9,color:#3b0764,font-weight:bold;
-    classDef ag fill:#cffafe,stroke:#0891b2,color:#083344;
-    classDef out fill:#dcfce7,stroke:#16a34a,color:#052e16;
-    classDef aux fill:#f1f5f9,stroke:#64748b,color:#0f172a;
-```
-
-### The learning & memory loop
-
-It closes the loop: a finished session is reviewed, distilled into memory and skills,
-and folded back into the next turn's system prompt — safely (secret-redacted,
-injection-scanned, human-gated by default).
-
-```mermaid
-flowchart LR
-    S["✅ Finished session"]:::src --> R["Forked review agent<br/>memory + skill tools only"]:::work
-    R --> C{"Candidates<br/>redacted · injection-scanned"}:::gate
-    C -->|"/learn approve · auto"| M["MEMORY · USER<br/>fcntl-locked · refuse-don't-drop"]:::store
-    C -->|promote| K["Skills · SKILL.md<br/>provenance-tracked"]:::store
-    EXT["External providers<br/>mem0 · honcho · jsonl · http"]:::ext --> SNAP
-    M --> SNAP["🧩 System-prompt snapshot<br/>cache-stable · mtime-refreshed"]:::prompt
-    K --> SNAP --> S
-    K --> CUR["Curator<br/>active → stale → archived"]:::work
-
-    classDef src fill:#ede9fe,stroke:#7c3aed,color:#3b0764;
-    classDef work fill:#cffafe,stroke:#0891b2,color:#083344;
-    classDef gate fill:#fef9c3,stroke:#ca8a04,color:#422006;
-    classDef store fill:#dcfce7,stroke:#16a34a,color:#052e16;
-    classDef ext fill:#f1f5f9,stroke:#64748b,color:#0f172a;
-    classDef prompt fill:#ddd6fe,stroke:#6d28d9,color:#3b0764,font-weight:bold;
-```
-
-## 📦 Install (one line)
+## Install
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash
 ```
 
-Finds Python 3.10+, builds an isolated venv at `~/.aegis/venv`, installs the full curated
-stack (`.[all]`), drops a global `aegis` launcher on your PATH, installs Playwright
-Chromium for browser tools, then launches **guided onboarding** (provider → OAuth/API key →
-model → web tools → channels → workspace). Prompts read from `/dev/tty`, so `curl | bash`
-works. Variants:
+The installer finds Python 3.10+, creates an isolated venv at `~/.aegis/venv`,
+installs the package, creates a global `aegis` launcher, and starts guided setup.
 
 ```bash
-… | bash -s -- --core            # smaller CLI-only install
-… | bash -s -- --advanced        # every channel + memory backend
-… | bash -s -- --verify          # run `aegis doctor` afterwards
-… | bash -s -- --skip-browser    # no Chromium download
-# Windows:  irm https://raw.githubusercontent.com/Alien0013/aegis/main/install.ps1 | iex
+curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- --core
+curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- --advanced
+curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- --verify
+curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- --skip-browser
 ```
 
-<details><summary><b>From a clone / for development</b></summary>
+From a clone:
 
 ```bash
-git clone https://github.com/Alien0013/aegis && cd aegis
-./install.sh                                  # isolated, global command
-# — or editable —
-python3 -m venv .venv && . .venv/bin/activate
-pip install -e ".[all]" && playwright install chromium
-bash scripts/run_tests.sh                     # hermetic offline test run
-aegis doctor
+git clone https://github.com/Alien0013/aegis
+cd aegis
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -e ".[all]"
+bash scripts/run_tests.sh
 ```
-</details>
 
-Update with `aegis update`; remove with `./uninstall.sh` (`--purge` also deletes `~/.aegis`).
+Update with `aegis update`. Remove with `./uninstall.sh`; add `--purge` only if
+you also want to delete `~/.aegis`.
 
-## 🚀 Quickstart
+## Quickstart
 
 ```bash
-aegis setup                                   # guided onboarding (re-runnable)
-# …or configure directly:
-aegis secret set ANTHROPIC_API_KEY            # Claude (hidden input)
-aegis secret set OPENAI_API_KEY               # OpenAI (hidden input)
-aegis secret set QWEN_API_KEY                 # Qwen / DashScope-compatible API key
-codex login && aegis model set codex gpt-5.5  # ChatGPT subscription
-aegis model set qwen qwen-max                  # Qwen API-compatible provider
-aegis model set ollama llama3.1               # …or fully local, no key
+aegis setup
+aegis secret set ANTHROPIC_API_KEY
+aegis model set anthropic claude-sonnet-4-6
 
-aegis                                         # interactive REPL (streaming + slash cmds)
-aegis chat -q "summarize the files here"      # one-shot
-aegis chat --continue                         # resume last session
-aegis ui                                      # ← clickable browser UI (great for beginners)
-aegis desktop                                 # native Electron app (installs itself on first run)
-aegis trace list                              # inspect trace spans/runs
-aegis eval run suite.jsonl                    # replay offline eval cases
+aegis
+aegis chat -q "summarize this repo"
+aegis chat --continue
+aegis ui
+aegis desktop
 ```
+
+OpenAI-compatible local API:
+
+```bash
+aegis serve --port 8790
+```
+
+Python SDK:
 
 ```python
 from aegis import AegisClient
 
 client = AegisClient()
-result = client.run("Summarize this repo", title="repo summary")
-print(result.text, result.session_id, result.trace_id)
+result = client.run("Summarize this repository", title="repo summary")
+print(result.text)
 ```
 
-## 🧩 Features
+## Features
 
-### Providers & auth
-29 presets — `codex`, `codex-app-server`, `anthropic`, `openai`, `google`, `openrouter`, `groq`, `deepseek`,
-`qwen`, `xai`, `minimax`, `mistral`, `together`, `ollama`, `lmstudio`, `vllm`, … plus any
-OpenAI-compatible endpoint via `model.base_url`. Auth resolves **base_url → API key →
-OAuth** (API keys win because some OAuth tokens are identity-only). OAuth is full PKCE S256
-with localhost-callback **and** manual-paste, auto-refresh, and `auth.json` at `0600`.
-Qwen, MiniMax, and xAI OAuth are catalog scaffolds for now; they run with API keys.
-→ [docs/providers.md](docs/providers.md)
+### Surfaces
 
-### Tools & permissions (42 tools)
-`read_file` · `write_file` · `edit_file` · `apply_patch` · `list_dir` · `glob` · `search` ·
-`bash` · `process` (with completion wakeups) · `web_fetch` · `web_search` · `http_request` ·
-`download` · `todo_write` · `memory` · `skill` · `clarify` (ask the user) ·
-`spawn_subagent` (typed: explore/plan/review) · `mixture_of_agents` · `generate_image` ·
-`execute_code` (RPC sandbox) · `browser` (Playwright) · `computer` (pyautogui) · `lsp` ·
-`github` · `agent_state` · `dependency_audit` (OSV CVE scan) · every MCP tool (`mcp__server__tool`) and
-plugin tools. Results are **classified** (success/error/refused/truncated/partial),
-oversized outputs **spill to disk**, and rarely-used tools ship **name-only (deferred
-schemas)** until `tool_search` activates them — cutting steady-state token overhead.
-Every dangerous tool flows through:
+- `aegis` terminal REPL with streaming, slash commands, tool trail, checkpoints, diff, rollback, sessions, branch/resume, learning, traces, and usage.
+- `aegis ui` local React/Vite dashboard with chat, sessions, models, tools, skills, memory, schedules, MCP, channels, webhooks, plugins, keys/env, files, logs, profiles, system facts, config, analytics, traces, runs, and agents.
+- `aegis desktop` Electron shell around the local dashboard.
+- `aegis gateway` for Telegram, Discord, Slack, Signal, Matrix, Email, webhooks, and ntfy.
+- `aegis serve` OpenAI-compatible `/v1/chat/completions` and `/v1/models`.
+- `aegis rpc`, Python SDK, ACP stdio server, MCP client, and `aegis mcp serve`.
 
+### Providers and auth
+
+29 provider presets are available through one config surface. API-key auth works
+for all compatible providers; OAuth/PKCE is supported where implemented. The
+runtime also supports custom OpenAI-compatible `base_url`, fallback chains, model
+metadata, provider probes, and credential pool configuration.
+
+### Tools
+
+AEGIS registers 45 tools. The default bare install exposes 37 model-visible tools:
+file read/write/edit, apply patch, directory and glob search, ripgrep search,
+shell, background process management, system status, secrets, web fetch/search,
+HTTP request, download, todos, memory, skills, skill management, subagents,
+mixture of agents, image generation, execute-code, cron jobs, dependency audit,
+session search, repo map, semantic code search, agent state, GitHub, tool search,
+cloud image, cloud browser, and outgoing messages.
+
+Optional toolsets add browser automation, UI verification, computer control, LSP
+code intelligence, vision analysis, web extraction, speech-to-text, and TTS.
+Connected MCP and plugin tools join the same registry.
+
+### Safety and permissions
+
+Dangerous tool calls pass through:
+
+```text
+hardline blocklist -> deny groups -> exec mode -> allowlist -> approval
 ```
-hardline blocklist  →  deny_groups  →  exec_mode (deny|allowlist|ask|smart|auto|full)  →  allowlist  →  approval
-```
 
-### Skills (40 bundled) & the learning loop
-`SKILL.md` packages (agentskills.io-compatible) with progressive disclosure and tiered
-precedence (workspace > personal > configured > bundled). Bundled set includes
-`code-review`, `debugging`, `write-tests`, `refactor`, `commit`, `dockerize`, `kubernetes`,
-`web-research`, `data-analysis`, `pdf`/`docx`/`xlsx`/`pptx`, `security-audit`, and more.
-The closed loop reviews sessions → proposes redacted memory/skill candidates → promotes on
-approval (`aegis learn`), with optional **background review** every N turns.
-→ [docs/memory-skills.md](docs/memory-skills.md)
+The agent refuses catastrophic commands even in permissive modes, scans commands
+and memory entries for injection/exfiltration patterns, wraps tool results as
+untrusted data, redacts secrets in learning flows, guards sensitive paths, and
+supports local, Docker, SSH, Singularity, and Modal terminal backends.
 
-### Memory & recall
-Always-on file memory (`MEMORY.md`/`USER.md` + `history.jsonl`), pluggable external backends
-(`honcho`, `mem0`, `jsonl`, HTTP), and SQLite sessions with **FTS5 cross-session search**.
+### Memory, skills, and learning
 
-### MCP (client + server)
-Connect any MCP server (stdio or Streamable HTTP) — tools appear as `mcp__server__tool`;
-also reads Claude-Desktop `mcp.json`. Local catalog recipes, install flow, and per-server
-tool filters are available through `aegis mcp catalog|install|tools`. Or expose
-**AEGIS's own** tools/skills/memory as an MCP server: `aegis mcp serve`.
-→ [docs/mcp.md](docs/mcp.md)
+- Built-in file memory: `MEMORY.md`, `USER.md`, and `history.jsonl`.
+- SQLite sessions with FTS5 search, browse/read/scroll recall, lineage, branching, and archive support.
+- 41 bundled `SKILL.md` packages; 38 are available on a bare environment, while document/Kubernetes skills are gated by their runtime requirements.
+- Session review can extract memory candidates and propose skill updates with redaction and approval controls.
+- External memory provider hooks support JSONL, HTTP-style adapters, Honcho, and Mem0 where configured.
 
-### Plugins
-Drop-in `*.py` plugins still work, and manifest packages add lifecycle commands:
-`aegis plugins install|enable|disable|remove`. → [docs/plugins.md](docs/plugins.md)
+### Automation and evaluation
 
-### Channels / gateway
-One agent across CLI, Telegram, Discord, Slack, Signal, Matrix, Email, and webhooks — DM
-pairing, mention gating, per-channel session isolation, voice-memo transcription, and a
-durable retrying delivery queue. → [docs/gateway.md](docs/gateway.md)
+- `aegis cron` schedules recurring or one-shot agent jobs.
+- `aegis kanban` manages a SQLite task board with dependencies, runs, comments, workers, lanes, and retry state.
+- `aegis spec` tracks persistent requirements, design, and task state.
+- `aegis bench` runs end-to-end task benchmarks.
+- `aegis eval` replays offline eval suites.
+- `aegis ab` replays a session on a different model and diffs the result.
+- `aegis watch` runs project tests on file changes.
+- `aegis budget` reports spend/latency governance and downshift state.
+
+### Operations
 
 ```bash
-aegis secret set TELEGRAM_BOT_TOKEN
-aegis gateway --channels telegram,discord,slack
+aegis doctor --probe
+aegis status
+aegis security
+aegis backup
+aegis snapshot
+aegis trace list
+aegis cost --days 30
+aegis insights
 ```
 
-### Agentic depth
-- **Typed subagents** — `spawn_subagent` with `agent_type: explore | plan | review`
-  (read-only tool whitelists, safe to fan out in parallel) and `general`
-  children that match Hermes leaf safety: no recursion, `clarify`, memory writes,
-  outbound messages, or `execute_code`; child permission prompts auto-deny unless
-  `delegation.subagent_auto_approve` is enabled. `continue_id` follow-ups keep
-  the child's context.
-- **Background re-invocation** — `process start` and background subagents wake the
-  agent with their result on the next turn (and announce into the chat on a gateway).
-- **Auto-checkpoints with diff** — each turn's edit batch is snapshotted as one unit;
-  `/diff` previews it, `/rollback` undoes it (new files removed too). On by default.
-- **Mixture-of-agents** — fan one prompt across several models, get one synthesized
-  answer with disagreements flagged.
-- **Kanban lanes** — `kanban.workers: N` runs parallel board workers; pin a card to
-  `lane-K` to serialize related work.
-- **`/handoff telegram <chat>`** — move a CLI session (full history) to a messaging
-  channel; the gateway adopts it on the next message.
-- **Multi-profile gateways** — `gateway.profiles` gives each platform its own
-  personality/model/provider on one gateway process.
-- **Deep doctor** — `aegis doctor --probe` does a live one-token provider call
-  (with latency) and validates Telegram/Discord/Slack tokens; unclean shutdowns
-  are detected and DM'd to admins on restart.
+## Repository layout
 
-### Serve, schedule, observe
-```bash
-aegis serve --port 8790        # OpenAI-compatible /v1/chat/completions + /v1/models
-aegis rpc                      # JSON-RPC stdio agent surface for local bridges
-aegis cron add "@daily" "summarize today's commits"
-aegis trajectory export --format openai   # or hf / sharegpt — fine-tune datasets
-aegis trace list               # trace spans for turns, providers, tools, agents
-aegis eval run suite.jsonl     # provider-free replay evals
-aegis cost --days 30           # token-aware, cache-discounted spend by model
-aegis insights                 # usage analytics
-aegis ui                       # cockpit: traces, runs, agents, chat,
-                               # kanban, schedules, models, MCP, logs, system
+```text
+aegis/                  Python package
+  agent/                loop, context, compaction, governance, events
+  providers/            provider registry, transports, auth, fallback
+  tools/                registry, permissions, built-ins, browser, LSP, process, kanban
+  gateway/              channel adapters, pairing, routing, durable delivery queue
+  mcp/                  client and server support
+  lsp/                  persistent language-server service
+  cli/                  parser, REPL, menus
+  builtin_skills/       bundled SKILL.md packages
+  static/web_dist/      built dashboard served by aegis ui
+web/                    React + Vite dashboard source
+desktop/                Electron shell
+docs/                   install, providers, tools, gateway, MCP, SDK, security, tracing/evals
+assets/                 README images and diagrams
+scripts/                test, build, and verification helpers
+tests/                  offline regression suite
 ```
 
-The same runtime is embeddable from Python with `from aegis import AegisClient`:
-session continuity, progress events, trace lookup, branching, and eval replay all
-use the normal AEGIS stores.
+## Public Release Notes
 
-## 📊 What you get
+I would treat these as the main flags before a wider launch:
 
-| Capability | AEGIS |
-|---|---|
-| Core size | **~35k LOC**, ~95 modules — auditable end to end |
-| Providers | **29 presets**, API key **+ OAuth** (full PKCE for Anthropic/OpenAI/Google/OpenAI-Codex) |
-| Safety | hardline blocklist (even in yolo) · pre-exec scanning · fail-closed docker/ssh/singularity/modal sandboxes |
-| MCP | client **and** server |
-| Channels | CLI · Telegram · Discord · Slack · Signal · Matrix · Email · Webhook · ntfy |
-| Learning | autonomous memory + background self-improvement (auto-applies memory, proposes skills; fully autonomous via `learn.auto_apply_skills`) + FTS5 recall |
-| Trajectory export | jsonl · openai-finetune · sharegpt |
-| Cost analytics | cache-aware, by model |
-| On-ramps | one-line install · `aegis ui` browser dashboard with a live activity feed |
+- Keep README/docs counts tied to CI or a script so they do not drift again.
+- Use real screenshots, not idealized mockups, whenever the README shows product UI.
+- Make optional features obvious: browser, computer, LSP, voice, vision, some skills, and some providers need extra deps or credentials.
+- Keep dashboard auth guidance prominent if users bind outside `127.0.0.1`.
+- Continue running `bash scripts/run_tests.sh` before release; current local result is `973 passed`.
 
-## 🗂 Repository layout
-
-```
-aegis/                          the Python package (~35k LOC, ~95 modules)
-├─ agent/            loop · context · governance · compaction · guardrails · subdir_hints · review
-├─ providers/        transports (chat_completions · anthropic · responses · codex) · auth · registry · fallback
-├─ tools/            registry · permissions · builtin · browser · code_exec · lsp · process · kanban · environments/ (6 sandboxes)
-├─ gateway/          runner · 8 channel adapters · pairing · delivery queue · service
-├─ mcp/              client (stdio+HTTP) · server
-├─ lsp/              persistent client · 13-language servers · edit diagnostics
-├─ cli/              main · repl · menu
-├─ builtin_skills/   29 SKILL.md packages
-├─ static/web_dist/  built React dashboard (served at /)
-├─ memory.py · session.py · skills.py · learn.py · curator.py · surface.py
-├─ dashboard.py · server.py · sdk.py · rpc.py · runs.py · tracing.py · evals.py · cron.py …
-web/                 React + Vite + TypeScript dashboard source (build → aegis/static/web_dist)
-docs/                architecture · providers · gateway · mcp · memory-skills · sdk · tracing-evals · security …
-assets/              logo · wordmark · banner · diagrams · one-pager
-scripts/             run_tests.sh · build_web.sh · verify_e2e.py (18-subsystem live check)
-tests/               608 offline tests (fake provider, isolated home) + the live E2E harness
-```
-
-## 🧷 Identity & rules
-
-Drop into `~/.aegis/` (global) or your project root (local, wins):
-`SOUL.md` (persona) · `AGENTS.md`/`.aegis.md`/`CLAUDE.md` (operational rules) · `USER.md` (facts about you).
-
-## ⚙️ Configuration
-
-`~/.aegis/config.yaml` (settings, deep-merged) + `~/.aegis/.env` (API keys only) +
-`~/.aegis/auth.json` (OAuth, `0600`). Profiles isolate under `~/.aegis/profiles/<name>/`.
-Runtime home is `$AEGIS_HOME` or `~/.aegis`.
-
-## 🛡 Security
-
-Hardline blocklist (irreversible commands refused in every mode), Tirith-style pre-exec
-scanning, fail-closed sandbox backends, untrusted-tool-result wrapping, secret redaction in
-the learning loop, and `0600` credential files. See [docs/security.md](docs/security.md) and
-[SECURITY.md](SECURITY.md). All dependencies carry upper-bound version ceilings
-(supply-chain hygiene).
-
-## 🧪 Develop & test
+## Develop
 
 ```bash
 pip install -e ".[dev]"
-bash scripts/run_tests.sh     # hermetic: strips creds, pins UTC, throwaway AEGIS_HOME
+bash scripts/run_tests.sh
 ```
 
-Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
+The test runner strips real credentials, pins UTC, uses a throwaway `AEGIS_HOME`,
+and runs the same lint gate used in CI.
 
-## 📄 License
+## License
 
-MIT © Alien0013 — your keys, your data, your machine.
+MIT. Your keys, your data, your machine.

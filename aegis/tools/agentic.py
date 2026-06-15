@@ -147,7 +147,7 @@ def _max_spawn_depth(config) -> int:
 
 def _subagent_concurrency(config) -> int:
     """How many parallel subagents may run at once. Honors delegation.max_concurrent_children
-    (Hermes name), falling back to the existing agent.subagent_concurrency (default 4)."""
+    (legacy name), falling back to the existing agent.subagent_concurrency (default 4)."""
     for key in ("delegation.max_concurrent_children", "agent.subagent_concurrency"):
         try:
             val = config.get(key)
@@ -178,7 +178,7 @@ def _truthy(value) -> bool:
 
 
 def _subagent_auto_approve(config) -> bool:
-    """Hermes-compatible child approval knob: safe auto-deny by default."""
+    """Child approval knob: safe auto-deny by default."""
     try:
         val = config.get("delegation.subagent_auto_approve", None)
     except Exception:  # noqa: BLE001

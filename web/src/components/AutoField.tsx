@@ -1,5 +1,5 @@
 // Renders one config setting by its schema type (bool→toggle, enum→select,
-// number, list→comma input, string). Modeled on Hermes's AutoField, my own code.
+// number, list→comma input, string). Modeled on AEGIS AutoField, my own code.
 
 import { Input, Select, Toggle } from "./ui";
 import { titleCase } from "../lib/format";

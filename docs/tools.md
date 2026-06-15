@@ -1,12 +1,15 @@
 # Tools & Permissions
 
-35 built-ins: `read_file`, `write_file`, `edit_file`, `apply_patch`, `list_dir`, `glob`,
-`search`, `bash`, `process`, `download`, `http_request`, `web_fetch`, `web_search`,
-`browser`, `cloud_browser`, `computer`, `generate_image`, `cloud_image`, `transcribe`,
-`speak`, `execute_code`, `spawn_subagent`, `mixture_of_agents`, `lsp`, `github`,
-`tool_search`, `memory`, `skill`, `session_search`, `todo_write`, `schedule_task`,
-`clarify`, `agent_state`, `dependency_audit`, `system_status` — plus every connected MCP and plugin
-tool. Group them with `tools.toolsets` (add `browser`, `computer`, `voice`, `lsp`).
+45 registered tools cover files, search, shell, processes, web, HTTP, downloads,
+browser automation, UI verification, computer control, image generation, speech,
+code execution, subagents, mixture-of-agents, LSP, GitHub, memory, skills, session
+recall, repo maps, semantic code search, cron jobs, dependency audit, agent state,
+cloud backends, and every connected MCP/plugin tool.
+
+On a bare install, 37 tools are model-visible by default through the `core` and
+`mcp` toolsets. Enable optional toolsets with `tools.toolsets` (`browser`,
+`computer`, `voice`, `vision`, `web`, `lsp`) when their dependencies and credentials
+are configured.
 
 `agent_state` exposes shared runtime state to every surface: current session,
 recent sessions, session branching, linked run/trace breadcrumbs, eval runs, and
@@ -45,7 +48,7 @@ prints the schema that was loaded.
 | `plan` | read-only | step-by-step implementation plans |
 | `review` | read-only | code review with file:line findings |
 
-Like Hermes, leaf subagents cannot recurse or touch shared side-effect tools:
+Leaf subagents cannot recurse or touch shared side-effect tools:
 `spawn_subagent`, `clarify`, `memory`, `send_message`, and `execute_code` are
 withheld. `role: orchestrator` can regain `spawn_subagent` when
 `agent.max_spawn_depth` allows it; the other shared side-effect tools remain

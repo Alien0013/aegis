@@ -1021,7 +1021,7 @@ def test_dashboard_chat_stream_emits_progress_and_final():
             assert kwargs["provider_name"] == "stream-provider"
             on_event = kwargs["on_event"]
             on_event({"type": "iteration", "n": 1, "max": 2})
-            on_event({"type": "tool_start", "name": "grep", "args": {"query": "Hermes"}})
+            on_event({"type": "tool_start", "name": "grep", "args": {"query": "AEGIS"}})
             return SimpleNamespace(
                 text=f"stream:{prompt}",
                 session=Session(id="sess_streamchat", title="stream chat"),
@@ -1040,7 +1040,7 @@ def test_dashboard_chat_stream_emits_progress_and_final():
     assert [row["type"] for row in sent] == ["start", "event", "event", "final"]
     assert sent[1]["event"]["summary"] == "1/2"
     assert sent[2]["event"]["name"] == "grep"
-    assert sent[2]["event"]["target"] == "Hermes"
+    assert sent[2]["event"]["target"] == "AEGIS"
     assert final["reply"] == "stream:hello"
     assert final["session_id"] == "sess_streamchat"
     assert final["trace_id"] == "trace_streamchat"

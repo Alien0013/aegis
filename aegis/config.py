@@ -6,7 +6,7 @@ Layout of the runtime home (``$AEGIS_HOME`` or ``~/.aegis``)::
     .env             secrets (API keys); KEY=VALUE, injected into os.environ
     auth.json        OAuth tokens (chmod 0600)
     state.db         sessions (SQLite)
-    SOUL.md          persona / tone (home root, matching ~/.hermes/SOUL.md)
+    SOUL.md          persona / tone (home root, matching ~/.aegis/SOUL.md)
     AGENTS.md        global operating rules (home root)
     personalities/   named persona files
     memories/        MEMORY.md, USER.md (the user profile), history.jsonl
@@ -243,7 +243,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "subdir_hints": True,        # inject a subdir's rule files when the agent first works there
         "compression": {"preserve_first": 3, "preserve_last": 20, "max_tool_tokens": 600,
                         # in-loop compaction fires when history fills this fraction of the
-                        # model's window (Hermes-aligned default 0.50)
+                        # model's window (default 0.50)
                         "threshold": 0.50,
                         # tail protected by a TOKEN budget = this fraction of the model's
                         # window (scales with the model; preserve_last is the legacy fallback)
@@ -253,7 +253,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
                         # crosses this fraction of the window OR this many messages
                         "gateway_hygiene_threshold": 0.85,
                         "hard_message_limit": 400,
-                        # Hermes-compatible opt-in: when true, failed summarization aborts
+                        # Opt-in: when true, failed summarization aborts
                         # compaction instead of inserting a deterministic fallback summary.
                         "abort_on_summary_failure": False,
                         # when the window fills, roll into a fresh child session (parent kept
@@ -264,8 +264,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "enabled": True,
         "user_profile_enabled": True,
         "provider": "",              # "" builtin only; or "mem0" | "jsonl"
-        "memory_char_limit": 2200,   # whole-store budget for MEMORY.md (Hermes default)
-        "user_char_limit": 1375,     # whole-store budget for USER.md (Hermes default)
+        "memory_char_limit": 2200,   # whole-store budget for MEMORY.md
+        "user_char_limit": 1375,     # whole-store budget for USER.md
         "refresh": "session",        # session/message = rebuild when memory files change
                                      #   (facts apply next message; one cache miss per write)
                                      # frozen/never = keep prompt fixed until explicit rebuild
@@ -336,7 +336,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "interval_hours": 168,       # minimum time between automatic runs (7 days)
         "min_idle_hours": 2,         # only run after the agent has been idle this long
         "stale_after_days": 30,      # active -> stale
-        "archive_after_days": 90,    # stale -> archived (Hermes-aligned; never deleted)
+        "archive_after_days": 90,    # stale -> archived (never deleted)
         "llm_review": True,          # phase-2 aux-model consolidation pass (uses auxiliary.curator)
         "verify_with_evals": False,  # keep llm_review skill edits only if they don't regress the benchmark (self_improve)
         "prune_empty_sessions": True,    # session lifecycle: drop empty 'ghost' sessions during maintenance
@@ -351,7 +351,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "approval": "deny",          # headless approval for scheduled jobs: deny (safe) | approve (auto-run)
     },
     "delegation": {
-        "subagent_auto_approve": False,  # Hermes parity: child approval prompts auto-deny unless opted in
+        "subagent_auto_approve": False,  # child approval prompts auto-deny unless opted in
     },
     "kanban": {
         "workers": 1,                    # parallel lane workers for `kanban run`
@@ -431,7 +431,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "learn": {
         "auto": True,                # auto-review sessions on exit to propose memory/skill candidates
         "background": True,           # forked self-improvement review after substantial turns (on by default)
-        "memory_every": 10,           # run a memory review every N turns (Hermes-aligned)
+        "memory_every": 10,           # run a memory review every N turns
         "flush_min_turns": 6,          # run a final memory review on session end after N user turns
         "skill_every_iters": 15,      # run a skill review/creation nudge when a turn used >= N tool iterations
         "auto_apply": True,           # auto-write reviewed MEMORY (low risk); False = queue candidates
@@ -581,7 +581,7 @@ class Config:
 def _config_delta(data: dict, defaults: dict) -> dict:
     """Return only the entries of ``data`` that differ from ``defaults`` (recursing
     into nested dicts). Keys not present in defaults are kept verbatim. This is what
-    gets written to config.yaml so the file holds overrides only, like Hermes."""
+    gets written to config.yaml so the file holds overrides only."""
     out: dict[str, Any] = {}
     for key, value in data.items():
         if key not in defaults:

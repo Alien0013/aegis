@@ -592,7 +592,7 @@ class GatewayRunner:
                 return f"⚠ error: {type(e).__name__}: {e}"
 
     def _gateway_hygiene(self, agent, session):
-        """Pre-turn compaction safety net (Hermes "session hygiene"). Fires only when a
+        """Pre-turn compaction safety net (AEGIS "session hygiene"). Fires only when a
         session has grown large between turns — crossing the hygiene token threshold OR a
         hard message ceiling — at a higher bar than the agent's own in-loop compactor so it
         doesn't compact on every turn. Returns the active session (may be a compaction child)."""

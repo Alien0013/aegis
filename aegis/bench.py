@@ -217,7 +217,8 @@ def cmd_bench(args, config) -> int:
 
     action = getattr(args, "action", "run") or "run"
     root = getattr(args, "dir", None)
-    only = [getattr(args, "task")] if getattr(args, "task", None) else None
+    task = getattr(args, "task", None)
+    only = [task] if task else None
 
     if action == "list":
         tasks = discover_tasks(Path(root).expanduser() if root else _default_root(config))

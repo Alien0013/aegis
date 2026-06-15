@@ -103,7 +103,7 @@ def _preview(text: str, limit: int = 500) -> str:
 
 def _last_nonempty_assistant_text(messages: list[Message], *, exclude: Message | None = None) -> str:
     """Most recent assistant text with real content — used to hand back earlier output when a
-    final reply comes back empty, instead of returning nothing (Hermes parity)."""
+    final reply comes back empty, instead of returning nothing."""
     for m in reversed(messages):
         if m is exclude or getattr(m, "role", "") != "assistant":
             continue
@@ -597,7 +597,7 @@ class ToolExecutor:
         )
 
     def _enforce_turn_result_budget(self, messages: list[Message]) -> list[Message]:
-        """Hermes-style aggregate clamp for many medium tool results in one turn."""
+        """Aggregate clamp for many medium tool results in one turn."""
         cfg_obj = getattr(self.ctx, "config", None)
         if not messages or cfg_obj is None:
             return messages
@@ -786,7 +786,7 @@ def _tail_token_budget(agent, comp: dict, *, tight: bool = False) -> int:
 
 
 def _ensure_compression_feasibility(agent, engine, comp: dict, emit: OnEvent | None = None) -> None:
-    """Hermes-style aux compression preflight.
+    """Aux compression preflight.
 
     If the configured compression summarizer has a smaller context window than
     the main model threshold, lower the live default-engine threshold for this
@@ -1332,7 +1332,7 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
 
         # Provider-only volatile context tweaks use COPY messages. The canonical session
         # is never mutated: retrieved memory is wire-only, and persisting stripped
-        # thinking blocks would corrupt future Anthropic turns (Hermes #24107).
+        # thinking blocks would corrupt future Anthropic turns.
         wire_messages = _provider_wire_messages(agent, session.messages)
         provider_span = None
         response_state = _response_state_for_agent(agent, getattr(agent.session, "id", ""))
@@ -1670,7 +1670,7 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
             final_text = resp.text
             if not (final_text or "").strip() and agent.tools_used > 0:
                 # Nudges exhausted but still empty — hand back the last substantive reply
-                # rather than nothing (Hermes parity). The empty turn stays in the transcript.
+                # rather than nothing. The empty turn stays in the transcript.
                 reused = _last_nonempty_assistant_text(session.messages, exclude=assistant_msg)
                 if reused:
                     final_text = reused
@@ -1825,7 +1825,7 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
     session.messages.append(gm)
     grace_text = gm.content
     if not (grace_text or "").strip():
-        # Grace summary came back empty — reuse the last substantive reply (Hermes parity).
+        # Grace summary came back empty — reuse the last substantive reply.
         reused = _last_nonempty_assistant_text(session.messages, exclude=gm)
         if reused:
             grace_text = reused

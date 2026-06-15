@@ -1,7 +1,7 @@
 // Theme model for the AEGIS dashboard. A theme is more than colors: it also
 // carries typography (fonts + scale) and layout (corner radius + density), so
 // switching themes changes the whole personality of the UI — the same idea
-// Hermes uses, implemented here from scratch.
+// AEGIS uses, implemented here from scratch.
 
 export interface ThemePalette {
   /** Page background. */

@@ -1,6 +1,6 @@
 """Daytona execution environment placeholder.
 
-AEGIS exposes the same named environment seam as Hermes, but does not yet ship
+AEGIS exposes the named environment seam, but does not yet ship
 Daytona SDK wiring. Selecting it fails closed in the backend dispatcher.
 """
 

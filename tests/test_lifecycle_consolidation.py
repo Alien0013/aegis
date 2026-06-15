@@ -1,4 +1,4 @@
-"""Self-improvement depth (Hermes parity): skill lifecycle state machine
+"""Self-improvement depth: skill lifecycle state machine
 (active → stale → archived, with reactivation), real skill consolidation
 (merge into references/ + archive pointer), and deterministic memory dedup."""
 
@@ -145,7 +145,7 @@ def test_usage_json_persists_state(home):
 
 def test_seed_prevents_premature_archive_on_old_mtime(home):
     """A never-used skill whose directory mtime is ancient must NOT be archived the
-    first time the curator sees it — its clock is seeded to first-sight (Hermes parity)."""
+    first time the curator sees it — its clock is seeded to first-sight."""
     import os
     from aegis import curator
     d = _make_skill("ancient", "old but valid, never loaded")
@@ -271,7 +271,7 @@ def test_session_retention_window(home):
 # --- cron job lifecycle ----------------------------------------------------
 
 def test_cron_max_runs_auto_retires_recurring_job(home):
-    """A recurring job retires (disables) itself after max_runs fires (Hermes repeat.times)."""
+    """A recurring job retires (disables) itself after max_runs fires (AEGIS repeat.times)."""
     import time
     from aegis.cron import CronStore
     st = CronStore()

@@ -1,4 +1,4 @@
-"""Multi-agent kanban orchestration kernel, SQLite-backed (Hermes-parity).
+"""Multi-agent kanban orchestration kernel, SQLite-backed.
 
 A durable work board several agents (or a human + agents) share. Beyond a flat queue,
 it is a dependency-aware orchestration kernel:
@@ -34,7 +34,7 @@ from . import config as cfg
 from .types import new_id
 from .util import now_iso, truncate
 
-# Full lifecycle (Hermes-aligned; AEGIS keeps `in_progress` where Hermes says `running`).
+# Full lifecycle. AEGIS keeps `in_progress` as the persisted running state.
 STATUSES = ("triage", "todo", "scheduled", "ready", "in_progress",
             "blocked", "review", "done", "archived")
 # Terminal/active sets used by the dependency engine and dispatcher.
@@ -590,7 +590,7 @@ class KanbanStore:
     # -- stale reclaim ------------------------------------------------------
     def reclaim_stale(self, timeout_seconds: float) -> list[str]:
         """Return ``in_progress`` tasks whose last heartbeat is older than the timeout to
-        ``ready`` (no failure penalty — Hermes semantics). Returns reclaimed ids."""
+        ``ready`` with no failure penalty. Returns reclaimed ids."""
         cutoff = datetime.now(timezone.utc).timestamp() - timeout_seconds
         reclaimed: list[str] = []
         with self._conn() as c:
@@ -762,7 +762,7 @@ def cmd_kanban(args, config) -> int:
         return getattr(args, name, default)
 
     # id-taking verbs accept the id positionally (e.g. `aegis kanban complete <id>`)
-    # as well as via --id, matching the Hermes CLI ergonomics.
+    # as well as via --id, matching the AEGIS CLI ergonomics.
     if action not in ("create", "decompose", "list", "stats", "dispatch", "run") \
             and not _arg("id") and _arg("title"):
         args.id = _arg("title")

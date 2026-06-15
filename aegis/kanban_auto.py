@@ -6,10 +6,10 @@ Three layers on top of the kanban kernel (:mod:`aegis.kanban`):
 * ``run_board()``      — a worker loop: claim the next ready card, run the agent on it inside
   its resolved workspace, record the attempt as a *run*, and complete (or block) it.
 * ``dispatch_pass()``  — one full reconcile: reclaim stale claims → promote gated cards whose
-  parents are done → spawn workers for ready cards. Mirrors Hermes' dispatcher.
+  parents are done → spawn workers for ready cards. Mirrors AEGIS' dispatcher.
 
 Every dispatched worker's prompt is prefixed with :data:`WORKER_GUIDANCE` — the lifecycle
-contract (orient → work → heartbeat → block/complete) Hermes auto-injects as KANBAN_GUIDANCE.
+contract (orient → work → heartbeat → block/complete) AEGIS auto-injects as KANBAN_GUIDANCE.
 """
 
 from __future__ import annotations
@@ -217,7 +217,7 @@ def run_board(config, worker: str = "auto", max_tasks: int = 20,
 def dispatch_pass(config, worker: str = "agent", *, spawn: bool = True,
                   stale_timeout: float | None = None, max_tasks: int = 20,
                   store: KanbanStore | None = None) -> dict:
-    """One dispatcher reconcile, mirroring Hermes:
+    """One dispatcher reconcile, mirroring AEGIS:
 
     1. **Reclaim stale** — tasks whose worker went silent past the timeout go back to ready.
     2. **Promote** — gated ``todo`` cards whose parents are all done become ``ready``.

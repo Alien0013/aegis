@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="540" viewBox="0 0 1120 540" role="img" aria-label="AEGIS runtime loop">
+  <defs>
+    <linearGradient id="loopBg" x1="0" y1="0" x2="1120" y2="540" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#071115"/>
+      <stop offset="1" stop-color="#111a22"/>
+    </linearGradient>
+    <linearGradient id="loopAccent" x1="72" y1="0" x2="1048" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#36e2c0"/>
+      <stop offset="0.5" stop-color="#e8ba66"/>
+      <stop offset="1" stop-color="#7ab7ff"/>
+    </linearGradient>
+    <marker id="loopArrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#7d969e"/>
+    </marker>
+    <style>
+      .title{font:800 32px Inter,ui-sans-serif,Segoe UI,sans-serif;fill:#edf8f5}
+      .sub{font:500 15px Inter,ui-sans-serif,Segoe UI,sans-serif;fill:#8fa4ac}
+      .h{font:800 14px Inter,ui-sans-serif,Segoe UI,sans-serif;fill:#edf8f5}
+      .p{font:500 12px Inter,ui-sans-serif,Segoe UI,sans-serif;fill:#a9bdc4}
+      .mono{font:600 12px ui-monospace,Menlo,Consolas,monospace;fill:#8fa4ac}
+      .box{fill:#0c2026;stroke:#27464e;stroke-width:1.2}
+      .hot{fill:#102a31;stroke:url(#loopAccent);stroke-width:2}
+      .link{stroke:#7d969e;stroke-width:1.8;fill:none;marker-end:url(#loopArrow)}
+    </style>
+  </defs>
+  <rect width="1120" height="540" rx="24" fill="url(#loopBg)"/>
+  <text x="56" y="62" class="title">Runtime loop</text>
+  <text x="56" y="90" class="sub">How one user turn becomes a verified answer, trace, memory, and next action.</text>
+  <rect x="62" y="150" width="134" height="88" rx="16" class="box"/>
+  <text x="92" y="184" class="h">1. Message</text>
+  <text x="88" y="210" class="p">CLI, web, API,</text>
+  <text x="88" y="228" class="p">gateway, SDK</text>
+  <rect x="244" y="150" width="150" height="88" rx="16" class="box"/>
+  <text x="274" y="184" class="h">2. Context</text>
+  <text x="270" y="210" class="p">rules, memory,</text>
+  <text x="270" y="228" class="p">skills, files</text>
+  <rect x="442" y="150" width="150" height="88" rx="16" class="hot"/>
+  <text x="470" y="184" class="h">3. Provider</text>
+  <text x="468" y="210" class="p">route model, stream,</text>
+  <text x="468" y="228" class="p">recover thinking</text>
+  <rect x="640" y="150" width="150" height="88" rx="16" class="box"/>
+  <text x="670" y="184" class="h">4. Tool calls</text>
+  <text x="666" y="210" class="p">parallel where safe,</text>
+  <text x="666" y="228" class="p">guarded by policy</text>
+  <rect x="838" y="150" width="150" height="88" rx="16" class="box"/>
+  <text x="864" y="184" class="h">5. Results</text>
+  <text x="862" y="210" class="p">classify, redact,</text>
+  <text x="862" y="228" class="p">wrap untrusted data</text>
+  <path d="M196 194h48" class="link"/>
+  <path d="M394 194h48" class="link"/>
+  <path d="M592 194h48" class="link"/>
+  <path d="M790 194h48" class="link"/>
+  <path d="M913 238C913 304 536 304 536 238" class="link"/>
+  <rect x="226" y="320" width="194" height="104" rx="16" class="box"/>
+  <text x="252" y="354" class="h">Answer and handoff</text>
+  <text x="252" y="382" class="p">Final response, progress events,</text>
+  <text x="252" y="402" class="p">status updates, channel delivery.</text>
+  <rect x="464" y="320" width="194" height="104" rx="16" class="box"/>
+  <text x="490" y="354" class="h">Observe and replay</text>
+  <text x="490" y="382" class="p">Trace spans, usage/cost, evals,</text>
+  <text x="490" y="402" class="p">trajectory export, AB replay.</text>
+  <rect x="702" y="320" width="194" height="104" rx="16" class="box"/>
+  <text x="728" y="354" class="h">Learn safely</text>
+  <text x="728" y="382" class="p">Session review proposes memory</text>
+  <text x="728" y="402" class="p">and skills with redaction gates.</text>
+  <path d="M913 238C913 288 799 288 799 320" class="link"/>
+  <path d="M715 238C715 288 561 288 561 320" class="link"/>
+  <path d="M517 238C517 288 323 288 323 320" class="link"/>
+  <rect x="62" y="452" width="996" height="40" rx="20" fill="#0c2026" stroke="#27464e"/>
+  <text x="92" y="477" class="mono">Background wakeups from cron, process, subagents, kanban workers, and gateway events re-enter at step 1 with the same policy.</text>
+</svg>
