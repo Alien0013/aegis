@@ -338,6 +338,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "stale_after_days": 30,      # active -> stale
         "archive_after_days": 90,    # stale -> archived (Hermes-aligned; never deleted)
         "llm_review": True,          # phase-2 aux-model consolidation pass (uses auxiliary.curator)
+        "verify_with_evals": False,  # keep llm_review skill edits only if they don't regress the benchmark (self_improve)
         "prune_empty_sessions": True,    # session lifecycle: drop empty 'ghost' sessions during maintenance
         "session_retention_days": 7,     # only prune empty sessions untouched this long
         "prune_spent_cron": True,        # cron lifecycle: retire fired one-shots + jobs past max_runs

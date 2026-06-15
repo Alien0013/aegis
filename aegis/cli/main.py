@@ -1520,6 +1520,14 @@ def build_parser() -> argparse.ArgumentParser:
     bn.add_argument("--json", action="store_true")
     bn.set_defaults(func=_cmd_bench)
 
+    from ..self_improve import cmd_improve as _cmd_improve
+    ip = sub.add_parser("improve", help="verified self-improvement: keep curator edits only if the benchmark holds")
+    ip.add_argument("action", nargs="?", choices=["run", "log"], default="log")
+    ip.add_argument("--min-delta", type=float, default=0.0, dest="min_delta",
+                    help="score must improve by at least this to keep the change")
+    ip.add_argument("--limit", type=int, default=20)
+    ip.set_defaults(func=_cmd_improve)
+
     sv = sub.add_parser("serve", help="run an OpenAI-compatible API server")
     sv.add_argument("--host")
     sv.add_argument("--port", type=int)

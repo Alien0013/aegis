@@ -742,7 +742,16 @@ def run(config=None, *, dry_run: bool = False) -> dict:
         except Exception:  # noqa: BLE001
             pass
     if not dry_run and do_llm and config is not None:
-        result["llm_review"] = llm_review(config, dry_run=False)
+        if bool(config.get("curator.verify_with_evals", False)):
+            # Verified self-improvement: keep the review's skill edits only if they don't
+            # regress the benchmark score, else roll skills/ back (provider-dependent).
+            try:
+                from .self_improve import verified_curator_review
+                result["llm_review"] = verified_curator_review(config)
+            except Exception as e:  # noqa: BLE001 — maintenance must never crash
+                result["llm_review"] = {"ran": False, "reason": f"verify error: {type(e).__name__}"}
+        else:
+            result["llm_review"] = llm_review(config, dry_run=False)
     if not dry_run:
         result["report"] = str(_write_report(result, stale_days, archive_days))
         state = _load_state()
