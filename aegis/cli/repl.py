@@ -70,6 +70,7 @@ SLASH_COMMANDS = (
     SlashCommand("/ultracode", "planning", "run the rigorous autonomous plan→implement→verify loop", "/ultracode <task>"),
     SlashCommand("/architect", "planning", "strong model plans → this model implements (Aider-style)", "/architect <task>"),
     SlashCommand("/spec", "planning", "spec-driven dev: persistent requirements→design→tasks", "/spec new|list|show|implement [arg]"),
+    SlashCommand("/gstack", "planning", "run a goal through a sprint of roles (think→plan→build→review→test→ship→reflect)", "/gstack <goal>"),
     SlashCommand("/plan", "planning", "draft a plan without making changes", "/plan <task>"),
     SlashCommand("/proceed", "planning", "execute the plan from the last /plan"),
     SlashCommand("/context", "context", "show the token budget breakdown (system, history, tools)"),
@@ -912,6 +913,22 @@ def handle_architect_command(text: str, agent: Any) -> str | None:
             "</system-reminder>\n\nIMPLEMENTATION PLAN:\n" + plan + "\n\nTASK: " + arg
         )
     return arg   # no plan -> run the task directly
+
+
+def handle_gstack_command(text: str) -> str | None:
+    """`/gstack <goal>` — run the goal through a gstack sprint (think→plan→build→
+    review→test→ship→reflect) in this turn. Returns the sprint prompt for the agent."""
+    parts = text.strip().split(maxsplit=1)
+    goal = parts[1].strip() if len(parts) > 1 else ""
+    if not goal:
+        from ..gstack import PHASES
+        _out("usage: /gstack <goal>", style="yellow")
+        _out("  phases: " + " → ".join(p.name for p in PHASES), style="cyan")
+        return None
+    from ..gstack import repl_sprint_prompt
+    _out("🏃 gstack — running the sprint (think → plan → build → review → test → ship → reflect)…",
+         style="cyan")
+    return repl_sprint_prompt(goal)
 
 
 _SPEC_SYSTEM = (
@@ -2090,6 +2107,11 @@ def interactive(config: Config, *, model=None, provider_name=None,
                 if not spec_prompt:
                     continue
                 user = spec_prompt   # /spec implement -> execute the persisted spec
+            elif user.startswith("/gstack"):
+                gs_prompt = handle_gstack_command(user)
+                if not gs_prompt:
+                    continue
+                user = gs_prompt   # run the full think→…→reflect sprint in one turn
             elif user.startswith(("/plan", "/proceed")):
                 plan_prompt = handle_plan_command(user, agent)
                 if not plan_prompt:

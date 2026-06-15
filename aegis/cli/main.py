@@ -1562,6 +1562,14 @@ def build_parser() -> argparse.ArgumentParser:
     wp.add_argument("path", nargs="?", help="directory to watch (default: .)")
     wp.set_defaults(func=_cmd_watch)
 
+    from ..gstack import cmd_gstack as _cmd_gstack
+    gs = sub.add_parser("gstack", help="run a goal through a sprint of roles (think→plan→build→review→test→ship→reflect)")
+    gs.add_argument("goal", nargs="*", help="the goal for the sprint")
+    gs.add_argument("--phases", help="comma-separated subset, e.g. think,plan,build")
+    gs.add_argument("--from", dest="from_phase", help="start from this phase (resume a sprint)")
+    gs.add_argument("--dry", action="store_true", help="print the phase plan without running")
+    gs.set_defaults(func=_cmd_gstack)
+
     sv = sub.add_parser("serve", help="run an OpenAI-compatible API server")
     sv.add_argument("--host")
     sv.add_argument("--port", type=int)
