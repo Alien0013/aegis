@@ -1528,6 +1528,12 @@ def build_parser() -> argparse.ArgumentParser:
     ip.add_argument("--limit", type=int, default=20)
     ip.set_defaults(func=_cmd_improve)
 
+    from ..spec import cmd_spec as _cmd_spec
+    sp = sub.add_parser("spec", help="spec-driven dev: list/show persistent requirements→design→tasks")
+    sp.add_argument("action", nargs="?", choices=["list", "show"], default="list")
+    sp.add_argument("slug", nargs="?")
+    sp.set_defaults(func=_cmd_spec)
+
     sv = sub.add_parser("serve", help="run an OpenAI-compatible API server")
     sv.add_argument("--host")
     sv.add_argument("--port", type=int)

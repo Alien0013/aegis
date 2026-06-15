@@ -69,6 +69,7 @@ SLASH_COMMANDS = (
     SlashCommand("/clear", "sessions", "start a fresh session"),
     SlashCommand("/ultracode", "planning", "run the rigorous autonomous plan→implement→verify loop", "/ultracode <task>"),
     SlashCommand("/architect", "planning", "strong model plans → this model implements (Aider-style)", "/architect <task>"),
+    SlashCommand("/spec", "planning", "spec-driven dev: persistent requirements→design→tasks", "/spec new|list|show|implement [arg]"),
     SlashCommand("/plan", "planning", "draft a plan without making changes", "/plan <task>"),
     SlashCommand("/proceed", "planning", "execute the plan from the last /plan"),
     SlashCommand("/context", "context", "show the token budget breakdown (system, history, tools)"),
@@ -910,6 +911,82 @@ def handle_architect_command(text: str, agent: Any) -> str | None:
             "</system-reminder>\n\nIMPLEMENTATION PLAN:\n" + plan + "\n\nTASK: " + arg
         )
     return arg   # no plan -> run the task directly
+
+
+_SPEC_SYSTEM = (
+    "You are a software architect writing a SPEC for a feature. Output GitHub-flavored "
+    "markdown with EXACTLY three sections in this order:\n"
+    "## Requirements — numbered, testable acceptance criteria (what 'done' means).\n"
+    "## Design — the approach: files to touch, data flow, key decisions, trade-offs.\n"
+    "## Tasks — a checklist of small, ordered, independently-verifiable steps, each a "
+    "line `- [ ] <task>`. End each task with the concrete check that proves it.\n"
+    "Be concrete and minimal — the smallest design that satisfies the goal. Start with "
+    "a single `# <Title>` line. Do not write the implementation code."
+)
+
+
+def handle_spec_command(text: str, agent: Any) -> str | None:
+    """Spec-driven development. `new <title>` drafts a persistent requirements→design→tasks
+    spec with the architect model; `implement <slug>` feeds it back for execution; `list`/`show`
+    inspect. Returns an execution prompt only for `implement`, else None (handled inline)."""
+    from ..spec import SpecStore, implementation_prompt
+
+    parts = text.strip().split(maxsplit=2)
+    sub = parts[1].lower() if len(parts) > 1 else "list"
+    arg = parts[2].strip() if len(parts) > 2 else ""
+    store = SpecStore.from_config(getattr(agent, "config", None), cwd=getattr(agent, "cwd", None))
+
+    if sub == "list":
+        specs = store.list()
+        for s in specs:
+            done, total = s.progress()
+            _out(f"  {s.slug:<26} [{s.status}]  {done}/{total} tasks", style="cyan")
+        if not specs:
+            _out("  (no specs yet — /spec new <title> to draft one)", style="yellow")
+        return None
+
+    if sub == "show":
+        spec = store.get(arg) if arg else None
+        if not spec:
+            _out(f"  no spec: {arg or '(missing slug)'}", style="yellow")
+            return None
+        _out(spec.body)
+        return None
+
+    if sub == "new":
+        if not arg:
+            _out("usage: /spec new <title or one-line goal>", style="yellow")
+            return None
+        _out("📐 spec — drafting requirements → design → tasks…", style="cyan")
+        body = ""
+        try:
+            from ..auxiliary import router_for
+            from ..types import Message
+            provider = router_for(agent).provider_for("architect")
+            resp = provider.complete(
+                [Message.system(_SPEC_SYSTEM), Message.user(arg)], tools=None, stream=False)
+            body = (resp.text or "").strip()
+        except Exception as e:  # noqa: BLE001
+            _out(f"  spec model unavailable ({e}); writing a skeleton.", style="yellow")
+        title = arg if len(arg) <= 60 else arg[:57] + "…"
+        spec = store.create(title, body or None)
+        done, total = spec.progress()
+        _out(f"  ✓ spec saved: {spec.path}  ({total} tasks)", style=TERM_GREEN)
+        _out(f"    implement with: /spec implement {spec.slug}", style="cyan")
+        return None
+
+    if sub == "implement":
+        spec = store.get(arg) if arg else None
+        if not spec:
+            _out(f"  no spec: {arg or '(missing slug)'} — /spec list", style="yellow")
+            return None
+        store.set_status(spec.slug, "in_progress")
+        done, total = spec.progress()
+        _out(f"  ▶ implementing spec '{spec.title}' — {done}/{total} tasks done", style=TERM_GREEN)
+        return implementation_prompt(spec)
+
+    _out("usage: /spec new|list|show|implement [arg]", style="yellow")
+    return None
 
 
 def handle_plan_command(text: str, agent: Any) -> str | None:
@@ -1990,6 +2067,11 @@ def interactive(config: Config, *, model=None, provider_name=None,
                 if not arch_prompt:
                     continue
                 user = arch_prompt   # plan (strong model) then implement (this model)
+            elif user.startswith("/spec"):
+                spec_prompt = handle_spec_command(user, agent)
+                if not spec_prompt:
+                    continue
+                user = spec_prompt   # /spec implement -> execute the persisted spec
             elif user.startswith(("/plan", "/proceed")):
                 plan_prompt = handle_plan_command(user, agent)
                 if not plan_prompt:

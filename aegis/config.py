@@ -402,6 +402,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "bench": {
         "path": "benchmarks",         # dir of <task>/task.yaml end-to-end benchmark tasks
     },
+    "spec": {
+        "dir": ".aegis/specs",        # workspace-relative home for /spec requirements→design→tasks
+    },
     "plugins": {
         "manifests": True,
         "enabled": [],
