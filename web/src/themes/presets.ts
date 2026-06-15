@@ -16,32 +16,32 @@ const BASE_TYPE: ThemeTypography = {
   letterSpacing: "0",
 };
 
-const BASE_LAYOUT: ThemeLayout = { radius: "10px", density: "comfortable" };
+const BASE_LAYOUT: ThemeLayout = { radius: "4px", density: "compact" };
 
 export const aegisDark: DashboardTheme = {
   name: "aegis-dark",
-  label: "AEGIS Dark",
-  description: "Warm gold on deep charcoal — the signature look",
-  swatch: ["#0b0d10", "#e0a564", "#7ecf8f"],
+  label: "AEGIS Teal",
+  description: "Deep teal operator console with ivory controls",
+  swatch: ["#031c19", "#f3dfbf", "#39d98a"],
   palette: {
-    bg: "#0b0d10",
-    surface: "#14171c",
-    surface2: "#1c2027",
-    border: "#262b33",
-    border2: "#363d48",
-    text: "#f1efe8",
-    textDim: "#a4a89f",
-    textFaint: "#6c7269",
-    primary: "#e0a564",
-    primaryFg: "#1a1206",
-    success: "#7ecf8f",
-    warning: "#e8b86d",
+    bg: "#031c19",
+    surface: "#062823",
+    surface2: "#0b312b",
+    border: "#25534b",
+    border2: "#3f766b",
+    text: "#fff2df",
+    textDim: "#d3c8b0",
+    textFaint: "#8f9b86",
+    primary: "#f3dfbf",
+    primaryFg: "#05221e",
+    success: "#39d98a",
+    warning: "#e6c36f",
     danger: "#ff6b6b",
-    info: "#6fb7d8",
+    info: "#7dc8d8",
   },
   typography: BASE_TYPE,
   layout: BASE_LAYOUT,
-  termBg: "#0b0d10",
+  termBg: "#031c19",
 };
 
 export const aegisLight: DashboardTheme = {

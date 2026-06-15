@@ -80,6 +80,52 @@ def test_shared_inbound_stop_and_steer_controls_do_not_start_turns():
     assert ("c1", "🧭 steering noted.") in adapter.sent
 
 
+def test_shared_inbound_new_interrupts_and_queues_reset():
+    adapter = _adapter()
+    started = threading.Event()
+    release = threading.Event()
+    seen = []
+    interrupted = []
+
+    def dispatch(ev):
+        seen.append(ev.text)
+        if ev.text == "first":
+            started.set()
+            release.wait(2)
+        return f"reply:{ev.text}"
+
+    adapter._init_inbound_queue(dispatch)
+    adapter._interrupt_cb = lambda ev: interrupted.append(ev.text) or True
+
+    adapter._submit_inbound(_ev("first"))
+    assert started.wait(2)
+    adapter._submit_inbound(_ev("/new"))
+    release.set()
+
+    _wait_for(lambda: seen == ["first", "/new"])
+    assert interrupted == ["/new"]
+    assert ("c1", "🛑 stopping current turn; reset queued.") in adapter.sent
+
+
+def test_shared_inbound_clarify_waiter_consumes_next_reply():
+    adapter = _adapter()
+    seen = []
+    adapter._init_inbound_queue(lambda ev: seen.append(ev.text) or f"reply:{ev.text}")
+    answer = {}
+
+    def ask():
+        answer["text"] = adapter.ask_user(_ev("ask"), "Pick one", ["A", "B"], timeout=2)
+
+    thread = threading.Thread(target=ask)
+    thread.start()
+    _wait_for(lambda: ("c1", "Pick one\n  1. A\n  2. B") in adapter.sent)
+    adapter._submit_inbound(_ev("B"))
+    thread.join(2)
+
+    assert answer["text"] == "B"
+    assert seen == []
+
+
 def test_shared_inbound_busy_modes(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     from aegis.config import Config

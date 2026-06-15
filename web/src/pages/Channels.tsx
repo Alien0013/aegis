@@ -1,22 +1,30 @@
+import { useState } from "react";
 import { useApi } from "../lib/useApi";
-import { post } from "../lib/api";
-import { Badge, Button, Card, Empty, Loading, PageHeader, toast } from "../components/ui";
+import { patch, post } from "../lib/api";
+import { Badge, Button, Card, Empty, Field, Input, Loading, PageHeader, toast } from "../components/ui";
 import { titleCase } from "../lib/format";
+import { Icon } from "../components/icons";
 
 interface ChannelRow {
-  channel?: string; name?: string; label?: string;
+  id?: string; channel?: string; name?: string; label?: string;
   configured?: boolean; ready?: boolean; enabled?: boolean; active?: boolean;
+  env?: string[]; env_vars?: string[]; missing_env_vars?: string[];
+  setup?: string; profile?: Record<string, unknown>;
 }
-// _gateway_channel_payload shape varies; read defensively.
-type CatalogPayload = { channels?: ChannelRow[]; catalog?: ChannelRow[] } & Record<string, unknown>;
+type CatalogPayload = { channels?: ChannelRow[]; catalog?: ChannelRow[]; enabled?: string[] } & Record<string, unknown>;
+
+function channelId(row: ChannelRow): string {
+  return row.id || row.channel || row.name || (row.label || "").toLowerCase().replace(/\s+/g, "-");
+}
 
 export function Channels() {
   const { data, loading, error, reload } = useApi<CatalogPayload>("gateway/channels/catalog");
   const status = useApi<Record<string, unknown>>("gateway/status");
+  const [configuring, setConfiguring] = useState<ChannelRow | null>(null);
 
   const rows: ChannelRow[] = (Array.isArray(data?.channels) ? data!.channels
     : Array.isArray(data?.catalog) ? data!.catalog : []) as ChannelRow[];
-  const activeChannels = (status.data?.channels as string[]) || [];
+  const activeChannels = ((status.data?.channels as string[]) || data?.enabled || []) as string[];
 
   async function probe(ch: string) {
     try {
@@ -31,37 +39,115 @@ export function Channels() {
 
   return (
     <>
-      <PageHeader title="Channels" sub="Messaging platforms served by the gateway" />
-      {error && <Card><Empty icon="alert">Couldn't load — {error}</Empty></Card>}
+      <PageHeader title="Channels" sub={activeChannels.length ? `active: ${activeChannels.join(", ")}` : "Messaging platforms served by the gateway"} />
+      {error && <Card><Empty icon="alert">Couldn't load - {error}</Empty></Card>}
       {loading && <Loading />}
       {data && (
-        <Card title="Catalog" sub={activeChannels.length ? `active: ${activeChannels.join(", ")}` : "none active"} pad={false}>
-          {!rows.length && <Empty icon="channels">No channel catalog available.</Empty>}
+        <div className="grid gap-[var(--gap)] md:grid-cols-2 xl:grid-cols-3">
+          {!rows.length && <Card><Empty icon="channels">No channel catalog available.</Empty></Card>}
           {rows.map((c) => {
-            const id = c.channel || c.name || "";
+            const id = channelId(c);
             const on = activeChannels.includes(id);
             const configured = c.configured ?? c.ready ?? false;
             return (
-              <div key={id} className="flex items-center gap-3 border-b border-border px-[var(--pad)] py-2.5 last:border-0">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm text-text">{c.label || titleCase(id)}</span>
-                    <Badge status={configured ? "ok" : undefined} tone={configured ? undefined : "neutral"}>
-                      {configured ? "configured" : "needs token"}
-                    </Badge>
-                    {on && <Badge status="active">active</Badge>}
+              <Card key={id} pad={false}>
+                <div className="border-b border-border p-[var(--pad)]">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="font-mono text-base font-semibold text-text">{c.label || titleCase(id)}</div>
+                      <div className="truncate font-mono text-xs text-faint">{id}</div>
+                    </div>
+                    <Badge tone={on ? "success" : configured ? "info" : "neutral"}>{on ? "active" : configured ? "configured" : "needs token"}</Badge>
                   </div>
                 </div>
-                <Button sm variant="ghost" onClick={() => probe(id)}>Probe</Button>
-                <Button sm variant={on ? "danger" : "outline"}
-                  onClick={() => setActive(on ? activeChannels.filter((x) => x !== id) : [...activeChannels, id])}>
-                  {on ? "Disable" : "Enable"}
-                </Button>
-              </div>
+                <div className="space-y-3 p-[var(--pad)]">
+                  <div className="flex items-center gap-2 text-xs text-dim">
+                    <Icon name="channels" size={14} className={on ? "text-success" : "text-faint"} />
+                    {on ? "Delivery enabled for inbound and outbound messages." : "Enable this adapter when credentials are ready."}
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <Button sm onClick={() => probe(id)}>Test</Button>
+                    <Button sm onClick={() => setConfiguring(c)}>Configure</Button>
+                    <Button sm variant={on ? "danger" : "primary"}
+                      onClick={() => setActive(on ? activeChannels.filter((x) => x !== id) : [...activeChannels, id])}>
+                      {on ? "Disable" : "Enable"}
+                    </Button>
+                  </div>
+                </div>
+              </Card>
             );
           })}
-        </Card>
+        </div>
+      )}
+      {configuring && (
+        <ChannelConfig
+          row={configuring}
+          onClose={() => setConfiguring(null)}
+          onSaved={() => { setConfiguring(null); status.reload(); reload(); }}
+        />
       )}
     </>
+  );
+}
+
+function ChannelConfig({ row, onClose, onSaved }: { row: ChannelRow; onClose: () => void; onSaved: () => void }) {
+  const id = channelId(row);
+  const profile = row.profile || {};
+  const envVars = row.env_vars || row.env || [];
+  const missing = new Set(row.missing_env_vars || []);
+  const [form, setForm] = useState({
+    personality: String(profile.personality || profile.profile || ""),
+    provider: String(profile.provider || ""),
+    model: String(profile.model || ""),
+    reasoning_effort: String(profile.reasoning_effort || ""),
+    busy_mode: String(profile.busy_mode || ""),
+  });
+
+  async function save() {
+    try {
+      const r = await patch<{ ok?: boolean; error?: string }>(`gateway/channels/${encodeURIComponent(id)}`, {
+        enabled: true,
+        ...form,
+      });
+      if (r.ok === false) toast(r.error || "Channel save failed", "err");
+      else { toast("Channel saved"); onSaved(); }
+    } catch (e) { toast(String(e), "err"); }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[200] flex items-start justify-center bg-black/55 pt-[8vh] backdrop-blur-sm" onMouseDown={onClose}>
+      <div className="w-full max-w-xl border border-border bg-bg shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b border-border px-4 py-3">
+          <div>
+            <div className="font-mono text-base font-semibold text-text">Configure {titleCase(id)}</div>
+            <div className="text-xs text-faint">Adapter credentials and routing</div>
+          </div>
+          <button onClick={onClose} className="text-faint hover:text-text"><Icon name="x" size={18} /></button>
+        </div>
+        <div className="space-y-3 p-4">
+          <div className="border border-border bg-surface-2/55 p-3 text-xs text-dim">
+            <div>{row.setup || "Credentials are read from environment variables."}</div>
+            {!!envVars.length && (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {envVars.map((key) => (
+                  <Badge key={key} tone={missing.has(key) ? "warning" : "success"}>
+                    {key}
+                  </Badge>
+                ))}
+              </div>
+            )}
+          </div>
+          <Field label="Profile"><Input value={form.personality} placeholder="default personality" onChange={(e) => setForm({ ...form, personality: e.target.value })} /></Field>
+          <Field label="Provider"><Input value={form.provider} placeholder="provider override" onChange={(e) => setForm({ ...form, provider: e.target.value })} /></Field>
+          <Field label="Model"><Input value={form.model} placeholder="model override" onChange={(e) => setForm({ ...form, model: e.target.value })} /></Field>
+          <Field label="Reasoning effort"><Input value={form.reasoning_effort} placeholder="low, medium, high" onChange={(e) => setForm({ ...form, reasoning_effort: e.target.value })} /></Field>
+          <Field label="Busy mode"><Input value={form.busy_mode} placeholder="queue, reject, interrupt" onChange={(e) => setForm({ ...form, busy_mode: e.target.value })} /></Field>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-border px-4 py-3">
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" icon="check" onClick={save}>Save & Enable</Button>
+        </div>
+      </div>
+    </div>
   );
 }

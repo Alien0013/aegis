@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 from ..agent.agent import Agent
 from ..config import Config
@@ -42,6 +43,9 @@ class GatewayRunner:
         self._lock = threading.Lock()
         self._key_locks: dict[str, threading.Lock] = {}   # per-session serialization
         self._agents: dict[str, object] = {}              # LRU agent cache (prefix-cache reuse)
+        self._agent_signatures: dict[str, tuple[Any, ...]] = {}
+        self._agent_last_used: dict[str, float] = {}
+        self._generations: dict[str, int] = {}
         self._agent_cap = 32
         self.session_mode = config.get("gateway.session_mode", "per_channel_peer")
         self.require_mention = bool(config.get("gateway.require_mention", False))
@@ -85,12 +89,15 @@ class GatewayRunner:
 
     def interrupt(self, ev: MessageEvent) -> bool:
         """Cancel the run in progress for ev's session. True if an active agent was signalled."""
-        agent = self._agents.get(self._key(ev))
-        if agent is not None and not agent.cancel_event.is_set():
+        key = self._key(ev)
+        self._bump_generation(key)
+        agent = self._agents.get(key)
+        cancel_event = getattr(agent, "cancel_event", None)
+        if agent is not None and not (cancel_event is not None and cancel_event.is_set()):
             cancel = getattr(agent, "cancel", None)
             if callable(cancel):
                 cancel()
-            else:
+            elif cancel_event is not None:
                 agent.cancel_event.set()
             return True
         return False
@@ -107,10 +114,108 @@ class GatewayRunner:
 
     def _drop_agent(self, key: str):
         agent = self._agents.pop(key, None)
+        self._agent_signatures.pop(key, None)
+        self._agent_last_used.pop(key, None)
         if agent is not None:
             from ..surface import _close_agent
             _close_agent(agent)
         return agent
+
+    def _bump_generation(self, key: str) -> int:
+        with self._lock:
+            value = int(self._generations.get(key, 0) or 0) + 1
+            self._generations[key] = value
+            return value
+
+    def _generation(self, key: str) -> int:
+        return int(self._generations.get(key, 0) or 0)
+
+    def _fresh_session_if_drifted(self, key: str, session: Session) -> Session:
+        try:
+            stamp = self.store.session_stamp(key)
+        except Exception:  # noqa: BLE001
+            return session
+        if stamp is None:
+            return session
+        local_count = len(getattr(session, "messages", []) or [])
+        if not (
+            str(stamp.get("updated_at") or "") > getattr(session, "updated_at", "")
+            and int(stamp.get("message_count", local_count) or 0) != local_count
+        ):
+            return session
+        latest = self.store.load(key)
+        if latest is None:
+            return session
+        self._sessions[key] = latest
+        self._drop_agent(key)
+        self._bump_generation(key)
+        return latest
+
+    def _agent_signature(
+        self,
+        *,
+        ev: MessageEvent,
+        key: str,
+        session: Session,
+        run_config,
+        profile: dict,
+    ) -> tuple[Any, ...]:
+        from ..surface import _cache_runtime_fingerprint, session_runtime_controls
+
+        controls = session_runtime_controls(session)
+        provider = controls.get("provider") or profile.get("provider") or run_config.get("model.provider", "")
+        model = controls.get("model") or profile.get("model") or run_config.get("model.default", "")
+        return (
+            key,
+            ev.platform,
+            ev.chat_id,
+            ev.thread_id or "",
+            ev.user_id or "",
+            provider,
+            model,
+            controls.get("reasoning_effort", ""),
+            controls.get("reasoning_display", ""),
+            controls.get("busy_mode", ""),
+            *_cache_runtime_fingerprint(run_config, provider),
+        )
+
+    def _agent_expired(self, key: str) -> bool:
+        import time
+
+        ttl = float(self.config.get("gateway.agent_cache_ttl_seconds", 0) or 0)
+        if ttl <= 0:
+            return False
+        last = float(self._agent_last_used.get(key, 0.0) or 0.0)
+        return last > 0 and (time.time() - last) > ttl
+
+    def _touch_agent(self, key: str) -> None:
+        import time
+
+        self._agent_last_used[key] = time.time()
+
+    def _evict_agents_if_needed(self) -> None:
+        import time
+
+        ttl = float(self.config.get("gateway.agent_cache_ttl_seconds", 0) or 0)
+        if ttl > 0:
+            cutoff = time.time() - ttl
+            for old_key, last in list(self._agent_last_used.items()):
+                if last and last < cutoff:
+                    self._drop_agent(old_key)
+        while self._agent_cap and len(self._agents) > self._agent_cap:
+            evict_key = min(self._agents, key=lambda k: self._agent_last_used.get(k, 0.0))
+            self._drop_agent(evict_key)
+
+    def _gateway_asker(self, ev: MessageEvent):
+        adapter = next((a for a in self.adapters if a.name == ev.platform), None)
+        if adapter is None or not hasattr(adapter, "ask_user"):
+            return None
+        timeout = float(self.config.get("gateway.clarify_timeout_seconds", 3600) or 3600)
+
+        def ask(question: str, choices: list[str]) -> str:
+            return str(adapter.ask_user(ev, question, choices, timeout=timeout) or "")
+
+        return ask
 
     @staticmethod
     def _parse_model_override(arg: str) -> tuple[str, str]:
@@ -225,8 +330,32 @@ class GatewayRunner:
             return ("⛔ That command is restricted to admins. Available to you: "
                     + ", ".join(self._user_commands()))
         # Intercept control commands before the agent.
-        if text in ("/stop", "/new", "/reset"):
+        if text == "/stop":
+            self._bump_generation(key)
+            agent = self._agents.get(key)
+            if agent is not None and not getattr(agent, "cancel_event", threading.Event()).is_set():
+                cancel = getattr(agent, "cancel", None)
+                if callable(cancel):
+                    cancel()
+                else:
+                    agent.cancel_event.set()
+                return self._control_reply(
+                    ev,
+                    key,
+                    "/stop",
+                    lambda _proxy: "🛑 stop requested.",
+                    data={"stopped": True},
+                )
+            return self._control_reply(
+                ev,
+                key,
+                "/stop",
+                lambda _proxy: "No active turn is running.",
+                data={"stopped": False},
+            )
+        if text in ("/new", "/reset"):
             def action(proxy):
+                self._bump_generation(key)
                 self._drop_agent(key)
                 fresh = Session(id=key, title=key)
                 self._sessions[key] = fresh
@@ -467,16 +596,28 @@ class GatewayRunner:
         with lock:
             with self._lock:
                 session = self._session(key)
+                session = self._fresh_session_if_drifted(key, session)
             # Reuse a cached agent for this session (keeps the provider object warm so the
             # model's prompt prefix stays cached); rebuild if the session was reset.
+            generation = self._generation(key)
+            prof = (self.config.get("gateway.profiles", {}) or {}).get(ev.platform, {}) or {}
+            run_cfg = self.config
+            if prof.get("personality"):       # isolated copy — must not leak across platforms
+                import copy
+                run_cfg = type(self.config)(copy.deepcopy(self.config.data))
+                run_cfg.data.setdefault("agent", {})["personality"] = prof["personality"]
+            signature = self._agent_signature(
+                ev=ev,
+                key=key,
+                session=session,
+                run_config=run_cfg,
+                profile=prof,
+            )
             agent = self._agents.get(key)
+            if agent is not None and (self._agent_signatures.get(key) != signature or self._agent_expired(key)):
+                self._drop_agent(key)
+                agent = None
             if agent is None or agent.session is not session:
-                prof = (self.config.get("gateway.profiles", {}) or {}).get(ev.platform, {}) or {}
-                run_cfg = self.config
-                if prof.get("personality"):       # isolated copy — must not leak across platforms
-                    import copy
-                    run_cfg = type(self.config)(copy.deepcopy(self.config.data))
-                    run_cfg.data.setdefault("agent", {})["personality"] = prof["personality"]
                 from ..surface import apply_session_runtime, session_runtime_controls
                 controls = session_runtime_controls(session)
                 agent = Agent.create(run_cfg, session=session, cwd=self.cwd, store=self.store,
@@ -485,18 +626,22 @@ class GatewayRunner:
                                      include_mcp=True)   # /model > profile
                 apply_session_runtime(agent)
                 self._agents[key] = agent
-                if len(self._agents) > self._agent_cap:
-                    evict_key = next(iter(self._agents))
-                    self._drop_agent(evict_key)
+                self._agent_signatures[key] = signature
+                self._touch_agent(key)
+                self._evict_agents_if_needed()
             else:
                 from ..surface import apply_session_runtime
                 apply_session_runtime(agent)
+                self._touch_agent(key)
             agent.platform = ev.platform   # channel-specific prompt behavior
             agent.chat_id = ev.chat_id     # current conversation (for the send_message tool)
             agent.user_id = ev.user_id or ""
             agent.user_name = ev.user_name or ""
             agent.thread_id = ev.thread_id or ""
             agent.message_id = ev.message_id or ""
+            asker = self._gateway_asker(ev)
+            if asker is not None:
+                agent.tool_context.asker = asker
             try:
                 # Safety net: a gateway session can accumulate messages between turns
                 # (overnight Telegram/Discord) and blow past the window before the agent's
@@ -583,6 +728,8 @@ class GatewayRunner:
                     reply += "\n\n" + "\n".join(goal_notes)
                 if learned and self.config.get("gateway.show_learning", True):
                     reply += "\n\n— " + " · ".join(dict.fromkeys(learned))   # dedup, keep order
+                if generation != self._generation(key):
+                    return ""
                 BUS.publish({"platform": ev.platform, "chat_id": ev.chat_id,
                              "type": "assistant_message", "text": reply})
                 if not is_internal:
@@ -705,7 +852,11 @@ class GatewayRunner:
         if adapter is None:
             return False
         try:
-            adapter.send(chat_id, text)
+            deliver = getattr(adapter, "deliver", None)
+            if callable(deliver):
+                deliver(chat_id, text)
+            else:
+                adapter.send(chat_id, text)
             return True
         except Exception:  # noqa: BLE001
             return False

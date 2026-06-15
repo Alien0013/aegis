@@ -4,13 +4,15 @@ import { useApi } from "../lib/useApi";
 import { Badge, Button, Card, Empty, Input, Loading, PageHeader, toast } from "../components/ui";
 import { Icon } from "../components/icons";
 
-interface KeyRow { key: string; set: boolean }
+interface KeyRow { key: string; set: boolean; source?: string; length?: number }
+interface EnvPayload { env_path?: string; keys?: KeyRow[] }
 
 export function Keys() {
-  const { data, loading, error, reload } = useApi<KeyRow[]>("keys");
+  const { data, loading, error, reload } = useApi<EnvPayload>("env");
   const [editing, setEditing] = useState("");
   const [value, setValue] = useState("");
   const [newKey, setNewKey] = useState("");
+  const rows = data?.keys || [];
 
   async function setVal(key: string, v: string) {
     if (!v) return;
@@ -24,7 +26,7 @@ export function Keys() {
 
   return (
     <>
-      <PageHeader title="Keys & Env" sub="Secrets live in ~/.aegis/.env (chmod 600) — values are never shown" />
+      <PageHeader title="Env" sub={data?.env_path || "Secrets live in the profile .env file; values are hidden"} />
       {error && <Card><Empty icon="alert">Couldn't load — {error}</Empty></Card>}
       {loading && <Loading />}
       {data && (
@@ -39,10 +41,12 @@ export function Keys() {
             </div>
           </Card>
           <Card title="Known keys" pad={false}>
-            {data.map((k) => (
+            {rows.map((k) => (
               <div key={k.key} className="flex items-center gap-3 border-b border-border px-[var(--pad)] py-2 last:border-0">
                 <span className="min-w-0 flex-1 truncate font-mono text-sm text-text">{k.key}</span>
                 <Badge status={k.set ? "ok" : undefined} tone={k.set ? undefined : "neutral"}>{k.set ? "set" : "missing"}</Badge>
+                {k.source && <Badge tone="neutral">{k.source}</Badge>}
+                {k.set && typeof k.length === "number" && <span className="text-xs tabular-nums text-faint">{k.length} chars</span>}
                 {editing === k.key ? (
                   <Input autoFocus type="password" className="w-52" value={value} placeholder="new value"
                     onChange={(e) => setValue(e.target.value)}

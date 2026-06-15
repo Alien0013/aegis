@@ -208,10 +208,14 @@ def _fake_cron_agent(monkeypatch, reply):
             seen["prompt"] = prompt
             return type("R", (), {"content": reply})()
 
-    def create(cfg, session=None):
+    def create(cfg, session=None, **kwargs):
         seen["memory_enabled"] = cfg.get("memory.enabled")
         seen["user_profile_enabled"] = cfg.get("memory.user_profile_enabled")
         seen["cron_skip_memory"] = cfg.get("cron.skip_memory")
+        seen["model"] = cfg.get("model.default")
+        seen["toolsets"] = cfg.get("tools.toolsets")
+        seen["disabled_tools"] = cfg.get("tools.disabled")
+        seen["kwargs"] = kwargs
         return A()
 
     monkeypatch.setattr(am.Agent, "create", staticmethod(create))
@@ -274,6 +278,72 @@ def test_cron_run_job_records_history(monkeypatch, tmp_path):
     assert dash["last_run_id"] == result["run_id"]
     assert dash["last_status"] == "ok"
     assert dash["history"][0]["data"]["cron_job_id"] == job.id
+
+
+def test_cron_job_runtime_overrides_model_toolsets_and_workdir(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.cron import CronStore, run_job
+
+    workdir = tmp_path / "project"
+    workdir.mkdir()
+    seen = _fake_cron_agent(monkeypatch, reply="[SILENT]")
+    store = CronStore()
+    job = store.add(
+        "every 1h",
+        "run in project",
+        model="cron-model",
+        enabled_toolsets=["core", "web"],
+        workdir=str(workdir),
+    )
+
+    result = run_job(None, job.id, store=store, verbose=False)
+
+    assert result["ok"]
+    assert result["model"] == "cron-model"
+    assert result["enabled_toolsets"] == ["core", "web"]
+    assert result["workdir"] == str(workdir)
+    assert seen["model"] == "cron-model"
+    assert seen["toolsets"] == ["core", "web"]
+    assert {"clarify", "send_message", "cronjob", "schedule_task"}.issubset(set(seen["disabled_tools"]))
+    assert str(seen["kwargs"]["cwd"]) == str(workdir)
+    saved = CronStore().get(job.id)
+    assert saved.model == "cron-model"
+    assert saved.enabled_toolsets == ["core", "web"]
+    assert saved.workdir == str(workdir)
+
+
+def test_cron_context_from_prepends_latest_output(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.cron import CronStore, run_job
+
+    store = CronStore()
+    script = tmp_path / "collect.py"
+    script.write_text("print('raw metric: 42')", encoding="utf-8")
+    source = store.add("every 1h", "collect", name="collector", script=str(script), no_agent=True)
+
+    source_result = run_job(None, source.id, store=store, verbose=False)
+
+    assert source_result["ok"]
+    saved_source = CronStore().get(source.id)
+    assert saved_source.runs[-1]["chars"] == len("raw metric: 42")
+    assert saved_source.runs[-1]["output"]
+    assert (tmp_path / "cron" / "output" / source.id).is_dir()
+
+    seen = _fake_cron_agent(monkeypatch, reply="summary done")
+    downstream = store.add(
+        "every 2h",
+        "summarize the chained data",
+        name="summarizer",
+        context_from=["collector"],
+    )
+
+    result = run_job(None, downstream.id, store=store, verbose=False)
+
+    assert result["ok"]
+    assert "Output from job 'collector'" in seen["prompt"]
+    assert "raw metric: 42" in seen["prompt"]
+    assert seen["prompt"].find("raw metric: 42") < seen["prompt"].find("summarize the chained data")
+    assert CronStore().get(downstream.id).context_from == ["collector"]
 
 
 def test_cron_skips_memory_by_default_and_allows_opt_in(monkeypatch, tmp_path):

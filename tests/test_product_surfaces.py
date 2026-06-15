@@ -425,6 +425,8 @@ def test_terminal_goal_continuation_uses_surface_runner(monkeypatch):
 
     assert provider.calls == 2
     assert goals.get(agent.session) is None
+    assert "AEGIS terminal" in agent.session.messages[0].content
+    assert any(p["name"] == "platform:cli" for p in agent.session.meta["prompt_parts"])
     runs = RunStore().list(session_id=agent.session.id, limit=10)
     assert len([r for r in runs if r["surface"] == "terminal"]) == 2
     assert any("[Continuing toward your standing goal]" in r["prompt_preview"] for r in runs)

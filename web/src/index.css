@@ -26,16 +26,16 @@
 /* Fallback defaults so the very first paint (before ThemeProvider runs) is the
    signature dark theme rather than unstyled. Kept in sync with aegis-dark. */
 :root {
-  --bg: #0b0d10; --surface: #14171c; --surface-2: #1c2027;
-  --border: #262b33; --border-2: #363d48;
-  --text: #f1efe8; --text-dim: #a4a89f; --text-faint: #6c7269;
-  --primary: #e0a564; --primary-fg: #1a1206;
-  --success: #7ecf8f; --warning: #e8b86d; --danger: #ff6b6b; --info: #6fb7d8;
-  --term-bg: #0b0d10;
+  --bg: #031c19; --surface: #062823; --surface-2: #0b312b;
+  --border: #25534b; --border-2: #3f766b;
+  --text: #fff2df; --text-dim: #d3c8b0; --text-faint: #8f9b86;
+  --primary: #f3dfbf; --primary-fg: #05221e;
+  --success: #39d98a; --warning: #e6c36f; --danger: #ff6e6e; --info: #7dc8d8;
+  --term-bg: #031c19;
   --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
   --base-size: 14px; --line-height: 1.5; --letter-spacing: 0;
-  --radius: 10px; --gap: 12px; --pad: 14px; --row-h: 36px;
+  --radius: 4px; --gap: 12px; --pad: 14px; --row-h: 34px;
   --side: 248px;
 }
 
@@ -48,10 +48,25 @@ body {
   font-size: var(--base-size);
   line-height: var(--line-height);
   letter-spacing: var(--letter-spacing);
-  background: var(--bg);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--border) 18%, transparent) 1px, transparent 1px) 0 0 / 44px 44px,
+    linear-gradient(0deg, color-mix(in srgb, var(--border) 12%, transparent) 1px, transparent 1px) 0 0 / 44px 44px,
+    var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: -1;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--bg) 72%, transparent), color-mix(in srgb, var(--surface) 42%, transparent)),
+    repeating-linear-gradient(135deg, transparent 0 12px, color-mix(in srgb, var(--border) 8%, transparent) 12px 13px);
+  opacity: 0.62;
 }
 
 a { color: var(--primary); text-decoration: none; }
@@ -74,6 +89,8 @@ a { color: var(--primary); text-decoration: none; }
 .app-no-drag { -webkit-app-region: no-drag; }
 
 input, textarea, select, button { font-family: inherit; font-size: inherit; }
+
+button, select, input, textarea { letter-spacing: 0; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes pulse-dot { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }

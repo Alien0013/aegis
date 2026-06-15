@@ -108,6 +108,8 @@ class Skill:
     requires: dict = field(default_factory=dict)
     allowed_tools: list[str] | None = None
     toolsets: list[str] = field(default_factory=list)
+    platforms: list[str] = field(default_factory=list)
+    environments: list[str] = field(default_factory=list)
     tier: int = 4
 
     @property
@@ -158,6 +160,15 @@ def _skill_toolsets(fm: dict) -> list[str]:
     )
 
 
+def _skill_platforms(fm: dict) -> list[str]:
+    requires = fm.get("requires", {}) or {}
+    return _as_str_list(fm.get("platforms")) or _as_str_list(requires.get("platforms"))
+
+
+def _skill_environments(fm: dict) -> list[str]:
+    return _as_str_list(fm.get("environments"))
+
+
 def _skill_allowed_tools(fm: dict) -> list[str] | None:
     value = fm.get("allowed-tools")
     if value is None:
@@ -193,6 +204,30 @@ def _parse_frontmatter(raw: str) -> dict:
 
 def _bundled_dir() -> Path:
     return Path(__file__).parent / "builtin_skills"
+
+
+def _current_platform_name() -> str:
+    import sys
+
+    if sys.platform.startswith("linux"):
+        return "linux"
+    if sys.platform == "darwin":
+        return "macos"
+    if sys.platform.startswith("win"):
+        return "windows"
+    return sys.platform
+
+
+def _skill_matches_platform(skill: Skill) -> bool:
+    if not skill.platforms:
+        return True
+    current = _current_platform_name()
+    aliases = {"darwin": "macos", "osx": "macos", "win32": "windows"}
+    for item in skill.platforms:
+        normalized = aliases.get(str(item).lower().strip(), str(item).lower().strip())
+        if normalized and (current == normalized or current.startswith(normalized)):
+            return True
+    return False
 
 
 class SkillsLoader:
@@ -258,6 +293,8 @@ class SkillsLoader:
                     requires=fm.get("requires", {}) or {},
                     allowed_tools=_skill_allowed_tools(fm),
                     toolsets=_skill_toolsets(fm),
+                    platforms=_skill_platforms(fm),
+                    environments=_skill_environments(fm),
                     tier=tier,
                 )
         self._cache = found
@@ -286,21 +323,61 @@ class SkillsLoader:
                 entries.append((str(skill_md), int(stat.st_mtime_ns), int(stat.st_size)))
         return tuple(entries)
 
-    def _enabled(self, skill: Skill) -> tuple[bool, str]:
+    def _policy_reason(self, skill: Skill) -> str:
         disabled = {
             _skill_command_name(s)
             for s in self.config.get("skills.disabled", []) or []
             if str(s).strip()
         }
         if _skill_command_name(skill.name) in disabled:
-            return False, "disabled"
+            return "disabled"
         allowlist = {
             _skill_command_name(s)
             for s in self.config.get("skills.allowlist", []) or []
             if str(s).strip()
         }
         if allowlist and _skill_command_name(skill.name) not in allowlist:
-            return False, "not in skills.allowlist"
+            return "not in skills.allowlist"
+        if not _skill_matches_platform(skill):
+            return f"platform {_current_platform_name()} not in {skill.platforms}"
+        return ""
+
+    def _environment_reason(self, skill: Skill) -> str:
+        if not skill.environments:
+            return ""
+        active = {str(e).lower().strip() for e in skill.environments if str(e).strip()}
+        if not active:
+            return ""
+        for env in active:
+            if env == "kanban":
+                if (
+                    os.environ.get("AEGIS_KANBAN_TASK")
+                    or os.environ.get("AEGIS_KANBAN_BOARD")
+                    or "kanban" in {str(s).lower() for s in self.config.get("tools.toolsets", []) or []}
+                ):
+                    return ""
+                continue
+            if env == "docker":
+                if Path("/.dockerenv").exists() or "docker" in read_text(Path("/proc/1/cgroup")).lower():
+                    return ""
+                continue
+            if env == "s6":
+                if Path("/run/s6").is_dir() or Path("/package/admin/s6-overlay").is_dir():
+                    return ""
+                continue
+            return ""  # unknown environment tags fail open
+        return "environment not active: " + ", ".join(sorted(active))
+
+    def _loadable(self, skill: Skill) -> bool:
+        return not self._policy_reason(skill)
+
+    def _enabled(self, skill: Skill) -> tuple[bool, str]:
+        policy = self._policy_reason(skill)
+        if policy:
+            return False, policy
+        environment = self._environment_reason(skill)
+        if environment:
+            return False, environment
         ok, why = skill.satisfied()
         if not ok:
             return False, why
@@ -322,27 +399,45 @@ class SkillsLoader:
     def unavailable_reason(self, skill: Skill) -> str:
         return self._enabled(skill)[1]
 
-    def _available_by_slug(self) -> dict[str, Skill]:
+    def _available_by_slug(self, *, include_unavailable: bool = False) -> dict[str, Skill]:
         out: dict[str, Skill] = {}
-        for skill in self.available():
+        skills = self.discover().values() if include_unavailable else self.available()
+        for skill in skills:
+            if include_unavailable and not self._loadable(skill):
+                continue
             out.setdefault(_skill_command_name(skill.name), skill)
             out.setdefault(skill.name, skill)
         return out
 
     def _bundle_map(self) -> dict[str, list[str]]:
         raw = self.config.get("skills.bundles", {}) or {}
-        if not isinstance(raw, dict):
-            return {}
         bundles: dict[str, list[str]] = {}
-        for name, members in raw.items():
-            slug = _skill_command_name(name)
-            if not slug:
-                continue
-            bundles[slug] = _as_str_list(members)
+        if isinstance(raw, dict):
+            for name, members in raw.items():
+                slug = _skill_command_name(name)
+                if not slug:
+                    continue
+                bundles[slug] = _as_str_list(members)
+        try:
+            from .skill_bundles import load_bundles
+
+            for slug, bundle in load_bundles().items():
+                bundles[slug] = _as_str_list(bundle.get("skills"))
+        except Exception:  # noqa: BLE001
+            pass
         return bundles
 
+    def _bundle_instruction(self, slug: str) -> str:
+        try:
+            from .skill_bundles import load_bundles
+
+            bundle = load_bundles().get(slug)
+            return str((bundle or {}).get("instruction") or "")
+        except Exception:  # noqa: BLE001
+            return ""
+
     def resolve_requested(self, requested: list[str]) -> tuple[list[Skill], list[str], list[str]]:
-        by_slug = self._available_by_slug()
+        by_slug = self._available_by_slug(include_unavailable=True)
         bundles = self._bundle_map()
         skills: list[Skill] = []
         loaded: set[str] = set()
@@ -437,7 +532,18 @@ class SkillsLoader:
         max_chars: int | None = None,
     ) -> str:
         ok, why = skill.satisfied()
-        parts = [activation_note, "", f"# Skill: {skill.name}", skill.full_body().strip()]
+        body = skill.full_body().strip()
+        try:
+            from .skill_preprocessing import preprocess_skill_content
+
+            body = preprocess_skill_content(
+                body,
+                skill.dir,
+                skills_cfg=self.config.get("skills", {}) or {},
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        parts = [activation_note, "", f"# Skill: {skill.name}", body]
         if not ok:
             parts.insert(2, f"[Skill requirement not met: {why}]")
         parts.extend([
@@ -467,7 +573,9 @@ class SkillsLoader:
         command = _skill_command_name(first.lstrip("/").replace("_", "-"))
         if not command:
             return None
-        for skill in sorted(self.available(), key=lambda s: s.name):
+        for skill in sorted(self.discover().values(), key=lambda s: s.name):
+            if not self._loadable(skill):
+                continue
             if _skill_command_name(skill.name) != command:
                 continue
             return skill
@@ -493,6 +601,12 @@ class SkillsLoader:
                 source=f"{command} skill bundle",
                 user_instruction=rest,
             )
+            instruction = self._bundle_instruction(command)
+            if instruction:
+                block = (
+                    f'[IMPORTANT: The "/{command}" skill bundle included extra guidance.]\n'
+                    f"{instruction.strip()}\n\n{block}"
+                ).strip()
             if block:
                 if missing:
                     block += "\n\n[Missing bundled skills: " + ", ".join(missing) + "]"
@@ -618,10 +732,11 @@ class SkillsLoader:
         return skill.path
 
     def activate(self, name: str) -> str | None:
-        skill = self._available_by_slug().get(name) or self._available_by_slug().get(_skill_command_name(name))
+        by_slug = self._available_by_slug(include_unavailable=True)
+        skill = by_slug.get(name) or by_slug.get(_skill_command_name(name))
         if not skill:
             return None
-        self.record_use(name)
+        self.record_use(skill.name)
         note = (
             f'[IMPORTANT: The "{skill.name}" skill has been loaded. '
             "Follow its instructions for this task unless the user overrides them.]"

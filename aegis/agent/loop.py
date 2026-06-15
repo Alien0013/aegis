@@ -463,6 +463,21 @@ class ToolExecutor:
     def execute_one_raw(self, call: ToolCall) -> ToolResult:
         import time
         started = time.perf_counter()
+        try:
+            from ..plugins import fire_middleware
+            payload = fire_middleware(
+                "tool_request",
+                {"tool": call.name, "arguments": dict(call.arguments or {}), "call": call},
+                lambda p: p,
+                getattr(self.ctx, "agent", None),
+            )
+            if isinstance(payload, dict):
+                if payload.get("block"):
+                    return ToolResult.error(str(payload.get("reason") or "blocked by plugin middleware"))
+                if isinstance(payload.get("arguments"), dict):
+                    call.arguments = payload["arguments"]
+        except Exception:  # noqa: BLE001
+            pass
         safe_args = redact_secret_values(call.arguments)
         self.emit({"type": "tool_start", "id": call.id, "name": call.name, "args": safe_args})
         trace_span = None
@@ -495,7 +510,26 @@ class ToolExecutor:
                 res = ToolResult.error(f"permission denied: {reason}")
             else:
                 try:
-                    res = tool.run(call.arguments, self.ctx)
+                    from ..plugins import fire_middleware
+
+                    payload = {
+                        "tool": call.name,
+                        "arguments": call.arguments,
+                        "context": self.ctx,
+                        "call": call,
+                    }
+
+                    def _run_tool(p):
+                        args = p.get("arguments", call.arguments) if isinstance(p, dict) else call.arguments
+                        return tool.run(args, self.ctx)
+
+                    candidate = fire_middleware(
+                        "tool_execution",
+                        payload,
+                        _run_tool,
+                        getattr(self.ctx, "agent", None),
+                    )
+                    res = candidate if isinstance(candidate, ToolResult) else ToolResult.ok(str(candidate))
                 except Exception as e:  # noqa: BLE001
                     res = ToolResult.error(f"tool raised {type(e).__name__}: {e}")
         if self.guard and not blocked:
@@ -1450,18 +1484,55 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
         try:
             agent._active_response_id = ""
             agent._active_response_cancelled = ""
-            resp = _provider_complete(
-                agent.provider, wire_messages, tools=schemas, stream=agent.stream, on_delta=delta_cb,
-                reasoning=getattr(agent, "reasoning", "off"),
-                on_reasoning=reasoning_cb,
-                tool_runner=executor.execute_one_raw,
-                approver=getattr(agent.tool_context, "approver", None),
-                cwd=agent.cwd,
-                session_id=getattr(agent.session, "id", None),
-                response_state=response_state,
-                metadata=_provider_metadata(agent),
-                on_provider_attempt=_observe_provider_attempt,
-                on_response_id=lambda rid: setattr(agent, "_active_response_id", str(rid or "")),
+            provider_kwargs = {
+                "stream": agent.stream,
+                "on_delta": delta_cb,
+                "reasoning": getattr(agent, "reasoning", "off"),
+                "on_reasoning": reasoning_cb,
+                "tool_runner": executor.execute_one_raw,
+                "approver": getattr(agent.tool_context, "approver", None),
+                "cwd": agent.cwd,
+                "session_id": getattr(agent.session, "id", None),
+                "response_state": response_state,
+                "metadata": _provider_metadata(agent),
+                "on_provider_attempt": _observe_provider_attempt,
+                "on_response_id": lambda rid: setattr(agent, "_active_response_id", str(rid or "")),
+            }
+            from ..plugins import fire_middleware
+
+            middleware_payload = fire_middleware(
+                "llm_request",
+                {
+                    "provider": agent.provider,
+                    "messages": wire_messages,
+                    "tools": schemas,
+                    "kwargs": provider_kwargs,
+                    "request": request_payload,
+                },
+                lambda p: p,
+                agent,
+            )
+            if isinstance(middleware_payload, dict):
+                wire_messages = middleware_payload.get("messages", wire_messages)
+                schemas = middleware_payload.get("tools", schemas)
+                if isinstance(middleware_payload.get("kwargs"), dict):
+                    provider_kwargs = middleware_payload["kwargs"]
+
+            resp = fire_middleware(
+                "llm_execution",
+                {
+                    "provider": agent.provider,
+                    "messages": wire_messages,
+                    "tools": schemas,
+                    "kwargs": provider_kwargs,
+                },
+                lambda p: _provider_complete(
+                    p.get("provider", agent.provider),
+                    p.get("messages", wire_messages),
+                    tools=p.get("tools", schemas),
+                    **(p.get("kwargs", provider_kwargs) or {}),
+                ),
+                agent,
             )
             agent._active_response_id = ""
         except Exception as e:  # noqa: BLE001

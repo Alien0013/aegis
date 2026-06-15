@@ -105,7 +105,7 @@ function startBackend() {
     const bin = aegisCommand();
     log(`starting backend: ${bin} dashboard --port ${port}`);
     backend = spawn(bin, ["dashboard", "--port", String(port), "--no-open"], {
-      env: { ...process.env, AEGIS_DASHBOARD_TOKEN: token },
+      env: { ...process.env, AEGIS_DASHBOARD_TOKEN: token, AEGIS_DESKTOP: "1" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     const tail = (buf) => log(String(buf).trimEnd());

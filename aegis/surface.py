@@ -258,6 +258,10 @@ class SurfaceRunner:
                 effective_prompt = prompt
         run_store = None
         run_id = ""
+        if should_refresh_cached_session := (
+            self.reuse_agents if reuse_agent is None else bool(reuse_agent)
+        ):
+            session = self._fresh_session_for_reuse(session)
         runtime_data = _effective_runtime_data(
             self.config, session, agent, model=model, provider_name=provider_name
         )
@@ -283,7 +287,7 @@ class SurfaceRunner:
             run_id = run["id"]
         except Exception:  # noqa: BLE001
             run_store = None
-        should_reuse = self.reuse_agents if reuse_agent is None else bool(reuse_agent)
+        should_reuse = should_refresh_cached_session
         key = self._agent_key(
             session=session,
             cwd=cwd,
@@ -488,12 +492,28 @@ class SurfaceRunner:
             controls.get("reasoning_effort", ""),
             controls.get("reasoning_display", ""),
             controls.get("busy_mode", ""),
+            *_cache_runtime_fingerprint(config, provider_name or controls.get("provider") or cfg_get("model.provider", "")),
             mcp,
             id(approver) if approver is not None else None,
             id(asker) if asker is not None else None,
             id(secret_capture) if secret_capture is not None else None,
             id(config),
         )
+
+    def _fresh_session_for_reuse(self, session: Session) -> Session:
+        """Use the persisted tip when another process/thread advanced this session."""
+        try:
+            latest = self.store.load(session.id)
+        except Exception:  # noqa: BLE001
+            return session
+        if latest is None:
+            return session
+        if (
+            getattr(latest, "updated_at", "") > getattr(session, "updated_at", "")
+            and len(getattr(latest, "messages", []) or []) != len(getattr(session, "messages", []) or [])
+        ):
+            return latest
+        return session
 
     def _lock_for(self, key: tuple[Any, ...]):
         import threading
@@ -634,6 +654,49 @@ def _workspace_run_meta(cwd: Path) -> dict[str, str]:
         "worktree": root,
         "branch": branch,
     }
+
+
+def _cache_runtime_fingerprint(config: Config, provider_name: str = "") -> tuple[Any, ...]:
+    """Runtime-sensitive config values that should invalidate warm agents."""
+    import hashlib
+    import json
+    import os
+
+    cfg_get = getattr(config, "get", lambda _key, default=None: default)
+    toolsets = tuple(str(x) for x in (cfg_get("tools.toolsets", []) or []))
+    disabled = tuple(str(x) for x in (cfg_get("tools.disabled", []) or []))
+    custom = []
+    for row in cfg_get("custom_providers", []) or []:
+        if isinstance(row, dict):
+            custom.append({
+                "name": str(row.get("name") or ""),
+                "base_url": str(row.get("base_url") or ""),
+                "api_mode": str(row.get("api_mode") or ""),
+                "default_model": str(row.get("default_model") or ""),
+            })
+    env_names = [
+        "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY",
+        "GOOGLE_API_KEY", "GEMINI_API_KEY", "MISTRAL_API_KEY",
+        "GROQ_API_KEY", "XAI_API_KEY",
+    ]
+    try:
+        from .providers.registry import get_spec
+        spec = get_spec(provider_name, config)
+        env_names.extend(str(name) for name in getattr(spec, "env_vars", ()) or ())
+    except Exception:  # noqa: BLE001
+        pass
+    secret_basis = "|".join(f"{name}:{os.environ.get(name, '')}" for name in sorted(set(env_names)))
+    api_key = str(cfg_get("model.api_key", "") or "")
+    server_key = str(cfg_get("server.api_key", "") or "")
+    secret_hash = hashlib.sha256(f"{api_key}|{server_key}|{secret_basis}".encode()).hexdigest()[:16]
+    return (
+        str(cfg_get("model.base_url", "") or ""),
+        str(cfg_get("model.api_mode", "") or ""),
+        toolsets,
+        disabled,
+        json.dumps(custom, sort_keys=True, separators=(",", ":")),
+        secret_hash,
+    )
 
 
 def _surface_task_id(session: Session | None, run_id: str = "") -> str:

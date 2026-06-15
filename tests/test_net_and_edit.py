@@ -155,17 +155,23 @@ def test_platform_hint_only_when_on_a_channel():
     from aegis.agent.context import ContextBuilder
     from aegis.config import Config
     b = ContextBuilder(Config.load())
-    assert "You are on Telegram" not in b.build()                       # REPL: no hint
+    assert "You are on Telegram" not in b.build()                       # no gateway hint by default
+    cli = b.build(platform="cli")
+    assert "AEGIS terminal" in cli and "standard Markdown" in cli
     tg = b.build(platform="telegram")
     assert "You are on Telegram" in tg and "NO table" in tg             # Telegram: formatting hint
     assert "You are on Discord" in b.build(platform="discord")
 
 
 # --- gateway MEDIA: native attachments --------------------------------------
-def test_media_split_and_deliver():
+def test_media_split_and_deliver(tmp_path):
     from aegis.gateway.base import BasePlatformAdapter, split_media
     clean, media = split_media("chart attached:\nMEDIA:/tmp/c.png\nbye")
     assert media == ["/tmp/c.png"] and "MEDIA:" not in clean and clean.startswith("chart")
+    a = tmp_path / "a.png"
+    b = tmp_path / "b.pdf"
+    a.write_text("a", encoding="utf-8")
+    b.write_text("b", encoding="utf-8")
 
     sent = []
 
@@ -173,8 +179,8 @@ def test_media_split_and_deliver():
         def send(self, chat_id, text): sent.append(("text", text))
         def send_media(self, chat_id, path, caption=""): sent.append(("media", path))
 
-    Fake().deliver("c", "see files\nMEDIA:/tmp/a.png\nMEDIA:/tmp/b.pdf")
-    assert sent == [("text", "see files"), ("media", "/tmp/a.png"), ("media", "/tmp/b.pdf")]
+    Fake().deliver("c", f"see files\nMEDIA:{a}\nMEDIA:{b}")
+    assert sent == [("text", "see files"), ("media", str(a)), ("media", str(b))]
 
 
 def test_media_hint_only_on_supporting_channels():
@@ -457,6 +463,8 @@ def test_runner_interrupt_sets_cancel(monkeypatch, tmp_path):
     from aegis.gateway.base import MessageEvent
     gr = GatewayRunner.__new__(GatewayRunner)
     gr.session_mode = "per_channel"
+    gr._lock = threading.Lock()
+    gr._generations = {}
 
     class FakeAgent:
         def __init__(self):
@@ -734,6 +742,41 @@ def test_python_plugin_hooks():
     assert fire_hook("pre_llm_call", ["x"], "A") == ["x", "INJECTED"]       # bad hook swallowed
     assert fire_hook("unknown_event") is None
     _HOOKS.clear()
+
+
+def test_python_plugin_middleware_chain():
+    from aegis.plugins import PluginAPI, fire_middleware, _MIDDLEWARE
+    _MIDDLEWARE.clear()
+    api = PluginAPI()
+
+    def first(payload, next_call, agent):
+        payload = dict(payload)
+        payload.setdefault("seen", []).append(f"first:{agent}")
+        result = next_call(payload)
+        result["after_first"] = True
+        return result
+
+    def second(payload, next_call, agent):
+        payload = dict(payload)
+        payload.setdefault("seen", []).append("second")
+        return next_call(payload)
+
+    api.register_middleware("llm_request", first)
+    api.register_middleware("llm_request", second)
+    result = fire_middleware("llm_request", {}, lambda p: {"seen": p["seen"]}, agent="agent")
+
+    assert result == {"seen": ["first:agent", "second"], "after_first": True}
+
+    _MIDDLEWARE.clear()
+    api.register_middleware("tool_execution", lambda payload, next_call, _agent: (next_call(payload), next_call(payload)))
+    try:
+        fire_middleware("tool_execution", {}, lambda p: p, agent=None)
+    except RuntimeError as exc:
+        assert "more than once" in str(exc)
+    else:
+        raise AssertionError("middleware next_call should be single-use")
+    finally:
+        _MIDDLEWARE.clear()
 
 
 # --- dashboard Models + Analytics tabs (richer control panel) ---------------

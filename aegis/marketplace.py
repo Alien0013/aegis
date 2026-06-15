@@ -541,7 +541,7 @@ DEFAULT_TAPS = {
 }
 
 # GitHub repos searched/installed by the Browse Hub. Each holds SKILL.md packages
-# under `path/`. These are the same official sources Hermes pulls from.
+# under `path/`. These are the same official sources AEGIS pulls from.
 GITHUB_SKILL_REPOS = [
     {"hub": "anthropic", "repo": "anthropics/skills", "path": "skills"},
     {"hub": "openai-curated", "repo": "openai/skills", "path": "skills/.curated"},

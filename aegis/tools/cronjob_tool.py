@@ -44,7 +44,21 @@ class CronJobTool(Tool):
                 ),
             },
             "script": {"type": "string", "description": "Optional Python script path to prepend output as context"},
+            "context_from": {
+                "description": "Cron job id/name or list of ids/names whose latest output should be prepended as context",
+                "anyOf": [
+                    {"type": "string"},
+                    {"type": "array", "items": {"type": "string"}},
+                ],
+            },
             "no_agent": {"type": "boolean", "description": "Run script-only and deliver stdout without an agent"},
+            "model": {"type": "string", "description": "Optional model override for this job"},
+            "enabled_toolsets": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional toolsets enabled only for this job",
+            },
+            "workdir": {"type": "string", "description": "Optional working directory for this job"},
             "skills": {"type": "array", "items": {"type": "string"}},
             "skill": {"type": "string", "description": "Compatibility alias for one skill"},
             "enabled": {"type": "boolean", "description": "Set enabled/paused state on update"},
@@ -102,15 +116,23 @@ class CronJobTool(Tool):
         )
         if deliver_error:
             return _error(deliver_error)
+        context_from = _canonical_refs(args.get("context_from"))
+        context_error = _validate_context_refs(store, context_from)
+        if context_error:
+            return _error(context_error)
         job = store.add(
             schedule=schedule,
             prompt=prompt,
             deliver=deliver or "",
             script=str(args.get("script") or "").strip(),
             skills=skills,
+            context_from=context_from,
             name=str(args.get("name") or "").strip(),
             no_agent=bool(args.get("no_agent", False)),
             max_runs=int(args.get("max_runs", 0) or 0),
+            model=str(args.get("model") or "").strip(),
+            enabled_toolsets=_canonical_refs(args.get("enabled_toolsets")),
+            workdir=str(args.get("workdir") or "").strip(),
         )
         data = {
             "success": True,
@@ -135,7 +157,7 @@ class CronJobTool(Tool):
         if isinstance(resolved, ToolResult):
             return resolved
         updates: dict[str, Any] = {}
-        for key in ("schedule", "prompt", "name", "script"):
+        for key in ("schedule", "prompt", "name", "script", "model", "workdir"):
             if key in args and args.get(key) is not None:
                 updates[key] = str(args.get(key) or "").strip()
         if "prompt" in updates:
@@ -153,6 +175,14 @@ class CronJobTool(Tool):
             updates["deliver"] = deliver or ""
         if "skill" in args or "skills" in args:
             updates["skills"] = _canonical_skills(args.get("skill"), args.get("skills"))
+        if "context_from" in args:
+            context_from = _canonical_refs(args.get("context_from"))
+            context_error = _validate_context_refs(store, context_from)
+            if context_error:
+                return _error(context_error)
+            updates["context_from"] = context_from
+        if "enabled_toolsets" in args:
+            updates["enabled_toolsets"] = _canonical_refs(args.get("enabled_toolsets"))
         if not updates:
             return _error("No updates provided.")
         job = store.update(resolved.id, **updates)
@@ -278,6 +308,30 @@ def _canonical_skills(skill: Any = None, skills: Any = None) -> list[str]:
     return out
 
 
+def _canonical_refs(value: Any = None) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw = value.split(",") if "," in value else [value]
+    elif isinstance(value, (list, tuple, set)):
+        raw = list(value)
+    else:
+        raw = [value]
+    out: list[str] = []
+    for item in raw:
+        text = str(item or "").strip()
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
+def _validate_context_refs(store: CronStore, refs: list[str]) -> str:
+    for ref in refs:
+        if store.resolve(ref) is None:
+            return f"context_from job '{ref}' not found. Use cronjob(action='list') to inspect jobs."
+    return ""
+
+
 def _origin_target(ctx: ToolContext) -> str:
     agent = getattr(ctx, "agent", None)
     platform = getattr(agent, "platform", None)
@@ -348,7 +402,11 @@ def _format_job(job: CronJob) -> dict[str, Any]:
         "deliver": job.deliver or job.channel or "local",
         "channel": job.channel,
         "script": job.script or None,
+        "context_from": list(job.context_from or []),
         "no_agent": bool(job.no_agent),
+        "model": job.model or None,
+        "enabled_toolsets": list(job.enabled_toolsets or []),
+        "workdir": job.workdir or None,
         "skills": list(job.skills or []),
         "enabled": bool(job.enabled),
         "state": _display_state(job),

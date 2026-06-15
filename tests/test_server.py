@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import http.client
 import json
 import threading
@@ -197,6 +198,45 @@ def test_openai_chat_completions_http_nonstream_records_run_metadata(monkeypatch
     assert call["cwd"] == str(tmp_path / "project")
 
 
+def test_openai_chat_completions_aiohttp_transport(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    async def exercise() -> tuple[int, dict]:
+        from aiohttp import ClientSession, web
+
+        app = server.make_app(Config.load())
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        try:
+            assert site._server is not None
+            port = site._server.sockets[0].getsockname()[1]
+            async with ClientSession() as session:
+                async with session.post(
+                    f"http://127.0.0.1:{port}/v1/chat/completions",
+                    json={
+                        "model": "served-model",
+                        "metadata": {"session_id": "serve:aiohttp"},
+                        "messages": [{"role": "user", "content": "hi"}],
+                    },
+                ) as resp:
+                    return resp.status, await resp.json()
+        finally:
+            await runner.cleanup()
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    status, body = asyncio.run(exercise())
+
+    assert status == 200
+    assert body["choices"][0]["message"]["content"] == "hello"
+    assert body["metadata"]["session_id"] == "serve:aiohttp"
+    assert _FakeRunner.calls[0]["surface"] == "serve"
+
+
 def test_openai_chat_completions_usage_is_per_response(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
@@ -293,3 +333,154 @@ def test_openai_chat_completions_stream_sse_contract(monkeypatch, tmp_path):
     assert _FakeRunner.calls[0]["stream"] is True
     assert _FakeRunner.calls[0]["provider_name"] == "stream-provider"
     assert _FakeRunner.calls[0]["cwd"] == str(tmp_path / "stream-project")
+
+
+def test_server_health_capabilities_and_body_limit(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    monkeypatch.setattr(server, "_MAX_BODY_BYTES", 8)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        health_status, health_data = _request(port, "GET", "/health")
+        detailed_status, detailed_data = _request(port, "GET", "/health/detailed")
+        caps_status, caps_data = _request(port, "GET", "/v1/capabilities")
+        too_large_status, too_large_data = _raw_request(
+            port,
+            "POST",
+            "/v1/chat/completions",
+            b'{"messages":[]}',
+            headers={"Content-Type": "application/json", "Content-Length": "15"},
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert health_status == 200
+    assert json.loads(health_data)["ok"] is True
+    assert detailed_status == 200
+    assert json.loads(detailed_data)["max_body_bytes"] == 8
+    assert caps_status == 200
+    assert json.loads(caps_data)["endpoints"]["responses"] is True
+    assert too_large_status == 413
+    assert json.loads(too_large_data)["error"] == "request body too large"
+
+
+def test_responses_create_retrieve_cancel_delete(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "model": "served-model",
+            "instructions": "be brief",
+            "input": "hello",
+            "metadata": {"session_id": "serve:responses"},
+        })
+        body = json.loads(data)
+        response_id = body["id"]
+        get_status, get_data = _request(port, "GET", f"/v1/responses/{response_id}")
+        cancel_status, cancel_data = _request(port, "POST", f"/v1/responses/{response_id}/cancel", {})
+        delete_status, delete_data = _request(port, "DELETE", f"/v1/responses/{response_id}")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert body["object"] == "response"
+    assert body["output_text"] == "hello"
+    assert body["metadata"]["session_id"] == "serve:responses"
+    assert get_status == 200
+    assert json.loads(get_data)["id"] == response_id
+    assert cancel_status == 200
+    assert json.loads(cancel_data)["status"] == "cancelled"
+    assert delete_status == 200
+    assert json.loads(delete_data)["ok"] is True
+    assert _FakeRunner.calls[0]["session_id"] == "serve:responses"
+
+
+def test_server_session_crud_fork_and_chat(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        create_status, create_data = _request(port, "POST", "/api/sessions", {"title": "API Session"})
+        session_id = json.loads(create_data)["session"]["id"]
+        add_status, add_data = _request(
+            port,
+            "POST",
+            f"/api/sessions/{session_id}/messages",
+            {"role": "user", "content": "saved"},
+        )
+        chat_status, chat_data = _request(
+            port,
+            "POST",
+            f"/api/sessions/{session_id}/chat",
+            {"prompt": "reply"},
+        )
+        fork_status, fork_data = _request(
+            port,
+            "POST",
+            f"/api/sessions/{session_id}/fork",
+            {"title": "Forked"},
+        )
+        list_status, list_data = _request(port, "GET", "/api/sessions")
+        delete_status, delete_data = _request(port, "DELETE", f"/api/sessions/{session_id}")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert create_status == 201
+    assert add_status == 200
+    assert json.loads(add_data)["message"]["content"] == "saved"
+    assert chat_status == 200
+    assert json.loads(chat_data)["text"] == "hello"
+    assert fork_status == 201
+    assert json.loads(fork_data)["session"]["parent_id"] == session_id
+    assert list_status == 200
+    assert any(row["id"] == session_id for row in json.loads(list_data)["sessions"])
+    assert delete_status == 200
+    assert json.loads(delete_data)["ok"] is True
+
+
+def test_server_run_read_endpoints(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.config import Config
+    from aegis.runs import RunStore
+    from aegis.server import make_handler
+
+    run = RunStore().start(surface="serve", kind="serve", title="read run", prompt="hello")
+    RunStore().finish(run["id"], status="ok", result="done")
+    srv, port = _serve(make_handler(Config.load()))
+    try:
+        list_status, list_data = _request(port, "GET", "/v1/runs")
+        get_status, get_data = _request(port, "GET", f"/v1/runs/{run['id']}")
+        events_status, events_data = _request(port, "GET", f"/v1/runs/{run['id']}/events")
+        stream_status, stream_data = _request(
+            port,
+            "GET",
+            f"/v1/runs/{run['id']}/events",
+            headers={"Accept": "text/event-stream"},
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert list_status == 200
+    assert any(row["id"] == run["id"] for row in json.loads(list_data)["data"])
+    assert get_status == 200
+    assert json.loads(get_data)["run"]["id"] == run["id"]
+    assert events_status == 200
+    assert json.loads(events_data)["ok"] is True
+    assert stream_status == 200
+    assert "event: done" in stream_data
+    assert "data: [DONE]" in stream_data

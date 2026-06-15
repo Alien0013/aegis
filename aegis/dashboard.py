@@ -208,6 +208,57 @@ def _dashboard_tools(config: Config) -> dict:
     }
 
 
+_TOOLSET_LABELS = {
+    "browser": ("Browser Automation", "Browser interaction and UI verification tools."),
+    "computer": ("Computer Control", "Desktop screen, mouse, and keyboard automation."),
+    "core": ("Core Agent Tools", "Files, terminal, memory, skills, planning, messaging, and agent state."),
+    "lsp": ("Language Server", "Code intelligence through language-server protocol tools."),
+    "mcp": ("MCP Servers", "Tools exposed by configured Model Context Protocol servers."),
+    "vision": ("Vision / Image Analysis", "Image understanding tools."),
+    "voice": ("Voice", "Speech-to-text and text-to-speech tools."),
+    "web": ("Web Extraction", "Web page extraction and summarization tools."),
+}
+
+
+def _toolset_label(name: str) -> str:
+    return _TOOLSET_LABELS.get(name, (name.replace("_", " ").replace("-", " ").title(), ""))[0]
+
+
+def _toolset_description(name: str, tools: list[dict]) -> str:
+    if name in _TOOLSET_LABELS:
+        return _TOOLSET_LABELS[name][1]
+    if tools:
+        return tools[0].get("description", "")
+    return ""
+
+
+def _dashboard_toolsets(config: Config) -> list[dict]:
+    payload = _dashboard_tools(config)
+    active = set(payload["toolsets"])
+    grouped: dict[str, list[dict]] = {}
+    for tool in payload["tools"]:
+        grouped.setdefault(str(tool.get("toolset") or "core"), []).append(tool)
+    for name in active:
+        grouped.setdefault(name, [])
+    rows = []
+    for name, tools in sorted(grouped.items()):
+        enabled_tools = [tool for tool in tools if tool.get("enabled")]
+        available_tools = [tool for tool in tools if tool.get("available")]
+        rows.append({
+            "name": name,
+            "label": _toolset_label(name),
+            "description": _toolset_description(name, tools),
+            "enabled": name in active or "all" in active,
+            "available": bool(available_tools) or name in {"mcp"},
+            "configured": name in active or "all" in active,
+            "tools": sorted(tool["name"] for tool in tools),
+            "enabled_tools": sorted(tool["name"] for tool in enabled_tools),
+            "tool_count": len(tools),
+            "enabled_count": len(enabled_tools),
+        })
+    return rows
+
+
 def _dashboard_tool_toggle(body: dict, config: Config) -> dict:
     """Turn an individual tool on/off from the dashboard. Disabling adds the tool to the
     ``tools.disabled`` denylist; enabling removes it and, if the tool's toolset isn't active,
@@ -338,12 +389,26 @@ def _dashboard_review() -> dict:
 def _dashboard_recent_logs(limit: int = 80) -> dict:
     from . import config as _cfg
 
-    lp = _cfg.logs_dir() / "aegis.log"
+    log_dir = _cfg.logs_dir()
+    lp = log_dir / "agent.log"
+    if not lp.exists():
+        lp = log_dir / "aegis.log"
+    ep = log_dir / "errors.log"
     lines = lp.read_text(errors="replace").splitlines()[-limit:] if lp.exists() else []
-    errors = [line for line in lines if any(word in line.lower() for word in (
-        "error", "exception", "traceback", "failed", "fatal",
-    ))][-20:]
-    return {"path": str(lp), "lines": lines, "errors": errors}
+    errors = ep.read_text(errors="replace").splitlines()[-20:] if ep.exists() else [
+        line for line in lines if any(word in line.lower() for word in (
+            "error", "exception", "traceback", "failed", "fatal",
+        ))
+    ][-20:]
+    return {
+        "path": str(lp),
+        "lines": lines,
+        "errors": errors,
+        "files": {
+            name: str(log_dir / name)
+            for name in ("agent.log", "errors.log", "gateway.log", "gui.log", "aegis.log")
+        },
+    }
 
 
 def _dashboard_memory_payload() -> dict:
@@ -1959,7 +2024,7 @@ def _cron_run_history(job_id: str, limit: int = 5) -> list[dict]:
 
 
 def _dashboard_cron_jobs() -> list[dict]:
-    from .cron import CronStore
+    from .cron import CronStore, _latest_job_output
     rows = []
     for job in CronStore().list():
         history = _cron_run_history(job.id)
@@ -1971,6 +2036,15 @@ def _dashboard_cron_jobs() -> list[dict]:
             "enabled": job.enabled,
             "one_shot": bool(job.run_at),
             "no_agent": bool(job.no_agent),
+            "channel": job.channel,
+            "context_from": list(getattr(job, "context_from", []) or []),
+            "script": job.script,
+            "skills": list(job.skills or []),
+            "model": getattr(job, "model", "") or "",
+            "enabled_toolsets": list(getattr(job, "enabled_toolsets", []) or []),
+            "workdir": getattr(job, "workdir", "") or "",
+            "deliver": job.deliver,
+            "max_runs": job.max_runs,
             "state": job.state,
             "last_error": job.last_error,
             "next_run": job.next_run,
@@ -1980,6 +2054,7 @@ def _dashboard_cron_jobs() -> list[dict]:
             "last_run_id": history[0]["id"] if history else "",
             "last_status": history[0]["status"] if history else "",
             "history": history,
+            "latest_output": _latest_job_output(job, limit=1200),
         })
     return rows
 

@@ -41,12 +41,17 @@ const PATHS: Record<string, string> = {
   external: "M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6",
   command: "M6 6a3 3 0 1 1 3 3v6a3 3 0 1 1-3-3h12a3 3 0 1 1-3 3V9a3 3 0 1 1 3-3H6z",
   cornerDownLeft: "M9 10 4 15l5 5M20 4v7a4 4 0 0 1-4 4H4",
+  menu: "M4 6h16M4 12h16M4 18h16",
+  panelLeft: "M4 4h16v16H4zM9 4v16",
+  circle: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z",
+  more: "M12 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2zM19 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2zM5 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2z",
   winMin: "M5 12h14",
   winMax: "M5 5h14v14H5z",
   winRestore: "M8 8V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2M4 10a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z",
   kanban: "M4 4h4v16H4zM10 4h4v10h-4zM16 4h4v13h-4z",
   play: "M6 4l14 8-14 8V4z",
   download: "M12 3v12m0 0l-4-4m4 4l4-4M5 21h14",
+  upload: "M12 21V9m0 0 4 4m-4-4-4 4M5 3h14",
 };
 
 export type IconName = keyof typeof PATHS;

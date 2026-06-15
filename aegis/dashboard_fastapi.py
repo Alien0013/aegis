@@ -42,6 +42,36 @@ _SESSION_TTL_SECONDS = 12 * 60 * 60
 _BASIC_USER_ENV = "AEGIS_DASHBOARD_BASIC_AUTH_USERNAME"
 _BASIC_PASS_ENV = "AEGIS_DASHBOARD_BASIC_AUTH_PASSWORD"
 _BASIC_SECRET_ENV = "AEGIS_DASHBOARD_BASIC_AUTH_SECRET"
+_DESKTOP_CRON_STARTED = False
+_DESKTOP_CRON_LOCK = threading.Lock()
+
+
+def _start_desktop_cron_ticker(config: Config) -> bool:
+    """Start the in-dashboard cron ticker for Electron desktop launches."""
+    global _DESKTOP_CRON_STARTED
+    if os.environ.get("AEGIS_DESKTOP") != "1":
+        return False
+    with _DESKTOP_CRON_LOCK:
+        if _DESKTOP_CRON_STARTED:
+            return False
+        _DESKTOP_CRON_STARTED = True
+
+    def loop() -> None:
+        from . import cron
+        from .surface import SurfaceRunner
+
+        interval = int(config.get("gateway.cron_interval", 60) or 60)
+        sink = cron.build_delivery_sink(config, verbose=False)
+        runner = SurfaceRunner(config, include_mcp=True)
+        while True:
+            try:
+                cron.tick(config, sink=sink, verbose=False, runner=runner)
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(max(5, interval))
+
+    threading.Thread(target=loop, daemon=True, name="aegis-desktop-cron").start()
+    return True
 
 
 def _query_dict(request: Request) -> dict[str, list[str]]:
@@ -399,6 +429,21 @@ _CONFIG_FIELD_META: dict[str, dict[str, Any]] = {
     "skills.bundles": {
         "label": "Skill bundles",
         "description": "Named stacks of skills that can be preloaded together.",
+        "group": "Skills",
+    },
+    "skills.template_vars": {
+        "label": "Skill template variables",
+        "description": "Expand ${AEGIS_SKILL_DIR}/${AEGIS_SESSION_ID} placeholders when loading skills.",
+        "group": "Skills",
+    },
+    "skills.inline_shell": {
+        "label": "Skill inline shell",
+        "description": "Opt-in expansion for !`cmd` snippets inside loaded skills.",
+        "group": "Skills",
+    },
+    "skills.inline_shell_timeout": {
+        "label": "Inline shell timeout",
+        "description": "Maximum seconds for each skill inline shell snippet.",
         "group": "Skills",
     },
     "memory.enabled": {
@@ -848,6 +893,17 @@ def _write_profile(config: Config, name: str, content: str) -> dict:
     return {"ok": True, "profile": _profile_detail(config, path.stem)}
 
 
+def _runtime_profiles_payload() -> dict:
+    from . import config as cfg
+    from . import profiles
+
+    rows = [info.as_dict() for info in profiles.list_profiles()]
+    return {
+        "active": profiles.label(cfg.current_profile()),
+        "profiles": rows,
+    }
+
+
 def _skill_writable_roots() -> list[Path]:
     from . import config as cfg
 
@@ -874,6 +930,36 @@ def _skill_path_editable(path: Path) -> bool:
     return any(resolved.is_relative_to(root) for root in _skill_writable_roots())
 
 
+def _title_category(value: str) -> str:
+    return str(value or "General").replace("_", " ").replace("-", " ").title()
+
+
+def _skill_category(skill) -> str:
+    meta = skill.metadata if isinstance(skill.metadata, dict) else {}
+    category = meta.get("category")
+    if isinstance(category, str) and category.strip():
+        return _title_category(category)
+    try:
+        rel = skill.path.parent.relative_to(Path(__file__).parent / "builtin_skills")
+        if len(rel.parts) > 1:
+            return _title_category(rel.parts[0])
+    except ValueError:
+        pass
+    try:
+        rel = skill.path.parent.relative_to(Path.cwd() / ".aegis" / "skills")
+        if len(rel.parts) > 1:
+            return _title_category(rel.parts[0])
+    except ValueError:
+        pass
+    try:
+        rel = skill.path.parent.relative_to(Path.cwd() / "skills")
+        if len(rel.parts) > 1:
+            return _title_category(rel.parts[0])
+    except ValueError:
+        pass
+    return "General"
+
+
 def _skill_entry(skill, usage: dict, installed_lock: dict, loader) -> dict:
     reason = loader.unavailable_reason(skill)
     ok = not reason
@@ -881,8 +967,12 @@ def _skill_entry(skill, usage: dict, installed_lock: dict, loader) -> dict:
     return {
         "name": skill.name,
         "description": skill.description,
+        "category": _skill_category(skill),
         "path": str(skill.path),
         "tier": skill.tier,
+        "platforms": list(getattr(skill, "platforms", []) or []),
+        "environments": list(getattr(skill, "environments", []) or []),
+        "toolsets": list(getattr(skill, "toolsets", []) or []),
         "available": ok,
         "unavailable_reason": reason,
         "enabled": reason != "disabled",
@@ -903,10 +993,14 @@ def _skills_payload(config: Config) -> dict:
     lock = marketplace.installed()
     rows = [_skill_entry(skill, usage, lock, loader)
             for skill in sorted(loader.discover().values(), key=lambda s: s.name)]
+    categories: dict[str, int] = {}
+    for row in rows:
+        categories[row["category"]] = categories.get(row["category"], 0) + 1
     return {
         "skills": rows,
         "count": len(rows),
         "enabled_count": sum(1 for r in rows if r["enabled"]),
+        "categories": categories,
         "installed": lock,
         "taps": marketplace.list_taps(config),
         "registries": marketplace.list_registries(config),
@@ -1109,6 +1203,7 @@ def _session_stats() -> dict:
 
     store = SessionStore()
     rows = store.list(10000)
+    empty_sessions = store.prune_empty(dry_run=True)
     total_messages = 0
     role_counts: dict[str, int] = {}
     roots = 0
@@ -1130,6 +1225,7 @@ def _session_stats() -> dict:
         "session_count": len(rows),
         "root_sessions": roots,
         "child_sessions": children,
+        "empty_sessions": len(empty_sessions),
         "message_count": total_messages,
         "role_counts": role_counts,
     }
@@ -1160,11 +1256,62 @@ def _prune_sessions(older_than_days: int) -> dict:
     return {"ok": True, "removed": removed, "count": len(removed), "cutoff": cutoff.isoformat(timespec="seconds")}
 
 
+def _empty_sessions(older_than_days: float = 0.0, *, dry_run: bool = True) -> dict:
+    from .session import SessionStore
+
+    store = SessionStore()
+    removed = store.prune_empty(older_than_days=max(0.0, float(older_than_days)), dry_run=dry_run)
+    return {"ok": True, "ids": removed, "count": len(removed), "dry_run": dry_run}
+
+
+def _delete_sessions(ids: Any) -> dict:
+    from .session import SessionStore
+
+    if not isinstance(ids, list):
+        return {"ok": False, "error": "ids must be a list", "removed": [], "count": 0}
+    store = SessionStore()
+    removed: list[str] = []
+    missing: list[str] = []
+    for raw in ids:
+        sid = str(raw or "").strip()
+        if not sid:
+            continue
+        if store.delete(sid):
+            removed.append(sid)
+        else:
+            missing.append(sid)
+    return {"ok": True, "removed": removed, "missing": missing, "count": len(removed)}
+
+
 def _cron_job_detail(job_id: str) -> dict:
     for row in dash._dashboard_cron_jobs():
         if row["id"] == job_id or row["id"].startswith(job_id):
             return {"found": True, "job": row}
     return {"found": False, "id": job_id, "error": "cron job not found"}
+
+
+def _cron_context_refs(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        items = raw.split(",") if "," in raw else [raw]
+    elif isinstance(raw, (list, tuple, set)):
+        items = list(raw)
+    else:
+        items = [raw]
+    refs: list[str] = []
+    for item in items:
+        text = str(item or "").strip()
+        if text and text not in refs:
+            refs.append(text)
+    return refs
+
+
+def _validate_cron_context_refs(store: Any, refs: list[str]) -> str:
+    for ref in refs:
+        if store.resolve(ref) is None:
+            return f"context_from job not found: {ref}"
+    return ""
 
 
 def _service_result(result) -> dict:
@@ -1226,6 +1373,83 @@ def _gateway_probe(body: dict[str, Any]) -> dict:
     except Exception as exc:  # noqa: BLE001
         ok, detail = False, f"{type(exc).__name__}: {exc}"
     return {"ok": bool(ok), "channel": channel, "detail": detail}
+
+
+def _fs_git_root(query: dict[str, list[str]]) -> dict:
+    import subprocess
+
+    raw = (query.get("path", [""])[0] or "").strip()
+    base = Path(raw).expanduser() if raw else Path.cwd()
+    try:
+        base = base.resolve()
+        cwd = base if base.is_dir() else base.parent
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "path": str(base), "root": "", "error": str(exc)}
+    if result.returncode != 0:
+        return {"ok": False, "path": str(cwd), "root": "", "error": (result.stderr or "not a git worktree").strip()}
+    return {"ok": True, "path": str(cwd), "root": result.stdout.strip()}
+
+
+def _fs_read_data_url(query: dict[str, list[str]]) -> dict:
+    import mimetypes
+
+    raw = (query.get("path", [""])[0] or "").strip()
+    if not raw:
+        return {"ok": False, "error": "no path"}
+    try:
+        path = Path(raw).expanduser().resolve()
+    except Exception:  # noqa: BLE001
+        return {"ok": False, "error": "bad path"}
+    if not path.is_file():
+        return {"ok": False, "path": str(path), "error": "not a file"}
+    if dash._is_sensitive_path(path):
+        return {"ok": False, "path": str(path), "error": "blocked: refusing to read a credential/key path"}
+    try:
+        size = path.stat().st_size
+        if size > 2 * 1024 * 1024:
+            return {"ok": False, "path": str(path), "size": size, "error": "file too large to encode (>2MB)"}
+        mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        data = base64.b64encode(path.read_bytes()).decode("ascii")
+        return {"ok": True, "path": str(path), "size": size, "mime": mime, "data_url": f"data:{mime};base64,{data}"}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "path": str(path), "error": str(exc)}
+
+
+def _delete_managed_file(body: dict[str, Any]) -> dict:
+    import shutil
+
+    raw = str(body.get("path") or "").strip()
+    if not raw:
+        return {"ok": False, "error": "missing path"}
+    try:
+        target = Path(raw).expanduser().resolve()
+    except Exception:  # noqa: BLE001
+        return {"ok": False, "error": "bad path"}
+    protected = {Path("/").resolve(), Path.home().resolve(), Path.cwd().resolve()}
+    if target in protected:
+        return {"ok": False, "error": "refusing to delete a protected root path", "path": str(target)}
+    if dash._is_sensitive_path(target):
+        return {"ok": False, "error": "blocked: refusing to delete a credential/key path", "path": str(target)}
+    if not target.exists():
+        return {"ok": False, "error": "path does not exist", "path": str(target)}
+    try:
+        if target.is_dir():
+            if not bool(body.get("recursive", False)):
+                return {"ok": False, "error": "directory delete requires recursive=true", "path": str(target)}
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc), "path": str(target)}
+    return {"ok": True, "path": str(target)}
 
 
 def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
@@ -1321,6 +1545,17 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
         return dash._dashboard_files(query)
     if path == "/api/files/read":
         return dash._dashboard_file_read(query)
+    if path == "/api/fs/list":
+        return dash._dashboard_files(query)
+    if path == "/api/fs/read-text":
+        result = dash._dashboard_file_read(query)
+        return {"ok": not bool(result.get("error")), **result}
+    if path == "/api/fs/read-data-url":
+        return _fs_read_data_url(query)
+    if path == "/api/fs/git-root":
+        return _fs_git_root(query)
+    if path == "/api/fs/default-cwd":
+        return {"ok": True, "path": str(Path.cwd().resolve())}
     if path == "/api/review":
         return dash._dashboard_review()
     if path == "/api/evals":
@@ -1330,8 +1565,23 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
     if path == "/api/logs":
         from . import config as cfg
 
-        lp = cfg.logs_dir() / "aegis.log"
-        lines = lp.read_text(errors="replace").splitlines()[-200:] if lp.exists() else []
+        name = str(query.get("name", ["agent"])[0] or "agent")
+        try:
+            limit = max(1, min(1000, int(str(query.get("limit", ["200"])[0] or "200"))))
+        except (TypeError, ValueError):
+            limit = 200
+        allowed = {
+            "agent": "agent.log",
+            "desktop": "desktop.log",
+            "errors": "errors.log",
+            "gateway": "gateway.log",
+            "gui": "gui.log",
+            "legacy": "aegis.log",
+        }
+        lp = cfg.logs_dir() / allowed.get(name, "agent.log")
+        if not lp.exists() and name == "agent":
+            lp = cfg.logs_dir() / "aegis.log"
+        lines = lp.read_text(errors="replace").splitlines()[-limit:] if lp.exists() else []
         return {"path": str(lp), "lines": lines}
     if path == "/api/sessions":
         from .session import SessionStore
@@ -1369,6 +1619,12 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
         return _skills_payload(config)
     if path == "/api/tools":
         return dash._dashboard_tools(config)["tools"]
+    if path == "/api/tools/toolsets":
+        return dash._dashboard_toolsets(config)
+    if path == "/api/skills/bundles":
+        from .skill_bundles import list_bundles
+
+        return {"bundles": list_bundles()}
     return {"error": "not found"}
 
 
@@ -1379,11 +1635,17 @@ def _api_post(path: str, body: dict, config: Config, chat_runner: Any) -> dict:
         ks = KanbanStore()
         act = body.get("action")
         if act == "create":
+            parents = body.get("parents", body.get("parent", []))
+            if isinstance(parents, str):
+                parents = [p.strip() for p in parents.split(",") if p.strip()]
             t = ks.create(
                 (body.get("title") or "untitled").strip(), body.get("body", ""),
                 priority=int(body.get("priority") or 0),
                 assignee=str(body.get("assignee") or ""),
                 tenant=str(body.get("tenant") or ""),
+                parents=list(parents or []),
+                workspace=str(body.get("workspace_kind") or body.get("workspace") or "scratch"),
+                skills=str(body.get("skills") or ""),
             )
             status = str(body.get("status") or "").strip()
             if status in STATUSES and status != t.status:
@@ -1415,7 +1677,27 @@ def _api_post(path: str, body: dict, config: Config, chat_runner: Any) -> dict:
             prompt_error = _scan_cron_prompt(str(body.get("prompt") or ""))
             if prompt_error:
                 return {"ok": False, "error": prompt_error}
-            j = cs.add(body["schedule"], body["prompt"], body.get("channel", ""))
+            context_from = _cron_context_refs(body.get("context_from"))
+            context_error = _validate_cron_context_refs(cs, context_from)
+            if context_error:
+                return {"ok": False, "error": context_error}
+            skills = body.get("skills") or []
+            if isinstance(skills, str):
+                skills = [s.strip() for s in skills.split(",") if s.strip()]
+            j = cs.add(
+                body["schedule"],
+                body["prompt"],
+                body.get("channel", ""),
+                script=str(body.get("script") or ""),
+                skills=list(skills),
+                deliver=str(body.get("deliver") or ""),
+                no_agent=bool(body.get("no_agent", False)),
+                context_from=context_from,
+                model=str(body.get("model") or ""),
+                enabled_toolsets=_cron_context_refs(body.get("enabled_toolsets")),
+                workdir=str(body.get("workdir") or ""),
+                max_runs=int(body.get("max_runs") or 0),
+            )
             return {"id": j.id}
         if act == "remove" and body.get("id"):
             return {"ok": cs.remove(body["id"])}
@@ -1489,6 +1771,16 @@ def _api_post(path: str, body: dict, config: Config, chat_runner: Any) -> dict:
         if body.get("toolset") is not None:
             return dash._dashboard_toolset_toggle(body, config)
         return dash._dashboard_tool_toggle(body, config)
+    if path == "/api/skills/bundles":
+        from .skill_bundles import save_bundle
+
+        bundle = save_bundle(
+            str(body.get("name") or ""),
+            body.get("skills") or body.get("members") or [],
+            description=str(body.get("description") or ""),
+            instruction=str(body.get("instruction") or ""),
+        )
+        return {"ok": True, "bundle": bundle}
     if path == "/api/session":
         act = body.get("action")
         sid = (body.get("id") or body.get("session_id") or "").strip()
@@ -1602,7 +1894,7 @@ def _api_post(path: str, body: dict, config: Config, chat_runner: Any) -> dict:
         if act == "remove" and body.get("match"):
             return {"result": ms.remove(target, body["match"])}
         return {"error": "bad memory request"}
-    if path == "/api/files/mkdir":
+    if path in {"/api/files/mkdir", "/api/fs/mkdir"}:
         parent = Path(str(body.get("path") or Path.home())).expanduser().resolve()
         name = Path(str(body.get("name") or "")).name
         if not name:
@@ -1613,6 +1905,8 @@ def _api_post(path: str, body: dict, config: Config, chat_runner: Any) -> dict:
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}
         return {"ok": True, "path": str(target)}
+    if path in {"/api/files/delete", "/api/fs/delete"}:
+        return _delete_managed_file(body)
     return dash._dashboard_chat_response(body, chat_runner)
 
 
@@ -1627,6 +1921,7 @@ def create_app(config: Config) -> FastAPI:
         )
     app = FastAPI(title="AEGIS", version=__version__)
     chat_runner = SurfaceRunner(config, store=SessionStore(), include_mcp=True)
+    _start_desktop_cron_ticker(config)
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> HTMLResponse:
@@ -2056,10 +2351,90 @@ def create_app(config: Config) -> FastAPI:
         config.set("agent.personality", str(result["name"]))
         return JSONResponse({"ok": True, "active": result["name"], "profiles": _profiles_payload(config)})
 
+    @app.get("/api/runtime-profiles")
+    async def api_runtime_profiles_get(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_runtime_profiles_payload())
+
+    @app.post("/api/runtime-profiles")
+    async def api_runtime_profiles_create(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from . import profiles
+
+        body = await request.json()
+        try:
+            name = str((body or {}).get("name") or "").strip()
+            source = str((body or {}).get("clone_from") or "").strip() or None
+            path = profiles.create_profile(
+                name,
+                clone_from=source,
+                clone_config=bool((body or {}).get("clone", False) or source),
+                clone_all=bool((body or {}).get("clone_all", False)),
+            )
+            if bool((body or {}).get("activate", False)):
+                profiles.use_profile(name)
+            return JSONResponse({"ok": True, "path": str(path), **_runtime_profiles_payload()})
+        except (ValueError, FileExistsError, FileNotFoundError, OSError) as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+    @app.post("/api/runtime-profiles/{name}/activate")
+    async def api_runtime_profile_activate(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from . import profiles
+
+        try:
+            profiles.use_profile(name)
+            return JSONResponse({"ok": True, **_runtime_profiles_payload()})
+        except (ValueError, FileNotFoundError, OSError) as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+    @app.delete("/api/runtime-profiles/{name}")
+    async def api_runtime_profile_delete(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from . import profiles
+
+        try:
+            ok = profiles.delete_profile(name)
+            return JSONResponse({"ok": ok, **_runtime_profiles_payload()}, status_code=200 if ok else 404)
+        except (ValueError, OSError) as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
     @app.get("/api/skills/manage")
     async def api_skills_manage(request: Request) -> JSONResponse:
         _require_request(request, config)
         return JSONResponse(_skills_payload(config))
+
+    @app.get("/api/skills/bundles")
+    async def api_skill_bundles(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from .skill_bundles import list_bundles
+
+        return JSONResponse({"bundles": list_bundles()})
+
+    @app.post("/api/skills/bundles")
+    async def api_skill_bundle_save(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from .skill_bundles import save_bundle
+
+        body = await request.json()
+        try:
+            bundle = save_bundle(
+                str(body.get("name") or ""),
+                body.get("skills") or body.get("members") or [],
+                description=str(body.get("description") or ""),
+                instruction=str(body.get("instruction") or ""),
+            )
+            return JSONResponse({"ok": True, "bundle": bundle, "bundles": list_bundles()})
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+    @app.delete("/api/skills/bundles/{name}")
+    async def api_skill_bundle_delete(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from .skill_bundles import delete_bundle, list_bundles
+
+        ok = delete_bundle(name)
+        return JSONResponse({"ok": ok, "name": name, "bundles": list_bundles()}, status_code=200 if ok else 404)
 
     @app.get("/api/skills/marketplace/search")
     async def api_skills_marketplace_search(request: Request) -> JSONResponse:
@@ -2139,6 +2514,20 @@ def create_app(config: Config) -> FastAPI:
         _require_request(request, config)
         result = _skill_detail(config, name)
         return JSONResponse(result, status_code=200 if result.get("ok") else 404)
+
+    @app.put("/api/skills/{name}/toggle")
+    async def api_skill_toggle(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        safe = _safe_resource_name(name, "skill")
+        disabled = [str(s) for s in (config.get("skills.disabled", []) or []) if str(s).strip()]
+        enabled = bool(body.get("enabled"))
+        if enabled:
+            disabled = [item for item in disabled if item != safe]
+        elif safe not in disabled:
+            disabled.append(safe)
+        config.set("skills.disabled", sorted(set(disabled)))
+        return JSONResponse({"ok": True, "name": safe, "enabled": enabled, **_skills_payload(config)})
 
     @app.patch("/api/skills/{name}")
     async def api_skill_patch(name: str, request: Request) -> JSONResponse:
@@ -2271,6 +2660,24 @@ def create_app(config: Config) -> FastAPI:
 
         ok = plugin_runtime.remove(name, config)
         return JSONResponse({"ok": ok, "name": name, **_plugins_payload(config)}, status_code=200 if ok else 404)
+
+    @app.get("/api/tools/toolsets")
+    async def api_toolsets(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(dash._dashboard_toolsets(config))
+
+    @app.put("/api/tools/toolsets/{name}")
+    async def api_toolset_toggle(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        result = dash._dashboard_toolset_toggle(
+            {"toolset": name, "enabled": bool(body.get("enabled"))},
+            config,
+        )
+        return JSONResponse(
+            {**result, "toolsets_detail": dash._dashboard_toolsets(config)},
+            status_code=200 if result.get("ok") else 400,
+        )
 
     @app.get("/api/mcp/servers")
     async def api_mcp_servers(request: Request) -> JSONResponse:
@@ -2512,6 +2919,28 @@ def create_app(config: Config) -> FastAPI:
         body = await request.json()
         return JSONResponse(_prune_sessions(int(body.get("older_than_days", 30))))
 
+    @app.get("/api/sessions/empty")
+    async def api_sessions_empty(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        older_than_days = float(request.query_params.get("older_than_days") or 0)
+        return JSONResponse(_empty_sessions(older_than_days, dry_run=True))
+
+    @app.post("/api/sessions/prune-empty")
+    async def api_sessions_prune_empty(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        return JSONResponse(_empty_sessions(
+            float(body.get("older_than_days", 0)),
+            dry_run=bool(body.get("dry_run", False)),
+        ))
+
+    @app.post("/api/sessions/delete")
+    async def api_sessions_delete_many(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        result = _delete_sessions(body.get("ids") if isinstance(body, dict) else None)
+        return JSONResponse(result, status_code=200 if result.get("ok") else 400)
+
     @app.get("/api/sessions/{session_id}")
     async def api_session_detail(session_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
@@ -2655,21 +3084,31 @@ def create_app(config: Config) -> FastAPI:
             return JSONResponse({"ok": False, "error": "schedule and prompt are required"}, status_code=400)
         from .cron import CronStore, _scan_cron_prompt
 
+        store = CronStore()
         skills = body.get("skills") or []
         if isinstance(skills, str):
             skills = [s.strip() for s in skills.split(",") if s.strip()]
+        context_from = _cron_context_refs(body.get("context_from"))
+        context_error = _validate_cron_context_refs(store, context_from)
+        if context_error:
+            return JSONResponse({"ok": False, "error": context_error}, status_code=400)
         prompt_error = _scan_cron_prompt(str(body.get("prompt") or ""))
         if prompt_error:
             return JSONResponse({"ok": False, "error": prompt_error}, status_code=400)
-        job = CronStore().add(
+        job = store.add(
             str(body["schedule"]),
             str(body["prompt"]),
             name=str(body.get("name") or ""),
             channel=str(body.get("channel") or ""),
             script=str(body.get("script") or ""),
             skills=list(skills),
+            context_from=context_from,
             deliver=str(body.get("deliver") or ""),
             no_agent=bool(body.get("no_agent", False)),
+            model=str(body.get("model") or ""),
+            enabled_toolsets=_cron_context_refs(body.get("enabled_toolsets")),
+            workdir=str(body.get("workdir") or ""),
+            max_runs=int(body.get("max_runs") or 0),
         )
         return JSONResponse({"ok": True, "id": job.id, "job": _cron_job_detail(job.id)["job"]})
 
@@ -2685,15 +3124,23 @@ def create_app(config: Config) -> FastAPI:
         body = await request.json()
         from .cron import CronStore, _scan_cron_prompt
 
+        store = CronStore()
         updates = {key: body[key] for key in (
-            "schedule", "prompt", "name", "channel", "enabled", "script", "skills", "deliver",
-            "no_agent"
+            "schedule", "prompt", "name", "channel", "enabled", "script", "skills", "context_from", "deliver",
+            "no_agent", "max_runs", "model", "enabled_toolsets", "workdir",
         ) if key in body}
+        if "context_from" in updates:
+            updates["context_from"] = _cron_context_refs(updates["context_from"])
+            context_error = _validate_cron_context_refs(store, updates["context_from"])
+            if context_error:
+                return JSONResponse({"ok": False, "error": context_error}, status_code=400)
+        if "enabled_toolsets" in updates:
+            updates["enabled_toolsets"] = _cron_context_refs(updates["enabled_toolsets"])
         if "prompt" in updates:
             prompt_error = _scan_cron_prompt(str(updates.get("prompt") or ""))
             if prompt_error:
                 return JSONResponse({"ok": False, "error": prompt_error}, status_code=400)
-        job = CronStore().update(job_id, **updates)
+        job = store.update(job_id, **updates)
         if job is None:
             return JSONResponse({"ok": False, "error": "cron job not found", "id": job_id}, status_code=404)
         return JSONResponse({"ok": True, "id": job.id, "job": _cron_job_detail(job.id)["job"]})
@@ -2957,6 +3404,9 @@ def run_dashboard(config: Config, host: str, port: int, *, open_browser: bool = 
     import socket
     import uvicorn
 
+    from ._log import setup_logging
+
+    setup_logging(mode="gui")
     requested = port
     selected = None
     for candidate in range(port, port + 50):

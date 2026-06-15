@@ -473,6 +473,19 @@ class SessionStore:
                 c.execute("DELETE FROM messages_fts WHERE session_id=?", (sid,))  # no orphan rows
             return cur.rowcount > 0
 
+    def session_stamp(self, sid: str) -> dict[str, Any] | None:
+        """Cheap invalidation stamp for warm agent/session caches."""
+        with self._conn() as c:
+            row = c.execute("SELECT id, updated_at FROM sessions WHERE id=?", (sid,)).fetchone()
+            if row is None:
+                return None
+            count = c.execute("SELECT COUNT(*) FROM messages WHERE session_id=?", (sid,)).fetchone()[0]
+        return {"id": row["id"], "updated_at": row["updated_at"], "message_count": int(count or 0)}
+
+    def message_count(self, sid: str) -> int:
+        stamp = self.session_stamp(sid)
+        return int((stamp or {}).get("message_count", 0) or 0)
+
     def set_archived(self, sid: str, archived: bool = True) -> bool:
         """Archive (or unarchive) a session — archived sessions are kept but excluded
         from pruning and from the default session list (AEGIS set_session_archived)."""

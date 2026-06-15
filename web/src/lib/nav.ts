@@ -15,7 +15,7 @@ export const NAV: NavGroup[] = [
   {
     label: "Workspace",
     items: [
-      { path: "/", label: "Overview", icon: "overview" },
+      { path: "/dashboard", label: "Dashboard", icon: "overview" },
       { path: "/chat", label: "Chat", icon: "chat" },
       { path: "/terminal", label: "Terminal", icon: "terminal" },
       { path: "/sessions", label: "Sessions", icon: "sessions" },
@@ -28,6 +28,7 @@ export const NAV: NavGroup[] = [
       { path: "/tools", label: "Tools", icon: "tools" },
       { path: "/skills", label: "Skills", icon: "skills" },
       { path: "/memory", label: "Memory", icon: "memory" },
+      { path: "/persona", label: "Persona", icon: "profiles" },
       { path: "/cron", label: "Schedules", icon: "cron" },
       { path: "/kanban", label: "Kanban", icon: "kanban" },
     ],
@@ -38,8 +39,9 @@ export const NAV: NavGroup[] = [
       { path: "/mcp", label: "MCP", icon: "mcp" },
       { path: "/channels", label: "Channels", icon: "channels" },
       { path: "/webhooks", label: "Webhooks", icon: "webhooks" },
+      { path: "/pairing", label: "Pairing", icon: "shield" },
       { path: "/plugins", label: "Plugins", icon: "plugins" },
-      { path: "/keys", label: "Keys & Env", icon: "keys" },
+      { path: "/env", label: "Env", icon: "keys" },
     ],
   },
   {
@@ -49,6 +51,7 @@ export const NAV: NavGroup[] = [
       { path: "/files", label: "Files", icon: "files" },
       { path: "/logs", label: "Logs", icon: "logs" },
       { path: "/profiles", label: "Profiles", icon: "profiles" },
+      { path: "/docs", label: "Docs", icon: "files" },
       { path: "/system", label: "System", icon: "system" },
       { path: "/config", label: "Config", icon: "config" },
     ],

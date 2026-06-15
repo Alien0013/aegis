@@ -37,9 +37,34 @@ def set_profile(profile: str | None) -> None:
     _PROFILE = profile
 
 
+def active_profile_path() -> Path:
+    return _base_home() / "active_profile"
+
+
+def read_active_profile() -> str:
+    """Sticky default profile from ``active_profile``; ``""`` means default."""
+    try:
+        return _clean_profile(active_profile_path().read_text(encoding="utf-8").strip())
+    except (FileNotFoundError, OSError, UnicodeDecodeError, ValueError):
+        return ""
+
+
+def set_active_profile(profile: str | None) -> None:
+    """Persist the sticky default profile. ``None``/``default`` clears it."""
+    profile = _clean_profile(profile)
+    path = active_profile_path()
+    ensure_dir(path.parent)
+    if not profile:
+        path.unlink(missing_ok=True)
+        return
+    atomic_write(path, profile + "\n")
+
+
 def current_profile() -> str:
     """Active config profile name, or ``""`` for the default home."""
-    return _clean_profile(_PROFILE)
+    if _PROFILE is not None:
+        return _clean_profile(_PROFILE)
+    return read_active_profile()
 
 
 def _base_home() -> Path:
@@ -86,14 +111,14 @@ def available_profiles() -> list[str]:
                 name = _clean_profile(child.name)
             except ValueError:
                 continue
-            if name and (child / "state.db").exists():
+            if name:
                 profiles.append(name)
     return profiles
 
 
 def get_home() -> Path:
     """Resolve the runtime home dynamically. Honors $AEGIS_HOME and active profile."""
-    return profile_home(_PROFILE)
+    return profile_home(current_profile())
 
 
 def sub(*parts: str) -> Path:
@@ -337,6 +362,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "disabled": [],
         "allowlist": [],             # optional strict skill allowlist
         "bundles": {},               # name -> [skill, ...] for preload/slash stacks
+        "template_vars": True,        # expand ${AEGIS_SKILL_DIR}/${AEGIS_SESSION_ID} in loaded skills
+        "inline_shell": False,        # opt-in: expand !`cmd` snippets inside loaded skills
+        "inline_shell_timeout": 10,
         "auto_load": True,            # pre-turn: attach relevant skill bodies automatically
         "auto_load_limit": 3,         # max matching skills to inject for one turn
         "auto_load_min_score": 6,     # deterministic relevance score threshold
@@ -360,7 +388,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "cron": {
         "approval": "deny",          # headless approval for scheduled jobs: deny (safe) | approve (auto-run)
-        "skip_memory": True,         # Hermes-style: scheduled jobs use prompt/script/skills,
+        "skip_memory": True,         # AEGIS-style: scheduled jobs use prompt/script/skills,
                                      # not injected personal memory, unless explicitly opted in
     },
     "delegation": {

@@ -428,7 +428,7 @@ class MemoryManager:
         # Frozen snapshot, captured at construction and re-captured by refresh_snapshot().
         # Freezing keeps the system prompt byte-stable for prefix-cache reuse. The loop
         # only auto-refreshes this snapshot when memory.refresh is explicitly set to
-        # session/message; the default mirrors Hermes and surfaces saved facts in a new
+        # session/message; the default mirrors AEGIS and surfaces saved facts in a new
         # session/reset/compaction. External provider prompt blocks are frozen here too;
         # per-turn recall belongs in prefetch().
         self._snapshot = self._capture_snapshot()

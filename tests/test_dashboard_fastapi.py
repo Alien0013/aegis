@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import time
 
 import httpx
 
@@ -25,6 +26,31 @@ def _basic_app(tmp_path, monkeypatch):
     from aegis.dashboard_fastapi import create_app
 
     return create_app(Config.load())
+
+
+def test_desktop_mode_starts_dashboard_cron_ticker(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    monkeypatch.setenv("AEGIS_DESKTOP", "1")
+    from aegis.config import Config
+    import aegis.cron as cron
+    import aegis.dashboard_fastapi as dash_api
+
+    dash_api._DESKTOP_CRON_STARTED = False
+    ticks = []
+    monkeypatch.setattr(cron, "build_delivery_sink", lambda *_args, **_kwargs: None)
+
+    def tick_once(*_args, **_kwargs):
+        ticks.append(True)
+        raise RuntimeError("stop after first test tick")
+
+    monkeypatch.setattr(cron, "tick", tick_once)
+
+    assert dash_api._start_desktop_cron_ticker(Config.load()) is True
+    for _ in range(50):
+        if ticks:
+            break
+        time.sleep(0.02)
+    assert ticks
 
 
 async def _request(app, method: str, path: str, **kwargs) -> httpx.Response:
@@ -129,13 +155,49 @@ def test_dashboard_peer_guard_helpers(tmp_path, monkeypatch):
 
 def test_fastapi_files_upload_and_mkdir(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    note = tmp_path / "note.txt"
+    note.write_text("hello files\n", encoding="utf-8")
+
+    default_cwd = asyncio.run(_request(app, "GET", "/api/fs/default-cwd", headers=headers))
+    assert default_cwd.status_code == 200
+    assert default_cwd.json()["ok"] is True
+
+    listed = asyncio.run(_request(
+        app,
+        "GET",
+        f"/api/fs/list?path={str(tmp_path)}",
+        headers=headers,
+    ))
+    assert listed.status_code == 200
+    assert any(row["name"] == "note.txt" for row in listed.json()["entries"])
+
+    read_text = asyncio.run(_request(
+        app,
+        "GET",
+        f"/api/fs/read-text?path={str(note)}",
+        headers=headers,
+    ))
+    assert read_text.status_code == 200
+    assert read_text.json()["content"] == "hello files\n"
+
+    data_url = asyncio.run(_request(
+        app,
+        "GET",
+        f"/api/fs/read-data-url?path={str(note)}",
+        headers=headers,
+    ))
+    assert data_url.status_code == 200
+    assert data_url.json()["ok"] is True
+    assert data_url.json()["data_url"].startswith("data:text/plain;base64,")
 
     res = asyncio.run(_request(
         app,
         "POST",
         "/api/files/mkdir",
         json={"path": str(tmp_path), "name": "created", "exist_ok": True},
-        headers={"X-Aegis-Token": "t"},
+        headers=headers,
     ))
     assert res.status_code == 200
     assert res.json()["ok"] is True
@@ -147,11 +209,30 @@ def test_fastapi_files_upload_and_mkdir(tmp_path, monkeypatch):
         "/api/files/upload",
         data={"path": str(tmp_path / "created")},
         files={"file": ("hello.txt", b"uploaded", "text/plain")},
-        headers={"X-Aegis-Token": "t"},
+        headers=headers,
     ))
     assert res.status_code == 200
     assert res.json()["ok"] is True
     assert (tmp_path / "created" / "hello.txt").read_text() == "uploaded"
+
+    deleted = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/files/delete",
+        json={"path": str(note)},
+        headers=headers,
+    ))
+    assert deleted.status_code == 200
+    assert deleted.json()["ok"] is True
+    assert not note.exists()
+
+    desktop_log = asyncio.run(_request(app, "GET", "/api/logs?name=desktop", headers=headers))
+    assert desktop_log.status_code == 200
+    assert desktop_log.json()["path"].endswith("desktop.log")
+
+    pairing = asyncio.run(_request(app, "GET", "/api/pairing", headers=headers))
+    assert pairing.status_code == 200
+    assert set(pairing.json()) >= {"approved", "pending"}
 
 
 def test_fastapi_registers_live_and_pty_websockets(tmp_path, monkeypatch):
@@ -378,6 +459,39 @@ def test_fastapi_typed_config_profile_gateway_and_plugin_routes(tmp_path, monkey
     assert missing.status_code == 400
 
 
+def test_fastapi_runtime_profiles_control_plane(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    listed = asyncio.run(_request(app, "GET", "/api/runtime-profiles", headers=headers))
+    assert listed.status_code == 200
+    assert listed.json()["active"] == "default"
+    assert any(row["default"] and row["name"] == "default" for row in listed.json()["profiles"])
+
+    created = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/runtime-profiles",
+        json={"name": "research", "activate": True},
+        headers=headers,
+    ))
+    assert created.status_code == 200
+    assert created.json()["active"] == "research"
+    assert any(row["name"] == "research" and row["active"] for row in created.json()["profiles"])
+
+    activated = asyncio.run(_request(app, "POST", "/api/runtime-profiles/default/activate", headers=headers))
+    assert activated.status_code == 200
+    assert activated.json()["active"] == "default"
+
+    deleted = asyncio.run(_request(app, "DELETE", "/api/runtime-profiles/research", headers=headers))
+    assert deleted.status_code == 200
+    assert deleted.json()["ok"] is True
+    assert not any(row["name"] == "research" for row in deleted.json()["profiles"])
+
+    default_delete = asyncio.run(_request(app, "DELETE", "/api/runtime-profiles/default", headers=headers))
+    assert default_delete.status_code == 400
+
+
 def test_fastapi_typed_mcp_and_skills_routes(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
     headers = {"X-Aegis-Token": "t"}
@@ -520,6 +634,11 @@ def test_fastapi_sessions_control_plane(tmp_path, monkeypatch):
         Message.assistant("typed session routes are wired"),
     ]
     store.save(session)
+    empty_session = Session.create("empty dashboard session")
+    store.save(empty_session)
+    bulk_session = Session.create("bulk delete session")
+    bulk_session.messages = [Message.user("bulk delete me")]
+    store.save(bulk_session)
 
     listed = asyncio.run(_request(app, "GET", "/api/sessions", headers=headers))
     assert listed.status_code == 200
@@ -529,6 +648,32 @@ def test_fastapi_sessions_control_plane(tmp_path, monkeypatch):
     assert stats.status_code == 200
     assert stats.json()["session_count"] >= 1
     assert stats.json()["message_count"] >= 2
+    assert stats.json()["empty_sessions"] >= 1
+
+    empty = asyncio.run(_request(app, "GET", "/api/sessions/empty", headers=headers))
+    assert empty.status_code == 200
+    assert empty_session.id in empty.json()["ids"]
+
+    pruned_empty = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/sessions/prune-empty",
+        json={"dry_run": False},
+        headers=headers,
+    ))
+    assert pruned_empty.status_code == 200
+    assert empty_session.id in pruned_empty.json()["ids"]
+
+    deleted_many = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/sessions/delete",
+        json={"ids": [bulk_session.id, "missing-session"]},
+        headers=headers,
+    ))
+    assert deleted_many.status_code == 200
+    assert deleted_many.json()["removed"] == [bulk_session.id]
+    assert deleted_many.json()["missing"] == ["missing-session"]
 
     found = asyncio.run(_request(
         app,
@@ -731,6 +876,9 @@ def test_fastapi_cron_control_plane(tmp_path, monkeypatch):
             "prompt": "ship a dashboard digest",
             "deliver": "telegram:42",
             "skills": ["summarize"],
+            "model": "cron-model",
+            "enabled_toolsets": ["core", "web"],
+            "workdir": str(tmp_path),
         },
         headers=headers,
     ))
@@ -738,6 +886,9 @@ def test_fastapi_cron_control_plane(tmp_path, monkeypatch):
     job_id = create.json()["id"]
     assert create.json()["job"]["enabled"] is True
     assert create.json()["job"]["name"] == "Dashboard digest"
+    assert create.json()["job"]["model"] == "cron-model"
+    assert create.json()["job"]["enabled_toolsets"] == ["core", "web"]
+    assert create.json()["job"]["workdir"] == str(tmp_path)
 
     jobs = asyncio.run(_request(app, "GET", "/api/cron/jobs", headers=headers))
     assert any(job["id"] == job_id and job["name"] == "Dashboard digest" for job in jobs.json()["jobs"])
@@ -746,13 +897,21 @@ def test_fastapi_cron_control_plane(tmp_path, monkeypatch):
         app,
         "PATCH",
         f"/api/cron/jobs/{job_id}",
-        json={"enabled": False, "schedule": "every 3h", "name": "Paused digest"},
+        json={
+            "enabled": False,
+            "schedule": "every 3h",
+            "name": "Paused digest",
+            "model": "cron-updated",
+            "enabled_toolsets": ["core"],
+        },
         headers=headers,
     ))
     assert patch.status_code == 200
     assert patch.json()["job"]["enabled"] is False
     assert patch.json()["job"]["schedule"] == "every 3h"
     assert patch.json()["job"]["name"] == "Paused digest"
+    assert patch.json()["job"]["model"] == "cron-updated"
+    assert patch.json()["job"]["enabled_toolsets"] == ["core"]
 
     run = asyncio.run(_request(app, "POST", f"/api/cron/jobs/{job_id}/run", headers=headers))
     assert run.status_code == 200

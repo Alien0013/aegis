@@ -58,7 +58,7 @@ export function CommandPalette() {
     const list: Command[] = [
       { id: "new-chat", label: "New chat", group: "Actions", icon: "plus", hint: "Start a fresh conversation", run: () => nav("/app") },
       { id: "chat-app", label: "Open Chat app", group: "Actions", icon: "chat", run: () => nav("/app") },
-      { id: "control-panel", label: "Open Control Panel", group: "Actions", icon: "system", run: () => nav("/") },
+      { id: "control-panel", label: "Open Dashboard", group: "Actions", icon: "system", run: () => nav("/dashboard") },
     ];
     for (const i of NAV_ITEMS) {
       list.push({ id: `nav:${i.path}`, label: i.label, group: "Go to", icon: i.icon, run: go(i.path) });

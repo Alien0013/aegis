@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { post } from "../lib/api";
 import { useApi } from "../lib/useApi";
-import { Badge, Button, Card, Empty, Field, Input, Loading, PageHeader, Select, toast } from "../components/ui";
+import { Badge, Button, Card, Empty, Field, Input, Loading, MetricStrip, PageHeader, Segmented, Select, toast } from "../components/ui";
 
 interface ModelsPayload {
   provider?: string;
@@ -11,24 +11,28 @@ interface ModelsPayload {
   active?: { context_length?: number; error?: string };
 }
 
+type Window = "7d" | "30d" | "90d";
+
 export function Models() {
   const { data, loading, error, reload } = useApi<ModelsPayload>("models");
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
   const [busy, setBusy] = useState(false);
+  const [window, setWindow] = useState<Window>("30d");
 
   useEffect(() => {
     if (data) { setProvider(data.provider || ""); setModel(data.model || ""); }
   }, [data]);
 
   const presets = (data?.presets || {})[provider] || [];
+  const modelRows = presets.length ? presets : data?.model ? [data.model] : [];
 
-  async function setActive() {
+  async function setActive(nextProvider = provider, nextModel = model) {
     setBusy(true);
     try {
-      const r = await post<{ ok?: boolean; error?: string; warning?: string }>("models", { provider, model });
+      const r = await post<{ ok?: boolean; error?: string; warning?: string }>("models", { provider: nextProvider, model: nextModel });
       if (r.ok === false) toast(r.error || "Failed", "err");
-      else { toast(r.warning ? `Set (note: ${r.warning})` : "Model set", r.warning ? "info" : "ok"); reload(); }
+      else { toast(r.warning ? `Set note: ${r.warning}` : "Model set", r.warning ? "info" : "ok"); reload(); }
     } catch (e) { toast(String(e), "err"); }
     finally { setBusy(false); }
   }
@@ -37,55 +41,99 @@ export function Models() {
     setBusy(true);
     try {
       const r = await post<{ ok?: boolean; latency_ms?: number; error?: string }>("providers/probe", { provider });
-      toast(r.ok ? `Reachable${r.latency_ms ? ` · ${r.latency_ms}ms` : ""}` : (r.error || "Unreachable"), r.ok ? "ok" : "err");
+      toast(r.ok ? `Reachable${r.latency_ms ? ` / ${r.latency_ms}ms` : ""}` : (r.error || "Unreachable"), r.ok ? "ok" : "err");
     } catch (e) { toast(String(e), "err"); }
     finally { setBusy(false); }
   }
 
   return (
     <>
-      <PageHeader title="Models" sub="Pick the active provider + model" />
-      {error && <Card><Empty icon="alert">Couldn't load — {error}</Empty></Card>}
+      <PageHeader
+        title="Models"
+        sub="Provider routing and active model"
+        actions={<Segmented<Window> value={window} onChange={setWindow} items={[
+          { value: "7d", label: "7D" },
+          { value: "30d", label: "30D" },
+          { value: "90d", label: "90D" },
+        ]} />}
+      />
+      {error && <Card><Empty icon="alert">Couldn't load - {error}</Empty></Card>}
       {loading && <Loading />}
       {data && (
-        <div className="grid gap-[var(--gap)] lg:grid-cols-2">
-          <Card title="Active">
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="font-mono text-sm text-text">{data.model || "—"}</div>
-                  <div className="text-xs text-faint">{data.provider || "no provider"}</div>
-                </div>
-                <Badge status={data.active?.error ? "error" : "ok"}>{data.active?.error ? "error" : "ready"}</Badge>
+        <div className="space-y-[var(--gap)]">
+          <div className="grid gap-[var(--gap)] xl:grid-cols-[minmax(0,1fr)_minmax(340px,0.9fr)]">
+            <Card pad={false}>
+              <div className="border-b border-border px-[var(--pad)] py-3">
+                <div className="font-mono text-base font-semibold text-text">Model Settings</div>
+                <div className="text-xs text-faint">Applies to new sessions</div>
               </div>
-              {data.active?.context_length ? (
-                <div className="text-xs text-dim">context window: {data.active.context_length.toLocaleString()}</div>
-              ) : null}
-              {data.active?.error && (
-                <div className="rounded-[var(--radius)] border border-danger/30 bg-danger/10 p-2 text-xs text-danger">{data.active.error}</div>
-              )}
-            </div>
-          </Card>
+              <div className="space-y-3 p-[var(--pad)]">
+                <div className="flex items-center justify-between gap-3 border border-border bg-surface-2/45 p-3">
+                  <div className="min-w-0">
+                    <div className="font-mono text-xs uppercase tracking-wide text-faint">Main model</div>
+                    <div className="truncate font-mono text-sm text-text">{data.provider || "provider"} / {data.model || "model"}</div>
+                  </div>
+                  <Badge status={data.active?.error ? "error" : "ready"}>{data.active?.error ? "error" : "ready"}</Badge>
+                </div>
 
-          <Card title="Switch model" actions={<Button sm variant="ghost" icon="activity" onClick={probe} disabled={busy}>Probe</Button>}>
-            <div className="space-y-3">
-              <Field label="Provider">
-                <Select value={provider} onChange={(e) => { setProvider(e.target.value); setModel(""); }}>
-                  {(data.providers || []).map((p) => <option key={p} value={p}>{p}</option>)}
-                </Select>
-              </Field>
-              <Field label="Model" hint={presets.length ? "Pick a known model or type your own below" : "Type the model id"}>
-                {presets.length > 0 && (
-                  <Select value={presets.includes(model) ? model : ""} onChange={(e) => setModel(e.target.value)}>
-                    <option value="">— custom —</option>
-                    {presets.map((m) => <option key={m} value={m}>{m}</option>)}
-                  </Select>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <Field label="Provider">
+                    <Select value={provider} onChange={(e) => { setProvider(e.target.value); setModel(""); }}>
+                      {(data.providers || []).map((p) => <option key={p} value={p}>{p}</option>)}
+                    </Select>
+                  </Field>
+                  <Field label="Known model">
+                    <Select value={presets.includes(model) ? model : ""} onChange={(e) => setModel(e.target.value)}>
+                      <option value="">custom</option>
+                      {presets.map((m) => <option key={m} value={m}>{m}</option>)}
+                    </Select>
+                  </Field>
+                </div>
+                <Field label="Model id"><Input value={model} placeholder="model id" onChange={(e) => setModel(e.target.value)} /></Field>
+                {data.active?.error && (
+                  <div className="border border-danger/35 bg-danger/10 p-2 text-xs text-danger">{data.active.error}</div>
                 )}
-              </Field>
-              <Input value={model} placeholder="model id" onChange={(e) => setModel(e.target.value)} />
-              <Button variant="primary" icon="check" onClick={setActive} disabled={busy || !provider || !model}>Set active</Button>
-            </div>
-          </Card>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="primary" icon="check" onClick={() => setActive()} disabled={busy || !provider || !model}>Change</Button>
+                  <Button icon="activity" onClick={probe} disabled={busy}>Probe</Button>
+                </div>
+              </div>
+            </Card>
+
+            <MetricStrip items={[
+              { label: "models used", value: modelRows.length || 1 },
+              { label: "total sessions", value: data.active?.context_length ? "ctx" : "-" },
+              { label: "context", value: data.active?.context_length ? data.active.context_length.toLocaleString() : "-" },
+              { label: "window", value: window.toUpperCase() },
+            ]} />
+          </div>
+
+          <div className="grid gap-[var(--gap)] md:grid-cols-2 xl:grid-cols-3">
+            {modelRows.map((m, index) => (
+              <Card key={`${provider}:${m}`} pad={false}>
+                <div className="border-b border-border p-[var(--pad)]">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="font-mono text-xs text-faint">#{index + 1}</div>
+                      <div className="truncate font-mono text-base font-semibold text-text">{m}</div>
+                      <div className="truncate font-mono text-xs text-faint">{provider || data.provider || "provider"}</div>
+                    </div>
+                    {m === data.model && provider === data.provider && <Badge tone="primary">main</Badge>}
+                  </div>
+                </div>
+                <div className="space-y-3 p-[var(--pad)]">
+                  <div className="flex flex-wrap gap-1.5">
+                    <Badge tone="success">Tools</Badge>
+                    <Badge tone="info">Vision</Badge>
+                    <Badge tone="warning">Reasoning</Badge>
+                  </div>
+                  <Button sm onClick={() => setActive(provider || data.provider || "", m)} disabled={busy || (m === data.model && provider === data.provider)}>
+                    Use as
+                  </Button>
+                </div>
+              </Card>
+            ))}
+          </div>
         </div>
       )}
     </>

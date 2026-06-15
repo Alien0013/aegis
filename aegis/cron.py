@@ -17,6 +17,7 @@ from .util import atomic_write, read_text
 
 _TICK_LOCAL = threading.local()
 _JOBS_LOCK = threading.RLock()
+_CRON_BLOCKED_TOOLS = ("clarify", "send_message", "cronjob", "schedule_task")
 
 
 def _cron_path():
@@ -65,8 +66,12 @@ class CronJob:
     run_at: float = 0.0        # >0 marks a one-shot job: fire once at this epoch, then disable
     script: str = ""           # path to a Python file run first; its stdout is prepended as context
     skills: list[str] = field(default_factory=list)   # skills to load before running
+    context_from: list[str] = field(default_factory=list)  # prior cron job ids/names to prepend as context
     deliver: str = ""          # comma-sep "platform:chat_id" targets; supersedes ``channel`` when set
     no_agent: bool = False     # script-only: run the script and deliver its stdout, no LLM turn
+    model: str = ""            # optional per-job model override
+    enabled_toolsets: list[str] = field(default_factory=list)  # optional per-job toolsets
+    workdir: str = ""          # optional cwd for script + agent execution
     state: str = "idle"        # idle | running | ok | error
     last_error: str = ""       # last failure message ("" when healthy)
     next_run: float = 0.0      # epoch of the next expected fire (advisory; computed on each run)
@@ -157,6 +162,18 @@ def _coerce_list(value) -> list:
     return [value]
 
 
+def _coerce_refs(value) -> list[str]:
+    raw = value
+    if isinstance(value, str):
+        raw = value.split(",") if "," in value else [value]
+    refs: list[str] = []
+    for item in _coerce_list(raw):
+        text = _coerce_text(item).strip()
+        if text and text not in refs:
+            refs.append(text)
+    return refs
+
+
 def _safe_job_id(value) -> str:
     text = _coerce_text(value).strip()
     unsafe = (
@@ -195,6 +212,15 @@ def _normalize_job_record(raw: dict, *, index: int = 0, seen: set[str] | None = 
         text = _coerce_text(item).strip()
         if text and text not in skills:
             skills.append(text)
+    context_from = _coerce_refs(raw.get("context_from"))
+    enabled_toolsets: list[str] = []
+    raw_toolsets = raw.get("enabled_toolsets", raw.get("toolsets"))
+    if isinstance(raw_toolsets, str):
+        raw_toolsets = raw_toolsets.split(",")
+    for item in _coerce_list(raw_toolsets):
+        text = _coerce_text(item).strip()
+        if text and text not in enabled_toolsets:
+            enabled_toolsets.append(text)
     job_id = _safe_job_id(raw.get("id"))
     if seen is not None and job_id in seen:
         base = job_id
@@ -224,8 +250,12 @@ def _normalize_job_record(raw: dict, *, index: int = 0, seen: set[str] | None = 
         "run_at": _coerce_float(raw.get("run_at"), 0.0),
         "script": script,
         "skills": skills,
+        "context_from": context_from,
         "deliver": _coerce_text(raw.get("deliver")).strip(),
         "no_agent": _coerce_bool(raw.get("no_agent"), False),
+        "model": _coerce_text(raw.get("model")).strip(),
+        "enabled_toolsets": enabled_toolsets,
+        "workdir": _coerce_text(raw.get("workdir")).strip(),
         "state": state,
         "last_error": _coerce_text(raw.get("last_error")).strip()[:500],
         "next_run": _coerce_float(raw.get("next_run"), 0.0),
@@ -246,6 +276,90 @@ def _find_unique_job_index(jobs: list[dict], job_id: str) -> int | None:
         return None
     matches = [i for i, job in enumerate(jobs) if _coerce_text(job.get("id")).startswith(ref)]
     return matches[0] if len(matches) == 1 else None
+
+
+def _find_unique_job_ref_index(jobs: list[dict], ref: str) -> int | None:
+    ref = _coerce_text(ref).strip()
+    if not ref:
+        return None
+    exact_ids = [i for i, job in enumerate(jobs) if job.get("id") == ref]
+    if len(exact_ids) == 1:
+        return exact_ids[0]
+    if len(exact_ids) > 1:
+        return None
+    exact_names = [i for i, job in enumerate(jobs) if _coerce_text(job.get("name")).strip() == ref]
+    if len(exact_names) == 1:
+        return exact_names[0]
+    if len(exact_names) > 1:
+        return None
+    prefixes = [i for i, job in enumerate(jobs) if _coerce_text(job.get("id")).startswith(ref)]
+    return prefixes[0] if len(prefixes) == 1 else None
+
+
+def _cron_output_root() -> Path:
+    return cfg.sub("cron", "output")
+
+
+def _cron_output_dir(job_id: str) -> Path:
+    return _cron_output_root() / _safe_job_id(job_id)
+
+
+def _write_job_output(job_id: str, when: float, reply: str, *, keep: int = 10) -> str:
+    text = (reply or "").strip()
+    if not text:
+        return ""
+    out_dir = _cron_output_dir(job_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.fromtimestamp(when).strftime("%Y%m%dT%H%M%S")
+    path = out_dir / f"{stamp}-{int((when % 1) * 1000):03d}.md"
+    atomic_write(path, text + ("\n" if not text.endswith("\n") else ""))
+    files = sorted(out_dir.glob("*.md"), key=lambda p: (p.stat().st_mtime, p.name))
+    for old in files[:-keep]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+    return str(path)
+
+
+def _latest_job_output(job: CronJob, *, limit: int = 8000) -> str:
+    files: list[Path] = []
+    out_dir = _cron_output_dir(job.id)
+    if out_dir.is_dir():
+        try:
+            files = sorted(out_dir.glob("*.md"), key=lambda p: (p.stat().st_mtime, p.name), reverse=True)
+        except OSError:
+            files = []
+    for path in files:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            continue
+        if text:
+            return text if len(text) <= limit else text[:limit] + "\n\n...[truncated]"
+    for run in reversed(job.runs or []):
+        if not isinstance(run, dict) or not run.get("ok"):
+            continue
+        text = _coerce_text(run.get("reply")).strip()
+        if text:
+            return text if len(text) <= limit else text[:limit] + "\n\n...[truncated]"
+    return ""
+
+
+def _context_from_block(store: "CronStore", job: CronJob) -> str:
+    blocks: list[str] = []
+    for ref in job.context_from or []:
+        source = store.resolve(ref)
+        if source is None or source.id == job.id:
+            continue
+        text = _latest_job_output(source)
+        if not text:
+            continue
+        title = source.name or source.id
+        blocks.append(f"## Output from job '{title}' ({source.id})\n{text}")
+    if not blocks:
+        return ""
+    return "# Context from previous cron jobs\n" + "\n\n".join(blocks) + "\n\n"
 
 
 def _scan_cron_prompt(prompt: str) -> str:
@@ -443,13 +557,27 @@ class CronStore:
             return CronJob(**jobs[index])
         return None
 
+    def resolve(self, ref: str) -> CronJob | None:
+        jobs = self._load()
+        index = _find_unique_job_ref_index(jobs, ref)
+        if index is not None:
+            return CronJob(**jobs[index])
+        return None
+
     def add(self, schedule: str, prompt: str, channel: str = "", script: str = "",
             skills: list[str] | None = None, deliver: str = "", name: str = "",
-            no_agent: bool = False, max_runs: int = 0) -> CronJob:
+            no_agent: bool = False, max_runs: int = 0,
+            context_from: list[str] | str | None = None,
+            model: str = "", enabled_toolsets: list[str] | None = None,
+            workdir: str = "") -> CronJob:
         run_at = _parse_oneshot(schedule, time.time()) or 0.0
         job = CronJob(id=new_id("cron"), schedule=schedule, prompt=prompt, name=name, channel=channel,
                       run_at=run_at, script=script, skills=skills or [], deliver=deliver,
-                      no_agent=no_agent, max_runs=max(0, int(max_runs or 0)))
+                      context_from=_coerce_refs(context_from), no_agent=no_agent,
+                      model=str(model or "").strip(),
+                      enabled_toolsets=list(enabled_toolsets or []),
+                      workdir=str(workdir or "").strip(),
+                      max_runs=max(0, int(max_runs or 0)))
         with _JOBS_LOCK:
             jobs = self._load()
             jobs.append(job.__dict__)
@@ -503,8 +631,8 @@ class CronStore:
             index = _find_unique_job_index(jobs, job_id)
             if index is None:
                 return None
-            allowed = {"schedule", "prompt", "name", "channel", "enabled", "script", "skills",
-                       "deliver", "no_agent", "max_runs"}
+            allowed = {"schedule", "prompt", "name", "channel", "enabled", "script", "skills", "context_from",
+                       "deliver", "no_agent", "max_runs", "model", "enabled_toolsets", "workdir"}
             now = time.time()
             found = jobs[index]
             for key, value in updates.items():
@@ -512,6 +640,10 @@ class CronStore:
                     continue
                 if key == "skills" and value is None:
                     continue
+                if key == "context_from":
+                    value = _coerce_refs(value)
+                if key == "enabled_toolsets":
+                    value = _coerce_refs(value)
                 found[key] = value
             if "schedule" in updates:
                 found["run_at"] = _parse_oneshot(str(found.get("schedule", "")), now) or 0.0
@@ -567,20 +699,23 @@ class CronStore:
                     j["next_run"] = 0.0
                 else:
                     j["next_run"] = _compute_next_run(CronJob(**j), when)
+                output_path = _write_job_output(job_id, when, reply, keep=keep) if ok else ""
                 runs = list(j.get("runs", []))
                 runs.append({"at": when, "ok": ok, "error": error[:200] if error else "",
-                             "chars": len(reply or "")})
+                             "chars": len(reply or ""), "output": output_path,
+                             "reply": (reply or "")[:8000]})
                 j["runs"] = runs[-keep:]
             self._save(jobs)
 
 
-def _run_script_only(script: str, timeout: int = 120) -> tuple[bool, str, str]:
+def _run_script_only(script: str, timeout: int = 120, cwd: Path | None = None) -> tuple[bool, str, str]:
     if not script:
         return False, "", "no script configured for no-agent cron job"
     try:
         import subprocess
         import sys
-        r = subprocess.run([sys.executable, script], capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run([sys.executable, script], cwd=str(cwd) if cwd else None,
+                           capture_output=True, text=True, timeout=timeout)
     except Exception as e:  # noqa: BLE001
         return False, "", str(e)
     out = (r.stdout or "").strip()
@@ -593,10 +728,10 @@ def _run_script_only(script: str, timeout: int = 120) -> tuple[bool, str, str]:
     return True, out, ""
 
 
-def _cron_run_config(config):
+def _cron_run_config(config, job: CronJob | None = None):
     """Return the config used by the agent for a cron job.
 
-    Hermes cron jobs are deterministic unattended runs: the job prompt, explicit
+    AEGIS cron jobs are deterministic unattended runs: the job prompt, explicit
     skills, and script context should carry the task. By default we disable built-in
     memory for the agent created here; users can opt back in with
     ``cron.skip_memory=false``.
@@ -604,14 +739,37 @@ def _cron_run_config(config):
     from .config import Config
 
     base = config or Config.load()
-    if not bool(base.get("cron.skip_memory", True)):
+    skip_memory = bool(base.get("cron.skip_memory", True))
+    needs_copy = (
+        skip_memory
+        or bool(getattr(job, "model", ""))
+        or bool(getattr(job, "enabled_toolsets", []))
+        or bool(_CRON_BLOCKED_TOOLS)
+    )
+    if not needs_copy:
         return base
     import copy
 
     data = copy.deepcopy(getattr(base, "data", {}) or {})
-    memory = data.setdefault("memory", {})
-    memory["enabled"] = False
-    memory["user_profile_enabled"] = False
+    if skip_memory:
+        memory = data.setdefault("memory", {})
+        memory["enabled"] = False
+        memory["user_profile_enabled"] = False
+    if job is not None and job.model:
+        data.setdefault("model", {})["default"] = job.model
+    tools = data.setdefault("tools", {})
+    disabled = tools.get("disabled", []) or []
+    if isinstance(disabled, str):
+        disabled = [disabled]
+    merged_disabled = [str(item).strip() for item in disabled if str(item).strip()]
+    seen_disabled = set(merged_disabled)
+    for name in _CRON_BLOCKED_TOOLS:
+        if name not in seen_disabled:
+            merged_disabled.append(name)
+            seen_disabled.add(name)
+    tools["disabled"] = merged_disabled
+    if job is not None and job.enabled_toolsets:
+        tools["toolsets"] = list(job.enabled_toolsets)
     return Config(data)
 
 
@@ -627,16 +785,19 @@ def run_job(config, job: CronJob | str, *, sink=None, store: "CronStore | None" 
     now = time.time()
     if verbose:
         print(f"  ▸ running cron {job.id}: {job.prompt[:60]}")
-    from .automation import build_prompt, delivery_targets, is_silent
+    from .automation import delivery_targets, is_silent, script_context, skills_directive
     targets = delivery_targets(job.deliver) or ([job.channel] if job.channel else [])
     first_target = targets[0] if targets else ""
     platform, _, chat_id = first_target.partition(":")
-    run_config = _cron_run_config(config)
+    run_config = _cron_run_config(config, job)
+    job_cwd = Path(job.workdir).expanduser() if job.workdir else None
+    if job_cwd is not None and not job_cwd.exists():
+        return {"ok": False, "job_id": job.id, "error": f"workdir not found: {job.workdir}", "targets": targets}
     if mark:
         store.mark_running(job.id)
     try:
         if job.no_agent:
-            ok, reply, error = _run_script_only(job.script)
+            ok, reply, error = _run_script_only(job.script, cwd=job_cwd)
             if not ok:
                 raise RuntimeError(error)
             delivered = 0
@@ -649,6 +810,9 @@ def run_job(config, job: CronJob | str, *, sink=None, store: "CronStore | None" 
                 "job_id": job.id,
                 "mode": "no_agent",
                 "cron_skip_memory": bool(run_config.get("memory.enabled", True)) is False,
+                "model": job.model or "",
+                "enabled_toolsets": list(job.enabled_toolsets or []),
+                "workdir": str(job_cwd or ""),
                 "reply": reply,
                 "delivered": delivered,
                 "targets": targets,
@@ -660,6 +824,9 @@ def run_job(config, job: CronJob | str, *, sink=None, store: "CronStore | None" 
                 "cron_job_id": job.id,
                 "cron_schedule": job.schedule,
                 "cron_skip_memory": bool(run_config.get("memory.enabled", True)) is False,
+                "cron_model": job.model or "",
+                "cron_toolsets": list(job.enabled_toolsets or []),
+                "cron_workdir": str(job_cwd or ""),
             }
             session = runner.load_or_create_session(
                 f"cron:{job.id}",
@@ -673,19 +840,20 @@ def run_job(config, job: CronJob | str, *, sink=None, store: "CronStore | None" 
                 chat_id=chat_id if platform and chat_id else None,
                 include_mcp=True,
                 config=run_config,
+                cwd=job_cwd,
             )
             # Headless approval policy for scheduled jobs (à la cron_mode): 'deny' (default, safe —
             # dangerous tools blocked since nobody can approve) or 'approve' (auto-run, for trusted jobs).
             if run_config.get("cron.approval", "deny") == "approve":
                 agent.permissions._mode_override = "auto"
-            prompt = build_prompt(
-                job.prompt,
-                skills=job.skills,
-                script=job.script,
-                config=run_config,
-                cwd=getattr(agent, "cwd", Path.cwd()),
-            )
-            prompt = _scan_assembled_cron_prompt(prompt, job)
+            cwd = getattr(agent, "cwd", Path.cwd())
+            skill_block = skills_directive(job.skills, config=run_config, cwd=cwd)
+            script_block = script_context(job.script)
+            context_block = _context_from_block(store, job)
+            prompt_without_chained_context = skill_block + script_block + job.prompt
+            # Chained cron output is prior runtime data; scan configured prompt/script first.
+            _scan_assembled_cron_prompt(prompt_without_chained_context, job)
+            prompt = skill_block + context_block + script_block + job.prompt
             result = runner.run_prompt(
                 prompt,
                 session=session,
@@ -694,6 +862,7 @@ def run_job(config, job: CronJob | str, *, sink=None, store: "CronStore | None" 
                 meta=cron_meta,
                 platform=platform if platform and chat_id else None,
                 chat_id=chat_id if platform and chat_id else None,
+                cwd=job_cwd,
             )
             reply = result.text
             delivered = 0
@@ -709,6 +878,9 @@ def run_job(config, job: CronJob | str, *, sink=None, store: "CronStore | None" 
                 "trace_id": result.trace_id,
                 "turn_id": result.turn_id,
                 "cron_skip_memory": cron_meta["cron_skip_memory"],
+                "model": job.model or "",
+                "enabled_toolsets": list(job.enabled_toolsets or []),
+                "workdir": str(job_cwd or ""),
                 "reply": reply,
                 "delivered": delivered,
                 "targets": targets,
@@ -787,7 +959,11 @@ def build_delivery_sink(config, *, verbose: bool = True):
         adapter = adapters.get(platform)
         if adapter is not None:
             try:
-                adapter.send(chat_id, text or "")
+                deliver = getattr(adapter, "deliver", None)
+                if callable(deliver):
+                    deliver(chat_id, text or "")
+                else:
+                    adapter.send(chat_id, text or "")
                 return
             except Exception as e:  # noqa: BLE001
                 if verbose:

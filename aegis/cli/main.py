@@ -321,6 +321,42 @@ def cmd_skills(args, config: Config) -> int:
         except Exception as e:  # noqa: BLE001
             return _die(str(e))
         return 0
+    if args.action == "bundles":
+        from ..skill_bundles import list_bundles
+
+        bundles = list_bundles()
+        if not bundles:
+            _print("(no skill bundles)")
+            return 0
+        for bundle in bundles:
+            _print(
+                f"  {bundle['slug']:<24} {', '.join(bundle.get('skills') or [])}"
+                + (f"\n      {bundle['description']}" if bundle.get("description") else "")
+            )
+        return 0
+    if args.action == "bundle":
+        from ..skill_bundles import save_bundle
+
+        if not args.name or not getattr(args, "members", ""):
+            return _die("usage: aegis skills bundle <name> --members skill-a,skill-b")
+        try:
+            bundle = save_bundle(
+                args.name,
+                [s.strip() for s in args.members.split(",") if s.strip()],
+                description=getattr(args, "description", "") or "",
+                instruction=getattr(args, "instruction", "") or "",
+            )
+            _print(f"saved bundle {bundle['slug']} → {bundle['path']}")
+        except Exception as e:  # noqa: BLE001
+            return _die(str(e))
+        return 0
+    if args.action == "unbundle":
+        from ..skill_bundles import delete_bundle
+
+        if not args.name:
+            return _die("usage: aegis skills unbundle <name>")
+        _print("removed" if delete_bundle(args.name) else "not found")
+        return 0
     # list
     for s in sorted(loader.available(), key=lambda s: s.name):
         _print(f"  {s.name:<24} {s.description[:80]}")
@@ -434,10 +470,15 @@ def cmd_cron(args, config: Config) -> int:
             return _die('usage: aegis cron add "<schedule>" "<prompt>"')
         prompt = " ".join(args.prompt) if isinstance(args.prompt, list) else args.prompt
         skills = [s.strip() for s in (getattr(args, "skills", "") or "").split(",") if s.strip()]
+        context_from = [s.strip() for s in (getattr(args, "context_from", "") or "").split(",") if s.strip()]
+        for ref in context_from:
+            if store.resolve(ref) is None:
+                return _die(f"context_from job not found: {ref}")
         job = store.add(prompt=prompt, schedule=args.schedule,
                         script=getattr(args, "script", "") or "", skills=skills,
                         deliver=getattr(args, "deliver", "") or "",
-                        no_agent=bool(getattr(args, "no_agent", False)))
+                        no_agent=bool(getattr(args, "no_agent", False)),
+                        context_from=context_from)
         _print(f"added cron {job.id}: [{job.schedule}] {job.prompt[:60]}")
         return 0
     if args.action == "rm":
@@ -467,8 +508,83 @@ def cmd_cron(args, config: Config) -> int:
         return 0 if res.ok else 1
     # list
     for j in store.list():
-        _print(f"  {j.id}  [{j.schedule}]  {j.prompt[:60]}")
+        suffix = f"  <- {','.join(j.context_from)}" if j.context_from else ""
+        _print(f"  {j.id}  [{j.schedule}]  {j.prompt[:60]}{suffix}")
     return 0
+
+
+def cmd_profile(args, config: Config) -> int:
+    from .. import profiles
+
+    action = getattr(args, "profile_action", None) or "show"
+    try:
+        if action == "list":
+            rows = profiles.list_profiles()
+            _print(f"{'':2} {'profile':<18} {'model':<28} {'skills':>6} {'memory':>6} {'cron':>5} path")
+            for row in rows:
+                marker = "*" if row.active else " "
+                _print(
+                    f"{marker:2} {row.name:<18} {(row.model or '-'): <28.28} "
+                    f"{row.skills:>6} {row.memories:>6} {row.cron_jobs:>5} {row.path}"
+                )
+            return 0
+        if action == "use":
+            active = profiles.use_profile(args.profile_name)
+            _print(f"active profile: {active}")
+            return 0
+        if action == "create":
+            clone_all = bool(getattr(args, "clone_all", False))
+            clone_config = bool(getattr(args, "clone", False) or getattr(args, "clone_from", None))
+            path = profiles.create_profile(
+                args.profile_name,
+                clone_from=getattr(args, "clone_from", None),
+                clone_config=clone_config,
+                clone_all=clone_all,
+            )
+            detail = "fresh"
+            if clone_all:
+                detail = f"full clone from {profiles.label(getattr(args, 'clone_from', None) or cfg.current_profile())}"
+            elif clone_config:
+                detail = f"clone from {profiles.label(getattr(args, 'clone_from', None) or cfg.current_profile())}"
+            _print(f"created profile {args.profile_name}: {path} ({detail})")
+            return 0
+        if action == "clone":
+            path = profiles.clone_profile(args.source_profile, args.profile_name,
+                                          clone_all=bool(getattr(args, "clone_all", False)))
+            _print(f"cloned profile {args.source_profile} -> {args.profile_name}: {path}")
+            return 0
+        if action == "show":
+            requested = getattr(args, "profile_name", None)
+            name = cfg.current_profile() if requested is None else cfg.profile_name(requested)
+            if name and not profiles.profile_exists(name):
+                return _die(f"profile '{name}' does not exist")
+            info = profiles.profile_info(name)
+            _print(f"Profile:  {info.name}{' (active)' if info.active else ''}")
+            _print(f"Path:     {info.path}")
+            _print(f"Model:    {info.model or '-'}")
+            _print(f"Provider: {info.provider or '-'}")
+            _print(f"Skills:   {info.skills}")
+            _print(f"Memory:   {info.memories} non-empty line(s)")
+            _print(f"Cron:     {info.cron_jobs} job(s)")
+            return 0
+        if action == "export":
+            requested = getattr(args, "profile_name", None)
+            name = cfg.current_profile() if requested is None else cfg.profile_name(requested)
+            path = profiles.export_profile(
+                name,
+                getattr(args, "out", None),
+                include_history=bool(getattr(args, "include_history", False)),
+                include_secrets=bool(getattr(args, "include_secrets", False)),
+            )
+            _print(f"exported profile {profiles.label(name)}: {path}")
+            return 0
+        if action == "import":
+            path = profiles.import_profile(args.archive, name=getattr(args, "name", None))
+            _print(f"imported profile {path.name}: {path}")
+            return 0
+        return _die(f"unknown profile action: {action}")
+    except (ValueError, FileExistsError, FileNotFoundError, OSError) as exc:
+        return _die(str(exc))
 
 
 # --------------------------------------------------------------------------- #
@@ -944,9 +1060,11 @@ def cmd_gateway(args, config: Config) -> int:
         chans = args.channels or ",".join(config.get("gateway.channels", []) or []) or "telegram"
         return cmd_gateway_service(action, chans)
 
+    from .._log import setup_logging
     from ..gateway.channels import build_adapter
     from ..gateway.runner import GatewayRunner
 
+    setup_logging(mode="gateway")
     runner = GatewayRunner(config)
     configured = ",".join(config.get("gateway.channels", []) or [])
     channels = (args.channels or configured or "cli").split(",")
@@ -1152,7 +1270,49 @@ def cmd_batch(args, config: Config) -> int:
     return 0
 
 
-_CMDS = ("chat desktop model auth setup onboard status update skills plugins mcp serve rpc cron tools memory "
+def cmd_logs(args, config: Config) -> int:  # noqa: ARG001
+    import time
+
+    from .. import config as cfg
+
+    names = {
+        "agent": "agent.log",
+        "errors": "errors.log",
+        "gateway": "gateway.log",
+        "gui": "gui.log",
+        "legacy": "aegis.log",
+    }
+    filename = names.get(args.name, names["agent"])
+    path = cfg.logs_dir() / filename
+    if not path.exists() and args.name == "agent":
+        path = cfg.logs_dir() / "aegis.log"
+    if not path.exists():
+        _print(f"log file not found: {path}")
+        return 1
+
+    def tail_once(offset: int = 0) -> int:
+        text = path.read_text(errors="replace")
+        if offset:
+            chunk = text[offset:]
+            if chunk:
+                _print(chunk.rstrip("\n"))
+            return len(text)
+        for line in text.splitlines()[-int(args.lines or 80):]:
+            _print(line)
+        return len(text)
+
+    offset = tail_once()
+    if getattr(args, "follow", False):
+        try:
+            while True:
+                time.sleep(1)
+                offset = tail_once(offset)
+        except KeyboardInterrupt:
+            return 0
+    return 0
+
+
+_CMDS = ("chat desktop model auth setup onboard status update skills plugins mcp serve rpc cron profile profiles tools memory logs "
          "config sessions gateway doctor completion backup import insights webhook "
          "hooks kanban curator dashboard daemon acp pairing checkpoints background trace eval")
 
@@ -1319,6 +1479,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     st = sub.add_parser("status", help="show install/auth/tools/skills/plugins/service status")
     st.set_defaults(func=cmd_status)
+
+    lg = sub.add_parser("logs", help="tail agent/errors/gateway/gui logs")
+    lg.add_argument("name", nargs="?", choices=["agent", "errors", "gateway", "gui", "legacy"], default="agent")
+    lg.add_argument("-n", "--lines", type=int, default=80)
+    lg.add_argument("-f", "--follow", action="store_true")
+    lg.set_defaults(func=cmd_logs)
 
     ba = sub.add_parser("batch", help="run a prompt per line of a file (or - for stdin)")
     ba.add_argument("file")
@@ -1506,10 +1672,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     sk = sub.add_parser("skills", help="list/view/create/install/search/remove/uninstall skills")
     sk.add_argument("action", nargs="?",
-                    choices=["list", "view", "new", "install", "search", "remove", "uninstall", "hub"],
+                    choices=[
+                        "list", "view", "new", "install", "search", "remove", "uninstall", "hub",
+                        "bundles", "bundle", "unbundle",
+                    ],
                     default="list")
     sk.add_argument("name", nargs="?", help="skill name, install source, or hub name")
     sk.add_argument("--force", action="store_true", help="install even if the security scan flags it")
+    sk.add_argument("--members", help="comma-separated skill names for `aegis skills bundle`")
+    sk.add_argument("--description", default="", help="description for `aegis skills bundle`")
+    sk.add_argument("--instruction", default="", help="extra guidance injected by `aegis skills bundle`")
     sk.set_defaults(func=cmd_skills)
 
     pl = sub.add_parser("plugins", help="manage manifest and drop-in plugins")
@@ -1602,6 +1774,48 @@ def build_parser() -> argparse.ArgumentParser:
     rp = sub.add_parser("rpc", help="run a local JSON-RPC agent server over stdio")
     rp.set_defaults(func=cmd_rpc)
 
+    pf = sub.add_parser("profile", help="manage isolated runtime profiles")
+    pf_sub = pf.add_subparsers(dest="profile_action")
+    pf.set_defaults(func=cmd_profile)
+    pf_list = pf_sub.add_parser("list", help="list profiles")
+    pf_list.set_defaults(func=cmd_profile)
+    pf_use = pf_sub.add_parser("use", help="set sticky default profile")
+    pf_use.add_argument("profile_name", help="profile name, or 'default'")
+    pf_use.set_defaults(func=cmd_profile)
+    pf_create = pf_sub.add_parser("create", help="create a profile")
+    pf_create.add_argument("profile_name")
+    pf_create.add_argument("--clone", action="store_true",
+                           help="copy config, secrets, identity files, memories, and skills from the active profile")
+    pf_create.add_argument("--clone-all", action="store_true",
+                           help="copy profile state, excluding session history and logs")
+    pf_create.add_argument("--clone-from", metavar="SOURCE",
+                           help="source profile to clone from; implies --clone")
+    pf_create.set_defaults(func=cmd_profile)
+    pf_clone = pf_sub.add_parser("clone", help="clone one profile to another")
+    pf_clone.add_argument("source_profile")
+    pf_clone.add_argument("profile_name")
+    pf_clone.add_argument("--clone-all", action="store_true",
+                          help="copy profile state, excluding session history and logs")
+    pf_clone.set_defaults(func=cmd_profile)
+    pf_show = pf_sub.add_parser("show", help="show profile details")
+    pf_show.add_argument("profile_name", nargs="?", help="profile name; defaults to active")
+    pf_show.set_defaults(func=cmd_profile)
+    pf_export = pf_sub.add_parser("export", help="export a profile to tar.gz")
+    pf_export.add_argument("profile_name", nargs="?", help="profile name; defaults to active")
+    pf_export.add_argument("-o", "--out", help="archive path")
+    pf_export.add_argument("--include-history", action="store_true",
+                           help="include session DB, logs, and cron output history")
+    pf_export.add_argument("--include-secrets", action="store_true",
+                           help="include .env and auth.json in the archive")
+    pf_export.set_defaults(func=cmd_profile)
+    pf_import = pf_sub.add_parser("import", help="import a profile archive")
+    pf_import.add_argument("archive")
+    pf_import.add_argument("--name", help="profile name to import as")
+    pf_import.set_defaults(func=cmd_profile)
+
+    pfs = sub.add_parser("profiles", help="list isolated runtime profiles")
+    pfs.set_defaults(func=cmd_profile, profile_action="list")
+
     cr = sub.add_parser("cron", help="schedule recurring agent tasks")
     cr.add_argument("action", nargs="?",
                     choices=["list", "add", "rm", "run", "install", "uninstall",
@@ -1611,6 +1825,7 @@ def build_parser() -> argparse.ArgumentParser:
     cr.add_argument("prompt", nargs="*")
     cr.add_argument("--script", help="Python file to run first; its stdout is prepended as context")
     cr.add_argument("--skills", help="comma-sep skills to load before running")
+    cr.add_argument("--context-from", help="comma-sep cron job ids/names whose latest output is prepended")
     cr.add_argument("--deliver", help="comma-sep platform:chat_id targets (supersedes single channel)")
     cr.add_argument("--no-agent", action="store_true", help="run script-only and deliver stdout")
     cr.add_argument("--no-start", action="store_true", help="write service unit but do not start it")

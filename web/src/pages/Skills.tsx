@@ -1,153 +1,470 @@
-// Skills — installed skills (view / edit / create / uninstall) and a Browse Hub
-// that searches multiple connected sources (well-known agentskills.io + the
-// official GitHub repos) and installs with one click. Backed by /api/skills/*.
-
-import { useMemo, useState } from "react";
-import { api, post, patch, del } from "../lib/api";
+import type { ReactNode } from "react";
+import { useMemo, useRef, useState } from "react";
+import { api, del, patch, post, put } from "../lib/api";
 import { useApi } from "../lib/useApi";
-import { PageHeader, Spinner, toast } from "../components/ui";
-import { Icon } from "../components/icons";
 import { cn } from "../lib/cn";
+import { Icon } from "../components/icons";
+import { Badge, Button, Card, Empty, Field, Input, Loading, PageHeader, Spinner, Toggle, toast } from "../components/ui";
 
 interface SkillRow {
-  name: string; description: string; path: string; tier?: string;
-  available: boolean; unavailable_reason?: string; installed: boolean;
-  source?: string; editable: boolean; usage?: Record<string, unknown>;
+  name: string;
+  description: string;
+  category: string;
+  path: string;
+  tier?: number;
+  platforms?: string[];
+  environments?: string[];
+  toolsets?: string[];
+  available: boolean;
+  unavailable_reason?: string;
+  enabled: boolean;
+  installed: boolean;
+  source?: string;
+  installed_at?: string;
+  editable: boolean;
 }
+
 interface Registry { name: string; kind: string; ref: string }
 interface SkillsPayload {
-  skills: SkillRow[]; count: number; taps?: Record<string, string>; registries?: Registry[];
+  skills: SkillRow[];
+  count: number;
+  enabled_count?: number;
+  categories?: Record<string, number>;
+  taps?: Record<string, string>;
+  registries?: Registry[];
 }
-interface HubResult { name: string; description: string; source: string; hub: string; detail_url?: string; installed?: boolean }
+
+interface ToolsetRow {
+  name: string;
+  label: string;
+  description?: string;
+  enabled: boolean;
+  available: boolean;
+  configured: boolean;
+  tools: string[];
+  enabled_tools: string[];
+  tool_count: number;
+  enabled_count: number;
+}
+
+interface BundleRow {
+  name: string;
+  slug: string;
+  description?: string;
+  skills: string[];
+  instruction?: string;
+  path?: string;
+}
+interface BundlePayload { bundles: BundleRow[] }
+
+interface HubResult {
+  name: string;
+  description?: string;
+  source: string;
+  hub: string;
+  detail_url?: string;
+  installed?: boolean;
+}
+
+type Tab = "skills" | "toolsets" | "bundles" | "hub";
+type SkillFilter = "all" | "enabled" | "disabled" | "unavailable" | "installed" | "local" | "builtin";
+
+const FILTERS: { key: SkillFilter; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "enabled", label: "Enabled" },
+  { key: "disabled", label: "Disabled" },
+  { key: "unavailable", label: "Unavailable" },
+  { key: "installed", label: "Installed" },
+  { key: "local", label: "Local" },
+  { key: "builtin", label: "Built in" },
+];
 
 export function Skills() {
-  const { data, loading, error, reload } = useApi<SkillsPayload>("skills/manage");
-  const [tab, setTab] = useState<"installed" | "hub">("installed");
+  const skillsQ = useApi<SkillsPayload>("skills/manage");
+  const toolsetsQ = useApi<ToolsetRow[]>("tools/toolsets");
+  const bundlesQ = useApi<BundlePayload>("skills/bundles");
+  const [tab, setTab] = useState<Tab>("skills");
   const [q, setQ] = useState("");
+  const [category, setCategory] = useState("All");
+  const [filter, setFilter] = useState<SkillFilter>("all");
   const [open, setOpen] = useState("");
   const [content, setContent] = useState("");
+  const [busy, setBusy] = useState("");
   const [editing, setEditing] = useState<SkillRow | null>(null);
   const [creating, setCreating] = useState(false);
+  const contentSeq = useRef(0);
 
-  const skills = useMemo(() => (data?.skills || []).filter((s) =>
-    !q || s.name.toLowerCase().includes(q.toLowerCase()) || (s.description || "").toLowerCase().includes(q.toLowerCase())),
-    [data, q]);
+  const categories = useMemo(() => {
+    const keys = Object.keys(skillsQ.data?.categories || {}).sort((a, b) => a.localeCompare(b));
+    return ["All", ...keys];
+  }, [skillsQ.data]);
+
+  const skills = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return (skillsQ.data?.skills || []).filter((s) => {
+      const matchesText = !needle
+        || s.name.toLowerCase().includes(needle)
+        || (s.description || "").toLowerCase().includes(needle)
+        || (s.category || "").toLowerCase().includes(needle);
+      const matchesCategory = category === "All" || s.category === category;
+      const matchesFilter = filter === "all"
+        || (filter === "enabled" && s.enabled && s.available)
+        || (filter === "disabled" && !s.enabled)
+        || (filter === "unavailable" && !s.available)
+        || (filter === "installed" && s.installed)
+        || (filter === "local" && s.editable && !s.installed)
+        || (filter === "builtin" && !s.editable && !s.installed);
+      return matchesText && matchesCategory && matchesFilter;
+    });
+  }, [skillsQ.data, q, category, filter]);
+
+  async function reloadAll() {
+    skillsQ.reload();
+    toolsetsQ.reload();
+    bundlesQ.reload();
+  }
 
   async function view(name: string) {
-    if (open === name) { setOpen(""); return; }
-    setOpen(name); setContent("");
-    try { const d = await api<{ content?: string }>(`skills/${encodeURIComponent(name)}`); setContent(d.content || ""); }
-    catch (e) { setContent(String(e)); }
+    if (open === name) {
+      contentSeq.current += 1;
+      setOpen("");
+      return;
+    }
+    const seq = ++contentSeq.current;
+    setOpen(name);
+    setContent("");
+    try {
+      const d = await api<{ content?: string }>(`skills/${encodeURIComponent(name)}`);
+      if (seq === contentSeq.current) setContent(d.content || "");
+    } catch (e) {
+      if (seq === contentSeq.current) setContent(String(e));
+    }
   }
-  async function uninstall(s: SkillRow) {
-    if (!confirm(`Remove skill "${s.name}"?`)) return;
+
+  async function editSkill(s: SkillRow) {
+    const seq = ++contentSeq.current;
+    setBusy(`edit:${s.name}`);
+    try {
+      const d = await api<{ content?: string }>(`skills/${encodeURIComponent(s.name)}`);
+      if (seq === contentSeq.current) {
+        setContent(d.content || "");
+        setEditing(s);
+      }
+    } catch (e) {
+      if (seq === contentSeq.current) toast(String(e), "err");
+    } finally {
+      if (seq === contentSeq.current) setBusy("");
+    }
+  }
+
+  async function toggleSkill(s: SkillRow) {
+    setBusy(`skill:${s.name}`);
+    try {
+      await put(`skills/${encodeURIComponent(s.name)}/toggle`, { enabled: !s.enabled });
+      skillsQ.reload();
+    } catch (e) {
+      toast(String(e), "err");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function removeSkill(s: SkillRow) {
+    if (!window.confirm(`Remove skill "${s.name}"?`)) return;
+    setBusy(`remove:${s.name}`);
     try {
       if (s.installed) await post("skills/marketplace/uninstall", { name: s.name });
       else await del(`skills/${encodeURIComponent(s.name)}`);
-      toast(`Removed ${s.name}`); reload();
-    } catch (e) { toast(String(e), "err"); }
+      toast(`Removed ${s.name}`);
+      skillsQ.reload();
+    } catch (e) {
+      toast(String(e), "err");
+    } finally {
+      setBusy("");
+    }
   }
+
+  const loading = skillsQ.loading || (tab === "toolsets" && toolsetsQ.loading) || (tab === "bundles" && bundlesQ.loading);
+  const error = skillsQ.error || (tab === "toolsets" ? toolsetsQ.error : "") || (tab === "bundles" ? bundlesQ.error : "");
+  const enabledCount = skillsQ.data?.enabled_count ?? (skillsQ.data?.skills || []).filter((s) => s.enabled).length;
 
   return (
     <>
-      <PageHeader title="Skills" sub={data ? `${data.count} installed` : "Reusable SKILL.md packages"}
-        actions={tab === "installed" ? (
-          <button onClick={() => setCreating(true)}
-            className="inline-flex items-center gap-1.5 rounded-[var(--radius)] bg-primary px-3 py-1.5 text-sm font-medium text-primary-fg hover:opacity-90">
-            <Icon name="plus" size={14} /> New skill
-          </button>
-        ) : undefined} />
+      <PageHeader
+        title="Skills"
+        sub={skillsQ.data ? `${enabledCount}/${skillsQ.data.count} enabled` : "Reusable procedures and tool groups"}
+        actions={<div className="flex gap-2">
+          <Button icon="refresh" onClick={reloadAll}>Refresh</Button>
+          <Button variant="primary" icon="plus" onClick={() => setCreating(true)}>New skill</Button>
+        </div>}
+      />
 
-      {/* Prominent tabs: Installed (view/edit/uninstall) vs Browse Hub (search & install). */}
-      <div className="mb-[var(--gap)] inline-flex gap-1 rounded-[var(--radius)] border border-border bg-surface p-1">
-        <button onClick={() => setTab("installed")}
-          className={cn("inline-flex items-center gap-1.5 rounded-[calc(var(--radius)-2px)] px-3 py-1.5 text-sm transition",
-            tab === "installed" ? "bg-primary font-medium text-primary-fg" : "text-dim hover:text-text")}>
-          <Icon name="skills" size={14} /> Installed{data ? ` · ${data.count}` : ""}
-        </button>
-        <button onClick={() => setTab("hub")}
-          className={cn("inline-flex items-center gap-1.5 rounded-[calc(var(--radius)-2px)] px-3 py-1.5 text-sm transition",
-            tab === "hub" ? "bg-primary font-medium text-primary-fg" : "text-dim hover:text-text")}>
-          <Icon name="download" size={14} /> Browse Hub — install skills
-        </button>
-      </div>
+      {error && <Card><Empty icon="alert">Could not load - {error}</Empty></Card>}
+      {loading && !skillsQ.data && <Loading />}
 
-      {error &&<div className="rounded-[var(--radius)] border border-danger/40 bg-danger/10 p-3 text-sm text-danger">Couldn't load — {error}</div>}
-      {loading && !data && <div className="flex justify-center py-12"><Spinner size={20} /></div>}
+      {skillsQ.data && (
+        <div className="grid gap-[var(--gap)] xl:grid-cols-[220px_minmax(0,1fr)]">
+          <aside className="space-y-[var(--gap)]">
+            <Card pad={false}>
+              <div className="border-b border-border px-3 py-2 font-mono text-[10px] uppercase tracking-wide text-faint">Filters</div>
+              <RailButton active={tab === "skills" && category === "All"} icon="skills" label={`All (${skillsQ.data.count})`} onClick={() => { setTab("skills"); setCategory("All"); }} />
+              <RailButton active={tab === "toolsets"} icon="tools" label={`Toolsets (${toolsetsQ.data?.length || 0})`} onClick={() => setTab("toolsets")} />
+              <RailButton active={tab === "hub"} icon="download" label="Browse Hub" onClick={() => setTab("hub")} />
+              <RailButton active={tab === "bundles"} icon="command" label="Bundles" onClick={() => setTab("bundles")} />
+              <div className="border-t border-border px-3 pb-2 pt-3 font-mono text-[10px] uppercase tracking-wide text-faint">Categories</div>
+              {categories.filter((c) => c !== "All").map((c) => (
+                <button
+                  key={c}
+                  onClick={() => { setTab("skills"); setCategory(c); }}
+                  className={cn(
+                    "flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left font-mono text-xs",
+                    tab === "skills" && category === c ? "bg-primary text-primary-fg" : "text-dim hover:bg-surface-2 hover:text-text",
+                  )}
+                >
+                  <span className="truncate">{c}</span>
+                  <span>{skillsQ.data?.categories?.[c] || 0}</span>
+                </button>
+              ))}
+            </Card>
+          </aside>
 
-      {data && tab === "installed" && (
-        <>
-          <div className="mb-[var(--gap)] flex items-center gap-2 rounded-[var(--radius)] border border-border bg-surface-2 px-2.5">
-            <Icon name="search" size={13} className="text-faint" />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter installed skills…"
-              className="w-full bg-transparent py-2 text-sm text-text outline-none placeholder:text-faint" />
-          </div>
-          <div className="overflow-hidden rounded-[calc(var(--radius)+2px)] border border-border bg-surface">
-            {skills.length === 0 && <div className="py-10 text-center text-sm text-faint">No skills match.</div>}
-            {skills.map((s) => (
-              <div key={s.name} className="border-b border-border last:border-0">
-                <div className="flex items-start gap-3 px-[var(--pad)] py-2.5 hover:bg-surface-2/40">
-                  <button onClick={() => view(s.name)} className="mt-0.5 shrink-0 text-faint hover:text-primary">
-                    <Icon name={open === s.name ? "chevronDown" : "chevronRight"} size={14} />
-                  </button>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-mono text-sm text-text">{s.name}</span>
-                      {s.installed && <Badge tone="info">installed</Badge>}
-                      {s.editable && !s.installed && <Badge tone="neutral">local</Badge>}
-                      {!s.editable && !s.installed && <Badge tone="neutral">builtin</Badge>}
-                      {!s.available && <Badge tone="warning">unavailable</Badge>}
+          <main className="min-w-0 space-y-[var(--gap)]">
+            {tab === "skills" && (
+              <>
+                <Card>
+                  <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto]">
+                    <div className="flex items-center gap-2 border border-border bg-surface-2 px-2.5">
+                      <Icon name="search" size={14} className="text-faint" />
+                      <input
+                        value={q}
+                        onChange={(e) => setQ(e.target.value)}
+                        placeholder="Search skills..."
+                        className="w-full bg-transparent py-2 font-mono text-sm text-text outline-none placeholder:text-faint"
+                      />
                     </div>
-                    <div className="text-xs text-faint">{s.description || "—"}</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {FILTERS.map((f) => (
+                        <button
+                          key={f.key}
+                          onClick={() => setFilter(f.key)}
+                          className={cn(
+                            "border px-2.5 py-1 font-mono text-xs transition",
+                            filter === f.key ? "border-primary bg-primary text-primary-fg" : "border-border text-dim hover:bg-surface-2 hover:text-text",
+                          )}
+                        >
+                          {f.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                  <div className="flex shrink-0 items-center gap-1.5">
-                    {s.editable && (
-                      <button onClick={() => openEdit(s, setEditing, setContent)} title="Edit"
-                        className="rounded-[var(--radius)] border border-border px-2 py-1 text-xs text-dim hover:text-text">
-                        <Icon name="config" size={13} />
-                      </button>
-                    )}
-                    {(s.installed || s.editable) && (
-                      <button onClick={() => uninstall(s)} title="Uninstall"
-                        className="rounded-[var(--radius)] border border-border px-2 py-1 text-xs text-danger hover:bg-danger/10">
-                        <Icon name="trash" size={13} />
-                      </button>
-                    )}
+                </Card>
+
+                <Card pad={false}>
+                  <div className="flex items-center justify-between gap-3 border-b border-border px-[var(--pad)] py-3">
+                    <div>
+                      <div className="font-mono text-base font-semibold text-text">{category === "All" ? "All" : category}</div>
+                      <div className="text-xs text-faint">{skills.length} visible / {enabledCount} enabled</div>
+                    </div>
+                    <Badge tone="success">{enabledCount}/{skillsQ.data.count} enabled</Badge>
                   </div>
-                </div>
-                {open === s.name && (
-                  <pre className="scroll-thin max-h-96 overflow-auto whitespace-pre-wrap break-words border-t border-border bg-surface-2/40 px-[var(--pad)] py-3 font-mono text-xs text-dim">
-                    {content || "Loading…"}
-                  </pre>
-                )}
-              </div>
-            ))}
-          </div>
-        </>
+                  {!skills.length && <Empty icon="skills">No skills match.</Empty>}
+                  {skills.map((s) => (
+                    <div key={s.name} className="border-b border-border last:border-0">
+                      <div className="grid gap-3 px-[var(--pad)] py-3 hover:bg-surface-2/35 md:grid-cols-[auto_minmax(0,1fr)_auto]">
+                        <Toggle on={s.enabled} disabled={busy === `skill:${s.name}`} onChange={() => toggleSkill(s)} />
+                        <button onClick={() => view(s.name)} className="min-w-0 text-left">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-mono text-sm text-text">{s.name}</span>
+                            <Badge tone="neutral">{s.category || "General"}</Badge>
+                            {s.installed && <Badge tone="info">installed</Badge>}
+                            {s.editable && !s.installed && <Badge tone="neutral">local</Badge>}
+                            {!s.editable && !s.installed && <Badge tone="neutral">built in</Badge>}
+                            {!s.available && <Badge tone={s.enabled ? "warning" : "neutral"}>{s.enabled ? "gated" : "disabled"}</Badge>}
+                          </div>
+                          <div className="mt-1 line-clamp-2 text-xs text-faint">
+                            {s.unavailable_reason || s.description || "-"}
+                          </div>
+                          {!![...(s.platforms || []), ...(s.environments || []), ...(s.toolsets || [])].length && (
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {(s.platforms || []).map((x) => <MiniTag key={`p:${x}`}>platform:{x}</MiniTag>)}
+                              {(s.environments || []).map((x) => <MiniTag key={`e:${x}`}>env:{x}</MiniTag>)}
+                              {(s.toolsets || []).map((x) => <MiniTag key={`t:${x}`}>toolset:{x}</MiniTag>)}
+                            </div>
+                          )}
+                        </button>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <button onClick={() => view(s.name)} className="grid h-8 w-8 place-items-center border border-border text-faint hover:text-primary" title="View">
+                            <Icon name={open === s.name ? "chevronDown" : "chevronRight"} size={14} />
+                          </button>
+                          {s.editable && (
+                            <Button sm variant="ghost" icon="config" onClick={() => editSkill(s)} disabled={busy === `edit:${s.name}`}>Edit</Button>
+                          )}
+                          {(s.installed || s.editable) && (
+                            <button onClick={() => removeSkill(s)} title="Remove" className="grid h-8 w-8 place-items-center border border-border text-faint hover:text-danger">
+                              <Icon name="trash" size={15} />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      {open === s.name && (
+                        <pre className="scroll-thin max-h-96 overflow-auto whitespace-pre-wrap break-words border-t border-border bg-bg/45 px-[var(--pad)] py-3 font-mono text-xs text-dim">
+                          {content || "Loading..."}
+                        </pre>
+                      )}
+                    </div>
+                  ))}
+                </Card>
+              </>
+            )}
+
+            {tab === "toolsets" && (
+              <ToolsetsTab data={toolsetsQ.data || []} loading={toolsetsQ.loading} reload={toolsetsQ.reload} />
+            )}
+
+            {tab === "bundles" && (
+              <BundlesTab data={bundlesQ.data?.bundles || []} reload={reloadAll} />
+            )}
+
+            {tab === "hub" && (
+              <BrowseHub registries={skillsQ.data.registries || []} taps={skillsQ.data.taps || {}} onChange={reloadAll} />
+            )}
+          </main>
+        </div>
       )}
 
-      {data && tab === "hub" && <BrowseHub registries={data.registries || []} taps={data.taps || {}} onChange={reload} />}
-
-      {creating && <SkillEditor title="New skill" onClose={() => setCreating(false)} onSaved={() => { setCreating(false); reload(); }} />}
-      {editing && <SkillEditor title={`Edit ${editing.name}`} skill={editing} initial={content}
-        onClose={() => setEditing(null)} onSaved={() => { setEditing(null); reload(); }} />}
+      {creating && (
+        <SkillEditor title="New skill" onClose={() => setCreating(false)} onSaved={() => { setCreating(false); skillsQ.reload(); }} />
+      )}
+      {editing && (
+        <SkillEditor
+          title={`Edit ${editing.name}`}
+          skill={editing}
+          initial={content}
+          onClose={() => setEditing(null)}
+          onSaved={() => { setEditing(null); skillsQ.reload(); }}
+        />
+      )}
     </>
   );
 }
 
-function openEdit(s: SkillRow, setEditing: (s: SkillRow) => void, setContent: (c: string) => void) {
-  setContent("");
-  api<{ content?: string }>(`skills/${encodeURIComponent(s.name)}`)
-    .then((d) => setContent(d.content || ""))
-    .catch(() => {});
-  setEditing(s);
+function ToolsetsTab({ data, loading, reload }: { data: ToolsetRow[]; loading: boolean; reload: () => void }) {
+  const [busy, setBusy] = useState("");
+
+  async function toggle(row: ToolsetRow) {
+    setBusy(row.name);
+    try {
+      await put(`tools/toolsets/${encodeURIComponent(row.name)}`, { enabled: !row.enabled });
+      reload();
+    } catch (e) {
+      toast(String(e), "err");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  if (loading && !data.length) return <Loading />;
+  return (
+    <div className="grid gap-[var(--gap)] md:grid-cols-2 xl:grid-cols-3">
+      {!data.length && <Card><Empty icon="tools">No toolsets found.</Empty></Card>}
+      {data.map((row) => (
+        <Card
+          key={row.name}
+          title={<span className="font-mono">{row.label || row.name}</span>}
+          sub={`${row.enabled_count}/${row.tool_count} tools enabled`}
+          actions={<Toggle on={row.enabled} disabled={busy === row.name} onChange={() => toggle(row)} />}
+        >
+          <div className="min-h-10 text-xs text-faint">{row.description || "Tool group"}</div>
+          <div className="mt-3 flex flex-wrap gap-1">
+            {row.tools.slice(0, 12).map((tool) => (
+              <MiniTag key={tool}>{tool}</MiniTag>
+            ))}
+            {row.tools.length > 12 && <MiniTag>+{row.tools.length - 12}</MiniTag>}
+          </div>
+          {!row.available && <div className="mt-3"><Badge tone="warning">not available on this host</Badge></div>}
+        </Card>
+      ))}
+    </div>
+  );
 }
 
-function Badge({ children, tone }: { children: React.ReactNode; tone: "info" | "neutral" | "warning" }) {
-  const c = tone === "info" ? "bg-info/15 text-info border-info/30"
-    : tone === "warning" ? "bg-warning/15 text-warning border-warning/30"
-    : "bg-surface-2 text-dim border-border";
-  return <span className={cn("rounded-full border px-1.5 py-px text-[10px]", c)}>{children}</span>;
+function BundlesTab({ data, reload }: { data: BundleRow[]; reload: () => void }) {
+  const [name, setName] = useState("");
+  const [members, setMembers] = useState("");
+  const [description, setDescription] = useState("");
+  const [instruction, setInstruction] = useState("");
+  const [busy, setBusy] = useState("");
+
+  async function save() {
+    setBusy("save");
+    try {
+      const skills = members.split(",").map((s) => s.trim()).filter(Boolean);
+      await post("skills/bundles", { name, skills, description, instruction });
+      toast("Bundle saved");
+      setName("");
+      setMembers("");
+      setDescription("");
+      setInstruction("");
+      reload();
+    } catch (e) {
+      toast(String(e), "err");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function remove(slug: string) {
+    if (!window.confirm(`Remove bundle "${slug}"?`)) return;
+    setBusy(slug);
+    try {
+      await del(`skills/bundles/${encodeURIComponent(slug)}`);
+      toast("Bundle removed");
+      reload();
+    } catch (e) {
+      toast(String(e), "err");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  return (
+    <div className="space-y-[var(--gap)]">
+      <Card title="Bundle" sub="Load several skills together by name or slash command">
+        <div className="grid gap-2 md:grid-cols-2">
+          <Field label="Name"><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="frontend-stack" /></Field>
+          <Field label="Skills"><Input value={members} onChange={(e) => setMembers(e.target.value)} placeholder="frontend-design, write-tests" /></Field>
+          <Field label="Description"><Input value={description} onChange={(e) => setDescription(e.target.value)} /></Field>
+          <Field label="Extra guidance"><Input value={instruction} onChange={(e) => setInstruction(e.target.value)} /></Field>
+        </div>
+        <div className="mt-3">
+          <Button variant="primary" icon="check" disabled={busy === "save" || !name.trim() || !members.trim()} onClick={save}>
+            Save bundle
+          </Button>
+        </div>
+      </Card>
+
+      <Card title="Saved bundles" pad={false}>
+        {!data.length && <Empty icon="command">No bundles yet.</Empty>}
+        {data.map((b) => (
+          <div key={b.slug} className="flex items-start gap-3 border-b border-border px-[var(--pad)] py-2.5 last:border-0">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-mono text-sm text-text">{b.slug}</span>
+                <Badge tone="neutral">{b.skills.length} skills</Badge>
+              </div>
+              {b.description && <div className="text-xs text-faint">{b.description}</div>}
+              <div className="mt-1 flex flex-wrap gap-1">
+                {b.skills.map((s) => <MiniTag key={s}>{s}</MiniTag>)}
+              </div>
+            </div>
+            <button onClick={() => remove(b.slug)} disabled={busy === b.slug} className="text-faint hover:text-danger" title="Remove">
+              <Icon name="trash" size={15} />
+            </button>
+          </div>
+        ))}
+      </Card>
+    </div>
+  );
 }
 
 function BrowseHub({ registries, taps, onChange }: { registries: Registry[]; taps: Record<string, string>; onChange: () => void }) {
@@ -162,20 +479,39 @@ function BrowseHub({ registries, taps, onChange }: { registries: Registry[]; tap
     try {
       const d = await api<{ results?: HubResult[] }>(`skills/marketplace/search?q=${encodeURIComponent(q)}`);
       setResults(d.results || []);
-    } catch (e) { toast(String(e), "err"); setResults([]); }
-    finally { setSearching(false); }
+    } catch (e) {
+      toast(String(e), "err");
+      setResults([]);
+    } finally {
+      setSearching(false);
+    }
   }
+
   async function install(source: string, label: string) {
     setBusy(source);
-    try { await post("skills/marketplace/install", { source }); toast(`Installed ${label}`); onChange(); if (results) run(); }
-    catch (e) { toast(String(e), "err"); }
-    finally { setBusy(""); }
+    try {
+      await post("skills/marketplace/install", { source });
+      toast(`Installed ${label}`);
+      onChange();
+      if (results) run();
+    } catch (e) {
+      toast(String(e), "err");
+    } finally {
+      setBusy("");
+    }
   }
+
   async function installHub(hub: string) {
     setBusy(`hub:${hub}`);
-    try { const r = await post<{ installed?: string[] }>("skills/marketplace/install", { hub }); toast(`Installed ${r.installed?.length ?? 0} from ${hub}`); onChange(); }
-    catch (e) { toast(String(e), "err"); }
-    finally { setBusy(""); }
+    try {
+      const r = await post<{ installed?: string[] }>("skills/marketplace/install", { hub });
+      toast(`Installed ${r.installed?.length ?? 0} from ${hub}`);
+      onChange();
+    } catch (e) {
+      toast(String(e), "err");
+    } finally {
+      setBusy("");
+    }
   }
 
   const counts = useMemo(() => {
@@ -185,94 +521,92 @@ function BrowseHub({ registries, taps, onChange }: { registries: Registry[]; tap
   }, [results]);
 
   return (
-    <>
-      <div className="rounded-[calc(var(--radius)+2px)] border border-border bg-surface p-[var(--pad)]">
+    <div className="space-y-[var(--gap)]">
+      <Card>
         <div className="flex items-center gap-2">
           <div className="flex flex-1 items-center gap-2 rounded-[var(--radius)] border border-border bg-surface-2 px-2.5">
             <Icon name="search" size={14} className="text-faint" />
-            <input value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && run()}
-              placeholder="Search the skill hub (GitHub, agentskills, community)…"
-              className="w-full bg-transparent py-2 text-sm text-text outline-none placeholder:text-faint" />
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && run()}
+              placeholder="Search connected skill sources..."
+              className="w-full bg-transparent py-2 text-sm text-text outline-none placeholder:text-faint"
+            />
           </div>
-          <button onClick={run} disabled={searching}
-            className="inline-flex items-center gap-1.5 rounded-[var(--radius)] bg-primary px-3 py-2 text-sm font-medium text-primary-fg hover:opacity-90 disabled:opacity-50">
-            {searching ? <Spinner size={14} /> : <Icon name="search" size={14} />} Search
-          </button>
+          <Button variant="primary" icon={searching ? undefined : "search"} onClick={run} disabled={searching}>
+            {searching && <Spinner size={14} />} Search
+          </Button>
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[11px]">
           <span className="text-faint">Connected hubs:</span>
           {registries.map((r) => (
-            <span key={`${r.kind}:${r.name}`} title={`${r.kind} · ${r.ref}`}
-              className="rounded-full border border-border bg-surface-2 px-2 py-0.5 text-dim">
-              {r.name}{counts[r.name] ? ` · ${counts[r.name]}` : ""}
+            <span key={`${r.kind}:${r.name}`} title={`${r.kind} - ${r.ref}`} className="rounded-full border border-border bg-surface-2 px-2 py-0.5 text-dim">
+              {r.name}{counts[r.name] ? ` - ${counts[r.name]}` : ""}
             </span>
           ))}
           {Object.keys(taps).map((t) => (
-            <button key={t} onClick={() => installHub(t)} disabled={busy === `hub:${t}`}
-              title={`Install all from ${t} (${taps[t]})`}
-              className="rounded-full border border-primary/40 px-2 py-0.5 text-primary hover:bg-primary/10 disabled:opacity-50">
-              {busy === `hub:${t}` ? "installing…" : `+ ${t}`}
+            <button
+              key={t}
+              onClick={() => installHub(t)}
+              disabled={busy === `hub:${t}`}
+              title={`Install all from ${t}`}
+              className="rounded-full border border-primary/40 px-2 py-0.5 text-primary hover:bg-primary/10 disabled:opacity-50"
+            >
+              {busy === `hub:${t}` ? "installing..." : `+ ${t}`}
             </button>
           ))}
         </div>
 
-        <div className="mt-2 flex items-center gap-2">
-          <input value={direct} onChange={(e) => setDirect(e.target.value)}
-            placeholder="Install from URL / GitHub  (e.g. owner/repo, git:owner/repo/sub, https://…/SKILL.md)"
-            className="flex-1 rounded-[var(--radius)] border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text outline-none placeholder:text-faint" />
-          <button onClick={() => direct.trim() && install(direct.trim(), direct.trim())} disabled={!direct.trim() || busy === direct.trim()}
-            className="rounded-[var(--radius)] border border-border px-2.5 py-1.5 text-xs text-dim hover:text-text disabled:opacity-50">
-            <Icon name="download" size={13} /> Install
-          </button>
+        <div className="mt-3 flex items-center gap-2">
+          <Input value={direct} onChange={(e) => setDirect(e.target.value)} placeholder="Install from URL, owner/repo, or local path" />
+          <Button sm icon="download" disabled={!direct.trim() || busy === direct.trim()} onClick={() => install(direct.trim(), direct.trim())}>
+            Install
+          </Button>
         </div>
-      </div>
+      </Card>
 
-      <div className="mt-[var(--gap)] space-y-2">
-        {results === null && (
-          <div className="rounded-[calc(var(--radius)+2px)] border border-border bg-surface py-12 text-center text-sm text-faint">
-            Search the hub above to browse installable skills from the connected sources.
-          </div>
-        )}
-        {results?.length === 0 && (
-          <div className="rounded-[calc(var(--radius)+2px)] border border-border bg-surface py-10 text-center text-sm text-faint">No results.</div>
-        )}
-        {results?.map((r) => (
-          <div key={`${r.hub}/${r.name}`} className="flex items-start gap-3 rounded-[calc(var(--radius)+2px)] border border-border bg-surface px-[var(--pad)] py-2.5">
+      {results === null && <Card><Empty icon="download">Search to browse installable skills.</Empty></Card>}
+      {results?.length === 0 && <Card><Empty icon="search">No results.</Empty></Card>}
+      {results?.map((r) => (
+        <Card key={`${r.hub}/${r.name}`} pad={false}>
+          <div className="flex items-start gap-3 px-[var(--pad)] py-2.5">
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-mono text-sm text-text">{r.name}</span>
-                <span className="rounded-full border border-border bg-surface-2 px-1.5 py-px text-[10px] text-dim">{r.hub}</span>
-                {r.installed && <span className="rounded-full border border-info/30 bg-info/15 px-1.5 py-px text-[10px] text-info">installed</span>}
+                <Badge tone="neutral">{r.hub}</Badge>
+                {r.installed && <Badge tone="info">installed</Badge>}
               </div>
               {r.description && <div className="text-xs text-faint">{r.description}</div>}
               <div className="mt-0.5 truncate font-mono text-[11px] text-faint">{r.source}</div>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
               {r.detail_url && (
-                <a href={r.detail_url} target="_blank" rel="noreferrer" title="Details"
-                  className="rounded-[var(--radius)] border border-border px-2 py-1 text-xs text-dim hover:text-text">
-                  <Icon name="external" size={13} />
+                <a href={r.detail_url} target="_blank" rel="noreferrer" title="Details" className="text-faint hover:text-primary">
+                  <Icon name="external" size={15} />
                 </a>
               )}
-              <button onClick={() => install(r.source, r.name)} disabled={busy === r.source || r.installed}
-                className="inline-flex items-center gap-1 rounded-[var(--radius)] bg-primary px-2.5 py-1 text-xs font-medium text-primary-fg hover:opacity-90 disabled:opacity-50">
-                {busy === r.source ? <Spinner size={12} /> : <Icon name="download" size={12} />}
-                {r.installed ? "installed" : "Install"}
-              </button>
+              <Button sm variant="primary" icon="download" disabled={busy === r.source || r.installed} onClick={() => install(r.source, r.name)}>
+                {r.installed ? "Installed" : "Install"}
+              </Button>
             </div>
           </div>
-        ))}
-      </div>
-    </>
+        </Card>
+      ))}
+    </div>
   );
 }
 
-function SkillEditor({ title, skill, initial, onClose, onSaved }: {
-  title: string; skill?: SkillRow; initial?: string; onClose: () => void; onSaved: () => void;
+function SkillEditor({ title, skill, initial = "", onClose, onSaved }: {
+  title: string;
+  skill?: SkillRow;
+  initial?: string;
+  onClose: () => void;
+  onSaved: () => void;
 }) {
   const edit = !!skill;
-  const [content, setContent] = useState(initial ?? "");
+  const [content, setContent] = useState(initial);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [body, setBody] = useState("");
@@ -282,14 +616,17 @@ function SkillEditor({ title, skill, initial, onClose, onSaved }: {
     setSaving(true);
     try {
       if (edit) {
-        const text = content || initial || "";
-        await patch(`skills/${encodeURIComponent(skill!.name)}`, { content: text });
+        await patch(`skills/${encodeURIComponent(skill.name)}`, { content });
       } else {
         await post("skills", { name: name.trim(), description: description.trim(), body: body.trim() });
       }
-      toast("Saved"); onSaved();
-    } catch (e) { toast(String(e), "err"); }
-    finally { setSaving(false); }
+      toast("Saved");
+      onSaved();
+    } catch (e) {
+      toast(String(e), "err");
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -300,26 +637,83 @@ function SkillEditor({ title, skill, initial, onClose, onSaved }: {
           <button onClick={onClose} className="text-faint hover:text-text"><Icon name="x" size={16} /></button>
         </div>
         {edit ? (
-          <textarea value={content || initial || ""} onChange={(e) => setContent(e.target.value)} rows={18}
-            className="scroll-thin w-full resize-none rounded-[var(--radius)] border border-border bg-surface-2 p-3 font-mono text-xs text-text outline-none" />
+          <textarea
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            rows={18}
+            className="scroll-thin w-full resize-none rounded-[var(--radius)] border border-border bg-surface-2 p-3 font-mono text-xs text-text outline-none"
+          />
         ) : (
           <div className="space-y-2">
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="skill-name (lowercase-with-hyphens)"
-              className="w-full rounded-[var(--radius)] border border-border bg-surface-2 px-3 py-2 text-sm text-text outline-none placeholder:text-faint" />
-            <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="One-line description"
-              className="w-full rounded-[var(--radius)] border border-border bg-surface-2 px-3 py-2 text-sm text-text outline-none placeholder:text-faint" />
-            <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={12} placeholder="Skill body (markdown instructions)…"
-              className="scroll-thin w-full resize-none rounded-[var(--radius)] border border-border bg-surface-2 p-3 font-mono text-xs text-text outline-none placeholder:text-faint" />
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="skill-name" />
+            <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="One-line description" />
+            <textarea
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              rows={12}
+              placeholder="Skill body (markdown instructions)..."
+              className="scroll-thin w-full resize-none rounded-[var(--radius)] border border-border bg-surface-2 p-3 font-mono text-xs text-text outline-none placeholder:text-faint"
+            />
           </div>
         )}
         <div className="mt-3 flex justify-end gap-2">
-          <button onClick={onClose} className="rounded-[var(--radius)] border border-border px-3 py-1.5 text-sm text-dim hover:text-text">Cancel</button>
-          <button onClick={save} disabled={saving}
-            className="inline-flex items-center gap-1.5 rounded-[var(--radius)] bg-primary px-3 py-1.5 text-sm font-medium text-primary-fg hover:opacity-90 disabled:opacity-50">
-            {saving && <Spinner size={13} />} Save
-          </button>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button variant="primary" icon="check" onClick={save} disabled={saving || (!edit && (!name.trim() || !description.trim() || !body.trim()))}>
+            Save
+          </Button>
         </div>
       </div>
     </div>
+  );
+}
+
+function RailButton({ active, icon, label, onClick }: {
+  active: boolean;
+  icon: string;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "flex w-full items-center gap-2 px-3 py-2 text-left font-mono text-xs transition",
+        active ? "bg-primary text-primary-fg" : "text-dim hover:bg-surface-2 hover:text-text",
+      )}
+    >
+      <Icon name={icon} size={14} />
+      <span className="truncate">{label}</span>
+    </button>
+  );
+}
+
+function Tabs({ value, onChange, items }: {
+  value: Tab;
+  onChange: (value: Tab) => void;
+  items: [Tab, string, string][];
+}) {
+  return (
+    <div className="mb-[var(--gap)] flex flex-wrap gap-1 rounded-[var(--radius)] border border-border bg-surface p-1">
+      {items.map(([key, label, icon]) => (
+        <button
+          key={key}
+          onClick={() => onChange(key)}
+          className={cn(
+            "inline-flex items-center gap-1.5 rounded-[calc(var(--radius)-2px)] px-3 py-1.5 text-sm transition",
+            value === key ? "bg-primary font-medium text-primary-fg" : "text-dim hover:bg-surface-2 hover:text-text",
+          )}
+        >
+          <Icon name={icon} size={14} /> {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function MiniTag({ children }: { children: ReactNode }) {
+  return (
+    <span className="rounded-full border border-border bg-surface-2 px-1.5 py-px font-mono text-[10px] text-faint">
+      {children}
+    </span>
   );
 }

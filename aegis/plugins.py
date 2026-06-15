@@ -66,6 +66,20 @@ class PluginAPI:
         if self._current_plugin is not None:
             _PLUGIN_HOOKS.setdefault(self._current_plugin, []).append((event, fn))
 
+    def register_middleware(self, kind: str, fn) -> None:
+        """Register an in-process middleware wrapper.
+
+        Kinds are ``tool_request``, ``tool_execution``, ``llm_request``, and
+        ``llm_execution``. Middleware receives ``(payload, next_call, agent)``
+        and may return a replacement payload/result. ``next_call`` is single-use
+        so wrapper mistakes are caught close to the plugin that made them.
+        """
+        if kind not in _MIDDLEWARE_KINDS:
+            raise ValueError(f"unknown middleware kind: {kind}")
+        _MIDDLEWARE.setdefault(kind, []).append(fn)
+        if self._current_plugin is not None:
+            _PLUGIN_MIDDLEWARE.setdefault(self._current_plugin, []).append((kind, fn))
+
     def register_context_engine(self, name: str, engine_cls) -> None:
         """Register a custom context-management strategy (select via agent.context_engine)."""
         from .agent.context_engine import register
@@ -74,7 +88,10 @@ class PluginAPI:
 
 # Process-global hook registry, populated by plugins' register(api) at load time.
 _HOOKS: dict[str, list] = {}
+_MIDDLEWARE_KINDS = {"tool_request", "tool_execution", "llm_request", "llm_execution"}
+_MIDDLEWARE: dict[str, list] = {}
 _PLUGIN_HOOKS: dict[Path, list[tuple[str, Any]]] = {}
+_PLUGIN_MIDDLEWARE: dict[Path, list[tuple[str, Any]]] = {}
 _PLUGIN_PROVIDERS: dict[Path, list[str]] = {}
 _PLUGIN_MODULES: dict[Path, str] = {}
 
@@ -116,6 +133,64 @@ def fire_hook(event: str, *args, **kwargs):
             from ._log import log_exc
             log_exc(f"plugin hook {event} failed: {e}")
     return result
+
+
+def _call_middleware(fn, payload, next_call, agent):
+    """Call middleware while tolerating older two-argument experiments."""
+
+    import inspect
+
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return fn(payload, next_call, agent)
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return fn(payload, next_call, agent)
+    argc = len(params)
+    if argc >= 3:
+        return fn(payload, next_call, agent)
+    if argc == 2:
+        return fn(payload, next_call)
+    return fn(payload)
+
+
+def fire_middleware(kind: str, payload: dict[str, Any], call_next, agent=None):
+    """Run middleware wrappers for ``kind`` around ``call_next``.
+
+    A broken middleware is logged and skipped by advancing to the next wrapper,
+    preserving AEGIS' fail-soft plugin contract. If no middleware exists, this
+    simply returns ``call_next(payload)``.
+    """
+    chain = list(_MIDDLEWARE.get(kind, []))
+    if not chain:
+        return call_next(payload)
+
+    def invoke(index: int, current: dict[str, Any]):
+        if index >= len(chain):
+            return call_next(current)
+        fn = chain[index]
+        called = False
+
+        def next_call(updated=None):
+            nonlocal called
+            if called:
+                raise RuntimeError(f"middleware {kind} called next_call more than once")
+            called = True
+            return invoke(index + 1, current if updated is None else updated)
+
+        try:
+            result = _call_middleware(fn, current, next_call, agent)
+            if result is None and not called:
+                return next_call(current)
+            return result
+        except Exception as e:  # noqa: BLE001
+            from ._log import log_exc
+            log_exc(f"plugin middleware {kind} failed: {e}")
+            if called:
+                raise
+            return invoke(index + 1, current)
+
+    return invoke(0, payload)
 
 
 def _plugin_base() -> Path:
@@ -196,6 +271,11 @@ def _clear_plugin_side_effects(path: Path) -> None:
         _HOOKS[event] = [h for h in hooks if h is not fn]
         if not _HOOKS[event]:
             _HOOKS.pop(event, None)
+    for kind, fn in _PLUGIN_MIDDLEWARE.pop(path, []):
+        chain = _MIDDLEWARE.get(kind, [])
+        _MIDDLEWARE[kind] = [h for h in chain if h is not fn]
+        if not _MIDDLEWARE[kind]:
+            _MIDDLEWARE.pop(kind, None)
     names = _PLUGIN_PROVIDERS.pop(path, [])
     if names:
         try:

@@ -15,6 +15,7 @@ keywords = ["agent", "llm", "cli", "ai", "claude", "openai", "harness", "tools",
 # Upper-bound ceilings on every dependency (supply-chain hygiene, post-litellm policy):
 # post-1.0 packages pin <next_major; pre-1.0 packages allow a couple of minors.
 dependencies = [
+    "aiohttp>=3.9,<4",
     "fastapi>=0.115,<1",
     "httpx>=0.27,<0.30",
     "ptyprocess>=0.7,<1; sys_platform != 'win32'",
@@ -54,6 +55,7 @@ line-length = 110
 target-version = "py310"
 
 [tool.pytest.ini_options]
+pythonpath = ["."]
 filterwarnings = [
     # uvicorn[standard] still imports the deprecated websockets.legacy module; not ours
     # to fix and harmless until websockets drops it (capped <17 in dependencies).

@@ -59,6 +59,8 @@ class BasePlatformAdapter:
             self._active = set()
         if not hasattr(self, "_qlock"):
             self._qlock = threading.Lock()
+        if not hasattr(self, "_clarify_waiters"):
+            self._clarify_waiters = {}
 
     def _conversation_key(self, ev: MessageEvent) -> str:
         cb = getattr(self, "_conversation_key_cb", None)
@@ -79,6 +81,8 @@ class BasePlatformAdapter:
         raw_text: str | None = None,
     ) -> str | None:
         self._ensure_inbound_queue(getattr(self, "_dispatch", None))
+        if self._resolve_clarify_waiter(ev):
+            return ""
         if self._handle_inbound_control(ev, raw_text=raw_text):
             return ""
         done: threading.Event | None = None
@@ -103,6 +107,12 @@ class BasePlatformAdapter:
             busy = bool(worker and worker.is_alive() and key in self._active)
         if not busy:
             return False
+        if is_control_reset(text):
+            cb = getattr(self, "_interrupt_cb", None)
+            if cb and cb(ev):
+                ev._bypass_busy_mode = True
+                self._deliver_reply(ev, "🛑 stopping current turn; reset queued.", None)
+            return False
         if is_control_interrupt(text):
             cb = getattr(self, "_interrupt_cb", None)
             if cb and cb(ev):
@@ -124,7 +134,7 @@ class BasePlatformAdapter:
         with self._qlock:
             worker = self._workers.get(key)
             busy = bool(worker and worker.is_alive() and key in self._active)
-        if busy and not getattr(ev, "internal", False):
+        if busy and not getattr(ev, "internal", False) and not getattr(ev, "_bypass_busy_mode", False):
             handled, note = self._apply_busy_mode(ev)
             if note:
                 self._deliver_reply(ev, note, None)
@@ -285,6 +295,92 @@ class BasePlatformAdapter:
         else:
             self.send(chat_id, f"(file not found: {path})")
 
+    def send_image(self, chat_id: str, path: str, caption: str = "") -> None:
+        self.send_media(chat_id, path, caption)
+
+    def send_video(self, chat_id: str, path: str, caption: str = "") -> None:
+        self.send_media(chat_id, path, caption)
+
+    def send_voice(self, chat_id: str, path: str, caption: str = "") -> None:
+        self.send_media(chat_id, path, caption)
+
+    def send_document(self, chat_id: str, path: str, caption: str = "") -> None:
+        self.send_media(chat_id, path, caption)
+
+    def send_clarify(self, chat_id: str, question: str, choices: list[str] | None = None) -> None:
+        rendered = question.strip()
+        for i, choice in enumerate(choices or [], 1):
+            rendered += f"\n  {i}. {choice}"
+        self.send(chat_id, rendered)
+
+    def send_exec_approval(self, chat_id: str, prompt: str) -> None:
+        self.send(chat_id, prompt)
+
+    def add_reaction(self, chat_id: str, message_id: str, reaction: str) -> None:  # noqa: ARG002
+        return None
+
+    def remove_reaction(self, chat_id: str, message_id: str, reaction: str) -> None:  # noqa: ARG002
+        return None
+
+    def filter_media_path(self, path: str) -> tuple[bool, str]:
+        import os
+        if not path:
+            return False, "empty media path"
+        if not os.path.exists(path):
+            return False, "file not found"
+        try:
+            from ..tools.file_safety import read_denial
+            reason = read_denial(path)
+            if reason:
+                return False, reason
+        except Exception:  # noqa: BLE001
+            pass
+        return True, ""
+
+    def ask_user(
+        self,
+        ev: MessageEvent,
+        question: str,
+        choices: list[str] | None = None,
+        *,
+        timeout: float = 3600,
+    ) -> str:
+        import threading
+
+        self._ensure_inbound_queue()
+        key = self._conversation_key(ev)
+        done = threading.Event()
+        waiter = {"event": done, "answer": ""}
+        with self._qlock:
+            self._clarify_waiters.setdefault(key, []).append(waiter)
+        try:
+            self.send_clarify(ev.chat_id, question, choices or [])
+            done.wait(max(0.1, float(timeout or 0)))
+            return str(waiter.get("answer") or "")
+        finally:
+            with self._qlock:
+                waiters = self._clarify_waiters.get(key, [])
+                if waiter in waiters:
+                    waiters.remove(waiter)
+                if not waiters:
+                    self._clarify_waiters.pop(key, None)
+
+    def _resolve_clarify_waiter(self, ev: MessageEvent) -> bool:
+        self._ensure_inbound_queue()
+        if getattr(ev, "internal", False):
+            return False
+        key = self._conversation_key(ev)
+        with self._qlock:
+            waiters = self._clarify_waiters.get(key) or []
+            waiter = waiters.pop(0) if waiters else None
+            if not waiters:
+                self._clarify_waiters.pop(key, None)
+        if waiter is None:
+            return False
+        waiter["answer"] = ev.text or ""
+        waiter["event"].set()
+        return True
+
     def deliver(self, chat_id: str, text: str) -> None:
         """Send a reply, extracting any ``MEDIA:/abs/path`` lines and sending each as a native
         attachment. Adapters should call this (not ``send``) to deliver agent replies."""
@@ -295,18 +391,28 @@ class BasePlatformAdapter:
             self.send(chat_id, clean)
         for path in media:
             try:
+                allowed, reason = self.filter_media_path(path)
+                if not allowed:
+                    self.send(chat_id, f"📎 blocked media path: {reason}")
+                    continue
                 self.send_media(chat_id, path)
             except Exception:  # noqa: BLE001
                 self.send(chat_id, f"📎 {path}")
 
 
 _CONTROL_RE = re.compile(r"^\s*/?(stop|cancel|abort|halt)\s*!?\s*$", re.IGNORECASE)
+_RESET_RE = re.compile(r"^\s*/?(new|reset)\s*!?\s*$", re.IGNORECASE)
 
 
 def is_control_interrupt(text: str) -> bool:
     """True for a bare 'stop'/'cancel'/'abort'/'halt' (optionally '/stop') — used to cancel a
     run in progress rather than start a new turn."""
     return bool(_CONTROL_RE.match(text or ""))
+
+
+def is_control_reset(text: str) -> bool:
+    """True for a bare '/new' or '/reset' command while a run is active."""
+    return bool(_RESET_RE.match(text or ""))
 
 
 _MEDIA_RE = re.compile(r"^[ \t]*MEDIA:[ \t]*(\S.*?)[ \t]*$", re.MULTILINE)

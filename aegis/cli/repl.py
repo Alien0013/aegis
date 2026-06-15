@@ -1174,6 +1174,7 @@ def _run_terminal_turn_active_session(
         session=agent.session,
         agent=agent,
         surface=surface,
+        platform="cli",
         meta=meta,
         on_event=on_event,
         include_wakeups=include_wakeups,
@@ -1186,6 +1187,7 @@ def _run_terminal_turn_active_session(
             session=agent.session,
             agent=agent,
             surface=surface,
+            platform="cli",
             meta={"goal_continuation": True, **(meta or {})},
             on_event=on_event,
             include_wakeups=include_wakeups,
@@ -2037,6 +2039,7 @@ def run_once(config: Config, prompt: str, *, model=None, provider_name=None,
         asker=make_asker(),
         secret_capture=make_secret_capture(),
         surface=surface,
+        platform="cli",
         meta=meta,
         on_event=renderer,
     )
@@ -2123,7 +2126,7 @@ def interactive(config: Config, *, model=None, provider_name=None,
                     continue
                 user = goal_prompt   # run the new goal as this turn
             elif user.startswith("/") and agent.skills and agent.skills.slash_invocation_exists(user):
-                pass                  # let Agent.run load /<skill-name> like Hermes
+                pass                  # let Agent.run load /<skill-name> like AEGIS
             elif user.startswith("/"):
                 renderer = Renderer(config)
                 if handle_slash(user, agent, runner=runner, store=store,

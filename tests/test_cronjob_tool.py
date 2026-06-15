@@ -30,6 +30,9 @@ def test_cronjob_create_list_update_delete(tmp_path):
         "schedule": "30m",
         "prompt": "check server status",
         "name": "Server check",
+        "model": "cron-model",
+        "enabled_toolsets": ["core", "web"],
+        "workdir": str(tmp_path),
     }, ctx))
 
     assert created["success"] is True
@@ -39,6 +42,9 @@ def test_cronjob_create_list_update_delete(tmp_path):
     assert stored is not None
     assert stored.name == "Server check"
     assert stored.deliver == "telegram:42"
+    assert stored.model == "cron-model"
+    assert stored.enabled_toolsets == ["core", "web"]
+    assert stored.workdir == str(tmp_path)
 
     listing = _data(tool.run({"action": "list"}, ctx))
     assert listing["count"] == 1
@@ -52,12 +58,16 @@ def test_cronjob_create_list_update_delete(tmp_path):
         "skills": ["ops", "ops", "logs"],
         "deliver": "local",
         "enabled": False,
+        "model": "cron-updated",
+        "enabled_toolsets": ["core"],
     }, ctx))
 
     assert updated["job"]["schedule"] == "1h"
     assert updated["job"]["skills"] == ["ops", "logs"]
     assert updated["job"]["deliver"] == "local"
     assert updated["job"]["state"] == "paused"
+    assert updated["job"]["model"] == "cron-updated"
+    assert updated["job"]["enabled_toolsets"] == ["core"]
 
     deleted = _data(tool.run({"action": "delete", "job_id": job_id}, ctx))
     assert deleted["success"] is True
