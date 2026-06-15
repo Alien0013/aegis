@@ -312,6 +312,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "session_summary": {},       # session title/summary
         "trajectory_compression": {},
         "curator": {},               # phase-2 skill consolidation review
+        "architect": {},             # /architect planning model (Aider-style; set a strong model here)
         "vision": {},                # vision_analyze image understanding
         "web_extract": {},           # web_extract page summarization
         "approval": {},              # smart command-approval classifier

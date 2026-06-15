@@ -49,6 +49,35 @@ def test_ultracode_continuation_is_bounded(tmp_path, monkeypatch):
     assert agent.provider.calls <= _ULTRACODE_MAX_CONTINUES + 2
 
 
+def test_architect_command_plans_then_implements(tmp_path, monkeypatch):
+    """/architect asks the architect model for a plan, then hands this model an
+    execution prompt carrying that plan."""
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from types import SimpleNamespace
+    from aegis.cli.repl import handle_architect_command
+    from aegis.types import LLMResponse
+
+    prov = SimpleNamespace(
+        complete=lambda msgs, tools=None, stream=False: LLMResponse(text="1. edit x\n2. test"))
+    agent = SimpleNamespace(provider=prov, config=SimpleNamespace(get=lambda k, d=None: d))
+    out = handle_architect_command("/architect build the thing", agent)
+    assert "IMPLEMENTATION PLAN" in out and "1. edit x" in out and "build the thing" in out
+    assert handle_architect_command("/architect", agent) is None
+
+
+def test_architect_falls_back_when_model_errors(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from types import SimpleNamespace
+    from aegis.cli.repl import handle_architect_command
+
+    def boom(*a, **k):
+        raise RuntimeError("no provider")
+    agent = SimpleNamespace(provider=SimpleNamespace(complete=boom),
+                            config=SimpleNamespace(get=lambda k, d=None: d))
+    out = handle_architect_command("/architect do it", agent)
+    assert out == "do it"             # degrades to running the task directly
+
+
 def test_ultracode_command_raises_budget(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     from types import SimpleNamespace

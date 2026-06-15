@@ -68,6 +68,7 @@ SLASH_COMMANDS = (
     SlashCommand("/new", "sessions", "start a fresh session"),
     SlashCommand("/clear", "sessions", "start a fresh session"),
     SlashCommand("/ultracode", "planning", "run the rigorous autonomous plan→implement→verify loop", "/ultracode <task>"),
+    SlashCommand("/architect", "planning", "strong model plans → this model implements (Aider-style)", "/architect <task>"),
     SlashCommand("/plan", "planning", "draft a plan without making changes", "/plan <task>"),
     SlashCommand("/proceed", "planning", "execute the plan from the last /plan"),
     SlashCommand("/context", "context", "show the token budget breakdown (system, history, tools)"),
@@ -868,6 +869,47 @@ def handle_ultracode_command(text: str, agent: Any) -> str | None:
         "observed. If something blocks the real path, say so honestly and try another route — "
         "never fabricate results.</system-reminder>\n\n" + arg
     )
+
+
+_ARCHITECT_SYSTEM = (
+    "You are the ARCHITECT. Produce a precise, minimal implementation plan for the task — "
+    "do NOT write the full solution. Identify the exact files to create/modify, the specific "
+    "changes in each, the order to do them, edge cases to handle, and the concrete verification "
+    "(tests/build/lint) that proves it works. Be concrete and surgical; prefer the smallest change "
+    "that satisfies the goal. Output just the plan as numbered steps."
+)
+
+
+def handle_architect_command(text: str, agent: Any) -> str | None:
+    """Aider-style architect mode: a (typically stronger) model drafts the implementation
+    plan, then THIS model executes it. The architect model is the ``auxiliary.architect``
+    slot, falling back to the main provider when unset. Returns the execution prompt."""
+    parts = text.strip().split(maxsplit=1)
+    arg = parts[1].strip() if len(parts) > 1 else ""
+    if not arg:
+        _out("usage: /architect <task> — a strong model plans, then this model implements",
+             style="yellow")
+        return None
+    _out("🏛  architect — planning with the reasoning model…", style="cyan")
+    plan = ""
+    try:
+        from ..auxiliary import router_for
+        from ..types import Message
+        provider = router_for(agent).provider_for("architect")
+        resp = provider.complete(
+            [Message.system(_ARCHITECT_SYSTEM), Message.user(arg)], tools=None, stream=False)
+        plan = (resp.text or "").strip()
+    except Exception as e:  # noqa: BLE001
+        _out(f"  architect model unavailable ({e}); implementing directly.", style="yellow")
+    if plan:
+        _out("  ✓ plan ready — implementing.", style=TERM_GREEN)
+        return (
+            "<system-reminder>An architect model produced this implementation plan. Execute it "
+            "now on the real workspace: make the real edits and run the real verification. Adapt "
+            "if you find the plan is wrong, but do the actual work — do not just restate the plan."
+            "</system-reminder>\n\nIMPLEMENTATION PLAN:\n" + plan + "\n\nTASK: " + arg
+        )
+    return arg   # no plan -> run the task directly
 
 
 def handle_plan_command(text: str, agent: Any) -> str | None:
@@ -1943,6 +1985,11 @@ def interactive(config: Config, *, model=None, provider_name=None,
                 if not uc_prompt:
                     continue
                 user = uc_prompt   # run the full autonomous loop
+            elif user.startswith("/architect"):
+                arch_prompt = handle_architect_command(user, agent)
+                if not arch_prompt:
+                    continue
+                user = arch_prompt   # plan (strong model) then implement (this model)
             elif user.startswith(("/plan", "/proceed")):
                 plan_prompt = handle_plan_command(user, agent)
                 if not plan_prompt:
