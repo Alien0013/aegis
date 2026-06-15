@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 256 256" role="img" aria-label="AEGIS">
+  <defs>
+    <linearGradient id="aegis" x1="78" y1="56" x2="178" y2="208" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f2c878"/>
+      <stop offset="0.55" stop-color="#d8913f"/>
+      <stop offset="1" stop-color="#7ecf8f"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="224" height="224" rx="54" fill="#0a0c0f"/>
+  <path d="M128 50 196 76 V128 C196 168 166 196 128 210 C90 196 60 168 60 128 V76 Z" fill="url(#aegis)"/>
+  <path d="M104 104 L128 128 L104 152" fill="none" stroke="#14100a" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M134 152 H158" fill="none" stroke="#14100a" stroke-width="13" stroke-linecap="round"/>
+</svg>

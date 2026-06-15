@@ -30,6 +30,10 @@ import { Placeholder } from "./pages/Placeholder";
 
 // Code-split heavy pages (e.g. Chat pulls in xterm) so they load on demand.
 const Chat = lazy(() => import("./pages/Chat").then((m) => ({ default: m.Chat })));
+// The desktop app opens into a focused, chat-first shell instead of the admin grid.
+const DesktopShell = lazy(() =>
+  import("./pages/DesktopShell").then((m) => ({ default: m.DesktopShell })),
+);
 
 function TopBar() {
   const loc = useLocation();
@@ -39,7 +43,16 @@ function TopBar() {
   return (
     <header className="flex h-14 shrink-0 items-center justify-between border-b border-border bg-surface/40 px-[var(--pad)] backdrop-blur">
       <div className="text-sm font-medium text-dim">{current?.label || "AEGIS"}</div>
-      <ThemeSwitcher />
+      <div className="flex items-center gap-2">
+        <a
+          href="#/app"
+          title="Open the focused chat app"
+          className="rounded-[var(--radius)] border border-border bg-surface px-2.5 py-1.5 text-xs text-dim hover:text-text"
+        >
+          Chat app ↗
+        </a>
+        <ThemeSwitcher />
+      </div>
     </header>
   );
 }
@@ -78,19 +91,32 @@ function Routed() {
   );
 }
 
+function AdminShell() {
+  return (
+    <div className="flex h-screen overflow-hidden bg-bg text-text">
+      <Sidebar />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <TopBar />
+        <main className="scroll-thin flex-1 overflow-y-auto p-[var(--pad)] md:p-6">
+          <Routed />
+        </main>
+      </div>
+      <Toaster />
+    </div>
+  );
+}
+
 export function App() {
   return (
     <HashRouter>
-      <div className="flex h-screen overflow-hidden bg-bg text-text">
-        <Sidebar />
-        <div className="flex min-w-0 flex-1 flex-col">
-          <TopBar />
-          <main className="scroll-thin flex-1 overflow-y-auto p-[var(--pad)] md:p-6">
-            <Routed />
-          </main>
-        </div>
-        <Toaster />
-      </div>
+      <Suspense fallback={<Loading />}>
+        <Routes>
+          {/* The desktop app's chat-first surface — its own full-screen chrome. */}
+          <Route path="/app" element={<DesktopShell />} />
+          {/* Everything else is the admin control panel. */}
+          <Route path="/*" element={<AdminShell />} />
+        </Routes>
+      </Suspense>
     </HashRouter>
   );
 }

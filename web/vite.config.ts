@@ -35,7 +35,7 @@ export default defineConfig({
   plugins: [react(), tailwindcss(), aegisDevToken()],
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
   base: "/",
-  publicDir: false,
+  publicDir: "public",
   build: {
     outDir: "../aegis/static/web_dist",
     emptyOutDir: true,

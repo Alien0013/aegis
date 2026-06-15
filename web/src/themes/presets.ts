@@ -234,8 +234,117 @@ export const nord: DashboardTheme = {
   termBg: "#2e3440",
 };
 
+export const dracula: DashboardTheme = {
+  name: "dracula",
+  label: "Dracula",
+  description: "Purple and pink on slate — the classic",
+  swatch: ["#282a36", "#bd93f9", "#50fa7b"],
+  palette: {
+    bg: "#1e2029",
+    surface: "#282a36",
+    surface2: "#343746",
+    border: "#3c4055",
+    border2: "#4d5273",
+    text: "#f8f8f2",
+    textDim: "#b9bcd0",
+    textFaint: "#6f7494",
+    primary: "#bd93f9",
+    primaryFg: "#1e2029",
+    success: "#50fa7b",
+    warning: "#f1fa8c",
+    danger: "#ff5555",
+    info: "#8be9fd",
+  },
+  typography: { ...BASE_TYPE, fontMono: `"JetBrains Mono", ${MONO}`,
+    fontUrl: "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" },
+  layout: { radius: "9px", density: "comfortable" },
+  termBg: "#282a36",
+};
+
+export const gruvbox: DashboardTheme = {
+  name: "gruvbox",
+  label: "Gruvbox",
+  description: "Retro warm earth tones — cozy and readable",
+  swatch: ["#282828", "#fabd2f", "#b8bb26"],
+  palette: {
+    bg: "#1d2021",
+    surface: "#282828",
+    surface2: "#32302f",
+    border: "#3c3836",
+    border2: "#504945",
+    text: "#ebdbb2",
+    textDim: "#bdae93",
+    textFaint: "#7c6f64",
+    primary: "#fabd2f",
+    primaryFg: "#1d2021",
+    success: "#b8bb26",
+    warning: "#fe8019",
+    danger: "#fb4934",
+    info: "#83a598",
+  },
+  typography: { ...BASE_TYPE, fontMono: `"IBM Plex Mono", ${MONO}`,
+    fontUrl: "https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap" },
+  layout: { radius: "6px", density: "comfortable" },
+  termBg: "#1d2021",
+};
+
+export const solarized: DashboardTheme = {
+  name: "solarized",
+  label: "Solarized",
+  description: "Precision teal on deep navy — low fatigue",
+  swatch: ["#002b36", "#268bd2", "#2aa198"],
+  palette: {
+    bg: "#002b36",
+    surface: "#073642",
+    surface2: "#0a4250",
+    border: "#0f4d5c",
+    border2: "#13647a",
+    text: "#eee8d5",
+    textDim: "#93a1a1",
+    textFaint: "#657b83",
+    primary: "#268bd2",
+    primaryFg: "#00212b",
+    success: "#2aa198",
+    warning: "#b58900",
+    danger: "#dc322f",
+    info: "#6c71c4",
+  },
+  typography: BASE_TYPE,
+  layout: { radius: "7px", density: "comfortable" },
+  termBg: "#002b36",
+};
+
+export const latte: DashboardTheme = {
+  name: "latte",
+  label: "Latte",
+  description: "Soft pastel light — gentle daytime mode",
+  swatch: ["#eff1f5", "#8839ef", "#40a02b"],
+  palette: {
+    bg: "#eff1f5",
+    surface: "#ffffff",
+    surface2: "#e6e9ef",
+    border: "#dce0e8",
+    border2: "#ccd0da",
+    text: "#4c4f69",
+    textDim: "#6c6f85",
+    textFaint: "#9ca0b0",
+    primary: "#8839ef",
+    primaryFg: "#ffffff",
+    success: "#40a02b",
+    warning: "#df8e1d",
+    danger: "#d20f39",
+    info: "#1e66f5",
+  },
+  typography: { ...BASE_TYPE, fontSans: `"Inter", ${SANS}`,
+    fontUrl: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap",
+    letterSpacing: "-0.005em" },
+  layout: { radius: "12px", density: "comfortable" },
+  termBg: "#1e1e2e",
+};
+
 export const THEMES: DashboardTheme[] = [
   aegisDark, aegisLight, midnight, ember, mono, cyberpunk, rose, nord,
+  dracula, gruvbox, solarized, latte,
 ];
 
 export const THEME_MAP: Record<string, DashboardTheme> = Object.fromEntries(

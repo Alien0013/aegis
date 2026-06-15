@@ -44,8 +44,10 @@ const logPath = () => path.join(app.getPath("userData"), "desktop.log");
 const stateFile = () => path.join(app.getPath("userData"), "window-state.json");
 
 // The dashboard is a HashRouter SPA: deep-links must be `#/path` (leading slash).
-// route("/") -> Overview; route("/chat") -> Chat, etc.
+// route("/app") -> chat-first desktop shell; route("/") -> the full control panel.
 const route = (p) => dashboardUrl + "#" + (p && p.startsWith("/") ? p : "/" + (p || ""));
+// The desktop app opens into the focused chat-first surface, not the admin grid.
+const DEFAULT_ROUTE = "/app";
 
 function log(line) {
   try {
@@ -147,7 +149,7 @@ async function onBackendCrash() {
   try {
     await startBackend();
     await probe(`http://127.0.0.1:${port}/`, 50);
-    if (win && !win.isDestroyed()) win.loadURL(route("/"));
+    if (win && !win.isDestroyed()) win.loadURL(route(DEFAULT_ROUTE));
   } catch (e) { log(`restart failed: ${e.message}`); onBackendCrash(); }
 }
 
@@ -226,10 +228,11 @@ function createTray() {
   tray.setToolTip("AEGIS");
   const menu = Menu.buildFromTemplate([
     { label: "Show AEGIS", click: () => showMainWindow() },
-    { label: "New Window", click: () => openExtraWindow("/") },
+    { label: "New Window", click: () => openExtraWindow("/app") },
     { type: "separator" },
-    { label: "Chat", click: () => { showMainWindow(); win && win.loadURL(route("/chat")); } },
+    { label: "Chat", click: () => { showMainWindow(); win && win.loadURL(route("/app")); } },
     { label: "Sessions", click: () => { showMainWindow(); win && win.loadURL(route("/sessions")); } },
+    { label: "Control Panel", click: () => { showMainWindow(); win && win.loadURL(route("/")); } },
     { type: "separator" },
     { label: "Open in Browser", click: () => dashboardUrl && shell.openExternal(dashboardUrl) },
     { label: "Restart Backend", click: () => restartFromScratch() },
@@ -304,9 +307,9 @@ async function run() {
     boot({ pct: 30, message: "Waiting for the agent to come online…" });
     await probe(`http://127.0.0.1:${port}/`, 70, (done, total) =>
       boot({ pct: 30 + Math.round((done / total) * 55), message: "Waiting for the agent to come online…" }));
-    boot({ pct: 90, message: "Opening dashboard…" });
+    boot({ pct: 90, message: "Opening AEGIS…" });
     createWindow();
-    await win.loadURL(route("/"));
+    await win.loadURL(route(DEFAULT_ROUTE));
     boot({ pct: 100, message: "Ready" });
     win.show();
     if (splash && !splash.isDestroyed()) { splash.close(); splash = null; }
@@ -337,12 +340,12 @@ function installMenu() {
   const go = (p) => win && win.loadURL(route(p));
   const template = [
     { label: "AEGIS", submenu: [
-      { label: "Home", accelerator: "CmdOrCtrl+1", click: () => go("/") },
-      { label: "Chat", accelerator: "CmdOrCtrl+2", click: () => go("/chat") },
-      { label: "Sessions", accelerator: "CmdOrCtrl+3", click: () => go("/sessions") },
+      { label: "Chat", accelerator: "CmdOrCtrl+1", click: () => go("/app") },
+      { label: "Sessions", accelerator: "CmdOrCtrl+2", click: () => go("/sessions") },
+      { label: "Control Panel", accelerator: "CmdOrCtrl+3", click: () => go("/") },
       { label: "Settings", accelerator: "CmdOrCtrl+,", click: () => go("/config") },
       { type: "separator" },
-      { label: "New Window", accelerator: "CmdOrCtrl+N", click: () => openExtraWindow("/") },
+      { label: "New Window", accelerator: "CmdOrCtrl+N", click: () => openExtraWindow("/app") },
       { label: "Open in Browser", click: () => dashboardUrl && shell.openExternal(dashboardUrl) },
       { label: "Copy Dashboard URL", click: () => dashboardUrl && clipboard.writeText(dashboardUrl) },
       { label: "Restart Backend", click: () => restartFromScratch() },
