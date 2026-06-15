@@ -1,34 +1,49 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="360" viewBox="0 0 1280 360" role="img" aria-label="AEGIS - terminal agent harness">
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="360" viewBox="0 0 1280 360" role="img" aria-label="AEGIS - the terminal AI agent you actually own">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="360" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#0b0d10"/>
-      <stop offset="1" stop-color="#14171c"/>
+      <stop offset="0" stop-color="#0a0c0f"/>
+      <stop offset="1" stop-color="#13161b"/>
     </linearGradient>
-    <linearGradient id="gold" x1="112" y1="66" x2="308" y2="282" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#f0c078"/>
-      <stop offset="1" stop-color="#d8913f"/>
+    <linearGradient id="aegis" x1="132" y1="74" x2="300" y2="268" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f2c878"/>
+      <stop offset="0.55" stop-color="#d8913f"/>
+      <stop offset="1" stop-color="#7ecf8f"/>
     </linearGradient>
+    <linearGradient id="word" x1="392" y1="100" x2="780" y2="160" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f6f4ec"/>
+      <stop offset="1" stop-color="#e9c79a"/>
+    </linearGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="7" flood-color="#000" flood-opacity="0.4"/>
+    </filter>
   </defs>
+
   <rect width="1280" height="360" fill="url(#bg)"/>
-  <g opacity=".22" stroke="#262b33" stroke-width="1">
+  <g opacity=".18" stroke="#272c34" stroke-width="1">
     <path d="M0 72h1280M0 144h1280M0 216h1280M0 288h1280M160 0v360M320 0v360M480 0v360M640 0v360M800 0v360M960 0v360M1120 0v360"/>
   </g>
-  <g transform="translate(124,72)">
-    <rect x="0" y="0" width="192" height="192" rx="42" fill="url(#gold)"/>
-    <path d="M96 35 151 56v48c0 46-30 75-55 87-25-12-55-41-55-87V56l55-21Z" fill="none" stroke="#1a1206" stroke-width="13" stroke-linejoin="round"/>
-    <path d="M96 69v73M62 103h68" stroke="#1a1206" stroke-width="12" stroke-linecap="round"/>
+
+  <!-- shield + terminal prompt mark -->
+  <g transform="translate(116,84)">
+    <path d="M96 6 168 34 V90 C168 132 137 162 96 178 C55 162 24 132 24 90 V34 Z"
+          fill="url(#aegis)" filter="url(#soft)"/>
+    <path d="M72 62 L100 90 L72 118" fill="none" stroke="#14100a" stroke-width="15"
+          stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M106 118 H136" fill="none" stroke="#14100a" stroke-width="15" stroke-linecap="round"/>
   </g>
-  <text x="390" y="144" font-family="Inter, ui-sans-serif, Segoe UI, Roboto, Helvetica, Arial, sans-serif" font-size="88" font-weight="850" letter-spacing="7" fill="#f1efe8">AEGIS</text>
-  <text x="396" y="196" font-family="Inter, ui-sans-serif, Segoe UI, Roboto, Helvetica, Arial, sans-serif" font-size="28" font-weight="650" fill="#a4a89f">The terminal AI agent you actually own.</text>
-  <text x="396" y="238" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18" fill="#8a8f87">CLI | Web dashboard | Desktop | Gateway | API | SDK | MCP</text>
-  <g transform="translate(396,276)" font-family="Inter, ui-sans-serif, Segoe UI, Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="700">
-    <rect width="128" height="32" rx="16" fill="#1c2027" stroke="#363d48"/>
+
+  <text x="392" y="150" font-family="Inter, ui-sans-serif, Segoe UI, Roboto, Helvetica, Arial, sans-serif" font-size="92" font-weight="850" letter-spacing="8" fill="url(#word)">AEGIS</text>
+  <text x="398" y="200" font-family="Inter, ui-sans-serif, Segoe UI, Roboto, Helvetica, Arial, sans-serif" font-size="28" font-weight="650" fill="#a8aca2">The terminal AI agent you actually own.</text>
+  <text x="398" y="240" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="18" fill="#7ecf8f">CLI · Dashboard · Desktop · Gateway · API · SDK · MCP</text>
+
+  <g transform="translate(398,272)" font-family="Inter, ui-sans-serif, Segoe UI, Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="700">
+    <rect width="132" height="32" rx="16" fill="#1c2027" stroke="#363d48"/>
     <text x="18" y="21" fill="#e0a564">29 providers</text>
-    <rect x="146" width="116" height="32" rx="16" fill="#1c2027" stroke="#363d48"/>
-    <text x="164" y="21" fill="#7ecf8f">45 tools</text>
-    <rect x="280" width="116" height="32" rx="16" fill="#1c2027" stroke="#363d48"/>
-    <text x="298" y="21" fill="#6fb7d8">41 skills</text>
-    <rect x="414" width="116" height="32" rx="16" fill="#1c2027" stroke="#363d48"/>
-    <text x="432" y="21" fill="#f1efe8">973 tests</text>
+    <rect x="150" width="104" height="32" rx="16" fill="#1c2027" stroke="#363d48"/>
+    <text x="168" y="21" fill="#7ecf8f">45 tools</text>
+    <rect x="274" width="104" height="32" rx="16" fill="#1c2027" stroke="#363d48"/>
+    <text x="292" y="21" fill="#6fb7d8">41 skills</text>
+    <rect x="398" width="112" height="32" rx="16" fill="#1c2027" stroke="#363d48"/>
+    <text x="416" y="21" fill="#f1efe8">973 tests</text>
   </g>
 </svg>

@@ -1,18 +1,31 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240" role="img" aria-label="AEGIS logo">
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="AEGIS logo">
   <defs>
-    <linearGradient id="tile" x1="34" y1="26" x2="206" y2="214" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#15181d"/>
-      <stop offset="1" stop-color="#0b0d10"/>
+    <linearGradient id="tile" x1="40" y1="32" x2="216" y2="224" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#181c22"/>
+      <stop offset="1" stop-color="#0a0c0f"/>
     </linearGradient>
-    <linearGradient id="gold" x1="58" y1="42" x2="182" y2="198" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#f0c078"/>
-      <stop offset="1" stop-color="#d8913f"/>
+    <linearGradient id="aegis" x1="78" y1="56" x2="178" y2="208" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f2c878"/>
+      <stop offset="0.55" stop-color="#d8913f"/>
+      <stop offset="1" stop-color="#7ecf8f"/>
     </linearGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
   </defs>
-  <rect x="16" y="16" width="208" height="208" rx="48" fill="url(#tile)"/>
-  <rect x="17.5" y="17.5" width="205" height="205" rx="46.5" fill="none" stroke="#2d333d"/>
-  <rect x="54" y="44" width="132" height="132" rx="30" fill="url(#gold)"/>
-  <path d="M120 68 156 82v30c0 31-20 51-36 58-16-7-36-27-36-58V82l36-14Z" fill="none" stroke="#1a1206" stroke-width="10" stroke-linejoin="round"/>
-  <path d="M120 91v48" stroke="#1a1206" stroke-width="10" stroke-linecap="round"/>
-  <path d="M98 114h44" stroke="#1a1206" stroke-width="10" stroke-linecap="round"/>
+
+  <!-- tile -->
+  <rect x="16" y="16" width="224" height="224" rx="54" fill="url(#tile)"/>
+  <rect x="17.5" y="17.5" width="221" height="221" rx="52.5" fill="none" stroke="#2c333d" stroke-width="1.5"/>
+
+  <!-- shield (the aegis) -->
+  <path d="M128 50 196 76 V128 C196 168 166 196 128 210 C90 196 60 168 60 128 V76 Z"
+        fill="url(#aegis)" filter="url(#soft)"/>
+  <path d="M128 50 196 76 V128 C196 168 166 196 128 210 C90 196 60 168 60 128 V76 Z"
+        fill="none" stroke="#0a0c0f" stroke-width="2" opacity="0.25"/>
+
+  <!-- terminal prompt knocked out of the shield: >_ -->
+  <path d="M104 104 L128 128 L104 152" fill="none" stroke="#14100a" stroke-width="13"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M134 152 H158" fill="none" stroke="#14100a" stroke-width="13" stroke-linecap="round"/>
 </svg>
