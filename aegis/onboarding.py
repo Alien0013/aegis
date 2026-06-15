@@ -91,7 +91,24 @@ def _banner(out: Output) -> None:
     out("   " + _paint(f"v{__version__}", "1", out)
         + _paint("  ·  local agent desktop", "2", out)
         + _paint("  ·  providers · tools · channels", "2", out))
+    out("   " + _paint("Let's get AEGIS configured. Press Ctrl+C any time to exit.", "2", out))
     out("")
+
+
+def _section(out: Output, title: str) -> None:
+    """A plain section header (cyan ● bullet), outside the numbered stepper."""
+    out("")
+    out(_paint(f"● {title}", "1;38;2;126;207;143", out))
+
+
+def _config_location(out: Output) -> None:
+    """Show where AEGIS keeps its files up front, so the user knows what the wizard writes."""
+    _section(out, "Configuration location")
+    out(f"   Config:    {cfg.config_path()}")
+    out(f"   Secrets:   {cfg.env_path()}")
+    out(f"   Data:      {cfg.get_home()}")
+    out(f"   Workspace: {cfg.workspace_dir()}")
+    out("   Edit these directly or use `aegis config edit`.")
 
 
 MODEL_PRESETS: dict[str, list[tuple[str, str]]] = {
@@ -228,6 +245,8 @@ def run_onboarding(
     if not _confirm("Acknowledge security notice and proceed?", True, input_func, out):
         out("onboarding cancelled.")
         return 1
+
+    _config_location(out)
 
     if cfg.config_path().exists() and not quick and not advanced:
         choice = _choose(
@@ -1311,3 +1330,11 @@ def _summary(config: Config, state: OnboardingState, out: Output) -> None:
     out(f"  {_paint('aegis', '1;36', out)}         → chat in the terminal")
     out(f"  {_paint('aegis ui', '1;36', out)}      → web control panel ({state.dashboard_url})")
     out(f"  {_paint('aegis doctor', '1;36', out)}  → verify the install end to end")
+    _section(out, "Handy commands")
+    out(f"  {_paint('aegis setup', '1;36', out)}        reconfigure model, auth & tools")
+    out(f"  {_paint('aegis config edit', '1;36', out)}  open config.yaml in your editor")
+    out(f"  {_paint('aegis gateway', '1;36', out)}      start the messaging gateway")
+    out(f"  {_paint('aegis update', '1;36', out)}       update to the latest version")
+    out("")
+    out(_paint("Reload your shell if `aegis` isn't found yet:", "2", out)
+        + _paint("  source ~/.bashrc", "1;36", out))

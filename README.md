@@ -75,7 +75,11 @@ curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | b
 ```
 
 The installer finds Python 3.10+, creates an isolated venv at `~/.aegis/venv`,
-installs the package, creates a global `aegis` launcher, and starts guided setup.
+installs the package, creates a global `aegis` launcher, and starts a guided
+setup wizard: it shows where AEGIS keeps its files, lets you pick a provider and
+sign in (API key, OAuth, or a reused Codex/Claude login), choose a model and
+tools, then prints a completion summary with the commands to start chatting. Re-run
+it any time with `aegis setup`.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- --core
@@ -139,6 +143,20 @@ print(result.text)
 - `aegis serve` OpenAI-compatible `/v1/chat/completions` and `/v1/models`.
 - `aegis rpc`, Python SDK, ACP stdio server, MCP client, and `aegis mcp serve`.
 
+### Agentic workflows
+
+Drive the agent however the task needs — all from the terminal REPL:
+
+- **`/ultracode <task>`** — rigorous autonomous plan → implement → verify loop that won't stop while its todo list has open items.
+- **`/architect <task>`** — a strong model drafts a surgical plan, then the working model implements it (Aider-style).
+- **`/spec new|implement <slug>`** — durable, in-repo requirements → design → tasks artifacts under `.aegis/specs/` that survive across sessions.
+- **`/plan` / `/proceed`** — draft a plan first, then execute it.
+- **`/goal` / `/subgoal`** — set a standing objective the agent keeps working toward across turns.
+- **`/kanban`** — a dependency-aware task board: cards gate on parents (`todo` → `ready`), record per-attempt runs, and fan out to parallel workers.
+- **Checkpoints** — every turn's edits auto-snapshot; `/diff` previews and `/undo` / `/rollback` revert them.
+- **Subagents** — `spawn_subagent` (explore/plan/review specialists, background mode) and `mixture_of_agents` fan one prompt across models.
+- **Context tools** — `repo_map` for structure, `code_search` for semantic ("where are auth tokens validated") lookup, `@file`/`@diff`/`@url` prompt references, and automatic compaction.
+
 ### Providers and auth
 
 29 provider presets are available through one config surface. API-key auth works
@@ -186,10 +204,11 @@ supports local, Docker, SSH, Singularity, and Modal terminal backends.
 - `aegis cron` schedules recurring or one-shot agent jobs.
 - `aegis kanban` manages a SQLite task board with dependencies, runs, comments, workers, lanes, and retry state.
 - `aegis spec` tracks persistent requirements, design, and task state.
-- `aegis bench` runs end-to-end task benchmarks.
+- `aegis bench` runs end-to-end task benchmarks and scores a single pass-rate.
+- `aegis improve` keeps a curator skill edit only if the benchmark holds (verified self-improvement).
 - `aegis eval` replays offline eval suites.
 - `aegis ab` replays a session on a different model and diffs the result.
-- `aegis watch` runs project tests on file changes.
+- `aegis watch` runs project tests on file changes (ambient mode).
 - `aegis budget` reports spend/latency governance and downshift state.
 
 ### Operations
@@ -226,15 +245,12 @@ scripts/                test, build, and verification helpers
 tests/                  offline regression suite
 ```
 
-## Public Release Notes
+## Good to know
 
-I would treat these as the main flags before a wider launch:
-
-- Keep README/docs counts tied to CI or a script so they do not drift again.
-- Use real screenshots, not idealized mockups, whenever the README shows product UI.
-- Make optional features obvious: browser, computer, LSP, voice, vision, some skills, and some providers need extra deps or credentials.
-- Keep dashboard auth guidance prominent if users bind outside `127.0.0.1`.
-- Continue running `bash scripts/run_tests.sh` before release; current local result is `973 passed`.
+- Optional features need extra deps or credentials: browser/computer (Playwright/pyautogui), LSP, voice, vision, some skills, and some providers. AEGIS reports what's missing rather than failing at import.
+- The dashboard binds to `127.0.0.1` and uses a token by default; if you bind it to a public interface, keep that token private (or put it behind your own auth).
+- All state lives under `~/.aegis` (or `$AEGIS_HOME`): config, secrets, sessions, memory, traces, evals, checkpoints, and tool output. Back it up with `aegis backup`.
+- The screenshots above are real product UI. The offline test suite currently reports `973 passed`.
 
 ## Develop
 
