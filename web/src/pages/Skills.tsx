@@ -51,27 +51,28 @@ export function Skills() {
   return (
     <>
       <PageHeader title="Skills" sub={data ? `${data.count} installed` : "Reusable SKILL.md packages"}
-        actions={
-          <div className="flex items-center gap-2">
-            <div className="flex rounded-[var(--radius)] border border-border p-0.5 text-xs">
-              {(["installed", "hub"] as const).map((t) => (
-                <button key={t} onClick={() => setTab(t)}
-                  className={cn("rounded-[calc(var(--radius)-2px)] px-2.5 py-1 transition",
-                    tab === t ? "bg-surface-2 text-text" : "text-dim hover:text-text")}>
-                  {t === "installed" ? "Installed" : "Browse Hub"}
-                </button>
-              ))}
-            </div>
-            {tab === "installed" && (
-              <button onClick={() => setCreating(true)}
-                className="inline-flex items-center gap-1.5 rounded-[var(--radius)] bg-primary px-3 py-1.5 text-sm font-medium text-primary-fg hover:opacity-90">
-                <Icon name="plus" size={14} /> New skill
-              </button>
-            )}
-          </div>
-        } />
+        actions={tab === "installed" ? (
+          <button onClick={() => setCreating(true)}
+            className="inline-flex items-center gap-1.5 rounded-[var(--radius)] bg-primary px-3 py-1.5 text-sm font-medium text-primary-fg hover:opacity-90">
+            <Icon name="plus" size={14} /> New skill
+          </button>
+        ) : undefined} />
 
-      {error && <div className="rounded-[var(--radius)] border border-danger/40 bg-danger/10 p-3 text-sm text-danger">Couldn't load — {error}</div>}
+      {/* Prominent tabs: Installed (view/edit/uninstall) vs Browse Hub (search & install). */}
+      <div className="mb-[var(--gap)] inline-flex gap-1 rounded-[var(--radius)] border border-border bg-surface p-1">
+        <button onClick={() => setTab("installed")}
+          className={cn("inline-flex items-center gap-1.5 rounded-[calc(var(--radius)-2px)] px-3 py-1.5 text-sm transition",
+            tab === "installed" ? "bg-primary font-medium text-primary-fg" : "text-dim hover:text-text")}>
+          <Icon name="skills" size={14} /> Installed{data ? ` · ${data.count}` : ""}
+        </button>
+        <button onClick={() => setTab("hub")}
+          className={cn("inline-flex items-center gap-1.5 rounded-[calc(var(--radius)-2px)] px-3 py-1.5 text-sm transition",
+            tab === "hub" ? "bg-primary font-medium text-primary-fg" : "text-dim hover:text-text")}>
+          <Icon name="download" size={14} /> Browse Hub — install skills
+        </button>
+      </div>
+
+      {error &&<div className="rounded-[var(--radius)] border border-danger/40 bg-danger/10 p-3 text-sm text-danger">Couldn't load — {error}</div>}
       {loading && !data && <div className="flex justify-center py-12"><Spinner size={20} /></div>}
 
       {data && tab === "installed" && (

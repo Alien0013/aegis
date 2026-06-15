@@ -58,13 +58,6 @@ function TopBar() {
           <Icon name="search" size={13} /> Search
           <kbd className="rounded border border-border bg-surface-2 px-1 py-px font-mono text-[10px] text-faint">⌘K</kbd>
         </button>
-        <a
-          href="#/app"
-          title="Open the focused chat app"
-          className="rounded-[var(--radius)] border border-border bg-surface px-2.5 py-1.5 text-xs text-dim hover:text-text"
-        >
-          Chat app ↗
-        </a>
         <ThemeSwitcher />
       </div>
     </header>
