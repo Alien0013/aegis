@@ -8,11 +8,6 @@ import { AutoField, type FieldSchema } from "../components/AutoField";
 
 interface Schema { sections: Record<string, { fields: FieldSchema[] }> }
 
-function getByPath(obj: unknown, path: string): unknown {
-  return path.split(".").reduce<unknown>((acc, k) =>
-    (acc && typeof acc === "object" ? (acc as Record<string, unknown>)[k] : undefined), obj);
-}
-
 export function Config() {
   const schemaQ = useApi<Schema>("config/schema");
   const valuesQ = useApi<Record<string, unknown>>("config");
@@ -29,7 +24,10 @@ export function Config() {
 
   function valueOf(f: FieldSchema): unknown {
     if (f.path in edits) return edits[f.path];
-    const v = getByPath(valuesQ.data, f.path);
+    // GET /api/config returns a FLAT dotted-key map ({"agent.max_iterations": 123}),
+    // so read the key directly — walking it as a nested object always missed and the
+    // page fell back to defaults, making saved settings look unsaved.
+    const v = valuesQ.data?.[f.path];
     return v === undefined ? f.default : v;
   }
   const dirtyCount = Object.keys(edits).length;
