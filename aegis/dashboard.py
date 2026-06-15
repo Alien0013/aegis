@@ -1848,6 +1848,28 @@ def _dashboard_files(query: dict) -> dict:
     return {"path": str(base), "parent": str(base.parent), "entries": entries[:2000]}
 
 
+_SENSITIVE_NAMES = frozenset({
+    ".env", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "credentials",
+    "secrets.json", "auth.json", ".netrc", ".pgpass", ".htpasswd",
+})
+_SENSITIVE_SUFFIXES = (".pem", ".key", ".pfx", ".p12", ".keystore", ".jks")
+_SENSITIVE_DIRS = frozenset({".ssh", ".gnupg", ".aws", ".docker"})
+
+
+def _is_sensitive_path(p: Path) -> bool:
+    """Files that must never be served as content through the dashboard browser:
+    credentials, private keys, .env secret stores, SSH/GPG/cloud config. The file
+    browser is read-only and token-gated, but reading a secret file would still
+    exfiltrate API keys to anyone with dashboard access (or a remote-bound host)."""
+    name = p.name.lower()
+    if name in _SENSITIVE_NAMES or name.startswith(".env"):
+        return True
+    if any(name.endswith(s) for s in _SENSITIVE_SUFFIXES):
+        return True
+    parts = {part.lower() for part in p.parts}
+    return bool(parts & _SENSITIVE_DIRS)
+
+
 def _dashboard_file_read(query: dict) -> dict:
     raw = (query.get("path", [""])[0] or "").strip()
     if not raw:
@@ -1858,6 +1880,9 @@ def _dashboard_file_read(query: dict) -> dict:
         return {"error": "bad path"}
     if not p.is_file():
         return {"error": "not a file"}
+    if _is_sensitive_path(p):
+        return {"path": str(p), "error": "blocked: this looks like a secret/credential file "
+                "and can't be previewed through the dashboard."}
     try:
         if p.stat().st_size > 512 * 1024:
             return {"path": str(p), "error": "file too large to preview (>512KB)"}

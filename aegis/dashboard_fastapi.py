@@ -2795,6 +2795,9 @@ def create_app(config: Config) -> FastAPI:
             return JSONResponse({"ok": False, "error": "target is not a directory"})
         filename = Path(file.filename or "upload.bin").name
         target = target_dir / filename
+        if dash._is_sensitive_path(target):
+            return JSONResponse({"ok": False, "error": "blocked: refusing to write a "
+                                 "credential/key/SSH path through the dashboard."})
         try:
             data = await file.read()
             target.write_bytes(data)
