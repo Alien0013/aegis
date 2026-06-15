@@ -27,6 +27,14 @@ _PROJECT_MARKERS = (
     "Gemfile", "composer.json", "CMakeLists.txt", "Makefile",
 )
 
+# Markers of a web frontend — when present, nudge the model to close the UI loop.
+_WEB_MARKERS = ("package.json", "tsconfig.json", "deno.json")
+
+_WEB_HINT = (
+    "- For web/UI changes, close the loop with `web_verify` (headless browser): it loads the\n"
+    "  running page and reports console errors + whether expected text/elements render."
+)
+
 _BRIEF = """\
 # Coding workspace
 You're operating inside a code repository — work like a careful engineer:
@@ -117,7 +125,10 @@ def coding_workspace_block(cwd: Path | str, config: Config | None = None) -> str
     markers = _detect_markers(cwd)
     if not is_repo and not markers:
         return ""                       # not a code workspace — stay out of the prompt
-    blocks = [_BRIEF]
+    brief = _BRIEF
+    if any((cwd / m).exists() for m in _WEB_MARKERS):
+        brief = brief + "\n" + _WEB_HINT
+    blocks = [brief]
     if is_repo:
         blocks.append(_git_snapshot(cwd))
     else:

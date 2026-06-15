@@ -77,6 +77,7 @@ def default_registry(*, include_plugins: bool = True) -> ToolRegistry:
     from .agentic import agentic_tools
     from .aux_tools import aux_tools
     from .browser import browser_tools
+    from .ui_verify import web_verify_tools
     from .builtin import all_builtin_tools
     from .code_exec import code_tools
     from .extra_builtin import extra_tools
@@ -99,6 +100,7 @@ def default_registry(*, include_plugins: bool = True) -> ToolRegistry:
     reg.register_all(agentic_tools())
     reg.register_all(code_tools())
     reg.register_all(browser_tools())
+    reg.register_all(web_verify_tools())
     reg.register_all(voice_tools())
     reg.register_all(lsp_tools())
     reg.register_all(recall_tools())
