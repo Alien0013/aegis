@@ -276,7 +276,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
                                      # still apply); set 'ask' to prompt on dangerous tools.
         "deny_groups": [],           # e.g. ["runtime", "automation"]
         "allowlist": [],             # shell command prefixes auto-approved
-        "toolsets": ["core", "mcp"], # enabled toolsets (add "browser","computer" to opt in)
+        "toolsets": ["core", "mcp", "browser", "computer", "lsp", "web"],
+                                     # on by default: browser (Playwright), computer (OS
+                                     # screen/keyboard/mouse via pyautogui), lsp, web_extract.
+                                     # Each degrades gracefully if its host deps are absent.
         "terminal_backend": "local", # local | docker | ssh | singularity | modal | daytona
         "subagent_terminal_backend": "", # "" inherits terminal_backend; else backend for subagents
         "terminal_lifetime_seconds": 300, # idle task environments are cleaned after this long
@@ -300,7 +303,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "defer_schemas": True,       # ship rarely-used tools name-only; tool_search loads them
         "deferred": [                # schemas withheld until tool_search activates them
             "generate_image", "cloud_image", "cloud_browser", "dependency_audit",
-            "transcribe", "speak", "computer", "download", "github", "mixture_of_agents",
+            "transcribe", "speak", "download", "github", "mixture_of_agents",
         ],
     },
     "auxiliary": {                   # small/cheap model for internal side-tasks
