@@ -20,8 +20,14 @@ def test_run_is_interruptible_midturn(tmp_path):
     from aegis.types import LLMResponse, ToolCall
 
     class CancelMid:
-        context_length = 200_000; name = "f"; model = "m"; api_mode = None; auth = None
-        def __init__(self): self.agent = None; self.n = 0
+        context_length = 200_000
+        name = "f"
+        model = "m"
+        api_mode = None
+        auth = None
+        def __init__(self):
+            self.agent = None
+            self.n = 0
         def describe(self): return "f"
         def complete(self, messages, **k):
             self.n += 1
@@ -46,7 +52,8 @@ def test_unusable_tools_hidden_from_model():
     from aegis.tools.registry import ToolRegistry
 
     class Gated(Tool):
-        name = "gated"; toolset = "core"
+        name = "gated"
+        toolset = "core"
         def available(self): return False, "missing dep"
 
     reg = ToolRegistry()
@@ -185,7 +192,8 @@ def test_crashed_tool_does_not_break_run(tmp_path):
     from aegis.types import LLMResponse, ToolCall
 
     class Boom(Tool):
-        name = "boom"; toolset = "core"
+        name = "boom"
+        toolset = "core"
         parameters = {"type": "object", "properties": {}}
         def run(self, args, ctx):
             raise RuntimeError("kaboom")
@@ -223,7 +231,11 @@ def test_session_save_crash_does_not_break_run(tmp_path):
 
 def test_provider_error_surfaces_without_crashing(tmp_path):
     class Exploding:
-        context_length = 200_000; name = "f"; model = "m"; api_mode = None; auth = None
+        context_length = 200_000
+        name = "f"
+        model = "m"
+        api_mode = None
+        auth = None
         def describe(self): return "f"
         def complete(self, messages, **k): raise ConnectionError("network down")
 

@@ -160,7 +160,10 @@ def test_fallback_short_circuits_unfixable_errors():
 
     class P:
         def __init__(self, name, exc=None, resp=None):
-            self.name = name; self.exc = exc; self.resp = resp; self.calls = 0
+            self.name = name
+            self.exc = exc
+            self.resp = resp
+            self.calls = 0
         def complete(self, messages, tools=None, **kw):
             self.calls += 1
             if self.exc:

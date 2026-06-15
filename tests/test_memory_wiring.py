@@ -292,7 +292,8 @@ def test_flatten_workspace_to_root_migration(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     from aegis.config import Config, Workspace
     from aegis.memory import MemoryManager
-    ws = tmp_path / "workspace"; (ws / "personalities").mkdir(parents=True)
+    ws = tmp_path / "workspace"
+    (ws / "personalities").mkdir(parents=True)
     (ws / "SOUL.md").write_text("# my persona")
     (ws / "AGENTS.md").write_text("# my rules")
     (ws / "personalities" / "pirate.md").write_text("arr")

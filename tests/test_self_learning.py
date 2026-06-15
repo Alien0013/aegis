@@ -26,8 +26,12 @@ def test_fallback_swaps_and_records_trigger():
 
     class P:
         def __init__(self, name, err=None):
-            self.name = name; self.err = err; self.model = "m"
-            self.context_length = 1; self.api_mode = None; self.auth = None
+            self.name = name
+            self.err = err
+            self.model = "m"
+            self.context_length = 1
+            self.api_mode = None
+            self.auth = None
         def describe(self): return self.name
         def complete(self, m, tools=None, **k):
             if self.err:
@@ -96,7 +100,8 @@ def test_curator_only_prunes_curatable(monkeypatch):
 def test_session_fork_lineage(tmp_path):
     from aegis.session import Session, SessionStore
     st = SessionStore()
-    parent = Session.create("p"); st.save(parent)
+    parent = Session.create("p")
+    st.save(parent)
     child = st.fork(parent)
     assert child.parent_id == parent.id
     assert child.id in {c["id"] for c in st.children(parent.id)}
@@ -114,7 +119,11 @@ def test_forked_review_writes_agent_created_skill(tmp_path):
     from aegis.types import LLMResponse, Message, ToolCall
 
     class SkillWriter:
-        context_length = 200_000; name = "f"; model = "m"; api_mode = None; auth = None
+        context_length = 200_000
+        name = "f"
+        model = "m"
+        api_mode = None
+        auth = None
         def __init__(self): self.n = 0
         def describe(self): return "f"
         def complete(self, messages, **k):
@@ -125,7 +134,8 @@ def test_forked_review_writes_agent_created_skill(tmp_path):
                     "description": "how to deploy safely", "body": "## When\n..."})])
             return LLMResponse(text="saved")
 
-    cfg = Config.load(); cfg.data["tools"]["exec_mode"] = "full"
+    cfg = Config.load()
+    cfg.data["tools"]["exec_mode"] = "full"
     a = Agent(config=cfg, provider=SkillWriter(), session=Session.create())
     a.session.messages = [Message.user("deploy it"), Message.assistant("done")]
     actions = review.run_review(a, "skill")
@@ -216,7 +226,11 @@ def test_compaction_splits_into_child_session(tmp_path, monkeypatch):
 
     class Dual:
         # small window so the token-budgeted tail (a fraction of it) leaves a middle to compress
-        context_length = 2000; name = "f"; model = "m"; api_mode = None; auth = None
+        context_length = 2000
+        name = "f"
+        model = "m"
+        api_mode = None
+        auth = None
         def describe(self): return "f"
         def complete(self, messages, tools=None, **k):
             if tools is None:

@@ -284,7 +284,10 @@ def test_fallback_provider():
 
     class Boom:
         context_length = 1000
-        name = "boom"; model = "x"; api_mode = None; auth = None
+        name = "boom"
+        model = "x"
+        api_mode = None
+        auth = None
         def describe(self): return "boom"
         def complete(self, *a, **k): raise RuntimeError("down")
 
@@ -370,8 +373,10 @@ def test_credential_pool_rotation(monkeypatch):
     a = ApiKeyAuth(["POOL_KEY"], "bearer")
     assert a.headers()["Authorization"] == "Bearer k1"
     assert a.rotate() and a.headers()["Authorization"] == "Bearer k2"
-    a.rotate(); assert a.headers()["Authorization"] == "Bearer k3"
-    a.rotate(); assert a.headers()["Authorization"] == "Bearer k1"  # wraps
+    a.rotate()
+    assert a.headers()["Authorization"] == "Bearer k3"
+    a.rotate()
+    assert a.headers()["Authorization"] == "Bearer k1"  # wraps
 
 
 def test_at_reference_expansion(tmp_path):
