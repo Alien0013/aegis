@@ -148,6 +148,24 @@ def test_cli_status_surfaces_inventory(monkeypatch, capsys):
     assert "Dashboard" in out
 
 
+def test_cli_memory_status_replace_remove(tmp_path, monkeypatch, capsys):
+    from aegis.cli.main import main
+
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+
+    assert main(["memory", "add", "project", "uses", "pytest"]) == 0
+    assert main(["memory", "status"]) == 0
+    out = capsys.readouterr().out
+    assert "MEMORY.md" in out
+    assert "entries: 1" in out
+
+    assert main(["memory", "replace", "--old-text", "pytest", "project", "uses", "pytest", "with", "xdist"]) == 0
+    assert main(["memory", "remove", "xdist"]) == 0
+    out = capsys.readouterr().out
+    assert "updated entry" in out
+    assert "removed 1 entry" in out
+
+
 def test_cli_bare_first_run_guard(capsys):
     from aegis.cli.main import main
 

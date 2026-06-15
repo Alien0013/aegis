@@ -30,8 +30,9 @@ def test_learn_review_redacts_and_extracts(monkeypatch):
     found = learn.review_session(Config.load(), s.id)
     assert len(found) == 2
     mem = next(c for c in found if c["type"] == "memory")
-    assert "sk-abcdefghijklmnopqrstuvwx" not in mem["payload"]  # secret redacted
-    assert "[REDACTED]" in mem["payload"]
+    assert "sk-abcdefghijklmnopqrstuvwx" not in mem["payload"]["content"]  # secret redacted
+    assert "[REDACTED]" in mem["payload"]["content"]
+    assert mem["payload"]["target"] == "memory"
 
 
 def test_learn_apply_promotes(monkeypatch):

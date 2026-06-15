@@ -85,7 +85,15 @@ class BrowserTool(Tool):
                 page = self._page
                 if action == "navigate":
                     page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                    return ToolResult.ok(f"navigated to {page.url}\ntitle: {page.title()}",
+                    final_url = str(getattr(page, "url", "") or "")
+                    final_blocked = guard(final_url, getattr(ctx, "config", None))
+                    if final_blocked:
+                        try:
+                            page.goto("about:blank", wait_until="domcontentloaded", timeout=5000)
+                        except Exception:
+                            pass
+                        return ToolResult.error("blocked final browser URL after redirect: " + final_blocked)
+                    return ToolResult.ok(f"navigated to {final_url}\ntitle: {page.title()}",
                                          display=f"browser -> {url[:50]}")
                 if action == "text":
                     body = page.inner_text("body")

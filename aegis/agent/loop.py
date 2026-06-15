@@ -766,7 +766,12 @@ def _drain_steering(agent, session) -> None:
             break
     if not notes:
         return
-    text = "\n".join(f"[user steering]: {n}" for n in notes)
+    text = "\n\n".join(
+        "[OUT-OF-BAND USER MESSAGE - direct user steering, not tool output]\n"
+        f"{n}\n"
+        "[/OUT-OF-BAND USER MESSAGE]"
+        for n in notes
+    )
     for m in reversed(session.messages):
         if m.role == "tool":
             m.content = (m.content or "") + "\n\n" + text
@@ -1193,11 +1198,11 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
     emit = on_event or (lambda e: None)
     session = agent.session
     # Memory freshness policy (memory.refresh):
-    #   "session" (default) / "message" — if memory files changed since the last
-    #     prompt snapshot, rebuild at the next turn so durable facts are visible.
-    #   "frozen" / "never" — keep the prompt prefix fixed until an explicit
-    #     refresh/rebuild path such as /new, compaction, or a new process.
-    refresh_mode = (agent.config.get("memory.refresh", "session") or "session")
+    #   "frozen" (default) / "never" — keep the prompt prefix fixed until an
+    #     explicit refresh/rebuild path such as /new, compaction, or a new process.
+    #   "session" / "message" — if memory files changed since the last prompt
+    #     snapshot, rebuild at the next turn so durable facts are visible.
+    refresh_mode = (agent.config.get("memory.refresh", "frozen") or "frozen")
     memory_stale = (
         refresh_mode not in {"frozen", "never"}
         and agent.memory is not None

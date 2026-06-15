@@ -223,7 +223,11 @@ def make_handler(config, store: WebhookStore):
                     return self._json(200, {"ok": True, "skipped": "event"})
 
             from .automation import build_prompt, delivery_targets, enqueue_delivery, is_silent
-            prompt = build_prompt(render_prompt(hook.prompt, name, body), skills=hook.skills)
+            prompt = build_prompt(
+                render_prompt(hook.prompt, name, body),
+                skills=hook.skills,
+                config=config,
+            )
             targets = delivery_targets(hook.deliver)
             first_target = targets[0] if targets else ""
             platform, _, chat_id = first_target.partition(":")

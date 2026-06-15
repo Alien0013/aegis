@@ -35,6 +35,30 @@ def test_web_fetch_tool_refuses_metadata():
     assert r.is_error and "blocked for safety" in r.content
 
 
+def test_download_refuses_sensitive_destination_before_network(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path / ".aegis"))
+
+    def fail_request(*_args, **_kwargs):
+        raise AssertionError("network request should not run before write authorization")
+
+    monkeypatch.setattr("aegis.net_safety.request", fail_request)
+
+    from aegis.config import Config
+    from aegis.tools.base import ToolContext
+    from aegis.tools.extra_builtin import DownloadTool
+
+    cfg = Config.load()
+    target = tmp_path / ".aegis" / "config.yaml"
+    r = DownloadTool().run(
+        {"url": "https://example.com/file.txt", "path": str(target)},
+        ToolContext(cwd=tmp_path, config=cfg),
+    )
+
+    assert r.is_error
+    assert "sensitive path" in r.content or "agent-internal state" in r.content
+    assert not target.exists()
+
+
 # --- fuzzy edit recovery ----------------------------------------------------
 def test_edit_file_fuzzy_recovers_whitespace(tmp_path):
     from aegis.tools.builtin import EditFileTool
@@ -193,6 +217,33 @@ def test_redact_secrets_covers_telegram_and_keys():
     assert "1234567890" not in out and "sk-proj" not in out
     assert out.count("[REDACTED]") == 2
     assert redact_secrets("plain text") == "plain text"
+
+
+def test_redact_secrets_covers_headers_json_env_urls_and_private_keys():
+    from aegis.redact import redact_secrets
+
+    raw = "\n".join([
+        "OPENAI_API_KEY=sk-proj-ABCDEFGHIJ1234567890",
+        "Authorization: Bearer github_pat_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456",
+        '{"access_token": "eyJabcdefghijklmnopqrstuv.abcdefghij.klmnopqrst"}',
+        "postgres://user:dbpassword@example.com/app",
+        "https://user:token-secret@example.com/path?client_secret=abc123&ok=1",
+        "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----",
+    ])
+
+    out = redact_secrets(raw)
+
+    for secret in (
+        "sk-proj-ABCDEFGHIJ1234567890",
+        "github_pat_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456",
+        "eyJabcdefghijklmnopqrstuv.abcdefghij.klmnopqrst",
+        "dbpassword",
+        "token-secret",
+        "abc123",
+        "BEGIN PRIVATE KEY",
+    ):
+        assert secret not in out
+    assert out.count("[REDACTED]") >= 6
 
 
 def test_learn_redact_reuses_shared_module():

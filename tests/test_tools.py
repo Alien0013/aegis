@@ -111,6 +111,35 @@ def test_browser_navigate_blocks_ssrf_before_launch(tmp_path, monkeypatch):
     assert "blocked for safety" in res.content
 
 
+def test_browser_navigate_blocks_private_final_url_after_redirect(tmp_path):
+    from aegis.tools.base import ToolContext
+    from aegis.tools.browser import BrowserTool
+
+    tool = BrowserTool()
+    calls = []
+
+    class FakePage:
+        url = "http://127.0.0.1/admin"
+
+        def goto(self, url, **_kwargs):
+            calls.append(url)
+            if url == "about:blank":
+                self.url = "about:blank"
+
+        def title(self):
+            return "private"
+
+    def ensure(_ctx):
+        tool._page = FakePage()
+
+    tool._ensure = ensure
+    res = tool.run({"action": "navigate", "url": "https://example.com/start"}, ToolContext(cwd=tmp_path))
+
+    assert res.is_error
+    assert "blocked final browser URL after redirect" in res.content
+    assert calls == ["https://example.com/start", "about:blank"]
+
+
 def test_browser_and_computer_screenshots_respect_write_safe_root(tmp_path, monkeypatch):
     import sys
     from types import SimpleNamespace

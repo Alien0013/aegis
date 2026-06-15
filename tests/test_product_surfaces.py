@@ -19,6 +19,12 @@ def test_cli_parser_exposes_upgrade_commands():
     assert parser.parse_args(["eval", "show", "eval_1"]).action == "show"
     assert parser.parse_args(["rpc"]).command == "rpc"
     assert parser.parse_args(["model", "doctor"]).action == "doctor"
+    assert parser.parse_args(["chat", "--skills", "frontend-design,ultracode", "build"]).skills == (
+        "frontend-design,ultracode"
+    )
+    assert parser.parse_args(["skills", "uninstall", "demo-skill"]).action == "uninstall"
+    assert parser.parse_args(["memory", "status"]).action == "status"
+    assert parser.parse_args(["memory", "replace", "--old-text", "old", "new"]).old_text == "old"
 
 
 def test_model_doctor_prints_resolver_report(capsys):
@@ -1417,6 +1423,27 @@ def test_context_references_shared_across_surfaces(tmp_path):
 
     refused = expand_reference_result("@file:~/.ssh/id_rsa", tmp_path)
     assert "refused" in refused.text
+
+
+def test_url_context_reference_uses_net_safety_request(tmp_path, monkeypatch):
+    import httpx
+
+    calls = []
+
+    def fake_request(method, url, config=None, timeout=0, **kwargs):
+        calls.append((method, url, config, timeout))
+        return httpx.Response(200, text="SAFE URL BODY", request=httpx.Request(method, url))
+
+    monkeypatch.setattr("aegis.net_safety.request", fake_request)
+
+    from aegis.config import Config
+    from aegis.context_refs import expand_reference_result
+
+    cfg = Config.load()
+    result = expand_reference_result("read @url:https://example.com/doc", tmp_path, config=cfg)
+
+    assert "SAFE URL BODY" in result.text
+    assert calls == [("GET", "https://example.com/doc", cfg, 15)]
 
 
 def test_context_references_can_attach_mcp_resource(tmp_path):

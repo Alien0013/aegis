@@ -1,0 +1,196 @@
+from __future__ import annotations
+
+import asyncio
+import io
+import zipfile
+
+import httpx
+
+
+class FakeResponse:
+    def __init__(self, *, json_data=None, text="", content=b"", status_code=200):
+        self._json = json_data
+        self.text = text
+        self.content = content or text.encode()
+        self.status_code = status_code
+        self.headers = {"content-type": "application/json"}
+
+    def json(self):
+        return self._json
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+
+def test_marketplace_accepts_quoted_frontmatter_names(tmp_path):
+    from aegis import marketplace
+
+    source = tmp_path / "quoted-skill"
+    source.mkdir()
+    (source / "SKILL.md").write_text(
+        "---\nname: \"quoted-skill\"\ndescription: quoted.\n---\nbody\n",
+        encoding="utf-8",
+    )
+
+    assert marketplace.install(str(source)) == ["quoted-skill"]
+
+
+def test_marketplace_remove_lockless_skill_reports_success():
+    from aegis import config as cfg
+    from aegis import marketplace
+
+    target = cfg.skills_dir() / "lockless-skill"
+    target.mkdir(parents=True)
+    (target / "SKILL.md").write_text(
+        "---\nname: lockless-skill\ndescription: local.\n---\nbody\n",
+        encoding="utf-8",
+    )
+
+    assert marketplace.remove("lockless-skill") is True
+    assert not target.exists()
+
+
+def test_marketplace_skills_sh_search_normalizes_install_source(monkeypatch):
+    from aegis import marketplace
+
+    def fake_get(url, **kwargs):  # noqa: ARG001
+        assert url.startswith(marketplace.SKILLS_SH_SEARCH_URL)
+        return FakeResponse(json_data={
+            "skills": [{
+                "id": "github/awesome-copilot/git-commit",
+                "skillId": "git-commit",
+                "name": "git-commit",
+                "installs": 123,
+                "source": "github/awesome-copilot",
+            }],
+        })
+
+    monkeypatch.setattr(marketplace.httpx, "get", fake_get)
+
+    results = marketplace._skillssh_search("git")
+
+    assert results == [{
+        "name": "git-commit",
+        "description": "123 installs",
+        "source": "skills-sh:github/awesome-copilot/git-commit",
+        "hub": "skills.sh",
+        "detail_url": "https://www.skills.sh/github/awesome-copilot/git-commit",
+    }]
+
+
+def test_marketplace_skills_sh_install_resolves_nested_github_dir(monkeypatch, tmp_path):
+    from aegis import marketplace
+
+    skill = tmp_path / "checkout" / "skills" / "git-commit"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: git-commit\ndescription: commit helper.\n---\nbody\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        marketplace,
+        "_github_find_skill_source",
+        lambda repo, skill_id: f"git:{repo}/skills/{skill_id}",
+    )
+    monkeypatch.setattr(marketplace, "_git_clone", lambda repo, ref, subdir: [skill])
+
+    assert marketplace.install("skills-sh:github/awesome-copilot/git-commit") == ["git-commit"]
+
+
+def test_marketplace_direct_skill_url_reinstall_clears_stale_files(monkeypatch):
+    from aegis import config as cfg
+    from aegis import marketplace
+
+    target = cfg.skills_dir() / "downloaded-demo"
+    target.mkdir(parents=True)
+    (target / "SKILL.md").write_text(
+        "---\nname: downloaded-demo\ndescription: old.\n---\nold\n",
+        encoding="utf-8",
+    )
+    (target / "stale.md").write_text("stale", encoding="utf-8")
+
+    def fake_get(url, **kwargs):  # noqa: ARG001
+        return FakeResponse(
+            text="---\nname: downloaded-demo\ndescription: new.\n---\nnew\n",
+        )
+
+    monkeypatch.setattr(marketplace.httpx, "get", fake_get)
+
+    assert marketplace.install("https://example.test/downloaded-demo/SKILL.md") == ["downloaded-demo"]
+    assert not (target / "stale.md").exists()
+    assert "new." in (target / "SKILL.md").read_text(encoding="utf-8")
+
+
+def test_marketplace_lobehub_install_generates_skill(monkeypatch):
+    from aegis import config as cfg
+    from aegis import marketplace
+
+    def fake_get(url, **kwargs):  # noqa: ARG001
+        assert url == "https://chat-agents.lobehub.com/academic-writing-assistant.json"
+        return FakeResponse(json_data={
+            "meta": {
+                "title": "Academic Writing Assistant",
+                "description": "Expert in academic writing",
+            },
+            "config": {
+                "systemRole": "Write with formal academic style.",
+                "openingMessage": "Ready.",
+            },
+        })
+
+    monkeypatch.setattr(marketplace.httpx, "get", fake_get)
+
+    assert marketplace.install("lobehub:academic-writing-assistant") == ["academic-writing-assistant"]
+    body = (cfg.skills_dir() / "academic-writing-assistant" / "SKILL.md").read_text(encoding="utf-8")
+    assert "Write with formal academic style." in body
+    assert "homepage: \"https://lobehub.com/agent/academic-writing-assistant\"" in body
+
+
+def test_marketplace_clawhub_zip_install_normalizes_name(monkeypatch):
+    from aegis import config as cfg
+    from aegis import marketplace
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(
+            "SKILL.md",
+            "---\nname: Git\ndescription: Git workflows.\n---\nUse Git carefully.\n",
+        )
+        zf.writestr("commands.md", "Commit early and review diffs.\n")
+
+    def fake_get(url, **kwargs):  # noqa: ARG001
+        assert url == "https://clawhub.ai/api/v1/download?slug=git"
+        return FakeResponse(content=buf.getvalue())
+
+    monkeypatch.setattr(marketplace.httpx, "get", fake_get)
+
+    assert marketplace.install("clawhub:git") == ["git"]
+    body = (cfg.skills_dir() / "git" / "SKILL.md").read_text(encoding="utf-8")
+    assert body.startswith("---\nname: git\n")
+
+
+def test_dashboard_marketplace_install_returns_installed_names(monkeypatch):
+    from aegis import marketplace
+    from aegis.config import Config
+    from aegis.dashboard_fastapi import create_app
+
+    monkeypatch.setenv("AEGIS_DASHBOARD_TOKEN", "t")
+    monkeypatch.setattr(marketplace, "install", lambda source, force=False: ["demo-skill"])
+    app = create_app(Config.load())
+
+    async def run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.post(
+                "/api/skills/marketplace/install",
+                headers={"X-Aegis-Token": "t"},
+                json={"source": "git:example/demo"},
+            )
+
+    res = asyncio.run(run())
+
+    assert res.status_code == 200
+    assert res.json()["installed"] == ["demo-skill"]
+    assert isinstance(res.json()["skills"], list)

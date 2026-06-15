@@ -92,11 +92,11 @@ def test_memory_is_stale_after_write_and_clears_on_refresh(tmp_path, monkeypatch
     assert not mm.is_stale()                 # cleared
 
 
-def test_bot_remembers_fact_saved_on_previous_turn(tmp_path, monkeypatch):
-    """The reported bug: a long-lived chat (gateway) froze the system prompt at turn 1,
-    so anything saved mid-conversation never re-entered context. The loop now rebuilds
-    when memory changed — so turn 2 sees what turn 1 saved."""
+def test_message_refresh_mode_remembers_fact_saved_on_previous_turn(tmp_path, monkeypatch):
+    """Opt-in message/session refresh rebuilds when memory changed, so turn 2 sees
+    what turn 1 saved."""
     config = _cfg(tmp_path, monkeypatch)
+    config.data["memory"]["refresh"] = "message"
     from aegis.agent.agent import Agent
     from aegis.agent.loop import run_conversation
 
@@ -113,7 +113,7 @@ def test_bot_remembers_fact_saved_on_previous_turn(tmp_path, monkeypatch):
     assert run_conversation is not None                   # import sanity
 
 
-def test_default_agent_run_refreshes_stale_memory_on_next_turn(tmp_path, monkeypatch):
+def test_default_agent_run_keeps_memory_snapshot_frozen_until_reset(tmp_path, monkeypatch):
     config = _cfg(tmp_path, monkeypatch)
     from aegis.agent.agent import Agent
     from aegis.session import Session
@@ -143,11 +143,11 @@ def test_default_agent_run_refreshes_stale_memory_on_next_turn(tmp_path, monkeyp
         "target": "user",
         "content": "The user's name is TJ.",
     })
-    assert "next message" in result.content
+    assert "next session" in result.content
 
     agent.run("what is my name?")
 
-    assert "The user's name is TJ" in provider.calls[-1][0]
+    assert "The user's name is TJ" not in provider.calls[-1][0]
 
 
 def test_legacy_workspace_profile_migrates_once(tmp_path, monkeypatch):
@@ -252,9 +252,9 @@ def test_memory_add_only_dedups_exact_duplicates(tmp_path, monkeypatch):
     assert len(store.entries("user")) == 3
 
 
-def test_refresh_policy_refreshes_default_and_allows_frozen(monkeypatch):
-    """Default turns refresh stale memory on the next message; frozen/never keeps
-    the old cache-first behavior for users who explicitly choose it."""
+def test_refresh_policy_allows_opt_in_message_refresh(monkeypatch):
+    """Frozen/never keeps the cache-first behavior; session/message is an opt-in
+    mode for users who want stale memory to refresh next turn."""
     from aegis.agent.agent import Agent
     from aegis.config import Config
     from aegis.session import Session
@@ -279,9 +279,9 @@ def test_refresh_policy_refreshes_default_and_allows_frozen(monkeypatch):
             pass
         return calls["refresh"]
 
-    assert run_one("session") >= 1      # default: stale facts apply next turn
+    assert run_one("session") >= 1      # opt-in: stale facts apply next turn
     assert run_one("message") >= 1      # alias: rebuilds so the fact applies now
-    assert run_one("frozen") == 0       # explicit cache-first mode
+    assert run_one("frozen") == 0       # default cache-first mode
     assert run_one("never") == 0
 
 

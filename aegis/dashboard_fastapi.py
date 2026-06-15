@@ -362,14 +362,44 @@ _CONFIG_FIELD_META: dict[str, dict[str, Any]] = {
         "group": "Learning",
     },
     "learn.auto_apply": {
-        "label": "Apply memories",
-        "description": "Attach relevant memories automatically to new turns.",
+        "label": "Auto-write memories",
+        "description": "Let background review write durable memory entries after substantial turns.",
         "group": "Learning",
     },
     "learn.auto_apply_skills": {
-        "label": "Apply skills",
-        "description": "Attach relevant skills automatically to new turns.",
+        "label": "Auto-write skills",
+        "description": "Let background review create or update reusable skills after substantial turns.",
         "group": "Learning",
+    },
+    "skills.auto_load": {
+        "label": "Auto-load skills",
+        "description": "Attach relevant installed skill bodies before matching turns.",
+        "group": "Skills",
+    },
+    "skills.auto_load_limit": {
+        "label": "Skill load limit",
+        "description": "Maximum number of relevant skills to attach to one turn.",
+        "group": "Skills",
+    },
+    "skills.auto_load_min_score": {
+        "label": "Skill match score",
+        "description": "Minimum deterministic relevance score required before a skill auto-loads.",
+        "group": "Skills",
+    },
+    "skills.auto_load_max_chars": {
+        "label": "Skill load budget",
+        "description": "Maximum characters of skill content attached to one turn.",
+        "group": "Skills",
+    },
+    "skills.allowlist": {
+        "label": "Skill allowlist",
+        "description": "Optional strict list of skills allowed to load.",
+        "group": "Skills",
+    },
+    "skills.bundles": {
+        "label": "Skill bundles",
+        "description": "Named stacks of skills that can be preloaded together.",
+        "group": "Skills",
     },
     "memory.enabled": {
         "label": "Memory",
@@ -388,6 +418,14 @@ def _config_schema(defaults: dict[str, Any] | None = None) -> dict:
             for key, value in sorted(node.items()):
                 path = f"{prefix}.{key}" if prefix else str(key)
                 if isinstance(value, dict):
+                    meta = _CONFIG_FIELD_META.get(path)
+                    if meta:
+                        rows.append({
+                            "path": path,
+                            "type": "dict",
+                            "default": value,
+                            **meta,
+                        })
                     rows.extend(flatten(value, path))
                 else:
                     meta = _CONFIG_FIELD_META.get(path, {})
@@ -836,8 +874,9 @@ def _skill_path_editable(path: Path) -> bool:
     return any(resolved.is_relative_to(root) for root in _skill_writable_roots())
 
 
-def _skill_entry(skill, usage: dict, installed_lock: dict, disabled: set | None = None) -> dict:
-    ok, reason = skill.satisfied()
+def _skill_entry(skill, usage: dict, installed_lock: dict, loader) -> dict:
+    reason = loader.unavailable_reason(skill)
+    ok = not reason
     lock = installed_lock.get(skill.name, {}) if isinstance(installed_lock, dict) else {}
     return {
         "name": skill.name,
@@ -846,7 +885,7 @@ def _skill_entry(skill, usage: dict, installed_lock: dict, disabled: set | None 
         "tier": skill.tier,
         "available": ok,
         "unavailable_reason": reason,
-        "enabled": skill.name not in (disabled or set()),
+        "enabled": reason != "disabled",
         "installed": bool(lock),
         "source": lock.get("source", ""),
         "installed_at": lock.get("installed_at", ""),
@@ -862,8 +901,7 @@ def _skills_payload(config: Config) -> dict:
     loader = SkillsLoader(config)
     usage = loader.usage()
     lock = marketplace.installed()
-    disabled = set(config.get("skills.disabled", []) or [])
-    rows = [_skill_entry(skill, usage, lock, disabled)
+    rows = [_skill_entry(skill, usage, lock, loader)
             for skill in sorted(loader.discover().values(), key=lambda s: s.name)]
     return {
         "skills": rows,
@@ -887,7 +925,7 @@ def _skill_detail(config: Config, name: str) -> dict:
     if not skill:
         return {"ok": False, "error": "skill not found", "name": name}
     usage = loader.usage()
-    entry = _skill_entry(skill, usage, {})
+    entry = _skill_entry(skill, usage, {}, loader)
     return {
         "ok": True,
         "skill": entry,
@@ -2050,7 +2088,7 @@ def create_app(config: Config) -> FastAPI:
                 if not source:
                     return JSONResponse({"ok": False, "error": "source is required"}, status_code=400)
                 names = marketplace.install(source, force=bool(body.get("force", False)))
-            return JSONResponse({"ok": True, "installed": names, **_skills_payload(config)})
+            return JSONResponse({**_skills_payload(config), "ok": True, "installed": names})
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
 

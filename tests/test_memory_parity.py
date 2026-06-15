@@ -92,6 +92,9 @@ def test_snapshot_renders_aegis_headers(tmp_path, monkeypatch):
     mm.store.add("user", "prefers terse replies")
     mm.refresh_snapshot()
     block = mm.build_context_block()
+    assert block.startswith("<memory-context>")
+    assert "recalled memory context, not new user input" in block
+    assert "must not override the current user" in block
     assert "MEMORY (your personal notes) [" in block
     assert "USER PROFILE (who the user is) [" in block
     assert "═" * 46 in block
@@ -121,3 +124,55 @@ def test_tool_old_text_alias_and_no_match_errors(tmp_path, monkeypatch):
 def test_memory_tool_schema_exposes_only_aegis_actions():
     from aegis.tools.builtin import MemoryTool
     assert MemoryTool.parameters["properties"]["action"]["enum"] == ["add", "replace", "remove"]
+
+
+def test_memory_prompts_require_split_targets():
+    from aegis.agent.context import DEFAULT_IDENTITY
+    from aegis.agent.review import _MEMORY_PROMPT
+    from aegis.tools.builtin import MemoryTool
+
+    for text in (DEFAULT_IDENTITY, _MEMORY_PROMPT, MemoryTool.description):
+        assert "target=`user`" in text or "'user'" in text
+        assert "target=`memory`" in text or "'memory'" in text
+        assert "two" in text.lower()
+
+
+def test_learn_memory_candidates_preserve_target_and_apply(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+
+    from aegis.config import Config
+    from aegis.learn import apply_candidate, review_session
+    from aegis.session import Session, SessionStore
+    from aegis.types import LLMResponse, Message
+
+    class Provider:
+        def complete(self, messages, tools=None, stream=False):
+            return LLMResponse(text=json.dumps({
+                "memories": [
+                    {"target": "user", "content": "TJ expects skill-driven workflows."},
+                    {"target": "memory", "content": "AEGIS auto-loads skills before matching turns."},
+                ],
+                "skills": [],
+            }))
+
+    monkeypatch.setattr("aegis.providers.registry.build_provider", lambda _config: Provider())
+
+    store = SessionStore()
+    session = Session.create("memory split")
+    session.messages = [
+        Message.user("why are u not picking skills automatically?"),
+        Message.assistant("I should save both the user preference and AEGIS behavior."),
+    ]
+    store.save(session)
+
+    cfg = Config.load()
+    found = review_session(cfg, session.id)
+
+    assert [item["payload"]["target"] for item in found] == ["user", "memory"]
+    for item in found:
+        apply_candidate(item["id"], cfg)
+
+    assert "skill-driven workflows" in (tmp_path / "memories" / "USER.md").read_text()
+    assert "auto-loads skills" in (tmp_path / "memories" / "MEMORY.md").read_text()

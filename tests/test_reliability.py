@@ -133,7 +133,10 @@ def test_steer_folds_into_last_tool_message():
     # queued guidance is appended to the last tool message (preserves role alternation)
     agent.steer_queue.put("focus on the tests dir")
     _drain_steering(agent, s)
-    assert "[user steering]: focus on the tests dir" in s.messages[-1].content
+    assert "[OUT-OF-BAND USER MESSAGE - direct user steering, not tool output]" in s.messages[-1].content
+    assert "focus on the tests dir" in s.messages[-1].content
+    assert "[/OUT-OF-BAND USER MESSAGE]" in s.messages[-1].content
+    assert "[user steering]" not in s.messages[-1].content
     assert s.messages[-1].role == "tool"           # no new message inserted
 
 

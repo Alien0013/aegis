@@ -190,6 +190,13 @@ def test_fastapi_config_and_env_control_plane(tmp_path, monkeypatch):
     schema = asyncio.run(_request(app, "GET", "/api/config/schema", headers=headers))
     assert schema.status_code == 200
     assert any(f["path"] == "model.provider" for f in schema.json()["fields"])
+    fields = {f["path"]: f for f in schema.json()["fields"]}
+    assert fields["learn.auto_apply_skills"]["label"] == "Auto-write skills"
+    assert "after substantial turns" in fields["learn.auto_apply_skills"]["description"]
+    assert fields["skills.auto_load"]["label"] == "Auto-load skills"
+    assert "before matching turns" in fields["skills.auto_load"]["description"]
+    assert fields["skills.allowlist"]["label"] == "Skill allowlist"
+    assert fields["skills.bundles"]["label"] == "Skill bundles"
 
     set_key = asyncio.run(_request(
         app,

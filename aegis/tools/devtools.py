@@ -62,7 +62,13 @@ class ToolSearchTool(Tool):
         import json
         q = args["query"].lower()
         agent = ctx.agent
-        tools = agent.registry.all() if agent and agent.registry else []
+        if agent and agent.registry:
+            tools = agent.registry.available(
+                agent.config.get("tools.toolsets", ["core"]),
+                disabled=agent.config.get("tools.disabled", []),
+            )
+        else:
+            tools = []
         hits = [t for t in tools if q in t.name.lower() or q in t.description.lower()]
         if not hits:
             return ToolResult.ok("(no matching tools)", display="tool_search")

@@ -2122,6 +2122,8 @@ def interactive(config: Config, *, model=None, provider_name=None,
                 if not goal_prompt:
                     continue
                 user = goal_prompt   # run the new goal as this turn
+            elif user.startswith("/") and agent.skills and agent.skills.slash_invocation_exists(user):
+                pass                  # let Agent.run load /<skill-name> like Hermes
             elif user.startswith("/"):
                 renderer = Renderer(config)
                 if handle_slash(user, agent, runner=runner, store=store,

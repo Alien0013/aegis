@@ -79,6 +79,11 @@ def cmd_chat(args, config: Config) -> int:
     session = _terminal_session(args, store)
     if isinstance(session, int):
         return session
+    skills = [s.strip() for s in (getattr(args, "skills", "") or "").split(",") if s.strip()]
+    if skills:
+        session.meta["pending_skill_preload"] = skills
+        session.meta["pending_skill_preload_source"] = "chat"
+        store.save(session)
 
     images = None
     if getattr(args, "image", None):
@@ -297,7 +302,7 @@ def cmd_skills(args, config: Config) -> int:
         for r in results:
             _print(f"  {r['name']:<24} {r['description'][:70]}\n      {r['source']}")
         return 0
-    if args.action == "remove":
+    if args.action in {"remove", "uninstall"}:
         from .. import marketplace
         _print("removed" if marketplace.remove(args.name) else "not found")
         return 0
@@ -779,17 +784,34 @@ def cmd_memory(args, config: Config) -> int:
     from ..memory import MemoryStore
 
     store = MemoryStore()
+    target = "user" if args.user else "memory"
     if args.action == "add":
         if not args.text:
             return _die("usage: aegis memory add <text> [--user]")
-        target = "user" if args.user else "memory"
         _print(store.add(target, " ".join(args.text)))
         return 0
+    if args.action == "replace":
+        if not args.old_text or not args.text:
+            return _die("usage: aegis memory replace --old-text <match> <new text> [--user]")
+        _print(store.replace(target, args.old_text, " ".join(args.text)))
+        return 0
+    if args.action == "remove":
+        match = args.old_text or " ".join(args.text)
+        if not match:
+            return _die("usage: aegis memory remove <match> [--user]")
+        _print(store.remove(target, match))
+        return 0
     if args.action == "clear":
-        target = "user" if args.user else "memory"
         for e in store.entries(target):
             store.remove(target, e)
         _print(f"cleared {target}")
+        return 0
+    if args.action == "status":
+        for tgt in ("memory", "user"):
+            path = store._path(tgt)
+            _print(f"{path.name}: {store.usage(tgt)}")
+            _print(f"  path: {path}")
+            _print(f"  entries: {len(store.entries(tgt))}")
         return 0
     _print("# MEMORY\n" + (store.raw("memory") or "(empty)"))
     _print("\n# USER\n" + (store.raw("user") or "(empty)"))
@@ -1255,6 +1277,7 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--yolo", action="store_true", help="auto-approve all tools")
     c.add_argument("--worktree", "-w", action="store_true", help="run in an isolated git worktree")
     c.add_argument("--image", action="append", help="attach an image for vision (repeatable)")
+    c.add_argument("-s", "--skills", help="comma-sep skills or skill bundles to preload")
     c.set_defaults(func=cmd_chat)
 
     m = sub.add_parser("model", help="show/set the model")
@@ -1481,9 +1504,10 @@ def build_parser() -> argparse.ArgumentParser:
     tj.add_argument("--summarize", action="store_true", help="LLM-summarize long tool outputs when compressing")
     tj.set_defaults(func=_traj.cmd_trajectory)
 
-    sk = sub.add_parser("skills", help="list/view/create/install/search/remove skills")
+    sk = sub.add_parser("skills", help="list/view/create/install/search/remove/uninstall skills")
     sk.add_argument("action", nargs="?",
-                    choices=["list", "view", "new", "install", "search", "remove", "hub"], default="list")
+                    choices=["list", "view", "new", "install", "search", "remove", "uninstall", "hub"],
+                    default="list")
     sk.add_argument("name", nargs="?", help="skill name, install source, or hub name")
     sk.add_argument("--force", action="store_true", help="install even if the security scan flags it")
     sk.set_defaults(func=cmd_skills)
@@ -1596,9 +1620,11 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("action", nargs="?", choices=["list", "status", "doctor"], default="list")
     t.set_defaults(func=cmd_tools)
 
-    mem = sub.add_parser("memory", help="show/add long-term memory")
-    mem.add_argument("action", nargs="?", choices=["show", "add", "clear"], default="show")
+    mem = sub.add_parser("memory", help="show/add/replace/remove/status long-term memory")
+    mem.add_argument("action", nargs="?", choices=["show", "add", "replace", "remove", "clear", "status"],
+                     default="show")
     mem.add_argument("text", nargs="*")
+    mem.add_argument("--old-text", help="unique substring to replace/remove")
     mem.add_argument("--user", action="store_true", help="target the user profile")
     mem.set_defaults(func=cmd_memory)
 

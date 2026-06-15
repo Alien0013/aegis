@@ -11,7 +11,22 @@ from http.server import ThreadingHTTPServer
 # --- shared helpers ---------------------------------------------------------
 def test_automation_helpers(tmp_path):
     from aegis import automation as a
-    assert a.skills_directive(["x", "y"]).startswith("Load these skills first: x, y")
+    from aegis.config import Config
+
+    skill_dir = tmp_path / "skills" / "s1"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: s1\ndescription: Use for scheduled checks.\n---\n"
+        "## Procedure\n1. Follow the scheduled skill.\n",
+        encoding="utf-8",
+    )
+    cfg = Config.load()
+    cfg.data["skills"]["paths"] = [str(tmp_path / "skills")]
+
+    directive = a.skills_directive(["s1", "missing-skill"], config=cfg, cwd=tmp_path)
+    assert "# Preloaded skills" in directive
+    assert "Follow the scheduled skill." in directive
+    assert "Missing: missing-skill" in directive
     assert a.skills_directive([]) == ""
     assert a.is_silent("") and a.is_silent("  [SILENT] nothing changed") and a.is_silent("[silent]")
     assert not a.is_silent("real reply")
@@ -22,8 +37,8 @@ def test_automation_helpers(tmp_path):
     out = a.script_context(str(script))
     assert "# Context" in out and "HELLO CONTEXT" in out
     assert a.script_context("/no/such/file.py") == ""              # fail-soft
-    prompt = a.build_prompt("do the thing", skills=["s1"], script=str(script))
-    assert "Load these skills first: s1" in prompt and "HELLO CONTEXT" in prompt and prompt.endswith("do the thing")
+    prompt = a.build_prompt("do the thing", skills=["s1"], script=str(script), config=cfg, cwd=tmp_path)
+    assert "Follow the scheduled skill." in prompt and "HELLO CONTEXT" in prompt and prompt.endswith("do the thing")
 
 
 def test_cron_delivery_sink_sends_via_configured_adapter(monkeypatch, tmp_path):
@@ -124,6 +139,15 @@ def test_webhook_delivers_to_outbox_and_honors_silent(monkeypatch, tmp_path):
 
 def test_webhook_prepends_skills(monkeypatch, tmp_path):
     cfg, store, make_handler = _webhook_server(monkeypatch, tmp_path)
+    from aegis import config as cfg_paths
+
+    skill_dir = cfg_paths.skills_dir() / "github-review"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: github-review\ndescription: Use for GitHub review webhooks.\n---\n"
+        "## Procedure\n1. Review the webhook payload.\n",
+        encoding="utf-8",
+    )
     seen = _fake_agent(monkeypatch)
     store.add("s", "do it", skills=["github-review"])
     srv, port = _serve(make_handler, cfg, store)
@@ -131,7 +155,7 @@ def test_webhook_prepends_skills(monkeypatch, tmp_path):
         _post(port, "/hook/s")
     finally:
         srv.shutdown()
-    assert "Load these skills first: github-review" in seen["prompt"]
+    assert "Review the webhook payload." in seen["prompt"]
 
 
 def test_webhook_store_normalizes_malformed_rows(monkeypatch, tmp_path):
@@ -183,7 +207,14 @@ def _fake_cron_agent(monkeypatch, reply):
         def run(self, prompt):
             seen["prompt"] = prompt
             return type("R", (), {"content": reply})()
-    monkeypatch.setattr(am.Agent, "create", staticmethod(lambda cfg, session=None: A()))
+
+    def create(cfg, session=None):
+        seen["memory_enabled"] = cfg.get("memory.enabled")
+        seen["user_profile_enabled"] = cfg.get("memory.user_profile_enabled")
+        seen["cron_skip_memory"] = cfg.get("cron.skip_memory")
+        return A()
+
+    monkeypatch.setattr(am.Agent, "create", staticmethod(create))
     return seen
 
 
@@ -243,6 +274,45 @@ def test_cron_run_job_records_history(monkeypatch, tmp_path):
     assert dash["last_run_id"] == result["run_id"]
     assert dash["last_status"] == "ok"
     assert dash["history"][0]["data"]["cron_job_id"] == job.id
+
+
+def test_cron_skips_memory_by_default_and_allows_opt_in(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.config import Config
+    from aegis.cron import CronStore, run_job
+    from aegis.runs import RunStore
+
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = True
+    cfg.data["memory"]["user_profile_enabled"] = True
+    store = CronStore()
+
+    seen = _fake_cron_agent(monkeypatch, reply="[SILENT]")
+    job = store.add("every 1h", "summarize")
+
+    result = run_job(cfg, job.id, store=store, verbose=False)
+
+    assert result["ok"]
+    assert result["cron_skip_memory"] is True
+    assert seen["memory_enabled"] is False
+    assert seen["user_profile_enabled"] is False
+    assert seen["cron_skip_memory"] is True
+    assert cfg.get("memory.enabled") is True
+    assert cfg.get("memory.user_profile_enabled") is True
+    run = RunStore().get(result["run_id"])
+    assert run and run["data"]["cron_skip_memory"] is True
+
+    cfg.data["cron"]["skip_memory"] = False
+    seen = _fake_cron_agent(monkeypatch, reply="[SILENT]")
+    job = store.add("every 1h", "summarize with memory")
+
+    result = run_job(cfg, job.id, store=store, verbose=False)
+
+    assert result["ok"]
+    assert result["cron_skip_memory"] is False
+    assert seen["memory_enabled"] is True
+    assert seen["user_profile_enabled"] is True
+    assert seen["cron_skip_memory"] is False
 
 
 def test_cron_sets_delivery_target_as_agent_context(monkeypatch, tmp_path):

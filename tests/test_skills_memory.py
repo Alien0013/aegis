@@ -43,6 +43,227 @@ def test_skill_create_view_improve_usage():
     assert "Learned Notes" in sl.discover()["my-skill"].path.read_text()
 
 
+def test_agent_autoloads_relevant_skill_before_turn(tmp_path):
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.session import Session
+    from aegis.types import LLMResponse
+
+    skill_dir = tmp_path / "skills" / "pytest-helper"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: pytest-helper\n"
+        "description: Use for pytest failures in Python projects.\n"
+        "---\n"
+        "## Procedure\n"
+        "1. Run pytest -q before final.\n",
+        encoding="utf-8",
+    )
+
+    class Provider:
+        context_length = 200_000
+        name = "fake"
+        model = "fake-model"
+        api_mode = None
+        auth = None
+
+        def __init__(self):
+            self.user_messages = []
+
+        def describe(self):
+            return "fake"
+
+        def complete(self, messages, tools=None, **_kwargs):
+            self.user_messages.append(messages[-1].content)
+            return LLMResponse(text="done")
+
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = False
+    provider = Provider()
+    agent = Agent(config=cfg, provider=provider, session=Session.create(), cwd=tmp_path)
+
+    agent.run("fix this pytest failure in a Python module")
+
+    assert 'AEGIS selected the "pytest-helper" skill' in provider.user_messages[-1]
+    assert "Run pytest -q before final." in provider.user_messages[-1]
+    assert agent.skills.usage()["pytest-helper"]["count"] == 1
+
+
+def test_agent_loads_slash_skill_when_auto_load_disabled(tmp_path):
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.session import Session
+    from aegis.types import LLMResponse
+
+    skill_dir = tmp_path / "skills" / "release-check"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: release-check\n"
+        "description: Use for release validation.\n"
+        "---\n"
+        "## Procedure\n"
+        "1. Check the changelog.\n",
+        encoding="utf-8",
+    )
+
+    class Provider:
+        context_length = 200_000
+        name = "fake"
+        model = "fake-model"
+        api_mode = None
+        auth = None
+
+        def __init__(self):
+            self.user_messages = []
+
+        def describe(self):
+            return "fake"
+
+        def complete(self, messages, tools=None, **_kwargs):
+            self.user_messages.append(messages[-1].content)
+            return LLMResponse(text="done")
+
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = False
+    cfg.data["skills"]["auto_load"] = False
+    provider = Provider()
+    agent = Agent(config=cfg, provider=provider, session=Session.create(), cwd=tmp_path)
+
+    agent.run("/release-check prepare v1.2")
+
+    assert 'The user invoked the "release-check" skill' in provider.user_messages[-1]
+    assert "Check the changelog." in provider.user_messages[-1]
+    assert "prepare v1.2" in provider.user_messages[-1]
+
+
+def test_agent_consumes_pending_skill_preload_bundle(tmp_path):
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.session import Session
+    from aegis.types import LLMResponse
+
+    for name, body in {
+        "frontend-design": "Use visual assets and responsive controls.",
+        "ultracode": "Drive the task to verified completion.",
+    }.items():
+        skill_dir = tmp_path / "skills" / name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: Use for {name} tasks.\n---\n{body}",
+            encoding="utf-8",
+        )
+
+    class Provider:
+        context_length = 200_000
+        name = "fake"
+        model = "fake-model"
+        api_mode = None
+        auth = None
+
+        def __init__(self):
+            self.user_messages = []
+
+        def describe(self):
+            return "fake"
+
+        def complete(self, messages, tools=None, **_kwargs):
+            self.user_messages.append(messages[-1].content)
+            return LLMResponse(text="done")
+
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = False
+    cfg.data["skills"]["auto_load"] = False
+    cfg.data["skills"]["bundles"] = {"build-stack": ["frontend-design", "ultracode", "missing-one"]}
+    session = Session.create()
+    session.meta["pending_skill_preload"] = ["build-stack"]
+    session.meta["pending_skill_preload_source"] = "chat"
+    agent = Agent(config=cfg, provider=Provider(), session=session, cwd=tmp_path)
+
+    agent.run("build a polished app")
+
+    prompt = agent.provider.user_messages[-1]
+    assert 'The "frontend-design" skill was preloaded for this chat' in prompt
+    assert 'The "ultracode" skill was preloaded for this chat' in prompt
+    assert "Use visual assets and responsive controls." in prompt
+    assert "Drive the task to verified completion." in prompt
+    assert "[Missing preloaded skills: build-stack:missing-one]" in prompt
+    assert "pending_skill_preload" not in session.meta
+    assert session.meta["active_skills"] == ["frontend-design", "ultracode"]
+
+
+def test_agent_loads_slash_skill_bundle_when_auto_load_disabled(tmp_path):
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.session import Session
+    from aegis.types import LLMResponse
+
+    for name in ("one-skill", "two-skill"):
+        skill_dir = tmp_path / "skills" / name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: Use for bundle testing.\n---\n{name} body",
+            encoding="utf-8",
+        )
+
+    class Provider:
+        context_length = 200_000
+        name = "fake"
+        model = "fake-model"
+        api_mode = None
+        auth = None
+
+        def __init__(self):
+            self.user_messages = []
+
+        def describe(self):
+            return "fake"
+
+        def complete(self, messages, tools=None, **_kwargs):
+            self.user_messages.append(messages[-1].content)
+            return LLMResponse(text="done")
+
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = False
+    cfg.data["skills"]["auto_load"] = False
+    cfg.data["skills"]["bundles"] = {"combo": ["one-skill", "two-skill"]}
+    agent = Agent(config=cfg, provider=Provider(), session=Session.create(), cwd=tmp_path)
+
+    agent.run("/combo ship it")
+
+    prompt = agent.provider.user_messages[-1]
+    assert "one-skill body" in prompt
+    assert "two-skill body" in prompt
+    assert "ship it" in prompt
+
+
+def test_skill_activate_includes_directory_and_support_files(tmp_path):
+    from aegis.config import Config
+    from aegis.skills import SkillsLoader
+
+    skill_dir = tmp_path / "skills" / "support-demo"
+    (skill_dir / "references").mkdir(parents=True)
+    (skill_dir / "references" / "note.md").write_text("details", encoding="utf-8")
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: support-demo\n"
+        "description: Use for support file discovery.\n"
+        "---\n"
+        "## Procedure\n1. Read supporting files when needed.\n",
+        encoding="utf-8",
+    )
+    cfg = Config.load()
+    cfg.data["skills"]["paths"] = [str(tmp_path / "skills")]
+    loader = SkillsLoader(cfg, cwd=tmp_path)
+
+    body = loader.activate("support-demo")
+
+    assert body is not None
+    assert f"[Skill directory: {skill_dir}]" in body
+    assert "references/note.md" in body
+
+
 def test_skill_requires_gating(tmp_path):
     from aegis.config import Config
     from aegis.skills import SkillsLoader
@@ -55,6 +276,68 @@ def test_skill_requires_gating(tmp_path):
     sl = SkillsLoader(cfg)
     assert "gated" in sl.discover()
     assert "gated" not in {s.name for s in sl.available()}
+
+
+def test_skill_discovery_recurses_and_excludes_dependency_dirs(tmp_path):
+    from aegis.config import Config
+    from aegis.skills import SkillsLoader
+
+    nested = tmp_path / "repo" / "skills" / ".curated" / "deep-skill"
+    nested.mkdir(parents=True)
+    (nested / "SKILL.md").write_text(
+        "---\nname: deep-skill\ndescription: nested catalog skill.\n---\nbody",
+        encoding="utf-8",
+    )
+    support = nested / "references" / "fake-skill"
+    support.mkdir(parents=True)
+    (support / "SKILL.md").write_text(
+        "---\nname: support-fake\ndescription: support file, not a package.\n---\nbody",
+        encoding="utf-8",
+    )
+    ignored = tmp_path / "repo" / "skills" / "node_modules" / "bad-skill"
+    ignored.mkdir(parents=True)
+    (ignored / "SKILL.md").write_text(
+        "---\nname: bad-skill\ndescription: dependency skill.\n---\nbody",
+        encoding="utf-8",
+    )
+
+    cfg = Config.load()
+    cfg.data["skills"]["paths"] = [str(tmp_path / "repo" / "skills")]
+    sl = SkillsLoader(cfg)
+    names = set(sl.discover())
+
+    assert "deep-skill" in names
+    assert "bad-skill" not in names
+    assert "support-fake" not in names
+
+
+def test_skill_allowlist_and_toolset_filter_activation(tmp_path):
+    from aegis.config import Config
+    from aegis.skills import SkillsLoader
+
+    for name, extra in {
+        "allowed-skill": "",
+        "blocked-skill": "",
+        "browser-skill": "requires:\n  toolsets: [browser]\n",
+    }.items():
+        d = tmp_path / name
+        d.mkdir()
+        (d / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: {name} description.\n{extra}---\nbody",
+            encoding="utf-8",
+        )
+
+    cfg = Config.load()
+    cfg.data["skills"]["paths"] = [str(tmp_path)]
+    cfg.data["skills"]["allowlist"] = ["allowed-skill", "browser-skill"]
+    cfg.data["tools"]["toolsets"] = ["core"]
+    sl = SkillsLoader(cfg)
+
+    assert {s.name for s in sl.available()} == {"allowed-skill"}
+    assert sl.activate("allowed-skill") is not None
+    assert sl.activate("blocked-skill") is None
+    assert sl.activate("browser-skill") is None
+    assert sl.unavailable_reason(sl.discover()["browser-skill"]) == "missing toolset browser"
 
 
 def test_skill_tier_precedence(tmp_path, monkeypatch):

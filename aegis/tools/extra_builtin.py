@@ -70,6 +70,10 @@ class DownloadTool(Tool):
             ctx.cwd / (Path(urlparse(url).path).name or "download.bin")
         if not dest.is_absolute():
             dest = ctx.cwd / dest
+        from . import file_safety
+        denied = file_safety.authorize_write(dest, ctx)
+        if denied:
+            return ToolResult.error(denied)
         try:
             r = net_safety.request("GET", url, getattr(ctx, "config", None), timeout=120)
             r.raise_for_status()

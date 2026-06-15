@@ -266,9 +266,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "provider": "",              # "" builtin only; or "mem0" | "jsonl"
         "memory_char_limit": 2200,   # whole-store budget for MEMORY.md
         "user_char_limit": 1375,     # whole-store budget for USER.md
-        "refresh": "session",        # session/message = rebuild when memory files change
+        "refresh": "frozen",         # frozen/never = keep prompt fixed until explicit rebuild
+                                     #   (/new, compaction, process restart)
+                                     # session/message = rebuild when memory files change
                                      #   (facts apply next message; one cache miss per write)
-                                     # frozen/never = keep prompt fixed until explicit rebuild
     },
     "tools": {
         "exec_mode": "auto",         # deny | allowlist | ask | smart | auto | full
@@ -333,6 +334,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "hooks": {},                     # event -> [shell commands]: session_start, pre_tool, ...
     "skills": {
         "paths": [],                 # extra skill dirs
+        "disabled": [],
+        "allowlist": [],             # optional strict skill allowlist
+        "bundles": {},               # name -> [skill, ...] for preload/slash stacks
+        "auto_load": True,            # pre-turn: attach relevant skill bodies automatically
+        "auto_load_limit": 3,         # max matching skills to inject for one turn
+        "auto_load_min_score": 6,     # deterministic relevance score threshold
+        "auto_load_max_chars": 24000, # total chars of skill bodies attached to the prompt
     },
     "curator": {                     # background maintenance of agent-created skills
         "enabled": True,
@@ -352,6 +360,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "cron": {
         "approval": "deny",          # headless approval for scheduled jobs: deny (safe) | approve (auto-run)
+        "skip_memory": True,         # Hermes-style: scheduled jobs use prompt/script/skills,
+                                     # not injected personal memory, unless explicitly opted in
     },
     "delegation": {
         "subagent_auto_approve": False,  # child approval prompts auto-deny unless opted in

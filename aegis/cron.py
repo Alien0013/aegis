@@ -593,6 +593,28 @@ def _run_script_only(script: str, timeout: int = 120) -> tuple[bool, str, str]:
     return True, out, ""
 
 
+def _cron_run_config(config):
+    """Return the config used by the agent for a cron job.
+
+    Hermes cron jobs are deterministic unattended runs: the job prompt, explicit
+    skills, and script context should carry the task. By default we disable built-in
+    memory for the agent created here; users can opt back in with
+    ``cron.skip_memory=false``.
+    """
+    from .config import Config
+
+    base = config or Config.load()
+    if not bool(base.get("cron.skip_memory", True)):
+        return base
+    import copy
+
+    data = copy.deepcopy(getattr(base, "data", {}) or {})
+    memory = data.setdefault("memory", {})
+    memory["enabled"] = False
+    memory["user_profile_enabled"] = False
+    return Config(data)
+
+
 def run_job(config, job: CronJob | str, *, sink=None, store: "CronStore | None" = None,
             runner=None, verbose: bool = True, mark: bool = True) -> dict:
     """Run one cron job immediately using the same path as the scheduler."""
@@ -609,6 +631,7 @@ def run_job(config, job: CronJob | str, *, sink=None, store: "CronStore | None" 
     targets = delivery_targets(job.deliver) or ([job.channel] if job.channel else [])
     first_target = targets[0] if targets else ""
     platform, _, chat_id = first_target.partition(":")
+    run_config = _cron_run_config(config)
     if mark:
         store.mark_running(job.id)
     try:
@@ -625,37 +648,50 @@ def run_job(config, job: CronJob | str, *, sink=None, store: "CronStore | None" 
                 "ok": True,
                 "job_id": job.id,
                 "mode": "no_agent",
+                "cron_skip_memory": bool(run_config.get("memory.enabled", True)) is False,
                 "reply": reply,
                 "delivered": delivered,
                 "targets": targets,
             }
         else:
             from .surface import SurfaceRunner
-            runner = runner or SurfaceRunner(config, include_mcp=True)
+            runner = runner or SurfaceRunner(run_config, include_mcp=True)
+            cron_meta = {
+                "cron_job_id": job.id,
+                "cron_schedule": job.schedule,
+                "cron_skip_memory": bool(run_config.get("memory.enabled", True)) is False,
+            }
             session = runner.load_or_create_session(
                 f"cron:{job.id}",
                 title=f"cron {job.id}",
                 surface="cron",
-                meta={"cron_job_id": job.id, "cron_schedule": job.schedule},
+                meta=cron_meta,
             )
             agent = runner.make_agent(
                 session=session,
                 platform=platform if platform and chat_id else None,
                 chat_id=chat_id if platform and chat_id else None,
                 include_mcp=True,
+                config=run_config,
             )
             # Headless approval policy for scheduled jobs (à la cron_mode): 'deny' (default, safe —
             # dangerous tools blocked since nobody can approve) or 'approve' (auto-run, for trusted jobs).
-            if config and config.get("cron.approval", "deny") == "approve":
+            if run_config.get("cron.approval", "deny") == "approve":
                 agent.permissions._mode_override = "auto"
-            prompt = build_prompt(job.prompt, skills=job.skills, script=job.script)
+            prompt = build_prompt(
+                job.prompt,
+                skills=job.skills,
+                script=job.script,
+                config=run_config,
+                cwd=getattr(agent, "cwd", Path.cwd()),
+            )
             prompt = _scan_assembled_cron_prompt(prompt, job)
             result = runner.run_prompt(
                 prompt,
                 session=session,
                 agent=agent,
                 surface="cron",
-                meta={"cron_job_id": job.id, "cron_schedule": job.schedule},
+                meta=cron_meta,
                 platform=platform if platform and chat_id else None,
                 chat_id=chat_id if platform and chat_id else None,
             )
@@ -672,6 +708,7 @@ def run_job(config, job: CronJob | str, *, sink=None, store: "CronStore | None" 
                 "session_id": result.session.id,
                 "trace_id": result.trace_id,
                 "turn_id": result.turn_id,
+                "cron_skip_memory": cron_meta["cron_skip_memory"],
                 "reply": reply,
                 "delivered": delivered,
                 "targets": targets,

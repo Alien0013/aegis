@@ -263,7 +263,11 @@ class Agent:
         if not self.config.get("tools.defer_schemas", True):
             return ""
         selectors = self.config.get("tools.deferred", []) or []
-        tools = [t for t in self.registry.all() if _matches_deferred_selector(t, selectors)]
+        available = self.registry.available(
+            self.config.get("tools.toolsets", ["core"]),
+            disabled=self.config.get("tools.disabled", []),
+        )
+        tools = [t for t in available if _matches_deferred_selector(t, selectors)]
         if not tools:
             return ""
         lines = "\n".join(f"- {t.name} — {t.description.splitlines()[0]}"
@@ -629,6 +633,93 @@ class Agent:
             return True
         return False
 
+    def _inject_relevant_skills(
+        self,
+        selection_text: str,
+        user_text: str,
+        on_event: OnEvent | None = None,
+    ) -> str:
+        if not self.skills:
+            return user_text
+        try:
+            explicit = self.skills.invocation_from_slash(selection_text)
+            if explicit:
+                prompt, names = explicit
+                self.session.meta["active_skills"] = names
+                self.session.meta["active_skills_source"] = "slash"
+                if on_event is not None:
+                    on_event({
+                        "type": "skill_loaded",
+                        "names": names,
+                        "source": "slash",
+                        "summary": "loaded skills: " + ", ".join(names),
+                    })
+                return prompt
+        except Exception:  # noqa: BLE001
+            pass
+        preloaded_block = ""
+        preloaded_names: list[str] = []
+        try:
+            requested = self.session.meta.pop("pending_skill_preload", []) or []
+            source = str(self.session.meta.pop("pending_skill_preload_source", "turn") or "turn")
+            if requested:
+                max_chars = int(self.config.get("skills.auto_load_max_chars", 24000) or 24000)
+                preloaded_block, preloaded_names, missing = self.skills.preload_block(
+                    requested,
+                    source=source,
+                    user_instruction=selection_text,
+                    max_chars=max_chars,
+                )
+                if missing:
+                    warning = "[Missing preloaded skills: " + ", ".join(missing) + "]"
+                    preloaded_block = f"{preloaded_block}\n\n{warning}".strip()
+                if preloaded_names:
+                    self.session.meta["active_skills"] = preloaded_names
+                    self.session.meta["active_skills_source"] = "preload"
+                    if on_event is not None:
+                        on_event({
+                            "type": "skill_loaded",
+                            "names": preloaded_names,
+                            "source": "preload",
+                            "summary": "preloaded skills: " + ", ".join(preloaded_names),
+                        })
+        except Exception:  # noqa: BLE001
+            preloaded_block = ""
+            preloaded_names = []
+        if not bool(self.config.get("skills.auto_load", True)):
+            return f"{preloaded_block}\n\n[User task]\n{user_text}" if preloaded_block else user_text
+        try:
+            limit = int(self.config.get("skills.auto_load_limit", 3) or 3)
+            min_score = int(self.config.get("skills.auto_load_min_score", 6) or 6)
+            max_chars = int(self.config.get("skills.auto_load_max_chars", 24000) or 24000)
+            block, names = self.skills.autoload_block(
+                selection_text,
+                limit=limit,
+                min_score=min_score,
+                max_chars=max_chars,
+                exclude=set(preloaded_names),
+            )
+            if not block:
+                if not preloaded_block:
+                    self.session.meta.pop("active_skills", None)
+                    self.session.meta.pop("active_skills_source", None)
+                    return user_text
+                return f"{preloaded_block}\n\n[User task]\n{user_text}"
+            all_names = [*preloaded_names, *[name for name in names if name not in preloaded_names]]
+            self.session.meta["active_skills"] = all_names
+            self.session.meta["active_skills_source"] = "preload+auto" if preloaded_names else "auto"
+            if on_event is not None:
+                on_event({
+                    "type": "skill_loaded",
+                    "names": names,
+                    "source": "auto",
+                    "summary": "auto-loaded skills: " + ", ".join(names),
+                })
+            blocks = "\n\n".join(part for part in (preloaded_block, block) if part)
+            return f"{blocks}\n\n[User task]\n{user_text}"
+        except Exception:  # noqa: BLE001
+            return f"{preloaded_block}\n\n[User task]\n{user_text}" if preloaded_block else user_text
+
     def run(self, user_input: str | Message, on_event: OnEvent | None = None) -> Message:
         self.cancel_event.clear()
         self._compact_stuck = False        # reset the no-progress-compaction guard each turn
@@ -656,10 +747,11 @@ class Agent:
             except Exception:  # noqa: BLE001
                 pass
         msg = user_input if isinstance(user_input, Message) else Message.user(user_input)
-        self._apply_routing(msg.content)
-        self._apply_budget_governor(msg.content, on_event)
-        self.session.maybe_title_from(msg.content)
-        provider_query = msg.content
+        original_user_content = msg.content
+        self._apply_routing(original_user_content)
+        self._apply_budget_governor(original_user_content, on_event)
+        self.session.maybe_title_from(original_user_content)
+        provider_query = original_user_content
         if self.memory:
             try:
                 turn_number = sum(1 for m in self.session.messages if m.role == "user") + 1
@@ -683,6 +775,11 @@ class Agent:
                     msg.content = f"{wb}\n\n{msg.content}"
             except Exception:  # noqa: BLE001
                 pass
+        if self.skills and self.skills.is_stale():
+            self.session.meta["_rebuild_system_prompt"] = True
+        msg.content = self._inject_relevant_skills(original_user_content, msg.content, on_event)
+        if msg.content != original_user_content:
+            msg.meta.setdefault("original_content", original_user_content)
         if self.memory:                    # provider prefetch relevant to THIS turn (volatile)
             try:
                 fetched = self.memory.prefetch(provider_query)

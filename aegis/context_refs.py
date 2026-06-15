@@ -262,7 +262,7 @@ def _expand_one(
         )
     if kind == "url" and sep and _strip_reference_wrappers(value).startswith(("http://", "https://")):
         value = _strip_reference_wrappers(value)
-        body = _fetch_url(value, max_url)
+        body = _fetch_url(value, max_url, config)
         return (
             f'\n\n<url-content href="{_xml_attr(value)}">\n{body}\n</url-content>',
             ContextReference(raw=raw, kind="url", target=value, chars=len(body)),
@@ -374,16 +374,15 @@ def _binary_reference_block(path: Path) -> str:
     )
 
 
-def _fetch_url(url: str, max_chars: int) -> str:
+def _fetch_url(url: str, max_chars: int, config: Any = None) -> str:
+    from . import net_safety
+
     try:
-        from .net_safety import guard
-
-        blocked = guard(url)
-        if blocked:
-            return blocked
-        import httpx
-
-        return httpx.get(url, timeout=15, follow_redirects=True).text[:max_chars]
+        response = net_safety.request("GET", url, config, timeout=15)
+        response.raise_for_status()
+        return response.text[:max_chars]
+    except net_safety.BlockedURL as exc:
+        return str(exc)
     except Exception as exc:  # noqa: BLE001
         return f"(fetch failed: {exc})"
 

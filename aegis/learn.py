@@ -48,16 +48,36 @@ def _extract_json(text: str) -> dict:
 
 REVIEW_PROMPT = """\
 You are reviewing a completed work session to help the agent learn. Extract:
-1. memories — durable facts about the USER or PROJECT worth remembering across sessions
-   (preferences, conventions, environment, decisions). Only non-obvious, lasting facts.
+1. memories — durable facts worth remembering across sessions. Use target "user" for
+   who the user is, preferences, communication style, pet peeves, and workflow
+   expectations. Use target "memory" for project/tool/environment facts, stable
+   AEGIS behavior diagnoses, conventions, and decisions. If one correction contains
+   both a user preference and a system/project fact, emit TWO memory objects.
 2. skills — reusable step-by-step procedures demonstrated in this session that would help
    next time (only if the session solved a non-trivial, repeatable task).
 
 Reply with ONLY JSON:
-{"memories": ["fact", ...],
+{"memories": [{"target": "user|memory", "content": "fact"}, ...],
  "skills": [{"name": "kebab-case-name", "description": "what it does and WHEN to use it",
              "body": "## When to Use\\n...\\n## Procedure\\n1. ..."}]}
-Use [] when there is nothing worth saving. Do not include secrets or API keys."""
+Use [] when there is nothing worth saving. Do not include secrets or API keys.
+For compatibility, a memory string is allowed and means {"target": "memory", "content": string}."""
+
+
+def _memory_candidate(mem) -> dict | None:
+    if isinstance(mem, str):
+        content = mem.strip()
+        target = "memory"
+    elif isinstance(mem, dict):
+        content = str(mem.get("content") or mem.get("text") or mem.get("fact") or "").strip()
+        target = str(mem.get("target") or "memory").strip().lower()
+    else:
+        return None
+    if not content:
+        return None
+    if target not in {"memory", "user"}:
+        target = "memory"
+    return {"target": target, "content": _redact(content)}
 
 
 def review_session(config, session_id: str | None = None) -> list[dict]:
@@ -81,9 +101,10 @@ def review_session(config, session_id: str | None = None) -> list[dict]:
     items = _load()
     new_items: list[dict] = []
     for mem in data.get("memories", []) or []:
-        if isinstance(mem, str) and mem.strip():
+        payload = _memory_candidate(mem)
+        if payload:
             new_items.append({"id": new_id("cand"), "type": "memory", "session": sess.id,
-                              "payload": _redact(mem.strip()), "status": "pending",
+                              "payload": payload, "status": "pending",
                               "created_at": now_iso()})
     for sk in data.get("skills", []) or []:
         if isinstance(sk, dict) and sk.get("name") and sk.get("description") and sk.get("body"):
@@ -114,8 +135,17 @@ def apply_candidate(cand_id: str, config) -> str:
     if not cand:
         return "candidate not found"
     if cand["type"] == "memory":
-        MemoryStore().add("memory", cand["payload"])
-        result = f"promoted memory: {cand['payload'][:60]}"
+        payload = cand["payload"]
+        if isinstance(payload, dict):
+            target = str(payload.get("target") or "memory")
+            content = str(payload.get("content") or "")
+        else:
+            target = "memory"
+            content = str(payload or "")
+        if target not in {"memory", "user"}:
+            target = "memory"
+        MemoryStore().add(target, content)
+        result = f"promoted {target} memory: {content[:60]}"
     else:
         p = cand["payload"]
         loader = SkillsLoader(config)
@@ -151,7 +181,7 @@ def cmd_learn(args, config) -> int:
             return 1
         print(f"proposed {len(found)} candidate(s):")
         for c in found:
-            label = c["payload"] if c["type"] == "memory" else c["payload"]["name"]
+            label = _candidate_label(c)
             print(f"  {c['id']}  [{c['type']}]  {label}")
         print("review with `aegis learn list`, then `aegis learn apply <id>`")
         return 0
@@ -167,6 +197,18 @@ def cmd_learn(args, config) -> int:
         print("(no pending candidates — run `aegis learn review`)")
         return 0
     for c in pending:
-        label = c["payload"] if c["type"] == "memory" else c["payload"]["name"]
+        label = _candidate_label(c)
         print(f"  {c['id']}  [{c['type']}]  {label}")
     return 0
+
+
+def _candidate_label(c: dict) -> str:
+    if c.get("type") != "memory":
+        payload = c.get("payload") or {}
+        return str(payload.get("name") if isinstance(payload, dict) else payload)
+    payload = c.get("payload")
+    if isinstance(payload, dict):
+        target = str(payload.get("target") or "memory")
+        content = str(payload.get("content") or "")
+        return f"{target}: {content}"
+    return str(payload or "")

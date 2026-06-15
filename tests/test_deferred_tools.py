@@ -46,6 +46,17 @@ def test_tool_search_activates_deferred_tool():
     assert "activated" not in r2.display
 
 
+def test_tool_search_and_deferred_index_respect_disabled_tools():
+    a = _agent()
+    a.config.data["tools"]["disabled"] = ["generate_image"]
+    ctx = ToolContext(cwd=a.cwd, config=a.config, agent=a)
+
+    r = ToolSearchTool().run({"query": "generate_image"}, ctx)
+
+    assert "generate_image" not in r.content
+    assert "generate_image" not in a._deferred_index_block()
+
+
 def test_deferred_index_is_stable_across_activation():
     """Prefix-cache safety: activating a tool must not change the system prompt."""
     a = _agent()
