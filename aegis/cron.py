@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 import threading
@@ -12,6 +13,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import config as cfg
+from ._locks import file_lock
 from .types import new_id
 from .util import atomic_write, read_text
 
@@ -22,6 +24,45 @@ _CRON_BLOCKED_TOOLS = ("clarify", "send_message", "cronjob", "schedule_task")
 
 def _cron_path():
     return cfg.sub("cron.json")
+
+
+@contextmanager
+def _jobs_file_lock():
+    """Cross-process lock for cron.json load-modify-save transactions."""
+    with _JOBS_LOCK:
+        path = _cron_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with file_lock(path):
+            yield
+
+
+def _fsync_dir(path: Path) -> None:
+    try:
+        fd = os.open(str(path), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _atomic_write_cron(path: Path, text: str) -> None:
+    atomic_write(path, text)
+    _fsync_dir(path.parent)
+
+
+def _backup_corrupt_jobs(raw: str) -> None:
+    if not raw:
+        return
+    stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    target = _cron_path().with_name(f"{_cron_path().name}.corrupt.{stamp}.bak")
+    try:
+        _atomic_write_cron(target, raw)
+    except OSError:
+        pass
 
 
 @contextmanager
@@ -519,33 +560,44 @@ def is_due(job: CronJob, now: float) -> bool:
 
 
 class CronStore:
+    @staticmethod
+    def _load_unlocked() -> list[dict]:
+        raw = read_text(_cron_path())
+        if not raw.strip():
+            return []
+        try:
+            loaded = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            _backup_corrupt_jobs(raw)
+            return []
+        if not isinstance(loaded, list):
+            _backup_corrupt_jobs(raw)
+            return []
+        seen: set[str] = set()
+        jobs: list[dict] = []
+        for index, item in enumerate(loaded):
+            normalized = _normalize_job_record(item, index=index, seen=seen)
+            if normalized is not None:
+                jobs.append(normalized)
+        return jobs
+
+    @staticmethod
+    def _save_unlocked(jobs: list[dict]) -> None:
+        seen: set[str] = set()
+        normalized = [
+            job for index, item in enumerate(jobs)
+            if (job := _normalize_job_record(item, index=index, seen=seen)) is not None
+        ]
+        text = json.dumps(normalized, indent=2)
+        _atomic_write_cron(_cron_path(), text + ("\n" if not text.endswith("\n") else ""))
+
     def _load(self) -> list[dict]:
-        with _JOBS_LOCK:
-            raw = read_text(_cron_path())
-            if not raw.strip():
-                return []
-            try:
-                loaded = json.loads(raw)
-            except (json.JSONDecodeError, TypeError):
-                return []
-            if not isinstance(loaded, list):
-                return []
-            seen: set[str] = set()
-            jobs: list[dict] = []
-            for index, item in enumerate(loaded):
-                normalized = _normalize_job_record(item, index=index, seen=seen)
-                if normalized is not None:
-                    jobs.append(normalized)
-            return jobs
+        with _jobs_file_lock():
+            return self._load_unlocked()
 
     def _save(self, jobs: list[dict]) -> None:
-        with _JOBS_LOCK:
-            seen: set[str] = set()
-            normalized = [
-                job for index, item in enumerate(jobs)
-                if (job := _normalize_job_record(item, index=index, seen=seen)) is not None
-            ]
-            atomic_write(_cron_path(), json.dumps(normalized, indent=2))
+        with _jobs_file_lock():
+            self._save_unlocked(jobs)
 
     def list(self) -> list[CronJob]:
         return [CronJob(**j) for j in self._load()]
@@ -578,30 +630,30 @@ class CronStore:
                       enabled_toolsets=list(enabled_toolsets or []),
                       workdir=str(workdir or "").strip(),
                       max_runs=max(0, int(max_runs or 0)))
-        with _JOBS_LOCK:
-            jobs = self._load()
+        with _jobs_file_lock():
+            jobs = self._load_unlocked()
             jobs.append(job.__dict__)
-            self._save(jobs)
+            self._save_unlocked(jobs)
         return job
 
     def remove(self, job_id: str) -> bool:
-        with _JOBS_LOCK:
-            jobs = self._load()
+        with _jobs_file_lock():
+            jobs = self._load_unlocked()
             index = _find_unique_job_index(jobs, job_id)
             if index is None:
                 return False
             del jobs[index]
-            self._save(jobs)
+            self._save_unlocked(jobs)
             return True
 
     def set_enabled(self, job_id: str, enabled: bool) -> bool:
-        with _JOBS_LOCK:
-            jobs = self._load()
+        with _jobs_file_lock():
+            jobs = self._load_unlocked()
             index = _find_unique_job_index(jobs, job_id)
             if index is None:
                 return False
             jobs[index]["enabled"] = enabled
-            self._save(jobs)
+            self._save_unlocked(jobs)
             return True
 
     def prune_spent(self, *, dry_run: bool = True) -> list[str]:
@@ -610,8 +662,8 @@ class CronStore:
         after hitting ``max_runs``. Keeps the cron store from accumulating dead jobs —
         the cron-side of the lifecycle cleanup the curator runs for skills/sessions.
         Returns the ids pruned (or that would be, when ``dry_run``)."""
-        with _JOBS_LOCK:
-            jobs = self._load()
+        with _jobs_file_lock():
+            jobs = self._load_unlocked()
             spent: list[str] = []
             for j in jobs:
                 if j.get("enabled", True):
@@ -622,12 +674,12 @@ class CronStore:
                 if one_shot_done or hit_limit:
                     spent.append(j.get("id", ""))
             if not dry_run and spent:
-                self._save([j for j in jobs if j.get("id") not in spent])
+                self._save_unlocked([j for j in jobs if j.get("id") not in spent])
             return [s for s in spent if s]
 
     def update(self, job_id: str, **updates) -> CronJob | None:
-        with _JOBS_LOCK:
-            jobs = self._load()
+        with _jobs_file_lock():
+            jobs = self._load_unlocked()
             index = _find_unique_job_index(jobs, job_id)
             if index is None:
                 return None
@@ -649,12 +701,12 @@ class CronStore:
                 found["run_at"] = _parse_oneshot(str(found.get("schedule", "")), now) or 0.0
                 found["last_run"] = 0.0
                 found["next_run"] = 0.0
-            self._save(jobs)
+            self._save_unlocked(jobs)
             return CronJob(**_normalize_job_record(found))
 
     def mark_run(self, job_id: str, when: float) -> None:
-        with _JOBS_LOCK:
-            jobs = self._load()
+        with _jobs_file_lock():
+            jobs = self._load_unlocked()
             index = _find_unique_job_index(jobs, job_id)
             if index is not None:
                 j = jobs[index]
@@ -666,23 +718,23 @@ class CronStore:
                     j["next_run"] = 0.0
                 else:
                     j["next_run"] = _compute_next_run(CronJob(**j), when)
-            self._save(jobs)
+            self._save_unlocked(jobs)
 
     def mark_running(self, job_id: str) -> None:
-        with _JOBS_LOCK:
-            jobs = self._load()
+        with _jobs_file_lock():
+            jobs = self._load_unlocked()
             index = _find_unique_job_index(jobs, job_id)
             if index is not None:
                 jobs[index]["state"] = "running"
                 jobs[index]["last_error"] = ""
-            self._save(jobs)
+            self._save_unlocked(jobs)
 
     def record_run(self, job_id: str, when: float, *, ok: bool, error: str = "",
                    reply: str = "", keep: int = 10) -> None:
         """Persist a typed run outcome: last_run, state, last_error, next_run, and a capped
         ``runs`` history (newest last)."""
-        with _JOBS_LOCK:
-            jobs = self._load()
+        with _jobs_file_lock():
+            jobs = self._load_unlocked()
             index = _find_unique_job_index(jobs, job_id)
             if index is not None:
                 j = jobs[index]
@@ -705,7 +757,7 @@ class CronStore:
                              "chars": len(reply or ""), "output": output_path,
                              "reply": (reply or "")[:8000]})
                 j["runs"] = runs[-keep:]
-            self._save(jobs)
+            self._save_unlocked(jobs)
 
 
 def _run_script_only(script: str, timeout: int = 120, cwd: Path | None = None) -> tuple[bool, str, str]:

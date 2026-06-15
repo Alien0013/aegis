@@ -20,4 +20,8 @@ contextBridge.exposeInMainWorld("aegisDesktop", {
   },
   openExternal: (url) => ipcRenderer.send("win:openExternal", url),
   restartBackend: () => ipcRenderer.send("win:restartBackend"),
+  getConnection: () => ipcRenderer.invoke("aegis:connection"),
+  api: (request) => ipcRenderer.invoke("aegis:api", request),
+  getRecentLogs: () => ipcRenderer.invoke("aegis:logs:recent"),
+  revealLogs: () => ipcRenderer.invoke("aegis:logs:reveal"),
 });

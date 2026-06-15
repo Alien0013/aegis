@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import time
 
 import httpx
@@ -802,6 +803,64 @@ def test_fastapi_config_preferences_memory_provider_and_plugins(tmp_path, monkey
     assert plugins.status_code == 200
     assert "plugins" in plugins.json()
     assert "errors" in plugins.json()
+
+
+def test_fastapi_dashboard_plugins_manifest_assets_and_api(tmp_path, monkeypatch):
+    plug = tmp_path / "plugins" / "demo"
+    (plug / "dashboard" / "dist").mkdir(parents=True)
+    (plug / "plugin.json").write_text(
+        '{"name":"demo","version":"1.0","description":"Demo plugin"}',
+        encoding="utf-8",
+    )
+    (plug / "dashboard" / "manifest.json").write_text(
+        json.dumps({
+            "name": "demo-panel",
+            "title": "Demo Panel",
+            "tab": {"label": "Demo"},
+            "slots": [{"slot": "overview", "component": "Demo"}],
+            "entry": "index.js",
+            "css": ["style.css"],
+            "api": "api.py",
+        }),
+        encoding="utf-8",
+    )
+    (plug / "dashboard" / "dist" / "index.js").write_text("window.demoPlugin = true;", encoding="utf-8")
+    (plug / "dashboard" / "dist" / "style.css").write_text(".demo{}", encoding="utf-8")
+    (plug / "dashboard" / "dist" / "secret.py").write_text("print('no')", encoding="utf-8")
+    (plug / "api.py").write_text(
+        "from fastapi import APIRouter\n"
+        "router = APIRouter()\n"
+        "@router.get('/ping')\n"
+        "def ping():\n"
+        "    return {'pong': True}\n",
+        encoding="utf-8",
+    )
+
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    manifest = asyncio.run(_request(app, "GET", "/api/dashboard/plugins", headers=headers))
+    assert manifest.status_code == 200
+    rows = manifest.json()
+    assert rows[0]["name"] == "demo-panel"
+    assert rows[0]["entry"] == "index.js"
+    assert rows[0]["css"] == ["style.css"]
+    assert rows[0]["has_api"] is True
+
+    asset = asyncio.run(_request(app, "GET", "/dashboard-plugins/demo-panel/index.js"))
+    assert asset.status_code == 200
+    assert "window.demoPlugin" in asset.text
+
+    source = asyncio.run(_request(app, "GET", "/dashboard-plugins/demo-panel/secret.py"))
+    traversal = asyncio.run(_request(app, "GET", "/dashboard-plugins/demo-panel/../api.py"))
+    assert source.status_code == 404
+    assert traversal.status_code == 404
+
+    denied = asyncio.run(_request(app, "GET", "/api/plugins/demo-panel/ping"))
+    allowed = asyncio.run(_request(app, "GET", "/api/plugins/demo-panel/ping", headers=headers))
+    assert denied.status_code == 401
+    assert allowed.status_code == 200
+    assert allowed.json() == {"pong": True}
 
 
 def test_fastapi_audio_control_plane(tmp_path, monkeypatch):

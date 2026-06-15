@@ -48,6 +48,7 @@ const stateFile = () => path.join(app.getPath("userData"), "window-state.json");
 const route = (p) => dashboardUrl + "#" + (p && p.startsWith("/") ? p : "/" + (p || ""));
 // The desktop app opens into the focused chat-first surface, not the admin grid.
 const DEFAULT_ROUTE = "/app";
+const backendBaseUrl = () => port ? `http://127.0.0.1:${port}` : "";
 
 function log(line) {
   try {
@@ -101,11 +102,16 @@ function startBackend() {
   return new Promise(async (resolve, reject) => {
     port = await freePort();
     token = crypto.randomBytes(18).toString("hex");
-    dashboardUrl = `http://127.0.0.1:${port}/?token=${token}`;
+    dashboardUrl = `${backendBaseUrl()}/?token=${token}`;
     const bin = aegisCommand();
-    log(`starting backend: ${bin} dashboard --port ${port}`);
-    backend = spawn(bin, ["dashboard", "--port", String(port), "--no-open"], {
-      env: { ...process.env, AEGIS_DASHBOARD_TOKEN: token, AEGIS_DESKTOP: "1" },
+    log(`starting backend: ${bin} dashboard --host 127.0.0.1 --port ${port}`);
+    backend = spawn(bin, ["dashboard", "--host", "127.0.0.1", "--port", String(port), "--no-open"], {
+      env: {
+        ...process.env,
+        AEGIS_DASHBOARD_TOKEN: token,
+        AEGIS_DESKTOP: "1",
+        TERMINAL_CWD: process.env.TERMINAL_CWD || process.cwd(),
+      },
       stdio: ["ignore", "pipe", "pipe"],
     });
     const tail = (buf) => log(String(buf).trimEnd());
@@ -127,10 +133,67 @@ function probe(url, tries, onTick) {
   return new Promise((resolve, reject) => {
     const attempt = (n) => {
       onTick && onTick(tries - n, tries);
-      http.get(url, (r) => { r.resume(); resolve(); })
-        .on("error", () => { n <= 0 ? reject(new Error("backend did not respond in time")) : setTimeout(() => attempt(n - 1), 400); });
+      http.get(url, { headers: { "X-Aegis-Token": token } }, (r) => {
+        let body = "";
+        r.setEncoding("utf8");
+        r.on("data", (chunk) => { body += chunk; });
+        r.on("end", () => {
+          if (r.statusCode >= 200 && r.statusCode < 300) {
+            try {
+              const data = JSON.parse(body || "{}");
+              if (data.ok === true) { resolve(); return; }
+            } catch { /* keep retrying */ }
+          }
+          if (n <= 0) reject(new Error("backend health check did not become ready"));
+          else setTimeout(() => attempt(n - 1), 400);
+        });
+      }).on("error", () => {
+        if (n <= 0) reject(new Error("backend did not respond in time"));
+        else setTimeout(() => attempt(n - 1), 400);
+      });
     };
     attempt(tries);
+  });
+}
+
+function connectionDescriptor() {
+  const baseUrl = backendBaseUrl();
+  return {
+    baseUrl,
+    mode: "local",
+    source: "local",
+    authMode: "token",
+    token,
+    wsUrl: baseUrl ? `ws://127.0.0.1:${port}/api/ws?token=${encodeURIComponent(token)}` : "",
+  };
+}
+
+function apiRequest({ method = "GET", path: requestPath = "", body = null } = {}) {
+  return new Promise((resolve, reject) => {
+    if (!port || !token) { reject(new Error("backend is not connected")); return; }
+    const cleanPath = String(requestPath || "").replace(/^\/+/, "").replace(/^api\/?/, "");
+    const url = new URL(`/api/${cleanPath}`, backendBaseUrl());
+    const payload = body == null ? null : Buffer.from(JSON.stringify(body));
+    const req = http.request(url, {
+      method: String(method || "GET").toUpperCase(),
+      headers: {
+        "X-Aegis-Token": token,
+        ...(payload ? { "Content-Type": "application/json", "Content-Length": String(payload.length) } : {}),
+      },
+    }, (res) => {
+      let text = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk) => { text += chunk; });
+      res.on("end", () => {
+        let parsed = text;
+        try { parsed = text ? JSON.parse(text) : {}; } catch { /* return text */ }
+        if (res.statusCode >= 200 && res.statusCode < 300) resolve(parsed);
+        else reject(new Error(typeof parsed === "string" ? parsed : (parsed.error || parsed.detail || `HTTP ${res.statusCode}`)));
+      });
+    });
+    req.on("error", reject);
+    if (payload) req.write(payload);
+    req.end();
   });
 }
 
@@ -148,7 +211,7 @@ async function onBackendCrash() {
   log(`restarting backend (attempt ${crashRestarts}/${MAX_CRASH_RESTARTS})`);
   try {
     await startBackend();
-    await probe(`http://127.0.0.1:${port}/`, 50);
+    await probe(`${backendBaseUrl()}/api/health`, 50);
     if (win && !win.isDestroyed()) win.loadURL(route(DEFAULT_ROUTE));
   } catch (e) { log(`restart failed: ${e.message}`); onBackendCrash(); }
 }
@@ -324,7 +387,7 @@ async function run() {
   try {
     await startBackend();
     boot({ pct: 30, message: "Waiting for the agent to come online…" });
-    await probe(`http://127.0.0.1:${port}/`, 70, (done, total) =>
+    await probe(`${backendBaseUrl()}/api/health`, 70, (done, total) =>
       boot({ pct: 30 + Math.round((done / total) * 55), message: "Waiting for the agent to come online…" }));
     boot({ pct: 90, message: "Opening AEGIS…" });
     createWindow();
@@ -421,6 +484,13 @@ ipcMain.on("win:close", (e) => { const w = senderWindow(e); if (w) w.close(); })
 ipcMain.handle("win:isMaximized", (e) => !!(senderWindow(e) && senderWindow(e).isMaximized()));
 ipcMain.on("win:openExternal", (_e, url) => { if (url && /^https?:/i.test(String(url))) shell.openExternal(url); });
 ipcMain.on("win:restartBackend", () => restartFromScratch());
+ipcMain.handle("aegis:connection", () => connectionDescriptor());
+ipcMain.handle("aegis:api", (_e, request) => apiRequest(request));
+ipcMain.handle("aegis:logs:recent", () => {
+  try { return fs.readFileSync(logPath(), "utf8").splitlines?.() || fs.readFileSync(logPath(), "utf8").split(/\r?\n/).slice(-200); }
+  catch { return []; }
+});
+ipcMain.handle("aegis:logs:reveal", () => shell.openPath(logPath()));
 
 /* ---------- deep links (aegis://) ---------- */
 function pickDeepLink(argv) {

@@ -518,6 +518,11 @@ class SubagentTool(Tool):
         """Fire-and-forget delegation: the child runs after this turn ends and its
         result is announced into the originating chat (gateway) or kept for /tasks (CLI)."""
         from ..background import get_manager
+        if len(tasks) > 1:
+            return ToolResult.error(
+                "background delegation accepts one task at a time; start separate background "
+                "tasks or run the tasks in the foreground bounded batch."
+            )
         platform = getattr(ctx.agent, "platform", None)
         chat_id = getattr(ctx.agent, "chat_id", None)
         allow_delegation = role == "orchestrator" and depth < max_depth
@@ -547,7 +552,9 @@ class SubagentTool(Tool):
                     pass
             from ..eventbus import BUS              # else surface on the live dashboard feed
             BUS.publish({"type": "background_done", "platform": platform or "cli",
-                         "chat_id": chat_id, "text": text[:2000]})
+                         "chat_id": chat_id, "text": text[:2000],
+                         "id": task.id, "status": task.status, "run_id": task.run_id,
+                         "agent_type": agent_type, "background": True})
 
         parent_session = getattr(ctx.agent, "session", None)
         ids = [

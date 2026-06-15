@@ -1312,9 +1312,13 @@ def cmd_logs(args, config: Config) -> int:  # noqa: ARG001
     return 0
 
 
-_CMDS = ("chat desktop model auth setup onboard status update skills plugins mcp serve rpc cron profile profiles tools memory logs "
-         "config sessions gateway doctor completion backup import insights webhook "
-         "hooks kanban curator dashboard daemon acp pairing checkpoints background trace eval")
+_CMDS = (
+    "ab acp auth background backup batch bench budget chat checkpoints completion config cost cron "
+    "curator daemon dashboard debug deksktop desktop doctor eval gateway gstack hooks import improve "
+    "insights kanban learn logs mcp memory model models onboard pairing plugins profile profiles rpc "
+    "secret secrets security serve sessions setup skills snapshot spec status tools trace trajectory ui "
+    "uninstall update watch webhook"
+)
 
 
 def cmd_checkpoints(args, config: Config) -> int:

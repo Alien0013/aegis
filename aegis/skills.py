@@ -732,7 +732,7 @@ class SkillsLoader:
         return skill.path
 
     def activate(self, name: str) -> str | None:
-        by_slug = self._available_by_slug(include_unavailable=True)
+        by_slug = self._available_by_slug()
         skill = by_slug.get(name) or by_slug.get(_skill_command_name(name))
         if not skill:
             return None

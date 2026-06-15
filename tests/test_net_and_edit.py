@@ -114,7 +114,7 @@ def test_context_files_block_prompt_injection(tmp_path):
 def test_model_metadata_resolves_current_models():
     from aegis.model_meta import context_window
     assert context_window("claude-sonnet-4-6") == 1_000_000
-    assert context_window("gpt-5.5") == 400_000
+    assert context_window("gpt-5.5") == 1_050_000
     assert context_window("gpt-4o") == 128_000
     assert context_window("gemini-2.5-pro") == 1_048_576
     assert context_window("totally-unknown-model") is None     # falls back to preset
@@ -256,6 +256,33 @@ def test_learn_redact_reuses_shared_module():
     from aegis import learn
     from aegis.redact import redact_secrets
     assert learn._redact is redact_secrets        # single source of truth
+
+
+def test_debug_report_redacts_config_and_logs(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import zipfile
+    from aegis import config as cfg
+    from aegis import ops
+    from aegis.config import Config
+    import aegis.cli.main as cli_main
+
+    cfg.config_path().write_text("OPENAI_API_KEY: sk-proj-ABCDEFGHIJ1234567890\n", encoding="utf-8")
+    cfg.logs_dir().mkdir(parents=True, exist_ok=True)
+    (cfg.logs_dir() / "aegis.log").write_text(
+        "Authorization: Bearer github_pat_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli_main, "cmd_doctor", lambda args, config: print("doctor ok"))
+
+    assert ops.cmd_debug(type("A", (), {})(), Config.load()) == 0
+
+    with zipfile.ZipFile(cfg.sub("debug-report.zip")) as z:
+        config_text = z.read("config.yaml").decode()
+        log_text = z.read("logs/aegis.log").decode()
+    assert "sk-proj-" not in config_text
+    assert "github_pat_" not in log_text
+    assert "[REDACTED]" in config_text
+    assert "[REDACTED]" in log_text
 
 
 def test_compaction_uses_aux_provider_helper():

@@ -498,6 +498,42 @@ def test_cron_store_normalizes_legacy_rows(monkeypatch, tmp_path):
     assert jobs[0].runs == [{"ok": True}]
 
 
+def test_cron_store_backs_up_corrupt_json(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.cron import CronStore
+
+    (tmp_path / "cron.json").write_text("{not json", encoding="utf-8")
+
+    assert CronStore().list() == []
+    backups = list(tmp_path.glob("cron.json.corrupt.*.bak"))
+    assert backups
+    assert backups[0].read_text(encoding="utf-8") == "{not json"
+
+
+def test_cron_store_cross_process_adds_do_not_clobber(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    from aegis.cron import CronStore
+
+    env = os.environ.copy()
+    env["AEGIS_HOME"] = str(tmp_path)
+    repo = Path(__file__).resolve().parents[1]
+    env["PYTHONPATH"] = str(repo) + os.pathsep + env.get("PYTHONPATH", "")
+    code = "from aegis.cron import CronStore; import sys; CronStore().add('every 1h', sys.argv[1])"
+    procs = [
+        subprocess.Popen([sys.executable, "-c", code, f"job-{i}"], cwd=repo, env=env)
+        for i in range(6)
+    ]
+    for proc in procs:
+        assert proc.wait(timeout=10) == 0
+
+    prompts = {job.prompt for job in CronStore().list()}
+    assert prompts == {f"job-{i}" for i in range(6)}
+
+
 def test_cron_store_rejects_ambiguous_prefix_mutations(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import json

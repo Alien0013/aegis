@@ -141,7 +141,7 @@ def install_deps():
         "On environments without pip (e.g. Nix, or the AEGIS Docker image's "
         "uv-managed venv), install the optional extra instead:"
     )
-    print("  pip install 'aegis-agent[google]'")
+    print("  pip install 'aegis-agent-harness[google]'")
     print(f"Or manually: {sys.executable} -m pip install {' '.join(REQUIRED_PACKAGES)}")
     return False
 

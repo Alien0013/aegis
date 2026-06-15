@@ -169,6 +169,77 @@ def test_background_spawn_registers_subagent_terminal_backend(tmp_path, monkeypa
         backends.clear_task_env_overrides(tid)
 
 
+def test_background_manager_caps_workers_and_records_completions(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import threading
+    import time
+    import aegis.surface as surface
+    from aegis.background import BackgroundManager
+    from aegis.config import Config
+
+    active = 0
+    max_seen = 0
+    lock = threading.Lock()
+
+    class FakeRunner:
+        def __init__(self, config, cwd=None, include_mcp=True):
+            pass
+
+        def load_or_create_session(self, session_id=None, title=None, surface="", meta=None, **_kwargs):
+            return type("S", (), {"id": session_id, "title": title, "meta": meta or {}})()
+
+        def make_agent(self, **_kwargs):
+            return object()
+
+        def run_prompt(self, prompt, **kwargs):
+            nonlocal active, max_seen
+            with lock:
+                active += 1
+                max_seen = max(max_seen, active)
+            try:
+                time.sleep(0.12)
+                return type("R", (), {"text": f"ok {prompt}", "run_id": f"run_{prompt}"})()
+            finally:
+                with lock:
+                    active -= 1
+
+        def close(self):
+            pass
+
+    config = Config.load()
+    config.data.setdefault("delegation", {})["max_background_children"] = 2
+    monkeypatch.setattr(surface, "SurfaceRunner", FakeRunner)
+
+    mgr = BackgroundManager()
+    ids = [mgr.spawn(config, f"task{i}", session_meta={"agent_type": "review"}) for i in range(5)]
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        rows = mgr.list()
+        if len(rows) == 5 and all(row["status"] != "running" for row in rows):
+            break
+        time.sleep(0.02)
+
+    assert {row["id"] for row in mgr.list()} == set(ids)
+    assert max_seen <= 2
+    events = mgr.completions()
+    assert len(events) == 5
+    assert {event["status"] for event in events} == {"done"}
+    assert {event["agent_type"] for event in events} == {"review"}
+    assert all(event["background"] is True for event in events)
+
+
+def test_background_subagent_rejects_multiple_tasks(tmp_path):
+    from aegis.config import Config
+    from aegis.tools.agentic import SubagentTool
+    from aegis.tools.base import ToolContext
+
+    ctx = ToolContext(cwd=tmp_path, config=Config.load())
+    result = SubagentTool().run({"tasks": ["a", "b"], "background": True}, ctx)
+
+    assert result.is_error
+    assert "one task at a time" in result.content
+
+
 # --- iteration-budget refund ------------------------------------------------
 def test_iteration_budget_refund():
     from aegis.agent.agent import IterationBudget

@@ -237,6 +237,88 @@ def test_openai_chat_completions_aiohttp_transport(monkeypatch, tmp_path):
     assert _FakeRunner.calls[0]["surface"] == "serve"
 
 
+def test_openai_chat_completions_string_false_is_nonstream(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/chat/completions", {
+            "stream": "false",
+            "messages": [{"role": "user", "content": "hi"}],
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    body = json.loads(data)
+    assert body["object"] == "chat.completion"
+    assert _FakeRunner.calls[0]["stream"] is False
+
+
+def test_openai_chat_completions_aiohttp_sse_flushes_live(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import time
+    import aegis.server as server
+    from aegis.config import Config
+
+    class SlowStreamingRunner:
+        def __init__(self, config, include_mcp=True):
+            pass
+
+        def run_prompt(self, prompt, **kwargs):
+            kwargs["on_event"]({"type": "assistant_delta", "text": "early"})
+            time.sleep(1.0)
+            session_id = kwargs.get("session_id") or "serve:live"
+            return SimpleNamespace(
+                text="early late",
+                session=SimpleNamespace(id=session_id),
+                trace_id="trace_live",
+                turn_id="turn_live",
+                run_id="run_live",
+                agent=SimpleNamespace(
+                    provider=SimpleNamespace(model="served-model"),
+                    budget=SimpleNamespace(usage=_Usage()),
+                ),
+            )
+
+    async def exercise() -> tuple[int, bytes, float]:
+        from aiohttp import ClientSession, web
+
+        app = server.make_app(Config.load())
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        try:
+            assert site._server is not None
+            port = site._server.sockets[0].getsockname()[1]
+            started = time.monotonic()
+            async with ClientSession() as session:
+                async with session.post(
+                    f"http://127.0.0.1:{port}/v1/chat/completions",
+                    json={"stream": True, "messages": [{"role": "user", "content": "hi"}]},
+                ) as resp:
+                    first = await asyncio.wait_for(resp.content.readline(), timeout=0.8)
+                    elapsed = time.monotonic() - started
+                    resp.release()
+                    return resp.status, first, elapsed
+        finally:
+            await runner.cleanup()
+
+    monkeypatch.setattr(server, "SurfaceRunner", SlowStreamingRunner)
+    status, first, elapsed = asyncio.run(exercise())
+
+    assert status == 200
+    assert first.startswith(b"data: ")
+    assert b"early" in first
+    assert elapsed < 0.8
+
+
 def test_openai_chat_completions_usage_is_per_response(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
@@ -367,6 +449,30 @@ def test_server_health_capabilities_and_body_limit(monkeypatch, tmp_path):
     assert json.loads(too_large_data)["error"] == "request body too large"
 
 
+def test_server_health_skills_toolsets_and_cors_options(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        health_status, health_data = _request(port, "GET", "/v1/health")
+        skills_status, skills_data = _request(port, "GET", "/v1/skills")
+        toolsets_status, toolsets_data = _request(port, "GET", "/v1/toolsets")
+        options_status, _options_data = _request(port, "OPTIONS", "/v1/chat/completions")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert health_status == 200
+    assert json.loads(health_data)["ok"] is True
+    assert skills_status == 200
+    assert json.loads(skills_data)["object"] == "list"
+    assert toolsets_status == 200
+    assert json.loads(toolsets_data)["object"] == "list"
+    assert options_status == 204
+
+
 def test_responses_create_retrieve_cancel_delete(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
@@ -402,6 +508,52 @@ def test_responses_create_retrieve_cancel_delete(monkeypatch, tmp_path):
     assert delete_status == 200
     assert json.loads(delete_data)["ok"] is True
     assert _FakeRunner.calls[0]["session_id"] == "serve:responses"
+
+
+def test_responses_persist_store_false_and_previous_id(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": "first",
+            "metadata": {"session_id": "serve:persist"},
+        })
+        response_id = json.loads(data)["id"]
+        stateless_status, stateless_data = _request(port, "POST", "/v1/responses", {
+            "input": "stateless",
+            "store": False,
+        })
+        stateless_id = json.loads(stateless_data)["id"]
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    srv2, port2 = _serve(server.make_handler(Config.load()))
+    try:
+        get_status, get_data = _request(port2, "GET", f"/v1/responses/{response_id}")
+        missing_status, _missing_data = _request(port2, "GET", f"/v1/responses/{stateless_id}")
+        chained_status, chained_data = _request(port2, "POST", "/v1/responses", {
+            "input": "second",
+            "previous_response_id": response_id,
+        })
+    finally:
+        srv2.shutdown()
+        srv2.server_close()
+
+    assert status == 200
+    assert stateless_status == 200
+    assert get_status == 200
+    assert json.loads(get_data)["id"] == response_id
+    assert missing_status == 404
+    assert chained_status == 200
+    chained = json.loads(chained_data)
+    assert chained["metadata"]["previous_response_id"] == response_id
+    assert chained["metadata"]["session_id"] == "serve:persist"
 
 
 def test_server_session_crud_fork_and_chat(monkeypatch, tmp_path):
@@ -484,3 +636,57 @@ def test_server_run_read_endpoints(monkeypatch, tmp_path):
     assert stream_status == 200
     assert "event: done" in stream_data
     assert "data: [DONE]" in stream_data
+
+
+def test_server_api_jobs_crud_pause_resume_and_run(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    def fake_run_job(config, job, **kwargs):
+        job_id = job if isinstance(job, str) else job.id
+        return {"ok": True, "job_id": job_id, "reply": "ran"}
+
+    monkeypatch.setattr("aegis.cron.run_job", fake_run_job)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        create_status, create_data = _request(port, "POST", "/api/jobs", {
+            "schedule": "every 1h",
+            "prompt": "check status",
+            "name": "status check",
+            "model": "cron-model",
+            "enabled_toolsets": ["core", "web"],
+            "workdir": str(tmp_path),
+            "no_agent": "false",
+        })
+        job_id = json.loads(create_data)["id"]
+        list_status, list_data = _request(port, "GET", "/api/jobs")
+        pause_status, pause_data = _request(port, "POST", f"/api/jobs/{job_id}/pause", {})
+        resume_status, resume_data = _request(port, "POST", f"/api/jobs/{job_id}/resume", {})
+        patch_status, patch_data = _request(port, "PATCH", f"/api/jobs/{job_id}", {
+            "model": "cron-updated",
+            "toolsets": "core",
+        })
+        run_status, run_data = _request(port, "POST", f"/api/jobs/{job_id}/trigger", {})
+        delete_status, delete_data = _request(port, "DELETE", f"/api/jobs/{job_id}")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert create_status == 201
+    created = json.loads(create_data)["job"]
+    assert created["model"] == "cron-model"
+    assert created["enabled_toolsets"] == ["core", "web"]
+    assert created["workdir"] == str(tmp_path)
+    assert list_status == 200
+    assert any(row["id"] == job_id for row in json.loads(list_data)["data"])
+    assert pause_status == 200
+    assert json.loads(pause_data)["job"]["enabled"] is False
+    assert resume_status == 200
+    assert json.loads(resume_data)["job"]["enabled"] is True
+    assert patch_status == 200
+    assert json.loads(patch_data)["job"]["enabled_toolsets"] == ["core"]
+    assert run_status == 200
+    assert json.loads(run_data)["job_id"] == job_id
+    assert delete_status == 200
+    assert json.loads(delete_data)["ok"] is True

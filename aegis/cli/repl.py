@@ -771,8 +771,8 @@ def banner(agent: Agent) -> None:
         body.append("  Surfaces\n", style=f"bold {TERM_AMBER}")
         body.append("    aegis ui", style=f"bold {TERM_GREEN}")
         body.append("   browser control panel\n", style=f"{TERM_MUTED}")
-        body.append("    aegis tui", style=f"bold {TERM_GREEN}")
-        body.append("  full-screen terminal app\n\n", style=f"{TERM_MUTED}")
+        body.append("    aegis desktop", style=f"bold {TERM_GREEN}")
+        body.append("  Electron desktop app\n\n", style=f"{TERM_MUTED}")
         body.append("  Try  ", style=f"{TERM_MUTED}")
         body.append("/help", style=f"bold {TERM_GREEN}")
         body.append(" commands · ", style="dim")
@@ -800,7 +800,7 @@ def banner(agent: Agent) -> None:
               f"{getattr(agent, 'reasoning', 'off')} · permissions "
               f"{agent.config.get('tools.exec_mode', 'auto')}")
         print(f"cwd: {agent.cwd}")
-        print("Surfaces:  aegis ui (browser control panel) · aegis tui (terminal app)")
+        print("Surfaces:  aegis ui (browser control panel) · aegis desktop (Electron app)")
         print("Try: /help · @file · /goal · /ultracode · /context · /quit")
         print("=" * 60)
 

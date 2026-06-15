@@ -56,6 +56,7 @@ target-version = "py310"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+testpaths = ["tests"]
 filterwarnings = [
     # uvicorn[standard] still imports the deprecated websockets.legacy module; not ours
     # to fix and harmless until websockets drops it (capped <17 in dependencies).

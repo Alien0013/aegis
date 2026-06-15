@@ -7,7 +7,9 @@ import base64
 import copy
 import hashlib
 import hmac
+import importlib.util
 import json
+import mimetypes
 import os
 import queue
 import re
@@ -23,7 +25,7 @@ from . import __version__
 from .config import Config
 
 try:
-    from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket
+    from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket
     from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 except ImportError as exc:  # pragma: no cover - import check covers dependency presence
     raise RuntimeError(
@@ -1164,6 +1166,142 @@ def _plugins_payload(config: Config) -> dict:
         "disabled": config.get("plugins.disabled", []) or [],
         "allowlist": config.get("plugins.allowlist", []) or [],
     }
+
+
+_DASHBOARD_STATIC_DENY_SUFFIXES = {
+    ".py", ".pyc", ".pyo", ".toml", ".yaml", ".yml", ".json", ".env", ".sqlite", ".db",
+}
+
+
+def _contained(root: Path, candidate: Path) -> bool:
+    try:
+        candidate.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _safe_plugin_relpath(value: str, *, suffix: str = "") -> str:
+    text = str(value or "").strip().replace("\\", "/")
+    if not text or text.startswith("/") or "\x00" in text:
+        return ""
+    parts = Path(text).parts
+    if any(part in {"", ".", ".."} for part in parts):
+        return ""
+    if suffix and not text.endswith(suffix):
+        return ""
+    return text
+
+
+def _dashboard_plugin_records(config: Config) -> list[dict[str, Any]]:
+    from .plugins import list_manifests
+
+    rows: list[dict[str, Any]] = []
+    for manifest in list_manifests(config):
+        if not manifest.enabled:
+            continue
+        plugin_root = manifest.path.parent if manifest.path.is_file() else manifest.path
+        dash_root = plugin_root / "dashboard"
+        manifest_path = dash_root / "manifest.json"
+        if not manifest_path.exists():
+            continue
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        if not isinstance(data, dict):
+            continue
+        try:
+            name = _safe_resource_name(str(data.get("name") or manifest.name), "plugin")
+        except ValueError:
+            continue
+        dist_root = (dash_root / "dist").resolve()
+        entry = _safe_plugin_relpath(str(data.get("entry") or "index.js"))
+        css_raw = data.get("css") or []
+        css = [_safe_plugin_relpath(str(item)) for item in (css_raw if isinstance(css_raw, list) else [css_raw])]
+        css = [item for item in css if item]
+        api_rel = _safe_plugin_relpath(str(data.get("api") or ""), suffix=".py")
+        api_path = (plugin_root / api_rel).resolve() if api_rel else None
+        if api_path is not None and not _contained(plugin_root.resolve(), api_path):
+            api_path = None
+        rows.append({
+            "name": name,
+            "plugin": manifest.name,
+            "title": str(data.get("title") or data.get("label") or name),
+            "description": str(data.get("description") or manifest.description or ""),
+            "version": str(data.get("version") or manifest.version or ""),
+            "tab": data.get("tab", False),
+            "slots": data.get("slots") if isinstance(data.get("slots"), list) else [],
+            "entry": entry,
+            "css": css,
+            "base_path": f"/dashboard-plugins/{name}",
+            "has_api": bool(api_path and api_path.exists()),
+            "_root": str(plugin_root.resolve()),
+            "_dist": str(dist_root),
+            "_api": str(api_path) if api_path and api_path.exists() else "",
+        })
+    return rows
+
+
+def _dashboard_plugins_payload(config: Config) -> list[dict[str, Any]]:
+    public = []
+    for row in _dashboard_plugin_records(config):
+        public.append({key: value for key, value in row.items() if not key.startswith("_")})
+    return public
+
+
+def _dashboard_plugin_record(config: Config, name: str) -> dict[str, Any] | None:
+    safe = _safe_resource_name(name, "plugin")
+    return next((row for row in _dashboard_plugin_records(config) if row.get("name") == safe), None)
+
+
+def _dashboard_plugin_static(config: Config, name: str, file_path: str) -> Response:
+    record = _dashboard_plugin_record(config, name)
+    if not record:
+        raise HTTPException(status_code=404, detail="dashboard plugin not found")
+    rel = _safe_plugin_relpath(file_path)
+    if not rel:
+        raise HTTPException(status_code=404, detail="asset not found")
+    target = (Path(record["_dist"]) / rel).resolve()
+    dist_root = Path(record["_dist"]).resolve()
+    if not _contained(dist_root, target) or not target.is_file():
+        raise HTTPException(status_code=404, detail="asset not found")
+    if target.suffix.lower() in _DASHBOARD_STATIC_DENY_SUFFIXES:
+        raise HTTPException(status_code=404, detail="asset not found")
+    data = target.read_bytes()
+    media_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+    return Response(data, media_type=media_type)
+
+
+def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
+    def dashboard_plugin_auth(request: Request) -> None:
+        _require_request(request, config)
+
+    for record in _dashboard_plugin_records(config):
+        api_path = record.get("_api")
+        if not api_path:
+            continue
+        path = Path(api_path)
+        module_name = "aegis_dashboard_plugin_" + hashlib.sha256(str(path).encode()).hexdigest()[:16]
+        try:
+            spec = importlib.util.spec_from_file_location(module_name, path)
+            if spec is None or spec.loader is None:
+                continue
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            router = getattr(module, "router", None)
+            get_router = getattr(module, "get_router", None)
+            if router is None and callable(get_router):
+                router = get_router()
+            if router is None:
+                continue
+            app.include_router(
+                router,
+                prefix=f"/api/plugins/{record['name']}",
+                dependencies=[Depends(dashboard_plugin_auth)],
+            )
+        except Exception:  # noqa: BLE001
+            continue
 
 
 def _dashboard_preferences(config: Config) -> dict:
@@ -2597,6 +2735,19 @@ def create_app(config: Config) -> FastAPI:
         _require_request(request, config)
         return JSONResponse(_plugins_payload(config))
 
+    @app.get("/api/dashboard/plugins")
+    async def api_dashboard_plugins(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_dashboard_plugins_payload(config))
+
+    @app.get("/dashboard-plugins/{plugin_name}/{file_path:path}")
+    async def dashboard_plugin_asset(plugin_name: str, file_path: str) -> Response:
+        return _dashboard_plugin_static(config, plugin_name, file_path)
+
+    @app.get("/dashboard-plugins/{bad_path:path}")
+    async def dashboard_plugin_bad_path(bad_path: str) -> JSONResponse:  # noqa: ARG001
+        return JSONResponse({"ok": False, "error": "dashboard plugin asset not found"}, status_code=404)
+
     @app.post("/api/plugins/reload")
     async def api_plugins_reload(request: Request) -> JSONResponse:
         _require_request(request, config)
@@ -3264,6 +3415,8 @@ def create_app(config: Config) -> FastAPI:
         if action in {"start", "stop", "restart"}:
             return JSONResponse(_service_result(control_gateway_service(action)))
         return JSONResponse({"ok": False, "error": f"unknown gateway service action: {action}"}, status_code=400)
+
+    _mount_dashboard_plugin_api_routes(app, config)
 
     @app.get("/api/{path:path}")
     async def api_get(path: str, request: Request) -> JSONResponse:

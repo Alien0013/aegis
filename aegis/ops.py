@@ -61,11 +61,13 @@ def cmd_security_audit(args, config) -> int:
 
 def cmd_debug(args, config) -> int:
     """`aegis debug share` — bundle redacted logs + config + doctor output into a zip."""
+    from .redact import redact_secrets
+
     out = cfg.sub("debug-report.zip")
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         # redacted config
         raw = read_text(cfg.config_path())
-        z.writestr("config.yaml", raw)
+        z.writestr("config.yaml", redact_secrets(raw))
         # .env keys only (values redacted)
         env = read_text(cfg.env_path())
         redacted = "\n".join(ln.split("=")[0] + "=<redacted>" for ln in env.splitlines()
@@ -76,7 +78,7 @@ def cmd_debug(args, config) -> int:
         if logs.exists():
             for f in logs.glob("*"):
                 if f.is_file():
-                    z.writestr(f"logs/{f.name}", read_text(f)[-50_000:])
+                    z.writestr(f"logs/{f.name}", redact_secrets(read_text(f)[-50_000:]))
         # doctor summary
         import io
         import contextlib
