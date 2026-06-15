@@ -29,6 +29,7 @@ export const NAV: NavGroup[] = [
       { path: "/skills", label: "Skills", icon: "skills" },
       { path: "/memory", label: "Memory", icon: "memory" },
       { path: "/cron", label: "Schedules", icon: "cron" },
+      { path: "/kanban", label: "Kanban", icon: "kanban" },
     ],
   },
   {

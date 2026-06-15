@@ -1191,7 +1191,7 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
     if path == "/api/cockpit":
         return dash._dashboard_cockpit(config)
     if path == "/api/kanban":
-        return dash._dashboard_kanban()
+        return dash._dashboard_kanban(include_archived=bool(query.get("archived")))
     if path == "/api/cron":
         return dash._dashboard_cron_jobs()
     if path == "/api/config":
@@ -1331,18 +1331,26 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
 
 def _api_post(path: str, body: dict, config: Config, chat_runner: Any) -> dict:
     if path == "/api/kanban":
-        from .kanban import KanbanStore
+        from .kanban import STATUSES, KanbanStore
 
         ks = KanbanStore()
         act = body.get("action")
         if act == "create":
-            t = ks.create((body.get("title") or "untitled").strip(), body.get("body", ""))
-            return {"id": t.id}
-        if act == "move" and body.get("id") and body.get("status") in (
-            "ready", "in_progress", "done", "blocked"
-        ):
+            t = ks.create(
+                (body.get("title") or "untitled").strip(), body.get("body", ""),
+                priority=int(body.get("priority") or 0),
+                assignee=str(body.get("assignee") or ""),
+                tenant=str(body.get("tenant") or ""),
+            )
+            status = str(body.get("status") or "").strip()
+            if status in STATUSES and status != t.status:
+                ks._set_status(t.id, status)
+            return {"id": t.id, "status": status if status in STATUSES else t.status}
+        if act == "move" and body.get("id") and body.get("status") in STATUSES:
             ks._set_status(body["id"], body["status"])
             return {"ok": True}
+        if act == "archive" and body.get("id"):
+            return {"ok": ks.archive(str(body["id"]))}
         if act == "decompose" and body.get("goal"):
             from .kanban_auto import decompose
 

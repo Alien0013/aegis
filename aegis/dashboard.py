@@ -139,17 +139,41 @@ def _profiles(config: Config) -> dict:
     return {"active": config.get("agent.personality") or "", "available": names}
 
 
-def _dashboard_kanban() -> dict:
-    from .kanban import KanbanStore
+def _kanban_card(t, ks) -> dict:
+    return {"id": t.id, "title": t.title, "body": t.body,
+            "assignee": t.assignee, "priority": t.priority,
+            "run_id": t.run_id, "session_id": t.session_id,
+            "trace_id": t.trace_id, "tenant": t.tenant,
+            "parents": ks.parents(t.id), "status": t.status,
+            "created_at": getattr(t, "created_at", ""),
+            "updated_at": getattr(t, "updated_at", "")}
+
+
+def _dashboard_kanban(include_archived: bool = False) -> dict:
+    """Full board payload. Each status maps to its cards (flat, e.g. ``["ready"]``);
+    ``order`` lists the columns in board order and ``assignees`` / ``tenants`` /
+    ``stats`` drive the dashboard's filters and lane grouping."""
+    from .kanban import STATUSES, KanbanStore
 
     ks = KanbanStore()
-    return {s: [{"id": t.id, "title": t.title, "body": t.body,
-                 "assignee": t.assignee, "priority": t.priority,
-                 "run_id": t.run_id, "session_id": t.session_id,
-                 "trace_id": t.trace_id, "tenant": t.tenant,
-                 "parents": ks.parents(t.id), "status": t.status}
-                for t in ks.list(status=s)]
-            for s in ("todo", "ready", "in_progress", "review", "done", "blocked")}
+    statuses = STATUSES if include_archived else tuple(s for s in STATUSES if s != "archived")
+    out: dict = {}
+    assignees: set[str] = set()
+    tenants: set[str] = set()
+    for s in statuses:
+        cards = []
+        for t in ks.list(status=s):
+            cards.append(_kanban_card(t, ks))
+            if t.assignee:
+                assignees.add(t.assignee)
+            if t.tenant:
+                tenants.add(t.tenant)
+        out[s] = cards
+    out["order"] = list(statuses)
+    out["assignees"] = sorted(assignees)
+    out["tenants"] = sorted(tenants)
+    out["stats"] = ks.stats()
+    return out
 
 
 def _dashboard_tools(config: Config) -> dict:

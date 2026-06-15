@@ -1,1 +1,0 @@
-import{a as o,b as r,j as n}from"./index-D8Ovss7z.js";import{G as i}from"./GraphicalChat-Co3Zoq32.js";function m(){const[t]=o(),e=r(),s=t.get("id")||"";return n.jsx(i,{sessionId:s,onSession:a=>{a&&a!==s&&e(`/chat?id=${encodeURIComponent(a)}`,{replace:!0})}})}export{m as ChatGraphical};

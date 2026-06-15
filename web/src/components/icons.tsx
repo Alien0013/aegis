@@ -44,6 +44,9 @@ const PATHS: Record<string, string> = {
   winMin: "M5 12h14",
   winMax: "M5 5h14v14H5z",
   winRestore: "M8 8V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2M4 10a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z",
+  kanban: "M4 4h4v16H4zM10 4h4v10h-4zM16 4h4v13h-4z",
+  play: "M6 4l14 8-14 8V4z",
+  download: "M12 3v12m0 0l-4-4m4 4l4-4M5 21h14",
 };
 
 export type IconName = keyof typeof PATHS;

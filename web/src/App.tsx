@@ -19,6 +19,7 @@ import { Tools } from "./pages/Tools";
 import { Skills } from "./pages/Skills";
 import { Config } from "./pages/Config";
 import { Cron } from "./pages/Cron";
+import { Kanban } from "./pages/Kanban";
 import { Mcp } from "./pages/Mcp";
 import { Channels } from "./pages/Channels";
 import { Webhooks } from "./pages/Webhooks";
@@ -87,6 +88,7 @@ function Routed({ full }: { full?: boolean }) {
             <Route path="/skills" element={<Skills />} />
             <Route path="/config" element={<Config />} />
             <Route path="/cron" element={<Cron />} />
+            <Route path="/kanban" element={<Kanban />} />
             <Route path="/mcp" element={<Mcp />} />
             <Route path="/channels" element={<Channels />} />
             <Route path="/webhooks" element={<Webhooks />} />
