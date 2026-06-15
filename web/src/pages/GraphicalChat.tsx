@@ -1,0 +1,244 @@
+// GraphicalChat — a real graphical chat surface (message bubbles, streaming markdown,
+// inline tool-call cards), backed by the agent over POST /api/chat/stream (SSE).
+//
+// This is the desktop app's primary surface — the graphical equivalent of the terminal
+// REPL: the user's words render as bubbles, the agent's reply streams as markdown, and
+// each tool call shows as a live card (running → ok/error) paired by event id.
+
+import { useEffect, useRef, useState } from "react";
+import { postStream } from "../lib/api";
+import { Icon } from "../components/icons";
+import { Markdown } from "../components/Markdown";
+
+interface ToolEvent {
+  id: string;
+  name: string;
+  target: string;
+  status: string; // running | ok | error
+  kind?: string; // tool | subagent
+}
+
+interface Turn {
+  role: "user" | "assistant";
+  text: string;
+  reasoning?: string;
+  tools?: ToolEvent[];
+}
+
+export function GraphicalChat({
+  sessionId,
+  onSession,
+}: {
+  sessionId?: string;
+  onSession?: (id: string) => void;
+}) {
+  const [turns, setTurns] = useState<Turn[]>([]);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [sid, setSid] = useState(sessionId || "");
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const taRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // Load a session's transcript when one is opened from the rail.
+  useEffect(() => {
+    let cancelled = false;
+    setSid(sessionId || "");
+    setTurns([]);
+    if (!sessionId) return;
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+      headers: { "X-Aegis-Token": localStorage.getItem("aegis_token") || "" },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { messages?: { role: string; content: string }[] } | null) => {
+        if (cancelled || !data?.messages) return;
+        setTurns(
+          data.messages
+            .filter((t) => (t.role === "user" || t.role === "assistant") && (t.content || "").trim())
+            .map((t) => ({ role: t.role as "user" | "assistant", text: t.content || "" })),
+        );
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+  }, [turns, busy]);
+
+  const send = async () => {
+    const text = input.trim();
+    if (!text || busy) return;
+    setInput("");
+    setBusy(true);
+    setTurns((t) => [...t, { role: "user", text }, { role: "assistant", text: "", tools: [] }]);
+
+    const patchLast = (fn: (turn: Turn) => Turn) =>
+      setTurns((t) => {
+        const copy = t.slice();
+        copy[copy.length - 1] = fn(copy[copy.length - 1]);
+        return copy;
+      });
+
+    try {
+      await postStream("chat/stream", { message: text, session_id: sid || undefined }, (data) => {
+        const type = String(data.type || "");
+        if (type === "start") {
+          const s = String(data.session_id || "");
+          if (s) { setSid(s); onSession?.(s); }
+          return;
+        }
+        if (type === "final") {
+          const reply = String(data.reply || "");
+          const s = String(data.session_id || "");
+          patchLast((turn) => ({ ...turn, text: reply || turn.text }));
+          if (s) { setSid(s); onSession?.(s); }
+          return;
+        }
+        if (type === "error") {
+          patchLast((turn) => ({ ...turn, text: String(data.reply || "error") }));
+          return;
+        }
+        if (type !== "event") return;
+        const ev = (data.event || {}) as Record<string, unknown>;
+        const et = String(ev.type || "");
+        if (et === "assistant_delta" || et === "assistant_message") {
+          const delta = String(ev.text || "");
+          patchLast((turn) => ({ ...turn, text: turn.text + delta }));
+        } else if (et === "reasoning_delta") {
+          const delta = String(ev.text || "");
+          patchLast((turn) => ({ ...turn, reasoning: (turn.reasoning || "") + delta }));
+        } else if (et === "tool_start") {
+          patchLast((turn) => ({
+            ...turn,
+            tools: [
+              ...(turn.tools || []),
+              { id: String(ev.id || ev.name), name: String(ev.name || "tool"), target: String(ev.target || ""), status: "running", kind: "tool" },
+            ],
+          }));
+        } else if (et === "tool_result") {
+          patchLast((turn) => ({
+            ...turn,
+            tools: (turn.tools || []).map((x) =>
+              x.id === String(ev.id || ev.name)
+                ? { ...x, status: String(ev.status || "ok"), target: String(ev.target || x.target) }
+                : x,
+            ),
+          }));
+        } else if (et === "subagent_start") {
+          patchLast((turn) => ({
+            ...turn,
+            tools: [...(turn.tools || []), { id: String(ev.id || ev.task), name: `subagent: ${String(ev.agent_type || "")}`, target: String(ev.task || ""), status: "running", kind: "subagent" }],
+          }));
+        } else if (et === "subagent_done") {
+          patchLast((turn) => ({
+            ...turn,
+            tools: (turn.tools || []).map((x) => (x.id === String(ev.id || ev.task) ? { ...x, status: String(ev.status || "ok") } : x)),
+          }));
+        }
+      });
+    } catch (e) {
+      patchLast((turn) => ({ ...turn, text: turn.text || `connection error: ${String(e)}` }));
+    } finally {
+      setBusy(false);
+      taRef.current?.focus();
+    }
+  };
+
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+  };
+
+  return (
+    <div className="flex h-full flex-col bg-bg">
+      <div ref={scrollRef} className="scroll-thin flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-3xl px-4 py-6">
+          {turns.length === 0 && (
+            <div className="mt-24 text-center text-dim">
+              <div className="mb-3 flex justify-center opacity-80"><Icon name="chat" size={28} /></div>
+              <div className="text-lg font-medium text-text">Start a conversation</div>
+              <div className="mt-1 text-sm text-faint">Ask anything — the agent can read files, run commands, search, and more.</div>
+            </div>
+          )}
+          {turns.map((t, i) => (
+            <Bubble key={i} turn={t} streaming={busy && i === turns.length - 1 && t.role === "assistant"} />
+          ))}
+        </div>
+      </div>
+
+      <div className="border-t border-border bg-surface/40 px-4 py-3 backdrop-blur">
+        <div className="mx-auto flex w-full max-w-3xl items-end gap-2">
+          <textarea
+            ref={taRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={onKey}
+            rows={1}
+            placeholder="Message AEGIS…  (Enter to send, Shift+Enter for newline)"
+            className="scroll-thin max-h-40 min-h-[44px] flex-1 resize-none rounded-[var(--radius)] border border-border bg-surface px-3 py-2.5 text-sm text-text outline-none placeholder:text-faint focus:border-border-2"
+          />
+          <button
+            onClick={send}
+            disabled={busy || !input.trim()}
+            className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-[var(--radius)] bg-primary text-primary-fg transition enabled:hover:opacity-90 disabled:opacity-40"
+            title="Send"
+          >
+            <Icon name={busy ? "refresh" : "send"} size={18} className={busy ? "animate-spin" : ""} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ToolCard({ ev }: { ev: ToolEvent }) {
+  const color =
+    ev.status === "error" ? "text-danger" : ev.status === "running" ? "text-warning" : "text-success";
+  const dot =
+    ev.status === "error" ? "bg-danger" : ev.status === "running" ? "bg-warning animate-pulse" : "bg-success";
+  return (
+    <div className="flex items-start gap-2 rounded-[var(--radius)] border border-border bg-surface-2/60 px-2.5 py-1.5 text-xs">
+      <span className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
+      <div className="min-w-0 flex-1">
+        <span className={`font-mono font-medium ${color}`}>{ev.name}</span>
+        {ev.target && <span className="ml-2 truncate text-faint">{ev.target}</span>}
+      </div>
+    </div>
+  );
+}
+
+function Bubble({ turn, streaming }: { turn: Turn; streaming: boolean }) {
+  if (turn.role === "user") {
+    return (
+      <div className="mb-5 flex justify-end">
+        <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-primary px-3.5 py-2 text-sm text-primary-fg">
+          {turn.text}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="mb-6">
+      {turn.reasoning && (
+        <details className="mb-2 text-xs text-faint">
+          <summary className="cursor-pointer select-none hover:text-dim">Reasoning</summary>
+          <div className="mt-1 whitespace-pre-wrap border-l-2 border-border pl-3 text-dim">{turn.reasoning}</div>
+        </details>
+      )}
+      {(turn.tools?.length ?? 0) > 0 && (
+        <div className="mb-2 space-y-1">
+          {turn.tools!.map((ev, i) => <ToolCard key={`${ev.id}-${i}`} ev={ev} />)}
+        </div>
+      )}
+      {turn.text ? (
+        <Markdown text={turn.text} />
+      ) : streaming ? (
+        <span className="inline-block h-4 w-2 animate-pulse rounded-sm bg-dim align-middle" />
+      ) : null}
+    </div>
+  );
+}

@@ -10,7 +10,7 @@ import { Icon } from "../components/icons";
 import { ThemeSwitcher } from "../components/ThemeSwitcher";
 import { Toaster } from "../components/ui";
 import { ago, compact } from "../lib/format";
-import { Chat } from "./Chat";
+import { GraphicalChat } from "./GraphicalChat";
 
 interface SessionRow {
   id: string;
@@ -122,7 +122,13 @@ export function DesktopShell() {
       </aside>
 
       <main className="min-w-0 flex-1">
-        <Chat />
+        <GraphicalChat
+          sessionId={activeId}
+          onSession={(id) => {
+            if (id && id !== activeId) nav(`/app?id=${encodeURIComponent(id)}`, { replace: true });
+            reload();
+          }}
+        />
       </main>
       <Toaster />
     </div>
