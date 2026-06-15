@@ -5,7 +5,7 @@ import { cn } from "../lib/cn";
 import { useTheme } from "../themes/ThemeProvider";
 import { Icon } from "./icons";
 
-export function ThemeSwitcher() {
+export function ThemeSwitcher({ up }: { up?: boolean }) {
   const { theme, themes, setTheme } = useTheme();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -37,7 +37,10 @@ export function ThemeSwitcher() {
       </button>
 
       {open && (
-        <div className="animate-fade-in absolute right-0 z-50 mt-1.5 w-60 rounded-[calc(var(--radius)+2px)] border border-border bg-surface p-1.5 shadow-2xl">
+        <div className={cn(
+          "animate-fade-in absolute right-0 z-50 w-60 rounded-[calc(var(--radius)+2px)] border border-border bg-surface p-1.5 shadow-2xl",
+          up ? "bottom-full mb-1.5" : "mt-1.5",
+        )}>
           {themes.map((t) => (
             <button
               key={t.name}

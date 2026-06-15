@@ -17,6 +17,7 @@ export const NAV: NavGroup[] = [
     items: [
       { path: "/", label: "Overview", icon: "overview" },
       { path: "/chat", label: "Chat", icon: "chat" },
+      { path: "/terminal", label: "Terminal", icon: "terminal" },
       { path: "/sessions", label: "Sessions", icon: "sessions" },
     ],
   },

@@ -100,16 +100,14 @@ export function DesktopShell() {
               <span className="truncate">{model}</span>
             </div>
           )}
-          <div className="flex items-center justify-between">
-            <ThemeSwitcher />
-            <button
-              onClick={() => nav("/")}
-              className="flex items-center gap-1.5 text-xs text-dim transition hover:text-primary"
-              title="Open the full control panel"
-            >
-              <Icon name="system" size={14} /> Control Panel
-            </button>
-          </div>
+          <ThemeSwitcher up />
+          <button
+            onClick={() => nav("/")}
+            className="flex w-full items-center gap-2 rounded-[var(--radius)] border border-border px-2.5 py-1.5 text-xs text-dim transition hover:text-primary"
+            title="Open the full control panel"
+          >
+            <Icon name="system" size={14} /> Control Panel
+          </button>
         </div>
       </aside>
 
