@@ -1549,6 +1549,14 @@ def build_parser() -> argparse.ArgumentParser:
     bg2.add_argument("action", nargs="?", choices=["status"], default="status")
     bg2.set_defaults(func=_cmd_budget)
 
+    from ..ab import cmd_ab as _cmd_ab
+    abp = sub.add_parser("ab", help="replay a session on a different model and diff the result")
+    abp.add_argument("session_id")
+    abp.add_argument("--model", help="model for variant B")
+    abp.add_argument("--provider", help="provider for variant B")
+    abp.add_argument("--json", action="store_true")
+    abp.set_defaults(func=_cmd_ab)
+
     sv = sub.add_parser("serve", help="run an OpenAI-compatible API server")
     sv.add_argument("--host")
     sv.add_argument("--port", type=int)
