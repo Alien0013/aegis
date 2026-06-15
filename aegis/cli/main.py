@@ -1557,6 +1557,11 @@ def build_parser() -> argparse.ArgumentParser:
     abp.add_argument("--json", action="store_true")
     abp.set_defaults(func=_cmd_ab)
 
+    from ..ambient import cmd_watch as _cmd_watch
+    wp = sub.add_parser("watch", help="ambient mode: run the project's tests on every save")
+    wp.add_argument("path", nargs="?", help="directory to watch (default: .)")
+    wp.set_defaults(func=_cmd_watch)
+
     sv = sub.add_parser("serve", help="run an OpenAI-compatible API server")
     sv.add_argument("--host")
     sv.add_argument("--port", type=int)

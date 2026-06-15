@@ -417,6 +417,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "spec": {
         "dir": ".aegis/specs",        # workspace-relative home for /spec requirements→design→tasks
     },
+    "ambient": {
+        "test_command": "",           # `aegis watch` test cmd ("" = auto-detect pytest/npm/cargo/go)
+        "interval": 1.5,              # seconds between save polls
+    },
     "plugins": {
         "manifests": True,
         "enabled": [],
