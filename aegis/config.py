@@ -398,6 +398,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "path": "evals",
         "default_grader": "exact_or_contains",
     },
+    "bench": {
+        "path": "benchmarks",         # dir of <task>/task.yaml end-to-end benchmark tasks
+    },
     "plugins": {
         "manifests": True,
         "enabled": [],

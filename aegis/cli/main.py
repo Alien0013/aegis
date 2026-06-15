@@ -1512,6 +1512,14 @@ def build_parser() -> argparse.ArgumentParser:
     ev.add_argument("--json", action="store_true")
     ev.set_defaults(func=cmd_eval)
 
+    from ..bench import cmd_bench as _cmd_bench
+    bn = sub.add_parser("bench", help="run end-to-end task benchmarks (give a task, score pass/fail)")
+    bn.add_argument("action", nargs="?", choices=["run", "list", "score"], default="run")
+    bn.add_argument("--dir", help="benchmark directory (default: ./benchmarks)")
+    bn.add_argument("--task", help="run only this task by name")
+    bn.add_argument("--json", action="store_true")
+    bn.set_defaults(func=_cmd_bench)
+
     sv = sub.add_parser("serve", help="run an OpenAI-compatible API server")
     sv.add_argument("--host")
     sv.add_argument("--port", type=int)

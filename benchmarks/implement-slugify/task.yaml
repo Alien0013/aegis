@@ -1,0 +1,18 @@
+name: implement-slugify
+prompt: |
+  Implement the slugify() function in slug.py so that `python check.py` prints OK
+  and exits 0. It should lowercase the text, replace runs of non-alphanumeric
+  characters with single hyphens, and strip leading/trailing hyphens.
+files:
+  slug.py: |
+    def slugify(text):
+        raise NotImplementedError
+  check.py: |
+    from slug import slugify
+    assert slugify("Hello, World!") == "hello-world", slugify("Hello, World!")
+    assert slugify("  Spaces  and---dashes  ") == "spaces-and-dashes"
+    assert slugify("Already-Slug") == "already-slug"
+    print("OK")
+verify:
+  - python check.py
+timeout: 300

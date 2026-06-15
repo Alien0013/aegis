@@ -1,0 +1,16 @@
+name: fix-add
+prompt: |
+  The add() function in calc.py has a bug — it subtracts instead of adds.
+  Fix it so that running `python check.py` prints OK and exits 0.
+files:
+  calc.py: |
+    def add(a, b):
+        return a - b
+  check.py: |
+    from calc import add
+    assert add(2, 3) == 5, f"add(2,3) returned {add(2, 3)}"
+    assert add(10, 0) == 10
+    print("OK")
+verify:
+  - python check.py
+timeout: 300
