@@ -31,6 +31,9 @@ _PARALLEL_SAFE_TOOLS = frozenset({
     "vision_analyze", "web_extract", "web_fetch", "web_search",
 })
 _PATH_SCOPED_TOOLS = frozenset({"apply_patch", "edit_file", "list_dir", "read_file", "write_file"})
+# Max times the ultracode loop is pushed to continue past a premature "done" while
+# todo items remain open — bounded so it can never loop forever.
+_ULTRACODE_MAX_CONTINUES = 12
 _DESTRUCTIVE_COMMAND_RE = re.compile(
     r"""(?:^|\s|&&|\|\||;|`)(?:rm\s|rmdir\s|cp\s|install\s|mv\s|sed\s+-i|
         truncate\s|dd\s|shred\s|git\s+(?:reset|clean|checkout)\s)""",
@@ -1287,6 +1290,7 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
     executor = ToolExecutor(agent.registry, agent.permissions, agent.tool_context, emit, guard)
     continuations = 0
     empty_nudges = 0
+    ultracode_continues = 0
     from ..util import estimate_tokens
     schema_tokens = estimate_tokens(json.dumps(schemas))   # tools count toward the window
 
@@ -1640,6 +1644,26 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                     "You returned an empty reply after using tools. Continue: take the next "
                     "action, or give the final answer."))
                 continue
+            # ULTRACODE continuation: the rigorous autonomous loop must not stop while the
+            # plan still has open todo items. If the model tries to finish with incomplete
+            # todos, push it to keep going (bounded, so it can't loop forever).
+            if getattr(agent, "_ultracode_active", False):
+                incomplete = [t for t in (session.todos or [])
+                              if isinstance(t, dict) and t.get("status") != "completed"]
+                if incomplete and ultracode_continues < _ULTRACODE_MAX_CONTINUES:
+                    ultracode_continues += 1
+                    emit({"type": "ultracode_continue", "n": ultracode_continues,
+                          "remaining": len(incomplete)})
+                    todo_lines = "\n".join(f"- {t.get('content', '')}" for t in incomplete[:10])
+                    session.messages.append(Message.user(
+                        "ULTRACODE — you still have incomplete todo items:\n" + todo_lines +
+                        "\nDo not stop. Take the next item NOW on the real workspace (edit the "
+                        "real files, run the real commands), then verify with real tool output. "
+                        "Mark items completed via todo_write only once proven. Continue until "
+                        "every item is done and the success criterion is met."))
+                    continue
+                # Done (or hit the cap): let it finalize and leave ultracode mode.
+                agent._ultracode_active = False
             # No manual "save this as a skill" nudge: the forked background review
             # (agent/review.py) already creates skills automatically (learn.auto_apply_skills),
             # so prompting the user to do it by hand would be redundant and contradictory.

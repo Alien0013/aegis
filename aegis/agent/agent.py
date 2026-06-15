@@ -675,7 +675,10 @@ class Agent:
             self.budget.usage.cache_write,
         )
         tools_before = self.tools_used
-        result = run_conversation(self, on_event)
+        try:
+            result = run_conversation(self, on_event)
+        finally:
+            self._ultracode_active = False   # ultracode mode is scoped to a single turn
         tools_this_turn = self.tools_used - tools_before
         self._update_runtime_meta(tools_this_turn)
 

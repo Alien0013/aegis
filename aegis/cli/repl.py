@@ -457,6 +457,9 @@ class Renderer:
                 _out(f"    📦 {summary}{secs}", style=TERM_AMBER)
             else:
                 _out(f"    ✓ {summary}{secs}", style=TERM_GREEN)
+        elif t == "ultracode_continue":
+            _out(f"  ↻ ultracode: {e.get('remaining', '?')} todo(s) left — continuing "
+                 f"(push {e.get('n', '')}/{12})", style=TERM_CYAN)
         elif t == "compacting":
             _out("  ⋯ context filling up — compacting older turns to free room …", style="yellow")
         elif t == "compacted":
@@ -841,6 +844,14 @@ def handle_ultracode_command(text: str, agent: Any) -> str | None:
         _out("usage: /ultracode <task> — run the rigorous plan → implement → verify loop", style="yellow")
         return None
     _out("🚀 ultracode — autonomous loop: plan → test → implement → verify.", style="cyan")
+    # The rigorous autonomous loop needs room to actually finish: raise the step budget
+    # for this run, and mark the turn so the loop won't stop while todo items remain open.
+    try:
+        uc_budget = int(agent.config.get("agent.ultracode_max_iterations", 250) or 250)
+        agent.budget.max_iterations = max(int(agent.budget.max_iterations), uc_budget)
+        agent._ultracode_active = True
+    except Exception:  # noqa: BLE001
+        pass
     body = _ultracode_skill_body(agent)
     skill_block = f"<system-reminder>ULTRACODE SKILL — follow this loop exactly:\n{body}\n</system-reminder>\n\n" if body else ""
     return (
