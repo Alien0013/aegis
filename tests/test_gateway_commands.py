@@ -413,6 +413,62 @@ def test_gateway_reply_context_prefixes_prompt(tmp_path, monkeypatch):
     assert "What's the best time to go?" in captured["prompt"]
 
 
+def test_gateway_memory_notification_modes(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from aegis.types import Message
+    import aegis.gateway.runner as rmod
+
+    r = _runner(tmp_path, monkeypatch)
+
+    class FakeAgent:
+        def __init__(self, session):
+            self.session = session
+            self.budget = SimpleNamespace(api_call_count=0)
+
+    monkeypatch.setattr(rmod.Agent, "create",
+                        staticmethod(lambda *args, **kwargs: FakeAgent(kwargs["session"])))
+
+    def fake_run_prompt(_prompt, **kwargs):
+        kwargs["on_event"]({
+            "type": "review_done",
+            "kind": "memory",
+            "actions": [
+                "remembered in MEMORY.md (1/10)",
+                "removed 1 entry from USER.md",
+            ],
+            "action_details": [
+                {
+                    "tool": "memory",
+                    "action": "add",
+                    "target": "memory",
+                    "content": "Repo lives at /workspace/aegis.",
+                    "summary": "remembered in MEMORY.md",
+                },
+                {
+                    "tool": "memory",
+                    "action": "remove",
+                    "target": "user",
+                    "old_text": "old preference",
+                    "summary": "removed 1 entry from USER.md",
+                },
+            ],
+        })
+        return SimpleNamespace(message=Message.assistant("ok"), session=kwargs["session"])
+
+    monkeypatch.setattr(r._surface_runner, "run_prompt", fake_run_prompt)
+
+    assert r.dispatch(_ev("default")) == "ok\n\n— 💾 Memory updated · 💾 User profile updated"
+
+    r.config.data.setdefault("display", {})["memory_notifications"] = "verbose"
+    verbose = r.dispatch(_ev("verbose"))
+    assert "💾 Memory ➕ Repo lives at /workspace/aegis." in verbose
+    assert "💾 User profile ➖ old preference" in verbose
+
+    r.config.data.setdefault("display", {})["memory_notifications"] = "off"
+    assert r.dispatch(_ev("off")) == "ok"
+
+
 def test_reply_pointer_truncates_and_escapes_quotes():
     from aegis.gateway.base import MessageEvent
     from aegis.gateway.runner import _with_reply_pointer

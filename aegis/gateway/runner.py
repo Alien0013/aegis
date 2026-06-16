@@ -28,6 +28,73 @@ def _with_reply_pointer(ev: MessageEvent, text: str, *, limit: int = 500) -> str
     return f'[Replying to: "{quoted}"]\n{text}'
 
 
+def _memory_notification_mode(value: Any) -> str:
+    if isinstance(value, bool):
+        return "on" if value else "off"
+    raw = str(value or "").strip().lower()
+    return raw if raw in {"off", "on", "verbose"} else "on"
+
+
+def _memory_notification_preview(action: Any) -> str:
+    if isinstance(action, dict):
+        verb = str(action.get("action") or "").strip().lower()
+        target = str(action.get("target") or "memory").strip().lower()
+        label = "User profile" if target == "user" else "Memory"
+        if verb == "remove":
+            marker = "➖"
+            text = action.get("old_text") or action.get("summary") or "removed"
+            limit = 60
+        elif verb == "replace":
+            marker = "✏"
+            text = action.get("content") or action.get("summary") or "updated"
+            limit = 120
+        elif verb == "add":
+            marker = "➕"
+            text = action.get("content") or action.get("summary") or "updated"
+            limit = 120
+        else:
+            marker = "•"
+            text = action.get("summary") or action.get("result") or "updated"
+            limit = 120
+        text = " ".join(str(text or "").split())
+        if len(text) > limit:
+            text = text[: limit - 1].rstrip() + "…"
+        return f"💾 {label} {marker} {text}"
+
+    text = " ".join(str(action or "").split())
+    if not text:
+        text = "updated"
+    lower = text.lower()
+    marker = "•"
+    limit = 120
+    if "removed" in lower or lower.startswith("remove"):
+        marker = "➖"
+        limit = 60
+    elif "replace" in lower or "updated" in lower or "consolidated" in lower:
+        marker = "✏"
+    elif "remembered" in lower or lower.startswith("add"):
+        marker = "➕"
+    if len(text) > limit:
+        text = text[: limit - 1].rstrip() + "…"
+    return f"💾 Memory {marker} {text}"
+
+
+def _memory_notification_summaries(actions: list[Any]) -> list[str]:
+    targets = {
+        str(action.get("target") or "memory").strip().lower()
+        for action in actions
+        if isinstance(action, dict)
+    }
+    if not targets:
+        return ["💾 Memory updated"] if actions else []
+    out: list[str] = []
+    if "memory" in targets:
+        out.append("💾 Memory updated")
+    if "user" in targets:
+        out.append("💾 User profile updated")
+    return out or ["💾 Memory updated"]
+
+
 _GATEWAY_GENERATION_META = "_gateway_generation"
 _RESUME_PENDING_META = "resume_pending"
 _RESUME_REASON_META = "resume_reason"
@@ -865,8 +932,20 @@ class GatewayRunner:
                     elif t == "tool_result" and not ev_.get("is_error") and ev_.get("name") == "skill":
                         learned.append(f"📝 {ev_.get('summary', 'skill')}")
                     elif t == "review_done":
-                        for a in ev_.get("actions") or []:
-                            learned.append(f"🧠 {a}")
+                        details = ev_.get("action_details") or []
+                        actions = details or ev_.get("actions") or []
+                        if ev_.get("kind") == "memory":
+                            mode = _memory_notification_mode(
+                                self.config.get("display.memory_notifications", "on")
+                            )
+                            if mode == "verbose":
+                                for action in actions:
+                                    learned.append(_memory_notification_preview(action))
+                            elif mode == "on":
+                                learned.extend(_memory_notification_summaries(actions))
+                        else:
+                            for a in actions:
+                                learned.append(f"🧠 {a}")
 
                 run = self._surface_runner.run_prompt(
                     text,

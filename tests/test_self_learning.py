@@ -198,6 +198,46 @@ def test_forked_review_uses_local_memory_without_external_provider_side_effects(
     assert external.prefetch_sessions[-1] == parent_session.id
 
 
+def test_memory_review_done_includes_action_details(tmp_path):
+    from aegis.agent.agent import Agent
+    from aegis.agent import review
+    from aegis.config import Config
+    from aegis.memory import MemoryManager
+    from aegis.session import Session
+    from aegis.types import LLMResponse, Message, ToolCall
+
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = True
+    parent_session = Session.create("parent")
+    parent_session.messages = [Message.user("remember my preference"), Message.assistant("noted")]
+    provider = FakeProvider([
+        LLMResponse(text="", tool_calls=[ToolCall("m1", "memory", {
+            "action": "add",
+            "target": "user",
+            "content": "Prefers concise progress updates.",
+        })]),
+        LLMResponse(text="saved"),
+    ])
+    agent = Agent(
+        config=cfg,
+        provider=provider,
+        session=parent_session,
+        memory=MemoryManager(cfg),
+        cwd=tmp_path,
+    )
+    events = []
+
+    actions = review.run_review(agent, "memory", on_event=events.append)
+
+    assert actions
+    done = next(event for event in events if event["type"] == "review_done")
+    detail = done["action_details"][0]
+    assert detail["action"] == "add"
+    assert detail["target"] == "user"
+    assert detail["content"] == "Prefers concise progress updates."
+    assert detail["summary"]
+
+
 def test_review_prompts_include_adapter_style_learning_rules():
     from aegis.agent import review
 

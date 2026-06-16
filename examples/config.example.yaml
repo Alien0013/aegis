@@ -8,6 +8,11 @@ agent:
   reasoning_effort: medium       # off | minimal | low | medium | high | xhigh
   stream: true
 
+display:
+  reasoning: summary             # off | summary | live
+  memory_notifications: on       # off | on | verbose
+  tool_progress_grouping: accumulate # accumulate | separate
+
 tools:
   exec_mode: smart               # deny | allowlist | ask | smart | auto | full
   terminal_backend: local        # local | docker | ssh

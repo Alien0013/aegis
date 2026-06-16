@@ -50,6 +50,17 @@ aegis learn apply <id>    # promote to MEMORY.md / a versioned SKILL.md
 Set `learn.auto: true` to review automatically on exit. The agent also tracks skill
 **usage**, can `skill improve` (append learned notes), and `aegis curator` audits/prunes.
 
+Gateway chats can tune background memory-review notifications:
+
+```yaml
+display:
+  memory_notifications: on   # off | on | verbose
+```
+
+`off` hides chat notices while the review still runs, `on` reports a generic
+memory/user-profile update, and `verbose` includes compact add/replace/remove
+previews.
+
 ## Recall
 
 SQLite **FTS5** full-text search across sessions, plus summaries:

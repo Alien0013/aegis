@@ -359,6 +359,24 @@ _CONFIG_FIELD_META: dict[str, dict[str, Any]] = {
         "enum": ["summary", "live", "off"],
         "group": "Display",
     },
+    "display.tool_progress": {
+        "label": "Tool progress",
+        "description": "How much tool-call progress is shown in dashboard and gateway surfaces.",
+        "enum": ["compact", "detailed"],
+        "group": "Display",
+    },
+    "display.tool_progress_grouping": {
+        "label": "Tool progress grouping",
+        "description": "Group gateway tool progress into one editable bubble or send each tool as a separate message.",
+        "enum": ["accumulate", "separate"],
+        "group": "Display",
+    },
+    "display.memory_notifications": {
+        "label": "Memory notifications",
+        "description": "Chat notification detail for background memory updates.",
+        "enum": ["off", "on", "verbose"],
+        "group": "Display",
+    },
     "agent.reasoning_effort": {
         "label": "Reasoning effort",
         "description": "Default reasoning budget for providers that support it.",
@@ -1551,12 +1569,39 @@ def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
             continue
 
 
+def _normalise_dashboard_choice(value: Any, choices: set[str], default: str) -> str:
+    if isinstance(value, bool):
+        value = "on" if value else "off"
+    raw = str(value or "").strip().lower()
+    return raw if raw in choices else default
+
+
+def _tool_progress_grouping(config: Config) -> str:
+    return _normalise_dashboard_choice(
+        config.get("display.tool_progress_grouping", "accumulate"),
+        {"accumulate", "separate"},
+        "accumulate",
+    )
+
+
+def _memory_notifications(config: Config) -> str:
+    return _normalise_dashboard_choice(
+        config.get("display.memory_notifications", "on"),
+        {"off", "on", "verbose"},
+        "on",
+    )
+
+
 def _dashboard_preferences(config: Config) -> dict:
+    grouping = _tool_progress_grouping(config)
     return {
         "theme": config.get("display.theme", "system"),
         "reasoning": config.get("display.reasoning", "summary"),
         "status_footer": bool(config.get("display.status_footer", True)),
         "tool_progress": config.get("display.tool_progress", "compact"),
+        "tool_progress_grouping": grouping,
+        "tool_progress_style": grouping,
+        "memory_notifications": _memory_notifications(config),
         "frontend": config.get("dashboard.frontend", "static"),
         "cockpit": bool(config.get("dashboard.cockpit", True)),
     }
@@ -1574,6 +1619,24 @@ def _set_dashboard_preferences(config: Config, body: dict) -> dict:
     for key, config_key in mapping.items():
         if key in body:
             config.set(config_key, body[key])
+    if "tool_progress_grouping" in body:
+        config.set("display.tool_progress_grouping", _normalise_dashboard_choice(
+            body["tool_progress_grouping"],
+            {"accumulate", "separate"},
+            "accumulate",
+        ))
+    elif "tool_progress_style" in body:
+        config.set("display.tool_progress_grouping", _normalise_dashboard_choice(
+            body["tool_progress_style"],
+            {"accumulate", "separate"},
+            "accumulate",
+        ))
+    if "memory_notifications" in body:
+        config.set("display.memory_notifications", _normalise_dashboard_choice(
+            body["memory_notifications"],
+            {"off", "on", "verbose"},
+            "on",
+        ))
     return _dashboard_preferences(config)
 
 

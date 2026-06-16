@@ -279,6 +279,8 @@ def test_fastapi_config_and_env_control_plane(tmp_path, monkeypatch):
     assert "before matching turns" in fields["skills.auto_load"]["description"]
     assert fields["skills.allowlist"]["label"] == "Skill allowlist"
     assert fields["skills.bundles"]["label"] == "Skill bundles"
+    assert fields["display.tool_progress_grouping"]["enum"] == ["accumulate", "separate"]
+    assert fields["display.memory_notifications"]["enum"] == ["off", "on", "verbose"]
 
     set_key = asyncio.run(_request(
         app,
@@ -771,17 +773,51 @@ def test_fastapi_config_preferences_memory_provider_and_plugins(tmp_path, monkey
     prefs = asyncio.run(_request(app, "GET", "/api/dashboard/preferences", headers=headers))
     assert prefs.status_code == 200
     assert prefs.json()["theme"] == "system"
+    assert prefs.json()["tool_progress_grouping"] == "accumulate"
+    assert prefs.json()["tool_progress_style"] == "accumulate"
+    assert prefs.json()["memory_notifications"] == "on"
 
     updated = asyncio.run(_request(
         app,
         "PUT",
         "/api/dashboard/preferences",
-        json={"theme": "dark", "tool_progress": "detailed"},
+        json={
+            "theme": "dark",
+            "tool_progress": "detailed",
+            "tool_progress_grouping": "separate",
+            "memory_notifications": "verbose",
+        },
         headers=headers,
     ))
     assert updated.status_code == 200
     assert updated.json()["preferences"]["theme"] == "dark"
     assert updated.json()["preferences"]["tool_progress"] == "detailed"
+    assert updated.json()["preferences"]["tool_progress_grouping"] == "separate"
+    assert updated.json()["preferences"]["tool_progress_style"] == "separate"
+    assert updated.json()["preferences"]["memory_notifications"] == "verbose"
+
+    legacy = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/dashboard/preferences",
+        json={"tool_progress_style": "accumulate", "memory_notifications": False},
+        headers=headers,
+    ))
+    assert legacy.status_code == 200
+    assert legacy.json()["preferences"]["tool_progress_grouping"] == "accumulate"
+    assert legacy.json()["preferences"]["tool_progress_style"] == "accumulate"
+    assert legacy.json()["preferences"]["memory_notifications"] == "off"
+
+    invalid = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/dashboard/preferences",
+        json={"tool_progress_grouping": "chatty", "memory_notifications": "loud"},
+        headers=headers,
+    ))
+    assert invalid.status_code == 200
+    assert invalid.json()["preferences"]["tool_progress_grouping"] == "accumulate"
+    assert invalid.json()["preferences"]["memory_notifications"] == "on"
 
     providers = asyncio.run(_request(app, "GET", "/api/memory/providers", headers=headers))
     assert providers.status_code == 200

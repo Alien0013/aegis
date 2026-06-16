@@ -426,6 +426,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "reasoning": "summary",      # off | summary | live
         "status_footer": True,
         "tool_progress": "compact",  # compact | detailed
+        "tool_progress_grouping": "accumulate",  # accumulate | separate
+        "memory_notifications": "on",  # off | on | verbose
         "theme": "system",
     },
     "prompt_caching": {

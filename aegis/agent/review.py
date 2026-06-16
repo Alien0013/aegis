@@ -14,6 +14,7 @@ Triggers (config ``learn.background``, off by default):
 from __future__ import annotations
 
 import threading
+from typing import Any
 
 from .. import provenance
 from ..types import Message
@@ -146,12 +147,33 @@ def run_review(agent, kind: str, on_event=None) -> list[str]:
     child._no_review = True                                # never let a review fork its own review
     child.tool_context.approver = lambda *a, **k: False   # never block on input in a thread
     actions: list[str] = []
+    action_details: list[dict[str, Any]] = []
+    tool_args: dict[str, dict[str, Any]] = {}
     if on_event:
         on_event({"type": "review_started", "kind": kind})
 
     def _capture(ev):
-        if ev.get("type") == "tool_result" and ev.get("name") in ("memory", "skill", "skill_manage"):
-            actions.append(ev.get("summary", ev["name"]))
+        tool_id = str(ev.get("id") or "")
+        name = ev.get("name")
+        if ev.get("type") == "tool_start" and name in ("memory", "skill", "skill_manage"):
+            args = ev.get("args")
+            if tool_id and isinstance(args, dict):
+                tool_args[tool_id] = args
+            return
+        if ev.get("type") == "tool_result" and name in ("memory", "skill", "skill_manage"):
+            summary = ev.get("summary", name)
+            actions.append(summary)
+            if name == "memory" and not ev.get("is_error"):
+                args = tool_args.pop(tool_id, {}) if tool_id else {}
+                action_details.append({
+                    "tool": "memory",
+                    "summary": summary,
+                    "action": args.get("action", ""),
+                    "target": args.get("target", "memory"),
+                    "content": args.get("content", ""),
+                    "old_text": args.get("old_text") or args.get("match", ""),
+                    "result": ev.get("preview") or summary,
+                })
 
     with provenance.origin_scope("agent"):     # skills written here are curatable
         from ..surface import SurfaceRunner
@@ -165,7 +187,12 @@ def run_review(agent, kind: str, on_event=None) -> list[str]:
             on_event=_capture,
         )
     if on_event:
-        on_event({"type": "review_done", "kind": kind, "actions": actions})
+        on_event({
+            "type": "review_done",
+            "kind": kind,
+            "actions": actions,
+            "action_details": action_details,
+        })
     return actions
 
 
