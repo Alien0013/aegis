@@ -391,6 +391,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "skip_memory": True,         # AEGIS-style: scheduled jobs use prompt/script/skills,
                                      # not injected personal memory, unless explicitly opted in
     },
+    "webhook": {
+        "idempotency_ttl_seconds": 3600,  # provider retry/delivery IDs dedupe within this window
+        "idempotency_cache_max": 10000,   # bounded in-process delivery-id cache
+    },
     "delegation": {
         "subagent_auto_approve": False,  # child approval prompts auto-deny unless opted in
         "max_async_children": 3,          # background subagents running at once; excess dispatches reject

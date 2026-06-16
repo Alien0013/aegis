@@ -66,10 +66,11 @@ def test_cron_delivery_sink_sends_via_configured_adapter(monkeypatch, tmp_path):
 # --- TASK 1: webhooks deliver / filter / chain skills -----------------------
 def _fake_agent(monkeypatch, reply="hello"):
     import aegis.agent.agent as am
-    seen = {}
+    seen = {"calls": 0}
 
     class A:
         def run(self, prompt):
+            seen["calls"] += 1
             seen["prompt"] = prompt
             return type("R", (), {"content": reply})()
     monkeypatch.setattr(am.Agent, "create", staticmethod(lambda cfg, session=None: A()))
@@ -195,6 +196,38 @@ def test_webhook_rejects_oversized_content_length(monkeypatch, tmp_path):
 
     assert status == 413
     assert body["error"] == "payload too large"
+
+
+def test_webhook_dedupes_provider_delivery_retries(monkeypatch, tmp_path):
+    cfg, store, make_handler = _webhook_server(monkeypatch, tmp_path)
+    seen = _fake_agent(monkeypatch, reply="done")
+    store.add("ci", "review {action}")
+    srv, port = _serve(make_handler, cfg, store)
+    headers = {"X-GitHub-Delivery": "delivery-1", "Content-Type": "application/json"}
+    try:
+        first_status, first_body = _post(port, "/hook/ci", b'{"action":"opened"}', headers)
+        second_status, second_body = _post(port, "/hook/ci", b'{"action":"opened"}', headers)
+    finally:
+        srv.shutdown()
+
+    assert first_status == second_status == 200
+    assert first_body["ok"] is True
+    assert second_body == {"ok": True, "duplicate": True}
+    assert seen["calls"] == 1
+
+
+def test_webhook_delivery_cache_prunes_incrementally():
+    from aegis.webhook import DeliveryIdCache
+
+    cache = DeliveryIdCache(ttl_seconds=60, max_items=3)
+    assert cache.record("expired-target", now=100.0) is True
+    assert cache.record("expired-sibling", now=101.0) is True
+    assert cache.record("fresh-sibling", now=155.0) is True
+
+    assert cache.record("expired-target", now=200.0) is True
+    assert cache.record("fresh-sibling", now=200.0) is False
+    assert "expired-sibling" not in cache._seen
+    assert cache._seen["expired-target"] == 200.0
 
 
 # --- TASK 2: cron script / skills / multi-deliver / [SILENT] ----------------

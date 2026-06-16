@@ -20,6 +20,9 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import threading
+import time
+from collections import deque
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -27,6 +30,7 @@ from . import config as cfg
 from .util import atomic_write, read_text, truncate
 
 MAX_WEBHOOK_BYTES = 10_000_000
+_DELIVERY_ID_HEADERS = ("X-GitHub-Delivery", "X-Request-Id", "Idempotency-Key")
 
 
 def _webhooks_path():
@@ -171,6 +175,59 @@ def _request_length(headers) -> tuple[int, str]:
     return size, ""
 
 
+class DeliveryIdCache:
+    """Bounded retry-dedupe cache for webhook delivery ids."""
+
+    def __init__(self, *, ttl_seconds: float = 3600, max_items: int = 10000) -> None:
+        self.ttl_seconds = max(1.0, float(ttl_seconds or 3600))
+        self.max_items = max(1, int(max_items or 10000))
+        self._seen: dict[str, float] = {}
+        self._order: deque[tuple[float, str]] = deque()
+        self._lock = threading.RLock()
+
+    def _prune_locked(self, now: float) -> None:
+        cutoff = now - self.ttl_seconds
+        while self._order and (self._order[0][0] < cutoff or len(self._seen) > self.max_items):
+            seen_at, key = self._order.popleft()
+            if self._seen.get(key) == seen_at:
+                self._seen.pop(key, None)
+
+    def record(self, key: str, *, now: float | None = None) -> bool:
+        """Return True when this delivery id has not been processed recently."""
+        key = str(key or "").strip()
+        if not key:
+            return True
+        timestamp = time.time() if now is None else float(now)
+        with self._lock:
+            seen_at = self._seen.get(key)
+            if seen_at is not None and timestamp - seen_at < self.ttl_seconds:
+                return False
+            if seen_at is not None:
+                self._seen.pop(key, None)
+            self._seen[key] = timestamp
+            self._order.append((timestamp, key))
+            self._prune_locked(timestamp)
+            return True
+
+
+def _delivery_cache(config) -> DeliveryIdCache:
+    ttl = config.get("webhook.idempotency_ttl_seconds", None)
+    if ttl is None:
+        ttl = config.get("server.idempotency_ttl_seconds", 3600)
+    return DeliveryIdCache(
+        ttl_seconds=float(ttl or 3600),
+        max_items=int(config.get("webhook.idempotency_cache_max", 10000) or 10000),
+    )
+
+
+def _delivery_id(name: str, headers) -> str:
+    for header in _DELIVERY_ID_HEADERS:
+        value = str(headers.get(header, "") or "").strip()
+        if value:
+            return f"{name}:{header.lower()}:{value}"
+    return ""
+
+
 # --------------------------------------------------------------------------- #
 # server
 # --------------------------------------------------------------------------- #
@@ -178,6 +235,7 @@ def make_handler(config, store: WebhookStore):
     from .surface import SurfaceRunner
 
     runner = SurfaceRunner(config, include_mcp=True)
+    delivery_cache = _delivery_cache(config)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):  # quiet
@@ -221,6 +279,9 @@ def make_handler(config, store: WebhookStore):
                 event = self.headers.get("X-GitHub-Event", "")
                 if event not in hook.events:
                     return self._json(200, {"ok": True, "skipped": "event"})
+            delivery_id = _delivery_id(name, self.headers)
+            if delivery_id and not delivery_cache.record(delivery_id):
+                return self._json(200, {"ok": True, "duplicate": True})
 
             from .automation import build_prompt, delivery_targets, enqueue_delivery, is_silent
             prompt = build_prompt(
