@@ -25,6 +25,7 @@ import { Mcp } from "./pages/Mcp";
 import { Channels } from "./pages/Channels";
 import { Webhooks } from "./pages/Webhooks";
 import { Keys } from "./pages/Keys";
+import { ProviderAuth } from "./pages/ProviderAuth";
 import { Plugins } from "./pages/Plugins";
 import { Profiles as PersonaProfiles } from "./pages/Profiles";
 import { RuntimeProfileNew, RuntimeProfiles } from "./pages/RuntimeProfiles";
@@ -127,6 +128,7 @@ function Routed({ full }: { full?: boolean }) {
             <Route path="/channels" element={<Channels />} />
             <Route path="/webhooks" element={<Webhooks />} />
             <Route path="/pairing" element={<Pairing />} />
+            <Route path="/accounts" element={<ProviderAuth />} />
             <Route path="/keys" element={<Keys />} />
             <Route path="/env" element={<Keys />} />
             <Route path="/plugins" element={<Plugins />} />

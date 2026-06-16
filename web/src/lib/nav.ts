@@ -40,6 +40,7 @@ export const NAV: NavGroup[] = [
       { path: "/channels", label: "Channels", icon: "channels" },
       { path: "/webhooks", label: "Webhooks", icon: "webhooks" },
       { path: "/pairing", label: "Pairing", icon: "shield" },
+      { path: "/accounts", label: "Accounts", icon: "keys" },
       { path: "/plugins", label: "Plugins", icon: "plugins" },
       { path: "/env", label: "Env", icon: "keys" },
     ],
