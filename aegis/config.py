@@ -559,7 +559,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "tips": True,             # contextual feature-discovery tips (one-time each)
     },
     "fallback_providers": [],         # [{provider, model}]
-    "custom_providers": [],           # [{name, base_url, api_mode, context_length, env_var}]
+    "custom_providers": [],           # [{name, base_url, api_mode, context_length, env_var, models:[...]}]
     "routing": [],                    # [{match: regex, provider, model}] per-prompt routing
 }
 

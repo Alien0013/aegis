@@ -22,6 +22,25 @@ report, including custom and plugin provider catalog rows with per-model
 capability flags for tools, streaming, images, reasoning, response state, and
 dynamic tools.
 
+Custom OpenAI-compatible providers can advertise more than their default model
+to the dashboard picker:
+
+```yaml
+custom_providers:
+  - name: localtest
+    base_url: http://127.0.0.1:8000/v1
+    api_mode: chat_completions
+    default_model: local-default
+    context_length: 70000
+    models:
+      - local-default
+      - local-preview
+      - local-live-only
+```
+
+The default/curated entries stay first, duplicates are removed
+case-insensitively, and additional provider/proxy models remain discoverable.
+
 ## Auth
 
 Use `codex` for ChatGPT/Codex subscription auth with the stateless

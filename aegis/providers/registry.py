@@ -38,6 +38,7 @@ class ProviderSpec:
     oauth: OAuthConfig | None = None
     max_tokens: int = 8192
     extra_headers: dict[str, str] = field(default_factory=dict)
+    models: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -352,6 +353,10 @@ def _custom_specs(config: cfg.Config) -> dict[str, ProviderSpec]:
     out: dict[str, ProviderSpec] = {}
     for c in config.get("custom_providers", []) or []:
         try:
+            models: list[str] = []
+            for item in c.get("models") or []:
+                if isinstance(item, str):
+                    _append_unique(models, item)
             out[c["name"]] = ProviderSpec(
                 name=c["name"],
                 api_mode=ApiMode(c.get("api_mode", "chat_completions")),
@@ -360,6 +365,7 @@ def _custom_specs(config: cfg.Config) -> dict[str, ProviderSpec]:
                 context_length=int(c.get("context_length", 64_000)),
                 env_vars=[c["env_var"]] if c.get("env_var") else [],
                 auth_scheme=c.get("auth_scheme", "none" if not c.get("env_var") else "bearer"),
+                models=models,
             )
         except (KeyError, ValueError):
             continue
@@ -432,6 +438,8 @@ def known_model_entries_for(provider_name: str, config: cfg.Config | None = None
 
     if spec is not None:
         add(spec.default_model, f"Provider default ({spec.default_model})", "default")
+        for model in getattr(spec, "models", []) or []:
+            add(model, model, "catalog")
     for model, label in _preset_model_entries(provider_name):
         add(model, label, "preset")
     return rows
@@ -983,6 +991,7 @@ def _spec_status(name: str, spec: ProviderSpec, *, origin: str) -> dict:
         "auth_scheme": spec.auth_scheme,
         "auth_methods": _auth_methods_for_spec(spec),
         "env_vars": list(spec.env_vars),
+        "models": list(getattr(spec, "models", []) or []),
         "oauth": bool(spec.oauth),
         "oauth_status": _oauth_status_for_spec(name, spec),
         "oauth_notes": _oauth_notes_for_spec(name),

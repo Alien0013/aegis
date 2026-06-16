@@ -683,6 +683,7 @@ def _cache_runtime_fingerprint(config: Config, provider_name: str = "") -> tuple
                 "base_url": str(row.get("base_url") or ""),
                 "api_mode": str(row.get("api_mode") or ""),
                 "default_model": str(row.get("default_model") or ""),
+                "models": [str(item) for item in (row.get("models") or []) if isinstance(item, str)],
             })
     env_names = [
         "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY",

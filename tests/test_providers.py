@@ -1389,6 +1389,36 @@ def test_model_inventory_dedupes_presets_and_keeps_provider_ownership():
     assert any(row["provider"] == "mirror" and row["id"] == "gpt-5.5" for row in inventory)
 
 
+def test_custom_provider_model_catalog_keeps_default_first_and_dedupes():
+    from aegis.config import Config
+    from aegis.providers import registry
+
+    cfg = Config.load()
+    cfg.data["custom_providers"] = [
+        {
+            "name": "localtest",
+            "base_url": "http://local.test/v1",
+            "api_mode": "chat_completions",
+            "default_model": "local-default",
+            "context_length": 70_000,
+            "models": ["LOCAL-DEFAULT", "local-preview", "local-live-only", "local-preview"],
+        }
+    ]
+
+    rows = registry.picker_model_entries_for("localtest", cfg)
+    assert [row["id"] for row in rows] == ["local-default", "local-preview", "local-live-only"]
+    assert rows[0]["source"] == "default"
+    assert rows[1]["source"] == "catalog"
+
+    validation = registry.validate_model_choice("localtest", "local-preview", cfg)
+    assert validation["ok"] is True
+    assert validation["model_known"] is True
+
+    report = registry.provider_report(cfg)
+    custom = next(row for row in report["custom_providers"] if row["name"] == "localtest")
+    assert custom["models"] == ["LOCAL-DEFAULT", "local-preview", "local-live-only"]
+
+
 def test_picker_model_entries_filter_custom_models_from_aggregators():
     from aegis.config import Config
     from aegis.providers import registry
