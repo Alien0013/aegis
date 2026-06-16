@@ -124,6 +124,37 @@ def test_gateway_shutdown_marks_locked_session_resume_pending(tmp_path, monkeypa
     assert loaded.meta["last_resume_marked_at"]
 
 
+def test_gateway_startup_recovers_stale_running_gateway_runs(tmp_path, monkeypatch):
+    from aegis.config import Config
+    from aegis.gateway.runner import GatewayRunner
+    from aegis.runs import RunStore
+    from aegis.session import Session, SessionStore
+
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    session = Session(id="telegram:c1:u1", title="gateway chat")
+    SessionStore().save(session)
+    run = RunStore().start(
+        surface="gateway",
+        kind="gateway",
+        title="stale turn",
+        session_id=session.id,
+        prompt="finish the deployment",
+    )
+    runner = GatewayRunner(Config.load(), cwd=tmp_path)
+
+    assert runner._recover_stale_gateway_runs() == 1
+
+    loaded = runner.store.load(session.id)
+    assert loaded.meta["resume_pending"] is True
+    assert loaded.meta["resume_reason"] == "restart_interrupted"
+    saved_run = RunStore().get(run["id"])
+    assert saved_run["status"] == "interrupted"
+    assert "Gateway restarted" in saved_run["error"]
+    assert saved_run["data"]["resume_pending"] is True
+    assert saved_run["data"]["recovered_by_gateway_start"] is True
+    assert runner._recover_stale_gateway_runs() == 0
+
+
 def test_daemon_gateway_stop_marks_planned_stop(monkeypatch):
     from aegis import daemon
 

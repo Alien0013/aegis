@@ -228,6 +228,38 @@ class GatewayRunner:
             pass
         return count
 
+    def _recover_stale_gateway_runs(self) -> int:
+        try:
+            from ..runs import RunStore
+
+            runs = RunStore()
+            stale = runs.list(surface="gateway", status="running", limit=100)
+        except Exception:  # noqa: BLE001
+            return 0
+        recovered = 0
+        for row in stale:
+            sid = str(row.get("session_id") or "")
+            marked = False
+            if sid:
+                try:
+                    marked = self.store.mark_resume_pending(sid, "restart_interrupted")
+                except Exception:  # noqa: BLE001
+                    marked = False
+            try:
+                runs.finish(
+                    row["id"],
+                    status="interrupted",
+                    error="Gateway restarted before this turn completed.",
+                    data={"resume_pending": marked, "recovered_by_gateway_start": True},
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            recovered += 1
+        if recovered:
+            suffix = "" if recovered == 1 else "s"
+            print(f"  ! recovered {recovered} stale gateway run{suffix}")
+        return recovered
+
     def _fresh_session_if_drifted(self, key: str, session: Session) -> Session:
         try:
             stamp = self.store.session_stamp(key)
@@ -1041,6 +1073,7 @@ class GatewayRunner:
                 BUS.publish({"type": "restart_notice", "text": report})
         except Exception:  # noqa: BLE001
             pass
+        self._recover_stale_gateway_runs()
         self._report_resume_pending_sessions(q)
         print("Gateway running. Ctrl+C to stop.")
         try:
