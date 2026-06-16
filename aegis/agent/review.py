@@ -116,6 +116,48 @@ def _transcript(messages: list[Message], limit: int = 12_000) -> str:
     return "\n".join(lines)[-limit:]
 
 
+def _review_tool_is_notifiable(name: str, args: dict[str, Any]) -> bool:
+    action = str(args.get("action") or "").strip()
+    if name == "memory":
+        return bool(action)
+    if name == "skill":
+        return action in {"create", "improve"}
+    if name == "skill_manage":
+        return action in {"create", "patch", "write_file", "delete", "consolidate"}
+    return False
+
+
+def _skill_change_detail(name: str, args: dict[str, Any], ev: dict[str, Any], summary: str) -> dict[str, Any]:
+    data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+    change = data.get("_change") if isinstance(data.get("_change"), dict) else {}
+    action = str(args.get("action") or change.get("action") or "").strip()
+    detail: dict[str, Any] = {
+        "tool": name,
+        "summary": summary,
+        "action": action,
+        "name": args.get("name") or change.get("name") or "",
+        "file_path": args.get("file_path") or change.get("file_path") or "",
+        "old_string": args.get("old_string") or args.get("old_text") or change.get("old") or "",
+        "new_string": args.get("new_string") or args.get("new_text") or change.get("new") or "",
+        "result": ev.get("preview") or summary,
+    }
+    if change:
+        detail["change"] = change
+    elif name == "skill" and action == "create":
+        detail["change"] = {
+            "action": "create",
+            "name": detail["name"],
+            "description": " ".join(str(args.get("description") or "").split())[:120],
+        }
+    elif name == "skill" and action == "improve":
+        detail["change"] = {
+            "action": "patch",
+            "name": detail["name"],
+            "new": " ".join(str(args.get("body") or "").split())[:200],
+        }
+    return detail
+
+
 def _local_review_memory(agent, session_id: str):
     """Review forks may write local MEMORY.md/USER.md but must not touch providers."""
     if getattr(agent, "memory", None) is None:
@@ -162,9 +204,11 @@ def run_review(agent, kind: str, on_event=None) -> list[str]:
             return
         if ev.get("type") == "tool_result" and name in ("memory", "skill", "skill_manage"):
             summary = ev.get("summary", name)
+            args = tool_args.pop(tool_id, {}) if tool_id else {}
+            if ev.get("is_error") or not _review_tool_is_notifiable(str(name or ""), args):
+                return
             actions.append(summary)
-            if name == "memory" and not ev.get("is_error"):
-                args = tool_args.pop(tool_id, {}) if tool_id else {}
+            if name == "memory":
                 action_details.append({
                     "tool": "memory",
                     "summary": summary,
@@ -174,6 +218,8 @@ def run_review(agent, kind: str, on_event=None) -> list[str]:
                     "old_text": args.get("old_text") or args.get("match", ""),
                     "result": ev.get("preview") or summary,
                 })
+            else:
+                action_details.append(_skill_change_detail(str(name), args, ev, summary))
 
     with provenance.origin_scope("agent"):     # skills written here are curatable
         from ..surface import SurfaceRunner

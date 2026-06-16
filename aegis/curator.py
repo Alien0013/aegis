@@ -371,15 +371,40 @@ def archive(name: str) -> bool:
         name = validate_skill_name(name)
     except ValueError:
         return False
-    src = cfg.skills_dir() / name
-    if not src.is_dir():
+    skills_root = cfg.skills_dir()
+    archive_root = _archive_dir()
+    src = skills_root / name
+    src_safe = _managed_child_dir(skills_root, src)
+    if src_safe is None:
         return False
-    dest = _archive_dir() / name
+    dest = archive_root / name
     dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.exists():
+    if dest.exists() or dest.is_symlink():
+        if _managed_child_dir(archive_root, dest) is None:
+            return False
         shutil.rmtree(dest)
     shutil.move(str(src), str(dest))
     return True
+
+
+def _managed_child_dir(root: Path, path: Path) -> Path | None:
+    """Return a resolved managed child dir, refusing roots, escapes, and symlinks."""
+    try:
+        root_resolved = root.resolve()
+        path_resolved = path.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+    if path.is_symlink():
+        return None
+    try:
+        path_resolved.relative_to(root_resolved)
+    except ValueError:
+        return None
+    if path_resolved == root_resolved:
+        return None
+    if not path.is_dir():
+        return None
+    return path_resolved
 
 
 def restore(name: str) -> bool:
@@ -388,11 +413,13 @@ def restore(name: str) -> bool:
         name = validate_skill_name(name)
     except ValueError:
         return False
-    src = _archive_dir() / name
-    if not src.is_dir():
+    archive_root = _archive_dir()
+    skills_root = cfg.skills_dir()
+    src = archive_root / name
+    if _managed_child_dir(archive_root, src) is None:
         return False
-    dest = cfg.skills_dir() / name
-    if dest.exists():
+    dest = skills_root / name
+    if dest.exists() or dest.is_symlink():
         return False  # refuse to clobber a live skill
     shutil.move(str(src), str(dest))
     remove_suppressed(name)              # an explicit restore overrides suppression

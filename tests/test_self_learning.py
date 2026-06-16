@@ -238,6 +238,46 @@ def test_memory_review_done_includes_action_details(tmp_path):
     assert detail["summary"]
 
 
+def test_skill_review_done_includes_change_details(tmp_path):
+    from aegis.agent.agent import Agent
+    from aegis.agent import review
+    from aegis.config import Config
+    from aegis.session import Session
+    from aegis.types import LLMResponse, Message, ToolCall
+
+    cfg = Config.load()
+    cfg.data["tools"]["exec_mode"] = "full"
+    parent_session = Session.create("parent")
+    parent_session.messages = [Message.user("patch the reusable workflow"), Message.assistant("noted")]
+    provider = FakeProvider([
+        LLMResponse(text="", tool_calls=[ToolCall("s1", "skill_manage", {
+            "action": "patch",
+            "name": "review-skill",
+            "old_string": "OLD_STEP",
+            "new_string": "NEW_STEP",
+        })]),
+        LLMResponse(text="saved"),
+    ])
+    agent = Agent(config=cfg, provider=provider, session=parent_session, cwd=tmp_path)
+    agent.skills.create(
+        "review-skill",
+        "Use for testing review skill changes.",
+        "## Steps\n1. OLD_STEP before finishing.",
+    )
+    events = []
+
+    actions = review.run_review(agent, "skill", on_event=events.append)
+
+    assert actions
+    done = next(event for event in events if event["type"] == "review_done")
+    detail = done["action_details"][0]
+    assert detail["tool"] == "skill_manage"
+    assert detail["action"] == "patch"
+    assert detail["name"] == "review-skill"
+    assert detail["change"]["old"] == "OLD_STEP"
+    assert detail["change"]["new"] == "NEW_STEP"
+
+
 def test_review_prompts_include_adapter_style_learning_rules():
     from aegis.agent import review
 

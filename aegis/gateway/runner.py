@@ -95,6 +95,68 @@ def _memory_notification_summaries(actions: list[Any]) -> list[str]:
     return out or ["💾 Memory updated"]
 
 
+def _skill_notification_preview(action: Any) -> str:
+    if isinstance(action, dict):
+        change = action.get("change") if isinstance(action.get("change"), dict) else {}
+        verb = str(change.get("action") or action.get("action") or "").strip().lower()
+        name = str(change.get("name") or action.get("name") or "skill").strip() or "skill"
+        if verb == "patch":
+            old = " ".join(str(change.get("old") or action.get("old_string") or "").split())
+            new = " ".join(str(change.get("new") or action.get("new_string") or "").split())
+            if len(old) > 200:
+                old = old[:199].rstrip() + "…"
+            if len(new) > 200:
+                new = new[:199].rstrip() + "…"
+            if old or new:
+                return f"📝 Skill '{name}' patched: \"{old}\" → \"{new}\""
+            return f"📝 Skill '{name}' patched"
+        if verb == "create":
+            desc = " ".join(str(change.get("description") or "").split())
+            return f"📝 Skill '{name}' created" + (f": {desc}" if desc else "")
+        if verb in {"edit", "rewrite", "rewritten"}:
+            desc = " ".join(str(change.get("description") or "").split())
+            return f"📝 Skill '{name}' rewritten" + (f": {desc}" if desc else "")
+        if verb == "write_file":
+            path = str(action.get("file_path") or change.get("file_path") or "").strip()
+            return f"📝 Skill '{name}' file updated" + (f": {path}" if path else "")
+        if verb == "delete":
+            return f"📝 Skill '{name}' archived"
+        if verb == "consolidate":
+            into = str(action.get("into") or "").strip()
+            return f"📝 Skill '{name}' consolidated" + (f" into '{into}'" if into else "")
+        summary = " ".join(str(action.get("summary") or "skill updated").split())
+        return f"📝 {summary}"
+
+    text = " ".join(str(action or "").split()) or "skill updated"
+    if len(text) > 120:
+        text = text[:119].rstrip() + "…"
+    return f"📝 {text}"
+
+
+def _skill_notification_summaries(actions: list[Any]) -> list[str]:
+    out: list[str] = []
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        change = action.get("change") if isinstance(action.get("change"), dict) else {}
+        verb = str(change.get("action") or action.get("action") or "").strip().lower()
+        name = str(change.get("name") or action.get("name") or "").strip()
+        label = f"Skill '{name}'" if name else "Skill"
+        if verb == "create":
+            out.append(f"📝 {label} created")
+        elif verb == "patch":
+            out.append(f"📝 {label} patched")
+        elif verb in {"edit", "rewrite", "rewritten", "write_file"}:
+            out.append(f"📝 {label} updated")
+        elif verb == "delete":
+            out.append(f"📝 {label} archived")
+        elif verb == "consolidate":
+            out.append(f"📝 {label} consolidated")
+    if out:
+        return out
+    return ["📝 Skills updated"] if actions else []
+
+
 _GATEWAY_GENERATION_META = "_gateway_generation"
 _RESUME_PENDING_META = "resume_pending"
 _RESUME_REASON_META = "resume_reason"
@@ -933,19 +995,41 @@ class GatewayRunner:
                         learned.append(f"📝 {ev_.get('summary', 'skill')}")
                     elif t == "review_done":
                         details = ev_.get("action_details") or []
-                        actions = details or ev_.get("actions") or []
-                        if ev_.get("kind") == "memory":
-                            mode = _memory_notification_mode(
-                                self.config.get("display.memory_notifications", "on")
-                            )
-                            if mode == "verbose":
-                                for action in actions:
-                                    learned.append(_memory_notification_preview(action))
-                            elif mode == "on":
-                                learned.extend(_memory_notification_summaries(actions))
+                        raw_actions = ev_.get("actions") or []
+                        mode = _memory_notification_mode(
+                            self.config.get("display.memory_notifications", "on")
+                        )
+                        if mode == "off":
+                            return
+                        if details:
+                            memory_actions = [
+                                action for action in details
+                                if isinstance(action, dict) and action.get("tool") == "memory"
+                            ]
+                            skill_actions = [
+                                action for action in details
+                                if isinstance(action, dict) and action.get("tool") in {"skill", "skill_manage"}
+                            ]
+                            other_actions: list[Any] = []
                         else:
-                            for a in actions:
-                                learned.append(f"🧠 {a}")
+                            kind = ev_.get("kind")
+                            memory_actions = raw_actions if kind == "memory" else []
+                            skill_actions = raw_actions if kind == "skill" else []
+                            other_actions = raw_actions if kind not in {"memory", "skill", "combined"} else []
+                        if memory_actions:
+                            if mode == "verbose":
+                                for action in memory_actions:
+                                    learned.append(_memory_notification_preview(action))
+                            else:
+                                learned.extend(_memory_notification_summaries(memory_actions))
+                        if skill_actions:
+                            if mode == "verbose":
+                                for action in skill_actions:
+                                    learned.append(_skill_notification_preview(action))
+                            else:
+                                learned.extend(_skill_notification_summaries(skill_actions))
+                        for action in other_actions:
+                            learned.append(f"🧠 {action}")
 
                 run = self._surface_runner.run_prompt(
                     text,

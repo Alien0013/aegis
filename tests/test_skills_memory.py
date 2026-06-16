@@ -474,6 +474,8 @@ def test_skill_manage_patch_pin_delete_report(tmp_path):
         "body": "## Steps\n1. Replace OLD_MARKER before finishing.",
     }, ctx)
     assert not created.is_error
+    assert created.data["_change"]["action"] == "create"
+    assert created.data["_change"]["description"] == "Use for testing patch and curator actions."
 
     patched = tool.run({
         "action": "patch",
@@ -482,6 +484,9 @@ def test_skill_manage_patch_pin_delete_report(tmp_path):
         "new_string": "NEW_MARKER",
     }, ctx).data
     assert patched["success"] is True
+    assert patched["_change"]["action"] == "patch"
+    assert patched["_change"]["old"] == "OLD_MARKER"
+    assert patched["_change"]["new"] == "NEW_MARKER"
     assert "NEW_MARKER" in (cfg.skills_dir() / "patched-skill" / "SKILL.md").read_text()
 
     support = tool.run({
@@ -544,6 +549,58 @@ def test_curator_and_marketplace_reject_traversal_names():
 
     assert curator.archive("../outside") is False
     assert marketplace.remove("../outside") is False
+    assert outside.exists()
+
+
+def test_curator_archive_refuses_symlink_skill_dir(tmp_path):
+    import pytest
+
+    from aegis import config as cfg
+    from aegis import curator
+
+    skills = cfg.skills_dir()
+    target = tmp_path / "outside-target"
+    target.mkdir()
+    (target / "SKILL.md").write_text(
+        "---\nname: linked-skill\ndescription: Linked skill.\n---\nbody",
+        encoding="utf-8",
+    )
+    link = skills / "linked-skill"
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
+
+    assert curator.archive("linked-skill") is False
+    assert link.is_symlink()
+    assert target.exists()
+
+
+def test_curator_archive_refuses_unsafe_existing_archive_destination(tmp_path):
+    import pytest
+
+    from aegis import config as cfg
+    from aegis import curator
+
+    skill = cfg.skills_dir() / "safe-skill"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: safe-skill\ndescription: Safe skill.\n---\nbody",
+        encoding="utf-8",
+    )
+    archive_root = cfg.sub("skills_archive")
+    archive_root.mkdir(parents=True)
+    outside = tmp_path / "outside-archive-target"
+    outside.mkdir()
+    dest = archive_root / "safe-skill"
+    try:
+        dest.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
+
+    assert curator.archive("safe-skill") is False
+    assert skill.exists()
+    assert dest.is_symlink()
     assert outside.exists()
 
 

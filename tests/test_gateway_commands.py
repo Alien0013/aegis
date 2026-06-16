@@ -469,6 +469,58 @@ def test_gateway_memory_notification_modes(tmp_path, monkeypatch):
     assert r.dispatch(_ev("off")) == "ok"
 
 
+def test_gateway_skill_notification_modes(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from aegis.types import Message
+    import aegis.gateway.runner as rmod
+
+    r = _runner(tmp_path, monkeypatch)
+
+    class FakeAgent:
+        def __init__(self, session):
+            self.session = session
+            self.budget = SimpleNamespace(api_call_count=0)
+
+    monkeypatch.setattr(rmod.Agent, "create",
+                        staticmethod(lambda *args, **kwargs: FakeAgent(kwargs["session"])))
+
+    def fake_run_prompt(_prompt, **kwargs):
+        kwargs["on_event"]({
+            "type": "review_done",
+            "kind": "skill",
+            "actions": ["patched skill review-skill"],
+            "action_details": [
+                {
+                    "tool": "skill_manage",
+                    "action": "patch",
+                    "name": "review-skill",
+                    "old_string": "OLD_STEP",
+                    "new_string": "NEW_STEP",
+                    "summary": "patched skill review-skill",
+                    "change": {
+                        "action": "patch",
+                        "name": "review-skill",
+                        "old": "OLD_STEP",
+                        "new": "NEW_STEP",
+                    },
+                },
+            ],
+        })
+        return SimpleNamespace(message=Message.assistant("ok"), session=kwargs["session"])
+
+    monkeypatch.setattr(r._surface_runner, "run_prompt", fake_run_prompt)
+
+    assert r.dispatch(_ev("default")) == "ok\n\n— 📝 Skill 'review-skill' patched"
+
+    r.config.data.setdefault("display", {})["memory_notifications"] = "verbose"
+    verbose = r.dispatch(_ev("verbose"))
+    assert "📝 Skill 'review-skill' patched: \"OLD_STEP\" → \"NEW_STEP\"" in verbose
+
+    r.config.data.setdefault("display", {})["memory_notifications"] = "off"
+    assert r.dispatch(_ev("off")) == "ok"
+
+
 def test_reply_pointer_truncates_and_escapes_quotes():
     from aegis.gateway.base import MessageEvent
     from aegis.gateway.runner import _with_reply_pointer

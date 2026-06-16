@@ -43,6 +43,13 @@ def _json_error(message: str, *, data: dict[str, Any] | None = None) -> ToolResu
     )
 
 
+def _change_preview(value: Any, limit: int) -> str:
+    text = " ".join(str(value or "").split())
+    if limit > 3 and len(text) > limit:
+        return text[: limit - 3].rstrip() + "..."
+    return text
+
+
 def _refresh_agent_prompt(ctx: ToolContext) -> None:
     refresh = getattr(getattr(ctx, "agent", None), "refresh_volatile", None)
     if callable(refresh):
@@ -189,7 +196,16 @@ def _create(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
 
     _refresh_agent_prompt(ctx)
     return _json_result(
-        {"success": True, "message": f"Skill '{name}' created.", "path": str(path)},
+        {
+            "success": True,
+            "message": f"Skill '{name}' created.",
+            "path": str(path),
+            "_change": {
+                "action": "create",
+                "name": name,
+                "description": _change_preview(description, 120),
+            },
+        },
         f"created skill {name}",
     )
 
@@ -286,6 +302,13 @@ def _patch(args: dict[str, Any], ctx: ToolContext) -> ToolResult:
             "message": f"Patched {rel} in skill '{name}'.",
             "path": str(target),
             "replacements": count if replace_all else 1,
+            "_change": {
+                "action": "patch",
+                "name": name,
+                "file_path": rel,
+                "old": _change_preview(old, 200),
+                "new": _change_preview(new, 200),
+            },
         },
         f"patched skill {name}",
     )
