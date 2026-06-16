@@ -8,6 +8,7 @@ session/compaction rebuild.
 
 from __future__ import annotations
 
+import copy
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 import json
 from pathlib import Path
@@ -54,6 +55,16 @@ def sanitize_provider_context(text: str) -> str:
     text = _PROVIDER_CONTEXT_TAGS.sub("[provider context tag removed]", str(text))
     text = _PROVIDER_SYSTEM_NOTE.sub("[provider system note removed]", text)
     return text.strip()
+
+
+def sanitize_skill_memory_text(text: str) -> str:
+    """Strip model-visible skill scaffolding before external memory sync."""
+    try:
+        from .skills import extract_user_instruction_from_skill_message
+
+        return extract_user_instruction_from_skill_message(str(text or ""))
+    except Exception:  # noqa: BLE001
+        return str(text or "")
 
 
 def scan_entry(text: str) -> str | None:
@@ -587,33 +598,59 @@ class MemoryManager:
     def prefetch(self, query: str) -> str:
         """Relevant memory for THIS turn, fetched synchronously from the provider.
         Returned text is injected as volatile context before the model call."""
-        cached = self._provider_call("consume_prefetch", query,
+        clean_query = sanitize_skill_memory_text(query)
+        if not clean_query and query:
+            return ""
+        cached = self._provider_call("consume_prefetch", clean_query,
                                      session_id=getattr(self, "_session_id", "")) or ""
         if isinstance(cached, str) and cached.strip():
             return sanitize_provider_context(cached)
-        block = self._provider_call("prefetch", query,
+        block = self._provider_call("prefetch", clean_query,
                                     session_id=getattr(self, "_session_id", "")) or ""
         return sanitize_provider_context(block) if isinstance(block, str) else ""
 
     def queue_prefetch(self, query: str) -> None:
         session_id = getattr(self, "_session_id", "")
+        clean_query = sanitize_skill_memory_text(query)
+        if not clean_query and query:
+            return
 
         def _run() -> None:
-            self._provider_call("queue_prefetch", query, session_id=session_id)
+            self._provider_call("queue_prefetch", clean_query, session_id=session_id)
 
         self._submit_background(_run)
 
     @staticmethod
-    def _message_wire(messages) -> list[dict]:
+    def _clean_provider_messages(messages) -> list:
+        cleaned = []
+        for message in messages or []:
+            if getattr(message, "role", "") in {"user", "assistant", "tool"}:
+                raw = getattr(message, "content", "")
+                content = sanitize_skill_memory_text(raw)
+                if raw and not content and content != raw:
+                    continue
+                clone = copy.copy(message)
+                try:
+                    clone.content = content
+                except Exception:  # noqa: BLE001
+                    pass
+                cleaned.append(clone)
+            else:
+                cleaned.append(message)
+        return cleaned
+
+    @classmethod
+    def _message_wire(cls, messages) -> list[dict]:
         return [
             {"role": getattr(m, "role", ""), "content": getattr(m, "content", "")}
-            for m in messages
+            for m in cls._clean_provider_messages(messages)
             if getattr(m, "role", "") in {"user", "assistant", "tool"}
         ]
 
     @staticmethod
     def _last_content(messages, role: str) -> str:
-        return next((getattr(m, "content", "") for m in reversed(messages)
+        return next((sanitize_skill_memory_text(getattr(m, "content", ""))
+                     for m in reversed(messages)
                      if getattr(m, "role", "") == role), "")
 
     def _sync_turn_compat(self, messages) -> None:
@@ -633,15 +670,21 @@ class MemoryManager:
         ]
         accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
         accepts_varargs = any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params.values())
+        clean_messages = self._clean_provider_messages(messages)
+        raw_last_user = next((getattr(m, "content", "") for m in reversed(messages or [])
+                              if getattr(m, "role", "") == "user"), "")
+        clean_last_user = self._last_content(clean_messages, "user")
+        if raw_last_user and not clean_last_user and sanitize_skill_memory_text(raw_last_user) != raw_last_user:
+            return
         # Existing AEGIS providers use sync_turn(messages). Two-argument providers
         # use sync_turn(user_content, assistant_content, session_id=..., messages=...).
         if len(positional) <= 1 and not accepts_varargs and "user_content" not in params:
-            fn(messages)
+            fn(clean_messages)
             return
         kw = {"session_id": getattr(self, "_session_id", "")}
         if accepts_kwargs or "messages" in params:
-            kw["messages"] = self._message_wire(messages)
-        fn(self._last_content(messages, "user"), self._last_content(messages, "assistant"), **kw)
+            kw["messages"] = self._message_wire(clean_messages)
+        fn(clean_last_user, self._last_content(clean_messages, "assistant"), **kw)
 
     def sync_turn(self, messages) -> None:
         snapshot = list(messages or [])

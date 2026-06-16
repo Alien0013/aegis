@@ -27,6 +27,32 @@ from . import config as cfg
 from .util import read_text
 
 SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+SKILL_USER_TASK_MARKER = "The user task for this skill invocation is:"
+SKILL_AUTOLOAD_USER_TASK_MARKER = "[User task]"
+
+
+def extract_user_instruction_from_skill_message(text: str) -> str:
+    """Return the real user task from a skill-injected user message.
+
+    Skill bodies are injected into the model-visible user turn for slash,
+    preload, and auto-load flows. External memory providers should remember the
+    user's request, not the full SKILL.md scaffold.
+    """
+    raw = str(text or "")
+    for marker in (SKILL_USER_TASK_MARKER, SKILL_AUTOLOAD_USER_TASK_MARKER):
+        idx = raw.rfind(marker)
+        if idx >= 0:
+            return raw[idx + len(marker):].lstrip(" \t\r\n")
+    if "# Skill:" in raw and (
+        "[Skill directory:" in raw
+        or "[IMPORTANT: The user invoked" in raw
+        or "[IMPORTANT: AEGIS selected" in raw
+        or "[IMPORTANT: The user preloaded" in raw
+    ):
+        return ""
+    return raw
+
+
 WORD_RE = re.compile(r"[a-z0-9]+")
 SUPPORT_DIRS = ("references", "templates", "scripts", "assets")
 EXCLUDED_DISCOVERY_DIRS = {
@@ -558,7 +584,7 @@ class SkillsLoader:
             parts.extend(f"- {rel} -> {skill.dir / rel}" for rel in supporting[:60])
         if user_instruction:
             parts.append("")
-            parts.append("The user task for this skill invocation is:")
+            parts.append(SKILL_USER_TASK_MARKER)
             parts.append(user_instruction)
         text = "\n".join(parts).strip()
         if max_chars is not None and max_chars > 0 and len(text) > max_chars:

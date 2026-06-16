@@ -127,6 +127,82 @@ def test_sync_turn_supports_adapter_style_provider_signature(tmp_path, monkeypat
     )]
 
 
+def test_skill_scaffolding_is_stripped_before_memory_provider_sync(tmp_path, monkeypatch):
+    config = _cfg(tmp_path, monkeypatch)
+    from aegis.memory import MemoryManager, sanitize_skill_memory_text
+    from aegis.skills import SKILL_AUTOLOAD_USER_TASK_MARKER, SKILL_USER_TASK_MARKER
+    from aegis.types import Message
+
+    slash_wrapped = (
+        '[IMPORTANT: The user invoked the "demo-skill" skill.]\n\n'
+        "# Skill: demo-skill\n"
+        "Follow these detailed instructions.\n\n"
+        "[Skill directory: /tmp/demo-skill]\n"
+        f"{SKILL_USER_TASK_MARKER}\n"
+        "build the clean thing"
+    )
+    auto_wrapped = (
+        '[IMPORTANT: AEGIS selected the "demo-skill" skill as relevant to this turn.]\n\n'
+        "# Skill: demo-skill\n"
+        "Follow these detailed instructions.\n\n"
+        "[Skill directory: /tmp/demo-skill]\n\n"
+        f"{SKILL_AUTOLOAD_USER_TASK_MARKER}\n"
+        "fix the dashboard"
+    )
+    bare_wrapped = (
+        '[IMPORTANT: The user invoked the "demo-skill" skill.]\n\n'
+        "# Skill: demo-skill\n"
+        "Follow these detailed instructions.\n\n"
+        "[Skill directory: /tmp/demo-skill]\n"
+    )
+
+    assert sanitize_skill_memory_text(slash_wrapped) == "build the clean thing"
+    assert sanitize_skill_memory_text(auto_wrapped) == "fix the dashboard"
+    assert sanitize_skill_memory_text(bare_wrapped) == ""
+    assert sanitize_skill_memory_text("plain request") == "plain request"
+
+    class AdapterProvider:
+        def __init__(self):
+            self.calls = []
+
+        def sync_turn(self, user_content, assistant_content, *, session_id="", messages=None):
+            self.calls.append((user_content, assistant_content, messages))
+
+    adapter = AdapterProvider()
+    mm = MemoryManager(config, external=adapter)
+    mm.sync_turn([Message.user(slash_wrapped), Message.assistant("done")])
+    assert mm.flush_pending(timeout=1)
+    assert adapter.calls == [(
+        "build the clean thing",
+        "done",
+        [
+            {"role": "user", "content": "build the clean thing"},
+            {"role": "assistant", "content": "done"},
+        ],
+    )]
+
+    class ObjectProvider:
+        def __init__(self):
+            self.messages = None
+
+        def sync_turn(self, messages):
+            self.messages = list(messages)
+
+    original = Message.user(auto_wrapped)
+    object_provider = ObjectProvider()
+    mm = MemoryManager(config, external=object_provider)
+    mm.sync_turn([original, Message.assistant("done")])
+    assert mm.flush_pending(timeout=1)
+    assert object_provider.messages[0].content == "fix the dashboard"
+    assert original.content == auto_wrapped
+
+    skipped = AdapterProvider()
+    mm = MemoryManager(config, external=skipped)
+    mm.sync_turn([Message.user(bare_wrapped), Message.assistant("loaded")])
+    assert mm.flush_pending(timeout=1)
+    assert skipped.calls == []
+
+
 def test_sync_turn_runs_on_background_worker(tmp_path, monkeypatch):
     import threading
     import time
