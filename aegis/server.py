@@ -7,11 +7,13 @@ Lets any OpenAI-client tool point at AEGIS. Optional bearer auth via
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import sqlite3
 import threading
 import time
+from collections import OrderedDict
 from io import BytesIO
 from http.server import BaseHTTPRequestHandler
 from typing import Any
@@ -117,6 +119,12 @@ def _response_headers(config: Config | None, origin: str = "") -> dict[str, str]
 
 def _json_bytes(obj: Any) -> bytes:
     return json.dumps(obj, default=str).encode()
+
+
+def _request_fingerprint(body: dict[str, Any], keys: list[str]) -> str:
+    subset = {key: body.get(key) for key in keys}
+    blob = json.dumps(subset, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 def _content(value: Any) -> tuple[str, list[str]]:
@@ -677,10 +685,57 @@ class ResponseStore:
             )
 
 
+class IdempotencyCache:
+    """Small in-process LRU cache for OpenAI-style Idempotency-Key replays."""
+
+    def __init__(self, *, max_items: int = 1000, ttl_seconds: float = 300) -> None:
+        self.max_items = max(1, int(max_items or 1000))
+        self.ttl_seconds = max(1.0, float(ttl_seconds or 300))
+        self._lock = threading.RLock()
+        self._items: OrderedDict[str, dict[str, Any]] = OrderedDict()
+
+    def _purge_locked(self) -> None:
+        now = time.time()
+        expired = [key for key, item in self._items.items()
+                   if now - float(item.get("ts") or 0) > self.ttl_seconds]
+        for key in expired:
+            self._items.pop(key, None)
+        while len(self._items) > self.max_items:
+            self._items.popitem(last=False)
+
+    def get(self, key: str, fingerprint: str) -> dict[str, Any] | None:
+        if not key:
+            return None
+        with self._lock:
+            self._purge_locked()
+            item = self._items.get(key)
+            if not item or item.get("fingerprint") != fingerprint:
+                return None
+            self._items.move_to_end(key)
+            response = item.get("response")
+            return dict(response) if isinstance(response, dict) else None
+
+    def put(self, key: str, fingerprint: str, response: dict[str, Any]) -> None:
+        if not key:
+            return
+        with self._lock:
+            self._items[key] = {
+                "fingerprint": fingerprint,
+                "response": dict(response),
+                "ts": time.time(),
+            }
+            self._items.move_to_end(key)
+            self._purge_locked()
+
+
 def make_handler(config: Config):
     api_key = config.get("server.api_key") or os.environ.get("AEGIS_SERVER_KEY")
     runner = SurfaceRunner(config, include_mcp=True)
     response_store = ResponseStore(config)
+    idempotency_cache = IdempotencyCache(
+        max_items=int(config.get("server.idempotency_cache_max", 1000) or 1000),
+        ttl_seconds=float(config.get("server.idempotency_ttl_seconds", 300) or 300),
+    )
     active_runs: dict[str, dict[str, Any]] = {}
     approvals: dict[str, dict[str, Any]] = {}
     state_lock = threading.RLock()
@@ -1234,6 +1289,14 @@ def make_handler(config: Config):
             cid = new_id("chatcmpl")
 
             if not stream:
+                idempotency_key = str(self.headers.get("Idempotency-Key", "") or "")
+                idempotency_fp = _request_fingerprint(
+                    body,
+                    ["model", "messages", "tools", "tool_choice", "stream"],
+                )
+                cached = idempotency_cache.get(idempotency_key, idempotency_fp)
+                if cached is not None:
+                    return self._json(200, cached)
                 result = runner.run_prompt(
                     last_user,
                     session_id=session_id,
@@ -1245,7 +1308,7 @@ def make_handler(config: Config):
                     surface="serve",
                     meta={"request_id": cid},
                 )
-                return self._json(200, {
+                response = {
                     "id": cid, "object": "chat.completion", "created": int(time.time()),
                     "model": result.agent.provider.model,
                     "choices": [{"index": 0, "message": {"role": "assistant", "content": result.text},
@@ -1256,7 +1319,9 @@ def make_handler(config: Config):
                         "trace_id": result.trace_id,
                         "run_id": result.run_id,
                     },
-                })
+                }
+                idempotency_cache.put(idempotency_key, idempotency_fp, response)
+                return self._json(200, response)
 
             # streaming
             self._send_sse_headers()
@@ -1624,6 +1689,14 @@ def make_handler(config: Config):
                 })
                 self.wfile.write(b"data: [DONE]\n\n")
                 return
+            idempotency_key = str(self.headers.get("Idempotency-Key", "") or "")
+            idempotency_fp = _request_fingerprint(
+                body,
+                ["input", "messages", "instructions", "previous_response_id", "conversation", "model", "tools"],
+            )
+            cached = idempotency_cache.get(idempotency_key, idempotency_fp)
+            if cached is not None:
+                return self._json(200, cached)
             result = runner.run_prompt(
                 last_user,
                 session_id=session_id,
@@ -1650,6 +1723,7 @@ def make_handler(config: Config):
                 })
                 if conversation:
                     response_store.set_conversation(conversation, response_id)
+            idempotency_cache.put(idempotency_key, idempotency_fp, response)
             return self._json(200, response)
 
         def _post_session_chat(self, session_id: str, body: dict[str, Any], *, stream: bool = False) -> None:

@@ -855,6 +855,118 @@ def test_responses_stream_maps_tools_to_function_call_items(monkeypatch, tmp_pat
     ]
 
 
+def test_responses_idempotency_key_replays_matching_request(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    class CountingRunner:
+        calls = 0
+
+        def __init__(self, config, include_mcp=True):
+            pass
+
+        def run_prompt(self, prompt, **kwargs):
+            type(self).calls += 1
+            session_id = kwargs.get("session_id") or "serve:idem"
+            return SimpleNamespace(
+                text=f"reply-{type(self).calls}",
+                session=SimpleNamespace(id=session_id),
+                trace_id=f"trace_{type(self).calls}",
+                turn_id=f"turn_{type(self).calls}",
+                run_id=f"run_{type(self).calls}",
+                agent=SimpleNamespace(
+                    provider=SimpleNamespace(model="served-model"),
+                    budget=SimpleNamespace(usage=_Usage()),
+                ),
+            )
+
+    monkeypatch.setattr(server, "SurfaceRunner", CountingRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        headers = {"Idempotency-Key": "idem-resp"}
+        first_status, first_data = _request(port, "POST", "/v1/responses", {
+            "input": "same",
+            "metadata": {"session_id": "serve:idem"},
+        }, headers=headers)
+        second_status, second_data = _request(port, "POST", "/v1/responses", {
+            "input": "same",
+            "metadata": {"session_id": "serve:idem"},
+        }, headers=headers)
+        third_status, third_data = _request(port, "POST", "/v1/responses", {
+            "input": "different",
+            "metadata": {"session_id": "serve:idem"},
+        }, headers=headers)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    first = json.loads(first_data)
+    second = json.loads(second_data)
+    third = json.loads(third_data)
+    assert first_status == second_status == third_status == 200
+    assert second["id"] == first["id"]
+    assert second["output_text"] == "reply-1"
+    assert third["id"] != first["id"]
+    assert third["output_text"] == "reply-2"
+    assert CountingRunner.calls == 2
+
+
+def test_chat_completions_idempotency_key_replays_matching_request(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    class CountingRunner:
+        calls = 0
+
+        def __init__(self, config, include_mcp=True):
+            pass
+
+        def run_prompt(self, prompt, **kwargs):
+            type(self).calls += 1
+            session_id = kwargs.get("session_id") or "serve:chat-idem"
+            return SimpleNamespace(
+                text=f"chat-{type(self).calls}",
+                session=SimpleNamespace(id=session_id),
+                trace_id=f"trace_chat_{type(self).calls}",
+                turn_id=f"turn_chat_{type(self).calls}",
+                run_id=f"run_chat_{type(self).calls}",
+                agent=SimpleNamespace(
+                    provider=SimpleNamespace(model="served-model"),
+                    budget=SimpleNamespace(usage=_Usage()),
+                ),
+            )
+
+    monkeypatch.setattr(server, "SurfaceRunner", CountingRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        headers = {"Idempotency-Key": "idem-chat"}
+        body = {"messages": [{"role": "user", "content": "same"}]}
+        first_status, first_data = _request(port, "POST", "/v1/chat/completions", body, headers=headers)
+        second_status, second_data = _request(port, "POST", "/v1/chat/completions", body, headers=headers)
+        third_status, third_data = _request(
+            port,
+            "POST",
+            "/v1/chat/completions",
+            {"messages": [{"role": "user", "content": "different"}]},
+            headers=headers,
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    first = json.loads(first_data)
+    second = json.loads(second_data)
+    third = json.loads(third_data)
+    assert first_status == second_status == third_status == 200
+    assert second["id"] == first["id"]
+    assert second["choices"][0]["message"]["content"] == "chat-1"
+    assert third["id"] != first["id"]
+    assert third["choices"][0]["message"]["content"] == "chat-2"
+    assert CountingRunner.calls == 2
+
+
 def test_server_session_crud_fork_and_chat(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
