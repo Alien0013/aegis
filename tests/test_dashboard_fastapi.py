@@ -412,6 +412,36 @@ def test_fastapi_config_and_env_control_plane(tmp_path, monkeypatch):
     missing = asyncio.run(_request(app, "GET", "/api/env/OPENAI_API_KEY/reveal", headers=headers))
     assert missing.status_code == 404
 
+    put_key = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/env",
+        json={"key": "ANTHROPIC_API_KEY", "value": "sk-ant-test"},
+        headers=headers,
+    ))
+    assert put_key.status_code == 200
+    assert put_key.json()["ok"] is True
+
+    reveal_body = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/env/reveal",
+        json={"key": "ANTHROPIC_API_KEY"},
+        headers=headers,
+    ))
+    assert reveal_body.status_code == 200
+    assert reveal_body.json()["value"] == "sk-ant-test"
+
+    delete_body = asyncio.run(_request(
+        app,
+        "DELETE",
+        "/api/env",
+        json={"key": "ANTHROPIC_API_KEY"},
+        headers=headers,
+    ))
+    assert delete_body.status_code == 200
+    assert delete_body.json()["ok"] is True
+
 
 def test_fastapi_provider_and_gateway_control_plane_routes(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)

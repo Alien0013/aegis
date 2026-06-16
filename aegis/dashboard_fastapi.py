@@ -685,6 +685,27 @@ def _delete_env_key(key: str) -> bool:
     return changed
 
 
+def _env_set_payload(body: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    key = str(body.get("key") or "").strip()
+    if not key:
+        return {"ok": False, "error": "missing key"}, 400
+    from .config import set_env_var
+
+    set_env_var(key, str(body.get("value") or ""))
+    return {"ok": True, "key": key}, 200
+
+
+def _env_reveal_payload(key: str) -> tuple[dict[str, Any], int]:
+    values = _env_file_values()
+    if key not in values and key not in os.environ:
+        return {"ok": False, "error": "key not set", "key": key}, 404
+    return {"ok": True, "key": key, "value": values.get(key, os.environ.get(key, ""))}, 200
+
+
+def _env_delete_payload(key: str) -> dict[str, Any]:
+    return {"ok": _delete_env_key(key), "key": key}
+
+
 def _provider_auth_row(row: dict, config: Config) -> dict:
     env_vars = list(row.get("env_vars") or [])
     missing = [key for key in env_vars if not _env_key_is_set(str(key))]
@@ -3194,26 +3215,48 @@ def create_app(config: Config) -> FastAPI:
     async def api_env_set(request: Request) -> JSONResponse:
         _require_request(request, config)
         body = await request.json()
-        key = str(body.get("key") or "").strip()
-        if not key:
-            return JSONResponse({"ok": False, "error": "missing key"}, status_code=400)
-        from .config import set_env_var
+        payload, status = _env_set_payload(body if isinstance(body, dict) else {})
+        return JSONResponse(payload, status_code=status)
 
-        set_env_var(key, str(body.get("value") or ""))
-        return JSONResponse({"ok": True, "key": key})
+    @app.put("/api/env")
+    async def api_env_put(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        payload, status = _env_set_payload(body if isinstance(body, dict) else {})
+        return JSONResponse(payload, status_code=status)
 
     @app.get("/api/env/{key}/reveal")
     async def api_env_reveal(key: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        values = _env_file_values()
-        if key not in values and key not in os.environ:
-            return JSONResponse({"ok": False, "error": "key not set", "key": key}, status_code=404)
-        return JSONResponse({"ok": True, "key": key, "value": values.get(key, os.environ.get(key, ""))})
+        payload, status = _env_reveal_payload(key)
+        return JSONResponse(payload, status_code=status)
+
+    @app.post("/api/env/reveal")
+    async def api_env_reveal_post(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        key = str((body if isinstance(body, dict) else {}).get("key") or "").strip()
+        if not key:
+            return JSONResponse({"ok": False, "error": "missing key"}, status_code=400)
+        payload, status = _env_reveal_payload(key)
+        return JSONResponse(payload, status_code=status)
 
     @app.delete("/api/env/{key}")
     async def api_env_delete(key: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        return JSONResponse({"ok": _delete_env_key(key), "key": key})
+        return JSONResponse(_env_delete_payload(key))
+
+    @app.delete("/api/env")
+    async def api_env_delete_body(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            body = {}
+        key = str((body if isinstance(body, dict) else {}).get("key") or "").strip()
+        if not key:
+            return JSONResponse({"ok": False, "error": "missing key"}, status_code=400)
+        return JSONResponse(_env_delete_payload(key))
 
     @app.get("/api/providers")
     async def api_providers_get(request: Request) -> JSONResponse:
