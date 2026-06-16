@@ -1990,6 +1990,63 @@ def test_manifest_plugin_enable_disable_and_remove(tmp_path):
     assert plugins.list_manifests(cfg) == []
 
 
+def test_hermes_style_plugin_yaml_metadata_category_key_and_safe_mode(tmp_path, monkeypatch):
+    from aegis import config as cfg_paths
+    from aegis import plugins
+    from aegis.config import Config
+
+    cfg = Config.load()
+    pkg = cfg_paths.sub("plugins") / "observability" / "langfuse"
+    pkg.mkdir(parents=True, exist_ok=True)
+    (pkg / "plugin.yaml").write_text(
+        "name: langfuse\n"
+        "version: 2.0.0\n"
+        "description: Observability exporter\n"
+        "author: AEGIS\n"
+        "kind: backend\n"
+        "requires_env:\n"
+        "  - LANGFUSE_PUBLIC_KEY\n"
+        "provides_tools:\n"
+        "  - trace_export\n"
+        "hooks:\n"
+        "  - post_llm_call\n",
+        encoding="utf-8",
+    )
+    (pkg / "__init__.py").write_text(
+        "def register(api):\n"
+        "    class T:\n"
+        "        name='trace_export'\n"
+        "    api.register_tool(T())\n"
+        "    api.register_hook('post_llm_call', lambda **kwargs: None)\n"
+        "    api.register_middleware('tool_request', lambda payload, next_call, agent=None: next_call(payload))\n",
+        encoding="utf-8",
+    )
+
+    manifest = next(m for m in plugins.list_manifests(cfg) if m.name == "langfuse")
+    assert manifest.key == "observability/langfuse"
+    assert manifest.category == "observability"
+    assert manifest.kind == "backend"
+    assert manifest.requires_env == ["LANGFUSE_PUBLIC_KEY"]
+    assert manifest.provides_tools == ["trace_export"]
+    assert manifest.provides_hooks == ["post_llm_call"]
+
+    api = plugins.load_plugins(config=cfg)
+    row = next(r for r in plugins.plugin_status(cfg, api) if r["key"] == "observability/langfuse")
+    assert row["status"] == "loaded"
+    assert row["tool_names"] == ["trace_export"]
+    assert row["hook_names"] == ["post_llm_call"]
+    assert row["middleware_kinds"] == ["tool_request"]
+
+    assert plugins.disable("observability/langfuse", cfg) is True
+    assert plugins.load_plugins(config=cfg).tools == []
+    assert plugins.enable("langfuse", cfg) is True
+    assert [t.name for t in plugins.load_plugins(config=cfg).tools] == ["trace_export"]
+
+    monkeypatch.setenv("AEGIS_SAFE_MODE", "1")
+    assert plugins.list_manifests(cfg) == []
+    assert plugins.load_plugins(config=cfg).tools == []
+
+
 def test_plugin_module_is_registered_during_import_and_cleaned_up():
     import sys
     from aegis import config as cfg_paths

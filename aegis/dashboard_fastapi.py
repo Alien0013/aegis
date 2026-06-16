@@ -1049,7 +1049,7 @@ def _validate_plugin_source(source: str) -> dict:
         return {"ok": False, "source": source, "error": "source does not exist"}
     if path.is_file() and path.suffix != ".py":
         return {"ok": False, "source": str(path), "error": "plugin file must be a .py file"}
-    if path.is_dir() and not any((path / name).exists() for name in ("plugin.json", "aegis-plugin.json")):
+    if path.is_dir() and not any((path / name).exists() for name in ("plugin.yaml", "plugin.yml", "plugin.json", "aegis-plugin.json")):
         py_files = [p for p in path.glob("*.py") if not p.name.startswith("_")]
         if not py_files:
             return {"ok": False, "source": str(path), "error": "directory needs a plugin manifest or .py file"}
@@ -1153,23 +1153,45 @@ def _patched_message(message, body: dict):
 
 
 def _plugins_payload(config: Config) -> dict:
-    from .plugins import list_manifests, load_plugins
+    from .plugins import list_manifests, load_plugins, plugin_status, safe_mode_enabled
 
     api = load_plugins(quiet=True, config=config)
+    status_rows = plugin_status(config, api)
     return {
-        "plugins": [m.to_dict() for m in list_manifests(config)],
+        "plugins": status_rows,
+        "manifests": [m.to_dict() for m in list_manifests(config)],
+        "plugin_status": status_rows,
+        "loaded": [str(p) for p in api.files if p not in {e[0] for e in api.errors}],
         "tools": [getattr(t, "name", "") for t in api.tools],
+        "tool_names": [getattr(t, "name", "") for t in api.tools],
         "channels": sorted(api.channels.keys()),
         "providers": list(api.providers),
         "errors": [{"path": str(path), "error": error} for path, error in api.errors],
         "enabled": config.get("plugins.enabled", []) or [],
         "disabled": config.get("plugins.disabled", []) or [],
         "allowlist": config.get("plugins.allowlist", []) or [],
+        "safe_mode": safe_mode_enabled(),
     }
 
 
-_DASHBOARD_STATIC_DENY_SUFFIXES = {
-    ".py", ".pyc", ".pyo", ".toml", ".yaml", ".yml", ".json", ".env", ".sqlite", ".db",
+_DASHBOARD_STATIC_TYPES = {
+    ".js": "application/javascript",
+    ".mjs": "application/javascript",
+    ".css": "text/css",
+    ".json": "application/json",
+    ".html": "text/html",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".ico": "image/x-icon",
+    ".woff2": "font/woff2",
+    ".woff": "font/woff",
+    ".ttf": "font/ttf",
+    ".otf": "font/otf",
+    ".map": "application/json",
 }
 
 
@@ -1194,8 +1216,10 @@ def _safe_plugin_relpath(value: str, *, suffix: str = "") -> str:
 
 
 def _dashboard_plugin_records(config: Config) -> list[dict[str, Any]]:
-    from .plugins import list_manifests
+    from .plugins import list_manifests, safe_mode_enabled
 
+    if safe_mode_enabled():
+        return []
     rows: list[dict[str, Any]] = []
     for manifest in list_manifests(config):
         if not manifest.enabled:
@@ -1215,29 +1239,59 @@ def _dashboard_plugin_records(config: Config) -> list[dict[str, Any]]:
             name = _safe_resource_name(str(data.get("name") or manifest.name), "plugin")
         except ValueError:
             continue
-        dist_root = (dash_root / "dist").resolve()
-        entry = _safe_plugin_relpath(str(data.get("entry") or "index.js"))
+        asset_root = dash_root.resolve()
+        entry = _safe_plugin_relpath(str(data.get("entry") or "dist/index.js"))
         css_raw = data.get("css") or []
         css = [_safe_plugin_relpath(str(item)) for item in (css_raw if isinstance(css_raw, list) else [css_raw])]
         css = [item for item in css if item]
-        api_rel = _safe_plugin_relpath(str(data.get("api") or ""), suffix=".py")
-        api_path = (plugin_root / api_rel).resolve() if api_rel else None
-        if api_path is not None and not _contained(plugin_root.resolve(), api_path):
-            api_path = None
+        api_value = str(data.get("api") or "")
+        if not api_value and (dash_root / "plugin_api.py").exists():
+            api_value = "plugin_api.py"
+        api_rel = _safe_plugin_relpath(api_value, suffix=".py")
+        api_path = (dash_root / api_rel).resolve() if api_rel else None
+        api_compat_root = False
+        if api_path is not None and (not _contained(dash_root.resolve(), api_path) or not api_path.exists()):
+            compat_path = (plugin_root / api_rel).resolve()
+            if _contained(plugin_root.resolve(), compat_path) and compat_path.exists():
+                api_path = compat_path
+                api_compat_root = True
+            else:
+                api_path = None
+        raw_tab = data.get("tab", {}) if isinstance(data.get("tab"), dict) else {}
+        tab = {
+            "path": raw_tab.get("path", f"/{name}"),
+            "position": raw_tab.get("position", "end"),
+        }
+        if raw_tab.get("label"):
+            tab["label"] = raw_tab.get("label")
+        override = raw_tab.get("override")
+        if isinstance(override, str) and override.startswith("/"):
+            tab["override"] = override
+        if bool(raw_tab.get("hidden")):
+            tab["hidden"] = True
+        slots = [str(slot) for slot in (data.get("slots") or []) if isinstance(slot, str) and slot]
         rows.append({
             "name": name,
             "plugin": manifest.name,
+            "key": manifest.key or manifest.name,
+            "kind": manifest.kind,
+            "category": manifest.category,
+            "source": manifest.source,
+            "label": str(data.get("label") or data.get("title") or name),
+            "icon": str(data.get("icon") or "Puzzle"),
             "title": str(data.get("title") or data.get("label") or name),
             "description": str(data.get("description") or manifest.description or ""),
             "version": str(data.get("version") or manifest.version or ""),
-            "tab": data.get("tab", False),
-            "slots": data.get("slots") if isinstance(data.get("slots"), list) else [],
+            "tab": tab,
+            "slots": slots,
             "entry": entry,
             "css": css,
             "base_path": f"/dashboard-plugins/{name}",
             "has_api": bool(api_path and api_path.exists()),
+            "api_compat_root": api_compat_root,
             "_root": str(plugin_root.resolve()),
-            "_dist": str(dist_root),
+            "_asset_root": str(asset_root),
+            "_dist": str((dash_root / "dist").resolve()),
             "_api": str(api_path) if api_path and api_path.exists() else "",
         })
     return rows
@@ -1262,14 +1316,18 @@ def _dashboard_plugin_static(config: Config, name: str, file_path: str) -> Respo
     rel = _safe_plugin_relpath(file_path)
     if not rel:
         raise HTTPException(status_code=404, detail="asset not found")
-    target = (Path(record["_dist"]) / rel).resolve()
-    dist_root = Path(record["_dist"]).resolve()
-    if not _contained(dist_root, target) or not target.is_file():
-        raise HTTPException(status_code=404, detail="asset not found")
-    if target.suffix.lower() in _DASHBOARD_STATIC_DENY_SUFFIXES:
+    asset_root = Path(record.get("_asset_root") or record["_dist"]).resolve()
+    target = (asset_root / rel).resolve()
+    if not _contained(asset_root, target) or not target.is_file():
+        dist_root = Path(record["_dist"]).resolve()
+        fallback = (dist_root / rel).resolve()
+        if not _contained(dist_root, fallback) or not fallback.is_file():
+            raise HTTPException(status_code=404, detail="asset not found")
+        target = fallback
+    media_type = _DASHBOARD_STATIC_TYPES.get(target.suffix.lower())
+    if not media_type:
         raise HTTPException(status_code=404, detail="asset not found")
     data = target.read_bytes()
-    media_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
     return Response(data, media_type=media_type)
 
 
@@ -1288,7 +1346,14 @@ def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
             if spec is None or spec.loader is None:
                 continue
             module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
+            import sys
+
+            sys.modules[module_name] = module
+            try:
+                spec.loader.exec_module(module)
+            except Exception:
+                sys.modules.pop(module_name, None)
+                raise
             router = getattr(module, "router", None)
             get_router = getattr(module, "get_router", None)
             if router is None and callable(get_router):

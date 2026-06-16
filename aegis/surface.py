@@ -50,6 +50,8 @@ class PluginInventory:
     tools: list[str]
     channels: list[str]
     providers: list[str]
+    manifests: list[dict[str, Any]] = field(default_factory=list)
+    status: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -1097,9 +1099,10 @@ def skill_inventory(config: Config, cwd: Path | None = None) -> SkillInventory:
 
 def plugin_inventory() -> PluginInventory:
     from . import config as cfg
-    from .plugins import load_plugins
+    from .plugins import list_manifests, load_plugins, plugin_status
 
     api = load_plugins(quiet=True)
+    status = plugin_status(api=api)
     return PluginInventory(
         path=cfg.sub("plugins"),
         files_count=len(api.files),
@@ -1108,4 +1111,6 @@ def plugin_inventory() -> PluginInventory:
         tools=sorted(getattr(t, "name", str(t)) for t in api.tools),
         channels=sorted(api.channels),
         providers=sorted(api.providers),
+        manifests=[m.to_dict() for m in list_manifests()],
+        status=status,
     )

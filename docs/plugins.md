@@ -1,9 +1,10 @@
 # Plugins
 
-AEGIS supports two plugin shapes:
+AEGIS supports three plugin shapes:
 
 - Drop a legacy `*.py` file in `~/.aegis/plugins/`.
 - Install a manifest package with `plugin.json` or `aegis-plugin.json`.
+- Install a Hermes-style package with `plugin.yaml` or `plugin.yml`.
 
 ## Manifest packages
 
@@ -22,6 +23,28 @@ The entrypoint is a normal plugin module with `register(api)`:
 def register(api):
     api.register_tool(MyTool())
 ```
+
+Hermes-style YAML packages are also accepted:
+
+```yaml
+name: langfuse
+version: 1.0.0
+description: Observability exporter
+author: AEGIS
+kind: backend
+requires_env:
+  - LANGFUSE_PUBLIC_KEY
+provides_tools:
+  - trace_export
+hooks:
+  - post_llm_call
+```
+
+If a YAML manifest omits `entrypoint`, AEGIS loads `__init__.py` when it exists.
+Nested packages get stable category keys, for example
+`~/.aegis/plugins/observability/langfuse/plugin.yaml` becomes
+`observability/langfuse`. Enable and disable accept either the key or the
+manifest name.
 
 Plugins can also register runtime extension points:
 
@@ -67,3 +90,8 @@ packages add lifecycle metadata and avoid loading disabled package files.
 
 The dashboard `/api/plugins` endpoint and Plugins page show loaded files,
 manifest state, registered tools, channel names, provider names, and load errors.
+They also expose plugin status, source, kind, category, declared env/tool/hook
+metadata, and per-plugin hook/middleware/provider/tool registrations.
+
+Set `AEGIS_SAFE_MODE=1` or `HERMES_SAFE_MODE=1` to skip plugin discovery and
+loading during troubleshooting.

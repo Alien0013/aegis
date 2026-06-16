@@ -17,11 +17,12 @@ Example ``~/.aegis/plugins/hello_tool.py``::
 from __future__ import annotations
 
 import hashlib
+import os
 import json
 import importlib.util
 import shutil
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -41,10 +42,13 @@ class PluginAPI:
         tool.source = getattr(tool, "source", "") or "plugin"
         if self._current_plugin is not None:
             tool._aegis_plugin = str(self._current_plugin)
+            _PLUGIN_TOOLS.setdefault(self._current_plugin, []).append(getattr(tool, "name", str(tool)))
         self.tools.append(tool)
 
     def register_channel(self, name: str, factory) -> None:
         self.channels[name] = factory
+        if self._current_plugin is not None:
+            _PLUGIN_CHANNELS.setdefault(self._current_plugin, []).append(name)
 
     def register_provider(self, spec) -> None:
         from .providers.registry import register_provider
@@ -93,10 +97,13 @@ _MIDDLEWARE: dict[str, list] = {}
 _PLUGIN_HOOKS: dict[Path, list[tuple[str, Any]]] = {}
 _PLUGIN_MIDDLEWARE: dict[Path, list[tuple[str, Any]]] = {}
 _PLUGIN_PROVIDERS: dict[Path, list[str]] = {}
+_PLUGIN_TOOLS: dict[Path, list[str]] = {}
+_PLUGIN_CHANNELS: dict[Path, list[str]] = {}
 _PLUGIN_MODULES: dict[Path, str] = {}
 
 
-MANIFEST_NAMES = ("aegis-plugin.json", "plugin.json")
+MANIFEST_NAMES = ("plugin.yaml", "plugin.yml", "aegis-plugin.json", "plugin.json")
+_VALID_PLUGIN_KINDS = {"standalone", "backend", "exclusive", "platform", "model-provider"}
 
 
 @dataclass
@@ -106,16 +113,34 @@ class PluginManifest:
     entrypoint: Path | None
     version: str = ""
     description: str = ""
+    author: str = ""
+    kind: str = "standalone"
+    key: str = ""
+    category: str = ""
+    source: str = "user"
+    manifest_version: int = 1
+    requires_env: list[Any] = field(default_factory=list)
+    provides_tools: list[str] = field(default_factory=list)
+    provides_hooks: list[str] = field(default_factory=list)
     enabled: bool = True
     raw: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
+            "key": self.key or self.name,
             "path": str(self.path),
             "entrypoint": str(self.entrypoint) if self.entrypoint else "",
             "version": self.version,
             "description": self.description,
+            "author": self.author,
+            "kind": self.kind,
+            "category": self.category,
+            "source": self.source,
+            "manifest_version": self.manifest_version,
+            "requires_env": self.requires_env,
+            "provides_tools": self.provides_tools,
+            "provides_hooks": self.provides_hooks,
             "enabled": self.enabled,
         }
 
@@ -197,6 +222,14 @@ def _plugin_base() -> Path:
     return cfg.sub("plugins")
 
 
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def safe_mode_enabled() -> bool:
+    return _env_truthy("AEGIS_SAFE_MODE") or _env_truthy("HERMES_SAFE_MODE")
+
+
 def _contained_path(root: Path, path: Path) -> bool:
     try:
         path.relative_to(root)
@@ -205,64 +238,132 @@ def _contained_path(root: Path, path: Path) -> bool:
         return False
 
 
-def _read_manifest(path: Path, config=None) -> PluginManifest | None:
+def _read_manifest_data(path: Path) -> dict[str, Any] | None:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        if path.suffix.lower() in {".yaml", ".yml"}:
+            import yaml
+
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        else:
+            data = json.loads(path.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001
         return None
-    if not isinstance(data, dict):
+    return data if isinstance(data, dict) else None
+
+
+def _list_field(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return list(value)
+    return [value]
+
+
+def _string_list(value: Any) -> list[str]:
+    return [str(item) for item in _list_field(value) if str(item).strip()]
+
+
+def _manifest_key(path: Path, name: str, base: Path | None) -> tuple[str, str]:
+    if base is None:
+        return name, ""
+    try:
+        rel_parent = path.parent.relative_to(base)
+    except ValueError:
+        return name, ""
+    parts = [p for p in rel_parent.parts if p not in {"", "."}]
+    if len(parts) >= 2:
+        return "/".join(parts), parts[0]
+    return name, ""
+
+
+def _manifest_enabled(name: str, key: str, config=None) -> bool:
+    disabled = set((config.get("plugins.disabled", []) if config else []) or [])
+    allowlist = set((config.get("plugins.allowlist", []) if config else []) or [])
+    aliases = {name, key or name}
+    return not (aliases & disabled) and (not allowlist or bool(aliases & allowlist))
+
+
+def _read_manifest(path: Path, config=None, *, base: Path | None = None,
+                   source: str = "user") -> PluginManifest | None:
+    data = _read_manifest_data(path)
+    if not data:
         return None
     name = str(data.get("name") or path.parent.name)
+    key = str(data.get("key") or "")
+    category = str(data.get("category") or "")
+    if not key:
+        key, category = _manifest_key(path, name, base)
+    elif not category and "/" in key:
+        category = key.split("/", 1)[0]
+    kind = str(data.get("kind") or data.get("type") or "standalone")
+    if kind not in _VALID_PLUGIN_KINDS:
+        kind = "standalone"
     entry = data.get("entrypoint") or data.get("main") or ""
+    if not entry and path.suffix.lower() in {".yaml", ".yml"} and (path.parent / "__init__.py").exists():
+        entry = "__init__.py"
     entrypoint = None
     if entry:
         root = path.parent.resolve()
         candidate = (path.parent / str(entry)).resolve()
         if _contained_path(root, candidate):
             entrypoint = candidate
-    disabled = set((config.get("plugins.disabled", []) if config else []) or [])
-    allowlist = set((config.get("plugins.allowlist", []) if config else []) or [])
-    enabled = name not in disabled and (not allowlist or name in allowlist)
     return PluginManifest(
         name=name,
         path=path,
         entrypoint=entrypoint,
         version=str(data.get("version") or ""),
         description=str(data.get("description") or ""),
-        enabled=enabled,
+        author=str(data.get("author") or ""),
+        kind=kind,
+        key=key or name,
+        category=category,
+        source=source,
+        manifest_version=int(data.get("manifest_version") or 1),
+        requires_env=_list_field(data.get("requires_env") or data.get("required_env")),
+        provides_tools=_string_list(data.get("provides_tools")),
+        provides_hooks=_string_list(data.get("provides_hooks") or data.get("hooks")),
+        enabled=_manifest_enabled(name, key or name, config),
         raw=data,
     )
 
 
 def list_manifests(config=None) -> list[PluginManifest]:
+    if safe_mode_enabled():
+        return []
     base = _plugin_base()
     found: list[PluginManifest] = []
     if not base.exists():
         return found
     seen: set[Path] = set()
+    seen_manifest_dirs: set[Path] = set()
     for name in MANIFEST_NAMES:
         for path in sorted(base.rglob(name)):
-            manifest = _read_manifest(path, config)
+            manifest_dir = path.parent.resolve()
+            if manifest_dir in seen_manifest_dirs:
+                continue
+            manifest = _read_manifest(path, config, base=base, source="user")
             if manifest:
+                seen_manifest_dirs.add(manifest_dir)
                 found.append(manifest)
                 if manifest.entrypoint:
                     seen.add(manifest.entrypoint)
-    disabled = set((config.get("plugins.disabled", []) if config else []) or [])
-    allowlist = set((config.get("plugins.allowlist", []) if config else []) or [])
     for path in sorted(base.glob("*.py")):
         if path in seen or path.name.startswith("_"):
             continue
         name = path.stem
         found.append(PluginManifest(
             name=name,
+            key=name,
             path=path,
             entrypoint=path,
-            enabled=name not in disabled and (not allowlist or name in allowlist),
+            source="user",
+            enabled=_manifest_enabled(name, name, config),
         ))
     return found
 
 
 def _clear_plugin_side_effects(path: Path) -> None:
+    path = path.resolve()
     module_name = _PLUGIN_MODULES.pop(path, None)
     if module_name:
         sys.modules.pop(module_name, None)
@@ -284,6 +385,8 @@ def _clear_plugin_side_effects(path: Path) -> None:
                 unregister_provider(name)
         except Exception:  # noqa: BLE001
             pass
+    _PLUGIN_TOOLS.pop(path, None)
+    _PLUGIN_CHANNELS.pop(path, None)
 
 
 def _module_name_for(path: Path) -> str:
@@ -292,6 +395,7 @@ def _module_name_for(path: Path) -> str:
 
 
 def _load_plugin_file(api: PluginAPI, path: Path, *, quiet: bool) -> None:
+    path = path.resolve()
     api.files.append(path)
     _clear_plugin_side_effects(path)
     try:
@@ -319,6 +423,14 @@ def _load_plugin_file(api: PluginAPI, path: Path, *, quiet: bool) -> None:
             print(f"  ! plugin {path.name} failed to load: {e}")
 
 
+def _manifest_matches(manifest: PluginManifest, name: str) -> bool:
+    return name in {manifest.name, manifest.key or manifest.name}
+
+
+def _find_manifest(name: str, config) -> PluginManifest | None:
+    return next((m for m in list_manifests(config) if _manifest_matches(m, name)), None)
+
+
 def _set_enabled(config, name: str, enabled: bool) -> None:
     plugins = config.data.setdefault("plugins", {})
     disabled = [x for x in plugins.get("disabled", []) if x != name]
@@ -333,20 +445,21 @@ def _set_enabled(config, name: str, enabled: bool) -> None:
 
 
 def enable(name: str, config) -> bool:
-    if not any(m.name == name for m in list_manifests(config)):
+    manifest = _find_manifest(name, config)
+    if manifest is None:
         return False
-    _set_enabled(config, name, True)
+    _set_enabled(config, manifest.key or manifest.name, True)
     clear_runtime_cache()
     return True
 
 
 def disable(name: str, config) -> bool:
-    manifest = next((m for m in list_manifests(config) if m.name == name), None)
+    manifest = _find_manifest(name, config)
     if manifest is None:
         return False
     if manifest.entrypoint:
         _clear_plugin_side_effects(manifest.entrypoint)
-    _set_enabled(config, name, False)
+    _set_enabled(config, manifest.key or manifest.name, False)
     clear_runtime_cache()
     return True
 
@@ -370,7 +483,7 @@ def install(source: str, config, *, force: bool = False) -> str:
                 raise ValueError(f"{dest.name} already exists; pass --force to replace")
             shutil.rmtree(dest)
         shutil.copytree(src, dest)
-        manifest = next((_read_manifest(dest / n, config) for n in MANIFEST_NAMES
+        manifest = next((_read_manifest(dest / n, config, base=base, source="user") for n in MANIFEST_NAMES
                          if (dest / n).exists()), None)
         name = manifest.name if manifest else dest.name
     enable(name, config)
@@ -381,7 +494,7 @@ def install(source: str, config, *, force: bool = False) -> str:
 def remove(name: str, config) -> bool:
     base = _plugin_base()
     manifests = list_manifests(config)
-    match = next((m for m in manifests if m.name == name), None)
+    match = next((m for m in manifests if _manifest_matches(m, name)), None)
     target = match.path if match else base / f"{name}.py"
     if target.is_file() and target.name in MANIFEST_NAMES:
         target = target.parent
@@ -393,8 +506,11 @@ def remove(name: str, config) -> bool:
     except FileNotFoundError:
         return False
     plugins = config.data.setdefault("plugins", {})
-    plugins["enabled"] = [x for x in plugins.get("enabled", []) if x != name]
-    plugins["disabled"] = [x for x in plugins.get("disabled", []) if x != name]
+    aliases = {name}
+    if match:
+        aliases.update({match.name, match.key or match.name})
+    plugins["enabled"] = [x for x in plugins.get("enabled", []) if x not in aliases]
+    plugins["disabled"] = [x for x in plugins.get("disabled", []) if x not in aliases]
     config.save()
     if match and match.entrypoint:
         _clear_plugin_side_effects(match.entrypoint)
@@ -413,8 +529,47 @@ def clear_runtime_cache() -> None:
         _clear_plugin_side_effects(path)
 
 
+def plugin_status(config=None, api: PluginAPI | None = None) -> list[dict[str, Any]]:
+    api = api or load_plugins(quiet=True, config=config)
+    errors = {Path(path).resolve(): msg for path, msg in api.errors}
+    loaded = {Path(path).resolve() for path in api.files if Path(path).resolve() not in errors}
+    rows: list[dict[str, Any]] = []
+    for manifest in list_manifests(config):
+        row = manifest.to_dict()
+        entrypoint = manifest.entrypoint.resolve() if manifest.entrypoint else None
+        if not manifest.enabled:
+            status = "disabled"
+        elif entrypoint is None:
+            status = "inactive"
+        elif entrypoint in errors:
+            status = "error"
+            row["error"] = errors[entrypoint]
+        elif entrypoint in loaded:
+            status = "loaded"
+        else:
+            status = "inactive"
+        row.update({
+            "status": status,
+            "loaded": status == "loaded",
+            "tool_names": sorted(_PLUGIN_TOOLS.get(entrypoint, [])) if entrypoint else [],
+            "channel_names": sorted(_PLUGIN_CHANNELS.get(entrypoint, [])) if entrypoint else [],
+            "provider_names": sorted(_PLUGIN_PROVIDERS.get(entrypoint, [])) if entrypoint else [],
+            "hook_names": sorted(event for event, _fn in _PLUGIN_HOOKS.get(entrypoint, [])) if entrypoint else [],
+            "middleware_kinds": sorted(kind for kind, _fn in _PLUGIN_MIDDLEWARE.get(entrypoint, [])) if entrypoint else [],
+        })
+        row["tools_registered"] = len(row["tool_names"])
+        row["channels_registered"] = len(row["channel_names"])
+        row["providers_registered"] = len(row["provider_names"])
+        row["hooks_registered"] = len(row["hook_names"])
+        row["middleware_registered"] = len(row["middleware_kinds"])
+        rows.append(row)
+    return rows
+
+
 def load_plugins(*, quiet: bool = False, config=None) -> PluginAPI:
     api = PluginAPI()
+    if safe_mode_enabled():
+        return api
     base = _plugin_base()
     if not base.exists():
         return api

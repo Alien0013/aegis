@@ -863,6 +863,86 @@ def test_fastapi_dashboard_plugins_manifest_assets_and_api(tmp_path, monkeypatch
     assert allowed.json() == {"pong": True}
 
 
+def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api(tmp_path, monkeypatch):
+    plug = tmp_path / "plugins" / "analytics" / "pulse"
+    (plug / "dashboard" / "dist").mkdir(parents=True)
+    (plug / "plugin.yaml").write_text(
+        "name: pulse\n"
+        "version: 2.1.0\n"
+        "description: Pulse dashboard plugin\n"
+        "kind: backend\n"
+        "author: AEGIS\n",
+        encoding="utf-8",
+    )
+    (plug / "__init__.py").write_text("def register(api):\n    pass\n", encoding="utf-8")
+    (plug / "dashboard" / "manifest.json").write_text(
+        json.dumps({
+            "name": "pulse-panel",
+            "label": "Pulse",
+            "description": "Live pulse",
+            "icon": "Activity",
+            "tab": {
+                "path": "/pulse",
+                "position": "after:sessions",
+                "override": "/overview",
+                "hidden": True,
+            },
+            "slots": ["overview.header", {"bad": True}, ""],
+            "entry": "dist/index.js",
+            "css": ["dist/style.css"],
+            "api": "plugin_api.py",
+        }),
+        encoding="utf-8",
+    )
+    (plug / "dashboard" / "dist" / "index.js").write_text("window.pulse = true;", encoding="utf-8")
+    (plug / "dashboard" / "dist" / "style.css").write_text(".pulse{}", encoding="utf-8")
+    (plug / "dashboard" / "plugin_api.py").write_text(
+        "from fastapi import APIRouter\n"
+        "router = APIRouter()\n"
+        "@router.get('/pulse')\n"
+        "def pulse():\n"
+        "    return {'pulse': True}\n",
+        encoding="utf-8",
+    )
+
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    plugins = asyncio.run(_request(app, "GET", "/api/plugins", headers=headers))
+    assert plugins.status_code == 200
+    status = next(row for row in plugins.json()["plugin_status"] if row["key"] == "analytics/pulse")
+    assert status["kind"] == "backend"
+    assert status["source"] == "user"
+    assert status["status"] == "loaded"
+
+    manifest = asyncio.run(_request(app, "GET", "/api/dashboard/plugins", headers=headers))
+    assert manifest.status_code == 200
+    row = next(item for item in manifest.json() if item["name"] == "pulse-panel")
+    assert row["label"] == "Pulse"
+    assert row["icon"] == "Activity"
+    assert row["source"] == "user"
+    assert row["key"] == "analytics/pulse"
+    assert row["tab"] == {
+        "path": "/pulse",
+        "position": "after:sessions",
+        "override": "/overview",
+        "hidden": True,
+    }
+    assert row["slots"] == ["overview.header"]
+    assert row["entry"] == "dist/index.js"
+    assert row["css"] == ["dist/style.css"]
+    assert row["has_api"] is True
+    assert row["api_compat_root"] is False
+
+    asset = asyncio.run(_request(app, "GET", "/dashboard-plugins/pulse-panel/dist/index.js"))
+    assert asset.status_code == 200
+    assert "window.pulse" in asset.text
+
+    route = asyncio.run(_request(app, "GET", "/api/plugins/pulse-panel/pulse", headers=headers))
+    assert route.status_code == 200
+    assert route.json() == {"pulse": True}
+
+
 def test_fastapi_audio_control_plane(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
     headers = {"X-Aegis-Token": "t"}
