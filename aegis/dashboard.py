@@ -2269,13 +2269,14 @@ def _dashboard_mcp_catalog(config: Config, *, live: bool = False) -> dict:
         servers.append({
             "name": str(name),
             "transport": transport,
+            "enabled": bool(spec.get("enabled", True)),
             "command": spec.get("command", ""),
             "args": list(spec.get("args") or []),
             "url": _redact_url(str(spec.get("url", ""))) if spec.get("url") else "",
             "cwd": spec.get("cwd", ""),
             "env_keys": sorted((spec.get("env") or {}).keys()),
             "header_keys": sorted((spec.get("headers") or {}).keys()),
-            "status": "configured",
+            "status": "configured" if bool(spec.get("enabled", True)) else "disabled",
             **(_mcp_live_inventory(str(name), spec) if live else {}),
         })
     recipes = []

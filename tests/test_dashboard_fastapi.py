@@ -742,6 +742,22 @@ def test_fastapi_typed_mcp_and_skills_routes(tmp_path, monkeypatch):
     assert probe.status_code == 200
     assert probe.json()["tools"] == ["read", "write"]
 
+    probe_alias = asyncio.run(_request(app, "POST", "/api/mcp/servers/local/test", headers=headers))
+    assert probe_alias.status_code == 200
+    assert probe_alias.json()["tools"] == ["read", "write"]
+
+    disabled = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/mcp/servers/local/enabled",
+        json={"enabled": False},
+        headers=headers,
+    ))
+    assert disabled.status_code == 200
+    local = next(row for row in disabled.json()["servers"] if row["name"] == "local")
+    assert local["enabled"] is False
+    assert local["status"] == "disabled"
+
     tools = asyncio.run(_request(
         app,
         "POST",
@@ -751,6 +767,24 @@ def test_fastapi_typed_mcp_and_skills_routes(tmp_path, monkeypatch):
     ))
     assert tools.status_code == 200
     assert saved["local"] == ["read"]
+
+    def fake_install_from_catalog(config, name):
+        servers = config.data.setdefault("mcp", {}).setdefault("servers", {})
+        servers[name] = {"command": "uvx", "args": [name]}
+        config.save()
+        return servers[name]
+
+    monkeypatch.setattr(mcp_client, "install_from_catalog", fake_install_from_catalog)
+    catalog_install = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/mcp/catalog/install",
+        json={"name": "fetcher"},
+        headers=headers,
+    ))
+    assert catalog_install.status_code == 200
+    assert catalog_install.json()["name"] == "fetcher"
+    assert any(row["name"] == "fetcher" for row in catalog_install.json()["servers"])
 
     skill = asyncio.run(_request(
         app,

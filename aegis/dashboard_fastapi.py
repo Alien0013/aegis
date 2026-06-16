@@ -1269,6 +1269,8 @@ def _mcp_servers(config: Config) -> dict[str, dict]:
 
 def _mcp_spec_from_body(body: dict, existing: dict | None = None) -> dict:
     spec = dict(existing or {})
+    if "enabled" in body:
+        spec["enabled"] = bool(body.get("enabled"))
     if "url" in body:
         spec.pop("command", None)
         spec.pop("args", None)
@@ -1303,6 +1305,21 @@ def _mcp_spec_from_body(body: dict, existing: dict | None = None) -> dict:
 def _save_mcp_servers(config: Config, servers: dict[str, dict]) -> None:
     config.data.setdefault("mcp", {})["servers"] = servers
     config.save()
+
+
+def _mcp_catalog_install_response(config: Config, name: str) -> JSONResponse:
+    try:
+        from .mcp.client import install_from_catalog
+
+        safe = _safe_resource_name(name, "mcp catalog entry")
+        spec = install_from_catalog(config, safe)
+        target = spec.get("url") or " ".join([spec.get("command", ""), *(spec.get("args") or [])])
+        return JSONResponse({"ok": True, "name": safe, "target": target.strip(),
+                             **dash._dashboard_mcp_catalog(config)})
+    except KeyError:
+        return JSONResponse({"ok": False, "error": "catalog entry not found"}, status_code=404)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
 
 
 def _session_export(session) -> dict:
@@ -3854,18 +3871,16 @@ def create_app(config: Config) -> FastAPI:
     @app.post("/api/mcp/catalog/{name}/install")
     async def api_mcp_catalog_install(name: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        try:
-            from .mcp.client import install_from_catalog
+        return _mcp_catalog_install_response(config, name)
 
-            safe = _safe_resource_name(name, "mcp catalog entry")
-            spec = install_from_catalog(config, safe)
-            target = spec.get("url") or " ".join([spec.get("command", ""), *(spec.get("args") or [])])
-            return JSONResponse({"ok": True, "name": safe, "target": target.strip(),
-                                 **dash._dashboard_mcp_catalog(config)})
-        except KeyError:
-            return JSONResponse({"ok": False, "error": "catalog entry not found"}, status_code=404)
-        except Exception as exc:  # noqa: BLE001
-            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    @app.post("/api/mcp/catalog/install")
+    async def api_mcp_catalog_install_body(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        name = str((body if isinstance(body, dict) else {}).get("name") or "").strip()
+        if not name:
+            return JSONResponse({"ok": False, "error": "missing name"}, status_code=400)
+        return _mcp_catalog_install_response(config, name)
 
     @app.get("/api/mcp/servers/{name}")
     async def api_mcp_server_detail(name: str, request: Request) -> JSONResponse:
@@ -3891,6 +3906,22 @@ def create_app(config: Config) -> FastAPI:
         except ValueError as exc:
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
 
+    @app.put("/api/mcp/servers/{name}/enabled")
+    async def api_mcp_server_enabled(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        try:
+            safe = _safe_resource_name(name, "mcp server")
+            servers = _mcp_servers(config)
+            if safe not in servers:
+                return JSONResponse({"ok": False, "error": "server not found"}, status_code=404)
+            enabled = bool((body if isinstance(body, dict) else {}).get("enabled"))
+            servers[safe] = _mcp_spec_from_body({"enabled": enabled}, servers[safe])
+            _save_mcp_servers(config, servers)
+            return JSONResponse({"ok": True, "name": safe, "enabled": enabled, **dash._dashboard_mcp_catalog(config)})
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
     @app.delete("/api/mcp/servers/{name}")
     async def api_mcp_server_delete(name: str, request: Request) -> JSONResponse:
         _require_request(request, config)
@@ -3904,6 +3935,18 @@ def create_app(config: Config) -> FastAPI:
 
     @app.post("/api/mcp/servers/{name}/probe")
     async def api_mcp_server_probe(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        try:
+            from .mcp.client import probe_server
+
+            safe = _safe_resource_name(name, "mcp server")
+            result = probe_server(config, safe)
+            return JSONResponse(result, status_code=200 if result.get("ok") else 502)
+        except KeyError:
+            return JSONResponse({"ok": False, "error": "server not found", "name": name}, status_code=404)
+
+    @app.post("/api/mcp/servers/{name}/test")
+    async def api_mcp_server_test(name: str, request: Request) -> JSONResponse:
         _require_request(request, config)
         try:
             from .mcp.client import probe_server
