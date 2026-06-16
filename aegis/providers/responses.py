@@ -118,6 +118,7 @@ class ResponsesTransport(ProviderTransport):
         metadata: dict | None = None,
         on_response_id=None,
         on_reasoning: OnDelta | None = None,
+        service_tier: str = "",
     ) -> LLMResponse:
         url = f"{base_url}/responses"
         headers = {"Content-Type": "application/json", **(extra_headers or {}), **auth.headers()}
@@ -167,6 +168,9 @@ class ResponsesTransport(ProviderTransport):
             payload["context_management"] = context_management
         if not is_codex_backend:
             payload["max_output_tokens"] = max_tokens
+        clean_service_tier = str(service_tier or "").strip()
+        if clean_service_tier and not self._is_xai_responses(base_url, model):
+            payload["service_tier"] = clean_service_tier
         eff = {"minimal": "low", "low": "low", "medium": "medium", "high": "high",
                "xhigh": "high"}.get(reasoning)
         if eff:
@@ -185,6 +189,10 @@ class ResponsesTransport(ProviderTransport):
                 on_response_id(str(resp.raw["id"]))
         self._remember_response(session_id, response_state or {}, model, resp, len(messages))
         return resp
+
+    def _is_xai_responses(self, base_url: str, model: str) -> bool:
+        text = f"{base_url} {model}".lower()
+        return "api.x.ai" in text or "grok" in text or "xai" in text
 
     def _metadata(self, metadata: dict | None) -> dict[str, str]:
         if not isinstance(metadata, dict):

@@ -1479,6 +1479,7 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
             "stream": bool(agent.stream),
             "reasoning": getattr(agent, "reasoning", "off"),
             "reasoning_display": agent.config.get("display.reasoning", "summary"),
+            "service_tier": getattr(agent, "service_tier", ""),
         })
         try:
             agent._active_response_id = ""
@@ -1487,6 +1488,7 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                 "stream": agent.stream,
                 "on_delta": delta_cb,
                 "reasoning": getattr(agent, "reasoning", "off"),
+                "service_tier": getattr(agent, "service_tier", ""),
                 "on_reasoning": reasoning_cb,
                 "tool_runner": executor.execute_one_raw,
                 "approver": getattr(agent.tool_context, "approver", None),
@@ -1835,6 +1837,7 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
             stream=agent.stream,
             on_delta=lambda t: emit({"type": "assistant_delta", "text": t}),
             reasoning=getattr(agent, "reasoning", "off"),
+            service_tier=getattr(agent, "service_tier", ""),
             session_id=getattr(agent.session, "id", None),
             response_state=grace_response_state,
             metadata=_provider_metadata(agent),

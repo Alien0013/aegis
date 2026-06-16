@@ -265,6 +265,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "max_spawn_depth": 1,        # flat by default; role=orchestrator can opt into deeper trees
         "context_engine": "default", # context-management strategy (plugins can register others)
         "reasoning_effort": "medium",   # off|minimal|low|medium|high|xhigh
+        "service_tier": "",          # ""/normal or priority (Hermes fast/priority mode)
         "subdir_hints": True,        # inject a subdir's rule files when the agent first works there
         "compression": {"preserve_first": 3, "preserve_last": 20, "max_tool_tokens": 600,
                         # in-loop compaction fires when history fills this fraction of the

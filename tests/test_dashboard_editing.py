@@ -173,6 +173,21 @@ def test_chat_meta_maps_model_picker_to_session_runtime():
     assert meta["runtime"]["reasoning_effort"] == "high"
 
 
+def test_chat_meta_maps_fast_to_service_tier():
+    from aegis.dashboard import _dashboard_chat_meta
+
+    fast = _dashboard_chat_meta({"fast": True}, "/api/chat/stream")
+    assert fast["runtime_controls"] == {"service_tier": "priority"}
+    assert fast["runtime"] == {"service_tier": "priority"}
+
+    normal = _dashboard_chat_meta({"fast": False}, "/api/chat/stream")
+    assert normal["runtime_controls"] == {"service_tier": "normal"}
+    assert normal["runtime"] == {"service_tier": "normal"}
+
+    explicit = _dashboard_chat_meta({"service_tier": "priority"}, "/api/chat/stream")
+    assert explicit["runtime_controls"] == {"service_tier": "priority"}
+
+
 def test_memory_post_add_and_remove(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     monkeypatch.setenv("AEGIS_DASHBOARD_TOKEN", "t")

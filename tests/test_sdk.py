@@ -184,6 +184,7 @@ def test_sdk_respects_session_runtime_controls():
         "reasoning_effort": "high",
         "reasoning_display": "live",
         "busy_mode": "interrupt",
+        "service_tier": "priority",
     }
     session.meta["runtime"] = {
         "provider": "stale-provider",
@@ -191,6 +192,7 @@ def test_sdk_respects_session_runtime_controls():
         "reasoning_effort": "low",
         "reasoning_display": "summary",
         "busy_mode": "queue",
+        "service_tier": "normal",
     }
     SessionStore().save(session)
     captured = {}
@@ -204,12 +206,23 @@ def test_sdk_respects_session_runtime_controls():
         def __init__(self, model):
             self.model = model
             self.last_reasoning = None
+            self.last_service_tier = None
 
         def describe(self):
             return f"custom/{self.model}"
 
-        def complete(self, messages, tools=None, stream=False, on_delta=None, reasoning="off", **_kwargs):
+        def complete(
+            self,
+            messages,
+            tools=None,
+            stream=False,
+            on_delta=None,
+            reasoning="off",
+            service_tier="",
+            **_kwargs,
+        ):
             self.last_reasoning = reasoning
+            self.last_service_tier = service_tier
             return LLMResponse(text="controlled")
 
     def factory(**kwargs):
@@ -228,7 +241,9 @@ def test_sdk_respects_session_runtime_controls():
     run = RunStore().get(result.run_id)
     assert run["data"]["provider"] == "custom"
     assert run["data"]["model"] == "session-model"
+    assert run["data"]["service_tier"] == "priority"
     assert captured["provider_obj"].last_reasoning == "high"
+    assert captured["provider_obj"].last_service_tier == "priority"
     assert cfg.get("display.reasoning") == "live"
     assert cfg.get("gateway.busy_mode") == "interrupt"
 

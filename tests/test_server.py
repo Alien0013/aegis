@@ -343,6 +343,7 @@ def test_openai_chat_completions_http_nonstream_records_run_metadata(monkeypatch
     try:
         status, data = _request(port, "POST", "/v1/chat/completions", {
             "model": "served-model",
+            "service_tier": "priority",
             "metadata": {
                 "session_id": "serve:http",
                 "provider": "served-provider",
@@ -364,6 +365,7 @@ def test_openai_chat_completions_http_nonstream_records_run_metadata(monkeypatch
         "session_id": "serve:http",
         "trace_id": "trace_http",
         "run_id": "run_http",
+        "service_tier": "priority",
     }
     assert body["usage"]["prompt_tokens"] == 11
     call = _FakeRunner.calls[0]
@@ -373,6 +375,7 @@ def test_openai_chat_completions_http_nonstream_records_run_metadata(monkeypatch
     assert call["model"] == "served-model"
     assert call["provider_name"] == "served-provider"
     assert call["cwd"] == str(tmp_path / "project")
+    assert call["meta"]["runtime_controls"]["service_tier"] == "priority"
 
 
 def test_hermes_session_key_chat_echoes_and_stays_separate_from_session_id(monkeypatch, tmp_path):

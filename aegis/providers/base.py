@@ -51,6 +51,7 @@ class ProviderTransport(ABC):
         cwd: Path | None = None,
         metadata: dict | None = None,
         on_response_id: OnResponseId | None = None,
+        service_tier: str = "",
     ) -> LLMResponse:
         """Make one completion call and return a normalized response."""
         raise NotImplementedError
@@ -100,6 +101,7 @@ class Provider:
         response_state: dict | None = None,
         metadata: dict | None = None,
         on_response_id: OnResponseId | None = None,
+        service_tier: str = "",
     ) -> LLMResponse:
         # Live thinking stream: only transports that accept on_reasoning get it.
         extra_kwargs = {}
@@ -118,6 +120,9 @@ class Provider:
             extra_kwargs["metadata"] = metadata
         if on_response_id is not None and "on_response_id" in params:
             extra_kwargs["on_response_id"] = on_response_id
+        clean_service_tier = str(service_tier or "").strip()
+        if clean_service_tier and "service_tier" in params:
+            extra_kwargs["service_tier"] = clean_service_tier
         attempts = 0
         while True:
             try:

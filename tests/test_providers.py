@@ -74,6 +74,98 @@ def test_chat_completions_records_rate_and_balance_headers(monkeypatch):
     assert "tokens left (min): 900" in ratelimit.summary()
 
 
+def test_chat_completions_includes_service_tier(monkeypatch):
+    from aegis.providers.chat_completions import ChatCompletionsTransport
+    from aegis.types import Message
+
+    captured = {}
+
+    class FakeAuth:
+        def headers(self):
+            return {}
+
+    class FakeResponse:
+        status_code = 200
+        headers = {}
+
+        def json(self):
+            return {"choices": [{"message": {"content": "ok"}}], "usage": {}}
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, url, headers, json):
+            captured["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr("aegis.providers.chat_completions.httpx.Client", FakeClient)
+
+    ChatCompletionsTransport().complete(
+        base_url="https://api.openai.com/v1",
+        auth=FakeAuth(),
+        model="gpt-5.5",
+        messages=[Message.user("hi")],
+        tools=None,
+        stream=False,
+        service_tier="priority",
+    )
+
+    assert captured["json"]["service_tier"] == "priority"
+
+
+def test_chat_completions_strips_service_tier_for_xai(monkeypatch):
+    from aegis.providers.chat_completions import ChatCompletionsTransport
+    from aegis.types import Message
+
+    captured = {}
+
+    class FakeAuth:
+        def headers(self):
+            return {}
+
+    class FakeResponse:
+        status_code = 200
+        headers = {}
+
+        def json(self):
+            return {"choices": [{"message": {"content": "ok"}}], "usage": {}}
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, url, headers, json):
+            captured["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr("aegis.providers.chat_completions.httpx.Client", FakeClient)
+
+    ChatCompletionsTransport().complete(
+        base_url="https://api.x.ai/v1",
+        auth=FakeAuth(),
+        model="grok-4.3",
+        messages=[Message.user("hi")],
+        tools=None,
+        stream=False,
+        service_tier="priority",
+    )
+
+    assert "service_tier" not in captured["json"]
+
+
 def test_chat_completions_stream_records_rate_and_balance_headers(monkeypatch):
     from aegis import ratelimit
     from aegis.providers.chat_completions import ChatCompletionsTransport
@@ -237,6 +329,7 @@ def test_responses_payload_includes_instructions(monkeypatch):
         tools=None,
         stream=False,
         metadata={"session_id": "sess_meta", "trace_id": "trace_meta", "empty": ""},
+        service_tier="priority",
     )
 
     assert resp.text == "ok"
@@ -244,6 +337,52 @@ def test_responses_payload_includes_instructions(monkeypatch):
     assert captured["json"]["instructions"] == DEFAULT_INSTRUCTIONS
     assert captured["json"]["store"] is False
     assert captured["json"]["metadata"] == {"session_id": "sess_meta", "trace_id": "trace_meta"}
+    assert captured["json"]["service_tier"] == "priority"
+
+
+def test_responses_strips_service_tier_for_xai(monkeypatch):
+    from aegis.providers.responses import ResponsesTransport
+    from aegis.types import Message
+
+    captured: dict = {}
+
+    class FakeAuth:
+        def headers(self):
+            return {}
+
+    class FakeResponse:
+        status_code = 200
+        headers = {}
+
+        def json(self):
+            return {"output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}]}
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, url, headers, json):
+            captured["json"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr("aegis.providers.responses.httpx.Client", FakeClient)
+    ResponsesTransport().complete(
+        base_url="https://api.x.ai/v1",
+        auth=FakeAuth(),
+        model="grok-4.3",
+        messages=[Message.user("hi")],
+        tools=None,
+        stream=False,
+        service_tier="priority",
+    )
+
+    assert "service_tier" not in captured["json"]
 
 
 def test_responses_records_rate_and_balance_headers(monkeypatch):

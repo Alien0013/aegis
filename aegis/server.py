@@ -24,7 +24,7 @@ from aiohttp import web
 
 from . import config as cfg_paths
 from .config import Config
-from .surface import SurfaceRunner, runtime_controls_meta
+from .surface import SurfaceRunner, normalize_service_tier, runtime_controls_meta
 from .types import Message, ToolCall, new_id
 from .util import now_iso
 
@@ -69,6 +69,15 @@ def _coerce_request_bool(value: Any, default: bool = False) -> bool:
     if text in {"0", "false", "no", "n", "off", ""}:
         return False
     return default
+
+
+def _request_service_tier(body: dict[str, Any], metadata: dict[str, Any] | None = None) -> str:
+    """Normalize service-tier controls from API body or metadata."""
+    metadata = metadata or {}
+    raw = metadata.get("service_tier") or body.get("service_tier")
+    if raw in (None, "") and "fast" in body:
+        raw = "priority" if _coerce_request_bool(body.get("fast"), False) else "normal"
+    return normalize_service_tier(raw)
 
 
 def _parse_cors_origins(value: Any) -> tuple[str, ...]:
@@ -1391,6 +1400,7 @@ def make_handler(config: Config):
             provider_name: Any,
             cwd: Any,
             session_key: str | None,
+            service_tier: str = "",
         ) -> tuple[Any, Any]:
             load_session = getattr(runner, "load_or_create_session", None)
             make_agent = getattr(runner, "make_agent", None)
@@ -1401,6 +1411,8 @@ def make_handler(config: Config):
                 "api": "responses",
                 **({"gateway_session_key": session_key} if session_key else {}),
             }
+            if service_tier:
+                meta.update(runtime_controls_meta({"service_tier": service_tier}))
             session = load_session(
                 session_id,
                 title=title,
@@ -1796,10 +1808,16 @@ def make_handler(config: Config):
                 if isinstance(body.get("metadata"), dict):
                     session.meta.update(body["metadata"])
                 session.meta["source"] = "api_server"
+                runtime_controls: dict[str, Any] = {}
                 if body.get("model"):
-                    session.meta.update(runtime_controls_meta({"model": body.get("model")}))
+                    runtime_controls["model"] = body.get("model")
                 if body.get("provider"):
-                    session.meta.update(runtime_controls_meta({"provider": body.get("provider")}))
+                    runtime_controls["provider"] = body.get("provider")
+                service_tier = _request_service_tier(body, body.get("metadata") if isinstance(body.get("metadata"), dict) else None)
+                if service_tier:
+                    runtime_controls["service_tier"] = service_tier
+                if runtime_controls:
+                    session.meta.update(runtime_controls_meta(runtime_controls))
                 system_prompt = body.get("system_prompt")
                 if system_prompt is not None:
                     if not isinstance(system_prompt, str):
@@ -1857,9 +1875,16 @@ def make_handler(config: Config):
                     store.delete(old_id)
                 child.messages = [Message.from_dict(message.to_dict()) for message in parent.messages]
                 if body.get("model"):
-                    child.meta.update(runtime_controls_meta({"model": body.get("model")}))
+                    runtime_controls = {"model": body.get("model")}
+                else:
+                    runtime_controls = {}
                 if body.get("provider"):
-                    child.meta.update(runtime_controls_meta({"provider": body.get("provider")}))
+                    runtime_controls["provider"] = body.get("provider")
+                service_tier = _request_service_tier(body)
+                if service_tier:
+                    runtime_controls["service_tier"] = service_tier
+                if runtime_controls:
+                    child.meta.update(runtime_controls_meta(runtime_controls))
                 if body.get("title"):
                     child.title = str(body["title"])
                 store.save(child)
@@ -1928,6 +1953,7 @@ def make_handler(config: Config):
                 or self.headers.get("X-Aegis-Cwd")
                 or None
             )
+            service_tier = _request_service_tier(body, metadata)
 
             cid = new_id("chatcmpl")
 
@@ -1940,9 +1966,18 @@ def make_handler(config: Config):
                 }
                 idempotency_fp = _request_fingerprint(
                     idempotency_body,
-                    ["model", "messages", "tools", "tool_choice", "stream", "_session_id_header", "_session_key_header"],
+                    [
+                        "model", "messages", "tools", "tool_choice", "stream",
+                        "service_tier", "fast", "_session_id_header", "_session_key_header",
+                    ],
                 )
                 def compute_response() -> dict[str, Any]:
+                    run_meta = {
+                        "request_id": cid,
+                        **({"gateway_session_key": session_key} if session_key else {}),
+                    }
+                    if service_tier:
+                        run_meta.update(runtime_controls_meta({"service_tier": service_tier}))
                     result = runner.run_prompt(
                         last_user,
                         session_id=session_id,
@@ -1952,16 +1987,15 @@ def make_handler(config: Config):
                         cwd=cwd,
                         stream=False,
                         surface="serve",
-                        meta={
-                            "request_id": cid,
-                            **({"gateway_session_key": session_key} if session_key else {}),
-                        },
+                        meta=run_meta,
                     )
                     response_metadata = {
                         "session_id": result.session.id,
                         "trace_id": result.trace_id,
                         "run_id": result.run_id,
                     }
+                    if service_tier:
+                        response_metadata["service_tier"] = service_tier
                     if session_key:
                         response_metadata["session_key"] = session_key
                     return {
@@ -2003,6 +2037,12 @@ def make_handler(config: Config):
                 except (BrokenPipeError, ConnectionResetError):
                     pass
 
+            run_meta = {
+                "request_id": cid,
+                **({"gateway_session_key": session_key} if session_key else {}),
+            }
+            if service_tier:
+                run_meta.update(runtime_controls_meta({"service_tier": service_tier}))
             result = runner.run_prompt(
                 last_user,
                 session_id=session_id,
@@ -2012,10 +2052,7 @@ def make_handler(config: Config):
                 cwd=cwd,
                 stream=True,
                 surface="serve",
-                meta={
-                    "request_id": cid,
-                    **({"gateway_session_key": session_key} if session_key else {}),
-                },
+                meta=run_meta,
                 on_event=emit,
             )
             final_metadata = {
@@ -2023,6 +2060,8 @@ def make_handler(config: Config):
                 "trace_id": result.trace_id,
                 "run_id": result.run_id,
             }
+            if service_tier:
+                final_metadata["service_tier"] = service_tier
             if session_key:
                 final_metadata["session_key"] = session_key
             final = {"id": cid, "object": "chat.completion.chunk", "created": int(time.time()),
@@ -2098,6 +2137,9 @@ def make_handler(config: Config):
             )
             provider_name = metadata.get("provider") or body.get("provider")
             cwd = metadata.get("cwd") or body.get("cwd")
+            service_tier = _request_service_tier(body, metadata)
+            if service_tier:
+                metadata["service_tier"] = service_tier
             response_title = last_user.content[:80] or response_id
             if stream:
                 sequence = 0
@@ -2300,6 +2342,7 @@ def make_handler(config: Config):
                         provider_name=provider_name,
                         cwd=cwd,
                         session_key=session_key,
+                        service_tier=service_tier,
                     )
                     with state_lock:
                         self._register_response_locked(
@@ -2321,6 +2364,8 @@ def make_handler(config: Config):
                         },
                         "on_event": emit,
                     }
+                    if service_tier:
+                        run_kwargs["meta"].update(runtime_controls_meta({"service_tier": service_tier}))
                     if response_agent is not None:
                         run_kwargs.update({
                             "session": response_session,
@@ -2469,6 +2514,7 @@ def make_handler(config: Config):
                         provider_name=provider_name,
                         cwd=cwd,
                         session_key=session_key,
+                        service_tier=service_tier,
                     )
                     with state_lock:
                         self._register_response_locked(
@@ -2489,6 +2535,8 @@ def make_handler(config: Config):
                             **({"gateway_session_key": session_key} if session_key else {}),
                         },
                     }
+                    if service_tier:
+                        run_kwargs["meta"].update(runtime_controls_meta({"service_tier": service_tier}))
                     if response_agent is not None:
                         run_kwargs.update({
                             "session": response_session,
@@ -2549,6 +2597,7 @@ def make_handler(config: Config):
             if session is None:
                 return self._json(404, {"ok": False, "error": "session not found", "id": session_id})
             prompt = body.get("prompt", body.get("input", body.get("message", "")))
+            service_tier = _request_service_tier(body)
             if stream:
                 stream_run_id = new_id("run")
                 message_id = new_id("msg")
@@ -2585,6 +2634,13 @@ def make_handler(config: Config):
                     if meta:
                         send_event("event", {"message_id": message_id, "event": meta})
 
+                run_meta = {
+                    "request_id": stream_run_id,
+                    "api": "session_chat_stream",
+                    **({"gateway_session_key": session_key} if session_key else {}),
+                }
+                if service_tier:
+                    run_meta.update(runtime_controls_meta({"service_tier": service_tier}))
                 result = runner.run_prompt(
                     str(prompt),
                     session=session,
@@ -2593,11 +2649,7 @@ def make_handler(config: Config):
                     cwd=body.get("cwd"),
                     surface="serve",
                     stream=True,
-                    meta={
-                        "request_id": stream_run_id,
-                        "api": "session_chat_stream",
-                        **({"gateway_session_key": session_key} if session_key else {}),
-                    },
+                    meta=run_meta,
                     on_event=emit,
                 )
                 final_session_id = getattr(getattr(result, "session", None), "id", session.id)
@@ -2627,6 +2679,11 @@ def make_handler(config: Config):
                 })
                 self.wfile.write(b"data: [DONE]\n\n")
                 return
+            run_meta = {
+                **({"gateway_session_key": session_key} if session_key else {}),
+            }
+            if service_tier:
+                run_meta.update(runtime_controls_meta({"service_tier": service_tier}))
             result = runner.run_prompt(
                 str(prompt),
                 session=session,
@@ -2635,9 +2692,7 @@ def make_handler(config: Config):
                 cwd=body.get("cwd"),
                 surface="serve",
                 stream=False,
-                meta={
-                    **({"gateway_session_key": session_key} if session_key else {}),
-                },
+                meta=run_meta,
             )
             return self._json(200, {
                 "ok": True,
@@ -2666,10 +2721,13 @@ def make_handler(config: Config):
                 return self._json(400, _openai_error("Missing 'input' field", param="input"))
             session_id = str(body.get("session_id") or "") or None
             title = str(body.get("title") or prompt[:80] or run_id)
+            service_tier = _request_service_tier(body)
             run_meta = {
                 "server_run_id": run_id,
                 **({"gateway_session_key": session_key} if session_key else {}),
             }
+            if service_tier:
+                run_meta.update(runtime_controls_meta({"service_tier": service_tier}))
             session = runner.load_or_create_session(session_id, title=title, surface="serve", meta=run_meta)
             now = time.time()
             record = {
@@ -2690,6 +2748,7 @@ def make_handler(config: Config):
                 "cancel_reason": "",
                 "last_event": "run.queued",
                 "model": body.get("model") or "",
+                "service_tier": service_tier,
                 "session_key": session_key or "",
             }
             with state_lock:

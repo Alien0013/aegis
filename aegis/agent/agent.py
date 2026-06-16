@@ -118,6 +118,8 @@ class Agent:
         self.store = store
         self.stream = bool(config.get("agent.stream", True))
         self.reasoning = config.get("agent.reasoning_effort", "medium")
+        raw_tier = str(config.get("agent.service_tier", "") or "").strip().lower()
+        self.service_tier = "priority" if raw_tier in {"fast", "priority", "on", "true", "yes"} else ""
         self.budget = IterationBudget(int(config.get("agent.max_iterations", DEFAULT_MAX_ITERATIONS)))
         self.tools_used = 0
         self.activated_tools: set[str] = set()   # deferred tools loaded via tool_search this session
@@ -863,9 +865,10 @@ class Agent:
             "reasoning_effort": getattr(self, "reasoning", ""),
             "reasoning_display": self.config.get("display.reasoning", "summary"),
             "busy_mode": self.config.get("gateway.busy_mode", "queue"),
+            "service_tier": "priority" if getattr(self, "service_tier", "") == "priority" else "normal",
         })
         runtime.update({k: v for k, v in controls.items()
-                        if k in {"reasoning_effort", "reasoning_display", "busy_mode"}})
+                        if k in {"reasoning_effort", "reasoning_display", "busy_mode", "service_tier"}})
         self.session.meta["runtime"] = runtime
         self.session.meta["usage"] = {
             "input_tokens": int(getattr(usage, "input_tokens", 0) or 0),

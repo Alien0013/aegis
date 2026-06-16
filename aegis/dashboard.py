@@ -1174,6 +1174,19 @@ def _dashboard_chat_meta(body: dict, route: str) -> dict:
     if provider:
         controls["provider"] = provider
 
+    service_tier = str(body.get("service_tier") or "").strip()
+    if not service_tier and "fast" in body:
+        fast_value = body.get("fast")
+        if isinstance(fast_value, bool):
+            service_tier = "priority" if fast_value else "normal"
+        else:
+            service_tier = str(fast_value or "").strip()
+    if service_tier:
+        from .surface import normalize_service_tier
+        normalized_tier = normalize_service_tier(service_tier)
+        if normalized_tier:
+            controls["service_tier"] = normalized_tier
+
     if controls:
         from .surface import runtime_controls_meta
         meta.update(runtime_controls_meta(controls))

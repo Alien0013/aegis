@@ -87,6 +87,7 @@ class ChatCompletionsTransport(ProviderTransport):
         approver=None,
         cwd=None,
         on_reasoning: OnDelta | None = None,
+        service_tier: str = "",
     ) -> LLMResponse:
         url = f"{base_url}/chat/completions"
         headers = {"Content-Type": "application/json", **(extra_headers or {}), **auth.headers()}
@@ -100,6 +101,9 @@ class ChatCompletionsTransport(ProviderTransport):
                "xhigh": "high"}.get(reasoning)
         if eff:
             payload["reasoning_effort"] = eff
+        clean_service_tier = str(service_tier or "").strip()
+        if clean_service_tier and not self._is_xai_chat(base_url, model):
+            payload["service_tier"] = clean_service_tier
         wire_tools = self._to_wire_tools(tools)
         if wire_tools:
             payload["tools"] = wire_tools
@@ -110,6 +114,10 @@ class ChatCompletionsTransport(ProviderTransport):
         if stream:
             return self._stream(url, headers, payload, on_delta, timeout, on_reasoning)
         return self._blocking(url, headers, payload, timeout)
+
+    def _is_xai_chat(self, base_url: str, model: str) -> bool:
+        text = f"{base_url} {model}".lower()
+        return "api.x.ai" in text or "grok" in text or "xai" in text
 
     def _blocking(self, url, headers, payload, timeout) -> LLMResponse:
         with httpx.Client(timeout=timeout) as client:

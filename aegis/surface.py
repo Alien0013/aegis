@@ -494,6 +494,7 @@ class SurfaceRunner:
             controls.get("reasoning_effort", ""),
             controls.get("reasoning_display", ""),
             controls.get("busy_mode", ""),
+            controls.get("service_tier", ""),
             *_cache_runtime_fingerprint(config, provider_name or controls.get("provider") or cfg_get("model.provider", "")),
             mcp,
             id(approver) if approver is not None else None,
@@ -627,7 +628,14 @@ def _effective_runtime_data(
             or agent_provider_name
             or str(cfg_get("model.provider", "") or "")
         )
-    return {"model": str(effective_model or ""), "provider": str(effective_provider or "")}
+    service_tier = controls.get("service_tier") or str(
+        getattr(agent, "service_tier", "") or cfg_get("agent.service_tier", "") or ""
+    )
+    return {
+        "model": str(effective_model or ""),
+        "provider": str(effective_provider or ""),
+        "service_tier": normalize_service_tier(service_tier),
+    }
 
 
 def _workspace_run_meta(cwd: Path) -> dict[str, str]:
@@ -754,6 +762,23 @@ def _retarget_agent(
             pass
 
 
+def normalize_service_tier(value: Any) -> str:
+    """Normalize Hermes-style fast/priority controls into a persisted value."""
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    if text in {"normal", "default", "standard", "off", "none", "false", "no"}:
+        return "normal"
+    if text in {"fast", "priority", "on", "true", "yes"}:
+        return "priority"
+    return ""
+
+
+def provider_service_tier(value: Any) -> str:
+    """Return the wire service_tier value accepted by OpenAI-compatible APIs."""
+    return "priority" if normalize_service_tier(value) == "priority" else ""
+
+
 def session_runtime_controls(session: Session | None) -> dict[str, str]:
     """Session-level runtime controls that should survive resume/branch/handoff."""
     if session is None:
@@ -770,12 +795,23 @@ def session_runtime_controls(session: Session | None) -> dict[str, str]:
         value = controls.get(key) or runtime.get(key)
         if value:
             out[key] = str(value)
+    service_tier = normalize_service_tier(controls.get("service_tier") or runtime.get("service_tier"))
+    if service_tier:
+        out["service_tier"] = service_tier
     return out
 
 
 def runtime_controls_meta(controls: dict[str, Any] | None) -> dict[str, Any]:
     """Session metadata shape for inherited runtime controls."""
-    clean = {k: str(v) for k, v in (controls or {}).items() if v not in (None, "")}
+    clean: dict[str, str] = {}
+    for key, value in (controls or {}).items():
+        if key == "service_tier":
+            tier = normalize_service_tier(value)
+            if tier:
+                clean[key] = tier
+            continue
+        if value not in (None, ""):
+            clean[key] = str(value)
     if not clean:
         return {}
     meta: dict[str, Any] = {"runtime_controls": clean}
@@ -784,7 +820,7 @@ def runtime_controls_meta(controls: dict[str, Any] | None) -> dict[str, Any]:
     if clean.get("provider"):
         meta["provider"] = clean["provider"]
     runtime = {k: v for k, v in clean.items()
-               if k in {"reasoning_effort", "reasoning_display", "busy_mode"}}
+               if k in {"reasoning_effort", "reasoning_display", "busy_mode", "service_tier"}}
     if runtime:
         meta["runtime"] = runtime
     return meta
@@ -810,6 +846,13 @@ def remember_session_runtime(agent: Any, **updates: Any) -> dict[str, str]:
         if value is None or value == "":
             controls.pop(key, None)
             continue
+        if key == "service_tier":
+            tier = normalize_service_tier(value)
+            if tier:
+                controls[key] = tier
+            else:
+                controls.pop(key, None)
+            continue
         controls[key] = str(value)
     if controls:
         meta["runtime_controls"] = controls
@@ -827,7 +870,7 @@ def remember_session_runtime(agent: Any, **updates: Any) -> dict[str, str]:
             meta.pop("provider", None)
     runtime = dict(meta.get("runtime") or {})
     runtime.update({k: v for k, v in controls.items()
-                    if k in {"reasoning_effort", "reasoning_display", "busy_mode"}})
+                    if k in {"reasoning_effort", "reasoning_display", "busy_mode", "service_tier"}})
     if runtime:
         meta["runtime"] = runtime
     return controls
@@ -846,6 +889,11 @@ def apply_session_runtime(agent: Any, *, rebuild_provider: bool = True) -> None:
     if controls.get("reasoning_effort"):
         try:
             agent.reasoning = controls["reasoning_effort"]
+        except Exception:  # noqa: BLE001
+            pass
+    if controls.get("service_tier"):
+        try:
+            agent.service_tier = provider_service_tier(controls["service_tier"])
         except Exception:  # noqa: BLE001
             pass
     if not rebuild_provider or config is None:
