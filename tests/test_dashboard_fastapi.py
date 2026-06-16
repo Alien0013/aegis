@@ -164,6 +164,7 @@ def test_fastapi_files_upload_and_mkdir(tmp_path, monkeypatch):
     default_cwd = asyncio.run(_request(app, "GET", "/api/fs/default-cwd", headers=headers))
     assert default_cwd.status_code == 200
     assert default_cwd.json()["ok"] is True
+    assert default_cwd.json()["cwd"] == default_cwd.json()["path"]
 
     listed = asyncio.run(_request(
         app,
@@ -192,6 +193,19 @@ def test_fastapi_files_upload_and_mkdir(tmp_path, monkeypatch):
     assert data_url.status_code == 200
     assert data_url.json()["ok"] is True
     assert data_url.json()["data_url"].startswith("data:text/plain;base64,")
+    assert data_url.json()["dataUrl"] == data_url.json()["data_url"]
+
+    image = tmp_path / "pixel.png"
+    image.write_bytes(b"png")
+    media = asyncio.run(_request(
+        app,
+        "GET",
+        f"/api/media?path={str(image)}",
+        headers=headers,
+    ))
+    assert media.status_code == 200
+    assert media.json()["ok"] is True
+    assert media.json()["dataUrl"].startswith("data:image/png;base64,")
 
     download = asyncio.run(_request(
         app,
@@ -224,6 +238,18 @@ def test_fastapi_files_upload_and_mkdir(tmp_path, monkeypatch):
     assert res.json()["ok"] is True
     assert (tmp_path / "created").is_dir()
 
+    full_dir = tmp_path / "full-created"
+    res = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/files/mkdir",
+        json={"path": str(full_dir), "parents": True, "exist_ok": True},
+        headers=headers,
+    ))
+    assert res.status_code == 200
+    assert res.json()["ok"] is True
+    assert full_dir.is_dir()
+
     res = asyncio.run(_request(
         app,
         "POST",
@@ -235,6 +261,30 @@ def test_fastapi_files_upload_and_mkdir(tmp_path, monkeypatch):
     assert res.status_code == 200
     assert res.json()["ok"] is True
     assert (tmp_path / "created" / "hello.txt").read_text() == "uploaded"
+
+    encoded = base64.b64encode(b"json uploaded").decode("ascii")
+    res = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/files/upload",
+        json={"path": str(full_dir), "name": "json.txt", "data_url": f"data:text/plain;base64,{encoded}"},
+        headers=headers,
+    ))
+    assert res.status_code == 200
+    assert res.json()["ok"] is True
+    json_upload = full_dir / "json.txt"
+    assert json_upload.read_text(encoding="utf-8") == "json uploaded"
+
+    deleted_alias = asyncio.run(_request(
+        app,
+        "DELETE",
+        "/api/files",
+        json={"path": str(json_upload)},
+        headers=headers,
+    ))
+    assert deleted_alias.status_code == 200
+    assert deleted_alias.json()["ok"] is True
+    assert not json_upload.exists()
 
     deleted = asyncio.run(_request(
         app,

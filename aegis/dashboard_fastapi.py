@@ -2327,9 +2327,48 @@ def _fs_read_data_url(query: dict[str, list[str]]) -> dict:
             return {"ok": False, "path": str(path), "size": size, "error": "file too large to encode (>2MB)"}
         mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         data = base64.b64encode(path.read_bytes()).decode("ascii")
-        return {"ok": True, "path": str(path), "size": size, "mime": mime, "data_url": f"data:{mime};base64,{data}"}
+        data_url = f"data:{mime};base64,{data}"
+        return {
+            "ok": True,
+            "path": str(path),
+            "size": size,
+            "mime": mime,
+            "data_url": data_url,
+            "dataUrl": data_url,
+        }
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "path": str(path), "error": str(exc)}
+
+
+def _fs_media(query: dict[str, list[str]]) -> dict:
+    result = _fs_read_data_url(query)
+    if not result.get("ok"):
+        return result
+    mime = str(result.get("mime") or "")
+    if not mime.startswith("image/"):
+        return {"ok": False, "path": result.get("path", ""), "mime": mime, "error": "unsupported media type"}
+    return result
+
+
+def _fs_default_cwd() -> dict:
+    import subprocess
+
+    cwd = str(Path.cwd().resolve())
+    branch = ""
+    try:
+        result = subprocess.run(
+            ["git", "branch", "--show-current"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        if result.returncode == 0:
+            branch = result.stdout.strip()
+    except Exception:  # noqa: BLE001
+        branch = ""
+    return {"ok": True, "path": cwd, "cwd": cwd, "branch": branch}
 
 
 def _delete_managed_file(body: dict[str, Any]) -> dict:
@@ -2558,10 +2597,12 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
         return {"ok": not bool(result.get("error")), **result}
     if path == "/api/fs/read-data-url":
         return _fs_read_data_url(query)
+    if path == "/api/media":
+        return _fs_media(query)
     if path == "/api/fs/git-root":
         return _fs_git_root(query)
     if path == "/api/fs/default-cwd":
-        return {"ok": True, "path": str(Path.cwd().resolve())}
+        return _fs_default_cwd()
     if path == "/api/review":
         return dash._dashboard_review()
     if path == "/api/evals":
@@ -2904,11 +2945,17 @@ def _api_post(path: str, body: dict, config: Config, chat_runner: Any) -> dict:
             return {"result": ms.remove(target, body["match"])}
         return {"error": "bad memory request"}
     if path in {"/api/files/mkdir", "/api/fs/mkdir"}:
-        parent = Path(str(body.get("path") or Path.home())).expanduser().resolve()
-        name = Path(str(body.get("name") or "")).name
-        if not name:
-            return {"ok": False, "error": "missing name"}
-        target = parent / name
+        raw_path = str(body.get("path") or "").strip()
+        name = str(body.get("name") or "").strip()
+        if name:
+            parent = Path(raw_path or Path.home()).expanduser().resolve()
+            target = parent / Path(name).name
+        elif raw_path:
+            target = Path(raw_path).expanduser().resolve()
+        else:
+            return {"ok": False, "error": "missing path"}
+        if dash._is_sensitive_path(target):
+            return {"ok": False, "error": "blocked: refusing to create a credential/key path", "path": str(target)}
         try:
             target.mkdir(parents=bool(body.get("parents", False)), exist_ok=bool(body.get("exist_ok", False)))
         except Exception as exc:  # noqa: BLE001
@@ -4529,6 +4576,15 @@ def create_app(config: Config) -> FastAPI:
         media_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
         return FileResponse(target, media_type=media_type, filename=target.name)
 
+    @app.delete("/api/files")
+    async def api_files_delete(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            body = {}
+        return JSONResponse(_delete_managed_file(body if isinstance(body, dict) else {}))
+
     @app.get("/api/{path:path}")
     async def api_get(path: str, request: Request) -> JSONResponse:
         _require_request(request, config)
@@ -4559,22 +4615,47 @@ def create_app(config: Config) -> FastAPI:
         return StreamingResponse(stream(), media_type="text/event-stream")
 
     @app.post("/api/files/upload")
-    async def upload_file(
-        request: Request,
-        file: Annotated[UploadFile, File()],
-        path: Annotated[str, Form()] = "",
-    ) -> JSONResponse:
+    async def upload_file(request: Request) -> JSONResponse:
         _require_request(request, config)
-        target_dir = Path(path or Path.home()).expanduser().resolve()
+        content_type = request.headers.get("content-type", "").lower()
+        filename = ""
+        target_path = ""
+        data = b""
+        if content_type.startswith("application/json"):
+            body = await request.json()
+            body = body if isinstance(body, dict) else {}
+            target_path = str(body.get("path") or body.get("dir") or "")
+            filename = Path(str(body.get("name") or body.get("filename") or "upload.bin")).name
+            data_url = str(body.get("data_url") or body.get("dataUrl") or "")
+            if data_url:
+                header, sep, payload = data_url.partition(",")
+                if not sep or ";base64" not in header:
+                    return JSONResponse({"ok": False, "error": "data_url must be base64"})
+                try:
+                    data = base64.b64decode(payload, validate=True)
+                except Exception:  # noqa: BLE001
+                    return JSONResponse({"ok": False, "error": "invalid data_url"})
+            elif "content" in body:
+                data = str(body.get("content") or "").encode("utf-8")
+            else:
+                return JSONResponse({"ok": False, "error": "missing data_url or content"})
+        else:
+            form = await request.form()
+            upload = form.get("file")
+            if upload is None or not hasattr(upload, "read"):
+                return JSONResponse({"ok": False, "error": "missing file"})
+            target_path = str(form.get("path") or "")
+            filename = Path(str(getattr(upload, "filename", "") or "upload.bin")).name
+            data = await upload.read()
+
+        target_dir = Path(target_path or Path.home()).expanduser().resolve()
         if not target_dir.is_dir():
             return JSONResponse({"ok": False, "error": "target is not a directory"})
-        filename = Path(file.filename or "upload.bin").name
         target = target_dir / filename
         if dash._is_sensitive_path(target):
             return JSONResponse({"ok": False, "error": "blocked: refusing to write a "
                                  "credential/key/SSH path through the dashboard."})
         try:
-            data = await file.read()
             target.write_bytes(data)
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"ok": False, "error": str(exc)})
