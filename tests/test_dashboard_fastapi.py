@@ -1694,6 +1694,7 @@ def test_fastapi_gateway_control_plane(tmp_path, monkeypatch):
 
     from aegis.daemon import ServiceResult
 
+    control_actions: list[str] = []
     monkeypatch.setattr("aegis.daemon.gateway_service_status", lambda: "inactive (dead, disabled)")
     monkeypatch.setattr(
         "aegis.daemon.install_gateway_service",
@@ -1701,7 +1702,7 @@ def test_fastapi_gateway_control_plane(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         "aegis.daemon.control_gateway_service",
-        lambda action: ServiceResult(True, f"gateway {action}"),
+        lambda action: control_actions.append(action) or ServiceResult(True, f"gateway {action}"),
     )
     monkeypatch.setattr(
         "aegis.providers.registry.provider_report",
@@ -1755,6 +1756,12 @@ def test_fastapi_gateway_control_plane(tmp_path, monkeypatch):
     ))
     assert restart.status_code == 200
     assert restart.json() == {"ok": True, "message": "gateway restart"}
+
+    for action in ("start", "stop", "restart"):
+        alias = asyncio.run(_request(app, "POST", f"/api/gateway/{action}", headers=headers))
+        assert alias.status_code == 200
+        assert alias.json() == {"ok": True, "message": f"gateway {action}"}
+    assert control_actions[-4:] == ["restart", "start", "stop", "restart"]
 
 
 def test_fastapi_websocket_auth_and_resize_protocol(tmp_path, monkeypatch):

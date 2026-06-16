@@ -2174,6 +2174,12 @@ def _service_result(result) -> dict:
     return {"ok": bool(getattr(result, "ok", False)), "message": str(getattr(result, "message", ""))}
 
 
+def _gateway_service_control(action: str) -> dict:
+    from .daemon import control_gateway_service
+
+    return _service_result(control_gateway_service(action))
+
+
 def _gateway_status(config: Config) -> dict:
     from .daemon import gateway_service_status
     from .gateway.queue import DeliveryQueue
@@ -4404,13 +4410,27 @@ def create_app(config: Config) -> FastAPI:
         config.save()
         return JSONResponse({"ok": True, "gateway": _gateway_status(config)})
 
+    @app.post("/api/gateway/start")
+    async def api_gateway_start(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_gateway_service_control("start"))
+
+    @app.post("/api/gateway/stop")
+    async def api_gateway_stop(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_gateway_service_control("stop"))
+
+    @app.post("/api/gateway/restart")
+    async def api_gateway_restart(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_gateway_service_control("restart"))
+
     @app.post("/api/gateway/service")
     async def api_gateway_service(request: Request) -> JSONResponse:
         _require_request(request, config)
         body = await request.json()
         action = str(body.get("action") or "status")
         from .daemon import (
-            control_gateway_service,
             gateway_service_status,
             install_gateway_service,
             remove_gateway_service,
@@ -4430,7 +4450,7 @@ def create_app(config: Config) -> FastAPI:
         if action == "remove":
             return JSONResponse(_service_result(remove_gateway_service()))
         if action in {"start", "stop", "restart"}:
-            return JSONResponse(_service_result(control_gateway_service(action)))
+            return JSONResponse(_gateway_service_control(action))
         return JSONResponse({"ok": False, "error": f"unknown gateway service action: {action}"}, status_code=400)
 
     @app.api_route(
