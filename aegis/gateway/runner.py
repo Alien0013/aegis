@@ -28,6 +28,9 @@ def _with_reply_pointer(ev: MessageEvent, text: str, *, limit: int = 500) -> str
     return f'[Replying to: "{quoted}"]\n{text}'
 
 
+_GATEWAY_GENERATION_META = "_gateway_generation"
+
+
 class GatewayRunner:
     """Hub-and-spoke. Each (platform, chat[, user]) maps to one persistent session."""
 
@@ -90,7 +93,8 @@ class GatewayRunner:
     def interrupt(self, ev: MessageEvent) -> bool:
         """Cancel the run in progress for ev's session. True if an active agent was signalled."""
         key = self._key(ev)
-        self._bump_generation(key)
+        generation = self._bump_generation(key)
+        self._persist_generation_marker(key, generation)
         agent = self._agents.get(key)
         cancel_event = getattr(agent, "cancel_event", None)
         if agent is not None and not (cancel_event is not None and cancel_event.is_set()):
@@ -110,6 +114,7 @@ class GatewayRunner:
     def _session(self, key: str) -> Session:
         if key not in self._sessions:
             self._sessions[key] = self.store.load(key) or Session(id=key, title=key)
+        self._stamp_generation(key, self._sessions[key])
         return self._sessions[key]
 
     def _drop_agent(self, key: str):
@@ -130,6 +135,23 @@ class GatewayRunner:
     def _generation(self, key: str) -> int:
         return int(self._generations.get(key, 0) or 0)
 
+    def _stamp_generation(self, key: str, session: Session, generation: int | None = None) -> Session:
+        session.meta[_GATEWAY_GENERATION_META] = int(self._generation(key) if generation is None else generation)
+        return session
+
+    def _persist_generation_marker(self, key: str, generation: int | None = None) -> None:
+        try:
+            with self._lock:
+                session = self._sessions.get(key)
+            if session is None:
+                session = self.store.load(key)
+            if session is None:
+                return
+            self._stamp_generation(key, session, generation)
+            self.store.save(session)
+        except Exception:  # noqa: BLE001
+            pass
+
     def _fresh_session_if_drifted(self, key: str, session: Session) -> Session:
         try:
             stamp = self.store.session_stamp(key)
@@ -148,7 +170,9 @@ class GatewayRunner:
             return session
         self._sessions[key] = latest
         self._drop_agent(key)
-        self._bump_generation(key)
+        generation = self._bump_generation(key)
+        self._stamp_generation(key, latest, generation)
+        self.store.save(latest)
         return latest
 
     def _agent_signature(
@@ -263,6 +287,7 @@ class GatewayRunner:
             ho = pop_handoff(ev.platform, ev.chat_id)
             if ho and (adopted := self.store.load(ho)) is not None:
                 with self._lock:
+                    self._stamp_generation(key, adopted)
                     self._sessions[key] = adopted
                 self._drop_agent(key)
         except Exception:  # noqa: BLE001
@@ -279,6 +304,7 @@ class GatewayRunner:
     ) -> str:
         with self._lock:
             session = self._session(key)
+            self._stamp_generation(key, session)
         proxy = SimpleNamespace(
             config=self.config,
             session=session,
@@ -305,6 +331,7 @@ class GatewayRunner:
                 **(data or {}),
             },
         )
+        self._stamp_generation(key, run.session)
         self._sessions[key] = run.session
         self.store.save(run.session)
         return run.text
@@ -331,7 +358,8 @@ class GatewayRunner:
                     + ", ".join(self._user_commands()))
         # Intercept control commands before the agent.
         if text == "/stop":
-            self._bump_generation(key)
+            generation = self._bump_generation(key)
+            self._persist_generation_marker(key, generation)
             agent = self._agents.get(key)
             if agent is not None and not getattr(agent, "cancel_event", threading.Event()).is_set():
                 cancel = getattr(agent, "cancel", None)
@@ -355,9 +383,9 @@ class GatewayRunner:
             )
         if text in ("/new", "/reset"):
             def action(proxy):
-                self._bump_generation(key)
+                generation = self._bump_generation(key)
                 self._drop_agent(key)
-                fresh = Session(id=key, title=key)
+                fresh = self._stamp_generation(key, Session(id=key, title=key), generation)
                 self._sessions[key] = fresh
                 proxy.session = fresh
                 self.store.save(fresh)
@@ -600,6 +628,7 @@ class GatewayRunner:
             # Reuse a cached agent for this session (keeps the provider object warm so the
             # model's prompt prefix stays cached); rebuild if the session was reset.
             generation = self._generation(key)
+            self._stamp_generation(key, session, generation)
             prof = (self.config.get("gateway.profiles", {}) or {}).get(ev.platform, {}) or {}
             run_cfg = self.config
             if prof.get("personality"):       # isolated copy — must not leak across platforms
@@ -680,7 +709,10 @@ class GatewayRunner:
                     include_wakeups=not is_internal,
                     on_event=_collect,
                 )
+                if generation != self._generation(key):
+                    return ""
                 session = getattr(run, "session", getattr(agent, "session", session))
+                self._stamp_generation(key, session, generation)
                 self._sessions[key] = session
                 final = run.message
                 final_text = final.content or ""
@@ -705,7 +737,10 @@ class GatewayRunner:
                             include_wakeups=not is_internal,
                             on_event=_collect,
                         )
+                        if generation != self._generation(key):
+                            return cont.message
                         cont_session = getattr(cont, "session", getattr(agent, "session", session))
+                        self._stamp_generation(key, cont_session, generation)
                         self._sessions[key] = cont_session
                         self.store.save(cont_session)
                         return cont.message
@@ -715,6 +750,7 @@ class GatewayRunner:
                     )
                     if goal_notes:
                         session = agent.session
+                        self._stamp_generation(key, agent.session, generation)
                         self._sessions[key] = agent.session
                         self.store.save(agent.session)
                 except Exception:  # noqa: BLE001  (goal machinery must never eat the reply)

@@ -86,6 +86,69 @@ def test_new_closes_cached_agent_before_reset(tmp_path, monkeypatch):
     assert r._session(key).messages == []
 
 
+def test_gateway_generation_guard_blocks_late_save_after_reset(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import aegis.gateway.runner as rmod
+    from aegis.session import Session
+    from aegis.types import Message
+
+    r = _runner(tmp_path, monkeypatch)
+    ev = _ev("work on this")
+    key = r._key(ev)
+
+    class FakeAgent:
+        def __init__(self, session):
+            self.session = session
+            self.budget = SimpleNamespace(api_call_count=0)
+
+    monkeypatch.setattr(
+        rmod.Agent,
+        "create",
+        staticmethod(lambda _config, **kwargs: FakeAgent(kwargs["session"])),
+    )
+
+    def fake_run_prompt(_prompt, **kwargs):
+        stale = kwargs["session"]
+        new_generation = r._bump_generation(key)
+        fresh = r._stamp_generation(key, Session(id=key, title=key), new_generation)
+        r._sessions[key] = fresh
+        r.store.save(fresh)
+
+        stale.messages.append(Message.user("late user"))
+        stale.messages.append(Message.assistant("late reply"))
+        r.store.save(stale)
+        return SimpleNamespace(message=Message.assistant("late reply"), session=stale)
+
+    monkeypatch.setattr(r._surface_runner, "run_prompt", fake_run_prompt)
+
+    assert r.dispatch(ev) == ""
+    assert r._session(key).messages == []
+    assert r.store.load(key).messages == []
+
+
+def test_session_store_rejects_stale_gateway_generation(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+
+    from aegis.session import Session, SessionStore
+    from aegis.types import Message
+
+    store = SessionStore()
+    old = Session(id="telegram:c1:u1", title="telegram:c1:u1")
+    old.meta["_gateway_generation"] = 1
+    old.messages.append(Message.user("old"))
+    store.save(old)
+
+    fresh = Session(id=old.id, title=old.id)
+    fresh.meta["_gateway_generation"] = 2
+    store.save(fresh)
+
+    old.messages.append(Message.assistant("late reply"))
+    store.save(old)
+
+    assert store.load(old.id).messages == []
+
+
 def test_agent_cache_eviction_closes_cached_agent(tmp_path, monkeypatch):
     from types import SimpleNamespace
 

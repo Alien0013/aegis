@@ -29,6 +29,28 @@ def _session_source(meta: dict[str, Any]) -> str:
     return ""
 
 
+_GATEWAY_GENERATION_META = "_gateway_generation"
+
+
+def _gateway_generation(meta: dict[str, Any] | None) -> int | None:
+    if not isinstance(meta, dict) or _GATEWAY_GENERATION_META not in meta:
+        return None
+    try:
+        return int(meta.get(_GATEWAY_GENERATION_META))
+    except (TypeError, ValueError):
+        return None
+
+
+def _row_gateway_generation(row: sqlite3.Row | None) -> int | None:
+    if row is None:
+        return None
+    try:
+        data = json.loads(row["data"] or "{}")
+    except Exception:  # noqa: BLE001
+        return None
+    return _gateway_generation(data.get("meta", {}))
+
+
 @dataclass
 class Session:
     id: str
@@ -236,11 +258,17 @@ class SessionStore:
 
     def save(self, session: Session) -> None:
         session.profile = session.profile or self.profile
-        row = session.to_row()
-        session.updated_at = row["updated_at"]
-        row["summary"] = session.meta.get("summary", "")
-        row["source"] = _session_source(session.meta)
+        incoming_generation = _gateway_generation(session.meta)
         with self._conn() as c:
+            if incoming_generation is not None:
+                current = c.execute("SELECT data FROM sessions WHERE id=?", (session.id,)).fetchone()
+                current_generation = _row_gateway_generation(current)
+                if current_generation is not None and incoming_generation < current_generation:
+                    return
+            row = session.to_row()
+            session.updated_at = row["updated_at"]
+            row["summary"] = session.meta.get("summary", "")
+            row["source"] = _session_source(session.meta)
             c.execute(
                 """INSERT INTO sessions (id, title, created_at, updated_at, summary, parent_id, profile, data, source)
                    VALUES (:id, :title, :created_at, :updated_at, :summary, :parent_id, :profile, :data, :source)
