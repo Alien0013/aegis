@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import difflib
 import os
-
+import time
 from dataclasses import dataclass, field
+
+import httpx
 
 from .. import config as cfg
 from ..constants import MIN_CONTEXT_LENGTH
@@ -265,6 +267,8 @@ _STRICT_MODEL_PRESET_PROVIDERS = {
     "openai-codex",
 }
 _AGGREGATOR_PROVIDERS = {"openrouter", "huggingface", "novita"}
+_LIVE_MODEL_CACHE_TTL_SECONDS = 60.0
+_LIVE_MODEL_CACHE: dict[tuple[str, str, str], tuple[float, list[str]]] = {}
 
 
 _OAUTH_CATALOG: dict[str, OAuthCatalogEntry] = {
@@ -356,17 +360,28 @@ def _custom_specs(config: cfg.Config) -> dict[str, ProviderSpec]:
     for c in config.get("custom_providers", []) or []:
         try:
             models: list[str] = []
-            for item in c.get("models") or []:
+            raw_models = c.get("models") or []
+            if isinstance(raw_models, dict):
+                raw_models = list(raw_models)
+            for item in raw_models:
                 if isinstance(item, str):
                     _append_unique(models, item)
+                elif isinstance(item, dict):
+                    _append_unique(models, item.get("id") or item.get("name") or item.get("model"))
+            env_var = (
+                c.get("env_var")
+                or c.get("key_env")
+                or c.get("api_key_env")
+                or c.get("api_key_env_var")
+            )
             out[c["name"]] = ProviderSpec(
                 name=c["name"],
                 api_mode=ApiMode(c.get("api_mode", "chat_completions")),
                 base_url=c["base_url"],
                 default_model=c.get("default_model", c.get("model", "local-model")),
                 context_length=int(c.get("context_length", 64_000)),
-                env_vars=[c["env_var"]] if c.get("env_var") else [],
-                auth_scheme=c.get("auth_scheme", "none" if not c.get("env_var") else "bearer"),
+                env_vars=[env_var] if env_var else [],
+                auth_scheme=c.get("auth_scheme", "none" if not env_var else "bearer"),
                 models=models,
             )
         except (KeyError, ValueError):
@@ -393,6 +408,95 @@ def _append_unique(items: list[str], value: str | None) -> None:
     value = str(value or "").strip()
     if value and value.lower() not in {item.lower() for item in items}:
         items.append(value)
+
+
+def _parse_model_ids(payload) -> list[str]:
+    if isinstance(payload, dict):
+        raw = payload.get("data")
+        if raw is None:
+            raw = payload.get("models")
+        if raw is None:
+            raw = payload.get("items")
+    else:
+        raw = payload
+    models: list[str] = []
+    for item in raw or []:
+        if isinstance(item, str):
+            _append_unique(models, item)
+        elif isinstance(item, dict):
+            _append_unique(models, item.get("id") or item.get("name") or item.get("model"))
+    return models
+
+
+def _model_listing_url(base_url: str, api_mode: ApiMode | str) -> str:
+    base = str(base_url or "").strip().rstrip("/")
+    if not base:
+        return ""
+    mode = api_mode.value if isinstance(api_mode, ApiMode) else str(api_mode or "")
+    if mode == ApiMode.ANTHROPIC_MESSAGES.value and not base.endswith("/v1"):
+        return f"{base}/v1/models"
+    return f"{base}/models"
+
+
+def _effective_model_listing_base(provider_name: str, spec: ProviderSpec, config: cfg.Config | None) -> str:
+    if (
+        config is not None
+        and str(config.get("model.provider") or "") == provider_name
+        and str(config.get("model.base_url") or "").strip()
+    ):
+        return str(config.get("model.base_url") or "").strip()
+    return spec.base_url
+
+
+def _live_model_fetch_allowed(provider_name: str, spec: ProviderSpec, config: cfg.Config | None) -> bool:
+    if spec.api_mode == ApiMode.CODEX_APP_SERVER:
+        return False
+    if config is not None and config.get("models.live_fetch") is False:
+        return False
+    custom_names = set(_custom_specs(config)) if config is not None else set()
+    is_active = bool(config is not None and str(config.get("model.provider") or "") == provider_name)
+    active_override = bool(
+        config is not None
+        and is_active
+        and str(config.get("model.base_url") or "").strip()
+    )
+    return provider_name in custom_names or active_override or (is_active and spec.auth_scheme == "none")
+
+
+def _live_model_ids_for(provider_name: str, spec: ProviderSpec, config: cfg.Config | None) -> list[str]:
+    if not _live_model_fetch_allowed(provider_name, spec, config):
+        return []
+    base_url = _effective_model_listing_base(provider_name, spec, config)
+    url = _model_listing_url(base_url, spec.api_mode)
+    if not url:
+        return []
+    cache_key = (provider_name, spec.api_mode.value, base_url.rstrip("/"))
+    now = time.monotonic()
+    cached = _LIVE_MODEL_CACHE.get(cache_key)
+    if cached is not None and now - cached[0] < _LIVE_MODEL_CACHE_TTL_SECONDS:
+        return list(cached[1])
+    try:
+        auth = _resolve_auth(spec, config=config)
+        if not auth.available():
+            _LIVE_MODEL_CACHE[cache_key] = (now, [])
+            return []
+        headers = auth.headers()
+    except Exception:  # noqa: BLE001
+        _LIVE_MODEL_CACHE[cache_key] = (now, [])
+        return []
+    headers = dict(headers or {})
+    headers.setdefault("Accept", "application/json")
+    try:
+        timeout = 2.0
+        if config is not None:
+            timeout = float(config.get("models.live_fetch_timeout_seconds", timeout) or timeout)
+        response = httpx.get(url, headers=headers, timeout=max(0.2, min(timeout, 10.0)))
+        response.raise_for_status()
+        models = _parse_model_ids(response.json())
+    except Exception:  # noqa: BLE001
+        models = []
+    _LIVE_MODEL_CACHE[cache_key] = (now, list(models))
+    return models
 
 
 def known_model_entries_for(provider_name: str, config: cfg.Config | None = None) -> list[dict]:
@@ -444,6 +548,9 @@ def known_model_entries_for(provider_name: str, config: cfg.Config | None = None
             add(model, model, "catalog")
     for model, label in _preset_model_entries(provider_name):
         add(model, label, "preset")
+    if spec is not None:
+        for model in _live_model_ids_for(provider_name, spec, config):
+            add(model, model, "live")
     return rows
 
 
