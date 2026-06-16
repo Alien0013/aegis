@@ -783,6 +783,78 @@ def test_responses_stream_failure_persists_failed_snapshot(monkeypatch, tmp_path
     assert stored["error"]["message"] == "RuntimeError: boom"
 
 
+def test_responses_stream_maps_tools_to_function_call_items(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    class ToolStreamRunner:
+        def __init__(self, config, include_mcp=True):
+            pass
+
+        def run_prompt(self, prompt, **kwargs):
+            kwargs["on_event"]({
+                "type": "tool_start",
+                "id": "call_search",
+                "name": "search",
+                "args": {"query": "aegis"},
+            })
+            kwargs["on_event"]({
+                "type": "tool_result",
+                "id": "call_search",
+                "name": "search",
+                "preview": "found docs",
+            })
+            kwargs["on_event"]({"type": "assistant_delta", "text": "done"})
+            session_id = kwargs.get("session_id") or "serve:tool-stream"
+            return SimpleNamespace(
+                text="done",
+                session=SimpleNamespace(id=session_id),
+                trace_id="trace_tool_stream",
+                turn_id="turn_tool_stream",
+                run_id="run_tool_stream",
+                agent=SimpleNamespace(
+                    provider=SimpleNamespace(model="served-model"),
+                    budget=SimpleNamespace(usage=_Usage()),
+                ),
+            )
+
+    monkeypatch.setattr(server, "SurfaceRunner", ToolStreamRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "stream": True,
+            "input": "search",
+            "metadata": {"session_id": "serve:tool-stream"},
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    events = _sse_events(data)
+    added = [payload["item"] for name, payload in events
+             if name == "response.output_item.added"]
+    done = [payload["item"] for name, payload in events
+            if name == "response.output_item.done"]
+    function_call = next(item for item in added if item["type"] == "function_call")
+    function_output = next(item for item in added if item["type"] == "function_call_output")
+    completed = next(payload for name, payload in events if name == "response.completed")
+
+    assert function_call["name"] == "search"
+    assert function_call["call_id"] == "call_search"
+    assert json.loads(function_call["arguments"]) == {"query": "aegis"}
+    assert function_output["call_id"] == "call_search"
+    assert function_output["output"][0]["text"] == "found docs"
+    assert any(item["type"] == "function_call" and item["status"] == "completed" for item in done)
+    assert any(item["type"] == "function_call_output" for item in done)
+    assert [item["type"] for item in completed["response"]["output"]] == [
+        "function_call",
+        "function_call_output",
+        "message",
+    ]
+
+
 def test_server_session_crud_fork_and_chat(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server

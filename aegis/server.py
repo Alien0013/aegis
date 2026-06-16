@@ -1359,7 +1359,11 @@ def make_handler(config: Config):
                 sequence = 0
                 message_item_id = new_id("msg")
                 message_opened = False
+                message_output_index: int | None = None
+                next_output_index = 0
                 text_parts: list[str] = []
+                pending_tool_calls: dict[str, dict[str, Any]] = {}
+                streamed_output_items: list[dict[str, Any]] = []
 
                 def send_event(event_name: str, payload: dict[str, Any]) -> bool:
                     nonlocal sequence
@@ -1369,12 +1373,14 @@ def make_handler(config: Config):
                     return self._write_sse(payload, event=event_name)
 
                 def open_message_item() -> bool:
-                    nonlocal message_opened
+                    nonlocal message_opened, message_output_index, next_output_index
                     if message_opened:
                         return True
                     message_opened = True
+                    message_output_index = next_output_index
+                    next_output_index += 1
                     return send_event("response.output_item.added", {
-                        "output_index": 0,
+                        "output_index": message_output_index,
                         "item": {
                             "id": message_item_id,
                             "type": "message",
@@ -1382,6 +1388,86 @@ def make_handler(config: Config):
                             "role": "assistant",
                             "content": [],
                         },
+                    })
+
+                def emit_tool_start(e: dict[str, Any]) -> None:
+                    nonlocal next_output_index
+                    call_id = str(e.get("id") or e.get("tool_call_id") or new_id("call"))
+                    args = e.get("args", e.get("arguments", {}))
+                    if isinstance(args, str):
+                        arguments = args
+                    else:
+                        arguments = json.dumps(args if args is not None else {}, default=str)
+                    item_id = new_id("fc")
+                    output_index = next_output_index
+                    next_output_index += 1
+                    item = {
+                        "id": item_id,
+                        "type": "function_call",
+                        "status": "in_progress",
+                        "name": str(e.get("name") or e.get("tool_name") or ""),
+                        "call_id": call_id,
+                        "arguments": arguments,
+                    }
+                    pending_tool_calls[call_id] = {
+                        "item_id": item_id,
+                        "output_index": output_index,
+                        "name": item["name"],
+                        "arguments": arguments,
+                        "call_id": call_id,
+                    }
+                    streamed_output_items.append({
+                        "type": "function_call",
+                        "name": item["name"],
+                        "arguments": arguments,
+                        "call_id": call_id,
+                    })
+                    send_event("response.output_item.added", {
+                        "output_index": output_index,
+                        "item": item,
+                    })
+
+                def emit_tool_result(e: dict[str, Any]) -> None:
+                    nonlocal next_output_index
+                    call_id = str(e.get("id") or e.get("tool_call_id") or "")
+                    pending = pending_tool_calls.pop(call_id, None) if call_id else None
+                    if pending is None:
+                        return
+                    done_item = {
+                        "id": pending["item_id"],
+                        "type": "function_call",
+                        "status": "completed",
+                        "name": pending["name"],
+                        "call_id": pending["call_id"],
+                        "arguments": pending["arguments"],
+                    }
+                    send_event("response.output_item.done", {
+                        "output_index": pending["output_index"],
+                        "item": done_item,
+                    })
+                    result_text = str(e.get("preview") or e.get("summary") or e.get("data") or "")
+                    output_parts = [{"type": "input_text", "text": result_text}]
+                    output_item = {
+                        "id": new_id("fco"),
+                        "type": "function_call_output",
+                        "call_id": pending["call_id"],
+                        "output": output_parts,
+                        "status": "completed" if not e.get("is_error") else "failed",
+                    }
+                    output_index = next_output_index
+                    next_output_index += 1
+                    streamed_output_items.append({
+                        "type": "function_call_output",
+                        "call_id": pending["call_id"],
+                        "output": output_parts,
+                    })
+                    send_event("response.output_item.added", {
+                        "output_index": output_index,
+                        "item": output_item,
+                    })
+                    send_event("response.output_item.done", {
+                        "output_index": output_index,
+                        "item": output_item,
                     })
 
                 def persist_stream_response(response: dict[str, Any], result=None) -> None:
@@ -1435,11 +1521,17 @@ def make_handler(config: Config):
                         send_event("response.output_text.delta", {
                             "response_id": response_id,
                             "item_id": message_item_id,
-                            "output_index": 0,
+                            "output_index": message_output_index if message_output_index is not None else 0,
                             "content_index": 0,
                             "delta": delta,
                             "logprobs": [],
                         })
+                        return
+                    if e.get("type") == "tool_start":
+                        emit_tool_start(e)
+                        return
+                    if e.get("type") == "tool_result":
+                        emit_tool_result(e)
                         return
                     meta = _event_metadata(e)
                     if meta:
@@ -1471,7 +1563,7 @@ def make_handler(config: Config):
                     )
                     failed.update({
                         "model": model or config.get("model.default", ""),
-                        "output": _response_output(text) if text else [],
+                        "output": list(streamed_output_items) + (_response_output(text) if text else []),
                         "output_text": text,
                         "error": {"message": f"{type(exc).__name__}: {exc}", "type": "server_error"},
                         "instructions": instructions,
@@ -1502,19 +1594,22 @@ def make_handler(config: Config):
                 response["conversation"] = conversation or None
                 response["store"] = store_response
                 final_text = response.get("output_text") or "".join(text_parts)
+                if streamed_output_items:
+                    response["output"] = list(streamed_output_items) + _response_output(final_text)
                 if final_text or message_opened:
                     if not message_opened:
                         open_message_item()
+                    out_index = message_output_index if message_output_index is not None else 0
                     send_event("response.output_text.done", {
                         "response_id": response_id,
                         "item_id": message_item_id,
-                        "output_index": 0,
+                        "output_index": out_index,
                         "content_index": 0,
                         "text": final_text,
                         "logprobs": [],
                     })
                     send_event("response.output_item.done", {
-                        "output_index": 0,
+                        "output_index": out_index,
                         "item": {
                             "id": message_item_id,
                             "type": "message",
