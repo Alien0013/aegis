@@ -43,17 +43,75 @@ def _coerce_request_bool(value: Any, default: bool = False) -> bool:
     return default
 
 
-def _cors_headers() -> dict[str, str]:
-    return {
-        "Access-Control-Allow-Origin": "*",
+def _parse_cors_origins(value: Any) -> tuple[str, ...]:
+    if not value:
+        return ()
+    if isinstance(value, str):
+        items = value.split(",")
+    elif isinstance(value, (list, tuple, set)):
+        items = value
+    else:
+        items = [value]
+    return tuple(str(item).strip() for item in items if str(item).strip())
+
+
+def _configured_cors_origins(config: Config | None) -> tuple[str, ...]:
+    value = None
+    if config is not None:
+        value = config.get("server.cors_origins")
+    if not value:
+        value = os.environ.get("AEGIS_SERVER_CORS_ORIGINS") or os.environ.get("API_SERVER_CORS_ORIGINS")
+    return _parse_cors_origins(value)
+
+
+def _cors_headers(config: Config | None, origin: str = "") -> dict[str, str] | None:
+    origin = str(origin or "").strip()
+    if not origin:
+        return {}
+    origins = _configured_cors_origins(config)
+    if not origins:
+        return None
+    headers = {
         "Access-Control-Allow-Methods": "GET,POST,PATCH,PUT,DELETE,OPTIONS",
         "Access-Control-Allow-Headers": (
-            "Authorization, Content-Type, Accept, OpenAI-Beta, "
+            "Authorization, Content-Type, Accept, OpenAI-Beta, Idempotency-Key, "
             "X-Aegis-Session, X-Aegis-Provider, X-Aegis-Cwd, "
             "X-Hermes-Session-Id, X-Hermes-Session-Key"
         ),
-        "Access-Control-Max-Age": "86400",
+        "Access-Control-Max-Age": "600",
     }
+    if "*" in origins:
+        headers["Access-Control-Allow-Origin"] = "*"
+        return headers
+    if origin not in origins:
+        return None
+    headers["Access-Control-Allow-Origin"] = origin
+    headers["Vary"] = "Origin"
+    return headers
+
+
+def _origin_allowed(config: Config | None, origin: str = "") -> bool:
+    return not origin or _cors_headers(config, origin) is not None
+
+
+def _security_headers() -> dict[str, str]:
+    return {
+        "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+        "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+        "X-XSS-Protection": "0",
+        "Referrer-Policy": "no-referrer",
+    }
+
+
+def _response_headers(config: Config | None, origin: str = "") -> dict[str, str]:
+    headers = _security_headers()
+    cors = _cors_headers(config, origin)
+    if cors:
+        headers.update(cors)
+    return headers
 
 
 def _json_bytes(obj: Any) -> bytes:
@@ -631,10 +689,19 @@ def make_handler(config: Config):
                 return True
             return self.headers.get("Authorization", "") == f"Bearer {api_key}"
 
+        def _origin(self) -> str:
+            return str(self.headers.get("Origin", "") or "")
+
+        def _forbid_disallowed_origin(self) -> bool:
+            if _origin_allowed(config, self._origin()):
+                return False
+            self._json(403, {"error": "cors origin not allowed"})
+            return True
+
         def _json(self, code: int, obj: Any) -> None:
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
-            for name, value in _cors_headers().items():
+            for name, value in _response_headers(config, self._origin()).items():
                 self.send_header(name, value)
             self.end_headers()
             self.wfile.write(_json_bytes(obj))
@@ -691,7 +758,7 @@ def make_handler(config: Config):
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
             self.send_header("X-Accel-Buffering", "no")
-            for name, value in _cors_headers().items():
+            for name, value in _response_headers(config, self._origin()).items():
                 self.send_header(name, value)
             self.end_headers()
 
@@ -823,8 +890,17 @@ def make_handler(config: Config):
                 time.sleep(0.2)
 
         def do_OPTIONS(self):  # noqa: N802
+            cors = _cors_headers(config, self._origin())
+            if not cors:
+                self.send_response(403)
+                for name, value in _security_headers().items():
+                    self.send_header(name, value)
+                self.end_headers()
+                return
             self.send_response(204)
-            for name, value in _cors_headers().items():
+            headers = _security_headers()
+            headers.update(cors)
+            for name, value in headers.items():
                 self.send_header(name, value)
             self.end_headers()
 
@@ -842,6 +918,8 @@ def make_handler(config: Config):
             return 200, {"ok": True, "run": run}
 
         def do_GET(self):  # noqa: N802
+            if self._forbid_disallowed_origin():
+                return
             if not self._authed():
                 return self._json(401, {"error": "unauthorized"})
             path, query = self._route()
@@ -913,6 +991,8 @@ def make_handler(config: Config):
             return self._json(404, {"error": "not found"})
 
         def do_DELETE(self):  # noqa: N802
+            if self._forbid_disallowed_origin():
+                return
             if not self._authed():
                 return self._json(401, {"error": "unauthorized"})
             path, _query = self._route()
@@ -935,6 +1015,8 @@ def make_handler(config: Config):
             return self._json(404, {"error": "not found"})
 
         def do_PATCH(self):  # noqa: N802
+            if self._forbid_disallowed_origin():
+                return
             if not self._authed():
                 return self._json(401, {"error": "unauthorized"})
             path, _query = self._route()
@@ -967,6 +1049,8 @@ def make_handler(config: Config):
             return self.do_PATCH()
 
         def do_POST(self):  # noqa: N802
+            if self._forbid_disallowed_origin():
+                return
             if not self._authed():
                 return self._json(401, {"error": "unauthorized"})
             path, _query = self._route()
@@ -1499,8 +1583,20 @@ def make_app(config: Config) -> web.Application:
             return bytes(self._buffer)
 
     async def dispatch(request: web.Request) -> web.StreamResponse:
+        origin = str(request.headers.get("Origin", "") or "")
         if request.method.upper() == "OPTIONS":
-            return web.Response(status=204, headers=_cors_headers())
+            cors = _cors_headers(config, origin)
+            if not cors:
+                return web.Response(status=403, headers=_security_headers())
+            headers = _security_headers()
+            headers.update(cors)
+            return web.Response(status=204, headers=headers)
+        if not _origin_allowed(config, origin):
+            return web.json_response(
+                {"error": "cors origin not allowed"},
+                status=403,
+                headers=_security_headers(),
+            )
         body = await request.read()
         loop = asyncio.get_running_loop()
         chunks: asyncio.Queue[bytes] = asyncio.Queue()
@@ -1532,7 +1628,11 @@ def make_app(config: Config) -> web.Application:
         method = request.method.upper()
         func = getattr(adapter, f"do_{method}", None)
         if func is None:
-            return web.json_response({"error": "method not allowed"}, status=405, headers=_cors_headers())
+            return web.json_response(
+                {"error": "method not allowed"},
+                status=405,
+                headers=_response_headers(config, origin),
+            )
 
         task = asyncio.create_task(asyncio.to_thread(func))
         header_wait = asyncio.create_task(headers_ready.wait())
@@ -1542,7 +1642,7 @@ def make_app(config: Config) -> web.Application:
             return web.json_response(
                 {"error": f"{type(task.exception()).__name__}: {task.exception()}"},
                 status=500,
-                headers=_cors_headers(),
+                headers=_response_headers(config, origin),
             )
         if not adapter._aegis_headers_sent:
             await task
@@ -1556,12 +1656,15 @@ def make_app(config: Config) -> web.Application:
                 return web.json_response(
                     {"error": f"{type(task.exception()).__name__}: {task.exception()}"},
                     status=500,
-                    headers=_cors_headers(),
+                    headers=_response_headers(config, origin),
                 )
-            merged_headers = {**_cors_headers(), **headers}
+            merged_headers = {**_response_headers(config, origin), **headers}
             return web.Response(status=adapter._aegis_status, headers=merged_headers, body=adapter.wfile.getvalue())
 
-        response = web.StreamResponse(status=adapter._aegis_status, headers={**_cors_headers(), **headers})
+        response = web.StreamResponse(
+            status=adapter._aegis_status,
+            headers={**_response_headers(config, origin), **headers},
+        )
         await response.prepare(request)
         try:
             while True:

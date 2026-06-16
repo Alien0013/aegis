@@ -491,23 +491,43 @@ def test_server_health_skills_toolsets_and_cors_options(monkeypatch, tmp_path):
     import aegis.server as server
     from aegis.config import Config
 
-    srv, port = _serve(server.make_handler(Config.load()))
+    cfg = Config.load()
+    cfg.data.setdefault("server", {})["cors_origins"] = ["http://client.local"]
+    srv, port = _serve(server.make_handler(cfg))
     try:
-        health_status, health_data = _request(port, "GET", "/v1/health")
+        health_status, health_headers, health_data = _request_with_headers(port, "GET", "/v1/health")
         skills_status, skills_data = _request(port, "GET", "/v1/skills")
         toolsets_status, toolsets_data = _request(port, "GET", "/v1/toolsets")
-        options_status, _options_data = _request(port, "OPTIONS", "/v1/chat/completions")
+        options_status, options_headers, _options_data = _request_with_headers(
+            port,
+            "OPTIONS",
+            "/v1/chat/completions",
+            headers={"Origin": "http://client.local"},
+        )
+        blocked_status, _blocked_headers, blocked_data = _request_with_headers(
+            port,
+            "GET",
+            "/v1/health",
+            headers={"Origin": "http://evil.local"},
+        )
     finally:
         srv.shutdown()
         srv.server_close()
 
     assert health_status == 200
     assert json.loads(health_data)["ok"] is True
+    assert health_headers["Content-Security-Policy"] == "default-src 'none'; frame-ancestors 'none'"
+    assert health_headers["X-Content-Type-Options"] == "nosniff"
+    assert "Access-Control-Allow-Origin" not in health_headers
     assert skills_status == 200
     assert json.loads(skills_data)["object"] == "list"
     assert toolsets_status == 200
     assert json.loads(toolsets_data)["object"] == "list"
     assert options_status == 204
+    assert options_headers["Access-Control-Allow-Origin"] == "http://client.local"
+    assert options_headers["Access-Control-Max-Age"] == "600"
+    assert blocked_status == 403
+    assert json.loads(blocked_data)["error"] == "cors origin not allowed"
 
 
 def test_responses_create_retrieve_cancel_delete(monkeypatch, tmp_path):
@@ -719,7 +739,9 @@ def test_server_session_chat_stream_uses_sse_cors_headers(monkeypatch, tmp_path)
 
     _FakeRunner.calls = []
     monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
-    srv, port = _serve(server.make_handler(Config.load()))
+    cfg = Config.load()
+    cfg.data.setdefault("server", {})["cors_origins"] = ["http://client.local"]
+    srv, port = _serve(server.make_handler(cfg))
     try:
         create_status, create_data = _request(port, "POST", "/api/sessions", {"title": "Stream Session"})
         session_id = json.loads(create_data)["session"]["id"]
@@ -728,6 +750,7 @@ def test_server_session_chat_stream_uses_sse_cors_headers(monkeypatch, tmp_path)
             "POST",
             f"/api/sessions/{session_id}/chat/stream",
             {"prompt": "reply"},
+            headers={"Origin": "http://client.local"},
         )
     finally:
         srv.shutdown()
@@ -736,8 +759,9 @@ def test_server_session_chat_stream_uses_sse_cors_headers(monkeypatch, tmp_path)
     assert create_status == 201
     assert stream_status == 200
     assert headers["Content-Type"].startswith("text/event-stream")
-    assert headers["Access-Control-Allow-Origin"] == "*"
+    assert headers["Access-Control-Allow-Origin"] == "http://client.local"
     assert headers["X-Accel-Buffering"] == "no"
+    assert headers["X-Frame-Options"] == "DENY"
     assert "data: [DONE]" in stream_data
 
 
