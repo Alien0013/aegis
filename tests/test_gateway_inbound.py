@@ -145,6 +145,39 @@ def test_shared_inbound_exec_approval_waiter_uses_exec_prompt():
     assert seen == []
 
 
+def test_media_helpers_accept_metadata_kwargs(tmp_path):
+    from aegis.gateway.base import BasePlatformAdapter
+    from aegis.gateway.channels import TelegramAdapter
+
+    path = tmp_path / "image.png"
+    path.write_bytes(b"png")
+
+    class CapturingAdapter(BasePlatformAdapter):
+        name = "capture"
+
+        def __init__(self):
+            self.sent = []
+            self.media = []
+
+        def send(self, chat_id: str, text: str) -> None:
+            self.sent.append((chat_id, text))
+
+        def send_media(self, chat_id: str, path: str, caption: str = "", *, metadata=None, **kwargs) -> None:
+            self.media.append((chat_id, path, caption, metadata, kwargs))
+
+    adapter = CapturingAdapter()
+    adapter.send_image("c1", str(path), caption="cap", metadata={"source": "remote"}, ephemeral=True)
+    assert adapter.media == [("c1", str(path), "cap", {"source": "remote"}, {"ephemeral": True})]
+
+    fallback = _adapter()
+    fallback.send_document("c1", str(path), caption="doc", metadata={"source": "remote"})
+    assert fallback.sent == [("c1", f"doc\n📎 file ready: {path}")]
+
+    telegram = TelegramAdapter("token")
+    telegram.send = lambda chat_id, text: None
+    telegram.send_image("c1", str(path), metadata={"source": "remote"})
+
+
 def test_shared_inbound_busy_modes(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     from aegis.config import Config

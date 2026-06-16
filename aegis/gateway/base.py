@@ -286,7 +286,15 @@ class BasePlatformAdapter:
         except Exception:  # noqa: BLE001
             pass
 
-    def send_media(self, chat_id: str, path: str, caption: str = "") -> None:
+    def send_media(
+        self,
+        chat_id: str,
+        path: str,
+        caption: str = "",
+        *,
+        metadata: dict | None = None,  # noqa: ARG002
+        **_kwargs,
+    ) -> None:
         """Send a file as a native attachment. Default: mention it as text (adapters that
         support native uploads — Telegram, Discord — override this)."""
         import os
@@ -295,17 +303,25 @@ class BasePlatformAdapter:
         else:
             self.send(chat_id, f"(file not found: {path})")
 
-    def send_image(self, chat_id: str, path: str, caption: str = "") -> None:
-        self.send_media(chat_id, path, caption)
+    def send_image(self, chat_id: str, path: str, caption: str = "", *, metadata: dict | None = None, **kwargs) -> None:
+        self.send_media(chat_id, path, caption, metadata=metadata, **kwargs)
 
-    def send_video(self, chat_id: str, path: str, caption: str = "") -> None:
-        self.send_media(chat_id, path, caption)
+    def send_video(self, chat_id: str, path: str, caption: str = "", *, metadata: dict | None = None, **kwargs) -> None:
+        self.send_media(chat_id, path, caption, metadata=metadata, **kwargs)
 
-    def send_voice(self, chat_id: str, path: str, caption: str = "") -> None:
-        self.send_media(chat_id, path, caption)
+    def send_voice(self, chat_id: str, path: str, caption: str = "", *, metadata: dict | None = None, **kwargs) -> None:
+        self.send_media(chat_id, path, caption, metadata=metadata, **kwargs)
 
-    def send_document(self, chat_id: str, path: str, caption: str = "") -> None:
-        self.send_media(chat_id, path, caption)
+    def send_document(
+        self,
+        chat_id: str,
+        path: str,
+        caption: str = "",
+        *,
+        metadata: dict | None = None,
+        **kwargs,
+    ) -> None:
+        self.send_media(chat_id, path, caption, metadata=metadata, **kwargs)
 
     def send_clarify(self, chat_id: str, question: str, choices: list[str] | None = None) -> None:
         rendered = question.strip()

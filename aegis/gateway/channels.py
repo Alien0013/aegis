@@ -138,7 +138,15 @@ class TelegramAdapter(BasePlatformAdapter):
             self._delete(chat_id, status_id)
         self.deliver(chat_id, reply)
 
-    def send_media(self, chat_id: str, path: str, caption: str = "") -> None:
+    def send_media(
+        self,
+        chat_id: str,
+        path: str,
+        caption: str = "",
+        *,
+        metadata: dict | None = None,  # noqa: ARG002
+        **_kwargs,
+    ) -> None:
         import os
         if not os.path.exists(path):
             self.send(chat_id, f"(file not found: {path})")
