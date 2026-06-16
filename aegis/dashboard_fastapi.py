@@ -2673,10 +2673,79 @@ def _dashboard_ws_capabilities() -> dict[str, Any]:
         "routes": {
             "events": "/api/ws",
             "sse": "/api/events",
+            "publish": "/api/pub",
             "pty": "/api/pty",
             "ws_ticket": "/api/auth/ws-ticket",
         },
     }
+
+
+_EVENT_SECRET_KEYS = {
+    "api_key",
+    "apikey",
+    "authorization",
+    "bearer",
+    "cookie",
+    "password",
+    "secret",
+    "token",
+}
+
+
+def _redact_event_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for key, child in value.items():
+            if str(key).lower() in _EVENT_SECRET_KEYS:
+                out[str(key)] = "[redacted]"
+            else:
+                out[str(key)] = _redact_event_value(child)
+        return out
+    if isinstance(value, list):
+        return [_redact_event_value(item) for item in value]
+    return value
+
+
+def _dashboard_event_payload(body: Any) -> dict[str, Any]:
+    raw = body if isinstance(body, dict) else {"value": body}
+    event = _redact_event_value(dash._jsonable(copy.deepcopy(raw)))
+    event_type = str(event.get("type") or event.get("event") or "dashboard_event").strip() or "dashboard_event"
+    event["type"] = event_type
+    event.setdefault("source", "dashboard")
+    event.setdefault("created_at", datetime.now(timezone.utc).isoformat(timespec="milliseconds"))
+    return event
+
+
+def _publish_dashboard_event(body: Any) -> dict[str, Any]:
+    from .eventbus import BUS
+
+    event = _dashboard_event_payload(body)
+    BUS.publish(event)
+    return {"ok": True, "event": event, "subscribers": BUS.subscriber_count()}
+
+
+def _dashboard_events_response(config: Config, request: Request) -> StreamingResponse:
+    _require_request(request, config)
+
+    def stream():
+        from .eventbus import BUS
+
+        sub = BUS.subscribe()
+        try:
+            while True:
+                try:
+                    ev = sub.get(timeout=15)
+                    yield f"data: {json.dumps(ev)}\n\n".encode()
+                except queue.Empty:
+                    yield b": keepalive\n\n"
+        finally:
+            BUS.unsubscribe(sub)
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 def _dashboard_ws_rpc_response(text: str | None, config: Config) -> dict[str, Any] | None:
@@ -3093,6 +3162,8 @@ def _api_post(path: str, body: dict, config: Config, chat_runner: Any) -> dict:
                 reason=str(body.get("reason") or "dashboard"),
             )
         return {"error": "bad session request"}
+    if path == "/api/pub":
+        return _publish_dashboard_event(body)
     if path == "/api/sessions/bulk-delete":
         ids = body.get("ids") if isinstance(body, dict) else None
         if not ids and isinstance(body, dict):
@@ -3289,23 +3360,21 @@ def create_app(config: Config) -> FastAPI:
 
     @app.get("/events")
     async def events(request: Request) -> StreamingResponse:
+        return _dashboard_events_response(config, request)
+
+    @app.get("/api/events")
+    async def api_events(request: Request) -> StreamingResponse:
+        return _dashboard_events_response(config, request)
+
+    @app.post("/api/pub")
+    async def api_pub(request: Request) -> JSONResponse:
         _require_request(request, config)
-
-        def stream():
-            from .eventbus import BUS
-
-            sub = BUS.subscribe()
-            try:
-                while True:
-                    try:
-                        ev = sub.get(timeout=15)
-                        yield f"data: {json.dumps(ev)}\n\n".encode()
-                    except queue.Empty:
-                        yield b": keepalive\n\n"
-            finally:
-                BUS.unsubscribe(sub)
-
-        return StreamingResponse(stream(), media_type="text/event-stream")
+        raw = await request.body()
+        try:
+            body = json.loads(raw) if raw else {}
+        except ValueError:
+            return JSONResponse({"ok": False, "error": "request body must be JSON"}, status_code=400)
+        return JSONResponse(_publish_dashboard_event(body))
 
     @app.websocket("/api/ws")
     async def event_socket(ws: WebSocket) -> None:

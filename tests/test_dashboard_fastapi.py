@@ -335,6 +335,8 @@ def test_fastapi_registers_live_and_pty_websockets(tmp_path, monkeypatch):
         "/api/auth/me",
         "/api/auth/providers",
         "/api/auth/ws-ticket",
+        "/api/events",
+        "/api/pub",
         "/api/config/schema",
         "/api/config/raw",
         "/api/env",
@@ -367,6 +369,8 @@ def test_fastapi_websocket_jsonrpc_helper(tmp_path, monkeypatch):
     assert capabilities["id"] == 1
     assert capabilities["result"]["transport"]["jsonrpc"] == "2.0"
     assert "/api/ws" == capabilities["result"]["routes"]["events"]
+    assert "/api/events" == capabilities["result"]["routes"]["sse"]
+    assert "/api/pub" == capabilities["result"]["routes"]["publish"]
 
     status = _dashboard_ws_rpc_response(
         '{"jsonrpc":"2.0","id":"s","method":"dashboard.get","params":{"path":"/api/status"}}',
@@ -389,6 +393,36 @@ def test_fastapi_websocket_jsonrpc_helper(tmp_path, monkeypatch):
         cfg,
     )
     assert blocked["error"]["code"] == -32602
+
+
+def test_fastapi_event_alias_and_publish_route(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    from aegis.eventbus import BUS
+
+    sub = BUS.subscribe()
+    try:
+        denied = asyncio.run(_request(app, "POST", "/api/pub", json={"type": "blocked"}))
+        assert denied.status_code == 401
+
+        published = asyncio.run(_request(
+            app,
+            "POST",
+            "/api/pub",
+            json={"type": "dashboard_probe", "payload": {"token": "secret-token", "ok": True}},
+            headers=headers,
+        ))
+        assert published.status_code == 200
+        body = published.json()
+        assert body["ok"] is True
+        assert body["event"]["type"] == "dashboard_probe"
+        assert body["event"]["payload"]["token"] == "[redacted]"
+
+        event = sub.get(timeout=1)
+        assert event == body["event"]
+    finally:
+        BUS.unsubscribe(sub)
 
 
 def test_fastapi_browser_manage_route(tmp_path, monkeypatch):
