@@ -878,6 +878,12 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
         "env": ["TELEGRAM_BOT_TOKEN"],
         "setup": "Create a bot with BotFather, set TELEGRAM_BOT_TOKEN, start the gateway, then approve the pairing code.",
         "pairing": True,
+        "adapter_class": "aegis.gateway.channels.TelegramAdapter",
+        "auth_type": "bot_token",
+        "transport": "long_poll",
+        "capabilities": ["text", "media", "typing", "status_edit", "reply_context"],
+        "delivery_modes": ["direct", "group"],
+        "security": {"allowed_users_env": "TELEGRAM_ALLOWED_USERS", "pairing": True},
     },
     {
         "id": "discord",
@@ -885,6 +891,12 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
         "env": ["DISCORD_BOT_TOKEN"],
         "setup": "Create a Discord bot token and install the discord extra when using this adapter.",
         "pairing": True,
+        "adapter_class": "aegis.gateway.discord_channel.DiscordAdapter",
+        "auth_type": "bot_token",
+        "transport": "gateway",
+        "capabilities": ["text", "status_edit", "mentions", "slash_commands"],
+        "delivery_modes": ["direct", "guild_channel"],
+        "security": {"pairing": True, "command_cap": 100},
     },
     {
         "id": "slack",
@@ -892,6 +904,12 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
         "env": ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"],
         "setup": "Use Socket Mode with a bot token and app-level token.",
         "pairing": True,
+        "adapter_class": "aegis.gateway.slack_channel.SlackAdapter",
+        "auth_type": "bot_and_app_tokens",
+        "transport": "socket_mode",
+        "capabilities": ["text", "threads", "status_edit", "mentions"],
+        "delivery_modes": ["direct", "channel", "thread"],
+        "security": {"pairing": True},
     },
     {
         "id": "signal",
@@ -899,6 +917,12 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
         "env": ["SIGNAL_CLI_ACCOUNT"],
         "setup": "Requires signal-cli and a registered account.",
         "pairing": False,
+        "adapter_class": "aegis.gateway.signal_channel.SignalAdapter",
+        "auth_type": "local_account",
+        "transport": "signal_cli",
+        "capabilities": ["text"],
+        "delivery_modes": ["direct", "group"],
+        "security": {"local_binary": "signal-cli"},
     },
     {
         "id": "matrix",
@@ -906,6 +930,12 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
         "env": ["MATRIX_HOMESERVER", "MATRIX_USER", "MATRIX_PASSWORD"],
         "setup": "Requires matrix-nio plus a Matrix homeserver, user, and password.",
         "pairing": True,
+        "adapter_class": "aegis.gateway.matrix_channel.MatrixAdapter",
+        "auth_type": "password",
+        "transport": "matrix_client",
+        "capabilities": ["text", "rooms"],
+        "delivery_modes": ["direct", "room"],
+        "security": {"pairing": True},
     },
     {
         "id": "email",
@@ -913,6 +943,12 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
         "env": ["EMAIL_IMAP_HOST", "EMAIL_SMTP_HOST", "EMAIL_ADDRESS", "EMAIL_PASSWORD"],
         "setup": "Configure IMAP and SMTP so AEGIS can read and send mail.",
         "pairing": False,
+        "adapter_class": "aegis.gateway.email_channel.EmailAdapter",
+        "auth_type": "mailbox_password",
+        "transport": "imap_smtp",
+        "capabilities": ["text", "attachments"],
+        "delivery_modes": ["mailbox"],
+        "security": {"secrets": ["EMAIL_PASSWORD"]},
     },
     {
         "id": "webhook",
@@ -920,6 +956,12 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
         "env": [],
         "setup": "POST bridge events to the local webhook endpoint.",
         "pairing": False,
+        "adapter_class": "aegis.gateway.webhook_channel.WebhookChannel",
+        "auth_type": "local_http",
+        "transport": "http",
+        "capabilities": ["text", "webhook_events"],
+        "delivery_modes": ["webhook"],
+        "security": {"local_only_recommended": True},
     },
     {
         "id": "ntfy",
@@ -927,6 +969,12 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
         "env": ["NTFY_TOPIC", "NTFY_TOKEN"],
         "setup": "Use ntfy for lightweight push notifications and replies.",
         "pairing": False,
+        "adapter_class": "aegis.gateway.ntfy_channel.NtfyAdapter",
+        "auth_type": "topic_token",
+        "transport": "http_push",
+        "capabilities": ["text", "push"],
+        "delivery_modes": ["topic"],
+        "security": {"optional_token": "NTFY_TOKEN"},
     },
 ]
 
@@ -1003,6 +1051,19 @@ def _messaging_platform_env_fields(item: dict[str, Any]) -> list[dict[str, Any]]
     return fields
 
 
+def _messaging_platform_metadata(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "adapter_class": item.get("adapter_class", ""),
+        "auth_type": item.get("auth_type", ""),
+        "transport": item.get("transport", ""),
+        "capabilities": list(item.get("capabilities", []) or []),
+        "delivery_modes": list(item.get("delivery_modes", []) or []),
+        "security": copy.deepcopy(item.get("security", {}) or {}),
+        "pairing": bool(item.get("pairing", False)),
+        "source": item.get("source", "builtin"),
+    }
+
+
 def _messaging_platform_row(config: Config, item: dict[str, Any]) -> dict[str, Any]:
     gateway_payload = _gateway_channel_payload(config, str(item["id"]))
     channel = gateway_payload.get("channel") or {}
@@ -1032,6 +1093,13 @@ def _messaging_platform_row(config: Config, item: dict[str, Any]) -> dict[str, A
         "profile": channel.get("profile", {}),
         "probe_available": bool(channel.get("probe_available", False)),
         "source": item.get("source", "builtin"),
+        "adapter_class": item.get("adapter_class", ""),
+        "auth_type": item.get("auth_type", ""),
+        "transport": item.get("transport", ""),
+        "capabilities": list(item.get("capabilities", []) or []),
+        "delivery_modes": list(item.get("delivery_modes", []) or []),
+        "security": copy.deepcopy(item.get("security", {}) or {}),
+        "metadata": _messaging_platform_metadata(item),
     }
 
 
@@ -1044,6 +1112,26 @@ def _messaging_platforms_payload(config: Config, platform_id: str = "") -> dict[
             return {"ok": False, "error": "unknown messaging platform", "platform": safe}
         return {"ok": True, "platform": _messaging_platform_row(config, item)}
     return {"platforms": [_messaging_platform_row(config, item) for item in _CHANNEL_CATALOG]}
+
+
+def _platform_registry_payload(config: Config, platform_id: str = "") -> dict[str, Any]:
+    payload = _messaging_platforms_payload(config, platform_id)
+    if platform_id:
+        platform = payload.get("platform")
+        return {
+            "ok": bool(payload.get("ok")),
+            "platform": platform,
+            "registry": platform,
+            "error": payload.get("error", ""),
+        }
+    rows = payload.get("platforms", [])
+    return {
+        "ok": True,
+        "platforms": rows,
+        "registry": rows,
+        "count": len(rows),
+        "enabled": [row["id"] for row in rows if row.get("enabled")],
+    }
 
 
 def _messaging_platform_update(config: Config, platform_id: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -2918,6 +3006,10 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
         from .gateway.pairing import PairingStore
 
         return PairingStore().list()
+    if path in {"/api/platforms", "/api/platforms/registry", "/api/messaging/platforms/registry"}:
+        return _platform_registry_payload(config)
+    if path.startswith("/api/platforms/"):
+        return _platform_registry_payload(config, path.removeprefix("/api/platforms/"))
     if path == "/api/mcp":
         servers = config.get("mcp.servers", {}) or {}
         return [{"name": n, "command": (s or {}).get("command", ""),
@@ -4895,6 +4987,20 @@ def create_app(config: Config) -> FastAPI:
     async def api_messaging_platforms(request: Request) -> JSONResponse:
         _require_request(request, config)
         return JSONResponse(_messaging_platforms_payload(config))
+
+    @app.get("/api/platforms")
+    @app.get("/api/platforms/registry")
+    @app.get("/api/messaging/platforms/registry")
+    async def api_platforms_registry(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_platform_registry_payload(config))
+
+    @app.get("/api/platforms/{platform_id}")
+    async def api_platform_registry_detail(platform_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        safe = _safe_resource_name(platform_id, "platform").lower()
+        payload = _platform_registry_payload(config, safe)
+        return JSONResponse(payload, status_code=200 if payload.get("ok") else 404)
 
     @app.put("/api/messaging/platforms/{platform_id}")
     async def api_messaging_platform_update(platform_id: str, request: Request) -> JSONResponse:

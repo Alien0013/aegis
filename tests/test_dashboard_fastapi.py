@@ -355,6 +355,8 @@ def test_fastapi_registers_live_and_pty_websockets(tmp_path, monkeypatch):
         "/api/cron/service",
         "/api/gateway/status",
         "/api/messaging/platforms",
+        "/api/platforms",
+        "/api/platforms/registry",
     ):
         assert routes[path] == "APIRoute"
 
@@ -742,6 +744,20 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     assert telegram["enabled"] is False
     assert telegram["state"] == "disabled"
     assert any(field["key"] == "TELEGRAM_BOT_TOKEN" and field["required"] for field in telegram["env_vars"])
+    assert telegram["auth_type"] == "bot_token"
+    assert telegram["transport"] == "long_poll"
+    assert "media" in telegram["capabilities"]
+    assert telegram["metadata"]["adapter_class"].endswith("TelegramAdapter")
+
+    registry = asyncio.run(_request(app, "GET", "/api/platforms/registry", headers=headers))
+    assert registry.status_code == 200
+    assert registry.json()["count"] >= len(rows)
+    reg_telegram = next(row for row in registry.json()["registry"] if row["id"] == "telegram")
+    assert reg_telegram["metadata"]["auth_type"] == "bot_token"
+
+    detail = asyncio.run(_request(app, "GET", "/api/platforms/telegram", headers=headers))
+    assert detail.status_code == 200
+    assert detail.json()["platform"]["metadata"]["transport"] == "long_poll"
 
     invalid = asyncio.run(_request(
         app,
