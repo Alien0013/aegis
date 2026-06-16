@@ -407,10 +407,10 @@ def test_gateway_reply_context_prefixes_prompt(tmp_path, monkeypatch):
     )
 
     assert r.dispatch(ev) == "ok"
-    assert captured["prompt"].startswith(
+    assert captured["prompt"].content.startswith(
         '[Replying to: "Japan is great for culture, food, and efficiency."]\n'
     )
-    assert "What's the best time to go?" in captured["prompt"]
+    assert "What's the best time to go?" in captured["prompt"].content
 
 
 def test_gateway_memory_notification_modes(tmp_path, monkeypatch):
@@ -816,7 +816,9 @@ def test_gateway_goal_continuation_uses_surface_runner(tmp_path, monkeypatch):
                 "trace_id": f"trace_gateway_goal_{self.calls}",
                 "turn_id": f"turn_gateway_goal_{self.calls}",
             }
-            self.session.messages.append(Message.user(str(prompt)))
+            self.session.messages.append(
+                Message.user(prompt.content if isinstance(prompt, Message) else str(prompt))
+            )
             message = Message.assistant(f"reply {self.calls}")
             self.session.messages.append(message)
             return message
@@ -871,9 +873,11 @@ def test_gateway_goal_command_bypasses_mention_gate(tmp_path, monkeypatch):
             self.tools_used = 0
 
         def run(self, prompt, on_event=None):
-            seen.append(str(prompt))
+            seen.append(prompt.content if isinstance(prompt, Message) else str(prompt))
             self._trace_context = {"trace_id": "trace_goal_gate", "turn_id": "turn_goal_gate"}
-            self.session.messages.append(Message.user(str(prompt)))
+            self.session.messages.append(
+                Message.user(prompt.content if isinstance(prompt, Message) else str(prompt))
+            )
             message = Message.assistant("goal response")
             self.session.messages.append(message)
             return message
@@ -924,9 +928,11 @@ def test_gateway_resume_pending_directive_clears_after_success(tmp_path, monkeyp
             self.tools_used = 0
 
         def run(self, prompt, on_event=None):
-            seen.append(str(prompt))
+            seen.append(prompt.content if isinstance(prompt, Message) else str(prompt))
             self._trace_context = {"trace_id": "trace_gateway_resume", "turn_id": "turn_gateway_resume"}
-            self.session.messages.append(Message.user(str(prompt)))
+            self.session.messages.append(
+                Message.user(prompt.content if isinstance(prompt, Message) else str(prompt))
+            )
             message = Message.assistant("resumed")
             self.session.messages.append(message)
             return message
@@ -990,9 +996,11 @@ def test_gateway_process_notification_injects_internal_turn(tmp_path, monkeypatc
             self.tools_used = 0
 
         def run(self, prompt, on_event=None):
-            seen.append(str(prompt))
+            seen.append(prompt.content if isinstance(prompt, Message) else str(prompt))
             self._trace_context = {"trace_id": "trace_process_notify", "turn_id": "turn_process_notify"}
-            self.session.messages.append(Message.user(str(prompt)))
+            self.session.messages.append(
+                Message.user(prompt.content if isinstance(prompt, Message) else str(prompt))
+            )
             message = Message.assistant("processed notification")
             self.session.messages.append(message)
             return message
@@ -1095,12 +1103,16 @@ def test_gateway_tracks_child_session_after_run_split(tmp_path, monkeypatch):
             }
             if self.calls == 1:
                 child = Session.create("gateway child", parent_id=self.session.id)
-                child.messages = [Message.user(str(prompt))]
+                child.messages = [
+                    Message.user(prompt.content if isinstance(prompt, Message) else str(prompt))
+                ]
                 self.session = child
                 self.tool_context.session = child
                 r.store.save(child)
             else:
-                self.session.messages.append(Message.user(str(prompt)))
+                self.session.messages.append(
+                    Message.user(prompt.content if isinstance(prompt, Message) else str(prompt))
+                )
             message = Message.assistant(f"reply {self.calls}")
             self.session.messages.append(message)
             return message

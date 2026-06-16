@@ -51,7 +51,8 @@ class NtfyAdapter(BasePlatformAdapter):
                         if ev.get("event") != "message" or not ev.get("message"):
                             continue
                         me = MessageEvent(platform="ntfy", chat_id=self.topic,
-                                          text=ev["message"], user_id="ntfy")
+                                          text=ev["message"], user_id="ntfy",
+                                          timestamp=ev.get("time"))
                         self._submit_inbound(me)
             except Exception:  # noqa: BLE001 - keep the subscriber alive across drops
                 continue

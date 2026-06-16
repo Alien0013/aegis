@@ -814,7 +814,11 @@ class Agent:
         except Exception:  # noqa: BLE001
             pass
         if self.memory:
-            self.memory.history.append("user", msg.content, self.session.id)
+            self.memory.history.append(
+                "user",
+                self._clean_gateway_timestamp_content(msg),
+                self.session.id,
+            )
 
         before = (
             self.budget.usage.input_tokens,
@@ -829,6 +833,7 @@ class Agent:
             self._ultracode_active = False   # ultracode mode is scoped to a single turn
         tools_this_turn = self.tools_used - tools_before
         self._update_runtime_meta(tools_this_turn)
+        msg.content = self._clean_gateway_timestamp_content(msg)
 
         from ..types import Usage
         turn = Usage(self.budget.usage.input_tokens - before[0],
@@ -862,6 +867,16 @@ class Agent:
         except Exception:  # noqa: BLE001
             pass
         return result
+
+    @staticmethod
+    def _clean_gateway_timestamp_content(msg: Message) -> str:
+        rendered = str(msg.meta.get("gateway_timestamp_rendered_content") or "")
+        has_clean = "gateway_timestamp_clean_content" in msg.meta
+        clean = str(msg.meta.get("gateway_timestamp_clean_content") or "")
+        content = msg.content
+        if rendered and has_clean and rendered in content:
+            return content.replace(rendered, clean, 1)
+        return content
 
     def _update_runtime_meta(self, tools_this_turn: int = 0) -> None:
         api_mode = getattr(self.provider, "api_mode", "")

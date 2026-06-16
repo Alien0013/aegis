@@ -56,7 +56,8 @@ class EmailAdapter(BasePlatformAdapter):
                     text = (subject + "\n\n" + self._body(msg)).strip()
                     imap.store(num, "+FLAGS", "\\Seen")
                     ev = MessageEvent(platform="email", chat_id=sender, text=text,
-                                      user_id=sender, thread_id=subject)
+                                      user_id=sender, thread_id=subject,
+                                      timestamp=msg.get("Date"))
                     self._submit_inbound(ev)
                 imap.logout()
             except Exception:  # noqa: BLE001 — keep the poller alive

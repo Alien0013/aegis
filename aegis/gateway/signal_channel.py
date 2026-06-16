@@ -92,6 +92,7 @@ class SignalAdapter(BasePlatformAdapter):
                     text=text,
                     user_id=source,
                     user_name=envelope.get("sourceName"),
+                    timestamp=envelope.get("timestamp") or data.get("timestamp"),
                 )
             )
         return events

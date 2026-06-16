@@ -48,6 +48,7 @@ class DiscordAdapter(BasePlatformAdapter):
                 message_id=str(getattr(message, "id", "") or "") or None,
                 reply_to_message_id=str(getattr(replied, "id", "") or "") or None,
                 reply_to_text=getattr(replied, "content", None),
+                timestamp=getattr(message, "created_at", None),
             )
             ev._discord_channel = message.channel
             ev._discord_loop = self._loop

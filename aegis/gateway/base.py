@@ -23,6 +23,7 @@ class MessageEvent:
     message_id: str | None = None
     reply_to_message_id: str | None = None
     reply_to_text: str | None = None
+    timestamp: object | None = None
     session_key: str | None = None
     internal: bool = False
     attachments: list[dict] = field(default_factory=list)

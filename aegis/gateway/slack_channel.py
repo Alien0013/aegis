@@ -39,6 +39,7 @@ class SlackAdapter(BasePlatformAdapter):
                 text=event.get("text", ""), user_id=event.get("user"),
                 thread_id=event.get("thread_ts"),
                 message_id=str(event.get("ts") or "") or None,
+                timestamp=event.get("ts"),
             )
             self._submit_inbound(ev)
 

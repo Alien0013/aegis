@@ -72,6 +72,7 @@ class WebhookChannel(BasePlatformAdapter):
                     chat_id=str(body.get("chat_id", "unknown")),
                     text=body.get("text", ""),
                     user_id=str(body.get("user_id")) if body.get("user_id") else None,
+                    timestamp=body.get("timestamp") or body.get("ts"),
                 )
                 reply = adapter._submit_inbound(ev, wait=True) or ""
                 self.send_response(200)

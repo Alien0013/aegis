@@ -86,6 +86,7 @@ class TelegramAdapter(BasePlatformAdapter):
                     message_id=str(msg.get("message_id") or "") or None,
                     reply_to_message_id=str(reply_to.get("message_id") or "") or None,
                     reply_to_text=reply_to.get("text") or reply_to.get("caption"),
+                    timestamp=msg.get("date"),
                 )
                 self._submit_inbound(ev, raw_text=msg["text"])
 

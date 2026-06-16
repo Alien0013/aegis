@@ -530,6 +530,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "gateway": {
         "channels": [],
+        "message_timestamps": {
+            "enabled": False,          # opt-in timestamp prefixes in model-visible gateway context
+        },
         "group_sessions_per_user": True,
         "session_mode": "per_channel_peer",  # main | per_channel | per_channel_peer | per_peer
         "require_mention": False,             # in group chats, only respond when mentioned

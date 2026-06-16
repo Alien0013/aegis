@@ -10,12 +10,53 @@ from typing import Any
 from ..agent.agent import Agent
 from ..config import Config
 from ..session import Session, SessionStore
+from ..types import Message
 from .base import BasePlatformAdapter, MessageEvent
 
 
 def _sync_control_session(proxy, session: Session, reply: str) -> str:
     proxy.session = session
     return reply
+
+
+def _message_timestamps_enabled(config: Config | None) -> bool:
+    if config is None:
+        return False
+    raw = config.get("gateway.message_timestamps", False)
+    if isinstance(raw, dict):
+        return bool(raw.get("enabled", False))
+    return bool(raw)
+
+
+def _gateway_user_message(config: Config, ev: MessageEvent, text: str) -> Message:
+    from .message_timestamps import (
+        coerce_message_timestamp,
+        render_user_content_with_timestamp,
+        strip_leading_message_timestamps,
+    )
+
+    clean_text, embedded_ts = strip_leading_message_timestamps(text)
+    event_ts = coerce_message_timestamp(getattr(ev, "timestamp", None))
+    timestamp = event_ts if event_ts is not None else embedded_ts
+    enabled = _message_timestamps_enabled(config)
+    rendered = (
+        render_user_content_with_timestamp(clean_text, timestamp)
+        if enabled else clean_text
+    )
+    msg = Message.user(rendered)
+    gateway_meta: dict[str, Any] = {
+        "platform": ev.platform,
+        "chat_id": ev.chat_id,
+        "message_id": ev.message_id or "",
+        "timestamp_enabled": enabled,
+    }
+    if timestamp is not None:
+        gateway_meta["message_timestamp"] = timestamp
+    if rendered != clean_text:
+        msg.meta["gateway_timestamp_rendered_content"] = rendered
+        msg.meta["gateway_timestamp_clean_content"] = clean_text
+    msg.meta["gateway"] = gateway_meta
+    return msg
 
 
 def _with_reply_pointer(ev: MessageEvent, text: str, *, limit: int = 500) -> str:
@@ -1010,13 +1051,15 @@ class GatewayRunner:
                 resume_directive = self._resume_pending_directive(session)
                 if resume_directive:
                     text = resume_directive + text
+                prompt_message = _gateway_user_message(self.config, ev, text)
+                gateway_prompt_meta = dict(prompt_message.meta.get("gateway") or {})
 
                 learned: list[str] = []
 
                 from ..eventbus import BUS
                 BUS.publish({"platform": ev.platform, "chat_id": ev.chat_id,
                              "type": "internal_message" if is_internal else "user_message",
-                             "text": text})
+                             "text": prompt_message.content})
 
                 def _collect(ev_: dict) -> None:
                     t = ev_.get("type")
@@ -1068,13 +1111,18 @@ class GatewayRunner:
                             learned.append(f"🧠 {action}")
 
                 run = self._surface_runner.run_prompt(
-                    text,
+                    prompt_message,
                     session=session,
                     agent=agent,
                     approver=approver,
                     asker=asker,
                     surface="gateway",
-                    meta={"platform": ev.platform, "chat_id": ev.chat_id, "user_id": ev.user_id or ""},
+                    meta={
+                        "platform": ev.platform,
+                        "chat_id": ev.chat_id,
+                        "user_id": ev.user_id or "",
+                        **gateway_prompt_meta,
+                    },
                     platform=ev.platform,
                     chat_id=ev.chat_id,
                     include_wakeups=not is_internal,
@@ -1212,6 +1260,7 @@ class GatewayRunner:
             thread_id=str(event.get("thread_id") or "") or None,
             message_id=str(event.get("message_id") or "") or None,
             session_key=str(event.get("session_key") or "") or None,
+            timestamp=event.get("timestamp") or event.get("ts"),
             internal=True,
         )
         try:
