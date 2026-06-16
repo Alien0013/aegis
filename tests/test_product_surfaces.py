@@ -1170,6 +1170,13 @@ def test_dashboard_models_exposes_resolver_report():
             "base_url": "http://local.test/v1",
             "api_mode": "chat_completions",
             "context_length": 70_000,
+        },
+        {
+            "name": "litellm-proxy",
+            "base_url": "http://proxy.local/v1",
+            "api_mode": "chat_completions",
+            "default_model": "anthropic/claude-sonnet-4.5",
+            "context_length": 70_000,
         }
     ]
     cfg.data["fallback_providers"] = [{"provider": "ollama", "model": "llama3.1"}]
@@ -1188,7 +1195,11 @@ def test_dashboard_models_exposes_resolver_report():
     assert data["presets"]["localtest"] == ["local-model"]
     assert data["preset_rows"]["localtest"][0]["id"] == "local-model"
     assert data["preset_rows"]["localtest"][0]["source"] == "default"
+    assert "anthropic/claude-sonnet-4.5" in data["presets"]["litellm-proxy"]
+    assert "anthropic/claude-sonnet-4.5" not in data["presets"]["openrouter"]
     assert any(row["provider"] == "localtest" and row["id"] == "local-model"
+               for row in data["model_inventory"])
+    assert any(row["provider"] == "openrouter" and row["id"] == "anthropic/claude-sonnet-4.5"
                for row in data["model_inventory"])
     assert any(row["name"] == "localtest" and row["origin"] == "custom"
                for row in data["provider_catalog"])

@@ -261,6 +261,7 @@ _STRICT_MODEL_PRESET_PROVIDERS = {
     "openai",
     "openai-codex",
 }
+_AGGREGATOR_PROVIDERS = {"openrouter", "huggingface", "novita"}
 
 
 _OAUTH_CATALOG: dict[str, OAuthCatalogEntry] = {
@@ -436,6 +437,38 @@ def known_models_for(provider_name: str, config: cfg.Config | None = None) -> li
     return [row["id"] for row in known_model_entries_for(provider_name, config)]
 
 
+def _custom_model_ids(config: cfg.Config | None) -> tuple[set[str], set[str]]:
+    custom_provider_names = set(_custom_specs(config)) if config is not None else set()
+    custom_model_ids: set[str] = set()
+    for custom_name in custom_provider_names:
+        for row in known_model_entries_for(custom_name, config):
+            model_id = str(row.get("id") or "").strip().lower()
+            if model_id:
+                custom_model_ids.add(model_id)
+    return custom_provider_names, custom_model_ids
+
+
+def picker_model_entries_for(provider_name: str, config: cfg.Config | None = None) -> list[dict]:
+    """Picker-facing model rows.
+
+    If a user-defined provider and an aggregator advertise the same model id,
+    hide the aggregator copy so selecting the row keeps calls on the specific
+    custom endpoint.
+    """
+    rows = known_model_entries_for(provider_name, config)
+    custom_provider_names, custom_model_ids = _custom_model_ids(config)
+    if provider_name in custom_provider_names or provider_name not in _AGGREGATOR_PROVIDERS:
+        return rows
+    return [
+        row for row in rows
+        if str(row.get("id") or "").strip().lower() not in custom_model_ids
+    ]
+
+
+def picker_models_for(provider_name: str, config: cfg.Config | None = None) -> list[str]:
+    return [row["id"] for row in picker_model_entries_for(provider_name, config)]
+
+
 def model_inventory(config: cfg.Config, provider_names: list[str] | None = None) -> list[dict]:
     """All known model rows, deduped by provider+model while preserving ownership."""
     providers = provider_names or list_providers(config)
@@ -443,7 +476,8 @@ def model_inventory(config: cfg.Config, provider_names: list[str] | None = None)
     seen: set[tuple[str, str]] = set()
     for provider_name in providers:
         for row in known_model_entries_for(provider_name, config):
-            key = (str(row.get("provider") or ""), str(row.get("id") or "").lower())
+            model_key = str(row.get("id") or "").strip().lower()
+            key = (str(row.get("provider") or ""), model_key)
             if key in seen:
                 continue
             seen.add(key)

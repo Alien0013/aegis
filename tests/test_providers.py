@@ -1231,6 +1231,35 @@ def test_model_inventory_dedupes_presets_and_keeps_provider_ownership():
     assert any(row["provider"] == "mirror" and row["id"] == "gpt-5.5" for row in inventory)
 
 
+def test_picker_model_entries_filter_custom_models_from_aggregators():
+    from aegis.config import Config
+    from aegis.providers import registry
+
+    cfg = Config.load()
+    cfg.data["custom_providers"] = [
+        {
+            "name": "litellm-proxy",
+            "base_url": "http://proxy.local/v1",
+            "api_mode": "chat_completions",
+            "default_model": "ANTHROPIC/CLAUDE-SONNET-4.5",
+            "context_length": 70_000,
+        }
+    ]
+
+    inventory = registry.model_inventory(cfg, ["openrouter", "litellm-proxy"])
+    rows = {(row["provider"], row["id"].lower()) for row in inventory}
+    assert ("litellm-proxy", "anthropic/claude-sonnet-4.5") in rows
+    assert ("openrouter", "anthropic/claude-sonnet-4.5") in rows
+
+    picker_rows = registry.picker_model_entries_for("openrouter", cfg)
+    picker_ids = {row["id"].lower() for row in picker_rows}
+    assert "anthropic/claude-sonnet-4.5" not in picker_ids
+    assert picker_rows
+
+    custom_picker_ids = {row["id"].lower() for row in registry.picker_model_entries_for("litellm-proxy", cfg)}
+    assert "anthropic/claude-sonnet-4.5" in custom_picker_ids
+
+
 def test_model_validation_warns_with_suggestions_without_blocking_custom():
     from aegis.config import Config
     from aegis.providers.registry import (
