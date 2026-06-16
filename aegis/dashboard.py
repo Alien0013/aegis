@@ -1155,12 +1155,28 @@ def _dashboard_chat_meta(body: dict, route: str) -> dict:
     meta = {"surface_route": route}
     if cwd:
         meta["dashboard_cwd"] = cwd
+    controls: dict[str, str] = {}
+
     # A reasoning choice from the Chat toggle becomes a session runtime control so
     # the agent streams (or stops streaming) live thinking for this turn onward.
     reasoning = str(body.get("reasoning") or "").strip().lower()
     if reasoning in _REASONING_LEVELS:
-        meta["runtime_controls"] = {"reasoning_effort": reasoning,
-                                    "reasoning_display": "live" if reasoning != "off" else "off"}
+        controls["reasoning_effort"] = reasoning
+        controls["reasoning_display"] = "live" if reasoning != "off" else "off"
+
+    # Dashboard/desktop composer choices are session runtime controls, not
+    # profile-default writes. Persisting them here keeps resume/reconnect truthful
+    # after a live or new-chat model switch.
+    model = str(body.get("model") or "").strip()
+    provider = str(body.get("provider") or body.get("provider_name") or "").strip()
+    if model:
+        controls["model"] = model
+    if provider:
+        controls["provider"] = provider
+
+    if controls:
+        from .surface import runtime_controls_meta
+        meta.update(runtime_controls_meta(controls))
     return meta
 
 

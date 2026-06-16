@@ -4,6 +4,7 @@
 // chat app: a slim session rail on the left and the real AEGIS terminal filling the rest.
 // The Electron app opens straight into `#/app`; the full control panel stays one click away.
 
+import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useApi } from "../lib/useApi";
 import { Icon } from "../components/icons";
@@ -29,6 +30,9 @@ export function DesktopShell() {
   const cfg = useApi<Record<string, unknown>>("config");
   const model = String(cfg.data?.["model.default"] ?? "");
   const provider = String(cfg.data?.["model.provider"] ?? "");
+  const [runtime, setRuntime] = useState({ model: "", provider: "" });
+  const shownModel = runtime.model || model;
+  const shownProvider = runtime.provider || provider;
   const sessions = (data || []).slice(0, 50);
 
   const open = (id: string) => nav(`/app?id=${encodeURIComponent(id)}`);
@@ -94,10 +98,10 @@ export function DesktopShell() {
         </nav>
 
         <div className="space-y-2 border-t border-border p-3">
-          {model && (
-            <div className="flex items-center gap-2 text-xs text-dim" title={`${provider} ${model}`}>
+          {shownModel && (
+            <div className="flex items-center gap-2 text-xs text-dim" title={`${shownProvider} ${shownModel}`}>
               <Icon name="models" size={13} />
-              <span className="truncate">{model}</span>
+              <span className="truncate">{shownModel}</span>
             </div>
           )}
           <ThemeSwitcher up />
@@ -114,6 +118,7 @@ export function DesktopShell() {
       <main className="min-w-0 flex-1">
         <GraphicalChat
           sessionId={activeId}
+          onRuntime={setRuntime}
           onSession={(id) => {
             if (id && id !== activeId) nav(`/app?id=${encodeURIComponent(id)}`, { replace: true });
             reload();

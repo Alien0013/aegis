@@ -5,8 +5,8 @@
 // REPL: the user's words render as bubbles, the agent's reply streams as markdown, and
 // each tool call shows as a live card (running → ok/error) paired by event id.
 
-import { useEffect, useRef, useState } from "react";
-import { post, postStream } from "../lib/api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { api, post, postStream } from "../lib/api";
 import { desktop, isDesktop } from "../lib/desktop";
 import { Icon } from "../components/icons";
 import { Mark } from "../components/Mark";
@@ -41,32 +41,114 @@ interface BrowserManageResponse {
   error?: string;
 }
 
+interface ModelsPayload {
+  provider?: string;
+  model?: string;
+  providers?: string[];
+  presets?: Record<string, string[]>;
+}
+
+interface SessionPayload {
+  messages?: { role: string; content: string }[];
+  meta?: {
+    model?: string;
+    provider?: string;
+    runtime_controls?: Record<string, unknown>;
+  };
+}
+
+const MODEL_KEY = "aegis.chat.composer.model";
+const PROVIDER_KEY = "aegis.chat.composer.provider";
+const CUSTOM_VALUE = "__custom";
+
+function stored(key: string): string {
+  try { return localStorage.getItem(key) || ""; } catch { return ""; }
+}
+
+function persist(key: string, value: string): void {
+  try {
+    if (value) localStorage.setItem(key, value);
+    else localStorage.removeItem(key);
+  } catch { /* ignore storage failures */ }
+}
+
 export function GraphicalChat({
   sessionId,
   onSession,
+  onRuntime,
 }: {
   sessionId?: string;
   onSession?: (id: string) => void;
+  onRuntime?: (runtime: { model: string; provider: string }) => void;
 }) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [sid, setSid] = useState(sessionId || "");
+  const [modelData, setModelData] = useState<ModelsPayload | null>(null);
+  const [model, setModelState] = useState(() => stored(MODEL_KEY));
+  const [provider, setProviderState] = useState(() => stored(PROVIDER_KEY));
+  const [runtimeDirty, setRuntimeDirty] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const setModel = (value: string, dirty = true) => {
+    setModelState(value);
+    persist(MODEL_KEY, value);
+    if (dirty) setRuntimeDirty(true);
+  };
+
+  const setProvider = (value: string, dirty = true) => {
+    setProviderState(value);
+    persist(PROVIDER_KEY, value);
+    if (dirty) setRuntimeDirty(true);
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    api<ModelsPayload>("models")
+      .then((data) => {
+        if (cancelled) return;
+        setModelData(data);
+        setProviderState((current) => {
+          if (current) return current;
+          const next = data.provider || "";
+          persist(PROVIDER_KEY, next);
+          return next;
+        });
+        setModelState((current) => {
+          if (current) return current;
+          const next = data.model || "";
+          persist(MODEL_KEY, next);
+          return next;
+        });
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    onRuntime?.({ model, provider });
+  }, [model, onRuntime, provider]);
 
   // Load a session's transcript when one is opened from the rail.
   useEffect(() => {
     let cancelled = false;
     setSid(sessionId || "");
     setTurns([]);
+    setRuntimeDirty(false);
     if (!sessionId) return;
     fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
       headers: { "X-Aegis-Token": localStorage.getItem("aegis_token") || "" },
     })
       .then((r) => (r.ok ? r.json() : null))
-      .then((data: { messages?: { role: string; content: string }[] } | null) => {
+      .then((data: SessionPayload | null) => {
         if (cancelled || !data?.messages) return;
+        const controls = data.meta?.runtime_controls || {};
+        const sessionModel = String(controls.model || data.meta?.model || "");
+        const sessionProvider = String(controls.provider || data.meta?.provider || "");
+        if (sessionModel) setModel(sessionModel, false);
+        if (sessionProvider) setProvider(sessionProvider, false);
         setTurns(
           data.messages
             .filter((t) => (t.role === "user" || t.role === "assistant") && (t.content || "").trim())
@@ -78,6 +160,27 @@ export function GraphicalChat({
       cancelled = true;
     };
   }, [sessionId]);
+
+  const providers = modelData?.providers || (provider ? [provider] : []);
+  const presets = (modelData?.presets || {})[provider] || [];
+  const knownModel = presets.includes(model);
+  const selectedModel = knownModel ? model : CUSTOM_VALUE;
+  const customModel = model && !knownModel ? model : "";
+
+  const switchProvider = (nextProvider: string) => {
+    setProvider(nextProvider);
+    const nextPresets = (modelData?.presets || {})[nextProvider] || [];
+    if (nextPresets.length) setModel(nextPresets[0]);
+  };
+
+  const sendRuntime = useMemo(() => {
+    const shouldSend = !sid || runtimeDirty;
+    if (!shouldSend || !model.trim()) return {};
+    return {
+      model: model.trim(),
+      ...(provider.trim() ? { provider: provider.trim() } : {}),
+    };
+  }, [model, provider, runtimeDirty, sid]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -176,7 +279,7 @@ export function GraphicalChat({
     setTurns((t) => [...t, { role: "user", text }, { role: "assistant", text: "", tools: [] }]);
 
     try {
-      await postStream("chat/stream", { message: text, session_id: sid || undefined }, (data) => {
+      await postStream("chat/stream", { message: text, session_id: sid || undefined, ...sendRuntime }, (data) => {
         const type = String(data.type || "");
         if (type === "start") {
           const s = String(data.session_id || "");
@@ -188,6 +291,7 @@ export function GraphicalChat({
           const s = String(data.session_id || "");
           patchLast((turn) => ({ ...turn, text: reply || turn.text }));
           if (s) { setSid(s); onSession?.(s); }
+          setRuntimeDirty(false);
           return;
         }
         if (type === "error") {
@@ -278,24 +382,61 @@ export function GraphicalChat({
       </div>
 
       <div className="border-t border-border bg-surface/40 px-4 py-3 backdrop-blur">
-        <div className="mx-auto flex w-full max-w-3xl items-end gap-2">
-          <textarea
-            ref={taRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={onKey}
-            rows={1}
-            placeholder="Message AEGIS…  (Enter to send, Shift+Enter for newline)"
-            className="scroll-thin max-h-40 min-h-[44px] flex-1 resize-none rounded-[var(--radius)] border border-border bg-surface px-3 py-2.5 text-sm text-text outline-none placeholder:text-faint focus:border-border-2"
-          />
-          <button
-            onClick={send}
-            disabled={busy || !input.trim()}
-            className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-[var(--radius)] bg-primary text-primary-fg transition enabled:hover:opacity-90 disabled:opacity-40"
-            title="Send"
-          >
-            <Icon name={busy ? "refresh" : "send"} size={18} className={busy ? "animate-spin" : ""} />
-          </button>
+        <div className="mx-auto w-full max-w-3xl">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <div className="flex min-h-9 max-w-full flex-wrap items-center gap-1.5 rounded-[var(--radius)] border border-border bg-surface px-2 py-1 text-xs text-dim">
+              <Icon name="models" size={14} className="text-primary" />
+              <select
+                value={provider}
+                onChange={(e) => switchProvider(e.target.value)}
+                className="max-w-[150px] bg-transparent font-mono text-xs text-text outline-none"
+                title="Provider"
+              >
+                {!providers.includes(provider) && provider && <option value={provider}>{provider}</option>}
+                {providers.map((p) => <option key={p} value={p}>{p}</option>)}
+              </select>
+              <select
+                value={selectedModel}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  if (value === CUSTOM_VALUE) setModel(customModel || model || "");
+                  else setModel(value);
+                }}
+                className="max-w-[220px] bg-transparent font-mono text-xs text-text outline-none"
+                title="Model"
+              >
+                <option value={CUSTOM_VALUE}>custom</option>
+                {presets.map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+              {selectedModel === CUSTOM_VALUE && (
+                <input
+                  value={customModel}
+                  onChange={(e) => setModel(e.target.value)}
+                  placeholder="model id"
+                  className="min-h-7 w-44 max-w-full rounded-[var(--radius)] border border-border bg-surface-2 px-2 font-mono text-xs text-text outline-none placeholder:text-faint focus:border-border-2"
+                />
+              )}
+            </div>
+          </div>
+          <div className="flex items-end gap-2">
+            <textarea
+              ref={taRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={onKey}
+              rows={1}
+              placeholder="Message AEGIS…  (Enter to send, Shift+Enter for newline)"
+              className="scroll-thin max-h-40 min-h-[44px] flex-1 resize-none rounded-[var(--radius)] border border-border bg-surface px-3 py-2.5 text-sm text-text outline-none placeholder:text-faint focus:border-border-2"
+            />
+            <button
+              onClick={send}
+              disabled={busy || !input.trim()}
+              className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-[var(--radius)] bg-primary text-primary-fg transition enabled:hover:opacity-90 disabled:opacity-40"
+              title="Send"
+            >
+              <Icon name={busy ? "refresh" : "send"} size={18} className={busy ? "animate-spin" : ""} />
+            </button>
+          </div>
         </div>
       </div>
     </div>

@@ -987,6 +987,8 @@ def test_dashboard_chat_response_includes_cockpit_breadcrumbs():
         def run_prompt(self, prompt, **kwargs):
             assert kwargs["surface"] == "dashboard"
             assert kwargs["meta"]["surface_route"] == "/api/chat"
+            assert kwargs["meta"]["runtime_controls"]["model"] == "dash-model"
+            assert kwargs["meta"]["runtime_controls"]["provider"] == "dash-provider"
             assert kwargs["model"] == "dash-model"
             assert kwargs["provider_name"] == "dash-provider"
             on_event = kwargs["on_event"]
@@ -1027,6 +1029,8 @@ def test_dashboard_chat_stream_emits_progress_and_final():
         def run_prompt(self, prompt, **kwargs):
             assert kwargs["surface"] == "dashboard"
             assert kwargs["meta"]["surface_route"] == "/api/chat/stream"
+            assert kwargs["meta"]["runtime_controls"]["model"] == "stream-model"
+            assert kwargs["meta"]["runtime_controls"]["provider"] == "stream-provider"
             assert kwargs["model"] == "stream-model"
             assert kwargs["provider_name"] == "stream-provider"
             on_event = kwargs["on_event"]

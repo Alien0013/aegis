@@ -152,6 +152,27 @@ def test_chat_meta_maps_reasoning_to_runtime_control():
     assert "runtime_controls" not in bad
 
 
+def test_chat_meta_maps_model_picker_to_session_runtime():
+    """Composer model/provider picks are per-session runtime controls, not
+    profile-default writes."""
+    from aegis.dashboard import _dashboard_chat_meta
+
+    meta = _dashboard_chat_meta(
+        {"model": "gpt-session", "provider": "openai", "reasoning": "high"},
+        "/api/chat/stream",
+    )
+
+    assert meta["model"] == "gpt-session"
+    assert meta["provider"] == "openai"
+    assert meta["runtime_controls"] == {
+        "reasoning_effort": "high",
+        "reasoning_display": "live",
+        "model": "gpt-session",
+        "provider": "openai",
+    }
+    assert meta["runtime"]["reasoning_effort"] == "high"
+
+
 def test_memory_post_add_and_remove(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     monkeypatch.setenv("AEGIS_DASHBOARD_TOKEN", "t")
