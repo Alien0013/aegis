@@ -322,12 +322,60 @@ def test_hermes_session_key_chat_echoes_and_stays_separate_from_session_id(monke
         srv.server_close()
 
     body = json.loads(data)
+    expected_session_id = server._derive_chat_session_id(None, "hi")
     assert status == 200
     assert headers["X-Hermes-Session-Key"] == "gateway:user-42"
-    assert headers["X-Hermes-Session-Id"] == "serve:test"
+    assert headers["X-Hermes-Session-Id"] == expected_session_id
     assert body["metadata"]["session_key"] == "gateway:user-42"
-    assert _FakeRunner.calls[0]["session_id"] is None
+    assert body["metadata"]["session_id"] == expected_session_id
+    assert _FakeRunner.calls[0]["session_id"] == expected_session_id
     assert _FakeRunner.calls[0]["meta"]["gateway_session_key"] == "gateway:user-42"
+
+
+def test_chat_completions_derives_stable_session_for_stateless_frontends(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        first_status, first_headers, first_data = _request_with_headers(
+            port,
+            "POST",
+            "/v1/chat/completions",
+            {
+                "messages": [
+                    {"role": "system", "content": "stay terse"},
+                    {"role": "user", "content": "first request"},
+                ]
+            },
+        )
+        second_status, second_headers, second_data = _request_with_headers(
+            port,
+            "POST",
+            "/v1/chat/completions",
+            {
+                "messages": [
+                    {"role": "system", "content": "stay terse"},
+                    {"role": "user", "content": "first request"},
+                    {"role": "assistant", "content": "hello"},
+                    {"role": "user", "content": "second request"},
+                ]
+            },
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    expected = server._derive_chat_session_id("stay terse", "first request")
+    assert first_status == second_status == 200
+    assert first_headers["X-Hermes-Session-Id"] == expected
+    assert second_headers["X-Hermes-Session-Id"] == expected
+    assert json.loads(first_data)["metadata"]["session_id"] == expected
+    assert json.loads(second_data)["metadata"]["session_id"] == expected
+    assert [call["session_id"] for call in _FakeRunner.calls] == [expected, expected]
 
 
 def test_openai_chat_completions_aiohttp_transport(monkeypatch, tmp_path):

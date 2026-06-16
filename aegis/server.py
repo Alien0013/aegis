@@ -227,6 +227,48 @@ def _convert(messages: list[dict]) -> tuple[list[Message], Message]:
     return internal, last_user
 
 
+def _content_seed_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                text = item.get("text") or item.get("input_text")
+                if text is not None:
+                    parts.append(str(text))
+            elif item is not None:
+                parts.append(str(item))
+        return "\n".join(parts)
+    if content is None:
+        return ""
+    try:
+        return json.dumps(content, sort_keys=True, default=str)
+    except TypeError:
+        return str(content)
+
+
+def _derive_chat_session_id(system_prompt: str | None, first_user_message: str) -> str:
+    seed = f"{system_prompt or ''}\n{first_user_message}"
+    digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
+    return f"api-{digest}"
+
+
+def _derive_chat_session_id_from_messages(messages: list[dict]) -> str:
+    system_prompt = ""
+    first_user = ""
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "")
+        if role == "system" and not system_prompt:
+            system_prompt = _content_seed_text(message.get("content"))
+        elif role == "user" and not first_user:
+            first_user = _content_seed_text(message.get("content"))
+            break
+    return _derive_chat_session_id(system_prompt, first_user)
+
+
 def _usage(source) -> dict[str, Any]:
     usage = source
     if not all(hasattr(usage, key) for key in ("input_tokens", "output_tokens")):
@@ -1401,6 +1443,8 @@ def make_handler(config: Config):
                 or self.headers.get("X-Hermes-Session-Id")
                 or None
             )
+            if not session_id:
+                session_id = _derive_chat_session_id_from_messages(body.get("messages", []))
             provider_name = (
                 metadata.get("provider")
                 or body.get("provider")
