@@ -871,6 +871,62 @@ def _admin_status_payload(config: Config) -> dict[str, Any]:
     }
 
 
+def _observability_contract_payload(config: Config) -> dict[str, Any]:
+    from . import hooks
+    from .agent import events as agent_events
+
+    configured = hooks.list_hooks(config)
+    hook_rows = [
+        {
+            "event": event,
+            "configured": event in configured,
+            "commands": configured.get(event, []),
+            "env_prefix": "AEGIS_HOOK_",
+            "timeout_seconds": 10,
+        }
+        for event in hooks.EVENTS
+    ]
+    event_rows = [{"type": event_type, "known": True} for event_type in sorted(agent_events.ALL)]
+    return {
+        "ok": True,
+        "version": __version__,
+        "agent_events": event_rows,
+        "agent_event_types": [row["type"] for row in event_rows],
+        "hooks": hook_rows,
+        "configured_hooks": configured,
+        "routes": {
+            "traces": "/api/traces",
+            "trace": "/api/trace",
+            "runs": "/api/runs",
+            "run": "/api/run",
+            "events_sse": "/api/events",
+            "events_ws": "/api/ws",
+            "publish": "/api/pub",
+        },
+        "semantics": {
+            "hook_failure_policy": "best_effort",
+            "hook_timeout_seconds": 10,
+            "event_shape": "plain JSON object with a 'type' field",
+        },
+    }
+
+
+def _hook_test_payload(config: Config, body: dict[str, Any]) -> dict[str, Any]:
+    from . import hooks
+
+    event = str(body.get("event") or "").strip()
+    if event not in hooks.EVENTS:
+        return {"ok": False, "error": "unknown hook event", "event": event, "known_events": list(hooks.EVENTS)}
+    context = body.get("context") if isinstance(body.get("context"), dict) else {}
+    results = hooks.run_hooks(config, event, context)
+    return {
+        "ok": all(result.ok for result in results),
+        "event": event,
+        "count": len(results),
+        "results": [result.__dict__ for result in results],
+    }
+
+
 _CHANNEL_CATALOG: list[dict[str, Any]] = [
     {
         "id": "telegram",
@@ -2991,6 +3047,15 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
         return _dashboard_action_catalog()
     if path == "/api/admin/status":
         return _admin_status_payload(config)
+    if path in {
+        "/api/hooks",
+        "/api/hooks/contract",
+        "/api/observability",
+        "/api/observability/contract",
+        "/api/observability/events",
+        "/api/observability/hooks",
+    }:
+        return _observability_contract_payload(config)
     if path in {"/api/analytics", "/api/analytics/usage"}:
         from . import ratelimit
         from .usage_log import cost_report, daily_series
@@ -3337,6 +3402,8 @@ def _api_post(path: str, body: dict, config: Config, chat_runner: Any) -> dict:
     if path in {"/api/actions/run", "/api/admin/actions/run"}:
         action = str(body.get("action") or body.get("id") or body.get("name") or "")
         return dash._ops_action(action, body, config)
+    if path in {"/api/hooks/test", "/api/observability/hooks/test"}:
+        return _hook_test_payload(config, body)
     if path == "/api/sessions/bulk-delete":
         ids = body.get("ids") if isinstance(body, dict) else None
         if not ids and isinstance(body, dict):
@@ -5202,6 +5269,27 @@ def create_app(config: Config) -> FastAPI:
         body = body if isinstance(body, dict) else {}
         action = str(body.get("action") or body.get("id") or body.get("name") or "")
         return JSONResponse(dash._ops_action(action, body, config))
+
+    @app.get("/api/hooks")
+    @app.get("/api/hooks/contract")
+    @app.get("/api/observability")
+    @app.get("/api/observability/contract")
+    @app.get("/api/observability/events")
+    @app.get("/api/observability/hooks")
+    async def api_observability_contract(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_observability_contract_payload(config))
+
+    @app.post("/api/hooks/test")
+    @app.post("/api/observability/hooks/test")
+    async def api_observability_hook_test(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        raw = await request.body()
+        try:
+            body = json.loads(raw) if raw else {}
+        except ValueError:
+            body = {}
+        return JSONResponse(_hook_test_payload(config, body if isinstance(body, dict) else {}))
 
     @app.get("/api/{path:path}")
     async def api_get(path: str, request: Request) -> JSONResponse:

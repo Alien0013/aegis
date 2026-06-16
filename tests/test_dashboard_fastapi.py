@@ -343,6 +343,8 @@ def test_fastapi_registers_live_and_pty_websockets(tmp_path, monkeypatch):
         "/api/portal",
         "/api/actions/status",
         "/api/admin/status",
+        "/api/observability/contract",
+        "/api/hooks/test",
         "/api/config/schema",
         "/api/config/raw",
         "/api/env",
@@ -499,6 +501,55 @@ def test_fastapi_portal_admin_and_credential_aliases(tmp_path, monkeypatch):
     assert admin.json()["ok"] is True
     assert admin.json()["auth"]["token_configured"] is True
     reset_credential_pools()
+
+
+def test_fastapi_observability_contract_and_hook_test(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    monkeypatch.setenv("AEGIS_DASHBOARD_TOKEN", "t")
+
+    import shlex
+    import sys
+
+    from aegis.config import Config
+    from aegis.dashboard_fastapi import create_app
+
+    cfg = Config.load()
+    command = f"{shlex.quote(sys.executable)} -c \"print('hook-ok')\""
+    cfg.set("hooks.user_prompt", command)
+    app = create_app(cfg)
+    headers = {"X-Aegis-Token": "t"}
+
+    contract = asyncio.run(_request(app, "GET", "/api/observability/contract", headers=headers))
+    assert contract.status_code == 200
+    body = contract.json()
+    assert "assistant_delta" in body["agent_event_types"]
+    assert body["configured_hooks"]["user_prompt"] == [command]
+    assert body["routes"]["events_sse"] == "/api/events"
+    user_prompt_hook = next(row for row in body["hooks"] if row["event"] == "user_prompt")
+    assert user_prompt_hook["configured"] is True
+
+    hook = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/hooks/test",
+        json={"event": "user_prompt", "context": {"session_id": "sess_test"}},
+        headers=headers,
+    ))
+    assert hook.status_code == 200
+    assert hook.json()["ok"] is True
+    assert hook.json()["count"] == 1
+    assert hook.json()["results"][0]["stdout"].strip() == "hook-ok"
+
+    unknown = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/observability/hooks/test",
+        json={"event": "not_real"},
+        headers=headers,
+    ))
+    assert unknown.status_code == 200
+    assert unknown.json()["ok"] is False
+    assert "user_prompt" in unknown.json()["known_events"]
 
 
 def test_fastapi_browser_manage_route(tmp_path, monkeypatch):
