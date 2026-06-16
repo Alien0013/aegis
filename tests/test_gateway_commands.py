@@ -151,6 +151,43 @@ def test_gateway_generation_guard_blocks_late_save_after_reset(tmp_path, monkeyp
     assert r.store.load(key).messages == []
 
 
+def test_gateway_refreshes_session_on_message_count_drift_without_newer_timestamp(tmp_path, monkeypatch):
+    from aegis.types import Message
+
+    r = _runner(tmp_path, monkeypatch)
+    ev = _ev("work on this")
+    key = r._key(ev)
+    stale = r._session(key)
+    stale.messages.append(Message.user("old in-memory prompt"))
+    r.store.save(stale)
+
+    latest = r.store.load(key)
+    latest.messages.append(Message.assistant("external persisted reply"))
+    r.store.save(latest)
+    stale.updated_at = latest.updated_at
+    r._sessions[key] = stale
+    closed = []
+
+    class CachedAgent:
+        session = stale
+
+        def end_session(self):
+            closed.append("closed")
+
+    r._agents[key] = CachedAgent()
+
+    fresh = r._fresh_session_if_drifted(key, stale)
+
+    assert [m.content for m in fresh.messages] == [
+        "old in-memory prompt",
+        "external persisted reply",
+    ]
+    assert closed == ["closed"]
+    assert key not in r._agents
+    assert r._generation(key) == 1
+    assert fresh.meta["_gateway_generation"] == 1
+
+
 def test_session_store_rejects_stale_gateway_generation(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
 

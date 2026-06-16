@@ -46,7 +46,7 @@ class GatewayRunner:
         from ..surface import SurfaceRunner
         self._surface_runner = SurfaceRunner(config, store=self.store, cwd=self.cwd, include_mcp=True)
         self._cron_runner = SurfaceRunner(config, store=self.store, cwd=self.cwd, include_mcp=True)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._key_locks: dict[str, threading.Lock] = {}   # per-session serialization
         self._agents: dict[str, object] = {}              # LRU agent cache (prefix-cache reuse)
         self._agent_signatures: dict[str, tuple[Any, ...]] = {}
@@ -268,9 +268,11 @@ class GatewayRunner:
         if stamp is None:
             return session
         local_count = len(getattr(session, "messages", []) or [])
+        stored_count = int(stamp.get("message_count", local_count) or 0)
+        stored_updated = str(stamp.get("updated_at") or "")
         if not (
-            str(stamp.get("updated_at") or "") > getattr(session, "updated_at", "")
-            and int(stamp.get("message_count", local_count) or 0) != local_count
+            stored_updated > getattr(session, "updated_at", "")
+            or stored_count > local_count
         ):
             return session
         latest = self.store.load(key)
