@@ -1,9 +1,12 @@
 // Left navigation rail: permanent on desktop, off-canvas on smaller screens.
 
+import { useMemo } from "react";
 import { NavLink } from "react-router-dom";
 import { cn } from "../lib/cn";
 import { NAV } from "../lib/nav";
+import { navWithPluginRoutes } from "../lib/pluginNav";
 import { useApi } from "../lib/useApi";
+import { useDashboardPluginHost } from "../plugins/host";
 import { Icon } from "./icons";
 
 interface StatusPayload {
@@ -19,6 +22,8 @@ interface StatusPayload {
 }
 
 export function Sidebar({ open = false, onClose }: { open?: boolean; onClose?: () => void }) {
+  const { routes: pluginRoutes } = useDashboardPluginHost();
+  const navGroups = useMemo(() => navWithPluginRoutes(NAV, pluginRoutes), [pluginRoutes]);
   return (
     <>
       <button
@@ -54,7 +59,7 @@ export function Sidebar({ open = false, onClose }: { open?: boolean; onClose?: (
         </div>
 
         <nav className="scroll-thin flex-1 space-y-2 overflow-y-auto px-2 py-3">
-          {NAV.map((group) => (
+          {navGroups.map((group) => (
             <div key={group.label}>
               <div className="px-2 pb-1 pt-2 font-mono text-[10px] text-faint">
                 {group.label}

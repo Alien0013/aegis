@@ -7,6 +7,8 @@ import { useNavigate } from "react-router-dom";
 import { desktop, isDesktop } from "../lib/desktop";
 import { TOKEN } from "../lib/api";
 import { NAV_ITEMS } from "../lib/nav";
+import { pluginNavItems } from "../lib/pluginNav";
+import { useDashboardPluginHost } from "../plugins/host";
 import { useTheme } from "../themes/ThemeProvider";
 import { Icon } from "./icons";
 
@@ -47,6 +49,7 @@ function score(query: string, text: string): number {
 export function CommandPalette() {
   const nav = useNavigate();
   const { themes, setTheme, theme } = useTheme();
+  const { routes: pluginRoutes } = useDashboardPluginHost();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [sel, setSel] = useState(0);
@@ -62,6 +65,16 @@ export function CommandPalette() {
     ];
     for (const i of NAV_ITEMS) {
       list.push({ id: `nav:${i.path}`, label: i.label, group: "Go to", icon: i.icon, run: go(i.path) });
+    }
+    for (const i of pluginNavItems(pluginRoutes, NAV_ITEMS)) {
+      list.push({
+        id: `plugin:${i.path}`,
+        label: i.label,
+        group: "Plugins",
+        icon: i.icon,
+        hint: i.plugin ? `Plugin: ${i.plugin}` : "Dashboard plugin route",
+        run: go(i.path),
+      });
     }
     for (const t of themes) {
       list.push({
@@ -84,7 +97,7 @@ export function CommandPalette() {
       });
     }
     return list;
-  }, [nav, themes, setTheme, theme.name]);
+  }, [nav, pluginRoutes, themes, setTheme, theme.name]);
 
   const results = useMemo(() => {
     if (!query.trim()) return commands;

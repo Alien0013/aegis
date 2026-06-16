@@ -39,6 +39,9 @@ export interface DashboardPluginRoute {
   path: string;
   plugin?: string;
   label?: string;
+  icon?: string;
+  position?: string;
+  hidden?: boolean;
   render?: PluginRenderer;
 }
 
@@ -131,6 +134,8 @@ function manifestRoute(manifest: DashboardPluginManifest): DashboardPluginRoute 
     path,
     plugin: manifest.name,
     label: tab.label || manifest.label || manifest.title || manifest.name,
+    icon: manifest.icon || "plugins",
+    position: tab.position || "end",
   };
 }
 
@@ -143,11 +148,14 @@ function buildState(manifests: DashboardPluginManifest[], loading: boolean, erro
     const registered = registrations.get(manifest.name);
     const declared = manifestRoute(manifest);
     for (const route of registered?.routes || []) {
+      if (route.hidden) continue;
       routes.push({
         ...route,
         plugin: manifest.name,
         path: normalizePath(route.path, declared?.path || `/plugins/${manifest.name}`),
         label: route.label || declared?.label,
+        icon: route.icon || declared?.icon || manifest.icon || "plugins",
+        position: route.position || declared?.position || "end",
       });
     }
     if (declared && !routes.some((route) => route.path === declared.path)) {
@@ -164,7 +172,14 @@ function buildState(manifests: DashboardPluginManifest[], loading: boolean, erro
   for (const [name, registered] of registrations) {
     if (byName.has(name)) continue;
     for (const route of registered.routes || []) {
-      routes.push({ ...route, plugin: name, path: normalizePath(route.path, `/plugins/${name}`) });
+      if (route.hidden) continue;
+      routes.push({
+        ...route,
+        plugin: name,
+        path: normalizePath(route.path, `/plugins/${name}`),
+        icon: route.icon || "plugins",
+        position: route.position || "end",
+      });
     }
     for (const [slotName, renderers] of Object.entries(registered.slots || {})) {
       const list = Array.isArray(renderers) ? renderers : [renderers];
