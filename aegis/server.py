@@ -146,6 +146,16 @@ def _json_bytes(obj: Any) -> bytes:
     return json.dumps(obj, default=str).encode()
 
 
+def _openai_error(message: str, *, type_: str = "invalid_request_error",
+                  code: str | None = None, param: str | None = None) -> dict[str, Any]:
+    error: dict[str, Any] = {"message": message, "type": type_}
+    if code:
+        error["code"] = code
+    if param:
+        error["param"] = param
+    return {"error": error}
+
+
 def _request_fingerprint(body: dict[str, Any], keys: list[str]) -> str:
     subset = {key: body.get(key) for key in keys}
     blob = json.dumps(subset, sort_keys=True, default=str, separators=(",", ":"))
@@ -174,6 +184,77 @@ def _content(value: Any) -> tuple[str, list[str]]:
             if image:
                 images.append(str(image))
     return "\n".join(t for t in texts if t), images
+
+
+def _content_has_visible_payload(value: Any) -> bool:
+    text, images = _content(value)
+    return bool(str(text or "").strip() or images)
+
+
+def _response_input_item_visible(item: Any) -> bool:
+    if not isinstance(item, dict):
+        return _content_has_visible_payload(item)
+    if "content" in item:
+        return _content_has_visible_payload(item.get("content"))
+    text = item.get("text", item.get("input_text"))
+    if text is not None and str(text).strip():
+        return True
+    image = item.get("image_url") or item.get("image")
+    if isinstance(image, dict):
+        image = image.get("url")
+    return bool(image)
+
+
+def _chat_messages_validation_error(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, list) or not value:
+        return _openai_error("Missing or invalid 'messages' field", param="messages")
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            return _openai_error(
+                "Missing or invalid 'messages' field",
+                param=f"messages[{index}]",
+            )
+    has_user_payload = any(
+        str(item.get("role") or "").lower() == "user"
+        and _content_has_visible_payload(item.get("content", ""))
+        for item in value
+    )
+    if not has_user_payload:
+        return _openai_error("No user message found in messages", param="messages")
+    return None
+
+
+def _responses_input_validation_error(body: dict[str, Any]) -> dict[str, Any] | None:
+    if "input" in body:
+        raw = body.get("input")
+    elif "messages" in body:
+        raw = body.get("messages")
+    else:
+        return _openai_error("Missing 'input' field", param="input")
+
+    has_payload = False
+    if isinstance(raw, str):
+        has_payload = bool(raw.strip())
+    elif isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict) and "role" in item:
+                if str(item.get("role") or "").lower() == "user" and _response_input_item_visible(item):
+                    has_payload = True
+                    break
+            elif _response_input_item_visible(item):
+                has_payload = True
+                break
+    elif isinstance(raw, dict):
+        if "role" in raw:
+            has_payload = str(raw.get("role") or "").lower() == "user" and _response_input_item_visible(raw)
+        else:
+            has_payload = _response_input_item_visible(raw)
+    elif raw is not None:
+        has_payload = bool(str(raw).strip())
+
+    if not has_payload:
+        return _openai_error("No user message found in input", param="input")
+    return None
 
 
 def _tool_calls_from_payload(payload: dict[str, Any]) -> list[ToolCall]:
@@ -1814,7 +1895,12 @@ def make_handler(config: Config):
             if session_key_error is not None:
                 code, payload = session_key_error
                 return self._json(code, payload)
-            history, last_user = _convert(body.get("messages", []))
+            messages = body.get("messages")
+            validation_error = _chat_messages_validation_error(messages)
+            if validation_error is not None:
+                return self._json(400, validation_error)
+            assert isinstance(messages, list)
+            history, last_user = _convert(messages)
             model = body.get("model")
             stream = _coerce_request_bool(body.get("stream"), False)
             metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
@@ -1952,6 +2038,9 @@ def make_handler(config: Config):
             if session_key_error is not None:
                 code, payload = session_key_error
                 return self._json(code, payload)
+            validation_error = _responses_input_validation_error(body)
+            if validation_error is not None:
+                return self._json(400, validation_error)
             response_id = new_id("resp")
             model = body.get("model")
             metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
@@ -2509,7 +2598,7 @@ def make_handler(config: Config):
             run_id = new_id("run")
             prompt = str(body.get("prompt", body.get("input", "")) or "")
             if not prompt:
-                return self._json(400, {"error": "missing input"})
+                return self._json(400, _openai_error("Missing 'input' field", param="input"))
             session_id = str(body.get("session_id") or "") or None
             title = str(body.get("title") or prompt[:80] or run_id)
             run_meta = {

@@ -519,6 +519,58 @@ def test_openai_chat_completions_string_false_is_nonstream(monkeypatch, tmp_path
     assert _FakeRunner.calls[0]["stream"] is False
 
 
+def test_openai_chat_completions_rejects_missing_or_empty_user_input(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        missing_status, missing_data = _request(port, "POST", "/v1/chat/completions", {})
+        system_status, system_data = _request(port, "POST", "/v1/chat/completions", {
+            "messages": [{"role": "system", "content": "be useful"}],
+        })
+        empty_status, empty_data = _request(port, "POST", "/v1/chat/completions", {
+            "messages": [{"role": "user", "content": "   "}],
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert missing_status == system_status == empty_status == 400
+    assert json.loads(missing_data)["error"]["type"] == "invalid_request_error"
+    assert "messages" in json.loads(missing_data)["error"]["message"]
+    assert json.loads(system_data)["error"]["message"] == "No user message found in messages"
+    assert json.loads(empty_data)["error"]["message"] == "No user message found in messages"
+    assert _FakeRunner.calls == []
+
+
+def test_openai_chat_completions_accepts_image_only_user_input(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/chat/completions", {
+            "messages": [{
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}],
+            }],
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert json.loads(data)["object"] == "chat.completion"
+    assert _FakeRunner.calls[0]["prompt"].images == ["data:image/png;base64,abc"]
+
+
 def test_openai_chat_completions_aiohttp_sse_flushes_live(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import time
@@ -794,6 +846,59 @@ def test_responses_create_retrieve_cancel_delete(monkeypatch, tmp_path):
     assert delete_status == 200
     assert json.loads(delete_data)["ok"] is True
     assert _FakeRunner.calls[0]["session_id"] == "serve:responses"
+
+
+def test_responses_rejects_missing_or_empty_user_input(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        missing_status, missing_data = _request(port, "POST", "/v1/responses", {})
+        empty_status, empty_data = _request(port, "POST", "/v1/responses", {"input": ""})
+        assistant_status, assistant_data = _request(port, "POST", "/v1/responses", {
+            "input": [{"role": "assistant", "content": "not a user prompt"}],
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert missing_status == empty_status == assistant_status == 400
+    assert json.loads(missing_data)["error"] == {
+        "message": "Missing 'input' field",
+        "type": "invalid_request_error",
+        "param": "input",
+    }
+    assert json.loads(empty_data)["error"]["message"] == "No user message found in input"
+    assert json.loads(assistant_data)["error"]["message"] == "No user message found in input"
+    assert _FakeRunner.calls == []
+
+
+def test_responses_accepts_messages_alias_and_image_only_input(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "messages": [{
+                "role": "user",
+                "content": [{"type": "input_image", "image_url": "data:image/png;base64,abc"}],
+            }],
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert json.loads(data)["object"] == "response"
+    assert _FakeRunner.calls[0]["prompt"].images == ["data:image/png;base64,abc"]
 
 
 def test_responses_echo_hermes_session_key(monkeypatch, tmp_path):
