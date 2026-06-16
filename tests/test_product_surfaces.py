@@ -1373,7 +1373,10 @@ def test_aux_provider_purpose_overrides_and_live_fallback(monkeypatch):
 
     def fake_build(config, model=None, name=None):
         built.append((name, model, config.get("model.context_length", 0)))
-        return Provider(name or "main", model or "main-model")
+        return Provider(
+            name or config.get("model.provider", "main"),
+            model or config.get("model.default", "main-model"),
+        )
 
     monkeypatch.setattr(registry, "build_provider", fake_build)
     cfg = Config.load()
@@ -1392,6 +1395,60 @@ def test_aux_provider_purpose_overrides_and_live_fallback(monkeypatch):
     fallback = Provider("routed-main", "routed-model")
     cfg.data["auxiliary"] = {"provider": "", "model": ""}
     assert registry.build_aux_provider(cfg, purpose="session_summary", fallback_provider=fallback) is fallback
+
+    cfg.data["model"]["provider"] = "primary"
+    cfg.data["model"]["default"] = "primary-model"
+    cfg.data["fallback_providers"] = [{"provider": "fallback", "model": "fallback-model"}]
+    provider = registry.build_aux_provider(cfg, purpose="trajectory_compression")
+    assert provider.primary.name == "primary"
+    assert [(p.name, p.model) for p in provider.fallbacks] == [("fallback", "fallback-model")]
+
+
+def test_aux_provider_auto_honors_main_fallback_chain(monkeypatch):
+    from aegis.config import Config
+    from aegis.providers import registry
+    from aegis.providers.fallback import FallbackProvider
+
+    class Provider:
+        def __init__(self, name, model):
+            self.name = name
+            self.model = model
+            self.context_length = 100_000
+            self.auth = None
+            self.api_mode = None
+
+    def fake_build(config, model=None, name=None):
+        return Provider(
+            name or config.get("model.provider", "main"),
+            model or config.get("model.default", "main-model"),
+        )
+
+    monkeypatch.setattr(registry, "build_provider", fake_build)
+    cfg = Config.load()
+    cfg.data["model"]["provider"] = "primary"
+    cfg.data["model"]["default"] = "primary-model"
+    cfg.data["fallback_providers"] = [{"provider": "fallback", "model": "fallback-model"}]
+    cfg.data["auxiliary"]["provider"] = "auto"
+
+    provider = registry.build_aux_provider(cfg, purpose="session_summary")
+
+    assert isinstance(provider, FallbackProvider)
+    assert (provider.primary.name, provider.primary.model) == ("primary", "primary-model")
+    assert [(p.name, p.model) for p in provider.fallbacks] == [("fallback", "fallback-model")]
+
+    routed = Provider("routed-main", "routed-model")
+    provider = registry.build_aux_provider(cfg, purpose="compaction", fallback_provider=routed)
+
+    assert isinstance(provider, FallbackProvider)
+    assert provider.primary is routed
+    assert [(p.name, p.model) for p in provider.fallbacks] == [("fallback", "fallback-model")]
+
+    routed_chain = FallbackProvider(routed, [Provider("routed-fallback", "routed-fallback-model")])
+    assert registry.build_aux_provider(
+        cfg,
+        purpose="compaction",
+        fallback_provider=routed_chain,
+    ) is routed_chain
 
 
 def test_context_references_shared_across_surfaces(tmp_path):

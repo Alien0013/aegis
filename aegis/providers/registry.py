@@ -638,6 +638,41 @@ def build_aux_provider(
     aux_provider = (config.get(prefix + "provider") if purpose else None) or config.get("auxiliary.provider") or None
     aux_model = (config.get(prefix + "model") if purpose else None) or config.get("auxiliary.model") or None
     ctx_length = (config.get(prefix + "context_length") if purpose else None) or None
+    if str(aux_provider or "").strip().lower() == "auto":
+        try:
+            import copy
+
+            data = copy.deepcopy(getattr(config, "data", {}))
+            if ctx_length:
+                data.setdefault("model", {})["context_length"] = int(ctx_length)
+            route_config = type(config)(data)
+            from .fallback import FallbackProvider, build_with_fallbacks
+
+            if fallback_provider is not None:
+                if isinstance(fallback_provider, FallbackProvider):
+                    return fallback_provider
+                fallbacks: list[Provider] = []
+                for spec in route_config.get("fallback_providers", []) or []:
+                    if not isinstance(spec, dict):
+                        continue
+                    try:
+                        candidate = build_provider(
+                            route_config,
+                            model=spec.get("model") or None,
+                            name=spec.get("provider") or None,
+                        )
+                    except Exception:  # noqa: BLE001
+                        continue
+                    same_name = getattr(candidate, "name", None) == getattr(fallback_provider, "name", None)
+                    same_model = getattr(candidate, "model", None) == getattr(fallback_provider, "model", None)
+                    if same_name and same_model:
+                        continue
+                    fallbacks.append(candidate)
+                return FallbackProvider(fallback_provider, fallbacks) if fallbacks else fallback_provider
+            return build_with_fallbacks(route_config, model=aux_model or None)
+        except Exception:  # noqa: BLE001
+            if fallback_provider is not None:
+                return fallback_provider
     if aux_provider or aux_model or ctx_length:
         try:
             if ctx_length:
@@ -651,7 +686,8 @@ def build_aux_provider(
             pass
     if fallback_provider is not None:
         return fallback_provider
-    return build_provider(config)
+    from .fallback import build_with_fallbacks
+    return build_with_fallbacks(config)
 
 
 def get_spec(name: str, config: cfg.Config | None = None) -> ProviderSpec | None:
