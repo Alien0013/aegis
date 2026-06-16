@@ -473,6 +473,20 @@ export function GraphicalChat({
             ...turn,
             tools: (turn.tools || []).map((x) => (x.id === String(ev.id || ev.task) ? { ...x, status: String(ev.status || "ok") } : x)),
           }));
+        } else if (et === "subagent_text") {
+          const id = String(ev.subagent_id || ev.id || ev.task || "subagent");
+          const delta = String(ev.text || "");
+          patchLast((turn) => {
+            const tools = [...(turn.tools || [])];
+            const idx = tools.findIndex((x) => x.id === id);
+            if (idx >= 0) {
+              const target = `${tools[idx].target || ""}${delta}`.slice(-900);
+              tools[idx] = { ...tools[idx], target, status: String(ev.status || tools[idx].status || "running") };
+            } else {
+              tools.push({ id, name: `subagent: ${String(ev.agent_type || "")}`, target: delta.slice(-900), status: "running", kind: "subagent" });
+            }
+            return { ...turn, tools };
+          });
         }
       });
     } catch (e) {

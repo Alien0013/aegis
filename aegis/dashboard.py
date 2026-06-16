@@ -1163,6 +1163,13 @@ def _chat_event_row(event: dict) -> dict:
         row["agent_type"] = str(event.get("agent_type") or event.get("type_name") or "")
         if not row["status"] and etype == "subagent_start":
             row["status"] = "running"
+    elif etype in ("subagent_text", "subagent_reasoning"):
+        row["text"] = str(event.get("text") or "")
+        row["subagent_id"] = str(event.get("subagent_id") or event.get("id") or "")
+        row["task"] = str(event.get("task") or event.get("summary") or "")[:240]
+        row["agent_type"] = str(event.get("agent_type") or event.get("type_name") or "")
+        if not row["status"]:
+            row["status"] = "running"
     return row
 
 

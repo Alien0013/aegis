@@ -71,6 +71,33 @@ def _notify_delegation(parent, task: str, result: str) -> None:
         pass
 
 
+def _relay_subagent_stream_event(ctx: ToolContext, sid: str, task: str, agent_type: str, event: dict) -> None:
+    etype = str((event or {}).get("type") or "")
+    if etype == "assistant_delta":
+        text = str(event.get("text") or "")
+        if text:
+            ctx.emit_event(
+                type="subagent_text",
+                id=sid,
+                subagent_id=sid,
+                agent_type=agent_type,
+                task=task[:240],
+                text=text,
+            )
+        return
+    if etype == "reasoning_delta":
+        text = str(event.get("text") or "")
+        if text:
+            ctx.emit_event(
+                type="subagent_reasoning",
+                id=sid,
+                subagent_id=sid,
+                agent_type=agent_type,
+                task=task[:240],
+                text=text,
+            )
+
+
 def _subagent_terminal_backend(config) -> str:
     try:
         backend = str(config.get("tools.subagent_terminal_backend", "") or "").strip().lower()
@@ -377,6 +404,9 @@ class SubagentTool(Tool):
                         "agent_type": role_type,
                         "continuation": True,
                     },
+                    on_event=lambda event: _relay_subagent_stream_event(
+                        ctx, args["continue_id"], tasks[0], role_type, event
+                    ),
                 )
                 _register(
                     args["continue_id"],
@@ -473,6 +503,7 @@ class SubagentTool(Tool):
                         "agent_type": atype,
                         "parent_session_id": getattr(getattr(parent, "session", None), "id", ""),
                     },
+                    on_event=lambda event: _relay_subagent_stream_event(ctx, sid, task, atype, event),
                 )
                 out = result.text or "(no output)"
                 _register(

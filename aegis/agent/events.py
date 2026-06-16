@@ -35,6 +35,12 @@ class EventType:
     # --- interactive ---
     CLARIFY = "clarify"                # {question, choices}
 
+    # --- delegation ---
+    SUBAGENT_START = "subagent_start"  # {id, task, agent_type}
+    SUBAGENT_TEXT = "subagent_text"    # {id, subagent_id, task, text}
+    SUBAGENT_REASONING = "subagent_reasoning"  # {id, subagent_id, task, text}
+    SUBAGENT_DONE = "subagent_done"    # {id, status}
+
 
 #: All known event type strings (for validation / docs / consumer tests).
 ALL: frozenset[str] = frozenset(

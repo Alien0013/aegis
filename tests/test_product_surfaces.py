@@ -1065,6 +1065,27 @@ def test_dashboard_chat_stream_emits_progress_and_final():
     assert final["run_id"] == "run_streamchat"
 
 
+def test_dashboard_chat_event_row_projects_subagent_stream_text():
+    from aegis.dashboard import _chat_event_row
+
+    row = _chat_event_row({
+        "type": "subagent_text",
+        "id": "sub_1",
+        "subagent_id": "sub_1",
+        "agent_type": "review",
+        "task": "inspect the patch",
+        "text": "child says hello",
+    })
+
+    assert row["type"] == "subagent_text"
+    assert row["id"] == "sub_1"
+    assert row["subagent_id"] == "sub_1"
+    assert row["agent_type"] == "review"
+    assert row["task"] == "inspect the patch"
+    assert row["text"] == "child says hello"
+    assert row["status"] == "running"
+
+
 def test_dashboard_chat_events_also_feed_live_activity():
     import queue
     from types import SimpleNamespace

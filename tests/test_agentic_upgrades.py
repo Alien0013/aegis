@@ -66,6 +66,41 @@ def test_subagent_tasks_expand_context_references(tmp_path, monkeypatch):
     assert "<file path=" in seen["task"]
 
 
+def test_subagent_relays_child_stream_events(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.agent.agent as am
+    from aegis.agent.events import is_known
+    from aegis.config import Config
+    from aegis.tools.agentic import SubagentTool, _REGISTRY
+    from aegis.tools.base import ToolContext
+    from aegis.types import Message
+
+    class Child:
+        def __init__(self):
+            self._depth = 0
+
+        def run(self, task, on_event=None):
+            if on_event:
+                on_event({"type": "reasoning_delta", "text": "thinking"})
+                on_event({"type": "assistant_delta", "text": "partial answer"})
+            return Message.assistant("child answer")
+
+    monkeypatch.setattr(am.Agent, "create", staticmethod(lambda cfg, session=None, cwd=None: Child()))
+
+    _REGISTRY.clear()
+    events = []
+    ctx = ToolContext(cwd=tmp_path, config=Config.load(), emit=events.append)
+    result = SubagentTool().run({"task": "stream work", "agent_type": "review"}, ctx)
+
+    assert not result.is_error
+    assert "child answer" in result.content
+    relayed = [event for event in events if event["type"].startswith("subagent_")]
+    assert any(event["type"] == "subagent_text" and event["text"] == "partial answer" for event in relayed)
+    assert any(event["type"] == "subagent_reasoning" and event["text"] == "thinking" for event in relayed)
+    assert all(is_known(event) for event in relayed)
+    assert {event["agent_type"] for event in relayed if "agent_type" in event} == {"review"}
+
+
 def test_background_spawn_inherits_parent_runtime_controls(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import time
