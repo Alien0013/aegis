@@ -1466,6 +1466,14 @@ def _dashboard_plugin_static(config: Config, name: str, file_path: str) -> Respo
     return Response(data, media_type=media_type)
 
 
+def _dashboard_plugin_api_insert_at(app: FastAPI) -> int:
+    fallback_paths = {"/api/plugins/{plugin_name}/{plugin_path:path}", "/api/{path:path}"}
+    for index, route in enumerate(app.router.routes):
+        if getattr(route, "path", "") in fallback_paths:
+            return index
+    return len(app.router.routes)
+
+
 def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
     def dashboard_plugin_auth(record_name: str, expected_api: str):
         def auth(request: Request) -> None:
@@ -1476,13 +1484,35 @@ def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
 
         return auth
 
+    mounted: dict[str, dict[str, Any]] = getattr(app.state, "dashboard_plugin_api_routes", None) or {}
+    app.state.dashboard_plugin_api_routes = mounted
+    records = {
+        str(record["name"]): record
+        for record in _dashboard_plugin_records(config)
+        if record.get("_api")
+    }
+    for name, row in list(mounted.items()):
+        live = records.get(name)
+        if live and str(live.get("_api") or "") == str(row.get("api") or ""):
+            continue
+        for route in row.get("routes", []):
+            try:
+                app.router.routes.remove(route)
+            except ValueError:
+                pass
+        mounted.pop(name, None)
+
     for record in _dashboard_plugin_records(config):
         api_path = record.get("_api")
         if not api_path:
             continue
+        record_name = str(record["name"])
+        if record_name in mounted and mounted[record_name].get("api") == str(api_path):
+            continue
         path = Path(api_path)
         module_name = "aegis_dashboard_plugin_" + hashlib.sha256(str(path).encode()).hexdigest()[:16]
         try:
+            before = {id(route) for route in app.router.routes}
             spec = importlib.util.spec_from_file_location(module_name, path)
             if spec is None or spec.loader is None:
                 continue
@@ -1503,9 +1533,20 @@ def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
                 continue
             app.include_router(
                 router,
-                prefix=f"/api/plugins/{record['name']}",
-                dependencies=[Depends(dashboard_plugin_auth(str(record["name"]), str(api_path)))],
+                prefix=f"/api/plugins/{record_name}",
+                dependencies=[Depends(dashboard_plugin_auth(record_name, str(api_path)))],
             )
+            new_routes = [route for route in app.router.routes if id(route) not in before]
+            if new_routes:
+                new_ids = {id(route) for route in new_routes}
+                app.router.routes[:] = [route for route in app.router.routes if id(route) not in new_ids]
+                insert_at = _dashboard_plugin_api_insert_at(app)
+                for offset, route in enumerate(new_routes):
+                    app.router.routes.insert(insert_at + offset, route)
+            mounted[record_name] = {
+                "api": str(api_path),
+                "routes": new_routes,
+            }
         except Exception:  # noqa: BLE001
             continue
 
@@ -3051,6 +3092,7 @@ def create_app(config: Config) -> FastAPI:
         from . import plugins as plugin_runtime
 
         plugin_runtime.clear_runtime_cache()
+        _mount_dashboard_plugin_api_routes(app, config)
         hub = _dashboard_plugin_hub(config)
         return JSONResponse({"ok": True, "count": len(hub.get("plugins", [])), **hub})
 
@@ -3071,6 +3113,7 @@ def create_app(config: Config) -> FastAPI:
             from . import plugins as plugin_runtime
 
             plugin_runtime.clear_runtime_cache()
+            _mount_dashboard_plugin_api_routes(app, config)
             return JSONResponse({"ok": True, **_plugins_payload(config)})
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
@@ -3093,6 +3136,7 @@ def create_app(config: Config) -> FastAPI:
             from . import plugins as plugin_runtime
 
             name = plugin_runtime.install(source, config, force=bool(body.get("force", False)))
+            _mount_dashboard_plugin_api_routes(app, config)
             return JSONResponse({"ok": True, "name": name, **_plugins_payload(config)})
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
@@ -3110,6 +3154,7 @@ def create_app(config: Config) -> FastAPI:
             name = plugin_runtime.install(source, config, force=bool(body.get("force", False)))
             if body.get("enable") is False:
                 plugin_runtime.disable(name, config)
+            _mount_dashboard_plugin_api_routes(app, config)
             return JSONResponse({"ok": True, "name": name, **_dashboard_plugin_hub(config)})
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
@@ -3135,6 +3180,8 @@ def create_app(config: Config) -> FastAPI:
 
         safe = _safe_plugin_route_name(name)
         ok = plugin_runtime.enable(safe, config)
+        if ok:
+            _mount_dashboard_plugin_api_routes(app, config)
         return JSONResponse({"ok": ok, "name": safe, **_plugins_payload(config)}, status_code=200 if ok else 404)
 
     @app.post("/api/dashboard/agent-plugins/{name:path}/enable")
@@ -3144,6 +3191,8 @@ def create_app(config: Config) -> FastAPI:
 
         safe = _safe_plugin_route_name(name)
         ok = plugin_runtime.enable(safe, config)
+        if ok:
+            _mount_dashboard_plugin_api_routes(app, config)
         return JSONResponse({"ok": ok, "name": safe, **_dashboard_plugin_hub(config)}, status_code=200 if ok else 404)
 
     @app.post("/api/plugins/{name:path}/disable")
@@ -3153,6 +3202,8 @@ def create_app(config: Config) -> FastAPI:
 
         safe = _safe_plugin_route_name(name)
         ok = plugin_runtime.disable(safe, config)
+        if ok:
+            _mount_dashboard_plugin_api_routes(app, config)
         return JSONResponse({"ok": ok, "name": safe, **_plugins_payload(config)}, status_code=200 if ok else 404)
 
     @app.post("/api/dashboard/agent-plugins/{name:path}/disable")
@@ -3162,6 +3213,8 @@ def create_app(config: Config) -> FastAPI:
 
         safe = _safe_plugin_route_name(name)
         ok = plugin_runtime.disable(safe, config)
+        if ok:
+            _mount_dashboard_plugin_api_routes(app, config)
         return JSONResponse({"ok": ok, "name": safe, **_dashboard_plugin_hub(config)}, status_code=200 if ok else 404)
 
     @app.delete("/api/plugins/{name:path}")
@@ -3171,6 +3224,8 @@ def create_app(config: Config) -> FastAPI:
 
         safe = _safe_plugin_route_name(name)
         ok = plugin_runtime.remove(safe, config)
+        if ok:
+            _mount_dashboard_plugin_api_routes(app, config)
         return JSONResponse({"ok": ok, "name": safe, **_plugins_payload(config)}, status_code=200 if ok else 404)
 
     @app.delete("/api/dashboard/agent-plugins/{name:path}")
@@ -3180,6 +3235,8 @@ def create_app(config: Config) -> FastAPI:
 
         safe = _safe_plugin_route_name(name)
         ok = plugin_runtime.remove(safe, config)
+        if ok:
+            _mount_dashboard_plugin_api_routes(app, config)
         return JSONResponse({"ok": ok, "name": safe, **_dashboard_plugin_hub(config)}, status_code=200 if ok else 404)
 
     @app.get("/api/tools/toolsets")
@@ -3788,6 +3845,19 @@ def create_app(config: Config) -> FastAPI:
         if action in {"start", "stop", "restart"}:
             return JSONResponse(_service_result(control_gateway_service(action)))
         return JSONResponse({"ok": False, "error": f"unknown gateway service action: {action}"}, status_code=400)
+
+    @app.api_route(
+        "/api/plugins/{plugin_name}/{plugin_path:path}",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    )
+    async def api_plugin_api_missing(plugin_name: str, plugin_path: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse({
+            "ok": False,
+            "plugin": plugin_name,
+            "path": plugin_path,
+            "error": "dashboard plugin API not mounted",
+        }, status_code=404)
 
     @app.get("/api/{path:path}")
     async def api_get(path: str, request: Request) -> JSONResponse:

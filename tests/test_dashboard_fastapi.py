@@ -982,6 +982,59 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
     assert enabled_route.json() == {"pulse": True}
 
 
+def test_fastapi_dashboard_plugin_install_mounts_api_without_restart(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+    source = tmp_path / "source_plugins" / "live"
+    (source / "dashboard").mkdir(parents=True)
+    (source / "plugin.json").write_text(
+        json.dumps({"name": "live-plugin", "version": "1.0.0"}),
+        encoding="utf-8",
+    )
+    (source / "dashboard" / "manifest.json").write_text(
+        json.dumps({
+            "name": "live-panel",
+            "title": "Live Panel",
+            "entry": "dist/index.js",
+            "api": "plugin_api.py",
+        }),
+        encoding="utf-8",
+    )
+    (source / "dashboard" / "plugin_api.py").write_text(
+        "from fastapi import APIRouter\n"
+        "router = APIRouter()\n"
+        "@router.get('/ping')\n"
+        "def ping():\n"
+        "    return {'live': True}\n",
+        encoding="utf-8",
+    )
+
+    missing = asyncio.run(_request(app, "GET", "/api/plugins/live-panel/ping", headers=headers))
+    install = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/plugins/install",
+        json={"source": str(source)},
+        headers=headers,
+    ))
+    route = asyncio.run(_request(app, "GET", "/api/plugins/live-panel/ping", headers=headers))
+    disabled = asyncio.run(_request(app, "POST", "/api/plugins/live-plugin/disable", headers=headers))
+    disabled_route = asyncio.run(_request(app, "GET", "/api/plugins/live-panel/ping", headers=headers))
+    enabled = asyncio.run(_request(app, "POST", "/api/plugins/live-plugin/enable", headers=headers))
+    enabled_route = asyncio.run(_request(app, "GET", "/api/plugins/live-panel/ping", headers=headers))
+
+    assert missing.status_code == 404
+    assert install.status_code == 200
+    assert install.json()["name"] == "live-plugin"
+    assert route.status_code == 200
+    assert route.json() == {"live": True}
+    assert disabled.status_code == 200
+    assert disabled_route.status_code == 404
+    assert enabled.status_code == 200
+    assert enabled_route.status_code == 200
+    assert enabled_route.json() == {"live": True}
+
+
 def test_fastapi_audio_control_plane(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
     headers = {"X-Aegis-Token": "t"}
