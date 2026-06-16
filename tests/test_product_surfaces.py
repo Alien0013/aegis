@@ -1509,6 +1509,33 @@ def test_context_references_shared_across_surfaces(tmp_path):
     assert "refused" in refused.text
 
 
+def test_context_reference_truncation_warns_with_config_key(tmp_path):
+    from aegis.config import Config
+    from aegis.context_refs import expand_reference_result
+
+    note = tmp_path / "long.txt"
+    note.write_text("0123456789abcdef", encoding="utf-8")
+    cfg = Config({"context_references": {
+        "enabled": True,
+        "max_chars": 100,
+        "max_file_chars": 12,
+        "max_git_chars": 20_000,
+        "max_url_chars": 20_000,
+        "max_folder_entries": 200,
+        "include_warnings": True,
+        "remove_tokens": True,
+    }})
+
+    result = expand_reference_result("review @file:long.txt", tmp_path, config=cfg)
+
+    assert "0123456789ab" in result.text
+    assert "cdef" not in result.text
+    assert result.references[0].chars == 12
+    assert result.references[0].warning == result.warnings[0]
+    assert "context_references.max_file_chars" in result.text
+    assert "<context-reference-warnings>" in result.text
+
+
 def test_url_context_reference_uses_net_safety_request(tmp_path, monkeypatch):
     import httpx
 
@@ -1528,6 +1555,38 @@ def test_url_context_reference_uses_net_safety_request(tmp_path, monkeypatch):
 
     assert "SAFE URL BODY" in result.text
     assert calls == [("GET", "https://example.com/doc", cfg, 15)]
+
+
+def test_url_context_reference_truncation_warns(tmp_path, monkeypatch):
+    import httpx
+
+    monkeypatch.setattr(
+        "aegis.net_safety.request",
+        lambda method, url, config=None, timeout=0, **kwargs: httpx.Response(
+            200,
+            text="ABCDEFGHIJKLMNO",
+            request=httpx.Request(method, url),
+        ),
+    )
+
+    from aegis.config import Config
+    from aegis.context_refs import expand_reference_result
+
+    cfg = Config({"context_references": {
+        "enabled": True,
+        "max_chars": 100,
+        "max_file_chars": 20_000,
+        "max_git_chars": 20_000,
+        "max_url_chars": 8,
+        "max_folder_entries": 200,
+        "include_warnings": True,
+        "remove_tokens": True,
+    }})
+    result = expand_reference_result("read @url:https://example.com/doc", tmp_path, config=cfg)
+
+    assert "ABCDEFGH" in result.text
+    assert "IJKLMNO" not in result.text
+    assert "context_references.max_url_chars" in result.warnings[0]
 
 
 def test_context_references_can_attach_mcp_resource(tmp_path):
@@ -2544,6 +2603,35 @@ def test_surface_runner_expands_prompt_context_references(monkeypatch, tmp_path)
     assert "runtime context" in seen["prompt"]
     assert result.session.meta["last_context_references"]["count"] == 1
     assert result.session.meta["last_context_references"]["references"][0]["kind"] == "file"
+
+
+def test_surface_runner_records_context_reference_warnings(monkeypatch, tmp_path):
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.surface import SurfaceRunner
+    from aegis.types import Message
+
+    (tmp_path / "brief.txt").write_text("0123456789abcdef", encoding="utf-8")
+
+    class FakeAgent:
+        def __init__(self, session):
+            self.session = session
+            self.tool_context = type("Ctx", (), {"session": session})()
+
+        def run(self, prompt, on_event=None):
+            return Message.assistant("ok")
+
+    monkeypatch.setattr(Agent, "create", staticmethod(lambda _config, session=None, **_kw: FakeAgent(session)))
+
+    cfg = Config.load()
+    cfg.data["context_references"]["max_file_chars"] = 8
+    runner = SurfaceRunner(cfg, cwd=tmp_path, include_mcp=False)
+    result = runner.run_prompt("read @brief.txt", surface="serve")
+
+    warning = result.session.meta["last_context_references"]["warnings"][0]
+    assert "brief.txt" in warning
+    assert "context_references.max_file_chars" in warning
+    assert result.session.meta["last_context_references"]["references"][0]["chars"] == 8
 
 
 def test_openai_server_conversion_preserves_context_and_images():

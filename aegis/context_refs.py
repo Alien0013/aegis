@@ -248,24 +248,54 @@ def _expand_one(
 ) -> tuple[str, ContextReference | None]:
     kind, sep, value = raw.partition(":")
     if raw == "diff":
-        body = _git(cwd, "diff")[:max_git]
-        return f"\n\n<git-diff>\n{body}\n</git-diff>", ContextReference(raw=raw, kind="diff", chars=len(body))
+        body, warning = _truncate_reference_body(
+            _git(cwd, "diff"),
+            raw,
+            label="git diff",
+            max_chars=max_git,
+            config_key="context_references.max_git_chars",
+        )
+        return (
+            f"\n\n<git-diff>\n{body}\n</git-diff>",
+            ContextReference(raw=raw, kind="diff", chars=len(body), warning=warning),
+        )
     if raw == "staged":
-        body = _git(cwd, "diff", "--cached")[:max_git]
-        return f"\n\n<git-staged>\n{body}\n</git-staged>", ContextReference(raw=raw, kind="staged", chars=len(body))
+        body, warning = _truncate_reference_body(
+            _git(cwd, "diff", "--cached"),
+            raw,
+            label="staged diff",
+            max_chars=max_git,
+            config_key="context_references.max_git_chars",
+        )
+        return (
+            f"\n\n<git-staged>\n{body}\n</git-staged>",
+            ContextReference(raw=raw, kind="staged", chars=len(body), warning=warning),
+        )
     if kind == "git" and sep and value:
         value = _strip_reference_wrappers(value)
-        body = _git(cwd, "show", "--stat", value)[:max_git]
+        body, warning = _truncate_reference_body(
+            _git(cwd, "show", "--stat", value),
+            raw,
+            label="git show",
+            max_chars=max_git,
+            config_key="context_references.max_git_chars",
+        )
         return (
             f'\n\n<git-show ref="{_xml_attr(value)}">\n{body}\n</git-show>',
-            ContextReference(raw=raw, kind="git", target=value, chars=len(body)),
+            ContextReference(raw=raw, kind="git", target=value, chars=len(body), warning=warning),
         )
     if kind == "url" and sep and _strip_reference_wrappers(value).startswith(("http://", "https://")):
         value = _strip_reference_wrappers(value)
-        body = _fetch_url(value, max_url, config)
+        body, warning = _truncate_reference_body(
+            _fetch_url(value, config),
+            raw,
+            label="URL content",
+            max_chars=max_url,
+            config_key="context_references.max_url_chars",
+        )
         return (
             f'\n\n<url-content href="{_xml_attr(value)}">\n{body}\n</url-content>',
-            ContextReference(raw=raw, kind="url", target=value, chars=len(body)),
+            ContextReference(raw=raw, kind="url", target=value, chars=len(body), warning=warning),
         )
     if kind == "mcp" and sep and value:
         return _expand_mcp_resource(raw, value, max_file, config)
@@ -313,11 +343,34 @@ def _expand_one(
     if start is not None and end is not None:
         lines = body.splitlines()[start - 1:end]
         body = "\n".join(f"{start + i}: {line}" for i, line in enumerate(lines))
-    body = body[:max_file]
+    body, warning = _truncate_reference_body(
+        body,
+        raw,
+        label="file content",
+        max_chars=max_file,
+        config_key="context_references.max_file_chars",
+    )
     return (
         f'\n\n<file path="{_xml_attr(target)}">\n{body}\n</file>',
-        ContextReference(raw=raw, kind="file", target=target, chars=len(body)),
+        ContextReference(raw=raw, kind="file", target=target, chars=len(body), warning=warning),
     )
+
+
+def _truncate_reference_body(
+    body: str,
+    raw: str,
+    *,
+    label: str,
+    max_chars: int,
+    config_key: str,
+) -> tuple[str, str]:
+    if len(body) <= max_chars:
+        return body, ""
+    warning = (
+        f"reference @{raw}: {label} truncated: {len(body)} chars exceeds "
+        f"limit of {max_chars}; increase {config_key} or narrow the reference"
+    )
+    return body[:max_chars], warning
 
 
 def _git(cwd: Path, *argv: str) -> str:
@@ -374,13 +427,13 @@ def _binary_reference_block(path: Path) -> str:
     )
 
 
-def _fetch_url(url: str, max_chars: int, config: Any = None) -> str:
+def _fetch_url(url: str, config: Any = None) -> str:
     from . import net_safety
 
     try:
         response = net_safety.request("GET", url, config, timeout=15)
         response.raise_for_status()
-        return response.text[:max_chars]
+        return response.text
     except net_safety.BlockedURL as exc:
         return str(exc)
     except Exception as exc:  # noqa: BLE001
@@ -408,7 +461,13 @@ def _expand_mcp_resource(
             return "", ContextReference(raw=raw, kind="mcp", target=value, warning=warning)
         try:
             client.connect()
-            body = client.read_resource(uri)[:max_chars]
+            body, warning = _truncate_reference_body(
+                client.read_resource(uri),
+                raw,
+                label="MCP resource",
+                max_chars=max_chars,
+                config_key="context_references.max_file_chars",
+            )
         finally:
             client.close()
     except Exception as exc:  # noqa: BLE001
@@ -417,7 +476,7 @@ def _expand_mcp_resource(
     return (
         f'\n\n<mcp-resource server="{_xml_attr(server)}" uri="{_xml_attr(uri)}">\n'
         f"{body}\n</mcp-resource>",
-        ContextReference(raw=raw, kind="mcp", target=f"{server}:{uri}", chars=len(body)),
+        ContextReference(raw=raw, kind="mcp", target=f"{server}:{uri}", chars=len(body), warning=warning),
     )
 
 
