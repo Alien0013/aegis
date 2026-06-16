@@ -2099,6 +2099,47 @@ def test_hermes_entrypoint_plugins_are_discovered_opt_in_and_reported(tmp_path, 
     sys.modules.pop("entry_plugin", None)
 
 
+def test_entrypoint_middleware_only_plugin_clears_on_disable(tmp_path, monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    from aegis import plugins
+    from aegis.config import Config
+
+    module = tmp_path / "middleware_plugin.py"
+    module.write_text(
+        "def register(api):\n"
+        "    def mw(payload, next_call, agent=None):\n"
+        "        updated = dict(payload)\n"
+        "        updated['middleware_seen'] = True\n"
+        "        return next_call(updated)\n"
+        "    api.register_middleware('tool_request', mw)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    def fake_entry_points():
+        return {
+            "hermes_agent.plugins": [
+                SimpleNamespace(name="mw-only", value="middleware_plugin"),
+            ],
+        }
+
+    monkeypatch.setattr(plugins.importlib_metadata, "entry_points", fake_entry_points)
+    cfg = Config.load()
+    plugins.clear_runtime_cache()
+
+    assert plugins.enable("mw-only", cfg) is True
+    plugins.load_plugins(config=cfg)
+    assert plugins.fire_middleware("tool_request", {"ok": True}, lambda payload: payload) == {
+        "ok": True,
+        "middleware_seen": True,
+    }
+
+    assert plugins.disable("mw-only", cfg) is True
+    assert plugins.fire_middleware("tool_request", {"ok": True}, lambda payload: payload) == {"ok": True}
+    sys.modules.pop("middleware_plugin", None)
+
+
 def test_plugin_module_is_registered_during_import_and_cleaned_up():
     import sys
     from aegis import config as cfg_paths

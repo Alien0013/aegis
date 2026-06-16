@@ -627,11 +627,14 @@ def remove(name: str, config) -> bool:
 def clear_runtime_cache() -> None:
     """Clear process-local plugin side effects so the next load reflects config/files."""
 
-    for path in list(_PLUGIN_HOOKS):
-        _clear_plugin_side_effects(path)
-    for path in list(_PLUGIN_PROVIDERS):
-        _clear_plugin_side_effects(path)
-    for path in list(_PLUGIN_MODULES):
+    paths = set()
+    paths.update(_PLUGIN_HOOKS)
+    paths.update(_PLUGIN_MIDDLEWARE)
+    paths.update(_PLUGIN_PROVIDERS)
+    paths.update(_PLUGIN_TOOLS)
+    paths.update(_PLUGIN_CHANNELS)
+    paths.update(_PLUGIN_MODULES)
+    for path in list(paths):
         _clear_plugin_side_effects(path)
 
 
