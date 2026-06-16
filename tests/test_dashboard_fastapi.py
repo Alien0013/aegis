@@ -1411,6 +1411,17 @@ def test_fastapi_gateway_control_plane(tmp_path, monkeypatch):
         "aegis.daemon.control_gateway_service",
         lambda action: ServiceResult(True, f"gateway {action}"),
     )
+    monkeypatch.setattr(
+        "aegis.providers.registry.provider_report",
+        lambda _config: {
+            "active": {
+                "name": "openai",
+                "model": "gpt-status",
+                "context_length": 128000,
+                "capabilities": {"fast_mode": True},
+            }
+        },
+    )
 
     set_channels = asyncio.run(_request(
         app,
@@ -1426,6 +1437,12 @@ def test_fastapi_gateway_control_plane(tmp_path, monkeypatch):
     assert status.status_code == 200
     assert status.json()["configured"] is True
     assert status.json()["service"] == "inactive (dead, disabled)"
+    assert status.json()["provider"] == "openai"
+    assert status.json()["model"] == "gpt-status"
+    assert status.json()["context_length"] == 128000
+    assert status.json()["capabilities"]["fast_mode"] is True
+    assert "reasoning_effort" in status.json()
+    assert "service_tier" in status.json()
 
     install = asyncio.run(_request(
         app,

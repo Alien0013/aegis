@@ -1893,9 +1893,39 @@ def _gateway_status(config: Config) -> dict:
     except Exception:  # noqa: BLE001
         pending = 0
     channels = list(config.get("gateway.channels", []) or [])
+    provider = str(config.get("model.provider") or "")
+    model = str(config.get("model.default") or "")
+    provider_error = ""
+    capabilities: dict[str, Any] = {}
+    try:
+        context_length = int(config.get("model.context_length", 0) or 0)
+    except (TypeError, ValueError):
+        context_length = 0
+    try:
+        from .providers.registry import provider_report
+
+        report = provider_report(config)
+        active_provider = report.get("active") if isinstance(report.get("active"), dict) else {}
+        provider = str(active_provider.get("name") or active_provider.get("provider") or provider)
+        model = str(active_provider.get("model") or model)
+        provider_error = str(active_provider.get("error") or "")
+        capabilities = dash._jsonable(active_provider.get("capabilities", {}))
+        try:
+            context_length = int(active_provider.get("context_length") or context_length or 0)
+        except (TypeError, ValueError):
+            context_length = 0
+    except Exception as exc:  # noqa: BLE001
+        provider_error = f"{type(exc).__name__}: {exc}"
     return {
         "channels": channels,
         "configured": bool(channels),
+        "provider": provider,
+        "model": model,
+        "context_length": context_length,
+        "provider_error": provider_error,
+        "capabilities": capabilities,
+        "reasoning_effort": config.get("agent.reasoning_effort"),
+        "service_tier": config.get("agent.service_tier"),
         "busy_mode": config.get("gateway.busy_mode", "queue"),
         "session_mode": config.get("gateway.session_mode", "per_channel_peer"),
         "require_mention": bool(config.get("gateway.require_mention", False)),
