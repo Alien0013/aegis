@@ -602,6 +602,101 @@ def test_cron_store_nested_lock_reuses_cross_process_lock(monkeypatch, tmp_path)
     assert entries == [tmp_path / "cron.json"]
 
 
+def test_cron_store_lock_excludes_another_process(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    try:
+        import fcntl
+    except ImportError:
+        import pytest
+        pytest.skip("POSIX fcntl/flock required")
+    import os
+    import subprocess
+    import sys
+    import textwrap
+    import time
+    from pathlib import Path
+    import pytest
+    import aegis.cron as cron
+
+    repo = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env["AEGIS_HOME"] = str(tmp_path)
+    env["PYTHONPATH"] = str(repo) + os.pathsep + env.get("PYTHONPATH", "")
+    ready = tmp_path / "child_holds_lock"
+    release = tmp_path / "child_may_release"
+    blocker_started = tmp_path / "blocker_started"
+    blocker_acquired = tmp_path / "blocker_acquired"
+
+    holder = tmp_path / "holder.py"
+    holder.write_text(
+        textwrap.dedent(
+            f"""
+            import pathlib
+            import time
+            from aegis import cron
+
+            with cron._jobs_file_lock():
+                pathlib.Path({str(ready)!r}).write_text("1", encoding="utf-8")
+                for _ in range(1000):
+                    if pathlib.Path({str(release)!r}).exists():
+                        break
+                    time.sleep(0.01)
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    blocker = tmp_path / "blocker.py"
+    blocker.write_text(
+        textwrap.dedent(
+            f"""
+            import pathlib
+            from aegis import cron
+
+            pathlib.Path({str(blocker_started)!r}).write_text("1", encoding="utf-8")
+            with cron._jobs_file_lock():
+                pathlib.Path({str(blocker_acquired)!r}).write_text("1", encoding="utf-8")
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    child = subprocess.Popen([sys.executable, str(holder)], cwd=repo, env=env)
+    blocker_child = None
+    try:
+        for _ in range(1000):
+            if ready.exists():
+                break
+            time.sleep(0.01)
+        assert ready.exists(), "child never acquired cron jobs lock"
+
+        lock_path = str(cron._cron_path()) + ".lock"
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            with pytest.raises(OSError):
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(fd)
+
+        blocker_child = subprocess.Popen([sys.executable, str(blocker)], cwd=repo, env=env)
+        for _ in range(1000):
+            if blocker_started.exists():
+                break
+            time.sleep(0.01)
+        assert blocker_started.exists(), "blocker process never started"
+        time.sleep(0.05)
+        assert not blocker_acquired.exists(), "second process entered cron jobs lock while held"
+    finally:
+        release.write_text("1", encoding="utf-8")
+        child.wait(timeout=15)
+        if blocker_child is not None:
+            blocker_child.wait(timeout=15)
+
+    assert blocker_acquired.exists(), "second process did not acquire cron jobs lock after release"
+    with cron._jobs_file_lock():
+        pass
+
+
 def test_cron_store_cross_process_adds_do_not_clobber(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import os
