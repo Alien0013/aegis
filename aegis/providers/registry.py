@@ -166,7 +166,8 @@ PROVIDERS: dict[str, ProviderSpec] = {
     ),
     "xai": ProviderSpec(
         "xai", ApiMode.CHAT_COMPLETIONS, "https://api.x.ai/v1",
-        "grok-2-latest", 131_072, ["XAI_API_KEY"],
+        "grok-build-0.1", 131_072, ["XAI_API_KEY"],
+        models=["grok-build-0.1", "grok-4.3"],
     ),
     "mistral": ProviderSpec(
         "mistral", ApiMode.CHAT_COMPLETIONS, "https://api.mistral.ai/v1",

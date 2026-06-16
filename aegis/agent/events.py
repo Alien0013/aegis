@@ -29,6 +29,7 @@ class EventType:
     # --- context / learning ---
     COMPACTING = "compacting"          # {}
     COMPACTED = "compacted"            # {messages_before, messages_after, tokens_before, tokens_after, reason}
+    SESSION_COMPRESS = "session:compress"  # {session_id, old_session_id, compression_count}
     REVIEW_STARTED = "review_started"  # {kind: memory|skill|combined}
     REVIEW_DONE = "review_done"        # {kind, actions: [str]}
 

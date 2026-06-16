@@ -15,6 +15,7 @@ from ..redact import redact_secret_values, redact_secrets
 from ..tools.base import ToolContext, ToolResult
 from ..types import Message, ToolCall, new_id
 from . import compaction, governance
+from .events import EventType
 
 OnEvent = Callable[[dict], None]
 _PERSISTED_OUTPUT_TAG = "<persisted-output>"
@@ -945,6 +946,21 @@ def _release_compression_lock(agent, session, holder: str | None) -> None:
         pass
 
 
+def _emit_session_compress(agent, emit: OnEvent | None, payload: dict[str, Any]) -> None:
+    event = {"type": EventType.SESSION_COMPRESS, **payload}
+    if emit is not None:
+        try:
+            emit(event)
+        except Exception:  # noqa: BLE001
+            pass
+    callback = getattr(agent, "event_callback", None)
+    if callable(callback):
+        try:
+            callback(EventType.SESSION_COMPRESS, dict(payload))
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _force_compact(agent, session):
     """Compress unconditionally — recovery from a provider context_overflow. Tighter tail than
     the proactive path so the request actually shrinks below the window."""
@@ -974,7 +990,7 @@ def _force_compact(agent, session):
         ))
         after_tok = compaction.estimated_tokens(session.messages)
         from ..util import now_iso
-        _trace_compaction(agent, session, {
+        rec = {
             "at": now_iso(),
             "iteration": getattr(agent.budget, "api_call_count", 0),
             "messages_before": before_n,
@@ -983,6 +999,14 @@ def _force_compact(agent, session):
             "tokens_after": after_tok,
             "reason": "context_overflow",
             "recovery": True,
+        }
+        _trace_compaction(agent, session, rec)
+        _emit_session_compress(agent, None, {
+            "platform": getattr(agent, "platform", "") or "",
+            "session_id": getattr(session, "id", "") or "",
+            "old_session_id": getattr(session, "id", "") or "",
+            "compression_count": len(session.meta.get("compactions", []) or []),
+            **rec,
         })
         agent.refresh_volatile()
         return session
@@ -1110,6 +1134,13 @@ def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
         session.messages = compressed
         session.meta.setdefault("compactions", []).append(rec)
     _trace_compaction(agent, session, rec)
+    _emit_session_compress(agent, emit, {
+        "platform": getattr(agent, "platform", "") or "",
+        "session_id": getattr(session, "id", "") or "",
+        "old_session_id": getattr(lock_session, "id", "") or "",
+        "compression_count": len(session.meta.get("compactions", []) or []),
+        **rec,
+    })
     _release_compression_lock(agent, lock_session, holder)
     emit({"type": "compacted", **rec})
     agent.refresh_volatile()
@@ -1220,6 +1251,13 @@ def compact_now(agent, session=None, emit: OnEvent | None = None, *,
             except Exception:  # noqa: BLE001
                 pass
     _trace_compaction(agent, session, rec)
+    _emit_session_compress(agent, emit, {
+        "platform": getattr(agent, "platform", "") or "",
+        "session_id": getattr(session, "id", "") or "",
+        "old_session_id": getattr(lock_session, "id", "") or "",
+        "compression_count": len(session.meta.get("compactions", []) or []),
+        **rec,
+    })
     _release_compression_lock(agent, lock_session, holder)
     emit({"type": "compacted", **rec})
     agent.refresh_volatile()

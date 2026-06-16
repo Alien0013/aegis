@@ -1380,6 +1380,21 @@ def test_glm_52_is_in_zai_and_openrouter_catalogs():
     assert model_meta.context_window("z-ai/glm-5.2", provider="openrouter") == 1_048_576
 
 
+def test_xai_defaults_to_grok_build_catalog():
+    from aegis import model_meta
+    from aegis.config import Config
+    from aegis.providers import registry
+
+    cfg = Config.load()
+    xai_rows = {row["id"]: row for row in registry.known_model_entries_for("xai", cfg)}
+
+    assert registry.PROVIDERS["xai"].default_model == "grok-build-0.1"
+    assert list(xai_rows)[0] == "grok-build-0.1"
+    assert xai_rows["grok-build-0.1"]["source"] == "default"
+    assert xai_rows["grok-4.3"]["context_length"] == 256_000
+    assert model_meta.context_window("grok-build-0.1", provider="xai") == 131_072
+
+
 def test_model_inventory_dedupes_presets_and_keeps_provider_ownership():
     from aegis.config import Config
     from aegis.providers import registry

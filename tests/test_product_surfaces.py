@@ -134,6 +134,7 @@ def test_surface_runner_retargets_run_after_session_switch(tmp_path):
 def test_manual_compress_child_inherits_runtime_controls(monkeypatch, tmp_path):
     from aegis.agent.agent import Agent
     from aegis.agent import loop
+    from aegis.agent.events import EventType
     from aegis.config import Config
     from aegis.session import Session, SessionStore
     from aegis.types import Message
@@ -157,14 +158,64 @@ def test_manual_compress_child_inherits_runtime_controls(monkeypatch, tmp_path):
         "busy_mode": "interrupt",
     }
     store.save(session)
-    agent = Agent(config=cfg, provider=FakeProvider(), session=session, cwd=tmp_path, store=store)
+    callback_events = []
+    agent = Agent(
+        config=cfg,
+        provider=FakeProvider(),
+        session=session,
+        cwd=tmp_path,
+        store=store,
+        event_callback=lambda event_type, payload: callback_events.append((event_type, payload)),
+    )
     monkeypatch.setattr(loop, "_engine", lambda _agent: Engine())
+    events = []
 
-    child = loop.compact_now(agent, session, reason="manual_context_compression")
+    child = loop.compact_now(agent, session, emit=events.append, reason="manual_context_compression")
 
     assert child.id != session.id
     assert child.meta["runtime_controls"] == session.meta["runtime_controls"]
     assert store.load(child.id).meta["runtime_controls"]["provider"] == "openrouter"
+    compress_event = next(event for event in events if event["type"] == EventType.SESSION_COMPRESS)
+    assert compress_event["old_session_id"] == session.id
+    assert compress_event["session_id"] == child.id
+    assert compress_event["compression_count"] == 1
+    assert callback_events[-1][0] == EventType.SESSION_COMPRESS
+    assert callback_events[-1][1]["session_id"] == child.id
+
+
+def test_session_compress_callback_failure_does_not_break_compaction(monkeypatch, tmp_path):
+    from aegis.agent.agent import Agent
+    from aegis.agent import loop
+    from aegis.config import Config
+    from aegis.session import Session
+    from aegis.types import Message
+    from conftest import FakeProvider
+
+    class Engine:
+        def compress(self, messages, _summarizer, **_kwargs):
+            return messages[:2]
+
+    def boom(_event_type, _payload):
+        raise RuntimeError("hook exploded")
+
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = False
+    cfg.data.setdefault("agent", {}).setdefault("compression", {})["split_sessions"] = False
+    session = Session.create("compress no callback break")
+    session.messages = [Message.system("sys")] + [Message.user(f"u{i}") for i in range(6)]
+    agent = Agent(
+        config=cfg,
+        provider=FakeProvider(),
+        session=session,
+        cwd=tmp_path,
+        event_callback=boom,
+    )
+    monkeypatch.setattr(loop, "_engine", lambda _agent: Engine())
+
+    result = loop.compact_now(agent, session, reason="manual_context_compression")
+
+    assert result.id == session.id
+    assert len(result.messages) == 2
 
 
 def test_model_set_rejects_unknown_provider_with_suggestion(capsys):

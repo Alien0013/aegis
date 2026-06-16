@@ -94,6 +94,7 @@ class Agent:
         approver: Callable[[str], bool] | None = None,
         secret_capture: Callable[[str, str, dict | None], dict] | None = None,
         store: SessionStore | None = None,
+        event_callback: Callable[[str, dict], None] | None = None,
     ):
         self.config = config
         self.provider = provider
@@ -116,6 +117,7 @@ class Agent:
         self.workspace = Workspace(self.cwd)
         self.context_builder = ContextBuilder(config, self.workspace, self.cwd)
         self.store = store
+        self.event_callback = event_callback
         self.stream = bool(config.get("agent.stream", True))
         self.reasoning = config.get("agent.reasoning_effort", "medium")
         raw_tier = str(config.get("agent.service_tier", "") or "").strip().lower()
@@ -168,13 +170,14 @@ class Agent:
         include_mcp: bool = False,
         registry: ToolRegistry | None = None,
         memory: MemoryManager | None = None,
+        event_callback: Callable[[str, dict], None] | None = None,
     ) -> "Agent":
         from ..providers.fallback import build_with_fallbacks
         provider = build_with_fallbacks(config, model=model, name=provider_name)
         session = session or Session.create()
         agent = cls(config=config, provider=provider, session=session, cwd=cwd,
                     approver=approver, secret_capture=secret_capture, store=store,
-                    registry=registry, memory=memory)
+                    registry=registry, memory=memory, event_callback=event_callback)
         if include_mcp:
             agent.load_mcp()
         return agent
