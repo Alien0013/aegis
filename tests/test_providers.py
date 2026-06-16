@@ -1363,6 +1363,23 @@ def test_model_fast_mode_capabilities_are_provider_aware():
     assert openrouter_rows["anthropic/claude-sonnet-4.5"]["capabilities"]["fast_mode"] is False
 
 
+def test_glm_52_is_in_zai_and_openrouter_catalogs():
+    from aegis import model_meta
+    from aegis.config import Config
+    from aegis.providers import registry
+
+    cfg = Config.load()
+    zai_rows = {row["id"]: row for row in registry.known_model_entries_for("zai", cfg)}
+    assert list(zai_rows)[0] == "glm-5.2"
+    assert zai_rows["glm-5.2"]["source"] == "default"
+    assert zai_rows["glm-5.2"]["context_length"] == 1_048_576
+    assert zai_rows["glm-4.6"]["context_length"] == 128_000
+
+    openrouter_rows = {row["id"]: row for row in registry.known_model_entries_for("openrouter", cfg)}
+    assert openrouter_rows["z-ai/glm-5.2"]["context_length"] == 1_048_576
+    assert model_meta.context_window("z-ai/glm-5.2", provider="openrouter") == 1_048_576
+
+
 def test_model_inventory_dedupes_presets_and_keeps_provider_ownership():
     from aegis.config import Config
     from aegis.providers import registry

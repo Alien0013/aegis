@@ -187,7 +187,8 @@ PROVIDERS: dict[str, ProviderSpec] = {
     ),
     "zai": ProviderSpec(
         "zai", ApiMode.CHAT_COMPLETIONS, "https://api.z.ai/api/paas/v4",
-        "glm-4.6", 128_000, ["ZAI_API_KEY", "GLM_API_KEY"],
+        "glm-5.2", 1_048_576, ["ZAI_API_KEY", "GLM_API_KEY"],
+        models=["glm-5.2", "glm-4.6"],
     ),
     "kimi": ProviderSpec(
         "kimi", ApiMode.CHAT_COMPLETIONS, "https://api.moonshot.ai/v1",

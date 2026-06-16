@@ -171,6 +171,7 @@ MODEL_PRESETS: dict[str, list[tuple[str, str]]] = {
     "openrouter": [
         ("anthropic/claude-sonnet-4.6", "Claude Sonnet via OpenRouter"),
         ("openai/gpt-5.5", "GPT-5.5 via OpenRouter"),
+        ("z-ai/glm-5.2", "GLM-5.2 via OpenRouter"),
         ("google/gemini-2.5-pro", "Gemini 2.5 Pro via OpenRouter"),
     ],
     "deepseek": [

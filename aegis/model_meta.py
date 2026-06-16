@@ -41,6 +41,7 @@ _BUNDLED: dict[str, int] = {
     "qwen3": 262_144, "qwen2.5": 131_072, "qwen": 131_072,
     "mistral-large": 131_072, "mistral": 131_072, "grok-4": 256_000, "grok": 131_072,
     "command-r": 131_072, "kimi-k2": 256_000, "kimi": 131_072, "minimax": 1_000_000,
+    "glm-5.2": 1_048_576, "glm-5.1": 200_000, "glm-4.6": 128_000,
 }
 
 _CODEX_PROVIDER_NAMES = {"codex", "codex-app-server", "openai-codex"}
