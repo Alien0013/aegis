@@ -1342,6 +1342,25 @@ def test_provider_report_exposes_chain_routing_and_catalog():
     assert openai["capabilities"]["reasoning_effort"] is True
     assert openai["capabilities"]["reasoning_stream"] is True
     assert openai["capabilities"]["images"] is True
+    assert openai["capabilities"]["fast_mode"] is True
+
+    xai = next(row for row in report["provider_catalog"] if row["name"] == "xai")
+    assert xai["capabilities"]["fast_mode"] is False
+
+
+def test_model_fast_mode_capabilities_are_provider_aware():
+    from aegis.config import Config
+    from aegis.providers import registry
+
+    cfg = Config.load()
+    anthropic_rows = {row["id"]: row for row in registry.known_model_entries_for("anthropic", cfg)}
+    assert anthropic_rows["claude-opus-4-6"]["capabilities"]["fast_mode"] is True
+    assert anthropic_rows["claude-opus-4-8"]["capabilities"]["fast_mode"] is False
+
+    openrouter_rows = {
+        row["id"]: row for row in registry.known_model_entries_for("openrouter", cfg)
+    }
+    assert openrouter_rows["anthropic/claude-sonnet-4.5"]["capabilities"]["fast_mode"] is False
 
 
 def test_model_inventory_dedupes_presets_and_keeps_provider_ownership():

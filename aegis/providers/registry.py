@@ -402,7 +402,12 @@ def known_model_entries_for(provider_name: str, config: cfg.Config | None = None
             return
         seen.add(key)
         api_mode = spec.api_mode if spec is not None else ApiMode.CHAT_COMPLETIONS
-        capabilities = _model_capabilities(mid, api_mode)
+        capabilities = _model_capabilities(
+            mid,
+            api_mode,
+            provider_name=provider_name,
+            base_url=getattr(spec, "base_url", "") if spec is not None else "",
+        )
         row = {
             "id": mid,
             "provider": provider_name,
@@ -823,11 +828,43 @@ def oauth_catalog(config: cfg.Config | None = None) -> list[dict]:
     return rows
 
 
-def _model_capabilities(model: str, api_mode: ApiMode | str) -> dict:
+def _strip_vendor_prefix(model: str) -> str:
+    raw = str(model or "").strip().lower()
+    return raw.split("/", 1)[1] if "/" in raw else raw
+
+
+def _openai_fast_model(model: str) -> bool:
+    base = _strip_vendor_prefix(model).split(":", 1)[0]
+    if "codex" in base:
+        return False
+    return base.startswith(("gpt-5", "gpt-4.1", "o1", "o3", "o4"))
+
+
+def _anthropic_fast_model(model: str) -> bool:
+    base = _strip_vendor_prefix(model).split(":", 1)[0]
+    return base.startswith("claude-") and ("opus-4-6" in base or "opus-4.6" in base)
+
+
+def _model_capabilities(
+    model: str,
+    api_mode: ApiMode | str,
+    *,
+    provider_name: str = "",
+    base_url: str = "",
+) -> dict:
     mode = api_mode.value if isinstance(api_mode, ApiMode) else str(api_mode or "")
     m = (model or "").lower()
+    provider = str(provider_name or "").lower()
+    url = str(base_url or "").lower()
     openai_reasoning = m.startswith(("gpt-5", "o1", "o3", "o4"))
     anthropic_reasoning = mode == ApiMode.ANTHROPIC_MESSAGES.value and "claude" in m
+    xai_target = provider == "xai" or "api.x.ai" in url or "grok" in m
+    fast_mode = False
+    if not xai_target and mode in {ApiMode.CHAT_COMPLETIONS.value, ApiMode.RESPONSES.value}:
+        fast_mode = _openai_fast_model(m)
+    if mode == ApiMode.ANTHROPIC_MESSAGES.value:
+        native_anthropic = provider == "anthropic" or "api.anthropic.com" in url
+        fast_mode = bool(native_anthropic and _anthropic_fast_model(m))
     chat_vision = any(
         marker in m
         for marker in (
@@ -871,6 +908,7 @@ def _model_capabilities(model: str, api_mode: ApiMode | str) -> dict:
         "response_state": mode == ApiMode.RESPONSES.value,
         "response_cancel": mode == ApiMode.RESPONSES.value,
         "dynamic_tools": mode == ApiMode.CODEX_APP_SERVER.value,
+        "fast_mode": fast_mode,
     }
 
 
@@ -884,6 +922,7 @@ def _capability_summary(capabilities: dict) -> str:
         ("response_state", "response-state"),
         ("response_cancel", "cancel"),
         ("dynamic_tools", "dynamic-tools"),
+        ("fast_mode", "fast"),
     ]
     enabled = [label for key, label in labels if capabilities.get(key)]
     return ", ".join(enabled) if enabled else "none"
@@ -903,7 +942,12 @@ def _resolved_spec_context_length(provider_name: str, spec: ProviderSpec) -> int
 
 def _provider_status(provider: Provider, *, role: str, configured: dict | None = None) -> dict:
     api_mode = getattr(provider, "api_mode", "")
-    capabilities = _model_capabilities(getattr(provider, "model", ""), api_mode)
+    capabilities = _model_capabilities(
+        getattr(provider, "model", ""),
+        api_mode,
+        provider_name=getattr(provider, "name", ""),
+        base_url=getattr(provider, "base_url", ""),
+    )
     return {
         "role": role,
         "name": getattr(provider, "name", ""),
@@ -920,7 +964,12 @@ def _provider_status(provider: Provider, *, role: str, configured: dict | None =
 
 def _spec_status(name: str, spec: ProviderSpec, *, origin: str) -> dict:
     auth = _resolve_auth(spec)
-    capabilities = _model_capabilities(spec.default_model, spec.api_mode)
+    capabilities = _model_capabilities(
+        spec.default_model,
+        spec.api_mode,
+        provider_name=name,
+        base_url=spec.base_url,
+    )
     entry = _OAUTH_CATALOG.get(name)
     context_length = _resolved_spec_context_length(name, spec)
     return {
@@ -1029,7 +1078,12 @@ def provider_report(config: cfg.Config) -> dict:
         }
         spec = specs.get(provider_name)
         if spec is not None:
-            capabilities = _model_capabilities(model, spec.api_mode)
+            capabilities = _model_capabilities(
+                model,
+                spec.api_mode,
+                provider_name=str(provider_name or ""),
+                base_url=spec.base_url,
+            )
             row["capabilities"] = capabilities
             row["capability_summary"] = _capability_summary(capabilities)
         if provider_name not in specs and not config.get("model.base_url"):

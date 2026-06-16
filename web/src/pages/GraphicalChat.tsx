@@ -50,6 +50,7 @@ interface ModelCapabilities {
   response_state?: boolean;
   response_cancel?: boolean;
   dynamic_tools?: boolean;
+  fast_mode?: boolean;
 }
 
 interface ModelRow {
@@ -273,7 +274,12 @@ export function GraphicalChat({
   const supportsReasoning = selectedRow ? selectedRow.capabilities?.reasoning_effort === true : true;
   const reasoningDisabled = knownModel && !supportsReasoning;
 
+  const supportsFast = selectedRow ? selectedRow.capabilities?.fast_mode === true : true;
+  const fastDisabled = knownModel && !supportsFast;
+
   const fastForModel = (nextProvider: string, nextModel: string): boolean => {
+    const row = rowsForProvider(nextProvider).find((entry) => entry.id === nextModel);
+    if (row && row.capabilities?.fast_mode !== true) return false;
     return modelPresets[presetKey(nextProvider, nextModel)]?.fast === true;
   };
 
@@ -311,9 +317,9 @@ export function GraphicalChat({
       model: model.trim(),
       ...(provider.trim() ? { provider: provider.trim() } : {}),
       ...((supportsReasoning || reasoningEffort === "off") ? { reasoning: reasoningEffort } : {}),
-      fast: fastMode,
+      fast: supportsFast ? fastMode : false,
     };
-  }, [fastMode, model, provider, reasoningEffort, runtimeDirty, sid, supportsReasoning]);
+  }, [fastMode, model, provider, reasoningEffort, runtimeDirty, sid, supportsFast, supportsReasoning]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -557,13 +563,18 @@ export function GraphicalChat({
               <button
                 type="button"
                 onClick={() => changeFastMode(!fastMode)}
-                aria-pressed={fastMode}
-                title={fastMode ? "Fast mode priority" : "Fast mode normal"}
+                disabled={fastDisabled}
+                aria-pressed={supportsFast && fastMode}
+                title={
+                  fastDisabled
+                    ? "Fast mode is not advertised for this model"
+                    : fastMode ? "Fast mode priority" : "Fast mode normal"
+                }
                 className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius)] border transition-colors ${
-                  fastMode
+                  supportsFast && fastMode
                     ? "border-warning/50 bg-warning/15 text-warning"
                     : "border-border bg-surface-2 text-faint hover:border-border-2 hover:text-text"
-                }`}
+                } disabled:cursor-not-allowed disabled:opacity-40`}
               >
                 <Icon name="zap" size={14} />
               </button>

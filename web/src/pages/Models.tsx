@@ -130,6 +130,7 @@ export function Models() {
                 caps.images ? { label: "Vision", tone: "info" as const } : null,
                 caps.reasoning_effort ? { label: "Reasoning", tone: "warning" as const } : null,
                 caps.reasoning_stream ? { label: "Reason stream", tone: "warning" as const } : null,
+                caps.fast_mode ? { label: "Fast", tone: "warning" as const } : null,
                 caps.response_state ? { label: "State", tone: "primary" as const } : null,
                 caps.dynamic_tools ? { label: "Dynamic tools", tone: "info" as const } : null,
               ].filter(Boolean) as { label: string; tone: "success" | "info" | "warning" | "primary" }[];
