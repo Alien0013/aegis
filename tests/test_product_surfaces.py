@@ -687,6 +687,7 @@ def test_terminal_runtime_controls_persist_and_resume(monkeypatch):
     repl.handle_slash("/model tuned/test-model", agent, runner=runner, store=store)
     repl.handle_slash("/think high", agent, runner=runner, store=store)
     repl.handle_slash("/reasoning live", agent, runner=runner, store=store)
+    repl.handle_slash("/fast on", agent, runner=runner, store=store)
     repl.handle_slash("/busy interrupt", agent, runner=runner, store=store)
 
     saved = store.load(agent.session.id)
@@ -695,6 +696,7 @@ def test_terminal_runtime_controls_persist_and_resume(monkeypatch):
         "model": "test-model",
         "reasoning_effort": "high",
         "reasoning_display": "live",
+        "service_tier": "priority",
         "busy_mode": "interrupt",
     }
     child = store.fork(saved)
@@ -711,6 +713,7 @@ def test_terminal_runtime_controls_persist_and_resume(monkeypatch):
 
     assert built[-1] == ("tuned", "test-model")
     assert resumed.reasoning == "high"
+    assert resumed.service_tier == "priority"
     assert resumed.config.get("display.reasoning") == "live"
     assert resumed.config.get("gateway.busy_mode") == "interrupt"
 

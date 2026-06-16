@@ -81,6 +81,7 @@ SLASH_COMMANDS = (
     SlashCommand("/title", "sessions", "rename this session", "/title <name>"),
     SlashCommand("/think", "model control", "set reasoning effort", "/think off|minimal|low|medium|high|xhigh"),
     SlashCommand("/reasoning", "model control", "set reasoning visibility or effort", "/reasoning off|none|summary|live|..."),
+    SlashCommand("/fast", "model control", "toggle priority/fast mode", "/fast [on|off|status]"),
     SlashCommand("/busy", "model control", "set busy input behavior", "/busy queue|steer|interrupt"),
     SlashCommand("/goal", "goals", "set a standing goal and start it", "/goal <objective>"),
     SlashCommand("/subgoal", "goals", "set a nested standing goal", "/subgoal <objective>"),
@@ -1511,6 +1512,7 @@ def handle_slash(
             f"reasoning: display {agent.config.get('display.reasoning', 'summary')} · "
             f"effort {getattr(agent, 'reasoning', 'off')}"
         )
+        _out(f"fast mode: {'priority' if getattr(agent, 'service_tier', '') == 'priority' else 'normal'}")
         _out(
             f"permissions: exec_mode {agent.config.get('tools.exec_mode')} · "
             f"toolsets {', '.join(agent.config.get('tools.toolsets', []) or []) or 'none'}"
@@ -1577,6 +1579,28 @@ def handle_slash(
             _out(f"reasoning effort → {value}", style="green")
         else:
             _out("usage: /reasoning off|none|summary|live|minimal|low|medium|high|xhigh")
+    elif name == "/fast":
+        value = (arg or "status").strip().lower()
+        controls = session_runtime_controls(agent.session)
+        if value in {"", "status"}:
+            tier = controls.get("service_tier") or (
+                "priority" if getattr(agent, "service_tier", "") == "priority" else "normal"
+            )
+            _out(f"fast mode: {tier} (/fast on|off)")
+        elif value in {"on", "true", "yes", "fast", "priority"}:
+            remember_session_runtime(agent, service_tier="priority")
+            apply_session_runtime(agent, rebuild_provider=False)
+            if store is not None:
+                store.save(agent.session)
+            _out("fast mode → priority", style="green")
+        elif value in {"off", "false", "no", "normal", "default", "standard", "none"}:
+            remember_session_runtime(agent, service_tier="normal")
+            apply_session_runtime(agent, rebuild_provider=False)
+            if store is not None:
+                store.save(agent.session)
+            _out("fast mode → normal", style="green")
+        else:
+            _out("usage: /fast [on|off|status]")
     elif name == "/context":
         for line in _render_context(agent):
             _out(line)
@@ -2136,7 +2160,7 @@ def interactive(config: Config, *, model=None, provider_name=None,
                                 surface="repl", on_event=renderer) == "break":
                     break
                 if user.split(maxsplit=1)[0] in {
-                    "/model", "/provider", "/think", "/reasoning", "/busy",
+                    "/model", "/provider", "/think", "/reasoning", "/fast", "/busy",
                     "/resume", "/branch", "/new", "/compact", "/compress",
                 }:
                     _maybe_print_status_footer(agent, renderer)

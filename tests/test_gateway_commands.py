@@ -656,14 +656,18 @@ def test_provider_and_reasoning_runtime_controls_are_session_scoped(tmp_path, mo
     assert "display → live" in r.dispatch(_ev("/reasoning live"))
     assert "effort → high" in r.dispatch(_ev("/reasoning high"))
     assert "usage" in r.dispatch(_ev("/reasoning chaos"))
+    assert "fast_mode: normal" in r.dispatch(_ev("/fast"))
+    assert "fast_mode → priority" in r.dispatch(_ev("/fast on"))
 
     controls = r._session(key).meta["runtime_controls"]
     assert controls["provider"] == "openrouter"
     assert controls["reasoning_display"] == "live"
     assert controls["reasoning_effort"] == "high"
+    assert controls["service_tier"] == "priority"
     who = r.dispatch(_ev("/whoami"))
     assert "provider: openrouter" in who
     assert "reasoning: display=live · effort=high" in who
+    assert "fast_mode: priority" in who
     from aegis.runs import RunStore
     run = next(row for row in RunStore().list(session_id=key, limit=10)
                if row["kind"] == "control" and row["data"].get("command") == "/provider")

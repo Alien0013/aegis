@@ -48,6 +48,56 @@ def test_off_sends_no_thinking_field(monkeypatch):
     assert "thinking" not in p and "output_config" not in p   # explicit disabled 400s on fable
 
 
+def test_anthropic_priority_service_tier_maps_to_fast_speed(monkeypatch):
+    tr = AnthropicTransport()
+    cap = {}
+    monkeypatch.setattr(tr, "_blocking",
+                        lambda url, headers, payload, timeout:
+                        cap.update(payload=payload) or LLMResponse(text="ok"))
+
+    tr.complete(
+        base_url="https://api.anthropic.com",
+        auth=_Auth(),
+        model="claude-opus-4-6",
+        messages=[Message.user("hi")],
+        tools=None,
+        stream=False,
+        service_tier="priority",
+    )
+
+    assert cap["payload"]["speed"] == "fast"
+
+
+def test_anthropic_fast_speed_is_gated_to_supported_native_models(monkeypatch):
+    tr = AnthropicTransport()
+    cap = {}
+    monkeypatch.setattr(tr, "_blocking",
+                        lambda url, headers, payload, timeout:
+                        cap.update(payload=payload) or LLMResponse(text="ok"))
+
+    tr.complete(
+        base_url="https://api.anthropic.com",
+        auth=_Auth(),
+        model="claude-sonnet-4-6",
+        messages=[Message.user("hi")],
+        tools=None,
+        stream=False,
+        service_tier="priority",
+    )
+    assert "speed" not in cap["payload"]
+
+    tr.complete(
+        base_url="https://openrouter.ai/api/v1",
+        auth=_Auth(),
+        model="anthropic/claude-opus-4.6",
+        messages=[Message.user("hi")],
+        tools=None,
+        stream=False,
+        service_tier="priority",
+    )
+    assert "speed" not in cap["payload"]
+
+
 def test_thinking_blocks_echoed_back_first():
     """Anthropic requires signed thinking blocks to precede text/tool_use on replay."""
     blk = {"type": "thinking", "thinking": "let me check", "signature": "sig=="}

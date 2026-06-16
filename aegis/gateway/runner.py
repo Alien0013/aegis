@@ -519,11 +519,13 @@ class GatewayRunner:
         busy_mode = controls.get("busy_mode") or self.config.get("gateway.busy_mode", "queue")
         reasoning_display = controls.get("reasoning_display") or self.config.get("display.reasoning", "summary")
         reasoning_effort = controls.get("reasoning_effort") or self.config.get("agent.reasoning_effort", "medium")
+        service_tier = controls.get("service_tier") or self.config.get("agent.service_tier", "") or "normal"
         return (
             f"platform: {ev.platform}\nuser: {ev.user_id or '?'}"
             f"{f' (@{ev.user_name})' if ev.user_name else ''}\nchat: {ev.chat_id}\n"
             f"session: {key}\nprovider: {provider}\nmodel: {model}\n"
-            f"busy_mode: {busy_mode}\nreasoning: display={reasoning_display} · effort={reasoning_effort}"
+            f"busy_mode: {busy_mode}\nreasoning: display={reasoning_display} · effort={reasoning_effort}\n"
+            f"fast_mode: {service_tier}"
         )
 
     def _gateway_status(self, key: str, session: Session) -> str:
@@ -541,6 +543,9 @@ class GatewayRunner:
             getattr(provider_obj, "model", "")
             or controls.get("model")
             or self.config.get("model.default")
+        )
+        service_tier = controls.get("service_tier") or (
+            "priority" if getattr(agent, "service_tier", "") == "priority" else "normal"
         )
         try:
             from ..agent import compaction
@@ -563,10 +568,10 @@ class GatewayRunner:
             context = f"context≈{context_used:,} tokens"
         messages = len(session.messages)
         return (
-            f"AEGIS gateway · provider={provider} · model={model} · session={key}\n"
+            f"AEGIS gateway · provider={provider} · model={model} · fast={service_tier} · session={key}\n"
             f"{context} · messages={messages}\n"
             "Commands: /new · /status · /whoami · /model [provider/model] · "
-            "/provider [name] · /reasoning [mode] · /compress · /busy [mode] · "
+            "/provider [name] · /reasoning [mode] · /fast [on|off] · /compress · /busy [mode] · "
             "/goal <text> · /subgoal <text> · /steer <text> · stop"
         )
 
@@ -790,6 +795,35 @@ class GatewayRunner:
                 return "usage: /reasoning off|none|summary|live|minimal|low|medium|high|xhigh"
 
             return self._control_reply(ev, key, "/reasoning", action, data={"mode": arg})
+        if text == "/fast" or text.startswith("/fast "):
+            arg = text[len("/fast"):].strip().lower()
+
+            def action(proxy):
+                session = proxy.session
+                from ..surface import apply_session_runtime, remember_session_runtime, session_runtime_controls
+                controls = session_runtime_controls(session)
+                if arg in {"", "status"}:
+                    tier = controls.get("service_tier") or self.config.get("agent.service_tier", "") or "normal"
+                    if tier in {"", "off", "none", "default", "standard"}:
+                        tier = "normal"
+                    return f"fast_mode: {tier} (/fast on|off)"
+                if arg in {"on", "true", "yes", "fast", "priority"}:
+                    remember_session_runtime(type("A", (), {"session": session})(), service_tier="priority")
+                    self.store.save(session)
+                    agent = self._agents.get(key)
+                    if agent is not None:
+                        apply_session_runtime(agent, rebuild_provider=False)
+                    return "✓ fast_mode → priority"
+                if arg in {"off", "false", "no", "normal", "default", "standard", "none"}:
+                    remember_session_runtime(type("A", (), {"session": session})(), service_tier="normal")
+                    self.store.save(session)
+                    agent = self._agents.get(key)
+                    if agent is not None:
+                        apply_session_runtime(agent, rebuild_provider=False)
+                    return "✓ fast_mode → normal"
+                return "usage: /fast [on|off|status]"
+
+            return self._control_reply(ev, key, "/fast", action, data={"mode": arg})
         if text == "/busy" or text.startswith("/busy "):
             arg = text[len("/busy"):].strip()
             def action(proxy):

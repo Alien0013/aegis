@@ -45,6 +45,17 @@ _ADAPTIVE_THINKING_PREFIXES = ("claude-fable", "claude-opus-4-6", "claude-opus-4
                                "claude-opus-4-8", "claude-sonnet-4-6")
 
 
+def _supports_fast_mode(base_url: str, model: str) -> bool:
+    url = str(base_url or "").lower()
+    if "api.anthropic.com" not in url:
+        return False
+    raw = str(model or "").strip().lower()
+    if "/" in raw:
+        raw = raw.split("/", 1)[1]
+    base = raw.split(":", 1)[0]
+    return base.startswith("claude-") and ("opus-4-6" in base or "opus-4.6" in base)
+
+
 class AnthropicTransport(ProviderTransport):
     api_mode = ApiMode.ANTHROPIC_MESSAGES
 
@@ -133,6 +144,7 @@ class AnthropicTransport(ProviderTransport):
         approver=None,
         cwd=None,
         on_reasoning: OnDelta | None = None,
+        service_tier: str = "",
     ) -> LLMResponse:
         url = f"{base_url}/v1/messages"
         system, wire_messages = self._to_wire(messages)
@@ -171,6 +183,8 @@ class AnthropicTransport(ProviderTransport):
                 if max_tokens <= budget:
                     payload["max_tokens"] = budget + 4096
                 payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
+        if str(service_tier or "").strip().lower() == "priority" and _supports_fast_mode(base_url, model):
+            payload["speed"] = "fast"
         # claude.ai/Claude-Code OAuth tokens require the system prompt to begin with the
         # Claude Code identity block, or the Messages API rejects the request. Detect OAuth
         # by the bearer beta header and prepend it.
