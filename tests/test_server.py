@@ -1556,6 +1556,53 @@ class _BlockingRunRunner:
         )
 
 
+class _ApprovalBlockingRunRunner:
+    approval_returned = threading.Event()
+    calls = []
+    agents = []
+
+    def __init__(self, config, include_mcp=True):
+        self.config = config
+        self.include_mcp = include_mcp
+
+    @classmethod
+    def reset(cls):
+        cls.approval_returned = threading.Event()
+        cls.calls = []
+        cls.agents = []
+
+    def load_or_create_session(self, session_id=None, title=None, surface="", meta=None):
+        return SimpleNamespace(id=session_id or "serve:approval-run", title=title or "", meta=meta or {})
+
+    def make_agent(self, **kwargs):
+        agent = SimpleNamespace(cancel_event=threading.Event(), approver=kwargs.get("approver"))
+
+        def cancel():
+            agent.cancel_event.set()
+
+        agent.cancel = cancel
+        self.agents.append(agent)
+        return agent
+
+    def run_prompt(self, prompt, **kwargs):
+        agent = kwargs["agent"]
+        approved = bool(agent.approver("Allow shell command?"))
+        self.approval_returned.set()
+        self.calls.append({"prompt": prompt, "approved": approved, **kwargs})
+        session = kwargs.get("session") or SimpleNamespace(id="serve:approval-run")
+        return SimpleNamespace(
+            text=f"approved={approved}",
+            session=session,
+            trace_id="trace_approval",
+            turn_id="turn_approval",
+            run_id="surface_approval",
+            agent=SimpleNamespace(
+                provider=SimpleNamespace(model="served-model"),
+                budget=SimpleNamespace(usage=_Usage()),
+            ),
+        )
+
+
 def test_server_run_echoes_hermes_session_key(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
@@ -1639,6 +1686,58 @@ def test_server_run_lifecycle_caps_active_runs_and_stop_wins(monkeypatch, tmp_pa
     assert _BlockingRunRunner.agents and _BlockingRunRunner.agents[0].cancel_event.is_set()
     assert final["run"]["status"] == "cancelled"
     assert final["run"]["result"] == "finished"
+
+
+def test_server_stop_releases_pending_approval_waiter(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import time
+    import aegis.server as server
+    from aegis.config import Config
+
+    _ApprovalBlockingRunRunner.reset()
+    monkeypatch.setattr(server, "SurfaceRunner", _ApprovalBlockingRunRunner)
+    cfg = Config.load()
+    cfg.data.setdefault("server", {})["approval_timeout_seconds"] = 60
+    srv, port = _serve(server.make_handler(cfg))
+    try:
+        create_status, create_data = _request(port, "POST", "/v1/runs", {
+            "input": "needs approval",
+            "session_id": "serve:approval-run",
+        })
+        run_id = json.loads(create_data)["id"]
+
+        pending = {}
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            pending_status, pending_data = _request(port, "GET", f"/v1/runs/{run_id}/approval")
+            pending = json.loads(pending_data)
+            if pending.get("pending"):
+                break
+            time.sleep(0.05)
+        stop_status, stop_data = _request(port, "POST", f"/v1/runs/{run_id}/stop", {})
+
+        final = {}
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            get_status, get_data = _request(port, "GET", f"/v1/runs/{run_id}")
+            final = json.loads(get_data)
+            if final.get("run", {}).get("status") == "cancelled":
+                break
+            time.sleep(0.05)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert create_status == 202
+    assert pending_status == 200
+    assert pending["pending"] and pending["pending"][0]["prompt"] == "Allow shell command?"
+    assert stop_status == 200
+    assert json.loads(stop_data)["status"] == "cancelling"
+    assert _ApprovalBlockingRunRunner.approval_returned.wait(0.1)
+    assert _ApprovalBlockingRunRunner.calls[0]["approved"] is False
+    assert _ApprovalBlockingRunRunner.agents[0].cancel_event.is_set()
+    assert final["run"]["status"] == "cancelled"
+    assert final["run"]["result"] == "approved=False"
 
 
 def test_server_api_jobs_crud_pause_resume_and_run(monkeypatch, tmp_path):

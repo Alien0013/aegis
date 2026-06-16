@@ -1035,12 +1035,25 @@ def make_handler(config: Config):
             rec["updated_at"] = int(now)
             return rec
 
+        def _release_run_approvals_locked(self, run_id: str, reason: str) -> None:
+            for pending in list(approvals.values()):
+                if pending.get("run_id") != run_id or pending.get("answered"):
+                    continue
+                pending["approved"] = False
+                pending["answered"] = True
+                pending["cancelled"] = True
+                pending["cancel_reason"] = reason
+                event = pending.get("event")
+                if event is not None:
+                    event.set()
+
         def _request_stop_run_locked(self, run_id: str, reason: str = "stop requested") -> dict[str, Any] | None:
             rec = active_runs.get(run_id)
             if rec is None:
                 return None
             rec["cancel_requested"] = True
             rec["cancel_reason"] = reason
+            self._release_run_approvals_locked(run_id, reason)
             agent = rec.get("agent")
             if agent is not None:
                 cancel = getattr(agent, "cancel", None)
