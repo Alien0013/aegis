@@ -36,6 +36,7 @@ import { Analytics } from "./pages/Analytics";
 import { Pairing } from "./pages/Pairing";
 import { Docs } from "./pages/Docs";
 import { Placeholder } from "./pages/Placeholder";
+import { DashboardPluginProvider, PluginRoutePage, PluginSlot, useDashboardPluginHost } from "./plugins/host";
 
 // Code-split heavy pages so they load on demand: Chat/Terminal pull in xterm,
 // and the desktop app keeps its own graphical chat surface.
@@ -84,6 +85,7 @@ function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
         </div>
       </div>
       <div className="flex items-center gap-2">
+        <PluginSlot name="topbar:right" className="hidden items-center gap-2 lg:flex" />
         <div className="hidden items-center gap-1.5 rounded-[var(--radius)] border border-border bg-surface px-2.5 py-1.5 text-[11px] text-dim xl:flex">
           <span className={gateway === "running" ? "h-1.5 w-1.5 rounded-full bg-success" : "h-1.5 w-1.5 rounded-full bg-faint"} />
           {gateway}
@@ -107,6 +109,7 @@ function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
 
 function Routed({ full }: { full?: boolean }) {
   const loc = useLocation();
+  const { routes: pluginRoutes } = useDashboardPluginHost();
   return (
     <div className={full ? "h-full animate-fade-in" : "mx-auto w-full max-w-[1500px] animate-fade-in"}>
       <ErrorBoundary key={loc.pathname}>
@@ -140,6 +143,9 @@ function Routed({ full }: { full?: boolean }) {
             <Route path="/system" element={<System />} />
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/docs" element={<Docs />} />
+            {pluginRoutes.map((route) => (
+              <Route key={`plugin-${route.plugin || route.path}-${route.path}`} path={route.path} element={<PluginRoutePage route={route} />} />
+            ))}
             <Route path="*" element={<Placeholder title="Not found" />} />
           </Routes>
         </Suspense>
@@ -164,6 +170,7 @@ function AdminShell() {
           <Routed full={fullBleed} />
         </main>
       </div>
+      <PluginSlot name="app:shell" />
       <Toaster />
     </div>
   );
@@ -172,22 +179,24 @@ function AdminShell() {
 export function App() {
   return (
     <HashRouter>
-      {/* Column root: the custom titlebar (desktop only) sits above the routed
-          surface; the command palette overlays everything. */}
-      <div className="flex h-screen flex-col overflow-hidden bg-bg text-text">
-        <TitleBar />
-        <div className="min-h-0 flex-1">
-          <Suspense fallback={<Loading />}>
-            <Routes>
-              {/* The desktop app's chat-first surface — its own full-screen chrome. */}
-              <Route path="/app" element={<DesktopShell />} />
-              {/* Everything else is the admin control panel. */}
-              <Route path="/*" element={<AdminShell />} />
-            </Routes>
-          </Suspense>
+      <DashboardPluginProvider>
+        {/* Column root: the custom titlebar (desktop only) sits above the routed
+            surface; the command palette overlays everything. */}
+        <div className="flex h-screen flex-col overflow-hidden bg-bg text-text">
+          <TitleBar />
+          <div className="min-h-0 flex-1">
+            <Suspense fallback={<Loading />}>
+              <Routes>
+                {/* The desktop app's chat-first surface — its own full-screen chrome. */}
+                <Route path="/app" element={<DesktopShell />} />
+                {/* Everything else is the admin control panel. */}
+                <Route path="/*" element={<AdminShell />} />
+              </Routes>
+            </Suspense>
+          </div>
+          <CommandPalette />
         </div>
-        <CommandPalette />
-      </div>
+      </DashboardPluginProvider>
     </HashRouter>
   );
 }
