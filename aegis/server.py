@@ -14,6 +14,7 @@ import sqlite3
 import threading
 import time
 from collections import OrderedDict
+from datetime import datetime
 from io import BytesIO
 from http.server import BaseHTTPRequestHandler
 from typing import Any
@@ -25,6 +26,7 @@ from . import config as cfg_paths
 from .config import Config
 from .surface import SurfaceRunner, runtime_controls_meta
 from .types import Message, ToolCall, new_id
+from .util import now_iso
 
 _MAX_BODY_BYTES = 10 * 1024 * 1024
 _DEFAULT_MAX_STORED_RESPONSES = 100
@@ -597,6 +599,101 @@ def _job_payload(job) -> dict[str, Any]:
         "max_runs": int(getattr(job, "max_runs", 0) or 0),
         "runs": list(getattr(job, "runs", []) or []),
     }
+
+
+def _epoch_from_run_time(value: Any) -> int:
+    if isinstance(value, (int, float)):
+        return int(value)
+    text = str(value or "").strip()
+    if not text:
+        return 0
+    try:
+        return int(datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp())
+    except ValueError:
+        return 0
+
+
+def _public_stored_run_record(run: dict[str, Any]) -> dict[str, Any]:
+    data = run.get("data") if isinstance(run.get("data"), dict) else {}
+    status = str(run.get("status") or "")
+    public_status = "completed" if status == "ok" else status
+    created_at = _epoch_from_run_time(data.get("created_at") or run.get("started_at"))
+    updated_at = _epoch_from_run_time(data.get("updated_at") or run.get("ended_at") or run.get("started_at"))
+    return {
+        "id": run.get("id", ""),
+        "object": data.get("object") or "run",
+        "status": public_status,
+        "created_at": created_at,
+        "updated_at": updated_at,
+        "session_id": run.get("session_id", ""),
+        "result": run.get("result_preview", ""),
+        "error": run.get("error", ""),
+        "trace_id": run.get("trace_id", ""),
+        "surface_run_id": data.get("surface_run_id", ""),
+        "cancel_reason": data.get("cancel_reason", ""),
+        "last_event": data.get("last_event") or (f"run.{public_status}" if public_status else ""),
+        "model": data.get("model", ""),
+        "session_key": data.get("session_key", ""),
+        "surface": run.get("surface", ""),
+        "kind": run.get("kind", ""),
+        "title": run.get("title", ""),
+        "started_at": run.get("started_at", ""),
+        "ended_at": run.get("ended_at", ""),
+        "prompt_preview": run.get("prompt_preview", ""),
+    }
+
+
+def _persist_api_run_record(record: dict[str, Any], *, title: str = "", prompt: str = "") -> None:
+    run_id = str(record.get("id") or "")
+    if not run_id:
+        return
+    from .runs import RunStore
+
+    store = RunStore()
+    row = store.get(run_id)
+    data = dict(row.get("data") or {}) if row else {}
+    data.update({
+        "api": "runs",
+        "object": record.get("object") or "run",
+        "server_run_id": run_id,
+        "created_at": record.get("created_at") or data.get("created_at") or int(time.time()),
+        "updated_at": record.get("updated_at") or int(time.time()),
+        "last_event": record.get("last_event") or data.get("last_event", ""),
+        "model": record.get("model") or data.get("model", ""),
+        "session_key": record.get("session_key") or data.get("session_key", ""),
+        "surface_run_id": record.get("surface_run_id") or data.get("surface_run_id", ""),
+        "cancel_reason": record.get("cancel_reason") or data.get("cancel_reason", ""),
+    })
+    status = str(record.get("status") or "running")
+    if row is None:
+        row = {
+            "id": run_id,
+            "surface": "serve",
+            "kind": "serve",
+            "status": status,
+            "title": title,
+            "session_id": record.get("session_id", ""),
+            "trace_id": record.get("trace_id", ""),
+            "started_at": "",
+            "ended_at": "",
+            "prompt_preview": prompt[:1200],
+            "result_preview": "",
+            "error": "",
+            "data": data,
+        }
+    row["status"] = status
+    if title:
+        row["title"] = title
+    if prompt and not row.get("prompt_preview"):
+        row["prompt_preview"] = prompt[:1200]
+    row["session_id"] = record.get("session_id") or row.get("session_id", "")
+    row["trace_id"] = record.get("trace_id") or row.get("trace_id", "")
+    row["result_preview"] = record.get("result") or row.get("result_preview", "")
+    row["error"] = record.get("error") or row.get("error", "")
+    if status in _TERMINAL_RUN_STATUSES and not row.get("ended_at"):
+        row["ended_at"] = now_iso()
+    row["data"] = data
+    store.write(row)
 
 
 def _public_run_record(record: dict[str, Any]) -> dict[str, Any]:
@@ -1292,7 +1389,13 @@ def make_handler(config: Config):
                 return 404, {"ok": False, "error": "run not found", "id": run_id}
             trace_id = str(run.get("trace_id") or "")
             trace = TraceStore.from_config(config).get_trace(trace_id) if trace_id else None
-            return 200, {"ok": True, "id": run_id, "events": (trace or {}).get("spans", []), "trace": trace}
+            return 200, {
+                "ok": True,
+                "id": run_id,
+                "run": _public_stored_run_record(run),
+                "events": (trace or {}).get("spans", []),
+                "trace": trace,
+            }
 
         def _stream_run_events(self, run_id: str) -> None:
             code, payload = self._run_events(run_id)
@@ -1308,8 +1411,9 @@ def make_handler(config: Config):
                     active = active_runs.get(run_id)
                     if active is None:
                         events = list(payload.get("events") or [])
-                        status = "completed"
-                        detail = {"id": run_id, "status": status}
+                        detail = payload.get("run") if isinstance(payload.get("run"), dict) else {}
+                        status = str(detail.get("status") or "completed")
+                        detail = detail or {"id": run_id, "status": status}
                     else:
                         events = list(active.get("events") or [])
                         status = str(active.get("status") or "running")
@@ -1356,7 +1460,7 @@ def make_handler(config: Config):
             run = RunStore().get(run_id)
             if run is None:
                 return 404, {"ok": False, "error": "run not found", "id": run_id}
-            return 200, {"ok": True, "run": run}
+            return 200, {"ok": True, "run": _public_stored_run_record(run)}
 
         def do_GET(self):  # noqa: N802
             if self._forbid_disallowed_origin():
@@ -1389,8 +1493,14 @@ def make_handler(config: Config):
                 limit = max(1, min(limit, 500))
                 with state_lock:
                     self._sweep_runs_locked()
-                    active = [_public_run_record(rec) for rec in active_runs.values()]
-                rows = active + RunStore().list(limit=max(1, limit - len(active)))
+                    active_records = [_public_run_record(rec) for rec in active_runs.values()]
+                    active_ids = {str(rec.get("id") or "") for rec in active_records}
+                stored = [
+                    _public_stored_run_record(row)
+                    for row in RunStore().list(limit=max(1, limit))
+                    if str(row.get("id") or "") not in active_ids
+                ]
+                rows = active_records + stored
                 return self._json(200, {"object": "list", "data": rows[:limit]})
             if path.startswith("/v1/runs/") and path.endswith("/events"):
                 run_id = path.split("/")[-2]
@@ -2325,8 +2435,6 @@ def make_handler(config: Config):
             })
 
         def _post_run(self, body: dict[str, Any]) -> None:
-            from .session import SessionStore
-
             session_key, session_key_error = self._session_key()
             if session_key_error is not None:
                 code, payload = session_key_error
@@ -2344,7 +2452,6 @@ def make_handler(config: Config):
                 return self._json(400, {"error": "missing input"})
             session_id = str(body.get("session_id") or "") or None
             title = str(body.get("title") or prompt[:80] or run_id)
-            store = SessionStore()
             run_meta = {
                 "server_run_id": run_id,
                 **({"gateway_session_key": session_key} if session_key else {}),
@@ -2373,6 +2480,7 @@ def make_handler(config: Config):
             }
             with state_lock:
                 active_runs[run_id] = record
+            _persist_api_run_record(record, title=title, prompt=prompt)
 
             def approver(question: str) -> bool:
                 approval_id = new_id("approval")
@@ -2405,7 +2513,10 @@ def make_handler(config: Config):
                     with state_lock:
                         rec = self._set_run_state_locked(run_id, status="running", agent=agent, last_event="run.running")
                         if rec is not None and rec.get("cancel_requested"):
-                            self._request_stop_run_locked(run_id, str(rec.get("cancel_reason") or "stop requested"))
+                            rec = self._request_stop_run_locked(run_id, str(rec.get("cancel_reason") or "stop requested"))
+                        run_snapshot = dict(rec) if rec is not None else None
+                    if run_snapshot is not None:
+                        _persist_api_run_record(run_snapshot, title=title, prompt=prompt)
 
                     def emit(ev: dict[str, Any]) -> None:
                         with state_lock:
@@ -2429,7 +2540,7 @@ def make_handler(config: Config):
                         rec = active_runs.get(run_id)
                         if rec is not None:
                             status = "cancelled" if rec.get("cancel_requested") else "completed"
-                            self._set_run_state_locked(run_id, **{
+                            rec = self._set_run_state_locked(run_id, **{
                                 "status": status,
                                 "result": result.text,
                                 "trace_id": result.trace_id,
@@ -2437,17 +2548,27 @@ def make_handler(config: Config):
                                 "session_id": result.session.id,
                                 "last_event": "run.cancelled" if status == "cancelled" else "run.completed",
                             })
+                            run_snapshot = dict(rec) if rec is not None else None
+                        else:
+                            run_snapshot = None
+                    if run_snapshot is not None:
+                        _persist_api_run_record(run_snapshot, title=title, prompt=prompt)
                 except Exception as exc:  # noqa: BLE001
                     with state_lock:
                         rec = active_runs.get(run_id)
                         if rec is not None:
                             status = "cancelled" if rec.get("cancel_requested") else "error"
-                            self._set_run_state_locked(
+                            rec = self._set_run_state_locked(
                                 run_id,
                                 status=status,
                                 error=f"{type(exc).__name__}: {exc}" if status == "error" else "",
                                 last_event="run.cancelled" if status == "cancelled" else "run.error",
                             )
+                            run_snapshot = dict(rec) if rec is not None else None
+                        else:
+                            run_snapshot = None
+                    if run_snapshot is not None:
+                        _persist_api_run_record(run_snapshot, title=title, prompt=prompt)
 
             thread = threading.Thread(target=worker, daemon=True, name=f"aegis-api-run-{run_id}")
             with state_lock:
@@ -2464,6 +2585,8 @@ def make_handler(config: Config):
                 rec = self._request_stop_run_locked(run_id, "API stop requested")
                 if rec is None:
                     return self._json(404, {"ok": False, "error": "active run not found", "id": run_id})
+                run_snapshot = dict(rec)
+            _persist_api_run_record(run_snapshot)
             return self._json(200, {"ok": True, "id": run_id, "status": "cancelling"})
 
         def _post_approval(self, run_id: str, body: dict[str, Any]) -> None:

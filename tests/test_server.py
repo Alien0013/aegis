@@ -1817,6 +1817,67 @@ def test_server_run_lifecycle_caps_active_runs_and_stop_wins(monkeypatch, tmp_pa
     assert final["run"]["result"] == "finished"
 
 
+def test_server_created_run_persists_across_handler_restart(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _BlockingRunRunner.reset()
+    monkeypatch.setattr(server, "SurfaceRunner", _BlockingRunRunner)
+    cfg = Config.load()
+    srv, port = _serve(server.make_handler(cfg))
+    try:
+        create_status, create_data = _request(port, "POST", "/v1/runs", {
+            "input": "durable run",
+            "session_id": "serve:persist-run",
+        })
+        run_id = json.loads(create_data)["id"]
+        assert _BlockingRunRunner.started.wait(2)
+        _BlockingRunRunner.release.set()
+
+        final = {}
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            get_status, get_data = _request(port, "GET", f"/v1/runs/{run_id}")
+            final = json.loads(get_data)
+            if final.get("run", {}).get("status") == "completed":
+                break
+            time.sleep(0.05)
+    finally:
+        _BlockingRunRunner.release.set()
+        srv.shutdown()
+        srv.server_close()
+
+    assert create_status == 202
+    assert final["run"]["id"] == run_id
+    assert final["run"]["status"] == "completed"
+
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        get_status, get_data = _request(port, "GET", f"/v1/runs/{run_id}")
+        list_status, list_data = _request(port, "GET", "/v1/runs")
+        events_status, events_data = _request(port, "GET", f"/v1/runs/{run_id}/events")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    run = json.loads(get_data)["run"]
+    listed = json.loads(list_data)["data"]
+    events = json.loads(events_data)
+    assert get_status == 200
+    assert run["id"] == run_id
+    assert run["status"] == "completed"
+    assert run["session_id"] == "serve:persist-run"
+    assert run["result"] == "finished"
+    assert run["trace_id"] == "trace_blocking"
+    assert run["surface_run_id"] == "surface_blocking"
+    assert list_status == 200
+    assert any(row["id"] == run_id and row["status"] == "completed" for row in listed)
+    assert events_status == 200
+    assert events["ok"] is True
+    assert events["run"]["id"] == run_id
+
+
 def test_server_stop_releases_pending_approval_waiter(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import time
