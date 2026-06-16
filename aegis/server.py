@@ -2540,16 +2540,50 @@ def make_handler(config: Config):
         def _post_session_chat(self, session_id: str, body: dict[str, Any], *, stream: bool = False) -> None:
             from .session import SessionStore
 
+            session_key, session_key_error = self._session_key()
+            if session_key_error is not None:
+                code, payload = session_key_error
+                return self._json(code, payload)
             store = SessionStore()
             session = store.load(session_id)
             if session is None:
                 return self._json(404, {"ok": False, "error": "session not found", "id": session_id})
             prompt = body.get("prompt", body.get("input", body.get("message", "")))
             if stream:
-                self._send_sse_headers()
+                stream_run_id = new_id("run")
+                message_id = new_id("msg")
+                sequence = 0
+                self._send_sse_headers(self._session_headers(session_id=session.id, session_key=session_key))
+
+                def send_event(event_name: str, payload: dict[str, Any]) -> bool:
+                    nonlocal sequence
+                    sequence += 1
+                    payload.setdefault("session_id", session.id)
+                    payload.setdefault("run_id", stream_run_id)
+                    payload.setdefault("sequence_number", sequence)
+                    payload.setdefault("created_at", int(time.time()))
+                    return self._write_sse(payload, event=event_name)
+
+                send_event("run.started", {
+                    "user_message": {"role": "user", "content": str(prompt)},
+                })
+                send_event("message.started", {
+                    "message": {"id": message_id, "role": "assistant", "status": "in_progress"},
+                    "message_id": message_id,
+                })
 
                 def emit(ev: dict[str, Any]) -> None:
-                    self._write_sse(ev)
+                    if ev.get("type") == "assistant_delta":
+                        delta = str(ev.get("text") or "")
+                        if delta:
+                            send_event("assistant.delta", {
+                                "message_id": message_id,
+                                "delta": delta,
+                            })
+                        return
+                    meta = _event_metadata(ev)
+                    if meta:
+                        send_event("event", {"message_id": message_id, "event": meta})
 
                 result = runner.run_prompt(
                     str(prompt),
@@ -2559,10 +2593,38 @@ def make_handler(config: Config):
                     cwd=body.get("cwd"),
                     surface="serve",
                     stream=True,
+                    meta={
+                        "request_id": stream_run_id,
+                        "api": "session_chat_stream",
+                        **({"gateway_session_key": session_key} if session_key else {}),
+                    },
                     on_event=emit,
                 )
-                emit({"type": "done", "text": result.text, "session_id": result.session.id,
-                      "run_id": result.run_id, "trace_id": result.trace_id})
+                final_session_id = getattr(getattr(result, "session", None), "id", session.id)
+                completed_common = {
+                    "session_id": final_session_id,
+                    "run_id": getattr(result, "run_id", stream_run_id) or stream_run_id,
+                    "trace_id": getattr(result, "trace_id", ""),
+                    "turn_id": getattr(result, "turn_id", ""),
+                }
+                send_event("assistant.completed", {
+                    **completed_common,
+                    "message_id": message_id,
+                    "content": getattr(result, "text", ""),
+                    "completed": True,
+                    "partial": False,
+                    "interrupted": False,
+                })
+                send_event("run.completed", {
+                    **completed_common,
+                    "message_id": message_id,
+                    "completed": True,
+                    "usage": _usage(getattr(result, "usage", None) or getattr(result, "agent", None)),
+                })
+                send_event("done", {
+                    **completed_common,
+                    "message_id": message_id,
+                })
                 self.wfile.write(b"data: [DONE]\n\n")
                 return
             result = runner.run_prompt(
@@ -2573,6 +2635,9 @@ def make_handler(config: Config):
                 cwd=body.get("cwd"),
                 surface="serve",
                 stream=False,
+                meta={
+                    **({"gateway_session_key": session_key} if session_key else {}),
+                },
             )
             return self._json(200, {
                 "ok": True,

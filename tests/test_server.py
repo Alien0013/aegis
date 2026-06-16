@@ -1705,7 +1705,19 @@ def test_server_session_chat_stream_uses_sse_cors_headers(monkeypatch, tmp_path)
     assert headers["Access-Control-Allow-Origin"] == "http://client.local"
     assert headers["X-Accel-Buffering"] == "no"
     assert headers["X-Frame-Options"] == "DENY"
-    assert "data: [DONE]" in stream_data
+    assert headers["X-Hermes-Session-Id"] == session_id
+    events = _sse_events(stream_data)
+    names = [name for name, _payload in events]
+    assert names[:2] == ["run.started", "message.started"]
+    assert "assistant.delta" in names
+    assert names[-3:] == ["run.completed", "done", "done"]
+    assert events[-1] == ("done", "[DONE]")
+    started = events[0][1]
+    completed = next(payload for name, payload in events if name == "assistant.completed")
+    assert started["session_id"] == session_id
+    assert started["user_message"]["content"] == "reply"
+    assert completed["content"] == "hello"
+    assert completed["trace_id"] == "trace_http"
 
 
 def test_server_run_read_endpoints(monkeypatch, tmp_path):
