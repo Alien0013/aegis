@@ -2047,6 +2047,56 @@ def test_hermes_style_plugin_yaml_metadata_category_key_and_safe_mode(tmp_path, 
     assert plugins.load_plugins(config=cfg).tools == []
 
 
+def test_hermes_entrypoint_plugins_are_discovered_opt_in_and_reported(tmp_path, monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    from aegis import plugins
+    from aegis.config import Config
+
+    module = tmp_path / "entry_plugin.py"
+    module.write_text(
+        "def register(api):\n"
+        "    class T:\n"
+        "        name='entry_tool'\n"
+        "    api.register_tool(T())\n"
+        "    api.register_hook('on_session_start', lambda agent: None)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    def fake_entry_points():
+        return {
+            "hermes_agent.plugins": [
+                SimpleNamespace(name="entry-demo", value="entry_plugin"),
+            ],
+        }
+
+    monkeypatch.setattr(plugins.importlib_metadata, "entry_points", fake_entry_points)
+    cfg = Config.load()
+    plugins.clear_runtime_cache()
+
+    manifest = next(m for m in plugins.list_manifests(cfg) if m.name == "entry-demo")
+    assert manifest.source == "entrypoint"
+    assert manifest.entry_ref == "entry_plugin"
+    assert manifest.enabled is False
+    assert plugins.load_plugins(config=cfg).tools == []
+
+    assert plugins.enable("entry-demo", cfg) is True
+    api = plugins.load_plugins(config=cfg)
+    row = next(r for r in plugins.plugin_status(cfg, api) if r["key"] == "entry-demo")
+
+    assert [tool.name for tool in api.tools] == ["entry_tool"]
+    assert row["source"] == "entrypoint"
+    assert row["status"] == "loaded"
+    assert row["tool_names"] == ["entry_tool"]
+    assert row["hook_names"] == ["on_session_start"]
+
+    monkeypatch.setenv("HERMES_SAFE_MODE", "1")
+    assert plugins.list_manifests(cfg) == []
+    assert plugins.load_plugins(config=cfg).tools == []
+    sys.modules.pop("entry_plugin", None)
+
+
 def test_plugin_module_is_registered_during_import_and_cleaned_up():
     import sys
     from aegis import config as cfg_paths

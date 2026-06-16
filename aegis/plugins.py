@@ -17,9 +17,12 @@ Example ``~/.aegis/plugins/hello_tool.py``::
 from __future__ import annotations
 
 import hashlib
+import importlib
+import importlib.metadata as importlib_metadata
 import os
 import json
 import importlib.util
+import re
 import shutil
 import sys
 from dataclasses import dataclass, field
@@ -103,6 +106,7 @@ _PLUGIN_MODULES: dict[Path, str] = {}
 
 
 MANIFEST_NAMES = ("plugin.yaml", "plugin.yml", "aegis-plugin.json", "plugin.json")
+ENTRY_POINT_GROUPS = ("hermes_agent.plugins", "aegis.plugins")
 _VALID_PLUGIN_KINDS = {"standalone", "backend", "exclusive", "platform", "model-provider"}
 
 
@@ -111,6 +115,7 @@ class PluginManifest:
     name: str
     path: Path
     entrypoint: Path | None
+    entry_ref: str = ""
     version: str = ""
     description: str = ""
     author: str = ""
@@ -131,6 +136,7 @@ class PluginManifest:
             "key": self.key or self.name,
             "path": str(self.path),
             "entrypoint": str(self.entrypoint) if self.entrypoint else "",
+            "entry_ref": self.entry_ref,
             "version": self.version,
             "description": self.description,
             "author": self.author,
@@ -283,6 +289,55 @@ def _manifest_enabled(name: str, key: str, config=None) -> bool:
     return not (aliases & disabled) and (not allowlist or bool(aliases & allowlist))
 
 
+def _entrypoint_enabled(name: str, key: str, config=None) -> bool:
+    disabled = set((config.get("plugins.disabled", []) if config else []) or [])
+    enabled = set((config.get("plugins.enabled", []) if config else []) or [])
+    allowlist = set((config.get("plugins.allowlist", []) if config else []) or [])
+    aliases = {name, key or name}
+    if aliases & disabled:
+        return False
+    if allowlist:
+        return bool(aliases & allowlist)
+    return bool(aliases & enabled)
+
+
+def _entrypoint_groups() -> list[Any]:
+    groups: list[Any] = []
+    try:
+        eps = importlib_metadata.entry_points()
+        for group in ENTRY_POINT_GROUPS:
+            if hasattr(eps, "select"):
+                groups.extend(list(eps.select(group=group)))
+            elif isinstance(eps, dict):
+                groups.extend(list(eps.get(group, [])))
+            else:
+                groups.extend([ep for ep in eps if getattr(ep, "group", "") == group])
+    except Exception:  # noqa: BLE001
+        return []
+    return groups
+
+
+def _entrypoint_manifests(config=None) -> list[PluginManifest]:
+    manifests: list[PluginManifest] = []
+    seen: set[str] = set()
+    for ep in _entrypoint_groups():
+        name = str(getattr(ep, "name", "") or "").strip()
+        value = str(getattr(ep, "value", "") or "").strip()
+        if not name or not value or name in seen:
+            continue
+        seen.add(name)
+        manifests.append(PluginManifest(
+            name=name,
+            key=name,
+            path=Path(value),
+            entrypoint=None,
+            entry_ref=value,
+            source="entrypoint",
+            enabled=_entrypoint_enabled(name, name, config),
+        ))
+    return manifests
+
+
 def _read_manifest(path: Path, config=None, *, base: Path | None = None,
                    source: str = "user") -> PluginManifest | None:
     data = _read_manifest_data(path)
@@ -333,7 +388,7 @@ def list_manifests(config=None) -> list[PluginManifest]:
     base = _plugin_base()
     found: list[PluginManifest] = []
     if not base.exists():
-        return found
+        return _entrypoint_manifests(config)
     seen: set[Path] = set()
     seen_manifest_dirs: set[Path] = set()
     for name in MANIFEST_NAMES:
@@ -359,6 +414,7 @@ def list_manifests(config=None) -> list[PluginManifest]:
             source="user",
             enabled=_manifest_enabled(name, name, config),
         ))
+    found.extend(_entrypoint_manifests(config))
     return found
 
 
@@ -394,6 +450,15 @@ def _module_name_for(path: Path) -> str:
     return f"aegis_plugin_{path.stem}_{digest}"
 
 
+def _manifest_identity(manifest: PluginManifest) -> Path | None:
+    if manifest.entrypoint:
+        return manifest.entrypoint.resolve()
+    if manifest.entry_ref:
+        safe = re.sub(r"[^A-Za-z0-9_.:-]+", "_", manifest.key or manifest.name)
+        return Path(f"<entrypoint:{safe}>").resolve()
+    return None
+
+
 def _load_plugin_file(api: PluginAPI, path: Path, *, quiet: bool) -> None:
     path = path.resolve()
     api.files.append(path)
@@ -421,6 +486,47 @@ def _load_plugin_file(api: PluginAPI, path: Path, *, quiet: bool) -> None:
         api.errors.append((path, str(e)))
         if not quiet:
             print(f"  ! plugin {path.name} failed to load: {e}")
+
+
+def _load_entry_ref(ref: str):
+    module_name, sep, attr_path = ref.partition(":")
+    if not module_name:
+        raise ValueError("missing entry point module")
+    obj: Any = importlib.import_module(module_name)
+    if sep and attr_path:
+        for part in attr_path.split("."):
+            obj = getattr(obj, part)
+    return obj
+
+
+def _load_plugin_entrypoint(api: PluginAPI, manifest: PluginManifest, *, quiet: bool) -> None:
+    identity = _manifest_identity(manifest)
+    if identity is None:
+        return
+    api.files.append(identity)
+    _clear_plugin_side_effects(identity)
+    try:
+        target = _load_entry_ref(manifest.entry_ref)
+        register = getattr(target, "register", None)
+        if callable(register):
+            api._current_plugin = identity
+            try:
+                register(api)
+            finally:
+                api._current_plugin = None
+            return
+        if callable(target):
+            api._current_plugin = identity
+            try:
+                target(api)
+            finally:
+                api._current_plugin = None
+            return
+        raise ValueError("entry point has no register(api) function")
+    except Exception as e:  # noqa: BLE001
+        api.errors.append((identity, str(e)))
+        if not quiet:
+            print(f"  ! plugin {manifest.name} failed to load: {e}")
 
 
 def _manifest_matches(manifest: PluginManifest, name: str) -> bool:
@@ -536,7 +642,7 @@ def plugin_status(config=None, api: PluginAPI | None = None) -> list[dict[str, A
     rows: list[dict[str, Any]] = []
     for manifest in list_manifests(config):
         row = manifest.to_dict()
-        entrypoint = manifest.entrypoint.resolve() if manifest.entrypoint else None
+        entrypoint = _manifest_identity(manifest)
         if not manifest.enabled:
             status = "disabled"
         elif entrypoint is None:
@@ -571,8 +677,6 @@ def load_plugins(*, quiet: bool = False, config=None) -> PluginAPI:
     if safe_mode_enabled():
         return api
     base = _plugin_base()
-    if not base.exists():
-        return api
     if config is None:
         try:
             from .config import Config
@@ -583,6 +687,14 @@ def load_plugins(*, quiet: bool = False, config=None) -> PluginAPI:
     handled: set[Path] = set()
     manifest_dirs = {m.path.parent for m in manifest_entries if m.path.name in MANIFEST_NAMES}
     for manifest in manifest_entries:
+        if manifest.entry_ref:
+            identity = _manifest_identity(manifest)
+            if not manifest.enabled:
+                if identity is not None:
+                    _clear_plugin_side_effects(identity)
+                continue
+            _load_plugin_entrypoint(api, manifest, quiet=quiet)
+            continue
         if not manifest.entrypoint:
             continue
         handled.add(manifest.entrypoint)
@@ -593,12 +705,13 @@ def load_plugins(*, quiet: bool = False, config=None) -> PluginAPI:
             _load_plugin_file(api, manifest.entrypoint, quiet=quiet)
         else:
             api.errors.append((manifest.path, f"entrypoint not found: {manifest.entrypoint}"))
-    for f in sorted(base.rglob("*.py")):
-        if f.name.startswith("_") or f in handled:
-            continue
-        if any(f.is_relative_to(d) for d in manifest_dirs):
-            continue
-        if any(part.startswith(".") for part in f.relative_to(base).parts):
-            continue
-        _load_plugin_file(api, f, quiet=quiet)
+    if base.exists():
+        for f in sorted(base.rglob("*.py")):
+            if f.name.startswith("_") or f in handled:
+                continue
+            if any(f.is_relative_to(d) for d in manifest_dirs):
+                continue
+            if any(part.startswith(".") for part in f.relative_to(base).parts):
+                continue
+            _load_plugin_file(api, f, quiet=quiet)
     return api
