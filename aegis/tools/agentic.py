@@ -548,26 +548,32 @@ class SubagentTool(Tool):
         parent_session = getattr(ctx.agent, "session", None)
         try:
             manager = get_manager()
-            require_capacity = getattr(manager, "require_capacity", None)
-            if callable(require_capacity):
-                require_capacity(child_config, len(tasks))
-            ids = [
-                manager.spawn(
-                    child_config, t, cwd=ctx.cwd, on_done=_announce,
-                    parent_session=parent_session, registry=registry,
-                    include_mcp=include_mcp, session_meta=session_meta,
-                    approver=_subagent_approver(config, "background"),
-                    delivery={
-                        "platform": platform or "",
-                        "chat_id": chat_id or "",
-                        "user_id": getattr(ctx.agent, "user_id", "") or "",
-                        "user_name": getattr(ctx.agent, "user_name", "") or "",
-                        "thread_id": getattr(ctx.agent, "thread_id", "") or "",
-                        "message_id": getattr(ctx.agent, "message_id", "") or "",
-                    },
-                )
-                for t in tasks
-            ]
+            delivery = {
+                "platform": platform or "",
+                "chat_id": chat_id or "",
+                "user_id": getattr(ctx.agent, "user_id", "") or "",
+                "user_name": getattr(ctx.agent, "user_name", "") or "",
+                "thread_id": getattr(ctx.agent, "thread_id", "") or "",
+                "message_id": getattr(ctx.agent, "message_id", "") or "",
+            }
+            spawn_kwargs = {
+                "cwd": ctx.cwd,
+                "on_done": _announce,
+                "parent_session": parent_session,
+                "registry": registry,
+                "include_mcp": include_mcp,
+                "session_meta": session_meta,
+                "approver": _subagent_approver(config, "background"),
+                "delivery": delivery,
+            }
+            spawn_many = getattr(manager, "spawn_many", None)
+            if callable(spawn_many):
+                ids = spawn_many(child_config, tasks, **spawn_kwargs)
+            else:
+                require_capacity = getattr(manager, "require_capacity", None)
+                if callable(require_capacity):
+                    require_capacity(child_config, len(tasks))
+                ids = [manager.spawn(child_config, t, **spawn_kwargs) for t in tasks]
         except BackgroundCapacityError as e:
             return ToolResult.error(str(e))
         return ToolResult.ok(

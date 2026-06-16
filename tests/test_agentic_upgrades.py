@@ -265,6 +265,26 @@ def test_background_manager_batch_capacity_preflight():
     assert "3 requested" in str(exc.value)
 
 
+def test_background_manager_spawn_many_is_all_or_nothing_at_capacity():
+    import pytest
+    from aegis.background import BackgroundCapacityError, BackgroundManager, BgTask
+    from aegis.config import Config
+
+    config = Config({"delegation": {"max_async_children": 2}})
+    mgr = BackgroundManager()
+
+    with pytest.raises(BackgroundCapacityError) as exc:
+        mgr.spawn_many(config, ["a", "b", "c"])
+    assert "3 requested" in str(exc.value)
+    assert mgr.list() == []
+
+    with mgr._lock:
+        mgr._tasks["bg_busy"] = BgTask(id="bg_busy", prompt="busy")
+    with pytest.raises(BackgroundCapacityError):
+        mgr.spawn_many(config, ["a", "b"])
+    assert [row["id"] for row in mgr.list()] == ["bg_busy"]
+
+
 def test_background_manager_prunes_completed_records(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import time
@@ -335,6 +355,38 @@ def test_background_subagent_dispatches_bounded_multiple_tasks(tmp_path, monkeyp
     assert manager.prompts == ["a", "b"]
     assert "bg_1" in result.content
     assert "bg_2" in result.content
+
+
+def test_background_subagent_uses_atomic_batch_spawn(tmp_path, monkeypatch):
+    from aegis.config import Config
+    from aegis.tools.agentic import SubagentTool
+    from aegis.tools.base import ToolContext
+
+    class Manager:
+        def __init__(self):
+            self.prompts = []
+            self.kwargs = {}
+
+        def require_capacity(self, *_args, **_kwargs):
+            raise AssertionError("spawn_many should own capacity admission")
+
+        def spawn(self, *_args, **_kwargs):
+            raise AssertionError("spawn_many should own batch dispatch")
+
+        def spawn_many(self, _config, prompts, **kwargs):
+            self.prompts = list(prompts)
+            self.kwargs = kwargs
+            return [f"bg_{i + 1}" for i in range(len(self.prompts))]
+
+    manager = Manager()
+    monkeypatch.setattr("aegis.background.get_manager", lambda: manager)
+    ctx = ToolContext(cwd=tmp_path, config=Config.load())
+    result = SubagentTool().run({"tasks": ["a", "b"], "background": True}, ctx)
+
+    assert not result.is_error
+    assert manager.prompts == ["a", "b"]
+    assert manager.kwargs["include_mcp"] is True
+    assert "bg_1" in result.content and "bg_2" in result.content
 
 
 # --- iteration-budget refund ------------------------------------------------

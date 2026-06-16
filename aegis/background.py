@@ -150,6 +150,31 @@ class BackgroundManager:
             executor = self._executor
         executor.submit(fn)
 
+    def _new_task(
+        self,
+        config: Any,
+        prompt: str,
+        *,
+        parent_session=None,
+        session_meta: dict | None = None,
+        delivery: dict[str, Any] | None = None,
+    ) -> BgTask:
+        return BgTask(
+            id=new_id("bg"),
+            prompt=prompt,
+            parent_session_id=str(getattr(parent_session, "id", "") or ""),
+            agent_type=str((session_meta or {}).get("agent_type") or "general"),
+            role=str((session_meta or {}).get("role") or "leaf"),
+            model=str((session_meta or {}).get("model") or config.get("delegation.model", "")
+                      or config.get("model.default", "") or ""),
+            platform=str((delivery or {}).get("platform") or ""),
+            chat_id=str((delivery or {}).get("chat_id") or ""),
+            user_id=str((delivery or {}).get("user_id") or ""),
+            user_name=str((delivery or {}).get("user_name") or ""),
+            thread_id=str((delivery or {}).get("thread_id") or ""),
+            message_id=str((delivery or {}).get("message_id") or ""),
+        )
+
     def _record_completion(self, task: BgTask, config: Any) -> None:
         event = {
             "type": "subagent_done",
@@ -209,39 +234,22 @@ class BackgroundManager:
         except Exception:  # noqa: BLE001
             pass
 
-    def spawn(self, config: Any, prompt: str, *, cwd=None, on_done=None,
-              parent_session=None, registry=None, include_mcp: bool = True,
-              session_meta: dict | None = None, approver=None,
-              delivery: dict[str, Any] | None = None) -> str:
-        """Run ``prompt`` in a background agent. ``on_done(task)`` (if given) fires
-        when it finishes — used to announce the result back into a chat."""
+    def _start_registered(
+        self,
+        config: Any,
+        task: BgTask,
+        *,
+        cwd=None,
+        on_done=None,
+        parent_session=None,
+        registry=None,
+        include_mcp: bool = True,
+        session_meta: dict | None = None,
+        approver=None,
+    ) -> None:
         from .surface import SurfaceRunner, runtime_controls_meta, session_runtime_controls
 
-        task = BgTask(
-            id=new_id("bg"),
-            prompt=prompt,
-            parent_session_id=str(getattr(parent_session, "id", "") or ""),
-            agent_type=str((session_meta or {}).get("agent_type") or "general"),
-            role=str((session_meta or {}).get("role") or "leaf"),
-            model=str((session_meta or {}).get("model") or config.get("delegation.model", "")
-                      or config.get("model.default", "") or ""),
-            platform=str((delivery or {}).get("platform") or ""),
-            chat_id=str((delivery or {}).get("chat_id") or ""),
-            user_id=str((delivery or {}).get("user_id") or ""),
-            user_name=str((delivery or {}).get("user_name") or ""),
-            thread_id=str((delivery or {}).get("thread_id") or ""),
-            message_id=str((delivery or {}).get("message_id") or ""),
-        )
         session_id = f"background:{task.id}"
-        with self._lock:
-            max_workers = self._max_workers(config)
-            running = self._running_count_locked()
-            if running >= max_workers:
-                raise BackgroundCapacityError(
-                    f"async background delegation capacity reached ({max_workers} running). "
-                    "Wait for one to finish or raise delegation.max_async_children."
-                )
-            self._tasks[task.id] = task
         try:
             backend = str(config.get("tools.subagent_terminal_backend", "") or "").strip().lower()
             if backend and backend not in {"inherit", "parent"}:
@@ -294,7 +302,7 @@ class BackgroundManager:
                     watchdog.daemon = True
                     watchdog.start()
                 result = runner.run_prompt(
-                    prompt,
+                    task.prompt,
                     session=session,
                     agent=agent,
                     surface="background",
@@ -334,7 +342,71 @@ class BackgroundManager:
                     pass
 
         self._submit(config, _work)
-        return task.id
+
+    def spawn_many(self, config: Any, prompts: list[str], *, cwd=None, on_done=None,
+                   parent_session=None, registry=None, include_mcp: bool = True,
+                   session_meta: dict | None = None, approver=None,
+                   delivery: dict[str, Any] | None = None) -> list[str]:
+        """Run several prompts in the background after atomically reserving capacity."""
+        clean_prompts = [str(prompt) for prompt in prompts]
+        if not clean_prompts:
+            return []
+        tasks = [
+            self._new_task(
+                config,
+                prompt,
+                parent_session=parent_session,
+                session_meta=session_meta,
+                delivery=delivery,
+            )
+            for prompt in clean_prompts
+        ]
+        requested = len(tasks)
+        with self._lock:
+            max_workers = self._max_workers(config)
+            running = self._running_count_locked()
+            available = max(0, max_workers - running)
+            if requested > available:
+                raise BackgroundCapacityError(
+                    "async background delegation capacity reached "
+                    f"({running}/{max_workers} running, {requested} requested, "
+                    f"{available} available). Wait for tasks to finish or raise "
+                    "delegation.max_async_children."
+                )
+            for task in tasks:
+                self._tasks[task.id] = task
+        for task in tasks:
+            self._start_registered(
+                config,
+                task,
+                cwd=cwd,
+                on_done=on_done,
+                parent_session=parent_session,
+                registry=registry,
+                include_mcp=include_mcp,
+                session_meta=session_meta,
+                approver=approver,
+            )
+        return [task.id for task in tasks]
+
+    def spawn(self, config: Any, prompt: str, *, cwd=None, on_done=None,
+              parent_session=None, registry=None, include_mcp: bool = True,
+              session_meta: dict | None = None, approver=None,
+              delivery: dict[str, Any] | None = None) -> str:
+        """Run ``prompt`` in a background agent. ``on_done(task)`` (if given) fires
+        when it finishes — used to announce the result back into a chat."""
+        return self.spawn_many(
+            config,
+            [prompt],
+            cwd=cwd,
+            on_done=on_done,
+            parent_session=parent_session,
+            registry=registry,
+            include_mcp=include_mcp,
+            session_meta=session_meta,
+            approver=approver,
+            delivery=delivery,
+        )[0]
 
     def list(self) -> list[dict]:
         with self._lock:
