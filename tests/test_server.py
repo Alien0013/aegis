@@ -1689,7 +1689,12 @@ def test_server_session_crud_fork_and_chat(monkeypatch, tmp_path):
     assert fork_status == 201
     assert json.loads(fork_data)["session"]["parent_id"] == session_id
     assert list_status == 200
-    assert any(row["id"] == session_id for row in json.loads(list_data)["sessions"])
+    listed = json.loads(list_data)
+    assert listed["object"] == "list"
+    assert listed["data"] == listed["sessions"]
+    assert listed["offset"] == 0
+    assert listed["has_more"] is False
+    assert any(row["id"] == session_id for row in listed["data"])
     assert delete_status == 200
     assert json.loads(delete_data)["ok"] is True
 
@@ -1731,7 +1736,7 @@ def test_server_session_create_and_fork_honor_hermes_fields(monkeypatch, tmp_pat
             "/api/sessions/api-explicit/fork",
             {"id": "api-child", "title": "Explicit Fork"},
         )
-        messages_status, messages_data = _request(port, "GET", "/api/sessions/api-child/messages")
+        messages_status, messages_data = _request(port, "GET", "/api/sessions/api-child/messages?limit=2&offset=0")
     finally:
         srv.shutdown()
         srv.server_close()
@@ -1754,7 +1759,13 @@ def test_server_session_create_and_fork_honor_hermes_fields(monkeypatch, tmp_pat
     assert forked["parent_id"] == "api-explicit"
     assert forked["title"] == "Explicit Fork"
     assert messages_status == 200
-    messages = json.loads(messages_data)["messages"]
+    message_payload = json.loads(messages_data)
+    assert message_payload["object"] == "list"
+    assert message_payload["session_id"] == "api-child"
+    assert message_payload["limit"] == 2
+    assert message_payload["offset"] == 0
+    assert message_payload["messages"] == message_payload["data"]
+    messages = message_payload["data"]
     assert [message["role"] for message in messages] == ["system", "user"]
     assert messages[1]["content"] == "saved"
 

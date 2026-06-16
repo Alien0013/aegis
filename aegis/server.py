@@ -1731,14 +1731,42 @@ def make_handler(config: Config):
                 from .session import SessionStore
 
                 limit = int((query.get("limit") or ["100"])[0] or 100)
-                return self._json(200, {"ok": True, "sessions": SessionStore().list(max(1, min(limit, 1000)))})
+                limit = max(1, min(limit, 1000))
+                offset = max(0, int((query.get("offset") or ["0"])[0] or 0))
+                include_internal = _coerce_request_bool((query.get("include_internal") or [None])[0], False)
+                rows = SessionStore().list(min(offset + limit + 1, 2000), include_internal=include_internal)
+                page = rows[offset:offset + limit]
+                return self._json(200, {
+                    "ok": True,
+                    "object": "list",
+                    "data": page,
+                    "sessions": page,
+                    "limit": limit,
+                    "offset": offset,
+                    "has_more": len(rows) > offset + limit,
+                    "include_internal": include_internal,
+                })
             if path.startswith("/api/sessions/") and path.endswith("/messages"):
                 session_id = path.split("/")[-2]
                 code, payload = self._session_detail(session_id)
                 if code != 200:
                     return self._json(code, payload)
                 session = payload["session"]
-                return self._json(200, {"ok": True, "id": session_id, "messages": session["messages"]})
+                messages = list(session["messages"])
+                limit = max(1, min(int((query.get("limit") or [str(len(messages) or 1)])[0] or 1), 1000))
+                offset = max(0, int((query.get("offset") or ["0"])[0] or 0))
+                page = messages[offset:offset + limit]
+                return self._json(200, {
+                    "ok": True,
+                    "object": "list",
+                    "id": session_id,
+                    "session_id": session_id,
+                    "data": page,
+                    "messages": page,
+                    "limit": limit,
+                    "offset": offset,
+                    "has_more": len(messages) > offset + limit,
+                })
             if path.startswith("/api/sessions/"):
                 code, payload = self._session_detail(path.rsplit("/", 1)[-1])
                 return self._json(code, payload)
