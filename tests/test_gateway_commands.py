@@ -468,6 +468,13 @@ def test_gateway_memory_notification_modes(tmp_path, monkeypatch):
     r.config.data.setdefault("display", {})["memory_notifications"] = "off"
     assert r.dispatch(_ev("off")) == "ok"
 
+    r.config.data.setdefault("display", {})["platforms"] = {
+        "telegram": {"memory_notifications": "verbose"}
+    }
+    platform_override = r.dispatch(_ev("platform override"))
+    assert "💾 Memory ➕ Repo lives at /workspace/aegis." in platform_override
+    assert "💾 User profile ➖ old preference" in platform_override
+
 
 def test_gateway_skill_notification_modes(tmp_path, monkeypatch):
     from types import SimpleNamespace
@@ -519,6 +526,12 @@ def test_gateway_skill_notification_modes(tmp_path, monkeypatch):
 
     r.config.data.setdefault("display", {})["memory_notifications"] = "off"
     assert r.dispatch(_ev("off")) == "ok"
+
+    r.config.data.setdefault("display", {})["platforms"] = {
+        "telegram": {"memory_notifications": "verbose"}
+    }
+    platform_override = r.dispatch(_ev("platform override"))
+    assert "📝 Skill 'review-skill' patched: \"OLD_STEP\" → \"NEW_STEP\"" in platform_override
 
 
 def test_reply_pointer_truncates_and_escapes_quotes():

@@ -996,8 +996,10 @@ class GatewayRunner:
                     elif t == "review_done":
                         details = ev_.get("action_details") or []
                         raw_actions = ev_.get("actions") or []
+                        from ..display_config import resolve_display_setting
+
                         mode = _memory_notification_mode(
-                            self.config.get("display.memory_notifications", "on")
+                            resolve_display_setting(self.config, ev.platform, "memory_notifications", "on")
                         )
                         if mode == "off":
                             return

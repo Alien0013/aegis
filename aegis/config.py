@@ -429,6 +429,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "tool_progress_grouping": "accumulate",  # accumulate | separate
         "memory_notifications": "on",  # off | on | verbose
         "theme": "system",
+        "platforms": {},              # per-platform display overrides
     },
     "prompt_caching": {
         "cache_ttl": "5m",           # "5m" (default) or "1h" — TTL for Anthropic cache breakpoints

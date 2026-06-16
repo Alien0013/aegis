@@ -831,6 +831,7 @@ def test_fastapi_config_preferences_memory_provider_and_plugins(tmp_path, monkey
     assert prefs.json()["tool_progress_grouping"] == "accumulate"
     assert prefs.json()["tool_progress_style"] == "accumulate"
     assert prefs.json()["memory_notifications"] == "on"
+    assert prefs.json()["platforms"] == {}
 
     updated = asyncio.run(_request(
         app,
@@ -841,6 +842,13 @@ def test_fastapi_config_preferences_memory_provider_and_plugins(tmp_path, monkey
             "tool_progress": "detailed",
             "tool_progress_grouping": "separate",
             "memory_notifications": "verbose",
+            "platforms": {
+                "Telegram": {
+                    "tool_progress_style": "SEPARATE",
+                    "memory_notifications": False,
+                    "ignored": "value",
+                }
+            },
         },
         headers=headers,
     ))
@@ -850,6 +858,12 @@ def test_fastapi_config_preferences_memory_provider_and_plugins(tmp_path, monkey
     assert updated.json()["preferences"]["tool_progress_grouping"] == "separate"
     assert updated.json()["preferences"]["tool_progress_style"] == "separate"
     assert updated.json()["preferences"]["memory_notifications"] == "verbose"
+    assert updated.json()["preferences"]["platforms"] == {
+        "telegram": {
+            "tool_progress_grouping": "separate",
+            "memory_notifications": "off",
+        }
+    }
 
     legacy = asyncio.run(_request(
         app,

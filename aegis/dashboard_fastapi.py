@@ -1577,19 +1577,27 @@ def _normalise_dashboard_choice(value: Any, choices: set[str], default: str) -> 
 
 
 def _tool_progress_grouping(config: Config) -> str:
-    return _normalise_dashboard_choice(
+    from .display_config import normalize_display_setting
+
+    return str(normalize_display_setting(
+        "tool_progress_grouping",
         config.get("display.tool_progress_grouping", "accumulate"),
-        {"accumulate", "separate"},
-        "accumulate",
-    )
+    ))
 
 
 def _memory_notifications(config: Config) -> str:
-    return _normalise_dashboard_choice(
+    from .display_config import normalize_display_setting
+
+    return str(normalize_display_setting(
+        "memory_notifications",
         config.get("display.memory_notifications", "on"),
-        {"off", "on", "verbose"},
-        "on",
-    )
+    ))
+
+
+def _display_platforms(config: Config) -> dict[str, dict[str, Any]]:
+    from .display_config import normalize_platform_display_overrides
+
+    return normalize_platform_display_overrides(config.get("display.platforms", {}) or {})
 
 
 def _dashboard_preferences(config: Config) -> dict:
@@ -1602,6 +1610,7 @@ def _dashboard_preferences(config: Config) -> dict:
         "tool_progress_grouping": grouping,
         "tool_progress_style": grouping,
         "memory_notifications": _memory_notifications(config),
+        "platforms": _display_platforms(config),
         "frontend": config.get("dashboard.frontend", "static"),
         "cockpit": bool(config.get("dashboard.cockpit", True)),
     }
@@ -1637,6 +1646,10 @@ def _set_dashboard_preferences(config: Config, body: dict) -> dict:
             {"off", "on", "verbose"},
             "on",
         ))
+    if "platforms" in body:
+        from .display_config import normalize_platform_display_overrides
+
+        config.set("display.platforms", normalize_platform_display_overrides(body.get("platforms")))
     return _dashboard_preferences(config)
 
 
