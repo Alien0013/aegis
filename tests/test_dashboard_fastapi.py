@@ -280,6 +280,7 @@ def test_fastapi_registers_live_and_pty_websockets(tmp_path, monkeypatch):
         "/api/cron/jobs",
         "/api/cron/service",
         "/api/gateway/status",
+        "/api/messaging/platforms",
     ):
         assert routes[path] == "APIRoute"
 
@@ -458,6 +459,61 @@ def test_fastapi_provider_and_gateway_control_plane_routes(tmp_path, monkeypatch
     ))
     assert channel.status_code == 200
     assert channel.json() == {"ok": True, "channel": "telegram", "detail": "bot @aegis"}
+
+
+def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    platforms = asyncio.run(_request(app, "GET", "/api/messaging/platforms", headers=headers))
+    assert platforms.status_code == 200
+    rows = platforms.json()["platforms"]
+    telegram = next(row for row in rows if row["id"] == "telegram")
+    assert telegram["name"] == "Telegram"
+    assert telegram["enabled"] is False
+    assert telegram["state"] == "disabled"
+    assert any(field["key"] == "TELEGRAM_BOT_TOKEN" and field["required"] for field in telegram["env_vars"])
+
+    invalid = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/messaging/platforms/telegram",
+        json={"env": {"DISCORD_BOT_TOKEN": "wrong-platform"}},
+        headers=headers,
+    ))
+    assert invalid.status_code == 400
+    assert "not configurable" in invalid.json()["error"]
+
+    updated = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/messaging/platforms/telegram",
+        json={"enabled": True, "env": {"TELEGRAM_BOT_TOKEN": "test-token"}},
+        headers=headers,
+    ))
+    assert updated.status_code == 200
+    assert updated.json()["platform"]["enabled"] is True
+    assert updated.json()["platform"]["configured"] is True
+
+    import aegis.doctor as doctor
+
+    monkeypatch.setitem(doctor.CHANNEL_PROBES, "telegram", lambda: (True, "bot ready"))
+    probe = asyncio.run(_request(app, "POST", "/api/messaging/platforms/telegram/test", headers=headers))
+    assert probe.status_code == 200
+    assert probe.json()["ok"] is True
+    assert probe.json()["message"] == "bot ready"
+
+    cleared = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/messaging/platforms/telegram",
+        json={"enabled": False, "clear_env": ["TELEGRAM_BOT_TOKEN"]},
+        headers=headers,
+    ))
+    assert cleared.status_code == 200
+    assert cleared.json()["platform"]["state"] == "disabled"
+    assert "TELEGRAM_BOT_TOKEN" in cleared.json()["platform"]["missing_env_vars"]
 
 
 def test_fastapi_typed_config_profile_gateway_and_plugin_routes(tmp_path, monkeypatch):

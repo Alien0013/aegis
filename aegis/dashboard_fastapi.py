@@ -860,6 +860,131 @@ def _set_gateway_channel(config: Config, channel: str, body: dict) -> dict:
     return {"ok": True, **_gateway_channel_payload(config, channel)}
 
 
+def _messaging_platform_env_fields(item: dict[str, Any]) -> list[dict[str, Any]]:
+    fields: list[dict[str, Any]] = []
+    for key in list(item.get("env") or item.get("env_vars") or []):
+        key_text = str(key)
+        fields.append({
+            "key": key_text,
+            "required": True,
+            "set": _env_key_is_set(key_text),
+            "description": f"Required for {item.get('label') or item.get('id')}",
+        })
+    return fields
+
+
+def _messaging_platform_row(config: Config, item: dict[str, Any]) -> dict[str, Any]:
+    gateway_payload = _gateway_channel_payload(config, str(item["id"]))
+    channel = gateway_payload.get("channel") or {}
+    env_fields = _messaging_platform_env_fields(item)
+    missing = [field["key"] for field in env_fields if not field["set"]]
+    enabled = bool(channel.get("enabled", False))
+    configured = not missing
+    if not enabled:
+        state = "disabled"
+    elif configured:
+        state = "ready"
+    else:
+        state = "not_configured"
+    return {
+        "id": item["id"],
+        "name": item.get("label") or item["id"],
+        "label": item.get("label") or item["id"],
+        "description": item.get("setup", ""),
+        "setup": item.get("setup", ""),
+        "docs_url": item.get("docs_url", ""),
+        "enabled": enabled,
+        "configured": configured,
+        "state": state,
+        "env_vars": env_fields,
+        "missing_env_vars": missing,
+        "pairing": bool(item.get("pairing", False)),
+        "profile": channel.get("profile", {}),
+        "probe_available": bool(channel.get("probe_available", False)),
+        "source": item.get("source", "builtin"),
+    }
+
+
+def _messaging_platforms_payload(config: Config, platform_id: str = "") -> dict[str, Any]:
+    catalog = _channel_catalog_map()
+    if platform_id:
+        safe = _safe_resource_name(platform_id, "platform").lower()
+        item = catalog.get(safe)
+        if not item:
+            return {"ok": False, "error": "unknown messaging platform", "platform": safe}
+        return {"ok": True, "platform": _messaging_platform_row(config, item)}
+    return {"platforms": [_messaging_platform_row(config, item) for item in _CHANNEL_CATALOG]}
+
+
+def _messaging_platform_update(config: Config, platform_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    from .config import set_env_var
+
+    safe = _safe_resource_name(platform_id, "platform").lower()
+    item = _channel_catalog_map().get(safe)
+    if not item:
+        return {"ok": False, "error": "unknown messaging platform", "platform": safe}
+    allowed_env = {str(key) for key in (item.get("env") or [])}
+    clear_env = body.get("clear_env") or []
+    if isinstance(clear_env, str):
+        clear_env = [clear_env]
+    if not isinstance(clear_env, list):
+        return {"ok": False, "error": "clear_env must be a list", "platform": safe}
+    for key in clear_env:
+        key_text = str(key).strip()
+        if key_text not in allowed_env:
+            return {"ok": False, "error": f"{key_text} is not configurable for {item.get('label')}", "platform": safe}
+        _delete_env_key(key_text)
+    env_updates = body.get("env") or {}
+    if not isinstance(env_updates, dict):
+        return {"ok": False, "error": "env must be an object", "platform": safe}
+    for key, value in env_updates.items():
+        key_text = str(key).strip()
+        if key_text not in allowed_env:
+            return {"ok": False, "error": f"{key_text} is not configurable for {item.get('label')}", "platform": safe}
+        value_text = str(value or "").strip()
+        if value_text:
+            set_env_var(key_text, value_text)
+        else:
+            _delete_env_key(key_text)
+    channel_body = {key: body[key] for key in (
+        "enabled", "personality", "profile", "provider", "model", "reasoning_effort", "service_tier", "busy_mode",
+    ) if key in body}
+    if channel_body:
+        result = _set_gateway_channel(config, safe, channel_body)
+        if not result.get("ok"):
+            return result
+    return {"ok": True, "platform": _messaging_platform_row(config, item)}
+
+
+def _messaging_platform_test(config: Config, platform_id: str) -> dict[str, Any]:
+    safe = _safe_resource_name(platform_id, "platform").lower()
+    item = _channel_catalog_map().get(safe)
+    if not item:
+        return {"ok": False, "error": "unknown messaging platform", "platform": safe}
+    platform = _messaging_platform_row(config, item)
+    if not platform["enabled"]:
+        return {
+            "ok": False,
+            "platform": safe,
+            "state": platform["state"],
+            "message": f"{platform['name']} is disabled. Enable it, then restart the gateway.",
+        }
+    if not platform["configured"]:
+        missing = ", ".join(platform["missing_env_vars"])
+        return {
+            "ok": False,
+            "platform": safe,
+            "state": platform["state"],
+            "message": f"Missing required setup for {platform['name']}: {missing}",
+        }
+    probe = _gateway_probe({"channel": safe})
+    probe["platform"] = safe
+    probe["state"] = "ready" if probe.get("ok") else "error"
+    if "detail" in probe and "message" not in probe:
+        probe["message"] = probe["detail"]
+    return probe
+
+
 def _profile_dir() -> Path:
     from . import config as cfg
 
@@ -4076,6 +4201,26 @@ def create_app(config: Config) -> FastAPI:
     async def api_gateway_status(request: Request) -> JSONResponse:
         _require_request(request, config)
         return JSONResponse(_gateway_status(config))
+
+    @app.get("/api/messaging/platforms")
+    async def api_messaging_platforms(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_messaging_platforms_payload(config))
+
+    @app.put("/api/messaging/platforms/{platform_id}")
+    async def api_messaging_platform_update(platform_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        payload = _messaging_platform_update(config, platform_id, body if isinstance(body, dict) else {})
+        status = 200 if payload.get("ok") else (404 if "unknown" in str(payload.get("error", "")) else 400)
+        return JSONResponse(payload, status_code=status)
+
+    @app.post("/api/messaging/platforms/{platform_id}/test")
+    async def api_messaging_platform_test(platform_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        payload = _messaging_platform_test(config, platform_id)
+        status = 200 if payload.get("ok") or payload.get("state") in {"disabled", "not_configured", "error"} else 404
+        return JSONResponse(payload, status_code=status)
 
     @app.get("/api/gateway/channels/catalog")
     async def api_gateway_channels_catalog(request: Request) -> JSONResponse:
