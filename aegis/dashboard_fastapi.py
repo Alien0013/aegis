@@ -1037,7 +1037,7 @@ def _skill_detail(config: Config, name: str) -> dict:
 def _plugin_detail(config: Config, name: str) -> dict:
     payload = _plugins_payload(config)
     manifests = payload.get("plugins") or []
-    match = next((row for row in manifests if row.get("name") == name), None)
+    match = next((row for row in manifests if _plugin_row_matches(row, name)), None)
     return {"ok": bool(match), "plugin": match, **payload}
 
 
@@ -1171,6 +1171,141 @@ def _plugins_payload(config: Config) -> dict:
         "disabled": config.get("plugins.disabled", []) or [],
         "allowlist": config.get("plugins.allowlist", []) or [],
         "safe_mode": safe_mode_enabled(),
+    }
+
+
+def _safe_plugin_route_name(name: str) -> str:
+    value = str(name or "").strip().strip("/")
+    if (
+        not value
+        or len(value) > 240
+        or "\x00" in value
+        or "\\" in value
+        or any(ord(ch) < 32 for ch in value)
+    ):
+        raise HTTPException(status_code=400, detail="invalid plugin name")
+    parts = value.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise HTTPException(status_code=400, detail="invalid plugin name")
+    return value
+
+
+def _plugin_row_matches(row: dict[str, Any], name: str) -> bool:
+    safe = str(name or "")
+    return safe in {str(row.get("name") or ""), str(row.get("key") or "")}
+
+
+def _plugin_path_under(path: str, root: Path) -> bool:
+    try:
+        Path(path).expanduser().resolve().relative_to(root)
+        return True
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def _plugin_manifest_dir(row: dict[str, Any]) -> Path | None:
+    raw = str(row.get("path") or "").strip()
+    if not raw:
+        return None
+    path = Path(raw).expanduser()
+    if path.name in {"plugin.yaml", "plugin.yml", "plugin.json", "aegis-plugin.json"} or path.suffix == ".py":
+        return path.parent
+    return path
+
+
+def _plugin_runtime_status(row: dict[str, Any]) -> str:
+    status = str(row.get("status") or "").lower()
+    if status == "disabled" or row.get("enabled") is False:
+        return "disabled"
+    if status == "loaded":
+        return "enabled"
+    if status == "error":
+        return "error"
+    return "inactive"
+
+
+def _dashboard_plugin_hub(config: Config) -> dict[str, Any]:
+    from . import config as config_paths
+    from .agent.context_engine import _ENGINES
+    from .memory_providers import memory_provider_catalog
+
+    payload = _plugins_payload(config)
+    dashboard_plugins = _dashboard_plugins_payload(config)
+    plugin_root = config_paths.sub("plugins").resolve()
+    hidden = {str(item) for item in (config.get("dashboard.hidden_plugins", []) or [])}
+
+    dashboard_by_alias: dict[str, dict[str, Any]] = {}
+    for record in dashboard_plugins:
+        for alias in (record.get("plugin"), record.get("key"), record.get("name")):
+            if alias:
+                dashboard_by_alias.setdefault(str(alias), record)
+
+    agent_aliases: set[str] = set()
+    rows: list[dict[str, Any]] = []
+    for row in payload.get("plugin_status") or payload.get("plugins") or []:
+        name = str(row.get("name") or "")
+        key = str(row.get("key") or name)
+        aliases = {alias for alias in (name, key) if alias}
+        agent_aliases.update(aliases)
+        dashboard_manifest = next(
+            (dashboard_by_alias[alias] for alias in aliases if alias in dashboard_by_alias),
+            None,
+        )
+        manifest_dir = _plugin_manifest_dir(row)
+        source = str(row.get("source") or "")
+        can_remove = source in {"user", "git"} and bool(
+            row.get("path") and _plugin_path_under(str(row.get("path")), plugin_root)
+        )
+        can_update_git = bool(
+            can_remove
+            and manifest_dir
+            and ((manifest_dir / ".git").exists() or (manifest_dir.parent / ".git").exists())
+        )
+        has_dashboard_manifest = bool(
+            dashboard_manifest or (manifest_dir and (manifest_dir / "dashboard" / "manifest.json").exists())
+        )
+        enriched = dict(row)
+        enriched.update({
+            "runtime_status": _plugin_runtime_status(row),
+            "has_dashboard_manifest": has_dashboard_manifest,
+            "dashboard_manifest": dashboard_manifest,
+            "can_remove": can_remove,
+            "can_update_git": can_update_git,
+            "auth_required": False,
+            "auth_command": "",
+            "user_hidden": bool(aliases & hidden),
+        })
+        rows.append(enriched)
+
+    orphan_dashboard_plugins = [
+        record for record in dashboard_plugins
+        if not ({
+            str(record.get("plugin") or ""),
+            str(record.get("key") or ""),
+            str(record.get("name") or ""),
+        } & agent_aliases)
+    ]
+    memory_options = [
+        str(row.get("name") or "") for row in memory_provider_catalog(config) if row.get("name")
+    ]
+    return {
+        "ok": True,
+        "plugins": rows,
+        "plugin_status": rows,
+        "manifests": payload.get("manifests", []),
+        "orphan_dashboard_plugins": orphan_dashboard_plugins,
+        "providers": {
+            "memory_provider": str(config.get("memory.provider", "") or ""),
+            "memory_options": memory_options,
+            "context_engine": str(config.get("agent.context_engine", "default") or "default"),
+            "context_options": sorted(_ENGINES.keys()),
+        },
+        "safe_mode": payload.get("safe_mode", False),
+        "loaded": payload.get("loaded", []),
+        "errors": payload.get("errors", []),
+        "enabled": payload.get("enabled", []),
+        "disabled": payload.get("disabled", []),
+        "allowlist": payload.get("allowlist", []),
     }
 
 
@@ -2898,6 +3033,21 @@ def create_app(config: Config) -> FastAPI:
         _require_request(request, config)
         return JSONResponse(_dashboard_plugins_payload(config))
 
+    @app.get("/api/dashboard/plugins/hub")
+    async def api_dashboard_plugins_hub(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_dashboard_plugin_hub(config))
+
+    @app.get("/api/dashboard/plugins/rescan")
+    @app.post("/api/dashboard/plugins/rescan")
+    async def api_dashboard_plugins_rescan(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from . import plugins as plugin_runtime
+
+        plugin_runtime.clear_runtime_cache()
+        hub = _dashboard_plugin_hub(config)
+        return JSONResponse({"ok": True, "count": len(hub.get("plugins", [])), **hub})
+
     @app.get("/dashboard-plugins/{plugin_name}/{file_path:path}")
     async def dashboard_plugin_asset(plugin_name: str, file_path: str) -> Response:
         return _dashboard_plugin_static(config, plugin_name, file_path)
@@ -2905,6 +3055,8 @@ def create_app(config: Config) -> FastAPI:
     @app.get("/dashboard-plugins/{bad_path:path}")
     async def dashboard_plugin_bad_path(bad_path: str) -> JSONResponse:  # noqa: ARG001
         return JSONResponse({"ok": False, "error": "dashboard plugin asset not found"}, status_code=404)
+
+    _mount_dashboard_plugin_api_routes(app, config)
 
     @app.post("/api/plugins/reload")
     async def api_plugins_reload(request: Request) -> JSONResponse:
@@ -2939,36 +3091,90 @@ def create_app(config: Config) -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
 
-    @app.get("/api/plugins/{name}")
-    async def api_plugin_detail(name: str, request: Request) -> JSONResponse:
+    @app.post("/api/dashboard/agent-plugins/install")
+    async def api_dashboard_agent_plugins_install(request: Request) -> JSONResponse:
         _require_request(request, config)
-        safe = _safe_resource_name(name, "plugin")
+        body = await request.json()
+        source = str(body.get("identifier") or body.get("source") or "").strip()
+        if not source:
+            return JSONResponse({"ok": False, "error": "identifier is required"}, status_code=400)
+        try:
+            from . import plugins as plugin_runtime
+
+            name = plugin_runtime.install(source, config, force=bool(body.get("force", False)))
+            if body.get("enable") is False:
+                plugin_runtime.disable(name, config)
+            return JSONResponse({"ok": True, "name": name, **_dashboard_plugin_hub(config)})
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+    @app.get("/api/dashboard/agent-plugins/{name:path}")
+    async def api_dashboard_agent_plugin_detail(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        safe = _safe_plugin_route_name(name)
         payload = _plugin_detail(config, safe)
         return JSONResponse(payload, status_code=200 if payload.get("ok") else 404)
 
-    @app.post("/api/plugins/{name}/enable")
+    @app.get("/api/plugins/{name}")
+    async def api_plugin_detail(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        safe = _safe_plugin_route_name(name)
+        payload = _plugin_detail(config, safe)
+        return JSONResponse(payload, status_code=200 if payload.get("ok") else 404)
+
+    @app.post("/api/plugins/{name:path}/enable")
     async def api_plugin_enable(name: str, request: Request) -> JSONResponse:
         _require_request(request, config)
         from . import plugins as plugin_runtime
 
-        ok = plugin_runtime.enable(name, config)
-        return JSONResponse({"ok": ok, "name": name, **_plugins_payload(config)}, status_code=200 if ok else 404)
+        safe = _safe_plugin_route_name(name)
+        ok = plugin_runtime.enable(safe, config)
+        return JSONResponse({"ok": ok, "name": safe, **_plugins_payload(config)}, status_code=200 if ok else 404)
 
-    @app.post("/api/plugins/{name}/disable")
+    @app.post("/api/dashboard/agent-plugins/{name:path}/enable")
+    async def api_dashboard_agent_plugin_enable(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from . import plugins as plugin_runtime
+
+        safe = _safe_plugin_route_name(name)
+        ok = plugin_runtime.enable(safe, config)
+        return JSONResponse({"ok": ok, "name": safe, **_dashboard_plugin_hub(config)}, status_code=200 if ok else 404)
+
+    @app.post("/api/plugins/{name:path}/disable")
     async def api_plugin_disable(name: str, request: Request) -> JSONResponse:
         _require_request(request, config)
         from . import plugins as plugin_runtime
 
-        ok = plugin_runtime.disable(name, config)
-        return JSONResponse({"ok": ok, "name": name, **_plugins_payload(config)}, status_code=200 if ok else 404)
+        safe = _safe_plugin_route_name(name)
+        ok = plugin_runtime.disable(safe, config)
+        return JSONResponse({"ok": ok, "name": safe, **_plugins_payload(config)}, status_code=200 if ok else 404)
 
-    @app.delete("/api/plugins/{name}")
+    @app.post("/api/dashboard/agent-plugins/{name:path}/disable")
+    async def api_dashboard_agent_plugin_disable(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from . import plugins as plugin_runtime
+
+        safe = _safe_plugin_route_name(name)
+        ok = plugin_runtime.disable(safe, config)
+        return JSONResponse({"ok": ok, "name": safe, **_dashboard_plugin_hub(config)}, status_code=200 if ok else 404)
+
+    @app.delete("/api/plugins/{name:path}")
     async def api_plugin_delete(name: str, request: Request) -> JSONResponse:
         _require_request(request, config)
         from . import plugins as plugin_runtime
 
-        ok = plugin_runtime.remove(name, config)
-        return JSONResponse({"ok": ok, "name": name, **_plugins_payload(config)}, status_code=200 if ok else 404)
+        safe = _safe_plugin_route_name(name)
+        ok = plugin_runtime.remove(safe, config)
+        return JSONResponse({"ok": ok, "name": safe, **_plugins_payload(config)}, status_code=200 if ok else 404)
+
+    @app.delete("/api/dashboard/agent-plugins/{name:path}")
+    async def api_dashboard_agent_plugin_delete(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from . import plugins as plugin_runtime
+
+        safe = _safe_plugin_route_name(name)
+        ok = plugin_runtime.remove(safe, config)
+        return JSONResponse({"ok": ok, "name": safe, **_dashboard_plugin_hub(config)}, status_code=200 if ok else 404)
 
     @app.get("/api/tools/toolsets")
     async def api_toolsets(request: Request) -> JSONResponse:
@@ -3576,8 +3782,6 @@ def create_app(config: Config) -> FastAPI:
         if action in {"start", "stop", "restart"}:
             return JSONResponse(_service_result(control_gateway_service(action)))
         return JSONResponse({"ok": False, "error": f"unknown gateway service action: {action}"}, status_code=400)
-
-    _mount_dashboard_plugin_api_routes(app, config)
 
     @app.get("/api/{path:path}")
     async def api_get(path: str, request: Request) -> JSONResponse:

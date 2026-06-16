@@ -915,6 +915,27 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
     assert status["source"] == "user"
     assert status["status"] == "loaded"
 
+    hub = asyncio.run(_request(app, "GET", "/api/dashboard/plugins/hub", headers=headers))
+    assert hub.status_code == 200
+    hub_body = hub.json()
+    hub_row = next(row for row in hub_body["plugins"] if row["key"] == "analytics/pulse")
+    assert hub_row["runtime_status"] == "enabled"
+    assert hub_row["has_dashboard_manifest"] is True
+    assert hub_row["dashboard_manifest"]["name"] == "pulse-panel"
+    assert hub_row["can_remove"] is True
+    assert "jsonl" in hub_body["providers"]["memory_options"]
+    assert "default" in hub_body["providers"]["context_options"]
+    assert hub_body["orphan_dashboard_plugins"] == []
+
+    rescan = asyncio.run(_request(app, "POST", "/api/dashboard/plugins/rescan", headers=headers))
+    assert rescan.status_code == 200
+    assert rescan.json()["ok"] is True
+    assert rescan.json()["count"] >= 1
+
+    detail = asyncio.run(_request(app, "GET", "/api/dashboard/agent-plugins/analytics/pulse", headers=headers))
+    assert detail.status_code == 200
+    assert detail.json()["plugin"]["name"] == "pulse"
+
     manifest = asyncio.run(_request(app, "GET", "/api/dashboard/plugins", headers=headers))
     assert manifest.status_code == 200
     row = next(item for item in manifest.json() if item["name"] == "pulse-panel")
@@ -941,6 +962,19 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
     route = asyncio.run(_request(app, "GET", "/api/plugins/pulse-panel/pulse", headers=headers))
     assert route.status_code == 200
     assert route.json() == {"pulse": True}
+
+    disabled = asyncio.run(_request(app, "POST", "/api/plugins/analytics/pulse/disable", headers=headers))
+    assert disabled.status_code == 200
+    assert "analytics/pulse" in disabled.json()["disabled"]
+    disabled_hub = asyncio.run(_request(app, "GET", "/api/dashboard/plugins/hub", headers=headers))
+    assert disabled_hub.status_code == 200
+    disabled_row = next(row for row in disabled_hub.json()["plugins"] if row["key"] == "analytics/pulse")
+    assert disabled_row["runtime_status"] == "disabled"
+    assert disabled_row["has_dashboard_manifest"] is True
+
+    enabled = asyncio.run(_request(app, "POST", "/api/dashboard/agent-plugins/analytics/pulse/enable", headers=headers))
+    assert enabled.status_code == 200
+    assert "analytics/pulse" in enabled.json()["enabled"]
 
 
 def test_fastapi_audio_control_plane(tmp_path, monkeypatch):
