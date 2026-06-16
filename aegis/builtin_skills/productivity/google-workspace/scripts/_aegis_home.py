@@ -26,12 +26,14 @@ except (ModuleNotFoundError, ImportError):
 
     def get_aegis_home() -> Path:
         """Return the AEGIS home directory (default: ~/.aegis).
+        """
 
         val = os.environ.get("AEGIS_HOME", "").strip()
         return Path(val) if val else Path.home() / ".aegis"
 
     def display_aegis_home() -> str:
         """Return a user-friendly ``~/``-shortened display string.
+        """
 
         home = get_aegis_home()
         try:

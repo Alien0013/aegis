@@ -234,6 +234,57 @@ def test_apply_patch(tmp_path):
     assert "B" in f.read_text()
 
 
+def test_apply_patch_respects_safe_root(tmp_path, monkeypatch):
+    from aegis.tools.extra_builtin import ApplyPatchTool
+
+    safe = tmp_path / "safe"
+    monkeypatch.setenv("AEGIS_WRITE_SAFE_ROOT", str(safe))
+    patch = "--- /dev/null\n+++ b/outside.txt\n@@ -0,0 +1 @@\n+no\n"
+
+    res = ApplyPatchTool().run({"patch": patch}, _ctx(tmp_path))
+
+    assert res.is_error
+    assert "write safe root" in res.content
+    assert not (tmp_path / "outside.txt").exists()
+
+
+def test_apply_patch_blocks_traversal(tmp_path):
+    from aegis.tools.extra_builtin import ApplyPatchTool
+
+    patch = "--- /dev/null\n+++ b/../pwned.txt\n@@ -0,0 +1 @@\n+no\n"
+
+    res = ApplyPatchTool().run({"patch": patch}, _ctx(tmp_path))
+
+    assert res.is_error
+    assert "traversal" in res.content
+    assert not (tmp_path.parent / "pwned.txt").exists()
+
+
+def test_apply_patch_reports_and_refreshes_stale_state(tmp_path):
+    import shutil
+    import time
+
+    if not shutil.which("git"):
+        return
+
+    from aegis.tools import file_state
+    from aegis.tools.extra_builtin import ApplyPatchTool
+
+    file_state.reset()
+    f = tmp_path / "h.txt"
+    f.write_text("a\nb\nc\n")
+    file_state.note(f)
+    time.sleep(0.01)
+    f.write_text("a\nb\nc\n")
+
+    patch = "--- a/h.txt\n+++ b/h.txt\n@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n"
+    res = ApplyPatchTool().run({"patch": patch}, _ctx(tmp_path))
+
+    assert not res.is_error, res.content
+    assert "changed on disk" in res.content
+    assert file_state.stale_warning(f) == ""
+
+
 def test_schedule_task_tool(tmp_path):
     from aegis.tools.extra_builtin import ScheduleTaskTool
     from aegis.cron import CronStore
@@ -1176,3 +1227,20 @@ def test_registry_has_full_surface():
                      "memory", "skill", "execute_code", "browser", "lsp", "session_search",
                      "agent_state", "apply_patch", "spawn_subagent", "generate_image"):
         assert expected in names, expected
+
+
+def test_google_workspace_home_helper_compiles():
+    import py_compile
+    from pathlib import Path
+
+    helper = (
+        Path(__file__).resolve().parents[1]
+        / "aegis"
+        / "builtin_skills"
+        / "productivity"
+        / "google-workspace"
+        / "scripts"
+        / "_aegis_home.py"
+    )
+
+    py_compile.compile(str(helper), doraise=True)

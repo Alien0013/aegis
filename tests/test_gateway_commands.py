@@ -332,6 +332,19 @@ def test_provider_override_rejects_unknown_provider(tmp_path, monkeypatch):
     assert r._agents[key] is cached
 
 
+def test_provider_switch_escapes_broken_config_provider(tmp_path, monkeypatch):
+    r = _runner(tmp_path, monkeypatch)
+    key = r._key(_ev("x"))
+    r.config.data["model"] = {"provider": "missing-provider", "default": "bad-model"}
+    r._agents[key] = object()
+
+    out = r.dispatch(_ev("/provider openrouter"))
+
+    assert "→ openrouter" in out
+    assert r._session(key).meta["runtime_controls"]["provider"] == "openrouter"
+    assert key not in r._agents
+
+
 def test_busy_mode_set_and_validate(tmp_path, monkeypatch):
     r = _runner(tmp_path, monkeypatch)
     assert "queue" in r.dispatch(_ev("/busy"))

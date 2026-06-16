@@ -52,4 +52,4 @@ def test_apply_patch_paths_extracted():
     from aegis.agent.loop import ToolExecutor
     patch = "--- a/src/m.py\n+++ b/src/m.py\n@@\n--- a/other\n+++ b/new_dir/n.py\n@@\n"
     paths = ToolExecutor._edit_paths(ToolCall("1", "apply_patch", {"patch": patch}))
-    assert paths == ["src/m.py", "new_dir/n.py"]
+    assert paths == ["src/m.py", "other", "new_dir/n.py"]

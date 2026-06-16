@@ -1184,6 +1184,10 @@ def test_dashboard_models_exposes_resolver_report():
     assert data["routing"][0]["capabilities"]["tool_calls"] is True
     assert "localtest" in data["providers"]
     assert data["presets"]["localtest"] == ["local-model"]
+    assert data["preset_rows"]["localtest"][0]["id"] == "local-model"
+    assert data["preset_rows"]["localtest"][0]["source"] == "default"
+    assert any(row["provider"] == "localtest" and row["id"] == "local-model"
+               for row in data["model_inventory"])
     assert any(row["name"] == "localtest" and row["origin"] == "custom"
                for row in data["provider_catalog"])
 

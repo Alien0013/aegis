@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import os
 import threading
+from contextlib import contextmanager
 
 _seen: dict[str, float] = {}      # resolved path -> mtime when last read/written
 _lock = threading.Lock()
+_path_locks: dict[str, threading.Lock] = {}
+_path_locks_lock = threading.Lock()
 
 
 def _key(path) -> str:
@@ -27,6 +30,22 @@ def note(path) -> None:
         return
     with _lock:
         _seen[_key(path)] = m
+
+
+@contextmanager
+def lock_path(path):
+    """Serialize a read/check/write region for one resolved path."""
+    key = _key(path)
+    with _path_locks_lock:
+        lock = _path_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _path_locks[key] = lock
+    lock.acquire()
+    try:
+        yield
+    finally:
+        lock.release()
 
 
 def stale_warning(path) -> str:
@@ -51,3 +70,5 @@ def stale_warning(path) -> str:
 def reset() -> None:
     with _lock:
         _seen.clear()
+    with _path_locks_lock:
+        _path_locks.clear()

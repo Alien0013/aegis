@@ -4,8 +4,11 @@ generic HTTP, and agent-callable task scheduling.
 
 from __future__ import annotations
 
+import os
+import shlex
 import subprocess
 import tempfile
+from contextlib import ExitStack
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -13,6 +16,88 @@ import httpx
 
 from ..util import truncate
 from .base import Tool, ToolContext, ToolResult
+
+
+_PATCH_PREFIXES = ("a/", "b/")
+
+
+def _strip_patch_path(raw: str) -> str:
+    raw = raw.strip()
+    if not raw:
+        return ""
+    if raw == "/dev/null":
+        return ""
+    if raw.startswith('"'):
+        try:
+            parts = shlex.split(raw)
+        except ValueError:
+            parts = []
+        if parts:
+            raw = parts[0]
+    elif "\t" in raw:
+        raw = raw.split("\t", 1)[0].strip()
+    if raw == "/dev/null":
+        return ""
+    for prefix in _PATCH_PREFIXES:
+        if raw.startswith(prefix):
+            raw = raw[len(prefix):]
+            break
+    return raw.strip()
+
+
+def extract_patch_paths(patch: str) -> list[str]:
+    """Return cwd-relative paths touched by a unified/git patch."""
+    paths: list[str] = []
+    seen: set[str] = set()
+    pending_old: str | None = None
+
+    def add(raw: str) -> None:
+        path = _strip_patch_path(raw)
+        if path and path not in seen:
+            seen.add(path)
+            paths.append(path)
+
+    for line in patch.splitlines():
+        if line.startswith("diff --git "):
+            try:
+                parts = shlex.split(line)
+            except ValueError:
+                parts = line.split()
+            if len(parts) >= 4:
+                add(parts[-2])
+                add(parts[-1])
+            pending_old = None
+            continue
+        if line.startswith("rename from "):
+            add(line[len("rename from "):])
+            continue
+        if line.startswith("rename to "):
+            add(line[len("rename to "):])
+            continue
+        if line.startswith("--- "):
+            pending_old = _strip_patch_path(line[4:])
+            continue
+        if line.startswith("+++ ") and pending_old is not None:
+            add(pending_old)
+            add(line[4:])
+            pending_old = None
+    return paths
+
+
+def _resolve_patch_target(raw: str, cwd: Path) -> tuple[Path | None, str]:
+    if not raw or "\x00" in raw:
+        return None, "patch contains an empty or invalid file path"
+    path = Path(raw)
+    if path.is_absolute():
+        return None, f"patch path must be relative to the working directory: {raw}"
+    if any(part == ".." for part in path.parts):
+        return None, f"patch path contains '..' traversal: {raw}"
+    target = (cwd / path).resolve(strict=False)
+    try:
+        target.relative_to(cwd.resolve(strict=False))
+    except ValueError:
+        return None, f"patch path escapes the working directory: {raw}"
+    return target, ""
 
 
 class ApplyPatchTool(Tool):
@@ -29,21 +114,74 @@ class ApplyPatchTool(Tool):
         patch = args["patch"]
         if not patch.endswith("\n"):
             patch += "\n"
+        raw_paths = extract_patch_paths(patch)
+        if not raw_paths:
+            return ToolResult.error("patch does not name any target files")
+
+        from . import file_safety, file_state
+
+        targets: list[Path] = []
+        seen_targets: set[str] = set()
+        for raw in raw_paths:
+            target, err = _resolve_patch_target(raw, ctx.cwd)
+            if err:
+                return ToolResult.error(err)
+            assert target is not None
+            key = os.path.realpath(str(target))
+            if key in seen_targets:
+                continue
+            denied = file_safety.authorize_write(target, ctx)
+            if denied:
+                return ToolResult.error(denied)
+            seen_targets.add(key)
+            targets.append(target)
+
         with tempfile.NamedTemporaryFile("w", suffix=".patch", delete=False, encoding="utf-8") as f:
             f.write(patch)
             tmp = f.name
-        # try git apply at -p1 then -p0, then GNU patch
-        for cmd in (["git", "apply", "--whitespace=nowarn", tmp],
-                    ["git", "apply", "-p0", "--whitespace=nowarn", tmp],
-                    ["patch", "-p1", "-i", tmp]):
-            try:
-                r = subprocess.run(cmd, cwd=str(ctx.cwd), capture_output=True, text=True, timeout=60)
-            except FileNotFoundError:
-                continue
-            if r.returncode == 0:
-                Path(tmp).unlink(missing_ok=True)
-                return ToolResult.ok(f"applied patch with `{' '.join(cmd[:2])}`", display="patch applied")
-        Path(tmp).unlink(missing_ok=True)
+        commands = (
+            (["git", "apply", "--check", "--whitespace=nowarn", tmp],
+             ["git", "apply", "--whitespace=nowarn", tmp],
+             "git apply"),
+            (["git", "apply", "-p0", "--check", "--whitespace=nowarn", tmp],
+             ["git", "apply", "-p0", "--whitespace=nowarn", tmp],
+             "git apply -p0"),
+            (["patch", "--dry-run", "-p1", "-i", tmp],
+             ["patch", "-p1", "-i", tmp],
+             "patch -p1"),
+        )
+        try:
+            with ExitStack() as stack:
+                for target in sorted(targets, key=lambda p: os.path.realpath(str(p))):
+                    stack.enter_context(file_state.lock_path(target))
+                stale = "".join(file_state.stale_warning(target) for target in targets)
+                from .builtin import _lsp_delta, _lsp_snapshot
+                for target in targets:
+                    _lsp_snapshot(ctx, target)
+
+                for check_cmd, apply_cmd, label in commands:
+                    try:
+                        check = subprocess.run(check_cmd, cwd=str(ctx.cwd), capture_output=True,
+                                               text=True, timeout=60)
+                    except FileNotFoundError:
+                        continue
+                    if check.returncode != 0:
+                        continue
+                    applied = subprocess.run(apply_cmd, cwd=str(ctx.cwd), capture_output=True,
+                                             text=True, timeout=60)
+                    if applied.returncode == 0:
+                        for target in targets:
+                            file_state.note(target)
+                        deltas = "".join(_lsp_delta(ctx, target) for target in targets)
+                        count = len(targets)
+                        return ToolResult.ok(
+                            f"applied patch with `{label}` ({count} file{'s' if count != 1 else ''})"
+                            + deltas + stale,
+                            display="patch applied",
+                            data={"files_modified": [str(p) for p in targets]},
+                        )
+        finally:
+            Path(tmp).unlink(missing_ok=True)
         return ToolResult.error("patch did not apply cleanly (check paths and context lines)")
 
 

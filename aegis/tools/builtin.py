@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import stat
 import tempfile
+from contextlib import nullcontext
 from pathlib import Path
 
 import httpx
@@ -207,29 +208,31 @@ class WriteFileTool(Tool):
         path = _resolve(ctx, args["path"])
         fs = getattr(ctx, "fs", None)
         stale = ""
+        lock = nullcontext()
         if fs is None:
             from . import file_safety, file_state
             denied = file_safety.authorize_write(path, ctx)
             if denied:
                 return ToolResult.error(denied)
-            stale = file_state.stale_warning(path)
-            _lsp_snapshot(ctx, path)
+            lock = file_state.lock_path(path)
         try:
-            if fs:                           # delegate to the editor (ACP fs/write_text_file)
-                fs.write_text(str(path), args["content"])
-            else:
-                had_bom = False
-                ending = None
-                if path.exists():
-                    old_text, had_bom, ending = _read_text_for_edit(path)
-                    del old_text
-                content = _normalize_line_endings(str(args["content"]), ending)
-                _atomic_write_local(path, _restore_bom(content, had_bom))
+            with lock:
+                if fs:                       # delegate to the editor (ACP fs/write_text_file)
+                    fs.write_text(str(path), args["content"])
+                else:
+                    from . import file_state
+                    stale = file_state.stale_warning(path)
+                    _lsp_snapshot(ctx, path)
+                    had_bom = False
+                    ending = None
+                    if path.exists():
+                        old_text, had_bom, ending = _read_text_for_edit(path)
+                        del old_text
+                    content = _normalize_line_endings(str(args["content"]), ending)
+                    _atomic_write_local(path, _restore_bom(content, had_bom))
+                    file_state.note(path)
         except Exception as e:  # noqa: BLE001
             return ToolResult.error(f"Could not write {path}: {e}")
-        if fs is None:
-            from . import file_state
-            file_state.note(path)
         n = args["content"].count("\n") + 1
         msg = f"Wrote {n} lines to {path}" + ("" if fs else _lsp_delta(ctx, path)) + stale
         return ToolResult.ok(msg, display=f"wrote {path.name}")
@@ -258,36 +261,37 @@ class EditFileTool(Tool):
         denied = file_safety.authorize_write(path, ctx)
         if denied:
             return ToolResult.error(denied)
-        stale = file_state.stale_warning(path)
-        text, had_bom, ending = _read_text_for_edit(path)
-        old, new = args["old_string"], args["new_string"]
-        via = ""
-        count = text.count(old)
-        if count == 0 and ending:
-            old_eol = _normalize_line_endings(old, ending)
-            if old_eol != old:
-                count = text.count(old_eol)
-                if count:
-                    old = old_eol
-                    new = _normalize_line_endings(new, ending)
-        if count == 0:
-            # Fuzzy recovery: whitespace/indentation drift is the usual cause. Only a
-            # UNIQUE fuzzy match is trusted; ambiguity falls through to the error.
-            from .fuzzy import find_fuzzy, reindent
-            hit = find_fuzzy(text, old)
-            if hit is None:
-                return ToolResult.error("old_string not found in file." + _closest_hint(text, old))
-            matched, strategy = hit
-            old, new = matched, reindent(new, matched, old)
-            count, via = 1, f" (matched via {strategy} — whitespace drift auto-recovered)"
-        if ending:
-            new = _normalize_line_endings(new, ending)
-        if count > 1 and not args.get("replace_all"):
-            return ToolResult.error(f"old_string appears {count}× — pass replace_all=true or add context.")
-        _lsp_snapshot(ctx, path)
-        text = text.replace(old, new) if args.get("replace_all") else text.replace(old, new, 1)
-        _atomic_write_local(path, _restore_bom(text, had_bom))
-        file_state.note(path)
+        with file_state.lock_path(path):
+            stale = file_state.stale_warning(path)
+            text, had_bom, ending = _read_text_for_edit(path)
+            old, new = args["old_string"], args["new_string"]
+            via = ""
+            count = text.count(old)
+            if count == 0 and ending:
+                old_eol = _normalize_line_endings(old, ending)
+                if old_eol != old:
+                    count = text.count(old_eol)
+                    if count:
+                        old = old_eol
+                        new = _normalize_line_endings(new, ending)
+            if count == 0:
+                # Fuzzy recovery: whitespace/indentation drift is the usual cause. Only a
+                # UNIQUE fuzzy match is trusted; ambiguity falls through to the error.
+                from .fuzzy import find_fuzzy, reindent
+                hit = find_fuzzy(text, old)
+                if hit is None:
+                    return ToolResult.error("old_string not found in file." + _closest_hint(text, old))
+                matched, strategy = hit
+                old, new = matched, reindent(new, matched, old)
+                count, via = 1, f" (matched via {strategy} — whitespace drift auto-recovered)"
+            if ending:
+                new = _normalize_line_endings(new, ending)
+            if count > 1 and not args.get("replace_all"):
+                return ToolResult.error(f"old_string appears {count}× — pass replace_all=true or add context.")
+            _lsp_snapshot(ctx, path)
+            text = text.replace(old, new) if args.get("replace_all") else text.replace(old, new, 1)
+            _atomic_write_local(path, _restore_bom(text, had_bom))
+            file_state.note(path)
         return ToolResult.ok(f"Edited {path} ({count if args.get('replace_all') else 1} replacement(s))."
                              + via + _lsp_delta(ctx, path) + stale,
                              display=f"edited {path.name}")

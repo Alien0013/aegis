@@ -131,23 +131,34 @@ def _usage(source) -> dict[str, Any]:
 def _models(config: Config) -> list[dict[str, Any]]:
     from .providers import registry
 
-    seen: set[str] = set()
+    by_id: dict[str, dict[str, Any]] = {}
     rows: list[dict[str, Any]] = []
 
     def add(model: str | None, provider: str = "") -> None:
         mid = str(model or "").strip()
-        if not mid or mid in seen:
+        if not mid:
             return
-        seen.add(mid)
+        if mid in by_id:
+            row = by_id[mid]
+            providers = row.setdefault("providers", [])
+            if provider and provider not in providers:
+                providers.append(provider)
+            if provider and not row.get("provider"):
+                row["provider"] = provider
+                row["owned_by"] = provider
+            return
         row = {"id": mid, "object": "model", "owned_by": provider or "aegis"}
         if provider:
             row["provider"] = provider
+            row["providers"] = [provider]
+        else:
+            row["providers"] = []
+        by_id[mid] = row
         rows.append(row)
 
     add(config.get("model.default"), config.get("model.provider", ""))
-    for provider in registry.list_providers(config):
-        for model in registry.known_models_for(provider, config):
-            add(model, provider)
+    for row in registry.model_inventory(config):
+        add(row.get("id"), row.get("provider", ""))
     return rows
 
 

@@ -372,31 +372,75 @@ def _specs_for(config: cfg.Config | None = None) -> dict[str, ProviderSpec]:
     return specs
 
 
-def _preset_model_ids(provider_name: str) -> list[str]:
+def _preset_model_entries(provider_name: str) -> list[tuple[str, str]]:
     try:
         from ..onboarding import MODEL_PRESETS
     except Exception:  # noqa: BLE001
         return []
-    return [str(value) for value, _label in MODEL_PRESETS.get(provider_name, []) if value]
+    return [(str(value), str(label or value)) for value, label in MODEL_PRESETS.get(provider_name, []) if value]
 
 
 def _append_unique(items: list[str], value: str | None) -> None:
     value = str(value or "").strip()
-    if value and value not in items:
+    if value and value.lower() not in {item.lower() for item in items}:
         items.append(value)
+
+
+def known_model_entries_for(provider_name: str, config: cfg.Config | None = None) -> list[dict]:
+    """Provider-scoped known model rows, used by picker/dashboard/API inventory."""
+    ensure_plugin_providers(config)
+    specs = _specs_for(config)
+    spec = specs.get(provider_name)
+    rows: list[dict] = []
+    seen: set[str] = set()
+
+    def add(model: str | None, label: str = "", source: str = "preset") -> None:
+        mid = str(model or "").strip()
+        key = mid.lower()
+        if not mid or key in seen:
+            return
+        seen.add(key)
+        api_mode = spec.api_mode if spec is not None else ApiMode.CHAT_COMPLETIONS
+        capabilities = _model_capabilities(mid, api_mode)
+        row = {
+            "id": mid,
+            "provider": provider_name,
+            "key": f"{provider_name}:{mid}",
+            "label": label or mid,
+            "source": source,
+            "api_mode": api_mode.value if isinstance(api_mode, ApiMode) else str(api_mode),
+            "capabilities": capabilities,
+            "capability_summary": _capability_summary(capabilities),
+        }
+        if spec is not None:
+            row["context_length"] = spec.context_length
+        rows.append(row)
+
+    if spec is not None:
+        add(spec.default_model, f"Provider default ({spec.default_model})", "default")
+    for model, label in _preset_model_entries(provider_name):
+        add(model, label, "preset")
+    return rows
 
 
 def known_models_for(provider_name: str, config: cfg.Config | None = None) -> list[str]:
     """Known/preset model ids for a provider, used for suggestions only."""
-    ensure_plugin_providers(config)
-    specs = _specs_for(config)
-    spec = specs.get(provider_name)
-    models: list[str] = []
-    if spec is not None:
-        _append_unique(models, spec.default_model)
-    for model in _preset_model_ids(provider_name):
-        _append_unique(models, model)
-    return models
+    return [row["id"] for row in known_model_entries_for(provider_name, config)]
+
+
+def model_inventory(config: cfg.Config, provider_names: list[str] | None = None) -> list[dict]:
+    """All known model rows, deduped by provider+model while preserving ownership."""
+    providers = provider_names or list_providers(config)
+    rows: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for provider_name in providers:
+        for row in known_model_entries_for(provider_name, config):
+            key = (str(row.get("provider") or ""), str(row.get("id") or "").lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(row)
+    return rows
 
 
 def _close_matches(value: str, choices: list[str]) -> list[str]:

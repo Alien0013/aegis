@@ -118,6 +118,29 @@ def test_openai_models_lists_model_ids_not_only_provider_names(monkeypatch, tmp_
     assert "serverplug" not in ids
 
 
+def test_openai_models_dedupes_ids_but_preserves_provider_owners():
+    from aegis.config import Config
+    from aegis.server import _models
+
+    cfg = Config.load()
+    cfg.data["model"] = {"provider": "openai", "default": "gpt-5.5"}
+    cfg.data["custom_providers"] = [
+        {
+            "name": "mirror",
+            "base_url": "http://mirror.local/v1",
+            "api_mode": "chat_completions",
+            "default_model": "gpt-5.5",
+            "context_length": 70_000,
+        }
+    ]
+
+    rows = _models(cfg)
+    matches = [row for row in rows if row["id"] == "gpt-5.5"]
+
+    assert len(matches) == 1
+    assert {"openai", "mirror"} <= set(matches[0]["providers"])
+
+
 def test_openai_server_auth_protects_models_and_rejects_bad_json(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     from aegis.config import Config

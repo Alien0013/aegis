@@ -1321,6 +1321,8 @@ def _dashboard_models(config: Config) -> dict:
         "model": config.get("model.default"),
         "providers": provider_names,
         "presets": {p: registry.known_models_for(p, config) for p in provider_names},
+        "preset_rows": {p: registry.known_model_entries_for(p, config) for p in provider_names},
+        "model_inventory": registry.model_inventory(config, provider_names),
     })
     return report
 

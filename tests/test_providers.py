@@ -1205,6 +1205,32 @@ def test_provider_report_exposes_chain_routing_and_catalog():
     assert openai["capabilities"]["images"] is True
 
 
+def test_model_inventory_dedupes_presets_and_keeps_provider_ownership():
+    from aegis.config import Config
+    from aegis.providers import registry
+
+    cfg = Config.load()
+    cfg.data["model"] = {"provider": "openai", "default": "gpt-5.5"}
+    cfg.data["custom_providers"] = [
+        {
+            "name": "mirror",
+            "base_url": "http://mirror.local/v1",
+            "api_mode": "chat_completions",
+            "default_model": "gpt-5.5",
+            "context_length": 70_000,
+        }
+    ]
+
+    openai_rows = registry.known_model_entries_for("openai", cfg)
+    assert openai_rows[0]["id"] == "gpt-5.5"
+    assert openai_rows[0]["source"] == "default"
+    assert len({row["id"].lower() for row in openai_rows}) == len(openai_rows)
+
+    inventory = registry.model_inventory(cfg, ["openai", "mirror"])
+    assert any(row["provider"] == "openai" and row["id"] == "gpt-5.5" for row in inventory)
+    assert any(row["provider"] == "mirror" and row["id"] == "gpt-5.5" for row in inventory)
+
+
 def test_model_validation_warns_with_suggestions_without_blocking_custom():
     from aegis.config import Config
     from aegis.providers.registry import (

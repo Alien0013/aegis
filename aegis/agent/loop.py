@@ -435,9 +435,8 @@ class ToolExecutor:
             p = call.arguments.get("path")
             return [p] if p else []
         if call.name == "apply_patch":
-            import re
-            return re.findall(r"^\+\+\+ (?:b/)?(\S+)", call.arguments.get("patch", "") or "",
-                              re.MULTILINE)
+            from ..tools.extra_builtin import extract_patch_paths
+            return extract_patch_paths(call.arguments.get("patch", "") or "")
         return []
 
     def _maybe_checkpoint(self, call: ToolCall) -> None:
