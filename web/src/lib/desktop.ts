@@ -3,6 +3,27 @@
 // the single source of truth for "are we running inside the native app?" —
 // the custom titlebar and window controls only render when it's true.
 
+export interface DesktopConnection {
+  mode?: string;
+  source?: string;
+  baseUrl?: string;
+  wsUrl?: string;
+  backend?: {
+    running?: boolean;
+    pid?: number | null;
+    port?: number;
+    command?: string;
+    args?: string[];
+    startedAt?: string;
+    uptimeMs?: number;
+    crashRestarts?: number;
+    maxCrashRestarts?: number;
+    logPath?: string;
+    userDataPath?: string;
+    env?: Record<string, string>;
+  };
+}
+
 export interface DesktopBridge {
   isDesktop: boolean;
   platform: string;
@@ -13,7 +34,7 @@ export interface DesktopBridge {
   onMaximizeChange(cb: (maximized: boolean) => void): () => void;
   openExternal(url: string): void;
   restartBackend(): void;
-  getConnection?(): Promise<{ mode?: string; source?: string; baseUrl?: string }>;
+  getConnection?(): Promise<DesktopConnection>;
   api?<T = unknown>(request: { method?: string; path: string; body?: unknown }): Promise<T>;
 }
 

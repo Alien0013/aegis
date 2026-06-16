@@ -15,7 +15,7 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const { aegisCommand, backendEnvironment } = require("./backend-env.cjs");
+const { aegisCommand, backendEnvironment, resolveAegisHome } = require("./backend-env.cjs");
 
 // Chromium checks the Linux setuid sandbox before main.js runs, so launch.js
 // puts --no-sandbox on argv; mirror it here so child processes inherit it.
@@ -34,6 +34,10 @@ let quitting = false;
 let crashRestarts = 0;
 let logFd = null;
 let tray = null;                       // system-tray presence
+let backendStartedAt = 0;
+let backendCommand = "";
+let backendArgs = [];
+let backendEnvSummary = {};
 const extraWindows = new Set();        // secondary session windows (multi-window)
 const GLOBAL_SHOW_SHORTCUT = "CommandOrControl+Shift+A";
 const DEEP_LINK_SCHEME = "aegis";      // aegis://chat , aegis://config , ...
@@ -98,8 +102,16 @@ function startBackend() {
     dashboardUrl = `${backendBaseUrl()}/?token=${token}`;
     const resolvedEnv = backendEnvironment(process.env, { cwd: process.env.TERMINAL_CWD || process.cwd() });
     const bin = aegisCommand({ env: resolvedEnv });
+    backendCommand = bin;
+    backendArgs = ["dashboard", "--host", "127.0.0.1", "--port", String(port), "--no-open"];
+    backendStartedAt = Date.now();
+    backendEnvSummary = {
+      AEGIS_HOME: resolvedEnv.AEGIS_HOME || resolveAegisHome({ env: resolvedEnv }),
+      AEGIS_BIN: resolvedEnv.AEGIS_BIN || "",
+      TERMINAL_CWD: resolvedEnv.TERMINAL_CWD || process.cwd(),
+    };
     log(`starting backend: ${bin} dashboard --host 127.0.0.1 --port ${port}`);
-    backend = spawn(bin, ["dashboard", "--host", "127.0.0.1", "--port", String(port), "--no-open"], {
+    backend = spawn(bin, backendArgs, {
       env: {
         ...resolvedEnv,
         AEGIS_DASHBOARD_TOKEN: token,
@@ -115,6 +127,7 @@ function startBackend() {
     backend.on("exit", (code, sig) => {
       log(`backend exited code=${code} sig=${sig}`);
       backend = null;
+      backendStartedAt = 0;
       if (quitting) return;
       onBackendCrash();
     });
@@ -152,6 +165,7 @@ function probe(url, tries, onTick) {
 
 function connectionDescriptor() {
   const baseUrl = backendBaseUrl();
+  const running = !!(backend && !backend.killed);
   return {
     baseUrl,
     mode: "local",
@@ -159,6 +173,20 @@ function connectionDescriptor() {
     authMode: "token",
     token,
     wsUrl: baseUrl ? `ws://127.0.0.1:${port}/api/ws?token=${encodeURIComponent(token)}` : "",
+    backend: {
+      running,
+      pid: running ? backend.pid : null,
+      port,
+      command: backendCommand,
+      args: backendArgs,
+      startedAt: backendStartedAt ? new Date(backendStartedAt).toISOString() : "",
+      uptimeMs: backendStartedAt ? Date.now() - backendStartedAt : 0,
+      crashRestarts,
+      maxCrashRestarts: MAX_CRASH_RESTARTS,
+      logPath: logPath(),
+      userDataPath: app.getPath("userData"),
+      env: backendEnvSummary,
+    },
   };
 }
 
