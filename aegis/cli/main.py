@@ -1316,7 +1316,7 @@ _CMDS = (
     "ab acp auth background backup batch bench budget chat checkpoints completion config cost cron "
     "curator daemon dashboard debug deksktop desktop doctor eval gateway gstack hooks import improve "
     "insights kanban learn logs mcp memory model models onboard pairing plugins profile profiles rpc "
-    "secret secrets security serve sessions setup skills snapshot spec status tools trace trajectory ui "
+    "secret secrets security serve sessions setup skills snapshot spec status tools trace trajectory tui ui "
     "uninstall update watch webhook"
 )
 
@@ -1510,6 +1510,7 @@ def build_parser() -> argparse.ArgumentParser:
     from .. import insights as _insights
     from .. import kanban as _kanban
     from .. import webhook as _webhook
+    from . import tui as _tui
 
     bk = sub.add_parser("backup", help="back up ~/.aegis to a zip")
     bk.add_argument("--out")
@@ -1602,6 +1603,13 @@ def build_parser() -> argparse.ArgumentParser:
         db.add_argument("--port", type=int)
         db.add_argument("--no-open", action="store_true", help="don't auto-open the browser")
         db.set_defaults(func=_dash.cmd_dashboard)
+
+    tu = sub.add_parser("tui", help="terminal cockpit for sessions/runs/cron/kanban")
+    tu.add_argument("--once", action="store_true", help="render one snapshot and exit")
+    tu.add_argument("--watch", action="store_true", help="refresh until interrupted")
+    tu.add_argument("--interval", type=float, default=5.0, help="watch refresh interval in seconds")
+    tu.add_argument("--no-color", action="store_true", help="disable ANSI color")
+    tu.set_defaults(func=_tui.cmd_tui)
 
     for _name in ("desktop", "deksktop"):
         help_text = "install/update and launch the native desktop app"

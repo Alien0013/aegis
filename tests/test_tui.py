@@ -1,0 +1,43 @@
+"""Terminal cockpit command."""
+
+from __future__ import annotations
+
+import io
+
+from rich.console import Console
+
+
+def test_cli_parser_accepts_tui():
+    from aegis.cli.main import build_parser
+
+    parser = build_parser()
+    args = parser.parse_args(["tui", "--once", "--no-color"])
+
+    assert args.command == "tui"
+    assert args.once is True
+    assert args.no_color is True
+
+
+def test_tui_renders_dashboard_sections(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis import config as cfg
+    from aegis.config import Config
+    from aegis.cli.tui import render_dashboard
+
+    cfg.set_profile(None)
+    config = Config.load()
+    config.set("model.provider", "fake")
+    config.set("model.default", "fake-model")
+    buffer = io.StringIO()
+    console = Console(file=buffer, force_terminal=False, width=120, no_color=True)
+
+    snapshot = render_dashboard(config, console=console)
+    output = buffer.getvalue()
+
+    assert "AEGIS Terminal Cockpit" in output
+    assert "Model" in output
+    assert "Sessions" in output
+    assert "Runs" in output
+    assert "Cron" in output
+    assert "Kanban" in output
+    assert snapshot["dashboard_url"].startswith("http://")
