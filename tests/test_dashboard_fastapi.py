@@ -1677,6 +1677,10 @@ def test_fastapi_cron_control_plane(tmp_path, monkeypatch):
     assert any(job["id"] == job_id for job in alias_jobs.json()["jobs"])
     assert any(job["id"] == job_id for job in alias_jobs.json()["data"])
 
+    delivery_targets = asyncio.run(_request(app, "GET", "/api/cron/delivery-targets", headers=headers))
+    assert delivery_targets.status_code == 200
+    assert any(target["id"] == "local" for target in delivery_targets.json()["targets"])
+
     alias_create = asyncio.run(_request(
         app,
         "POST",
@@ -1712,6 +1716,17 @@ def test_fastapi_cron_control_plane(tmp_path, monkeypatch):
     assert patch.json()["job"]["name"] == "Paused digest"
     assert patch.json()["job"]["model"] == "cron-updated"
     assert patch.json()["job"]["enabled_toolsets"] == ["core"]
+
+    put_patch = asyncio.run(_request(
+        app,
+        "PUT",
+        f"/api/cron/jobs/{job_id}",
+        json={"updates": {"name": "Put digest", "deliver": "local"}},
+        headers=headers,
+    ))
+    assert put_patch.status_code == 200
+    assert put_patch.json()["job"]["name"] == "Put digest"
+    assert put_patch.json()["job"]["deliver"] == "local"
 
     bad_patch_workdir = asyncio.run(_request(
         app,
@@ -1753,6 +1768,12 @@ def test_fastapi_cron_control_plane(tmp_path, monkeypatch):
     alias_run = asyncio.run(_request(app, "POST", f"/api/jobs/{job_id}/run", headers=headers))
     assert alias_run.status_code == 200
     assert alias_run.json()["run_id"] == "run_typed"
+
+    runs = asyncio.run(_request(app, "GET", f"/api/cron/jobs/{job_id}/runs?limit=3", headers=headers))
+    assert runs.status_code == 200
+    assert runs.json()["id"] == job_id
+    assert runs.json()["limit"] == 3
+    assert "runs" in runs.json()
 
     service = asyncio.run(_request(
         app,

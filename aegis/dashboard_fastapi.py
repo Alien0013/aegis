@@ -2160,6 +2160,13 @@ def _cron_job_patch_response(job_id: str, body: dict[str, Any]) -> JSONResponse:
     return JSONResponse({"ok": True, "id": job.id, "job": _cron_job_detail(job.id)["job"]})
 
 
+def _cron_job_put_response(job_id: str, body: dict[str, Any]) -> JSONResponse:
+    updates = body.get("updates", body) if isinstance(body, dict) else {}
+    if not isinstance(updates, dict):
+        return JSONResponse({"ok": False, "error": "updates must be an object"}, status_code=400)
+    return _cron_job_patch_response(job_id, updates)
+
+
 def _cron_job_delete_response(job_id: str) -> JSONResponse:
     from .cron import CronStore
 
@@ -2185,6 +2192,37 @@ def _cron_job_run_response(config: Config, job_id: str) -> JSONResponse:
         return JSONResponse({"ok": False, "error": "cron job not found", "id": job_id}, status_code=404)
     sink = build_delivery_sink(config, verbose=False)
     return JSONResponse(run_job(config, job_id, sink=sink, store=store, verbose=False))
+
+
+def _cron_job_runs_response(job_id: str, query: dict[str, list[str]]) -> JSONResponse:
+    try:
+        limit = max(1, min(100, int(str(query.get("limit", ["20"])[0] or "20"))))
+    except (TypeError, ValueError):
+        limit = 20
+    detail = _cron_job_detail(job_id)
+    if not detail.get("found"):
+        return JSONResponse({"ok": False, "error": "cron job not found", "id": job_id}, status_code=404)
+    history = list((detail.get("job") or {}).get("history") or [])[:limit]
+    return JSONResponse({"ok": True, "id": (detail.get("job") or {}).get("id", job_id), "limit": limit, "runs": history})
+
+
+def _cron_delivery_targets(config: Config) -> dict[str, Any]:
+    enabled_channels = set(config.get("gateway.channels", []) or [])
+    catalog = _channel_catalog_map()
+    targets: list[dict[str, Any]] = [
+        {"id": "local", "label": "Local dashboard", "kind": "local", "enabled": True},
+    ]
+    for channel in sorted(enabled_channels):
+        entry = catalog.get(str(channel))
+        label = str((entry or {}).get("label") or channel)
+        targets.append({
+            "id": str(channel),
+            "label": label,
+            "kind": "gateway",
+            "enabled": True,
+            "syntax": f"{channel}:<recipient>",
+        })
+    return {"targets": targets, "channels": sorted(enabled_channels)}
 
 
 def _service_result(result) -> dict:
@@ -4323,6 +4361,11 @@ def create_app(config: Config) -> FastAPI:
         body = await request.json()
         return _cron_job_create_response(config, body)
 
+    @app.get("/api/cron/delivery-targets")
+    async def api_cron_delivery_targets(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_cron_delivery_targets(config))
+
     @app.get("/api/cron/jobs/{job_id}")
     async def api_cron_job_detail(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
@@ -4335,10 +4378,21 @@ def create_app(config: Config) -> FastAPI:
         body = await request.json()
         return _cron_job_patch_response(job_id, body)
 
+    @app.put("/api/cron/jobs/{job_id}")
+    async def api_cron_job_put(job_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        return _cron_job_put_response(job_id, body if isinstance(body, dict) else {})
+
     @app.delete("/api/cron/jobs/{job_id}")
     async def api_cron_job_delete(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
         return _cron_job_delete_response(job_id)
+
+    @app.get("/api/cron/jobs/{job_id}/runs")
+    async def api_cron_job_runs(job_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return _cron_job_runs_response(job_id, _query_dict(request))
 
     @app.post("/api/cron/jobs/{job_id}/run")
     async def api_cron_job_run(job_id: str, request: Request) -> JSONResponse:
