@@ -696,6 +696,42 @@ def _persist_api_run_record(record: dict[str, Any], *, title: str = "", prompt: 
     store.write(row)
 
 
+def _recover_stale_api_runs() -> int:
+    try:
+        from .runs import RunStore
+
+        store = RunStore()
+        stale: list[dict[str, Any]] = []
+        for status in ("queued", "running", "cancelling"):
+            stale.extend(store.list(surface="serve", status=status, limit=500))
+    except Exception:  # noqa: BLE001
+        return 0
+    recovered = 0
+    for row in stale:
+        data = row.get("data") if isinstance(row.get("data"), dict) else {}
+        if data.get("api") != "runs" and data.get("server_run_id") != row.get("id"):
+            continue
+        data = dict(data)
+        data.update({
+            "interrupted_by_server_start": True,
+            "last_event": "run.interrupted",
+        })
+        try:
+            store.finish(
+                str(row["id"]),
+                status="interrupted",
+                error="AEGIS API server restarted before this run completed.",
+                data=data,
+            )
+        except Exception:  # noqa: BLE001
+            continue
+        recovered += 1
+    if recovered:
+        suffix = "" if recovered == 1 else "s"
+        print(f"  ! recovered {recovered} stale API run{suffix}")
+    return recovered
+
+
 def _public_run_record(record: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in record.items() if k not in {"agent", "thread", "events"}}
 
@@ -973,6 +1009,7 @@ def make_handler(config: Config):
         max_items=int(config.get("server.idempotency_cache_max", 1000) or 1000),
         ttl_seconds=float(config.get("server.idempotency_ttl_seconds", 300) or 300),
     )
+    _recover_stale_api_runs()
     active_runs: dict[str, dict[str, Any]] = {}
     active_responses: dict[str, dict[str, Any]] = {}
     approvals: dict[str, dict[str, Any]] = {}

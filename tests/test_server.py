@@ -1878,6 +1878,49 @@ def test_server_created_run_persists_across_handler_restart(monkeypatch, tmp_pat
     assert events["run"]["id"] == run_id
 
 
+def test_server_startup_marks_stale_api_runs_interrupted(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.config import Config
+    from aegis.runs import RunStore
+    from aegis.server import make_handler
+
+    run = RunStore().start(
+        surface="serve",
+        kind="serve",
+        title="stale api run",
+        session_id="serve:stale-run",
+        prompt="resume me",
+        data={
+            "api": "runs",
+            "object": "run",
+            "server_run_id": "placeholder",
+            "created_at": 123,
+            "last_event": "run.running",
+        },
+    )
+    stored = RunStore().get(run["id"])
+    stored["data"]["server_run_id"] = run["id"]
+    RunStore().write(stored)
+
+    srv, port = _serve(make_handler(Config.load()))
+    try:
+        get_status, get_data = _request(port, "GET", f"/v1/runs/{run['id']}")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    saved = RunStore().get(run["id"])
+    body = json.loads(get_data)
+    assert saved["status"] == "interrupted"
+    assert "API server restarted" in saved["error"]
+    assert saved["data"]["interrupted_by_server_start"] is True
+    assert saved["data"]["last_event"] == "run.interrupted"
+    assert get_status == 200
+    assert body["run"]["id"] == run["id"]
+    assert body["run"]["status"] == "interrupted"
+    assert body["run"]["last_event"] == "run.interrupted"
+
+
 def test_server_stop_releases_pending_approval_waiter(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import time
