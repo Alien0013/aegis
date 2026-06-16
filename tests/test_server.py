@@ -617,10 +617,19 @@ def test_openai_chat_completions_aiohttp_sse_flushes_live(monkeypatch, tmp_path)
                     f"http://127.0.0.1:{port}/v1/chat/completions",
                     json={"stream": True, "messages": [{"role": "user", "content": "hi"}]},
                 ) as resp:
-                    first = await asyncio.wait_for(resp.content.readline(), timeout=0.8)
+                    lines = []
+                    deadline = time.monotonic() + 0.8
+                    while time.monotonic() < deadline:
+                        line = await asyncio.wait_for(
+                            resp.content.readline(),
+                            timeout=max(0.05, deadline - time.monotonic()),
+                        )
+                        lines.append(line)
+                        if b"early" in line:
+                            break
                     elapsed = time.monotonic() - started
                     resp.release()
-                    return resp.status, first, elapsed
+                    return resp.status, b"".join(lines), elapsed
         finally:
             await runner.cleanup()
 
@@ -713,13 +722,22 @@ def test_openai_chat_completions_stream_sse_contract(monkeypatch, tmp_path):
         srv.server_close()
 
     assert status == 200
-    lines = [line.removeprefix("data: ") for line in data.splitlines()
-             if line.startswith("data: ")]
-    assert lines[-1] == "[DONE]"
-    chunks = [json.loads(line) for line in lines[:-1]]
-    assert chunks[0]["metadata"]["event"]["type"] == "iteration"
-    assert chunks[1]["choices"][0]["delta"]["content"] == "hel"
-    assert chunks[2]["metadata"]["event"]["name"] == "read_file"
+    events = _sse_events(data)
+    assert events[-1] == ("done", "[DONE]")
+    progress = [payload for name, payload in events if name == "hermes.tool.progress"]
+    assert progress
+    assert progress[0]["object"] == "hermes.tool.progress"
+    assert progress[0]["type"] == "tool_start"
+    assert progress[0]["name"] == "read_file"
+    chunks = [
+        payload for name, payload in events
+        if name == "message" and isinstance(payload, dict)
+        and payload.get("object") == "chat.completion.chunk"
+    ]
+    assert chunks[0]["choices"][0]["delta"]["role"] == "assistant"
+    assert chunks[1]["metadata"]["event"]["type"] == "iteration"
+    assert chunks[2]["choices"][0]["delta"]["content"] == "hel"
+    assert chunks[3]["metadata"]["event"]["name"] == "read_file"
     assert chunks[-1]["choices"][0]["finish_reason"] == "stop"
     assert chunks[-1]["usage"]["prompt_tokens"] == 11
     assert chunks[-1]["usage"]["completion_tokens"] == 7

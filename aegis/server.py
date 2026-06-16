@@ -2024,8 +2024,44 @@ def make_handler(config: Config):
 
             # streaming
             self._send_sse_headers(self._session_headers(session_id=session_id, session_key=session_key))
+            stream_closed = False
+
+            def write_sse_payload(payload: dict[str, Any], *, event: str | None = None) -> bool:
+                nonlocal stream_closed
+                if stream_closed:
+                    return False
+                try:
+                    if event:
+                        self.wfile.write(f"event: {event}\n".encode())
+                    self.wfile.write(f"data: {json.dumps(payload)}\n\n".encode())
+                    self.wfile.flush()
+                    return True
+                except (BrokenPipeError, ConnectionResetError):
+                    stream_closed = True
+                    return False
+
+            def write_sse_done() -> None:
+                nonlocal stream_closed
+                if stream_closed:
+                    return
+                try:
+                    self.wfile.write(b"data: [DONE]\n\n")
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    stream_closed = True
+
+            role_chunk = {
+                "id": cid,
+                "object": "chat.completion.chunk",
+                "created": int(time.time()),
+                "model": model or config.get("model.default", ""),
+                "choices": [{"index": 0, "delta": {"role": "assistant"}}],
+            }
+            write_sse_payload(role_chunk)
 
             def emit(e: dict) -> None:
+                if stream_closed:
+                    return
                 if e.get("type") == "assistant_delta":
                     chunk = {"id": cid, "object": "chat.completion.chunk", "created": int(time.time()),
                              "model": model or config.get("model.default", ""),
@@ -2038,11 +2074,20 @@ def make_handler(config: Config):
                              "model": model or config.get("model.default", ""),
                              "choices": [{"index": 0, "delta": {}}],
                              "metadata": {"event": meta}}
-                try:
-                    self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
-                    self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError):
-                    pass
+                    if meta.get("type") in {"tool_start", "tool_result"}:
+                        write_sse_payload({
+                            "id": cid,
+                            "object": "hermes.tool.progress",
+                            "created": int(time.time()),
+                            "type": meta.get("type"),
+                            "name": meta.get("name") or meta.get("tool_name") or "",
+                            "status": meta.get("status") or ("done" if meta.get("type") == "tool_result" else "running"),
+                            "summary": meta.get("summary") or meta.get("preview") or "",
+                            "metadata": {"event": meta},
+                        }, event="hermes.tool.progress")
+                        if stream_closed:
+                            return
+                write_sse_payload(chunk)
 
             run_meta = {
                 "request_id": cid,
@@ -2076,8 +2121,8 @@ def make_handler(config: Config):
                      "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
                      "usage": _usage(getattr(result, "usage", None) or result.agent),
                      "metadata": final_metadata}
-            self.wfile.write(f"data: {json.dumps(final)}\n\n".encode())
-            self.wfile.write(b"data: [DONE]\n\n")
+            write_sse_payload(final)
+            write_sse_done()
 
         def _post_response(self, body: dict[str, Any]) -> None:
             session_key, session_key_error = self._session_key()
