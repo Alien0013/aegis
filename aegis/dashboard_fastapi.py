@@ -809,6 +809,68 @@ def _provider_auth_payload(config: Config, provider: str = "") -> dict:
     return {"active": active, "providers": rows, "oauth_catalog": report.get("oauth_catalog", [])}
 
 
+def _credential_pools_payload(config: Config, provider: str = "") -> dict[str, Any]:
+    auth = _provider_auth_payload(config)
+    pools: list[dict[str, Any]] = []
+    for row in auth.get("providers", []) or []:
+        status = row.get("credential_pool")
+        if not isinstance(status, dict):
+            continue
+        item = {
+            **status,
+            "name": row.get("name", status.get("provider", "")),
+            "display_name": row.get("display_name") or row.get("name", ""),
+            "provider": row.get("provider") or status.get("provider", ""),
+            "env_vars": row.get("env_vars", []),
+            "auth_methods": row.get("auth_methods", []),
+            "ready": bool(row.get("ready")),
+        }
+        pools.append(item)
+    if provider:
+        match = next((row for row in pools if row.get("name") == provider or row.get("provider") == provider), None)
+        return {"ok": bool(match), "provider": provider, "pool": match}
+    return {"ok": True, "pools": pools, "count": len(pools)}
+
+
+def _dashboard_action_catalog() -> dict[str, Any]:
+    actions = [
+        {"id": "update_check", "label": "Check for updates", "destructive": False},
+        {"id": "doctor", "label": "Run doctor", "destructive": False},
+        {"id": "security_audit", "label": "Run security audit", "destructive": False},
+        {"id": "backup", "label": "Create backup", "destructive": False},
+        {"id": "curator_run", "label": "Run curator", "destructive": False},
+        {"id": "curator_pause", "label": "Pause curator", "destructive": False},
+        {"id": "curator_resume", "label": "Resume curator", "destructive": False},
+        {"id": "gateway", "label": "Control gateway service", "destructive": True, "requires": ["op"]},
+        {"id": "cron", "label": "Control cron service", "destructive": True, "requires": ["op"]},
+        {"id": "memory_reset", "label": "Reset MEMORY.md", "destructive": True},
+        {"id": "user_reset", "label": "Reset USER.md", "destructive": True},
+    ]
+    return {"ok": True, "actions": actions, "count": len(actions)}
+
+
+def _portal_status_payload(config: Config) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "version": __version__,
+        "system": dash._system_info(),
+        "ops": dash._ops_status(config),
+        "update": dash._update_check(),
+        "credentials": _credential_pools_payload(config),
+        "actions": _dashboard_action_catalog()["actions"],
+    }
+
+
+def _admin_status_payload(config: Config) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "version": __version__,
+        "auth": _auth_providers_payload(config),
+        "portal": _portal_status_payload(config),
+        "plugins": _plugins_payload(config),
+    }
+
+
 _CHANNEL_CATALOG: list[dict[str, Any]] = [
     {
         "id": "telegram",
@@ -2825,8 +2887,22 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
         return _recommended_default_payload(config, query)
     if path == "/api/model/auxiliary":
         return _auxiliary_model_payload(config)
+    if path in {"/api/credentials/pools", "/api/credential-pools"}:
+        return _credential_pools_payload(config)
+    if path.startswith("/api/credentials/pools/"):
+        return _credential_pools_payload(config, path.removeprefix("/api/credentials/pools/"))
+    if path == "/api/credential-pools/status":
+        return _credential_pools_payload(config)
     if path == "/api/provider-auth":
         return _provider_auth_payload(config)
+    if path in {"/api/update/check", "/api/portal/update/check", "/api/check/update"}:
+        return dash._update_check()
+    if path in {"/api/portal", "/api/portal/status"}:
+        return _portal_status_payload(config)
+    if path in {"/api/actions/status", "/api/admin/actions/status"}:
+        return _dashboard_action_catalog()
+    if path == "/api/admin/status":
+        return _admin_status_payload(config)
     if path in {"/api/analytics", "/api/analytics/usage"}:
         from . import ratelimit
         from .usage_log import cost_report, daily_series
@@ -3107,6 +3183,8 @@ def _api_post(path: str, body: dict, config: Config, chat_runner: Any) -> dict:
                 "model": config.get("model.default"),
                 "warning": registry.model_validation_message(validation),
                 "validation": validation}
+    if path in {"/api/update/check", "/api/portal/update/check", "/api/check/update"}:
+        return dash._update_check()
     if path == "/api/model/set":
         return _model_set_payload(config, body)
     if path == "/api/providers/test":
@@ -3164,6 +3242,9 @@ def _api_post(path: str, body: dict, config: Config, chat_runner: Any) -> dict:
         return {"error": "bad session request"}
     if path == "/api/pub":
         return _publish_dashboard_event(body)
+    if path in {"/api/actions/run", "/api/admin/actions/run"}:
+        action = str(body.get("action") or body.get("id") or body.get("name") or "")
+        return dash._ops_action(action, body, config)
     if path == "/api/sessions/bulk-delete":
         ids = body.get("ids") if isinstance(body, dict) else None
         if not ids and isinstance(body, dict):
@@ -4954,6 +5035,67 @@ def create_app(config: Config) -> FastAPI:
         except Exception:  # noqa: BLE001
             body = {}
         return JSONResponse(_delete_managed_file(body if isinstance(body, dict) else {}))
+
+    @app.get("/api/credentials/pools")
+    async def api_credentials_pools(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_credential_pools_payload(config))
+
+    @app.get("/api/credentials/pools/{provider}")
+    async def api_credentials_pool_detail(provider: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        name = _safe_resource_name(provider, "provider")
+        payload = _credential_pools_payload(config, name)
+        return JSONResponse(payload, status_code=200 if payload.get("ok") else 404)
+
+    @app.get("/api/credential-pools/status")
+    async def api_credential_pools_status(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_credential_pools_payload(config))
+
+    @app.get("/api/update/check")
+    @app.get("/api/portal/update/check")
+    @app.get("/api/check/update")
+    async def api_update_check(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(dash._update_check())
+
+    @app.post("/api/update/check")
+    @app.post("/api/portal/update/check")
+    @app.post("/api/check/update")
+    async def api_update_check_post(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(dash._update_check())
+
+    @app.get("/api/portal")
+    @app.get("/api/portal/status")
+    async def api_portal_status(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_portal_status_payload(config))
+
+    @app.get("/api/actions/status")
+    @app.get("/api/admin/actions/status")
+    async def api_actions_status(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_dashboard_action_catalog())
+
+    @app.get("/api/admin/status")
+    async def api_admin_status(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_admin_status_payload(config))
+
+    @app.post("/api/actions/run")
+    @app.post("/api/admin/actions/run")
+    async def api_actions_run(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        raw = await request.body()
+        try:
+            body = json.loads(raw) if raw else {}
+        except ValueError:
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        action = str(body.get("action") or body.get("id") or body.get("name") or "")
+        return JSONResponse(dash._ops_action(action, body, config))
 
     @app.get("/api/{path:path}")
     async def api_get(path: str, request: Request) -> JSONResponse:

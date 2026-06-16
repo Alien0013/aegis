@@ -337,6 +337,12 @@ def test_fastapi_registers_live_and_pty_websockets(tmp_path, monkeypatch):
         "/api/auth/ws-ticket",
         "/api/events",
         "/api/pub",
+        "/api/credentials/pools",
+        "/api/credential-pools/status",
+        "/api/update/check",
+        "/api/portal",
+        "/api/actions/status",
+        "/api/admin/status",
         "/api/config/schema",
         "/api/config/raw",
         "/api/env",
@@ -423,6 +429,74 @@ def test_fastapi_event_alias_and_publish_route(tmp_path, monkeypatch):
         assert event == body["event"]
     finally:
         BUS.unsubscribe(sub)
+
+
+def test_fastapi_portal_admin_and_credential_aliases(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    monkeypatch.setenv("AEGIS_DASHBOARD_TOKEN", "t")
+
+    from aegis.config import Config
+    from aegis.credentials import reset as reset_credential_pools
+    from aegis.dashboard_fastapi import create_app
+
+    cfg = Config.load()
+    cfg.set("credential_pools.anthropic.keys", [
+        "sk-ant-test-111111111111",
+        "sk-ant-test-222222222222",
+    ])
+    cfg.set("credential_pools.anthropic.strategy", "round_robin")
+    reset_credential_pools()
+    app = create_app(cfg)
+    headers = {"X-Aegis-Token": "t"}
+
+    pools = asyncio.run(_request(app, "GET", "/api/credentials/pools", headers=headers))
+    assert pools.status_code == 200
+    anthropic = next(row for row in pools.json()["pools"] if row["provider"] == "anthropic")
+    assert anthropic["keys"] == 2
+    assert anthropic["strategy"] == "round_robin"
+    assert "sk-ant-test" not in json.dumps(pools.json())
+
+    detail = asyncio.run(_request(app, "GET", "/api/credentials/pools/anthropic", headers=headers))
+    assert detail.status_code == 200
+    assert detail.json()["pool"]["provider"] == "anthropic"
+
+    status_alias = asyncio.run(_request(app, "GET", "/api/credential-pools/status", headers=headers))
+    assert status_alias.status_code == 200
+    assert status_alias.json()["count"] >= 1
+
+    update = asyncio.run(_request(app, "GET", "/api/update/check", headers=headers))
+    assert update.status_code == 200
+    assert "version" in update.json()
+
+    update_post = asyncio.run(_request(app, "POST", "/api/portal/update/check", headers=headers))
+    assert update_post.status_code == 200
+    assert update_post.json()["version"] == update.json()["version"]
+
+    portal = asyncio.run(_request(app, "GET", "/api/portal", headers=headers))
+    assert portal.status_code == 200
+    assert portal.json()["ok"] is True
+    assert "system" in portal.json()
+    assert "actions" in portal.json()
+
+    actions = asyncio.run(_request(app, "GET", "/api/actions/status", headers=headers))
+    assert actions.status_code == 200
+    assert any(row["id"] == "update_check" for row in actions.json()["actions"])
+
+    run_action = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/actions/run",
+        json={"action": "update_check"},
+        headers=headers,
+    ))
+    assert run_action.status_code == 200
+    assert run_action.json()["version"] == update.json()["version"]
+
+    admin = asyncio.run(_request(app, "GET", "/api/admin/status", headers=headers))
+    assert admin.status_code == 200
+    assert admin.json()["ok"] is True
+    assert admin.json()["auth"]["token_configured"] is True
+    reset_credential_pools()
 
 
 def test_fastapi_browser_manage_route(tmp_path, monkeypatch):
