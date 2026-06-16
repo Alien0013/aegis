@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from ..config import Config, Workspace
+from ..config import Config, Workspace, context_file_max_chars, drain_context_file_warnings
 from ..constants import DEFAULT_MAX_ITERATIONS
 from ..memory import MemoryManager
 from ..providers import Provider
@@ -114,7 +114,10 @@ class Agent:
             MemoryManager(config) if config.get("memory.enabled", True) else None
         )
         self.skills = skills or SkillsLoader(config, self.cwd)
-        self.workspace = Workspace(self.cwd)
+        self.workspace = Workspace(
+            self.cwd,
+            context_file_max_chars=context_file_max_chars(config),
+        )
         self.context_builder = ContextBuilder(config, self.workspace, self.cwd)
         self.store = store
         self.event_callback = event_callback
@@ -306,7 +309,11 @@ class Agent:
             parts.insert(insert_at, role_part)
             text = "\n\n---\n\n".join(part.text.strip() for part in parts if part.text.strip())
             built = PromptBuild(text=text, parts=parts)
-        self._last_prompt_metadata = built.metadata()
+        metadata = built.metadata()
+        warnings = drain_context_file_warnings()
+        if warnings:
+            metadata["context_file_warnings"] = warnings
+        self._last_prompt_metadata = metadata
         return built.text
 
     def _subagent_role_prompt_part(self) -> PromptPart | None:
@@ -350,6 +357,11 @@ class Agent:
         parts = []
         if current_build and isinstance(meta, dict) and meta.get("hash") == actual["hash"]:
             parts = meta.get("parts", []) or []
+            warnings = list(meta.get("context_file_warnings") or [])
+            if warnings:
+                self.session.meta["context_file_warnings"] = warnings
+            else:
+                self.session.meta.pop("context_file_warnings", None)
         elif self.session.meta.get("system_prompt_hash") == actual["hash"]:
             parts = self.session.meta.get("prompt_parts", []) or []
         self.session.meta["system_prompt_hash"] = actual["hash"]

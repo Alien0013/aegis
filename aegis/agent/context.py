@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .. import __version__
-from ..config import Config, Workspace
+from ..config import Config, Workspace, context_file_max_chars
 from ..util import estimate_tokens, now_local
 
 DEFAULT_IDENTITY = f"""\
@@ -182,7 +182,10 @@ class ContextBuilder:
     def __init__(self, config: Config, workspace: Workspace | None = None, cwd: Path | None = None):
         self.config = config
         self.cwd = cwd or Path.cwd()
-        self.workspace = workspace or Workspace(self.cwd)
+        self.workspace = workspace or Workspace(
+            self.cwd,
+            context_file_max_chars=context_file_max_chars(config),
+        )
 
     def _persona(self) -> str:
         """Layer SOUL.md with the active personality, when one is set."""

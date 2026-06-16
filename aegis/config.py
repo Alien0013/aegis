@@ -20,6 +20,7 @@ and ``$AEGIS_HOME`` switches take effect.
 
 from __future__ import annotations
 
+import contextvars
 import os
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,8 @@ from typing import Any
 import yaml
 
 from .util import atomic_write, ensure_dir, read_text
+
+DEFAULT_CONTEXT_FILE_MAX_CHARS = 20_000
 
 # --- module-level profile override (set by CLI) ----------------------------
 _PROFILE: str | None = None
@@ -250,6 +253,7 @@ def set_env_var(key: str, value: str) -> None:
 
 # --- config.yaml ------------------------------------------------------------
 DEFAULT_CONFIG: dict[str, Any] = {
+    "context_file_max_chars": DEFAULT_CONTEXT_FILE_MAX_CHARS,
     "model": {
         "provider": "anthropic",
         "default": "claude-sonnet-4-6",
@@ -513,6 +517,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "remove_tokens": True,        # remove consumed @refs from the active prompt text
         "allow_outside_cwd": False,   # keep prompt attachments inside the active workspace
     },
+    "workspace": {
+        "context_file_max_chars": None,  # optional alias for context_file_max_chars
+    },
     "server": {
         "host": "127.0.0.1",
         "port": 8790,
@@ -663,6 +670,70 @@ def _coerce(value: Any) -> Any:
         return value
 
 
+_context_file_warnings: contextvars.ContextVar[list[str] | None] = (
+    contextvars.ContextVar("aegis_context_file_warnings", default=None)
+)
+
+
+def _positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def context_file_max_chars(config: Config | None = None, explicit: Any = None) -> int:
+    """Return the configured workspace-context file cap.
+
+    Hermes exposes this as the top-level ``context_file_max_chars`` key. AEGIS also
+    accepts ``workspace.context_file_max_chars`` so profile-local config can keep
+    workspace settings grouped while remaining compatible with the Hermes name.
+    """
+    value = explicit
+    if value is None and config is not None:
+        value = config.get("workspace.context_file_max_chars")
+        if value in (None, ""):
+            value = config.get("context_file_max_chars")
+    if value in (None, ""):
+        value = DEFAULT_CONTEXT_FILE_MAX_CHARS
+    return _positive_int(value, DEFAULT_CONTEXT_FILE_MAX_CHARS)
+
+
+def _record_context_file_warning(message: str) -> None:
+    warnings = _context_file_warnings.get()
+    if warnings is None:
+        warnings = []
+        _context_file_warnings.set(warnings)
+    warnings.append(message)
+
+
+def drain_context_file_warnings() -> list[str]:
+    """Return and clear workspace context-file warnings for the current context."""
+    warnings = list(_context_file_warnings.get() or [])
+    _context_file_warnings.set(None)
+    return warnings
+
+
+def _truncate_context_file(body: str, label: str, max_chars: int) -> str:
+    if len(body) <= max_chars:
+        return body
+    head_chars = max(1, int(max_chars * 0.70))
+    tail_chars = max(1, int(max_chars * 0.20))
+    if head_chars + tail_chars >= len(body):
+        return body
+    warning = (
+        f"Context file {label} TRUNCATED: {len(body)} chars exceeds limit of "
+        f"{max_chars} - increase context_file_max_chars or trim the file."
+    )
+    _record_context_file_warning(warning)
+    marker = (
+        f"\n\n[..., truncated {label}: kept {head_chars}+{tail_chars} of "
+        f"{len(body)} chars. Use file tools to read the full file.]\n\n"
+    )
+    return body[:head_chars].rstrip() + marker + body[-tail_chars:].lstrip()
+
+
 # --- Workspace context files -----------------------------------------------
 class Workspace:
     """Identity + rules files, loaded hierarchically.
@@ -679,11 +750,11 @@ class Workspace:
 
     RULE_FILES = (".aegis.md", "AGENTS.md", "CLAUDE.md", ".cursorrules")
 
-    def __init__(self, cwd: Path | None = None):
+    def __init__(self, cwd: Path | None = None, *, context_file_max_chars: Any = None):
         self.cwd = cwd or Path.cwd()
+        self.context_file_max_chars = context_file_max_chars
 
-    @staticmethod
-    def _context_text(path: Path, label: str) -> str:
+    def _context_text(self, path: Path, label: str) -> str:
         body = read_text(path).strip()
         if not body:
             return ""
@@ -696,7 +767,11 @@ class Workspace:
             reason = findings[0].split(":", 1)[0]
             return (f"[BLOCKED: {label} contained potential prompt injection "
                     f"({reason}). Content not loaded.]")
-        return body
+        return _truncate_context_file(
+            body,
+            label,
+            context_file_max_chars(explicit=self.context_file_max_chars),
+        )
 
     def soul(self) -> str:
         return self._context_text(workspace_dir() / "SOUL.md", "SOUL.md")

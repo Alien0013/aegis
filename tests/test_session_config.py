@@ -128,6 +128,73 @@ def test_workspace_rules_layer_root_and_subdir(tmp_path):
     assert rules.index("ROOT RULES") < rules.index("SUBPKG RULES")
 
 
+def test_workspace_context_files_truncate_and_warn(tmp_path):
+    from aegis.config import Workspace, drain_context_file_warnings
+
+    body = "A" * 80 + "middle-marker" + "Z" * 80
+    (tmp_path / "AGENTS.md").write_text(body, encoding="utf-8")
+
+    rules = Workspace(cwd=tmp_path, context_file_max_chars=50).rules()
+    warnings = drain_context_file_warnings()
+
+    assert "truncated project:AGENTS.md" in rules
+    assert "middle-marker" not in rules
+    assert len(warnings) == 1
+    assert "context_file_max_chars" in warnings[0]
+    assert "AGENTS.md" in warnings[0]
+
+
+def test_context_file_max_chars_prefers_workspace_alias():
+    from aegis.config import Config, context_file_max_chars
+
+    cfg = Config({
+        "context_file_max_chars": 100,
+        "workspace": {"context_file_max_chars": 64},
+    })
+
+    assert context_file_max_chars(cfg) == 64
+
+
+def test_workspace_context_file_warnings_are_context_local(tmp_path):
+    from contextvars import copy_context
+
+    from aegis.config import Workspace, drain_context_file_warnings
+
+    (tmp_path / "AGENTS.md").write_text("R" * 120, encoding="utf-8")
+
+    def build_and_drain():
+        Workspace(cwd=tmp_path, context_file_max_chars=40).rules()
+        return drain_context_file_warnings()
+
+    warnings = copy_context().run(build_and_drain)
+
+    assert warnings
+    assert drain_context_file_warnings() == []
+
+
+def test_agent_records_context_file_truncation_warnings(tmp_path):
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.session import Session
+
+    class DummyProvider:
+        name = "dummy"
+        model = "dummy-model"
+        context_length = 200_000
+        auth = None
+
+    (tmp_path / "AGENTS.md").write_text("P" * 140, encoding="utf-8")
+    cfg = Config.load()
+    cfg.data["context_file_max_chars"] = 50
+    agent = Agent(config=cfg, provider=DummyProvider(), session=Session.create(), cwd=tmp_path)
+
+    agent.ensure_system_prompt()
+
+    warnings = agent.session.meta.get("context_file_warnings")
+    assert warnings and "context_file_max_chars" in warnings[0]
+    assert "truncated project:AGENTS.md" in agent.session.messages[0].content
+
+
 def test_personality_layers_with_soul(tmp_path):
     from aegis.agent.context import ContextBuilder
     from aegis.config import Config, workspace_dir
