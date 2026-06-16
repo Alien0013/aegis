@@ -67,6 +67,13 @@ async def _request(app, method: str, path: str, **kwargs) -> httpx.Response:
 def test_fastapi_dashboard_auth_and_cookie(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
 
+    providers = asyncio.run(_request(app, "GET", "/api/auth/providers"))
+    assert providers.status_code == 200
+    assert providers.json()["token_configured"] is True
+    token_row = next(row for row in providers.json()["providers"] if row["id"] == "token")
+    assert "value" not in token_row
+    assert "secret" not in token_row
+
     res = asyncio.run(_request(app, "GET", "/api/status"))
     assert res.status_code == 401
 
@@ -80,6 +87,12 @@ def test_fastapi_dashboard_auth_and_cookie(tmp_path, monkeypatch):
 
 def test_fastapi_basic_login_session_and_logout(tmp_path, monkeypatch):
     app = _basic_app(tmp_path, monkeypatch)
+
+    providers = asyncio.run(_request(app, "GET", "/api/auth/providers"))
+    assert providers.status_code == 200
+    assert providers.json()["basic_configured"] is True
+    assert providers.json()["login_url"] == "/login"
+    assert any(row["id"] == "basic" for row in providers.json()["providers"])
 
     res = asyncio.run(_request(app, "GET", "/api/status"))
     assert res.status_code == 401
@@ -320,6 +333,7 @@ def test_fastapi_registers_live_and_pty_websockets(tmp_path, monkeypatch):
     assert routes["/api/pty"] == "APIWebSocketRoute"
     for path in (
         "/api/auth/me",
+        "/api/auth/providers",
         "/api/auth/ws-ticket",
         "/api/config/schema",
         "/api/config/raw",

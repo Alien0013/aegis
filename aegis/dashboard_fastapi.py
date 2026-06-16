@@ -105,6 +105,53 @@ def _auth_configured(config: Config) -> bool:
     return bool(dash._dashboard_token(config) or _basic_auth_configured())
 
 
+def _auth_providers_payload(config: Config) -> dict[str, Any]:
+    token_configured = bool(dash._dashboard_token(config))
+    basic_configured = _basic_auth_configured()
+    providers: list[dict[str, Any]] = []
+    if token_configured:
+        providers.append({
+            "id": "token",
+            "name": "Dashboard token",
+            "type": "token",
+            "enabled": True,
+            "available": True,
+            "header": "X-Aegis-Token",
+            "query_param": "token",
+            "cookie": "aegis_dashboard_token",
+        })
+    if basic_configured:
+        providers.append({
+            "id": "basic",
+            "name": "Username and password",
+            "type": "password",
+            "enabled": True,
+            "available": True,
+            "login_url": "/login",
+            "session_cookie": _SESSION_COOKIE,
+            "ttl_seconds": _SESSION_TTL_SECONDS,
+        })
+    if not providers:
+        providers.append({
+            "id": "loopback",
+            "name": "Loopback local access",
+            "type": "loopback",
+            "enabled": not _remote_bind_requires_auth(config),
+            "available": not _remote_bind_requires_auth(config),
+        })
+    return {
+        "ok": True,
+        "auth_required": _auth_configured(config) or _remote_bind_requires_auth(config),
+        "token_configured": token_configured,
+        "basic_configured": basic_configured,
+        "session_cookie": _SESSION_COOKIE,
+        "ttl_seconds": _SESSION_TTL_SECONDS,
+        "default_provider": providers[0]["id"] if providers else "",
+        "login_url": "/login" if basic_configured else "",
+        "providers": providers,
+    }
+
+
 def _session_secret(config: Config) -> str:
     return (
         os.environ.get(_BASIC_SECRET_ENV)
@@ -2687,6 +2734,8 @@ def _ws_rpc_error(request_id: Any, code: int, message: str, *, is_jsonrpc: bool)
 def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
     if path == "/api/status":
         return dash._dashboard_status(config)
+    if path == "/api/auth/providers":
+        return _auth_providers_payload(config)
     if path == "/api/cockpit":
         return dash._dashboard_cockpit(config)
     if path == "/api/kanban":
@@ -3341,6 +3390,12 @@ def create_app(config: Config) -> FastAPI:
         except ValueError as exc:
             return JSONResponse({"connected": False, "url": "", "error": str(exc)}, status_code=400)
         return JSONResponse(result)
+
+    @app.get("/api/auth/providers")
+    async def api_auth_providers(request: Request) -> JSONResponse:
+        if not _request_peer_allowed(request, config):
+            return JSONResponse({"ok": False, "error": "request rejected by dashboard host guard"}, status_code=403)
+        return JSONResponse(_auth_providers_payload(config))
 
     @app.get("/api/auth/me")
     async def api_auth_me(request: Request) -> JSONResponse:
