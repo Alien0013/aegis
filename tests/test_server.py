@@ -574,6 +574,40 @@ def test_openai_chat_completions_accepts_image_only_user_input(monkeypatch, tmp_
     assert _FakeRunner.calls[0]["prompt"].images == ["data:image/png;base64,abc"]
 
 
+def test_openai_chat_completions_rejects_unsupported_content_parts(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        unsupported_status, unsupported_data = _request(port, "POST", "/v1/chat/completions", {
+            "messages": [{
+                "role": "user",
+                "content": [{"type": "file", "file_id": "file_123"}],
+            }],
+        })
+        malformed_status, malformed_data = _request(port, "POST", "/v1/chat/completions", {
+            "messages": [{
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {}}],
+            }],
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert unsupported_status == malformed_status == 400
+    unsupported = json.loads(unsupported_data)["error"]
+    malformed = json.loads(malformed_data)["error"]
+    assert unsupported["code"] == "unsupported_content_part"
+    assert unsupported["param"] == "messages[0].content[0].type"
+    assert malformed["code"] == "invalid_image_content"
+    assert _FakeRunner.calls == []
+
+
 def test_openai_chat_completions_aiohttp_sse_flushes_live(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import time
@@ -932,6 +966,32 @@ def test_responses_accepts_messages_alias_and_image_only_input(monkeypatch, tmp_
     assert status == 200
     assert json.loads(data)["object"] == "response"
     assert _FakeRunner.calls[0]["prompt"].images == ["data:image/png;base64,abc"]
+
+
+def test_responses_rejects_unsupported_content_parts(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": [{
+                "role": "user",
+                "content": [{"type": "document", "document": {"id": "doc_123"}}],
+            }],
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 400
+    error = json.loads(data)["error"]
+    assert error["code"] == "unsupported_content_part"
+    assert error["param"] == "input[0].content[0].type"
+    assert _FakeRunner.calls == []
 
 
 def test_responses_echo_hermes_session_key(monkeypatch, tmp_path):

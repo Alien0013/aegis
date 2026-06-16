@@ -196,6 +196,62 @@ def _content(value: Any) -> tuple[str, list[str]]:
     return "\n".join(t for t in texts if t), images
 
 
+def _content_part_validation_error(value: Any, *, param: str) -> dict[str, Any] | None:
+    if value is None or isinstance(value, str):
+        return None
+    if not isinstance(value, list):
+        return None
+    supported = {"text", "input_text", "image_url", "input_image"}
+    for index, part in enumerate(value):
+        part_param = f"{param}[{index}]"
+        if not isinstance(part, dict):
+            return _openai_error(
+                "Content array entries must be objects",
+                code="invalid_content_part",
+                param=part_param,
+            )
+        ptype = str(part.get("type") or "")
+        if ptype not in supported:
+            return _openai_error(
+                f"Unsupported content part type: {ptype or '<missing>'}",
+                code="unsupported_content_part",
+                param=f"{part_param}.type",
+            )
+        if ptype in {"text", "input_text"} and not isinstance(part.get("text", ""), str):
+            return _openai_error(
+                "Text content parts require a string 'text' field",
+                code="invalid_text_content",
+                param=f"{part_param}.text",
+            )
+        if ptype in {"image_url", "input_image"}:
+            image = part.get("image_url") or part.get("image")
+            if isinstance(image, dict):
+                image = image.get("url")
+            if not isinstance(image, str) or not image.strip():
+                return _openai_error(
+                    "Image content parts require a non-empty image URL",
+                    code="invalid_image_content",
+                    param=f"{part_param}.image_url",
+                )
+    return None
+
+
+def _response_content_validation_error(value: Any, *, param: str) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        if "content" in value:
+            return _content_part_validation_error(value.get("content"), param=f"{param}.content")
+        if "type" in value:
+            return _content_part_validation_error([value], param=param)
+        return None
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            err = _response_content_validation_error(item, param=f"{param}[{index}]")
+            if err is not None:
+                return err
+        return None
+    return _content_part_validation_error(value, param=param)
+
+
 def _content_has_visible_payload(value: Any) -> bool:
     text, images = _content(value)
     return bool(str(text or "").strip() or images)
@@ -224,6 +280,9 @@ def _chat_messages_validation_error(value: Any) -> dict[str, Any] | None:
                 "Missing or invalid 'messages' field",
                 param=f"messages[{index}]",
             )
+        err = _content_part_validation_error(item.get("content"), param=f"messages[{index}].content")
+        if err is not None:
+            return err
     has_user_payload = any(
         str(item.get("role") or "").lower() == "user"
         and _content_has_visible_payload(item.get("content", ""))
@@ -241,6 +300,10 @@ def _responses_input_validation_error(body: dict[str, Any]) -> dict[str, Any] | 
         raw = body.get("messages")
     else:
         return _openai_error("Missing 'input' field", param="input")
+
+    err = _response_content_validation_error(raw, param="input")
+    if err is not None:
+        return err
 
     has_payload = False
     if isinstance(raw, str):
