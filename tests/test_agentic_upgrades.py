@@ -169,17 +169,21 @@ def test_background_spawn_registers_subagent_terminal_backend(tmp_path, monkeypa
         backends.clear_task_env_overrides(tid)
 
 
-def test_background_manager_caps_workers_and_records_completions(tmp_path, monkeypatch):
+def test_background_manager_rejects_at_capacity_and_records_completions(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import pytest
     import threading
     import time
     import aegis.surface as surface
-    from aegis.background import BackgroundManager
+    from aegis.background import BackgroundCapacityError, BackgroundManager
     from aegis.config import Config
+    from aegis.tools.process_registry import process_registry
 
     active = 0
     max_seen = 0
     lock = threading.Lock()
+    both_running = threading.Event()
+    release = threading.Event()
 
     class FakeRunner:
         def __init__(self, config, cwd=None, include_mcp=True):
@@ -196,8 +200,10 @@ def test_background_manager_caps_workers_and_records_completions(tmp_path, monke
             with lock:
                 active += 1
                 max_seen = max(max_seen, active)
+                if active >= 2:
+                    both_running.set()
             try:
-                time.sleep(0.12)
+                release.wait(3)
                 return type("R", (), {"text": f"ok {prompt}", "run_id": f"run_{prompt}"})()
             finally:
                 with lock:
@@ -209,23 +215,82 @@ def test_background_manager_caps_workers_and_records_completions(tmp_path, monke
     config = Config.load()
     config.data.setdefault("delegation", {})["max_background_children"] = 2
     monkeypatch.setattr(surface, "SurfaceRunner", FakeRunner)
+    process_registry.drain_notifications()
 
     mgr = BackgroundManager()
-    ids = [mgr.spawn(config, f"task{i}", session_meta={"agent_type": "review"}) for i in range(5)]
+    ids = [mgr.spawn(config, f"task{i}", session_meta={"agent_type": "review"}) for i in range(2)]
+    assert both_running.wait(2)
+    with pytest.raises(BackgroundCapacityError):
+        mgr.spawn(config, "task2", session_meta={"agent_type": "review"})
+    release.set()
     deadline = time.time() + 5
     while time.time() < deadline:
         rows = mgr.list()
-        if len(rows) == 5 and all(row["status"] != "running" for row in rows):
+        if len(rows) == 2 and all(row["status"] != "running" for row in rows):
             break
         time.sleep(0.02)
 
     assert {row["id"] for row in mgr.list()} == set(ids)
     assert max_seen <= 2
+    late_id = mgr.spawn(config, "task3", session_meta={"agent_type": "review"})
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        task = mgr.get(late_id)
+        if task and task.status != "running":
+            break
+        time.sleep(0.02)
     events = mgr.completions()
-    assert len(events) == 5
+    assert len(events) == 3
     assert {event["status"] for event in events} == {"done"}
     assert {event["agent_type"] for event in events} == {"review"}
     assert all(event["background"] is True for event in events)
+    notifications = process_registry.drain_notifications()
+    async_events = [event for event, text in notifications if event.get("type") == "async_delegation"]
+    assert len(async_events) == 3
+    assert any("ASYNC DELEGATION COMPLETE" in text and "ok task3" in text for _event, text in notifications)
+
+
+def test_background_manager_prunes_completed_records(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import time
+    import aegis.surface as surface
+    from aegis.background import BackgroundManager
+    from aegis.config import Config
+
+    class FakeRunner:
+        def __init__(self, config, cwd=None, include_mcp=True):
+            pass
+
+        def load_or_create_session(self, session_id=None, title=None, surface="", meta=None, **_kwargs):
+            return type("S", (), {"id": session_id, "title": title, "meta": meta or {}})()
+
+        def make_agent(self, **_kwargs):
+            return object()
+
+        def run_prompt(self, prompt, **kwargs):
+            return type("R", (), {"text": f"ok {prompt}", "run_id": f"run_{prompt}"})()
+
+        def close(self):
+            pass
+
+    config = Config.load()
+    config.data.setdefault("delegation", {})["max_async_children"] = 10
+    config.data.setdefault("delegation", {})["retain_completed_background_tasks"] = 2
+    monkeypatch.setattr(surface, "SurfaceRunner", FakeRunner)
+
+    mgr = BackgroundManager()
+    ids = [mgr.spawn(config, f"task{i}") for i in range(5)]
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        if len(mgr.completions()) == 5:
+            break
+        time.sleep(0.02)
+
+    rows = mgr.list()
+    assert len(rows) == 2
+    assert all(row["status"] == "done" for row in rows)
+    assert {row["id"] for row in rows}.issubset(set(ids))
+    assert len(mgr.completions()) == 5
 
 
 def test_background_subagent_rejects_multiple_tasks(tmp_path):

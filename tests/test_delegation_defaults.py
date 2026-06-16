@@ -51,6 +51,24 @@ def test_subagent_concurrency_precedence():
     assert _subagent_concurrency(Config({"delegation": {"max_concurrent_children": 0}})) == 4
 
 
+def test_background_async_concurrency_precedence():
+    from aegis.background import BackgroundManager
+
+    mgr = BackgroundManager()
+    assert mgr._max_workers(Config({
+        "delegation": {"max_async_children": 3},
+        "agent": {"subagent_concurrency": 4},
+    })) == 3
+    assert mgr._max_workers(Config({
+        "delegation": {"max_async_children": 3, "max_background_children": 2},
+        "agent": {"subagent_concurrency": 4},
+    })) == 2
+    assert mgr._max_workers(Config({
+        "delegation": {"max_async_children": 5, "max_background_children": 2},
+        "agent": {"subagent_concurrency": 4},
+    })) == 5
+
+
 def test_child_timeout_read():
     assert _child_timeout(Config({"delegation": {"child_timeout_seconds": 45}})) == 45.0
     assert _child_timeout(Config({})) == 0.0

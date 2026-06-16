@@ -1256,10 +1256,74 @@ def _clean_process_output(text: str) -> str:
     return "\n".join(lines)
 
 
+def _format_elapsed(seconds: Any) -> str:
+    try:
+        value = int(max(0, float(seconds)))
+    except (TypeError, ValueError):
+        return "?"
+    if value < 60:
+        return f"{value}s"
+    minutes, secs = divmod(value, 60)
+    if minutes < 60:
+        return f"{minutes}m" if secs == 0 else f"{minutes}m{secs}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h" if minutes == 0 else f"{hours}h{minutes}m"
+
+
+def _format_async_delegation_notification(event: dict[str, Any]) -> str:
+    delegation_id = str(event.get("delegation_id") or event.get("session_id") or "unknown")
+    goal = str(event.get("goal") or "")
+    context = str(event.get("context") or "")
+    role = str(event.get("role") or event.get("agent_type") or "leaf")
+    model = str(event.get("model") or "?")
+    status = str(event.get("status") or "completed")
+    summary = str(event.get("summary") or "")
+    error = str(event.get("error") or "")
+    duration = event.get("duration_seconds", "?")
+    dispatched_at = event.get("dispatched_at")
+    completed_at = event.get("completed_at") or time.time()
+    lines = [
+        f"[ASYNC DELEGATION COMPLETE - {delegation_id}]",
+        "A background subagent you dispatched earlier has finished. Use the result if it is still relevant.",
+        "",
+    ]
+    if isinstance(dispatched_at, (int, float)):
+        age = _format_elapsed(float(completed_at) - float(dispatched_at))
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(dispatched_at)))
+        lines.append(f"Dispatched: {stamp} ({age} ago)")
+    if goal:
+        lines.append(f"Original goal: {goal}")
+    if context:
+        lines.append(f"Context provided: {context}")
+    lines.append(f"Role: {role}   Model: {model}")
+    lines.append(f"Status: {status}   Duration: {_format_elapsed(duration)}")
+    lines.append("--- RESULT ---")
+    if status in {"completed", "done", "success"} and summary:
+        lines.append(summary)
+    elif status == "interrupted":
+        lines.append("The subagent was interrupted before completing.")
+        if error:
+            lines.append(error)
+        if summary:
+            lines.append("Partial output:")
+            lines.append(summary)
+    else:
+        lines.append(f"The subagent did not complete successfully (status={status}).")
+        if error:
+            lines.append(error)
+        if summary:
+            lines.append("Partial output:")
+            lines.append(summary)
+    return "\n".join(lines)
+
+
 def format_process_notification(event: dict[str, Any]) -> str | None:
     evt_type = event.get("type", "completion")
     sid = event.get("session_id", "unknown")
     command = event.get("command", "unknown")
+
+    if evt_type == "async_delegation":
+        return _format_async_delegation_notification(event)
 
     if evt_type == "watch_disabled":
         return f"[IMPORTANT: {event.get('message', '')}]"

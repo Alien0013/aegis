@@ -78,6 +78,8 @@ def test_config_deep_merge_keeps_user_and_defaults():
     assert "memory" in c.data and "tools" in c.data
     assert c.get("agent.reasoning_effort") == DEFAULT_CONFIG["agent"]["reasoning_effort"]
     assert c.get("delegation.subagent_auto_approve") is False
+    assert c.get("delegation.max_async_children") == 3
+    assert c.get("delegation.retain_completed_background_tasks") == 50
 
 
 def test_workspace_rules_merge(tmp_path):

@@ -836,13 +836,15 @@ def test_terminal_background_inherits_agent_cwd(monkeypatch, tmp_path):
     captured = {}
 
     class Manager:
-        def spawn(self, config, prompt, *, cwd=None, on_done=None, parent_session=None):
+        def spawn(self, config, prompt, *, cwd=None, on_done=None, parent_session=None,
+                  delivery=None):
             captured.update({
                 "config": config,
                 "prompt": prompt,
                 "cwd": cwd,
                 "on_done": on_done,
                 "parent_session": parent_session,
+                "delivery": delivery or {},
             })
             task = SimpleNamespace(
                 id="bg_test",

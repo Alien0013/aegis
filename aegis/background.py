@@ -24,6 +24,39 @@ class BgTask:
     finished_at: float = 0.0
     parent_session_id: str = ""
     agent_type: str = "general"
+    role: str = "leaf"
+    model: str = ""
+    platform: str = ""
+    chat_id: str = ""
+    user_id: str = ""
+    user_name: str = ""
+    thread_id: str = ""
+    message_id: str = ""
+
+
+class BackgroundCapacityError(RuntimeError):
+    """Raised when background subagent admission would exceed the configured cap."""
+
+
+def _default_config_value(dotted: str) -> Any:
+    try:
+        from .config import DEFAULT_CONFIG
+    except Exception:  # noqa: BLE001
+        return None
+    node: Any = DEFAULT_CONFIG
+    for part in dotted.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node
+
+
+def _positive_config_int(config: Any, dotted: str) -> int:
+    try:
+        value = int(config.get(dotted, 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+    return value if value > 0 else 0
 
 
 class BackgroundManager:
@@ -35,15 +68,54 @@ class BackgroundManager:
         self._completion_events: list[dict[str, Any]] = []
 
     def _max_workers(self, config: Any) -> int:
-        for key in ("delegation.max_background_children", "delegation.max_concurrent_children",
-                    "tools.subagent_concurrency"):
+        async_value = _positive_config_int(config, "delegation.max_async_children")
+        default_async = _default_config_value("delegation.max_async_children")
+        alias_keys = (
+            "delegation.max_background_children",
+            "delegation.max_concurrent_children",
+            "tools.subagent_concurrency",
+            "agent.subagent_concurrency",
+        )
+        alias_values = []
+        for key in alias_keys:
+            value = _positive_config_int(config, key)
+            if value and value != _default_config_value(key):
+                alias_values.append(value)
+        if async_value and (async_value != default_async or not any(alias_values)):
+            return max(1, min(async_value, 32))
+        for value in alias_values:
+            if value > 0:
+                return max(1, min(value, 32))
+        if async_value:
+            return max(1, min(async_value, 32))
+        return 4
+
+    def _retained_completed(self, config: Any) -> int:
+        for key in ("delegation.retain_completed_background_tasks",
+                    "delegation.max_retained_background_tasks"):
             try:
                 value = int(config.get(key, 0) or 0)
             except (TypeError, ValueError):
                 value = 0
             if value > 0:
-                return max(1, min(value, 32))
-        return 4
+                return max(1, min(value, 1000))
+        return 50
+
+    def _running_count_locked(self) -> int:
+        return sum(1 for task in self._tasks.values() if task.status == "running")
+
+    def _prune_completed_locked(self, config: Any) -> None:
+        keep = self._retained_completed(config)
+        completed = [
+            (task_id, task)
+            for task_id, task in self._tasks.items()
+            if task.status != "running"
+        ]
+        if len(completed) <= keep:
+            return
+        completed.sort(key=lambda item: item[1].finished_at or item[1].started_at or item[1].created_at)
+        for task_id, _task in completed[:len(completed) - keep]:
+            self._tasks.pop(task_id, None)
 
     def _submit(self, config: Any, fn) -> None:
         size = self._max_workers(config)
@@ -57,7 +129,7 @@ class BackgroundManager:
             executor = self._executor
         executor.submit(fn)
 
-    def _record_completion(self, task: BgTask) -> None:
+    def _record_completion(self, task: BgTask, config: Any) -> None:
         event = {
             "type": "subagent_done",
             "id": task.id,
@@ -76,10 +148,50 @@ class BackgroundManager:
         with self._lock:
             self._completion_events.append(event)
             self._completion_events = self._completion_events[-200:]
+            self._prune_completed_locked(config)
+        self._queue_async_delegation_event(task)
+
+    def _queue_async_delegation_event(self, task: BgTask) -> None:
+        try:
+            from .tools.process_registry import process_registry
+        except Exception:  # noqa: BLE001
+            return
+        completed_at = task.finished_at or time.time()
+        event = {
+            "type": "async_delegation",
+            "session_id": task.id,
+            "session_key": task.parent_session_id,
+            "delegation_id": task.id,
+            "goal": task.prompt,
+            "context": "",
+            "toolsets": None,
+            "role": task.role,
+            "model": task.model,
+            "agent_type": task.agent_type,
+            "status": "completed" if task.status == "done" else task.status,
+            "summary": task.result,
+            "error": task.error,
+            "run_id": task.run_id,
+            "api_calls": 0,
+            "duration_seconds": round(completed_at - (task.started_at or task.created_at), 2),
+            "dispatched_at": task.created_at,
+            "completed_at": completed_at,
+            "platform": task.platform,
+            "chat_id": task.chat_id,
+            "user_id": task.user_id,
+            "user_name": task.user_name,
+            "thread_id": task.thread_id,
+            "message_id": task.message_id,
+        }
+        try:
+            process_registry.completion_queue.put(event)
+        except Exception:  # noqa: BLE001
+            pass
 
     def spawn(self, config: Any, prompt: str, *, cwd=None, on_done=None,
               parent_session=None, registry=None, include_mcp: bool = True,
-              session_meta: dict | None = None, approver=None) -> str:
+              session_meta: dict | None = None, approver=None,
+              delivery: dict[str, Any] | None = None) -> str:
         """Run ``prompt`` in a background agent. ``on_done(task)`` (if given) fires
         when it finishes — used to announce the result back into a chat."""
         from .surface import SurfaceRunner, runtime_controls_meta, session_runtime_controls
@@ -89,9 +201,25 @@ class BackgroundManager:
             prompt=prompt,
             parent_session_id=str(getattr(parent_session, "id", "") or ""),
             agent_type=str((session_meta or {}).get("agent_type") or "general"),
+            role=str((session_meta or {}).get("role") or "leaf"),
+            model=str((session_meta or {}).get("model") or config.get("delegation.model", "")
+                      or config.get("model.default", "") or ""),
+            platform=str((delivery or {}).get("platform") or ""),
+            chat_id=str((delivery or {}).get("chat_id") or ""),
+            user_id=str((delivery or {}).get("user_id") or ""),
+            user_name=str((delivery or {}).get("user_name") or ""),
+            thread_id=str((delivery or {}).get("thread_id") or ""),
+            message_id=str((delivery or {}).get("message_id") or ""),
         )
         session_id = f"background:{task.id}"
         with self._lock:
+            max_workers = self._max_workers(config)
+            running = self._running_count_locked()
+            if running >= max_workers:
+                raise BackgroundCapacityError(
+                    f"async background delegation capacity reached ({max_workers} running). "
+                    "Wait for one to finish or raise delegation.max_async_children."
+                )
             self._tasks[task.id] = task
         try:
             backend = str(config.get("tools.subagent_terminal_backend", "") or "").strip().lower()
@@ -177,7 +305,7 @@ class BackgroundManager:
                         clear_task_env_overrides(env_task_id)
                 except Exception:  # noqa: BLE001
                     pass
-                self._record_completion(task)
+                self._record_completion(task, config)
             if on_done is not None:
                 try:
                     on_done(task)

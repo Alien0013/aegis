@@ -393,6 +393,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "delegation": {
         "subagent_auto_approve": False,  # child approval prompts auto-deny unless opted in
+        "max_async_children": 3,          # background subagents running at once; excess dispatches reject
+        "retain_completed_background_tasks": 50,  # completed background records kept for status views
     },
     "kanban": {
         "workers": 1,                    # parallel lane workers for `kanban run`

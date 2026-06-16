@@ -1711,7 +1711,7 @@ def handle_slash(
             _out("usage: /personality <name>")
     elif name == "/background":
         if arg:
-            from ..background import get_manager
+            from ..background import BackgroundCapacityError, get_manager
 
             def _announce(task) -> None:
                 try:
@@ -1734,14 +1734,17 @@ def handle_slash(
                                  "chat_id": None, "text": text[:2000]})
                 except Exception:  # noqa: BLE001
                     pass
-            tid = get_manager().spawn(
-                agent.config,
-                arg,
-                cwd=getattr(agent, "cwd", None),
-                on_done=_announce,
-                parent_session=agent.session,
-            )
-            _out(f"started background task {tid}", style="green")
+            try:
+                tid = get_manager().spawn(
+                    agent.config,
+                    arg,
+                    cwd=getattr(agent, "cwd", None),
+                    on_done=_announce,
+                    parent_session=agent.session,
+                )
+                _out(f"started background task {tid}", style="green")
+            except BackgroundCapacityError as e:
+                _out(str(e), style="yellow")
         else:
             _out("usage: /background <prompt>")
     elif name == "/tasks":

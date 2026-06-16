@@ -517,7 +517,7 @@ class SubagentTool(Tool):
                           max_depth: int) -> ToolResult:
         """Fire-and-forget delegation: the child runs after this turn ends and its
         result is announced into the originating chat (gateway) or kept for /tasks (CLI)."""
-        from ..background import get_manager
+        from ..background import BackgroundCapacityError, get_manager
         if len(tasks) > 1:
             return ToolResult.error(
                 "background delegation accepts one task at a time; start separate background "
@@ -531,6 +531,7 @@ class SubagentTool(Tool):
         role_prompt = _role_prompt(agent_type, spec)
         session_meta = {
             "agent_type": agent_type,
+            "role": role,
             "subagent_role_prompt": role_prompt,
         } if role_prompt or agent_type else {}
         include_mcp = spec["tools"] is None
@@ -543,13 +544,6 @@ class SubagentTool(Tool):
             add_wakeup("subagent", f"{task.id}: {task.prompt[:80]}",
                        task.result or task.error,
                        session_key=str(getattr(getattr(ctx.agent, "session", None), "id", "") or ""))
-            if platform and chat_id:                 # announce back into the chat via the outbox
-                try:
-                    from ..gateway.queue import DeliveryQueue
-                    DeliveryQueue().enqueue(platform, chat_id, text[:3500])
-                    return
-                except Exception:  # noqa: BLE001
-                    pass
             from ..eventbus import BUS              # else surface on the live dashboard feed
             BUS.publish({"type": "background_done", "platform": platform or "cli",
                          "chat_id": chat_id, "text": text[:2000],
@@ -557,15 +551,26 @@ class SubagentTool(Tool):
                          "agent_type": agent_type, "background": True})
 
         parent_session = getattr(ctx.agent, "session", None)
-        ids = [
-            get_manager().spawn(
-                child_config, t, cwd=ctx.cwd, on_done=_announce,
-                parent_session=parent_session, registry=registry,
-                include_mcp=include_mcp, session_meta=session_meta,
-                approver=_subagent_approver(config, "background"),
-            )
-            for t in tasks
-        ]
+        try:
+            ids = [
+                get_manager().spawn(
+                    child_config, t, cwd=ctx.cwd, on_done=_announce,
+                    parent_session=parent_session, registry=registry,
+                    include_mcp=include_mcp, session_meta=session_meta,
+                    approver=_subagent_approver(config, "background"),
+                    delivery={
+                        "platform": platform or "",
+                        "chat_id": chat_id or "",
+                        "user_id": getattr(ctx.agent, "user_id", "") or "",
+                        "user_name": getattr(ctx.agent, "user_name", "") or "",
+                        "thread_id": getattr(ctx.agent, "thread_id", "") or "",
+                        "message_id": getattr(ctx.agent, "message_id", "") or "",
+                    },
+                )
+                for t in tasks
+            ]
+        except BackgroundCapacityError as e:
+            return ToolResult.error(str(e))
         return ToolResult.ok(
             f"started {len(ids)} background task(s): {', '.join(ids)}. I'll report the "
             "result(s) here when they finish — continuing with your other work meanwhile.",

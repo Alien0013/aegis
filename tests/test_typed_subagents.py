@@ -295,7 +295,8 @@ def test_background_subagent_notifies_parent_memory(tmp_path, monkeypatch):
 
     class Manager:
         def spawn(self, config, prompt, *, cwd=None, on_done=None, parent_session=None,
-                  registry=None, include_mcp=True, session_meta=None, approver=None):
+                  registry=None, include_mcp=True, session_meta=None, approver=None,
+                  delivery=None):
             task = type("Task", (), {
                 "id": "bg_test",
                 "prompt": prompt,
@@ -308,6 +309,7 @@ def test_background_subagent_notifies_parent_memory(tmp_path, monkeypatch):
             self.include_mcp = include_mcp
             self.session_meta = session_meta or {}
             self.approver = approver
+            self.delivery = delivery or {}
             if on_done is not None:
                 on_done(task)
             return task.id
@@ -325,6 +327,29 @@ def test_background_subagent_notifies_parent_memory(tmp_path, monkeypatch):
     assert "READ-ONLY code reviewer" in manager.session_meta["subagent_role_prompt"]
     assert {t.name for t in manager.registry.all()} <= _READONLY_TOOLS
     assert manager.approver("Allow bash(ls)?") is False
+
+
+def test_background_subagent_reports_capacity_error(tmp_path, monkeypatch):
+    from aegis.background import BackgroundCapacityError
+    from aegis.config import Config
+    from aegis.session import Session
+
+    class Parent:
+        session = Session.create()
+        platform = None
+        chat_id = None
+
+    class Manager:
+        def spawn(self, *_args, **_kwargs):
+            raise BackgroundCapacityError("async background delegation capacity reached (2 running)")
+
+    monkeypatch.setattr("aegis.background.get_manager", lambda: Manager())
+    ctx = ToolContext(cwd=tmp_path, config=Config.load(), agent=Parent())
+
+    result = SubagentTool().run({"task": "bg task", "background": True}, ctx)
+
+    assert result.is_error
+    assert "capacity reached" in result.content
 
 
 def test_subagent_inherits_parent_runtime_controls(tmp_path, capture):
