@@ -263,6 +263,61 @@ def test_stop_cancels_active_locked_agent(tmp_path, monkeypatch):
     assert r._generation(key) == 1
 
 
+def test_gateway_wires_exec_approval_to_platform_adapter(tmp_path, monkeypatch):
+    import threading
+    from types import SimpleNamespace
+
+    import aegis.gateway.runner as rmod
+    from aegis.gateway.base import BasePlatformAdapter
+    from aegis.types import Message
+
+    r = _runner(tmp_path, monkeypatch)
+    approvals = []
+    seen = {}
+
+    class ApprovalAdapter(BasePlatformAdapter):
+        name = "telegram"
+
+        def send(self, chat_id: str, text: str) -> None:
+            return None
+
+        def ask_exec_approval(self, ev, prompt: str, *, timeout: float = 3600) -> str:
+            approvals.append((ev.chat_id, prompt, timeout))
+            return "approve"
+
+    class FakeAgent:
+        def __init__(self, session):
+            self.config = r.config
+            self.session = session
+            self.cwd = tmp_path
+            self.tool_context = SimpleNamespace(session=session)
+            self.provider = SimpleNamespace(name="fake", model="fake-model")
+            self.budget = SimpleNamespace(api_call_count=0)
+            self.cancel_event = threading.Event()
+            self.tools_used = 0
+
+    monkeypatch.setattr(
+        rmod.Agent,
+        "create",
+        staticmethod(lambda _config, **kwargs: FakeAgent(kwargs["session"])),
+    )
+
+    def fake_run_prompt(_prompt, **kwargs):
+        agent = kwargs["agent"]
+        seen["approved"] = agent.tool_context.approver("Allow bash(ls)?")
+        seen["approver_kwarg"] = kwargs.get("approver")
+        return SimpleNamespace(message=Message.assistant("approved"), session=kwargs["session"])
+
+    r.add(ApprovalAdapter())
+    monkeypatch.setattr(r._surface_runner, "run_prompt", fake_run_prompt)
+
+    assert r.dispatch(_ev("needs shell")) == "approved"
+    assert seen["approved"] is True
+    assert callable(seen["approver_kwarg"])
+    assert approvals and approvals[0][0] == "c1"
+    assert approvals[0][1] == "Allow bash(ls)?"
+
+
 def test_agent_cache_eviction_closes_cached_agent(tmp_path, monkeypatch):
     from types import SimpleNamespace
 

@@ -351,6 +351,28 @@ class GatewayRunner:
 
         return ask
 
+    def _gateway_approver(self, ev: MessageEvent):
+        adapter = next((a for a in self.adapters if a.name == ev.platform), None)
+        if adapter is None:
+            return None
+        timeout = float(self.config.get("gateway.approval_timeout_seconds",
+                                        self.config.get("gateway.clarify_timeout_seconds", 3600)) or 3600)
+
+        def approve(prompt: str):
+            ask_exec = getattr(adapter, "ask_exec_approval", None)
+            if callable(ask_exec):
+                answer = str(ask_exec(ev, prompt, timeout=timeout) or "")
+            elif hasattr(adapter, "ask_user"):
+                answer = str(adapter.ask_user(ev, prompt, ["approve", "deny"], timeout=timeout) or "")
+            else:
+                return False
+            normalized = answer.strip().lower()
+            if normalized in {"always", "approve always", "allow always"}:
+                return "always"
+            return normalized in {"y", "yes", "ok", "approve", "approved", "allow", "allowed"}
+
+        return approve
+
     @staticmethod
     def _parse_model_override(arg: str) -> tuple[str, str]:
         raw = arg.strip()
@@ -811,8 +833,11 @@ class GatewayRunner:
             agent.thread_id = ev.thread_id or ""
             agent.message_id = ev.message_id or ""
             asker = self._gateway_asker(ev)
+            approver = self._gateway_approver(ev)
             if asker is not None:
                 agent.tool_context.asker = asker
+            if approver is not None:
+                agent.tool_context.approver = approver
             try:
                 # Safety net: a gateway session can accumulate messages between turns
                 # (overnight Telegram/Discord) and blow past the window before the agent's
@@ -847,6 +872,8 @@ class GatewayRunner:
                     text,
                     session=session,
                     agent=agent,
+                    approver=approver,
+                    asker=asker,
                     surface="gateway",
                     meta={"platform": ev.platform, "chat_id": ev.chat_id, "user_id": ev.user_id or ""},
                     platform=ev.platform,
@@ -870,6 +897,8 @@ class GatewayRunner:
                             prompt_text,
                             session=agent.session,
                             agent=agent,
+                            approver=approver,
+                            asker=asker,
                             surface="gateway",
                             meta={
                                 "platform": ev.platform,

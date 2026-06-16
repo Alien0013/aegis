@@ -126,6 +126,25 @@ def test_shared_inbound_clarify_waiter_consumes_next_reply():
     assert seen == []
 
 
+def test_shared_inbound_exec_approval_waiter_uses_exec_prompt():
+    adapter = _adapter()
+    seen = []
+    adapter._init_inbound_queue(lambda ev: seen.append(ev.text) or f"reply:{ev.text}")
+    answer = {}
+
+    def ask():
+        answer["text"] = adapter.ask_exec_approval(_ev("ask"), "Allow bash(ls)?", timeout=2)
+
+    thread = threading.Thread(target=ask)
+    thread.start()
+    _wait_for(lambda: ("c1", "Allow bash(ls)?\nReply approve, always, or deny.") in adapter.sent)
+    adapter._submit_inbound(_ev("approve"))
+    thread.join(2)
+
+    assert answer["text"] == "approve"
+    assert seen == []
+
+
 def test_shared_inbound_busy_modes(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     from aegis.config import Config

@@ -365,6 +365,37 @@ class BasePlatformAdapter:
                 if not waiters:
                     self._clarify_waiters.pop(key, None)
 
+    def ask_exec_approval(
+        self,
+        ev: MessageEvent,
+        prompt: str,
+        *,
+        timeout: float = 3600,
+    ) -> str:
+        import threading
+
+        self._ensure_inbound_queue()
+        key = self._conversation_key(ev)
+        done = threading.Event()
+        waiter = {"event": done, "answer": ""}
+        with self._qlock:
+            self._clarify_waiters.setdefault(key, []).append(waiter)
+        try:
+            rendered = (prompt or "").strip()
+            if rendered:
+                rendered += "\n"
+            rendered += "Reply approve, always, or deny."
+            self.send_exec_approval(ev.chat_id, rendered)
+            done.wait(max(0.1, float(timeout or 0)))
+            return str(waiter.get("answer") or "")
+        finally:
+            with self._qlock:
+                waiters = self._clarify_waiters.get(key, [])
+                if waiter in waiters:
+                    waiters.remove(waiter)
+                if not waiters:
+                    self._clarify_waiters.pop(key, None)
+
     def _resolve_clarify_waiter(self, ev: MessageEvent) -> bool:
         self._ensure_inbound_queue()
         if getattr(ev, "internal", False):
