@@ -66,6 +66,29 @@ def _unit_state(unit: str) -> str:
     return summary
 
 
+def _unit_main_pid(unit: str) -> int | None:
+    if shutil.which("systemctl") is None:
+        return None
+    res = _systemctl("show", unit, "--property=MainPID", "--value")
+    try:
+        pid = int((res.stdout or "").strip() or "0")
+    except ValueError:
+        return None
+    return pid if pid > 0 else None
+
+
+def _mark_gateway_planned_stop(unit: str = "aegis-gateway.service") -> None:
+    pid = _unit_main_pid(unit)
+    if not pid:
+        return
+    try:
+        from .gateway.status import write_planned_stop_marker
+
+        write_planned_stop_marker(pid)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _failed_after_start(unit: str) -> str:
     state = _unit_state(unit)
     return state if state.startswith("failed") or " result=" in state else ""
@@ -235,6 +258,8 @@ def control_gateway_service(action: str) -> ServiceResult:
         return ServiceResult(False, f"unknown gateway service action: {action}")
     if shutil.which("systemctl") is None:
         return ServiceResult(False, "systemctl not found")
+    if action in {"stop", "restart"}:
+        _mark_gateway_planned_stop()
     res = _systemctl(action, "aegis-gateway.service")
     ok = res.returncode == 0
     return ServiceResult(ok, res.stdout.strip() or res.stderr.strip() or action)
@@ -242,6 +267,7 @@ def control_gateway_service(action: str) -> ServiceResult:
 
 def remove_gateway_service() -> ServiceResult:
     if shutil.which("systemctl"):
+        _mark_gateway_planned_stop()
         _systemctl("disable", "--now", "aegis-gateway.service")
     try:
         (_unit_dir() / "aegis-gateway.service").unlink()

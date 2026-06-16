@@ -1,0 +1,117 @@
+"""Gateway planned-stop marker helpers."""
+
+from __future__ import annotations
+
+import json
+import os
+from datetime import datetime, timedelta, timezone
+
+
+def test_planned_stop_marker_write_and_consume_self(tmp_path, monkeypatch):
+    from aegis.gateway import status
+
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    monkeypatch.setattr(status, "_get_process_start_time", lambda pid: "42")
+
+    assert status.write_planned_stop_marker(os.getpid()) is True
+    marker = tmp_path / ".gateway-planned-stop.json"
+    payload = json.loads(marker.read_text())
+    assert payload["target_pid"] == os.getpid()
+    assert payload["target_start_time"] == "42"
+    assert payload["stopper_pid"] == os.getpid()
+
+    assert status.consume_planned_stop_marker_for_self() is True
+    assert not marker.exists()
+
+
+def test_planned_stop_marker_consume_false_for_different_pid_and_unlinks(tmp_path, monkeypatch):
+    from aegis.gateway import status
+
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    monkeypatch.setattr(status, "_get_process_start_time", lambda pid: "42")
+
+    assert status.write_planned_stop_marker(os.getpid() + 9999) is True
+    marker = tmp_path / ".gateway-planned-stop.json"
+
+    assert status.consume_planned_stop_marker_for_self() is False
+    assert not marker.exists()
+
+
+def test_planned_stop_marker_stale_cleanup(tmp_path, monkeypatch):
+    from aegis.gateway import status
+
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    marker = tmp_path / ".gateway-planned-stop.json"
+    marker.write_text(json.dumps({
+        "target_pid": os.getpid(),
+        "target_start_time": None,
+        "stopper_pid": os.getpid(),
+        "written_at": (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),
+    }))
+
+    assert status.planned_stop_marker_targets_self() is False
+    assert not marker.exists()
+
+
+def test_planned_stop_marker_probe_is_non_destructive(tmp_path, monkeypatch):
+    from aegis.gateway import status
+
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    monkeypatch.setattr(status, "_get_process_start_time", lambda pid: "42")
+
+    assert status.write_planned_stop_marker(os.getpid()) is True
+    marker = tmp_path / ".gateway-planned-stop.json"
+    assert status.planned_stop_marker_targets_self() is True
+    assert marker.exists()
+    status.clear_planned_stop_marker()
+    assert not marker.exists()
+
+
+def test_gateway_shutdown_signal_records_planned_stop(tmp_path, monkeypatch):
+    import signal
+    import pytest
+    from aegis.config import Config
+    from aegis.gateway import status
+    from aegis.gateway.runner import GatewayRunner
+
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    monkeypatch.setattr(status, "_get_process_start_time", lambda pid: "42")
+    status.write_planned_stop_marker(os.getpid())
+    runner = GatewayRunner(Config.load(), cwd=tmp_path)
+
+    with pytest.raises(KeyboardInterrupt):
+        runner._on_shutdown_signal(signal.SIGTERM, None)
+
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "logs" / "shutdowns.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert rows[-1]["cause"] == "planned_stop"
+    assert not (tmp_path / ".gateway-planned-stop.json").exists()
+    runner._record_shutdown("KeyboardInterrupt")
+    rows_after = (tmp_path / "logs" / "shutdowns.jsonl").read_text().splitlines()
+    assert len(rows_after) == len(rows)
+
+
+def test_daemon_gateway_stop_marks_planned_stop(monkeypatch):
+    from aegis import daemon
+
+    calls = []
+    marked = []
+
+    def fake_systemctl(*args):
+        calls.append(args)
+        if args[:3] == ("show", "aegis-gateway.service", "--property=MainPID"):
+            return type("R", (), {"returncode": 0, "stdout": "12345\n", "stderr": ""})()
+        return type("R", (), {"returncode": 0, "stdout": "stopped", "stderr": ""})()
+
+    monkeypatch.setattr(daemon.shutil, "which", lambda cmd: "/bin/systemctl" if cmd == "systemctl" else None)
+    monkeypatch.setattr(daemon, "_systemctl", fake_systemctl)
+    monkeypatch.setattr("aegis.gateway.status.write_planned_stop_marker", lambda pid: marked.append(pid) or True)
+
+    result = daemon.control_gateway_service("stop")
+
+    assert result.ok is True
+    assert marked == [12345]
+    assert ("stop", "aegis-gateway.service") in calls

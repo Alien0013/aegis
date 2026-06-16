@@ -25,6 +25,33 @@ def _launchd_path() -> Path:
     return Path.home() / "Library" / "LaunchAgents" / f"{_LAUNCHD_LABEL}.plist"
 
 
+def _systemd_main_pid() -> int | None:
+    if shutil.which("systemctl") is None:
+        return None
+    res = subprocess.run(
+        ["systemctl", "--user", "show", _SYSTEMD_UNIT, "--property=MainPID", "--value"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    try:
+        pid = int((res.stdout or "").strip() or "0")
+    except ValueError:
+        return None
+    return pid if pid > 0 else None
+
+
+def _mark_planned_stop(pid: int | None) -> None:
+    if not pid:
+        return
+    try:
+        from .status import write_planned_stop_marker
+
+        write_planned_stop_marker(pid)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def install(channels: str = "telegram") -> str:
     """Install + start the gateway as a user service. Returns a status line."""
     system = platform.system()
@@ -68,6 +95,7 @@ def install(channels: str = "telegram") -> str:
 def uninstall() -> str:
     system = platform.system()
     if system == "Linux":
+        _mark_planned_stop(_systemd_main_pid())
         subprocess.run(["systemctl", "--user", "disable", "--now", _SYSTEMD_UNIT], check=False)
         p = _systemd_path()
         if p.exists():
@@ -99,6 +127,7 @@ def restart() -> bool:
     """Restart the running service (used after self-update). True if a manager handled it."""
     system = platform.system()
     if system == "Linux" and _systemd_path().exists():
+        _mark_planned_stop(_systemd_main_pid())
         return subprocess.run(["systemctl", "--user", "restart", _SYSTEMD_UNIT],
                               check=False).returncode == 0
     if system == "Darwin" and _launchd_path().exists():

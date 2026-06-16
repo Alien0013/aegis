@@ -49,6 +49,7 @@ class GatewayRunner:
         self._agent_signatures: dict[str, tuple[Any, ...]] = {}
         self._agent_last_used: dict[str, float] = {}
         self._generations: dict[str, int] = {}
+        self._shutdown_recorded = False
         self._agent_cap = 32
         self.session_mode = config.get("gateway.session_mode", "per_channel_peer")
         self.require_mention = bool(config.get("gateway.require_mention", False))
@@ -970,12 +971,22 @@ class GatewayRunner:
 
     def _on_shutdown_signal(self, signum, _frame) -> None:
         import signal
-        self._record_shutdown(signal.Signals(signum).name)
+        cause = signal.Signals(signum).name
+        try:
+            from .status import consume_planned_stop_marker_for_self
+
+            if consume_planned_stop_marker_for_self():
+                cause = "planned_stop"
+        except Exception:  # noqa: BLE001
+            pass
+        self._record_shutdown(cause)
         raise KeyboardInterrupt
 
     def _record_shutdown(self, cause: str) -> None:
         """Durably log who/what triggered shutdown so 'the gateway keeps dying' is
         diagnosable after the fact. Fast + best-effort — never blocks teardown."""
+        if getattr(self, "_shutdown_recorded", False):
+            return
         try:
             import json
             import os
@@ -986,5 +997,6 @@ class GatewayRunner:
             path = cfg.logs_dir() / "shutdowns.jsonl"
             with open(path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec) + "\n")
+            self._shutdown_recorded = True
         except Exception:  # noqa: BLE001
             pass
