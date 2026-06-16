@@ -334,6 +334,8 @@ def test_fastapi_config_and_env_control_plane(tmp_path, monkeypatch):
     assert "before matching turns" in fields["skills.auto_load"]["description"]
     assert fields["skills.allowlist"]["label"] == "Skill allowlist"
     assert fields["skills.bundles"]["label"] == "Skill bundles"
+    assert fields["agent.service_tier"]["label"] == "Fast mode"
+    assert fields["agent.service_tier"]["enum"] == ["", "normal", "priority"]
     assert fields["display.tool_progress_grouping"]["enum"] == ["accumulate", "separate"]
     assert fields["display.memory_notifications"]["enum"] == ["off", "on", "verbose"]
 
@@ -420,25 +422,32 @@ def test_fastapi_typed_config_profile_gateway_and_plugin_routes(tmp_path, monkey
         app,
         "PATCH",
         "/api/config/fields",
-        json={"updates": {"tools.exec_mode": "smart", "agent.compression.max_tool_tokens": 12000}},
+        json={"updates": {
+            "tools.exec_mode": "smart",
+            "agent.compression.max_tool_tokens": 12000,
+            "agent.service_tier": "priority",
+        }},
         headers=headers,
     ))
     assert changed.status_code == 200
     body = changed.json()
     assert body["ok"] is True
     assert body["changed"]["tools.exec_mode"] == "smart"
+    assert body["changed"]["agent.service_tier"] == "priority"
     raw_config = asyncio.run(_request(app, "GET", "/api/config/raw", headers=headers)).json()["config"]
     assert raw_config["agent"]["compression"]["max_tool_tokens"] == 12000
+    assert raw_config["agent"]["service_tier"] == "priority"
 
     bad = asyncio.run(_request(
         app,
         "PATCH",
         "/api/config/fields",
-        json={"updates": {"tools.exec_mode": "root"}},
+        json={"updates": {"tools.exec_mode": "root", "agent.service_tier": "turbo"}},
         headers=headers,
     ))
     assert bad.status_code == 400
     assert "one of" in bad.json()["errors"]["tools.exec_mode"]
+    assert "one of" in bad.json()["errors"]["agent.service_tier"]
 
     created = asyncio.run(_request(
         app,
@@ -479,13 +488,14 @@ def test_fastapi_typed_config_profile_gateway_and_plugin_routes(tmp_path, monkey
         app,
         "PATCH",
         "/api/gateway/channels/telegram",
-        json={"enabled": True},
+        json={"enabled": True, "service_tier": "priority"},
         headers=headers,
     ))
     assert configured.status_code == 200
     telegram = configured.json()["channel"]
     assert telegram["id"] == "telegram"
     assert telegram["enabled"] is True
+    assert telegram["profile"]["service_tier"] == "priority"
 
     import aegis.doctor as doctor
 

@@ -383,6 +383,12 @@ _CONFIG_FIELD_META: dict[str, dict[str, Any]] = {
         "enum": ["medium", "high", "low", "minimal", "xhigh", "off"],
         "group": "Agent",
     },
+    "agent.service_tier": {
+        "label": "Fast mode",
+        "description": "Default provider priority tier for models that support Hermes-style fast mode.",
+        "enum": ["", "normal", "priority"],
+        "group": "Agent",
+    },
     "gateway.channels": {
         "label": "Gateway channels",
         "description": "Enabled inbound/outbound gateway platforms.",
@@ -839,7 +845,7 @@ def _set_gateway_channel(config: Config, channel: str, body: dict) -> dict:
         else:
             channels.discard(channel)
         config.data.setdefault("gateway", {})["channels"] = sorted(channels)
-    profile_keys = {"personality", "profile", "provider", "model", "reasoning_effort", "busy_mode"}
+    profile_keys = {"personality", "profile", "provider", "model", "reasoning_effort", "service_tier", "busy_mode"}
     overlay = {k: body[k] for k in profile_keys if k in body and body[k] not in ("", None)}
     if overlay:
         profiles = dict(config.get("gateway.profiles", {}) or {})

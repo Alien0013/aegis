@@ -329,6 +329,7 @@ def _dashboard_status(config: Config) -> dict:
         "exec_mode": config.get("tools.exec_mode"),
         "toolsets": config.get("tools.toolsets", []),
         "reasoning_effort": config.get("agent.reasoning_effort"),
+        "service_tier": config.get("agent.service_tier"),
         "reasoning_display": config.get("display.reasoning"),
         "busy_mode": config.get("gateway.busy_mode"),
         "learn": {
@@ -1196,11 +1197,23 @@ def _dashboard_chat_meta(body: dict, route: str) -> dict:
 def _dashboard_chat_runtime(body: dict) -> dict:
     model = str(body.get("model") or "").strip()
     provider = str(body.get("provider") or body.get("provider_name") or "").strip()
+    service_tier = str(body.get("service_tier") or "").strip()
+    if not service_tier and "fast" in body:
+        fast_value = body.get("fast")
+        if isinstance(fast_value, bool):
+            service_tier = "priority" if fast_value else "normal"
+        else:
+            service_tier = str(fast_value or "").strip()
     out = {}
     if model:
         out["model"] = model
     if provider:
         out["provider_name"] = provider
+    if service_tier:
+        from .surface import normalize_service_tier
+        normalized_tier = normalize_service_tier(service_tier)
+        if normalized_tier:
+            out["service_tier"] = normalized_tier
     return out
 
 

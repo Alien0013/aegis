@@ -100,6 +100,7 @@ function ChannelConfig({ row, onClose, onSaved }: { row: ChannelRow; onClose: ()
     provider: String(profile.provider || ""),
     model: String(profile.model || ""),
     reasoning_effort: String(profile.reasoning_effort || ""),
+    service_tier: String(profile.service_tier || ""),
     busy_mode: String(profile.busy_mode || ""),
   });
 
@@ -141,6 +142,7 @@ function ChannelConfig({ row, onClose, onSaved }: { row: ChannelRow; onClose: ()
           <Field label="Provider"><Input value={form.provider} placeholder="provider override" onChange={(e) => setForm({ ...form, provider: e.target.value })} /></Field>
           <Field label="Model"><Input value={form.model} placeholder="model override" onChange={(e) => setForm({ ...form, model: e.target.value })} /></Field>
           <Field label="Reasoning effort"><Input value={form.reasoning_effort} placeholder="low, medium, high" onChange={(e) => setForm({ ...form, reasoning_effort: e.target.value })} /></Field>
+          <Field label="Fast mode"><Input value={form.service_tier} placeholder="priority or normal" onChange={(e) => setForm({ ...form, service_tier: e.target.value })} /></Field>
           <Field label="Busy mode"><Input value={form.busy_mode} placeholder="queue, reject, interrupt" onChange={(e) => setForm({ ...form, busy_mode: e.target.value })} /></Field>
         </div>
         <div className="flex justify-end gap-2 border-t border-border px-4 py-3">

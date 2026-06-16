@@ -68,6 +68,7 @@ def test_dashboard_status_includes_operational_controls(tmp_path, monkeypatch):
     cfg.data["tools"]["toolsets"] = ["core"]
     cfg.data["display"]["reasoning"] = "live"
     cfg.data["agent"]["reasoning_effort"] = "high"
+    cfg.data["agent"]["service_tier"] = "priority"
     cfg.data["gateway"]["busy_mode"] = "steer"
 
     data = _dashboard_status(cfg)
@@ -77,6 +78,7 @@ def test_dashboard_status_includes_operational_controls(tmp_path, monkeypatch):
     assert data["toolsets"] == ["core"]
     assert data["reasoning_display"] == "live"
     assert data["reasoning_effort"] == "high"
+    assert data["service_tier"] == "priority"
     assert data["busy_mode"] == "steer"
     assert data["learn"]["memory_every"] >= 1
 
@@ -174,18 +176,21 @@ def test_chat_meta_maps_model_picker_to_session_runtime():
 
 
 def test_chat_meta_maps_fast_to_service_tier():
-    from aegis.dashboard import _dashboard_chat_meta
+    from aegis.dashboard import _dashboard_chat_meta, _dashboard_chat_runtime
 
     fast = _dashboard_chat_meta({"fast": True}, "/api/chat/stream")
     assert fast["runtime_controls"] == {"service_tier": "priority"}
     assert fast["runtime"] == {"service_tier": "priority"}
+    assert _dashboard_chat_runtime({"fast": True}) == {"service_tier": "priority"}
 
     normal = _dashboard_chat_meta({"fast": False}, "/api/chat/stream")
     assert normal["runtime_controls"] == {"service_tier": "normal"}
     assert normal["runtime"] == {"service_tier": "normal"}
+    assert _dashboard_chat_runtime({"fast": False}) == {"service_tier": "normal"}
 
     explicit = _dashboard_chat_meta({"service_tier": "priority"}, "/api/chat/stream")
     assert explicit["runtime_controls"] == {"service_tier": "priority"}
+    assert _dashboard_chat_runtime({"service_tier": "priority"}) == {"service_tier": "priority"}
 
 
 def test_memory_post_add_and_remove(tmp_path, monkeypatch):
