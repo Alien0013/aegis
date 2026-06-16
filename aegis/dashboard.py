@@ -1095,10 +1095,34 @@ def _dashboard_active_run_agents(config: Config) -> list[dict]:
     return [_dashboard_agent_from_run(row, config) for row in rows]
 
 
+def _task_target(value) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        for key in ("goal", "task", "prompt", "description"):
+            val = value.get(key)
+            if val:
+                return str(val).strip()
+    return ""
+
+
 def _tool_target(args: dict) -> str:
     """Human-readable one-liner for what a tool call is about to do."""
     if not isinstance(args, dict):
         return ""
+    tasks = args.get("tasks")
+    if isinstance(tasks, list):
+        goals = []
+        for item in tasks:
+            goal = _task_target(item)
+            if goal:
+                goals.append(goal[:40])
+        if goals:
+            return f"{len(tasks)} tasks: {' | '.join(goals)}"[:240]
+        return f"{len(tasks)} parallel tasks"[:240]
+    task = _task_target(args.get("task"))
+    if task:
+        return task[:240]
     for key in ("command", "path", "file_path", "url", "query", "pattern", "prompt", "name"):
         val = args.get(key)
         if val:
