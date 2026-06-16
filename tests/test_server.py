@@ -69,6 +69,26 @@ def _sse_events(data: str):
     return out
 
 
+def _read_sse_event(resp):
+    event = "message"
+    payload = None
+    while True:
+        raw = resp.fp.readline()
+        if not raw:
+            raise AssertionError("stream ended before next SSE event")
+        line = raw.decode().strip()
+        if not line:
+            if payload is not None:
+                return event, payload
+            continue
+        if line.startswith("event: "):
+            event = line.removeprefix("event: ").strip()
+            continue
+        if line.startswith("data: "):
+            data = line.removeprefix("data: ").strip()
+            payload = data if data == "[DONE]" else json.loads(data)
+
+
 class _Usage:
     def __init__(self, input_tokens=11, output_tokens=7, cache_read=3, cache_write=0):
         self.input_tokens = input_tokens
@@ -102,6 +122,64 @@ class _FakeRunner:
                 provider=SimpleNamespace(model=kwargs.get("model") or "served-model"),
                 budget=SimpleNamespace(usage=_Usage()),
             ),
+        )
+
+
+class _BlockingResponsesRunner:
+    started = threading.Event()
+    release = threading.Event()
+    agents = []
+    calls = []
+
+    def __init__(self, config, include_mcp=True):
+        self.config = config
+        self.include_mcp = include_mcp
+
+    @classmethod
+    def reset(cls):
+        cls.started = threading.Event()
+        cls.release = threading.Event()
+        cls.agents = []
+        cls.calls = []
+
+    def load_or_create_session(self, session_id=None, title=None, history=None, surface="", meta=None):
+        return SimpleNamespace(
+            id=session_id or "serve:blocking-response",
+            title=title or "",
+            messages=list(history or []),
+            meta=dict(meta or {}),
+        )
+
+    def make_agent(self, **kwargs):
+        agent = SimpleNamespace(
+            cancel_event=threading.Event(),
+            provider=SimpleNamespace(model=kwargs.get("model") or "served-model"),
+            budget=SimpleNamespace(usage=_Usage()),
+        )
+
+        def cancel():
+            agent.cancel_event.set()
+
+        agent.cancel = cancel
+        self.agents.append(agent)
+        return agent
+
+    def run_prompt(self, prompt, **kwargs):
+        self.calls.append({"prompt": prompt, **kwargs})
+        self.started.set()
+        self.release.wait(5)
+        session = kwargs.get("session") or SimpleNamespace(id="serve:blocking-response")
+        agent = kwargs.get("agent") or SimpleNamespace(
+            provider=SimpleNamespace(model="served-model"),
+            budget=SimpleNamespace(usage=_Usage()),
+        )
+        return SimpleNamespace(
+            text="late",
+            session=session,
+            trace_id="trace_response_cancel",
+            turn_id="turn_response_cancel",
+            run_id="run_response_cancel",
+            agent=agent,
         )
 
 
@@ -904,6 +982,57 @@ def test_responses_stream_sse_has_openai_event_shape(monkeypatch, tmp_path):
     assert done["text"] == "hello"
     assert done["item_id"] == delta["item_id"]
     assert _FakeRunner.calls[0]["stream"] is True
+
+
+def test_responses_stream_cancel_signals_live_agent_and_preserves_cancelled(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _BlockingResponsesRunner.reset()
+    monkeypatch.setattr(server, "SurfaceRunner", _BlockingResponsesRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    try:
+        conn.request(
+            "POST",
+            "/v1/responses",
+            body=json.dumps({
+                "stream": True,
+                "input": "wait for cancel",
+                "metadata": {"session_id": "serve:response-cancel"},
+            }).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        resp = conn.getresponse()
+        assert resp.status == 200
+        event, payload = _read_sse_event(resp)
+        assert event == "response.created"
+        response_id = payload["response"]["id"]
+        assert _BlockingResponsesRunner.started.wait(1)
+
+        cancel_status, cancel_data = _request(port, "POST", f"/v1/responses/{response_id}/cancel", {})
+        _BlockingResponsesRunner.release.set()
+        tail = resp.read().decode()
+        get_status, get_data = _request(port, "GET", f"/v1/responses/{response_id}")
+    finally:
+        _BlockingResponsesRunner.release.set()
+        conn.close()
+        srv.shutdown()
+        srv.server_close()
+
+    assert cancel_status == 200
+    assert json.loads(cancel_data)["status"] == "cancelled"
+    assert _BlockingResponsesRunner.agents
+    assert _BlockingResponsesRunner.agents[0].cancel_event.is_set()
+    events = _sse_events(tail)
+    names = [name for name, _payload in events]
+    assert "response.cancelled" in names
+    assert "response.completed" not in names
+    assert get_status == 200
+    stored = json.loads(get_data)
+    assert stored["status"] == "cancelled"
+    assert stored.get("output_text", "") != "late"
 
 
 def test_responses_stream_failure_persists_failed_snapshot(monkeypatch, tmp_path):

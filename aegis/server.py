@@ -877,6 +877,7 @@ def make_handler(config: Config):
         ttl_seconds=float(config.get("server.idempotency_ttl_seconds", 300) or 300),
     )
     active_runs: dict[str, dict[str, Any]] = {}
+    active_responses: dict[str, dict[str, Any]] = {}
     approvals: dict[str, dict[str, Any]] = {}
     state_lock = threading.RLock()
     max_concurrent_runs = max(1, int(config.get("server.max_concurrent_runs", 8) or 8))
@@ -1062,6 +1063,141 @@ def make_handler(config: Config):
                 elif getattr(agent, "cancel_event", None) is not None:
                     agent.cancel_event.set()
             return self._set_run_state_locked(run_id, status="cancelling", last_event="run.stopping")
+
+        def _cancel_agent(self, agent: Any) -> None:
+            if agent is None:
+                return
+            cancel = getattr(agent, "cancel", None)
+            if callable(cancel):
+                cancel()
+                return
+            cancel_event = getattr(agent, "cancel_event", None)
+            if cancel_event is not None:
+                cancel_event.set()
+
+        def _mark_response_cancelled(self, response: dict[str, Any], reason: str) -> dict[str, Any]:
+            cancelled = dict(response)
+            cancelled["status"] = "cancelled"
+            cancelled["error"] = None
+            cancelled["incomplete_details"] = cancelled.get("incomplete_details") or {"reason": reason}
+            metadata = cancelled.get("metadata") if isinstance(cancelled.get("metadata"), dict) else {}
+            metadata = dict(metadata)
+            metadata["cancel_reason"] = reason
+            metadata["cancelled_at"] = int(time.time())
+            cancelled["metadata"] = metadata
+            return cancelled
+
+        def _register_response_locked(
+            self,
+            response_id: str,
+            *,
+            response: dict[str, Any] | None = None,
+            agent: Any = None,
+            session: Any = None,
+            store_response: bool = True,
+        ) -> dict[str, Any]:
+            rec = active_responses.setdefault(response_id, {
+                "id": response_id,
+                "cancel_requested": False,
+                "cancel_reason": "",
+                "status": "running",
+                "created_at_ts": time.time(),
+            })
+            if response is not None:
+                rec["response"] = dict(response)
+            if agent is not None:
+                rec["agent"] = agent
+            if session is not None:
+                rec["session"] = session
+            rec["store_response"] = bool(store_response)
+            rec["updated_at_ts"] = time.time()
+            if rec.get("cancel_requested") and agent is not None:
+                self._cancel_agent(agent)
+            return rec
+
+        def _request_cancel_response_locked(
+            self,
+            response_id: str,
+            reason: str = "API cancel requested",
+        ) -> dict[str, Any] | None:
+            rec = active_responses.get(response_id)
+            if rec is None:
+                return None
+            rec["cancel_requested"] = True
+            rec["cancel_reason"] = reason
+            rec["status"] = "cancelling"
+            rec["updated_at_ts"] = time.time()
+            self._cancel_agent(rec.get("agent"))
+            return rec
+
+        def _response_cancel_requested(self, response_id: str) -> tuple[bool, str]:
+            with state_lock:
+                rec = active_responses.get(response_id)
+                if rec is None:
+                    return False, ""
+                return bool(rec.get("cancel_requested")), str(rec.get("cancel_reason") or "API cancel requested")
+
+        def _finish_response(self, response_id: str, response: dict[str, Any] | None = None) -> None:
+            with state_lock:
+                rec = active_responses.get(response_id)
+                if rec is not None and response is not None:
+                    rec["response"] = dict(response)
+                active_responses.pop(response_id, None)
+
+        def _prepare_response_agent(
+            self,
+            response_id: str,
+            *,
+            session_id: str | None,
+            title: str,
+            history: list[Message],
+            model: Any,
+            provider_name: Any,
+            cwd: Any,
+            session_key: str | None,
+        ) -> tuple[Any, Any]:
+            load_session = getattr(runner, "load_or_create_session", None)
+            make_agent = getattr(runner, "make_agent", None)
+            if not callable(load_session) or not callable(make_agent):
+                return None, None
+            meta = {
+                "request_id": response_id,
+                "api": "responses",
+                **({"gateway_session_key": session_key} if session_key else {}),
+            }
+            session = load_session(
+                session_id,
+                title=title,
+                history=history,
+                surface="serve",
+                meta=meta,
+            )
+            agent = make_agent(
+                session=session,
+                model=model,
+                provider_name=provider_name,
+                cwd=cwd,
+            )
+            return session, agent
+
+        def _cancel_response(self, response_id: str) -> None:
+            state = response_store.get_state(response_id)
+            response = (state or {}).get("response") if state else None
+            with state_lock:
+                rec = self._request_cancel_response_locked(response_id, "API cancel requested")
+                if not isinstance(response, dict) and rec is not None and isinstance(rec.get("response"), dict):
+                    response = dict(rec["response"])
+            if not isinstance(response, dict):
+                return self._json(404, {"error": "response not found", "id": response_id})
+            cancelled = self._mark_response_cancelled(response, "API cancel requested")
+            if state is not None and _coerce_request_bool(cancelled.get("store"), True):
+                response_store.put(cancelled, state)
+            with state_lock:
+                rec = active_responses.get(response_id)
+                if rec is not None:
+                    rec["response"] = dict(cancelled)
+                    rec["status"] = "cancelled"
+            return self._json(200, cancelled)
 
         def _job_detail(self, job_id: str) -> tuple[int, dict[str, Any]]:
             from .cron import CronStore
@@ -1373,14 +1509,7 @@ def make_handler(config: Config):
             if path == "/v1/responses":
                 return self._post_response(body)
             if path.startswith("/v1/responses/") and path.endswith("/cancel"):
-                rid = path.split("/")[-2]
-                state = response_store.get_state(rid)
-                response = (state or {}).get("response") if state else None
-                if isinstance(response, dict):
-                    response["status"] = "cancelled"
-                    response_store.put(response, state)
-                    return self._json(200, response)
-                return self._json(404, {"error": "response not found", "id": rid})
+                return self._cancel_response(path.split("/")[-2])
             if path == "/v1/runs":
                 return self._post_run(body)
             if path.startswith("/v1/runs/") and path.endswith(("/stop", "/cancel")):
@@ -1710,6 +1839,7 @@ def make_handler(config: Config):
             )
             provider_name = metadata.get("provider") or body.get("provider")
             cwd = metadata.get("cwd") or body.get("cwd")
+            response_title = last_user.content[:80] or response_id
             if stream:
                 sequence = 0
                 message_item_id = new_id("msg")
@@ -1864,6 +1994,12 @@ def make_handler(config: Config):
                         "session_id": session_id,
                         "conversation": conversation,
                     })
+                with state_lock:
+                    self._register_response_locked(
+                        response_id,
+                        response=created_response,
+                        store_response=store_response,
+                    )
 
                 def emit(e: dict[str, Any]) -> None:
                     if e.get("type") == "assistant_delta":
@@ -1896,40 +2032,72 @@ def make_handler(config: Config):
                         })
 
                 try:
-                    result = runner.run_prompt(
-                        last_user,
-                        session_id=session_id,
+                    response_session, response_agent = self._prepare_response_agent(
+                        response_id,
+                        session_id=str(session_id) if session_id else None,
+                        title=response_title,
                         history=history,
                         model=model,
                         provider_name=provider_name,
                         cwd=cwd,
-                        stream=True,
-                        surface="serve",
-                        meta={
+                        session_key=session_key,
+                    )
+                    with state_lock:
+                        self._register_response_locked(
+                            response_id,
+                            agent=response_agent,
+                            session=response_session,
+                            store_response=store_response,
+                        )
+                    run_kwargs: dict[str, Any] = {
+                        "model": model,
+                        "provider_name": provider_name,
+                        "cwd": cwd,
+                        "stream": True,
+                        "surface": "serve",
+                        "meta": {
                             "request_id": response_id,
                             "api": "responses",
                             **({"gateway_session_key": session_key} if session_key else {}),
                         },
-                        on_event=emit,
-                    )
+                        "on_event": emit,
+                    }
+                    if response_agent is not None:
+                        run_kwargs.update({
+                            "session": response_session,
+                            "agent": response_agent,
+                            "reuse_agent": False,
+                        })
+                    else:
+                        run_kwargs.update({
+                            "session_id": session_id,
+                            "history": history,
+                        })
+                    result = runner.run_prompt(last_user, **run_kwargs)
                 except Exception as exc:  # noqa: BLE001
                     text = "".join(text_parts)
+                    cancelled, cancel_reason = self._response_cancel_requested(response_id)
                     failed = _response_object(
                         response_id,
                         None,
-                        status="failed",
+                        status="cancelled" if cancelled else "failed",
                         metadata_extra=metadata,
                     )
                     failed.update({
                         "model": model or config.get("model.default", ""),
                         "output": list(streamed_output_items) + (_response_output(text) if text else []),
                         "output_text": text,
-                        "error": {"message": f"{type(exc).__name__}: {exc}", "type": "server_error"},
+                        "error": None if cancelled else {
+                            "message": f"{type(exc).__name__}: {exc}",
+                            "type": "server_error",
+                        },
                         "instructions": instructions,
                         "previous_response_id": previous_id or None,
                         "conversation": conversation or None,
                         "store": store_response,
                     })
+                    if cancelled:
+                        failed = self._mark_response_cancelled(failed, cancel_reason)
                     if store_response:
                         history_snapshot = list(state_history)
                         history_snapshot.append(last_user)
@@ -1943,11 +2111,24 @@ def make_handler(config: Config):
                         })
                         if conversation:
                             response_store.set_conversation(conversation, response_id)
-                    send_event("response.failed", {"response": failed, "error": failed["error"]})
-                    self.wfile.write(b"data: [DONE]\n\n")
+                    if cancelled:
+                        send_event("response.cancelled", {"response": failed})
+                    else:
+                        send_event("response.failed", {"response": failed, "error": failed["error"]})
+                    self._finish_response(response_id, failed)
+                    try:
+                        self.wfile.write(b"data: [DONE]\n\n")
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
                     return
 
-                response = _response_object(response_id, result, metadata_extra=metadata)
+                cancelled, cancel_reason = self._response_cancel_requested(response_id)
+                response = _response_object(
+                    response_id,
+                    result,
+                    status="cancelled" if cancelled else "completed",
+                    metadata_extra=metadata,
+                )
                 response["instructions"] = instructions
                 response["previous_response_id"] = previous_id or None
                 response["conversation"] = conversation or None
@@ -1955,7 +2136,12 @@ def make_handler(config: Config):
                 final_text = response.get("output_text") or "".join(text_parts)
                 if streamed_output_items:
                     response["output"] = list(streamed_output_items) + _response_output(final_text)
-                if final_text or message_opened:
+                if cancelled:
+                    final_text = "".join(text_parts)
+                    response["output_text"] = final_text
+                    response["output"] = list(streamed_output_items) + (_response_output(final_text) if final_text else [])
+                    response = self._mark_response_cancelled(response, cancel_reason)
+                elif final_text or message_opened:
                     if not message_opened:
                         open_message_item()
                     out_index = message_output_index if message_output_index is not None else 0
@@ -1978,10 +2164,17 @@ def make_handler(config: Config):
                         },
                     })
                 persist_stream_response(response, result)
-                send_event("response.completed", {
-                    "response": response,
-                })
-                self.wfile.write(b"data: [DONE]\n\n")
+                if cancelled:
+                    send_event("response.cancelled", {"response": response})
+                else:
+                    send_event("response.completed", {
+                        "response": response,
+                    })
+                self._finish_response(response_id, response)
+                try:
+                    self.wfile.write(b"data: [DONE]\n\n")
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
                 return
             idempotency_key = str(self.headers.get("Idempotency-Key", "") or "")
             idempotency_body = {
@@ -2004,37 +2197,77 @@ def make_handler(config: Config):
                 ],
             )
             def compute_response() -> dict[str, Any]:
-                result = runner.run_prompt(
-                    last_user,
-                    session_id=session_id,
-                    history=history,
-                    model=model,
-                    provider_name=provider_name,
-                    cwd=cwd,
-                    stream=False,
-                    surface="serve",
-                    meta={
-                        "request_id": response_id,
-                        "api": "responses",
-                        **({"gateway_session_key": session_key} if session_key else {}),
-                    },
-                )
-                response = _response_object(response_id, result, metadata_extra=metadata)
-                response["instructions"] = instructions
-                response["previous_response_id"] = previous_id or None
-                response["conversation"] = conversation or None
-                response["store"] = store_response
-                if store_response:
-                    full_history = _response_conversation_history(state_history, last_user, result)
-                    response_store.put(response, {
-                        "conversation_history": full_history,
-                        "instructions": instructions,
-                        "session_id": response.get("metadata", {}).get("session_id") or session_id,
-                        "conversation": conversation,
-                    })
-                    if conversation:
-                        response_store.set_conversation(conversation, response_id)
-                return response
+                response: dict[str, Any] | None = None
+                with state_lock:
+                    self._register_response_locked(response_id, store_response=store_response)
+                try:
+                    response_session, response_agent = self._prepare_response_agent(
+                        response_id,
+                        session_id=str(session_id) if session_id else None,
+                        title=response_title,
+                        history=history,
+                        model=model,
+                        provider_name=provider_name,
+                        cwd=cwd,
+                        session_key=session_key,
+                    )
+                    with state_lock:
+                        self._register_response_locked(
+                            response_id,
+                            agent=response_agent,
+                            session=response_session,
+                            store_response=store_response,
+                        )
+                    run_kwargs: dict[str, Any] = {
+                        "model": model,
+                        "provider_name": provider_name,
+                        "cwd": cwd,
+                        "stream": False,
+                        "surface": "serve",
+                        "meta": {
+                            "request_id": response_id,
+                            "api": "responses",
+                            **({"gateway_session_key": session_key} if session_key else {}),
+                        },
+                    }
+                    if response_agent is not None:
+                        run_kwargs.update({
+                            "session": response_session,
+                            "agent": response_agent,
+                            "reuse_agent": False,
+                        })
+                    else:
+                        run_kwargs.update({
+                            "session_id": session_id,
+                            "history": history,
+                        })
+                    result = runner.run_prompt(last_user, **run_kwargs)
+                    cancelled, cancel_reason = self._response_cancel_requested(response_id)
+                    response = _response_object(
+                        response_id,
+                        result,
+                        status="cancelled" if cancelled else "completed",
+                        metadata_extra=metadata,
+                    )
+                    if cancelled:
+                        response = self._mark_response_cancelled(response, cancel_reason)
+                    response["instructions"] = instructions
+                    response["previous_response_id"] = previous_id or None
+                    response["conversation"] = conversation or None
+                    response["store"] = store_response
+                    if store_response:
+                        full_history = _response_conversation_history(state_history, last_user, result)
+                        response_store.put(response, {
+                            "conversation_history": full_history,
+                            "instructions": instructions,
+                            "session_id": response.get("metadata", {}).get("session_id") or session_id,
+                            "conversation": conversation,
+                        })
+                        if conversation:
+                            response_store.set_conversation(conversation, response_id)
+                    return response
+                finally:
+                    self._finish_response(response_id, response)
 
             response = idempotency_cache.get_or_compute(idempotency_key, idempotency_fp, compute_response)
             response_session_id = None
