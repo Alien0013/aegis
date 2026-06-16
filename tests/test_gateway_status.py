@@ -94,6 +94,36 @@ def test_gateway_shutdown_signal_records_planned_stop(tmp_path, monkeypatch):
     assert len(rows_after) == len(rows)
 
 
+def test_gateway_shutdown_marks_locked_session_resume_pending(tmp_path, monkeypatch):
+    import signal
+    import threading
+
+    import pytest
+    from aegis.config import Config
+    from aegis.gateway.base import MessageEvent
+    from aegis.gateway.runner import GatewayRunner
+
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    runner = GatewayRunner(Config.load(), cwd=tmp_path)
+    ev = MessageEvent(platform="telegram", chat_id="c1", text="work", user_id="u1")
+    key = runner._key(ev)
+    session = runner._session(key)
+    runner.store.save(session)
+    lock = threading.Lock()
+    runner._key_locks[key] = lock
+    lock.acquire()
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            runner._on_shutdown_signal(signal.SIGTERM, None)
+    finally:
+        lock.release()
+
+    loaded = runner.store.load(key)
+    assert loaded.meta["resume_pending"] is True
+    assert loaded.meta["resume_reason"] == "SIGTERM"
+    assert loaded.meta["last_resume_marked_at"]
+
+
 def test_daemon_gateway_stop_marks_planned_stop(monkeypatch):
     from aegis import daemon
 

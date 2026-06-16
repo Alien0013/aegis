@@ -29,6 +29,9 @@ def _with_reply_pointer(ev: MessageEvent, text: str, *, limit: int = 500) -> str
 
 
 _GATEWAY_GENERATION_META = "_gateway_generation"
+_RESUME_PENDING_META = "resume_pending"
+_RESUME_REASON_META = "resume_reason"
+_RESUME_MARKED_AT_META = "last_resume_marked_at"
 
 
 class GatewayRunner:
@@ -152,6 +155,78 @@ class GatewayRunner:
             self.store.save(session)
         except Exception:  # noqa: BLE001
             pass
+
+    def _resume_pending_directive(self, session: Session) -> str:
+        if not session.meta.get(_RESUME_PENDING_META):
+            return ""
+        reason = str(session.meta.get(_RESUME_REASON_META) or "gateway_restart")
+        return (
+            "[Gateway recovery: the previous turn in this conversation may have "
+            f"been interrupted by {reason}. Continue from the current transcript "
+            "and answer the latest user message. Do not re-run previous tool calls, "
+            "restart background work, or repeat outbound actions unless the user "
+            "explicitly asks.]\n"
+        )
+
+    def _clear_resume_pending(self, session: Session) -> bool:
+        if not session.meta.get(_RESUME_PENDING_META):
+            return False
+        for key in (_RESUME_PENDING_META, _RESUME_REASON_META, _RESUME_MARKED_AT_META):
+            session.meta.pop(key, None)
+        try:
+            self.store.save(session)
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _mark_running_sessions_resume_pending(self, cause: str) -> int:
+        reason = str(cause or "shutdown")
+        with self._lock:
+            running = [
+                (key, session)
+                for key, session in self._sessions.items()
+                if self._key_locks.get(key) is not None and self._key_locks[key].locked()
+            ]
+        if not running:
+            return 0
+        from ..util import now_iso
+        marked = 0
+        for _key, session in running:
+            try:
+                session.meta[_RESUME_PENDING_META] = True
+                session.meta[_RESUME_REASON_META] = reason
+                session.meta[_RESUME_MARKED_AT_META] = now_iso()
+                self.store.save(session)
+                marked += 1
+            except Exception:  # noqa: BLE001
+                continue
+        return marked
+
+    def _report_resume_pending_sessions(self, delivery_queue=None) -> int:
+        try:
+            pending = self.store.list_resume_pending(limit=20)
+        except Exception:  # noqa: BLE001
+            return 0
+        if not pending:
+            return 0
+        count = len(pending)
+        suffix = "" if count == 1 else "s"
+        text = (
+            f"{count} gateway session{suffix} pending restart recovery; "
+            "the next user turn will resume on the same transcript."
+        )
+        print(f"  ! {text}")
+        admins = [str(a) for a in (self.config.get("gateway.admins", []) or [])]
+        if delivery_queue is not None:
+            for adapter in self.adapters:
+                for admin in admins:
+                    delivery_queue.enqueue(adapter.name, admin, f"⚠️ AEGIS recovery: {text}")
+        try:
+            from ..eventbus import BUS
+            BUS.publish({"type": "restart_notice", "text": text, "resume_pending": pending})
+        except Exception:  # noqa: BLE001
+            pass
+        return count
 
     def _fresh_session_if_drifted(self, key: str, session: Session) -> Session:
         try:
@@ -678,6 +753,9 @@ class GatewayRunner:
                 # in-loop compactor runs. Force a pre-turn compaction when it's grown large.
                 session = self._gateway_hygiene(agent, session) or session
                 self._sessions[key] = session
+                resume_directive = self._resume_pending_directive(session)
+                if resume_directive:
+                    text = resume_directive + text
 
                 learned: list[str] = []
 
@@ -767,6 +845,8 @@ class GatewayRunner:
                     reply += "\n\n— " + " · ".join(dict.fromkeys(learned))   # dedup, keep order
                 if generation != self._generation(key):
                     return ""
+                if self._clear_resume_pending(session):
+                    self._sessions[key] = session
                 BUS.publish({"platform": ev.platform, "chat_id": ev.chat_id,
                              "type": "assistant_message", "text": reply})
                 if not is_internal:
@@ -961,6 +1041,7 @@ class GatewayRunner:
                 BUS.publish({"type": "restart_notice", "text": report})
         except Exception:  # noqa: BLE001
             pass
+        self._report_resume_pending_sessions(q)
         print("Gateway running. Ctrl+C to stop.")
         try:
             for t in threads:
@@ -979,6 +1060,7 @@ class GatewayRunner:
                 cause = "planned_stop"
         except Exception:  # noqa: BLE001
             pass
+        self._mark_running_sessions_resume_pending(cause)
         self._record_shutdown(cause)
         raise KeyboardInterrupt
 

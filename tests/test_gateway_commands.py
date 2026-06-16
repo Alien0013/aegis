@@ -600,6 +600,60 @@ def test_gateway_goal_command_bypasses_mention_gate(tmp_path, monkeypatch):
     assert run["prompt_preview"].startswith("ship it")
 
 
+def test_gateway_resume_pending_directive_clears_after_success(tmp_path, monkeypatch):
+    import threading
+    from types import SimpleNamespace
+
+    import aegis.gateway.runner as rmod
+    from aegis.types import Message
+
+    r = _runner(tmp_path, monkeypatch)
+    r.config.data["memory"]["enabled"] = False
+    ev = _ev("continue")
+    key = r._key(ev)
+    session = r._session(key)
+    session.meta["resume_pending"] = True
+    session.meta["resume_reason"] = "SIGTERM"
+    session.meta["last_resume_marked_at"] = "2026-06-16T00:00:00+00:00"
+    r.store.save(session)
+    seen = []
+
+    class FakeAgent:
+        def __init__(self, session):
+            self.config = r.config
+            self.session = session
+            self.cwd = tmp_path
+            self.provider = SimpleNamespace(name="fake", model="fake-model")
+            self.tool_context = SimpleNamespace(session=session)
+            self.budget = SimpleNamespace(api_call_count=0)
+            self.cancel_event = threading.Event()
+            self.tools_used = 0
+
+        def run(self, prompt, on_event=None):
+            seen.append(str(prompt))
+            self._trace_context = {"trace_id": "trace_gateway_resume", "turn_id": "turn_gateway_resume"}
+            self.session.messages.append(Message.user(str(prompt)))
+            message = Message.assistant("resumed")
+            self.session.messages.append(message)
+            return message
+
+    monkeypatch.setattr(
+        rmod.Agent,
+        "create",
+        staticmethod(lambda _config, **kwargs: FakeAgent(kwargs["session"])),
+    )
+
+    out = r.dispatch(ev)
+
+    assert "resumed" in out
+    assert seen[0].startswith("[Gateway recovery:")
+    assert "Do not re-run previous tool calls" in seen[0]
+    loaded = r.store.load(key)
+    assert "resume_pending" not in loaded.meta
+    assert "resume_reason" not in loaded.meta
+    assert "last_resume_marked_at" not in loaded.meta
+
+
 def test_gateway_process_notification_injects_internal_turn(tmp_path, monkeypatch):
     import threading
     import time

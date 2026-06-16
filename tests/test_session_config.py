@@ -30,6 +30,28 @@ def test_session_list_and_delete():
     assert st.delete(ids[0]) and len(st.list()) == 2
 
 
+def test_session_resume_pending_helpers():
+    from aegis.session import Session, SessionStore
+
+    st = SessionStore()
+    s = Session(id="telegram:c1:u1", title="gateway chat")
+    st.save(s)
+
+    assert st.mark_resume_pending(s.id, "SIGTERM") is True
+    pending = st.list_resume_pending()
+    assert [row["id"] for row in pending] == [s.id]
+    assert pending[0]["resume_reason"] == "SIGTERM"
+    loaded = st.load(s.id)
+    assert loaded.meta["resume_pending"] is True
+    assert loaded.meta["last_resume_marked_at"]
+
+    assert st.clear_resume_pending(s.id) is True
+    loaded = st.load(s.id)
+    assert "resume_pending" not in loaded.meta
+    assert st.list_resume_pending() == []
+    assert st.clear_resume_pending(s.id) is False
+
+
 def test_session_search_messages_recall():
     from aegis.session import Session, SessionStore
     from aegis.types import Message

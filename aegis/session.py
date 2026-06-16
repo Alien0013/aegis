@@ -466,6 +466,67 @@ class SessionStore:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    def _load_exact(self, sid: str) -> Session | None:
+        if not sid:
+            return None
+        with self._conn() as c:
+            row = c.execute("SELECT * FROM sessions WHERE id=?", (sid,)).fetchone()
+            return Session.from_row(row) if row else None
+
+    def mark_resume_pending(self, sid: str, reason: str = "restart_timeout") -> bool:
+        """Mark a gateway session as interrupted but resumable after a restart.
+
+        This mirrors Hermes' ``resume_pending`` flag while preserving the current
+        AEGIS transcript/session id.  The flag is cleared after the next
+        successful gateway turn.
+        """
+        if self.read_only:
+            return False
+        session = self._load_exact(sid)
+        if session is None:
+            return False
+        session.meta["resume_pending"] = True
+        session.meta["resume_reason"] = str(reason or "restart_timeout")
+        session.meta["last_resume_marked_at"] = now_iso()
+        self.save(session)
+        return True
+
+    def clear_resume_pending(self, sid: str) -> bool:
+        """Clear a session's resume-pending recovery flag."""
+        if self.read_only:
+            return False
+        session = self._load_exact(sid)
+        if session is None or not session.meta.get("resume_pending"):
+            return False
+        for key in ("resume_pending", "resume_reason", "last_resume_marked_at"):
+            session.meta.pop(key, None)
+        self.save(session)
+        return True
+
+    def list_resume_pending(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Return sessions marked for gateway restart recovery, newest first."""
+        pending: list[dict[str, Any]] = []
+        max_rows = max(0, int(limit or 0))
+        if max_rows == 0:
+            return pending
+        with self._conn() as c:
+            rows = c.execute("SELECT * FROM sessions ORDER BY updated_at DESC").fetchall()
+        for row in rows:
+            session = Session.from_row(row)
+            if not session.meta.get("resume_pending"):
+                continue
+            pending.append({
+                "id": session.id,
+                "title": session.title,
+                "created_at": session.created_at,
+                "updated_at": session.updated_at,
+                "resume_reason": session.meta.get("resume_reason"),
+                "last_resume_marked_at": session.meta.get("last_resume_marked_at"),
+            })
+            if len(pending) >= max_rows:
+                break
+        return pending
+
     def children(self, parent_id: str) -> list[dict]:
         """Sessions forked from ``parent_id`` (lineage chain), oldest first."""
         with self._conn() as c:
