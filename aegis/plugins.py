@@ -127,6 +127,10 @@ class PluginManifest:
     requires_env: list[Any] = field(default_factory=list)
     provides_tools: list[str] = field(default_factory=list)
     provides_hooks: list[str] = field(default_factory=list)
+    provides_middleware: list[str] = field(default_factory=list)
+    provides_channels: list[str] = field(default_factory=list)
+    provides_providers: list[str] = field(default_factory=list)
+    permissions: list[str] = field(default_factory=list)
     enabled: bool = True
     raw: dict[str, Any] | None = None
 
@@ -147,6 +151,10 @@ class PluginManifest:
             "requires_env": self.requires_env,
             "provides_tools": self.provides_tools,
             "provides_hooks": self.provides_hooks,
+            "provides_middleware": self.provides_middleware,
+            "provides_channels": self.provides_channels,
+            "provides_providers": self.provides_providers,
+            "permissions": self.permissions,
             "enabled": self.enabled,
         }
 
@@ -377,6 +385,10 @@ def _read_manifest(path: Path, config=None, *, base: Path | None = None,
         requires_env=_list_field(data.get("requires_env") or data.get("required_env")),
         provides_tools=_string_list(data.get("provides_tools")),
         provides_hooks=_string_list(data.get("provides_hooks") or data.get("hooks")),
+        provides_middleware=_string_list(data.get("provides_middleware") or data.get("middleware")),
+        provides_channels=_string_list(data.get("provides_channels") or data.get("channels")),
+        provides_providers=_string_list(data.get("provides_providers") or data.get("providers")),
+        permissions=_string_list(data.get("permissions")),
         enabled=_manifest_enabled(name, key or name, config),
         raw=data,
     )

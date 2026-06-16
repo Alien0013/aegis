@@ -2011,7 +2011,15 @@ def test_hermes_style_plugin_yaml_metadata_category_key_and_safe_mode(tmp_path, 
         "provides_tools:\n"
         "  - trace_export\n"
         "hooks:\n"
-        "  - post_llm_call\n",
+        "  - post_llm_call\n"
+        "middleware:\n"
+        "  - tool_request\n"
+        "channels:\n"
+        "  - webhook\n"
+        "providers:\n"
+        "  - langfuse-provider\n"
+        "permissions:\n"
+        "  - network\n",
         encoding="utf-8",
     )
     (pkg / "__init__.py").write_text(
@@ -2031,6 +2039,10 @@ def test_hermes_style_plugin_yaml_metadata_category_key_and_safe_mode(tmp_path, 
     assert manifest.requires_env == ["LANGFUSE_PUBLIC_KEY"]
     assert manifest.provides_tools == ["trace_export"]
     assert manifest.provides_hooks == ["post_llm_call"]
+    assert manifest.provides_middleware == ["tool_request"]
+    assert manifest.provides_channels == ["webhook"]
+    assert manifest.provides_providers == ["langfuse-provider"]
+    assert manifest.permissions == ["network"]
 
     api = plugins.load_plugins(config=cfg)
     row = next(r for r in plugins.plugin_status(cfg, api) if r["key"] == "observability/langfuse")
@@ -2038,6 +2050,10 @@ def test_hermes_style_plugin_yaml_metadata_category_key_and_safe_mode(tmp_path, 
     assert row["tool_names"] == ["trace_export"]
     assert row["hook_names"] == ["post_llm_call"]
     assert row["middleware_kinds"] == ["tool_request"]
+    assert row["provides_middleware"] == ["tool_request"]
+    assert row["provides_channels"] == ["webhook"]
+    assert row["provides_providers"] == ["langfuse-provider"]
+    assert row["permissions"] == ["network"]
 
     assert plugins.disable("observability/langfuse", cfg) is True
     assert plugins.load_plugins(config=cfg).tools == []
