@@ -6,6 +6,7 @@ import asyncio
 import http.client
 import json
 import threading
+import time
 from http.server import ThreadingHTTPServer
 from types import SimpleNamespace
 
@@ -1198,6 +1199,133 @@ def test_chat_completions_idempotency_key_replays_matching_request(monkeypatch, 
     assert third["id"] != first["id"]
     assert third["choices"][0]["message"]["content"] == "chat-2"
     assert CountingRunner.calls == 2
+
+
+def test_chat_completions_idempotency_key_single_flights_concurrent_requests(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    class SlowRunner:
+        calls = 0
+        entered = threading.Event()
+        release = threading.Event()
+
+        def __init__(self, config, include_mcp=True):
+            pass
+
+        def run_prompt(self, prompt, **kwargs):
+            type(self).calls += 1
+            type(self).entered.set()
+            assert type(self).release.wait(5)
+            session_id = kwargs.get("session_id") or "serve:chat-singleflight"
+            return SimpleNamespace(
+                text="chat-singleflight",
+                session=SimpleNamespace(id=session_id),
+                trace_id="trace_chat_singleflight",
+                turn_id="turn_chat_singleflight",
+                run_id="run_chat_singleflight",
+                agent=SimpleNamespace(
+                    provider=SimpleNamespace(model="served-model"),
+                    budget=SimpleNamespace(usage=_Usage()),
+                ),
+            )
+
+    monkeypatch.setattr(server, "SurfaceRunner", SlowRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    results: list[tuple[int, str]] = []
+    try:
+        headers = {"Idempotency-Key": "idem-chat-flight"}
+        body = {"messages": [{"role": "user", "content": "same"}]}
+        threads = [
+            threading.Thread(target=lambda: results.append(
+                _request(port, "POST", "/v1/chat/completions", body, headers=headers)
+            ))
+            for _ in range(2)
+        ]
+        threads[0].start()
+        assert SlowRunner.entered.wait(5)
+        threads[1].start()
+        time.sleep(0.2)
+        assert SlowRunner.calls == 1
+    finally:
+        SlowRunner.release.set()
+        for thread in locals().get("threads", []):
+            thread.join(timeout=5)
+        srv.shutdown()
+        srv.server_close()
+
+    assert len(results) == 2
+    assert {status for status, _data in results} == {200}
+    bodies = [json.loads(data) for _status, data in results]
+    assert bodies[0]["id"] == bodies[1]["id"]
+    assert [body["choices"][0]["message"]["content"] for body in bodies] == [
+        "chat-singleflight",
+        "chat-singleflight",
+    ]
+    assert SlowRunner.calls == 1
+
+
+def test_responses_idempotency_key_single_flights_concurrent_requests(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    class SlowRunner:
+        calls = 0
+        entered = threading.Event()
+        release = threading.Event()
+
+        def __init__(self, config, include_mcp=True):
+            pass
+
+        def run_prompt(self, prompt, **kwargs):
+            type(self).calls += 1
+            type(self).entered.set()
+            assert type(self).release.wait(5)
+            session_id = kwargs.get("session_id") or "serve:response-singleflight"
+            return SimpleNamespace(
+                text="response-singleflight",
+                session=SimpleNamespace(id=session_id),
+                trace_id="trace_response_singleflight",
+                turn_id="turn_response_singleflight",
+                run_id="run_response_singleflight",
+                agent=SimpleNamespace(
+                    provider=SimpleNamespace(model="served-model"),
+                    budget=SimpleNamespace(usage=_Usage()),
+                ),
+            )
+
+    monkeypatch.setattr(server, "SurfaceRunner", SlowRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    results: list[tuple[int, str]] = []
+    try:
+        headers = {"Idempotency-Key": "idem-response-flight"}
+        body = {"input": "same", "metadata": {"session_id": "serve:response-singleflight"}}
+        threads = [
+            threading.Thread(target=lambda: results.append(
+                _request(port, "POST", "/v1/responses", body, headers=headers)
+            ))
+            for _ in range(2)
+        ]
+        threads[0].start()
+        assert SlowRunner.entered.wait(5)
+        threads[1].start()
+        time.sleep(0.2)
+        assert SlowRunner.calls == 1
+    finally:
+        SlowRunner.release.set()
+        for thread in locals().get("threads", []):
+            thread.join(timeout=5)
+        srv.shutdown()
+        srv.server_close()
+
+    assert len(results) == 2
+    assert {status for status, _data in results} == {200}
+    bodies = [json.loads(data) for _status, data in results]
+    assert bodies[0]["id"] == bodies[1]["id"]
+    assert [body["output_text"] for body in bodies] == ["response-singleflight", "response-singleflight"]
+    assert SlowRunner.calls == 1
 
 
 def test_server_session_crud_fork_and_chat(monkeypatch, tmp_path):

@@ -792,6 +792,7 @@ class IdempotencyCache:
         self.ttl_seconds = max(1.0, float(ttl_seconds or 300))
         self._lock = threading.RLock()
         self._items: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        self._inflight: dict[tuple[str, str], dict[str, Any]] = {}
 
     def _purge_locked(self) -> None:
         now = time.time()
@@ -825,6 +826,46 @@ class IdempotencyCache:
             }
             self._items.move_to_end(key)
             self._purge_locked()
+
+    def get_or_compute(self, key: str, fingerprint: str, compute) -> dict[str, Any]:
+        if not key:
+            return compute()
+        cached = self.get(key, fingerprint)
+        if cached is not None:
+            return cached
+        flight_key = (key, fingerprint)
+        with self._lock:
+            cached = self.get(key, fingerprint)
+            if cached is not None:
+                return cached
+            flight = self._inflight.get(flight_key)
+            if flight is None:
+                flight = {"event": threading.Event(), "response": None, "error": None}
+                self._inflight[flight_key] = flight
+                owner = True
+            else:
+                owner = False
+        if not owner:
+            flight["event"].wait()
+            error = flight.get("error")
+            if error is not None:
+                raise error
+            response = flight.get("response")
+            return dict(response) if isinstance(response, dict) else {}
+        try:
+            response = compute()
+            self.put(key, fingerprint, response)
+        except Exception as exc:  # noqa: BLE001
+            with self._lock:
+                flight["error"] = exc
+                flight["event"].set()
+                self._inflight.pop(flight_key, None)
+            raise
+        with self._lock:
+            flight["response"] = dict(response)
+            flight["event"].set()
+            self._inflight.pop(flight_key, None)
+        return dict(response)
 
 
 def make_handler(config: Config):
@@ -1503,48 +1544,42 @@ def make_handler(config: Config):
                     idempotency_body,
                     ["model", "messages", "tools", "tool_choice", "stream", "_session_id_header", "_session_key_header"],
                 )
-                cached = idempotency_cache.get(idempotency_key, idempotency_fp)
-                if cached is not None:
-                    cached_session_id = None
-                    if isinstance(cached, dict):
-                        cached_meta = cached.get("metadata") if isinstance(cached.get("metadata"), dict) else {}
-                        cached_session_id = cached_meta.get("session_id")
-                    return self._json(200, cached, self._session_headers(
-                        session_id=str(cached_session_id or session_id or ""),
-                        session_key=session_key,
-                    ))
-                result = runner.run_prompt(
-                    last_user,
-                    session_id=session_id,
-                    history=history,
-                    model=model,
-                    provider_name=provider_name,
-                    cwd=cwd,
-                    stream=False,
-                    surface="serve",
-                    meta={
-                        "request_id": cid,
-                        **({"gateway_session_key": session_key} if session_key else {}),
-                    },
-                )
-                response_metadata = {
-                    "session_id": result.session.id,
-                    "trace_id": result.trace_id,
-                    "run_id": result.run_id,
-                }
-                if session_key:
-                    response_metadata["session_key"] = session_key
-                response = {
-                    "id": cid, "object": "chat.completion", "created": int(time.time()),
-                    "model": result.agent.provider.model,
-                    "choices": [{"index": 0, "message": {"role": "assistant", "content": result.text},
-                                 "finish_reason": "stop"}],
-                    "usage": _usage(getattr(result, "usage", None) or result.agent),
-                    "metadata": response_metadata,
-                }
-                idempotency_cache.put(idempotency_key, idempotency_fp, response)
+                def compute_response() -> dict[str, Any]:
+                    result = runner.run_prompt(
+                        last_user,
+                        session_id=session_id,
+                        history=history,
+                        model=model,
+                        provider_name=provider_name,
+                        cwd=cwd,
+                        stream=False,
+                        surface="serve",
+                        meta={
+                            "request_id": cid,
+                            **({"gateway_session_key": session_key} if session_key else {}),
+                        },
+                    )
+                    response_metadata = {
+                        "session_id": result.session.id,
+                        "trace_id": result.trace_id,
+                        "run_id": result.run_id,
+                    }
+                    if session_key:
+                        response_metadata["session_key"] = session_key
+                    return {
+                        "id": cid, "object": "chat.completion", "created": int(time.time()),
+                        "model": result.agent.provider.model,
+                        "choices": [{"index": 0, "message": {"role": "assistant", "content": result.text},
+                                     "finish_reason": "stop"}],
+                        "usage": _usage(getattr(result, "usage", None) or result.agent),
+                        "metadata": response_metadata,
+                    }
+
+                response = idempotency_cache.get_or_compute(idempotency_key, idempotency_fp, compute_response)
+                response_metadata = response.get("metadata") if isinstance(response.get("metadata"), dict) else {}
+                response_session_id = response_metadata.get("session_id")
                 return self._json(200, response, self._session_headers(
-                    session_id=result.session.id,
+                    session_id=str(response_session_id or session_id or ""),
                     session_key=session_key,
                 ))
 
@@ -1955,47 +1990,40 @@ def make_handler(config: Config):
                     "_session_key_header",
                 ],
             )
-            cached = idempotency_cache.get(idempotency_key, idempotency_fp)
-            if cached is not None:
-                cached_session_id = None
-                if isinstance(cached, dict):
-                    cached_meta = cached.get("metadata") if isinstance(cached.get("metadata"), dict) else {}
-                    cached_session_id = cached_meta.get("session_id")
-                return self._json(200, cached, self._session_headers(
-                    session_id=str(cached_session_id or session_id or ""),
-                    session_key=session_key,
-                ))
-            result = runner.run_prompt(
-                last_user,
-                session_id=session_id,
-                history=history,
-                model=model,
-                provider_name=provider_name,
-                cwd=cwd,
-                stream=False,
-                surface="serve",
-                meta={
-                    "request_id": response_id,
-                    "api": "responses",
-                    **({"gateway_session_key": session_key} if session_key else {}),
-                },
-            )
-            response = _response_object(response_id, result, metadata_extra=metadata)
-            response["instructions"] = instructions
-            response["previous_response_id"] = previous_id or None
-            response["conversation"] = conversation or None
-            response["store"] = store_response
-            if store_response:
-                full_history = _response_conversation_history(state_history, last_user, result)
-                response_store.put(response, {
-                    "conversation_history": full_history,
-                    "instructions": instructions,
-                    "session_id": response.get("metadata", {}).get("session_id") or session_id,
-                    "conversation": conversation,
-                })
-                if conversation:
-                    response_store.set_conversation(conversation, response_id)
-            idempotency_cache.put(idempotency_key, idempotency_fp, response)
+            def compute_response() -> dict[str, Any]:
+                result = runner.run_prompt(
+                    last_user,
+                    session_id=session_id,
+                    history=history,
+                    model=model,
+                    provider_name=provider_name,
+                    cwd=cwd,
+                    stream=False,
+                    surface="serve",
+                    meta={
+                        "request_id": response_id,
+                        "api": "responses",
+                        **({"gateway_session_key": session_key} if session_key else {}),
+                    },
+                )
+                response = _response_object(response_id, result, metadata_extra=metadata)
+                response["instructions"] = instructions
+                response["previous_response_id"] = previous_id or None
+                response["conversation"] = conversation or None
+                response["store"] = store_response
+                if store_response:
+                    full_history = _response_conversation_history(state_history, last_user, result)
+                    response_store.put(response, {
+                        "conversation_history": full_history,
+                        "instructions": instructions,
+                        "session_id": response.get("metadata", {}).get("session_id") or session_id,
+                        "conversation": conversation,
+                    })
+                    if conversation:
+                        response_store.set_conversation(conversation, response_id)
+                return response
+
+            response = idempotency_cache.get_or_compute(idempotency_key, idempotency_fp, compute_response)
             response_session_id = None
             response_metadata = response.get("metadata") if isinstance(response.get("metadata"), dict) else {}
             response_session_id = response_metadata.get("session_id")
