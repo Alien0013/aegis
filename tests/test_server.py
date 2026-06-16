@@ -1627,9 +1627,20 @@ def test_server_run_read_endpoints(monkeypatch, tmp_path):
         srv.server_close()
 
     assert list_status == 200
-    assert any(row["id"] == run["id"] for row in json.loads(list_data)["data"])
+    assert any(
+        row["id"] == run["id"]
+        and row["run_id"] == run["id"]
+        and row["object"] == "hermes.run"
+        and row["output"] == "done"
+        for row in json.loads(list_data)["data"]
+    )
     assert get_status == 200
-    assert json.loads(get_data)["run"]["id"] == run["id"]
+    get_body = json.loads(get_data)
+    assert get_body["object"] == "hermes.run"
+    assert get_body["run_id"] == run["id"]
+    assert get_body["status"] == "completed"
+    assert get_body["output"] == "done"
+    assert get_body["run"]["id"] == run["id"]
     assert events_status == 200
     assert json.loads(events_data)["ok"] is True
     assert stream_status == 200
@@ -1763,6 +1774,9 @@ def test_server_run_echoes_hermes_session_key(monkeypatch, tmp_path):
     assert create_status == 202
     assert create_headers["X-Hermes-Session-Key"] == "gateway:user-42"
     assert create_headers["X-Hermes-Session-Id"] == "serve:run-key"
+    assert body["id"] == body["run_id"]
+    assert body["object"] == "hermes.run"
+    assert body["status"] == "started"
     assert body["session_key"] == "gateway:user-42"
     assert _BlockingRunRunner.calls[0]["meta"]["gateway_session_key"] == "gateway:user-42"
 
@@ -1783,7 +1797,8 @@ def test_server_run_lifecycle_caps_active_runs_and_stop_wins(monkeypatch, tmp_pa
             "input": "slow run",
             "session_id": "serve:blocking-run",
         })
-        run_id = json.loads(create_data)["id"]
+        create_body = json.loads(create_data)
+        run_id = create_body["run_id"]
         assert _BlockingRunRunner.started.wait(2)
 
         list_status, list_data = _request(port, "GET", "/v1/runs")
@@ -1805,16 +1820,54 @@ def test_server_run_lifecycle_caps_active_runs_and_stop_wins(monkeypatch, tmp_pa
         srv.server_close()
 
     assert create_status == 202
+    assert create_body["id"] == run_id
+    assert create_body["status"] == "started"
     listed = json.loads(list_data)["data"]
     assert list_status == 200
     assert any(row["id"] == run_id and row["status"] in {"queued", "running"} for row in listed)
     assert second_status == 429
     assert json.loads(second_data)["code"] == "rate_limit_exceeded"
     assert stop_status == 200
-    assert json.loads(stop_data)["status"] == "cancelling"
+    stop_body = json.loads(stop_data)
+    assert stop_body["id"] == run_id
+    assert stop_body["run_id"] == run_id
+    assert stop_body["status"] == "stopping"
     assert _BlockingRunRunner.agents and _BlockingRunRunner.agents[0].cancel_event.is_set()
     assert final["run"]["status"] == "cancelled"
     assert final["run"]["result"] == "finished"
+
+
+def test_server_run_approval_without_pending_returns_409(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _BlockingRunRunner.reset()
+    monkeypatch.setattr(server, "SurfaceRunner", _BlockingRunRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        create_status, create_data = _request(port, "POST", "/v1/runs", {
+            "input": "slow run",
+            "session_id": "serve:no-approval-run",
+        })
+        run_id = json.loads(create_data)["run_id"]
+        assert _BlockingRunRunner.started.wait(2)
+        approval_status, approval_data = _request(
+            port,
+            "POST",
+            f"/v1/runs/{run_id}/approval",
+            {"choice": "once"},
+        )
+    finally:
+        _BlockingRunRunner.release.set()
+        srv.shutdown()
+        srv.server_close()
+
+    body = json.loads(approval_data)
+    assert create_status == 202
+    assert approval_status == 409
+    assert body["run_id"] == run_id
+    assert body["error"]["code"] == "approval_not_pending"
 
 
 def test_server_created_run_persists_across_handler_restart(monkeypatch, tmp_path):
@@ -1831,7 +1884,8 @@ def test_server_created_run_persists_across_handler_restart(monkeypatch, tmp_pat
             "input": "durable run",
             "session_id": "serve:persist-run",
         })
-        run_id = json.loads(create_data)["id"]
+        create_body = json.loads(create_data)
+        run_id = create_body["run_id"]
         assert _BlockingRunRunner.started.wait(2)
         _BlockingRunRunner.release.set()
 
@@ -1849,8 +1903,14 @@ def test_server_created_run_persists_across_handler_restart(monkeypatch, tmp_pat
         srv.server_close()
 
     assert create_status == 202
+    assert create_body["id"] == run_id
+    assert create_body["status"] == "started"
     assert final["run"]["id"] == run_id
     assert final["run"]["status"] == "completed"
+    assert final["run_id"] == run_id
+    assert final["object"] == "hermes.run"
+    assert final["status"] == "completed"
+    assert final["output"] == "finished"
 
     srv, port = _serve(server.make_handler(Config.load()))
     try:
@@ -1866,9 +1926,12 @@ def test_server_created_run_persists_across_handler_restart(monkeypatch, tmp_pat
     events = json.loads(events_data)
     assert get_status == 200
     assert run["id"] == run_id
+    assert run["run_id"] == run_id
+    assert run["object"] == "hermes.run"
     assert run["status"] == "completed"
     assert run["session_id"] == "serve:persist-run"
     assert run["result"] == "finished"
+    assert run["output"] == "finished"
     assert run["trace_id"] == "trace_blocking"
     assert run["surface_run_id"] == "surface_blocking"
     assert list_status == 200
@@ -1916,9 +1979,73 @@ def test_server_startup_marks_stale_api_runs_interrupted(monkeypatch, tmp_path):
     assert saved["data"]["interrupted_by_server_start"] is True
     assert saved["data"]["last_event"] == "run.interrupted"
     assert get_status == 200
+    assert body["run_id"] == run["id"]
+    assert body["object"] == "hermes.run"
+    assert body["status"] == "interrupted"
     assert body["run"]["id"] == run["id"]
     assert body["run"]["status"] == "interrupted"
     assert body["run"]["last_event"] == "run.interrupted"
+
+
+def test_server_run_approval_choice_unblocks_pending_run(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import time
+    import aegis.server as server
+    from aegis.config import Config
+
+    _ApprovalBlockingRunRunner.reset()
+    monkeypatch.setattr(server, "SurfaceRunner", _ApprovalBlockingRunRunner)
+    cfg = Config.load()
+    cfg.data.setdefault("server", {})["approval_timeout_seconds"] = 60
+    srv, port = _serve(server.make_handler(cfg))
+    try:
+        create_status, create_data = _request(port, "POST", "/v1/runs", {
+            "input": "needs approval",
+            "session_id": "serve:approval-choice-run",
+        })
+        run_id = json.loads(create_data)["run_id"]
+
+        pending = {}
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            pending_status, pending_data = _request(port, "GET", f"/v1/runs/{run_id}/approval")
+            pending = json.loads(pending_data)
+            if pending.get("pending"):
+                break
+            time.sleep(0.05)
+        approval_status, approval_data = _request(
+            port,
+            "POST",
+            f"/v1/runs/{run_id}/approval",
+            {"choice": "approve"},
+        )
+
+        final = {}
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            get_status, get_data = _request(port, "GET", f"/v1/runs/{run_id}")
+            final = json.loads(get_data)
+            if final.get("run", {}).get("status") == "completed":
+                break
+            time.sleep(0.05)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    approval = json.loads(approval_data)
+    assert create_status == 202
+    assert pending_status == 200
+    assert pending["pending"] and pending["pending"][0]["prompt"] == "Allow shell command?"
+    assert approval_status == 200
+    assert approval["object"] == "hermes.run.approval_response"
+    assert approval["run_id"] == run_id
+    assert approval["choice"] == "once"
+    assert approval["approved"] is True
+    assert approval["resolved"] == 1
+    assert _ApprovalBlockingRunRunner.approval_returned.wait(0.1)
+    assert _ApprovalBlockingRunRunner.calls[0]["approved"] is True
+    assert final["run"]["status"] == "completed"
+    assert final["output"] == "approved=True"
 
 
 def test_server_stop_releases_pending_approval_waiter(monkeypatch, tmp_path):
@@ -1937,7 +2064,8 @@ def test_server_stop_releases_pending_approval_waiter(monkeypatch, tmp_path):
             "input": "needs approval",
             "session_id": "serve:approval-run",
         })
-        run_id = json.loads(create_data)["id"]
+        create_body = json.loads(create_data)
+        run_id = create_body["run_id"]
 
         pending = {}
         deadline = time.time() + 2
@@ -1962,10 +2090,14 @@ def test_server_stop_releases_pending_approval_waiter(monkeypatch, tmp_path):
         srv.server_close()
 
     assert create_status == 202
+    assert create_body["id"] == run_id
+    assert create_body["status"] == "started"
     assert pending_status == 200
     assert pending["pending"] and pending["pending"][0]["prompt"] == "Allow shell command?"
     assert stop_status == 200
-    assert json.loads(stop_data)["status"] == "cancelling"
+    stop_body = json.loads(stop_data)
+    assert stop_body["run_id"] == run_id
+    assert stop_body["status"] == "stopping"
     assert _ApprovalBlockingRunRunner.approval_returned.wait(0.1)
     assert _ApprovalBlockingRunRunner.calls[0]["approved"] is False
     assert _ApprovalBlockingRunRunner.agents[0].cancel_event.is_set()

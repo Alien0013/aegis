@@ -613,15 +613,34 @@ def _epoch_from_run_time(value: Any) -> int:
         return 0
 
 
+def _public_api_run_status(status: Any) -> str:
+    text = str(status or "")
+    if text == "ok":
+        return "completed"
+    if text == "cancelling":
+        return "stopping"
+    return text
+
+
+def _with_hermes_run_aliases(record: dict[str, Any]) -> dict[str, Any]:
+    out = dict(record)
+    run_id = str(out.get("run_id") or out.get("id") or "")
+    out["id"] = str(out.get("id") or run_id)
+    out["run_id"] = run_id
+    out["object"] = "hermes.run"
+    out["status"] = _public_api_run_status(out.get("status"))
+    out["output"] = out.get("output", out.get("result", ""))
+    return out
+
+
 def _public_stored_run_record(run: dict[str, Any]) -> dict[str, Any]:
     data = run.get("data") if isinstance(run.get("data"), dict) else {}
-    status = str(run.get("status") or "")
-    public_status = "completed" if status == "ok" else status
+    public_status = _public_api_run_status(run.get("status"))
     created_at = _epoch_from_run_time(data.get("created_at") or run.get("started_at"))
     updated_at = _epoch_from_run_time(data.get("updated_at") or run.get("ended_at") or run.get("started_at"))
-    return {
+    return _with_hermes_run_aliases({
         "id": run.get("id", ""),
-        "object": data.get("object") or "run",
+        "legacy_object": data.get("object") or "run",
         "status": public_status,
         "created_at": created_at,
         "updated_at": updated_at,
@@ -640,7 +659,7 @@ def _public_stored_run_record(run: dict[str, Any]) -> dict[str, Any]:
         "started_at": run.get("started_at", ""),
         "ended_at": run.get("ended_at", ""),
         "prompt_preview": run.get("prompt_preview", ""),
-    }
+    })
 
 
 def _persist_api_run_record(record: dict[str, Any], *, title: str = "", prompt: str = "") -> None:
@@ -733,7 +752,9 @@ def _recover_stale_api_runs() -> int:
 
 
 def _public_run_record(record: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in record.items() if k not in {"agent", "thread", "events"}}
+    public = {k: v for k, v in record.items() if k not in {"agent", "thread", "events"}}
+    public["legacy_object"] = public.get("object") or "run"
+    return _with_hermes_run_aliases(public)
 
 
 def _coerce_csv_list(value: Any) -> list[str]:
@@ -1491,13 +1512,15 @@ def make_handler(config: Config):
                 self._sweep_runs_locked()
                 active = active_runs.get(run_id)
                 if active is not None:
-                    return 200, {"ok": True, "run": _public_run_record(active)}
+                    public = _public_run_record(active)
+                    return 200, {"ok": True, **public, "run": public}
             from .runs import RunStore
 
             run = RunStore().get(run_id)
             if run is None:
-                return 404, {"ok": False, "error": "run not found", "id": run_id}
-            return 200, {"ok": True, "run": _public_stored_run_record(run)}
+                return 404, {"ok": False, "error": "run not found", "id": run_id, "run_id": run_id}
+            public = _public_stored_run_record(run)
+            return 200, {"ok": True, **public, "run": public}
 
         def do_GET(self):  # noqa: N802
             if self._forbid_disallowed_origin():
@@ -2611,7 +2634,9 @@ def make_handler(config: Config):
             with state_lock:
                 active_runs[run_id]["thread"] = thread
             thread.start()
-            return self._json(202, _public_run_record(record), self._session_headers(
+            public = _public_run_record(record)
+            public["status"] = "started"
+            return self._json(202, public, self._session_headers(
                 session_id=session.id,
                 session_key=session_key,
             ))
@@ -2621,14 +2646,33 @@ def make_handler(config: Config):
                 self._sweep_runs_locked()
                 rec = self._request_stop_run_locked(run_id, "API stop requested")
                 if rec is None:
-                    return self._json(404, {"ok": False, "error": "active run not found", "id": run_id})
+                    return self._json(404, {
+                        "ok": False,
+                        "error": "active run not found",
+                        "id": run_id,
+                        "run_id": run_id,
+                    })
                 run_snapshot = dict(rec)
             _persist_api_run_record(run_snapshot)
-            return self._json(200, {"ok": True, "id": run_id, "status": "cancelling"})
+            public = _public_run_record(run_snapshot)
+            public["status"] = "stopping"
+            return self._json(200, {"ok": True, **public, "run": public})
 
         def _post_approval(self, run_id: str, body: dict[str, Any]) -> None:
             approval_id = str(body.get("approval_id") or body.get("id") or "")
-            approved = _coerce_request_bool(body.get("approved", body.get("approve")), False)
+            raw_choice = str(body.get("choice") or "").strip().lower()
+            aliases = {"approve": "once", "approved": "once", "allow": "once", "yes": "once", "true": "once"}
+            choice = aliases.get(raw_choice, raw_choice)
+            if choice:
+                if choice not in {"once", "session", "always", "deny"}:
+                    return self._json(400, {
+                        "error": "Invalid approval choice; expected one of: once, session, always, deny",
+                        "code": "invalid_approval_choice",
+                    })
+                approved = choice != "deny"
+            else:
+                approved = _coerce_request_bool(body.get("approved", body.get("approve")), False)
+                choice = "once" if approved else "deny"
             with state_lock:
                 if approval_id:
                     pending = approvals.get(approval_id)
@@ -2636,13 +2680,29 @@ def make_handler(config: Config):
                     pending = next((v for v in approvals.values()
                                     if v.get("run_id") == run_id and not v.get("answered")), None)
                 if pending is None:
-                    return self._json(404, {"ok": False, "error": "approval not found", "run_id": run_id})
+                    return self._json(409, {
+                        "ok": False,
+                        "error": {
+                            "message": f"Run has no pending approval: {run_id}",
+                            "code": "approval_not_pending",
+                        },
+                        "run_id": run_id,
+                    })
                 pending["approved"] = approved
+                pending["choice"] = choice
                 pending["answered"] = True
                 event = pending.get("event")
             if event is not None:
                 event.set()
-            return self._json(200, {"ok": True, "approval_id": pending["id"], "approved": approved})
+            return self._json(200, {
+                "ok": True,
+                "object": "hermes.run.approval_response",
+                "run_id": run_id,
+                "approval_id": pending["id"],
+                "approved": approved,
+                "choice": choice,
+                "resolved": 1,
+            })
 
     return Handler
 
