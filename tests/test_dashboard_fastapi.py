@@ -541,6 +541,70 @@ def test_fastapi_provider_and_gateway_control_plane_routes(tmp_path, monkeypatch
     assert channel.json() == {"ok": True, "channel": "telegram", "detail": "bot @aegis"}
 
 
+def test_fastapi_model_route_aliases(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    info = asyncio.run(_request(app, "GET", "/api/model/info", headers=headers))
+    assert info.status_code == 200
+    assert info.json()["provider"]
+    assert info.json()["model"]
+    assert "effective_context_length" in info.json()
+
+    options = asyncio.run(_request(app, "GET", "/api/model/options", headers=headers))
+    assert options.status_code == 200
+    option_body = options.json()
+    assert option_body["provider"] == info.json()["provider"]
+    assert any(row["slug"] == info.json()["provider"] for row in option_body["providers"])
+    assert "model_inventory" in option_body
+
+    recommended = asyncio.run(_request(
+        app,
+        "GET",
+        f"/api/model/recommended-default?provider={info.json()['provider']}",
+        headers=headers,
+    ))
+    assert recommended.status_code == 200
+    assert recommended.json()["provider"] == info.json()["provider"]
+    assert "model" in recommended.json()
+    assert recommended.json()["free_tier"] is None
+
+    set_main = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/model/set",
+        json={"scope": "main", "provider": info.json()["provider"], "model": info.json()["model"]},
+        headers=headers,
+    ))
+    assert set_main.status_code == 200
+    assert set_main.json()["ok"] is True
+    assert set_main.json()["scope"] == "main"
+    assert set_main.json()["provider"] == info.json()["provider"]
+    assert set_main.json()["model"] == info.json()["model"]
+
+    aux = asyncio.run(_request(app, "GET", "/api/model/auxiliary", headers=headers))
+    assert aux.status_code == 200
+    assert aux.json()["main"]["provider"] == info.json()["provider"]
+    assert any(row["task"] == "vision" for row in aux.json()["tasks"])
+
+    set_aux = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/model/set",
+        json={"scope": "auxiliary", "task": "vision", "provider": "auto", "model": "small-helper"},
+        headers=headers,
+    ))
+    assert set_aux.status_code == 200
+    assert set_aux.json()["ok"] is True
+    assert set_aux.json()["scope"] == "auxiliary"
+    assert set_aux.json()["tasks"] == ["vision"]
+
+    aux_after = asyncio.run(_request(app, "GET", "/api/model/auxiliary", headers=headers))
+    vision = next(row for row in aux_after.json()["tasks"] if row["task"] == "vision")
+    assert vision["provider"] == "auto"
+    assert vision["model"] == "small-helper"
+
+
 def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     app = _app(tmp_path, monkeypatch)

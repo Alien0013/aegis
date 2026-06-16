@@ -2306,6 +2306,150 @@ def _provider_probe(config: Config, body: dict[str, Any]) -> dict:
     }
 
 
+def _model_info_payload(config: Config) -> dict[str, Any]:
+    models = dash._dashboard_models(config)
+    active = models.get("active") or {}
+    validation = active.get("model_validation") or {}
+    provider = str(models.get("provider") or config.get("model.provider") or "")
+    model = str(models.get("model") or config.get("model.default") or "")
+    context_length = active.get("effective_context_length") or active.get("context_length", 0)
+    return {
+        "ok": True,
+        "provider": provider,
+        "model": model,
+        "active": active,
+        "validation": validation,
+        "warning": active.get("warning", ""),
+        "context_length": context_length,
+        "effective_context_length": context_length,
+        "capabilities": active.get("capabilities", {}),
+        "capability_summary": active.get("capability_summary", ""),
+        "providers": models.get("providers", []),
+    }
+
+
+def _model_options_payload(config: Config) -> dict[str, Any]:
+    models = dash._dashboard_models(config)
+    providers: list[dict[str, Any]] = []
+    presets = models.get("presets", {}) or {}
+    catalog_by_name = {
+        str(row.get("name") or ""): row
+        for row in models.get("provider_catalog", []) or []
+        if row.get("name")
+    }
+    for name in models.get("providers", []) or []:
+        name = str(name)
+        catalog = catalog_by_name.get(name, {})
+        provider_models = list(presets.get(name) or [])
+        providers.append({
+            "slug": name,
+            "name": catalog.get("display_name") or name,
+            "models": provider_models,
+            "total_models": len(provider_models),
+            "is_current": name == models.get("provider"),
+            "authenticated": bool((catalog.get("auth") or {}).get("available", False)),
+            "auth_type": (catalog.get("auth_methods") or [""])[0],
+            "key_env": (catalog.get("env_vars") or [""])[0],
+            "warning": catalog.get("warning", ""),
+            "is_user_defined": catalog.get("origin") == "custom",
+        })
+    return {
+        "ok": True,
+        "provider": models.get("provider"),
+        "model": models.get("model"),
+        "providers": providers,
+        "provider_names": models.get("providers", []),
+        "presets": models.get("presets", {}),
+        "preset_rows": models.get("preset_rows", {}),
+        "model_inventory": models.get("model_inventory", []),
+        "provider_catalog": models.get("provider_catalog", []),
+    }
+
+
+def _recommended_default_payload(config: Config, query: dict[str, list[str]] | None = None) -> dict[str, Any]:
+    models = dash._dashboard_models(config)
+    query = query or {}
+    provider = str(query.get("provider", [""])[0] or config.get("model.provider") or models.get("provider") or "")
+    current = str(config.get("model.default") or models.get("model") or "")
+    presets = list((models.get("presets") or {}).get(provider) or [])
+    recommended = presets[0] if presets else current
+    return {
+        "provider": provider,
+        "model": recommended,
+        "free_tier": None,
+        "ok": True,
+        "current": current,
+        "recommended": {"provider": provider, "model": recommended},
+    }
+
+
+def _auxiliary_model_payload(config: Config) -> dict[str, Any]:
+    raw = config.get("auxiliary", {}) or {}
+    slots = {key: value for key, value in raw.items() if isinstance(value, dict)} if isinstance(raw, dict) else {}
+    tasks = [
+        {
+            "task": key,
+            "provider": str((value or {}).get("provider") or "auto"),
+            "model": str((value or {}).get("model") or ""),
+            "base_url": str((value or {}).get("base_url") or ""),
+        }
+        for key, value in sorted(slots.items())
+    ]
+    return {
+        "ok": True,
+        "provider": config.get("auxiliary.provider", "") or "",
+        "model": config.get("auxiliary.model", "") or "",
+        "slots": copy.deepcopy(slots),
+        "tasks": tasks,
+        "main": {
+            "provider": config.get("model.provider") or "",
+            "model": config.get("model.default") or "",
+        },
+    }
+
+
+def _model_set_payload(config: Config, body: dict[str, Any]) -> dict[str, Any]:
+    scope = str(body.get("scope") or "main").strip().lower()
+    provider = str(body.get("provider") or "").strip()
+    model = str(body.get("model") or "").strip()
+    if scope == "main":
+        result = _api_post("/api/models", {"provider": provider, "model": model}, config, chat_runner=None)
+        info = _model_info_payload(config)
+        stale_aux = []
+        aux = config.get("auxiliary", {}) or {}
+        if isinstance(aux, dict):
+            for task, slot in aux.items():
+                if not isinstance(slot, dict):
+                    continue
+                slot_provider = str(slot.get("provider") or "").strip()
+                slot_model = str(slot.get("model") or "").strip()
+                if slot_provider and slot_provider not in {"auto", provider}:
+                    stale_aux.append({"task": task, "provider": slot_provider, "model": slot_model})
+        return {**result, "scope": "main", "info": info, "stale_aux": stale_aux}
+    if scope == "auxiliary":
+        task = str(body.get("task") or "").strip().lower()
+        aux = config.data.setdefault("auxiliary", {})
+        slots = [key for key, value in aux.items() if isinstance(value, dict)]
+        if task == "__reset__":
+            for slot in slots:
+                aux[slot] = {"provider": "auto", "model": "", "base_url": ""}
+            config.save()
+            return {"ok": True, "scope": "auxiliary", "reset": True, "tasks": slots}
+        targets = slots if not task else [task]
+        if not targets:
+            return {"ok": False, "error": "no auxiliary task slots configured", "scope": "auxiliary"}
+        for slot in targets:
+            current = dict(aux.get(slot) or {})
+            current["provider"] = provider or "auto"
+            current["model"] = model
+            if "base_url" in body:
+                current["base_url"] = str(body.get("base_url") or "").strip()
+            aux[slot] = current
+        config.save()
+        return {"ok": True, "scope": "auxiliary", "provider": provider or "auto", "model": model, "tasks": targets}
+    return {"ok": False, "error": "scope must be 'main' or 'auxiliary'", "scope": scope}
+
+
 def _gateway_probe(body: dict[str, Any]) -> dict:
     from .doctor import CHANNEL_PROBES
 
@@ -2550,6 +2694,14 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
         return dash._dashboard_models(config)
     if path == "/api/providers":
         return dash._dashboard_models(config)
+    if path == "/api/model/info":
+        return _model_info_payload(config)
+    if path == "/api/model/options":
+        return _model_options_payload(config)
+    if path == "/api/model/recommended-default":
+        return _recommended_default_payload(config, query)
+    if path == "/api/model/auxiliary":
+        return _auxiliary_model_payload(config)
     if path == "/api/provider-auth":
         return _provider_auth_payload(config)
     if path in {"/api/analytics", "/api/analytics/usage"}:
@@ -2826,6 +2978,8 @@ def _api_post(path: str, body: dict, config: Config, chat_runner: Any) -> dict:
                 "model": config.get("model.default"),
                 "warning": registry.model_validation_message(validation),
                 "validation": validation}
+    if path == "/api/model/set":
+        return _model_set_payload(config, body)
     if path == "/api/providers/test":
         return _provider_probe(config, body)
     if path == "/api/keys":
