@@ -1077,7 +1077,7 @@ def test_fastapi_dashboard_plugins_manifest_assets_and_api(tmp_path, monkeypatch
     (plug / "dashboard" / "dist" / "index.js").write_text("window.demoPlugin = true;", encoding="utf-8")
     (plug / "dashboard" / "dist" / "style.css").write_text(".demo{}", encoding="utf-8")
     (plug / "dashboard" / "dist" / "secret.py").write_text("print('no')", encoding="utf-8")
-    (plug / "api.py").write_text(
+    (plug / "dashboard" / "api.py").write_text(
         "from fastapi import APIRouter\n"
         "router = APIRouter()\n"
         "@router.get('/ping')\n"
@@ -1111,6 +1111,85 @@ def test_fastapi_dashboard_plugins_manifest_assets_and_api(tmp_path, monkeypatch
     assert denied.status_code == 401
     assert allowed.status_code == 200
     assert allowed.json() == {"pong": True}
+
+
+def test_fastapi_dashboard_only_plugins_are_discovered_and_mounted(tmp_path, monkeypatch):
+    plug = tmp_path / "plugins" / "status"
+    (plug / "dashboard" / "dist").mkdir(parents=True)
+    (plug / "dashboard" / "manifest.json").write_text(
+        json.dumps({
+            "name": "status-panel",
+            "title": "Status Panel",
+            "description": "Dashboard only",
+            "entry": "dist/index.js",
+            "api": "plugin_api.py",
+        }),
+        encoding="utf-8",
+    )
+    (plug / "dashboard" / "dist" / "index.js").write_text("window.statusPanel = true;", encoding="utf-8")
+    (plug / "dashboard" / "plugin_api.py").write_text(
+        "from fastapi import APIRouter\n"
+        "router = APIRouter()\n"
+        "@router.get('/status')\n"
+        "def status():\n"
+        "    return {'dashboard_only': True}\n",
+        encoding="utf-8",
+    )
+
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    manifest = asyncio.run(_request(app, "GET", "/api/dashboard/plugins", headers=headers))
+    assert manifest.status_code == 200
+    row = next(item for item in manifest.json() if item["name"] == "status-panel")
+    assert row["plugin"] == "status"
+    assert row["key"] == "status"
+    assert row["kind"] == "dashboard"
+    assert row["source"] == "user"
+    assert row["has_api"] is True
+
+    hub = asyncio.run(_request(app, "GET", "/api/dashboard/plugins/hub", headers=headers))
+    assert hub.status_code == 200
+    hub_row = next(item for item in hub.json()["plugins"] if item["key"] == "status")
+    assert hub_row["runtime_status"] == "dashboard"
+    assert hub_row["has_dashboard_manifest"] is True
+    assert hub_row["dashboard_manifest"]["name"] == "status-panel"
+    assert any(item["name"] == "status-panel" for item in hub.json()["orphan_dashboard_plugins"])
+
+    asset = asyncio.run(_request(app, "GET", "/dashboard-plugins/status-panel/dist/index.js"))
+    assert asset.status_code == 200
+    assert "window.statusPanel" in asset.text
+
+    route = asyncio.run(_request(app, "GET", "/api/plugins/status-panel/status", headers=headers))
+    assert route.status_code == 200
+    assert route.json() == {"dashboard_only": True}
+
+
+def test_fastapi_dashboard_plugin_api_must_stay_under_dashboard_dir(tmp_path, monkeypatch):
+    plug = tmp_path / "plugins" / "unsafe"
+    (plug / "dashboard").mkdir(parents=True)
+    (plug / "plugin.json").write_text('{"name":"unsafe"}', encoding="utf-8")
+    (plug / "dashboard" / "manifest.json").write_text(
+        json.dumps({"name": "unsafe-panel", "api": "api.py"}),
+        encoding="utf-8",
+    )
+    (plug / "api.py").write_text(
+        "from fastapi import APIRouter\n"
+        "router = APIRouter()\n"
+        "@router.get('/ping')\n"
+        "def ping():\n"
+        "    return {'unsafe': True}\n",
+        encoding="utf-8",
+    )
+
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    manifest = asyncio.run(_request(app, "GET", "/api/dashboard/plugins", headers=headers))
+    row = next(item for item in manifest.json() if item["name"] == "unsafe-panel")
+    assert row["has_api"] is False
+    route = asyncio.run(_request(app, "GET", "/api/plugins/unsafe-panel/ping", headers=headers))
+    assert route.status_code == 404
 
 
 def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api(tmp_path, monkeypatch):

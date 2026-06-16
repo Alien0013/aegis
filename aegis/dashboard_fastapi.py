@@ -1471,6 +1471,31 @@ def _dashboard_plugin_hub(config: Config) -> dict[str, Any]:
             str(record.get("name") or ""),
         } & agent_aliases)
     ]
+    for record in orphan_dashboard_plugins:
+        aliases = {
+            str(record.get("plugin") or ""),
+            str(record.get("key") or ""),
+            str(record.get("name") or ""),
+        }
+        rows.append({
+            "name": record.get("plugin") or record.get("name") or "",
+            "key": record.get("key") or record.get("plugin") or record.get("name") or "",
+            "kind": record.get("kind") or "dashboard",
+            "category": record.get("category") or "",
+            "source": record.get("source") or "user",
+            "version": record.get("version") or "",
+            "description": record.get("description") or "",
+            "status": "dashboard",
+            "enabled": True,
+            "runtime_status": "dashboard",
+            "has_dashboard_manifest": True,
+            "dashboard_manifest": record,
+            "can_remove": False,
+            "can_update_git": False,
+            "auth_required": False,
+            "auth_command": "",
+            "user_hidden": bool(aliases & hidden),
+        })
     memory_options = [
         str(row.get("name") or "") for row in memory_provider_catalog(config) if row.get("name")
     ]
@@ -1536,26 +1561,122 @@ def _safe_plugin_relpath(value: str, *, suffix: str = "") -> str:
     return text
 
 
+def _dashboard_plugin_key(plugin_root: Path, base: Path, fallback: str) -> tuple[str, str]:
+    try:
+        rel = plugin_root.resolve().relative_to(base.resolve())
+    except ValueError:
+        return fallback, ""
+    parts = [part for part in rel.parts if part not in {"", "."}]
+    if len(parts) >= 2:
+        return "/".join(parts), parts[0]
+    return fallback, ""
+
+
+def _dashboard_plugin_enabled(config: Config, name: str, key: str) -> bool:
+    disabled = set((config.get("plugins.disabled", []) or []))
+    allowlist = set((config.get("plugins.allowlist", []) or []))
+    aliases = {name, key or name}
+    return not (aliases & disabled) and (not allowlist or bool(aliases & allowlist))
+
+
+def _read_dashboard_manifest(manifest_path: Path) -> dict[str, Any] | None:
+    try:
+        loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        loaded = None
+    return loaded if isinstance(loaded, dict) else None
+
+
+def _dashboard_plugin_row(
+    *,
+    config: Config,
+    plugin_root: Path,
+    dash_root: Path,
+    data: dict[str, Any],
+    plugin_name: str,
+    key: str,
+    kind: str,
+    category: str,
+    source: str,
+    description: str = "",
+    version: str = "",
+) -> dict[str, Any] | None:
+    if not _dashboard_plugin_enabled(config, plugin_name, key):
+        return None
+    try:
+        name = _safe_resource_name(str(data.get("name") or plugin_name), "plugin")
+    except ValueError:
+        return None
+    asset_root = dash_root.resolve()
+    entry = _safe_plugin_relpath(str(data.get("entry") or "dist/index.js"))
+    css_raw = data.get("css") or []
+    css = [_safe_plugin_relpath(str(item)) for item in (css_raw if isinstance(css_raw, list) else [css_raw])]
+    css = [item for item in css if item]
+    api_value = str(data.get("api") or "")
+    if not api_value and (dash_root / "plugin_api.py").exists():
+        api_value = "plugin_api.py"
+    api_rel = _safe_plugin_relpath(api_value, suffix=".py")
+    api_path = (dash_root / api_rel).resolve() if api_rel else None
+    if api_path is not None and (not _contained(dash_root.resolve(), api_path) or not api_path.exists()):
+        api_path = None
+    raw_tab = data.get("tab", {}) if isinstance(data.get("tab"), dict) else {}
+    tab = {
+        "path": raw_tab.get("path", f"/{name}"),
+        "position": raw_tab.get("position", "end"),
+    }
+    if raw_tab.get("label"):
+        tab["label"] = raw_tab.get("label")
+    override = raw_tab.get("override")
+    if isinstance(override, str) and override.startswith("/"):
+        tab["override"] = override
+    if bool(raw_tab.get("hidden")):
+        tab["hidden"] = True
+    slots = [str(slot) for slot in (data.get("slots") or []) if isinstance(slot, str) and slot]
+    return {
+        "name": name,
+        "plugin": plugin_name,
+        "key": key or plugin_name,
+        "kind": kind,
+        "category": category,
+        "source": source,
+        "label": str(data.get("label") or data.get("title") or name),
+        "icon": str(data.get("icon") or "Puzzle"),
+        "title": str(data.get("title") or data.get("label") or name),
+        "description": str(data.get("description") or description or ""),
+        "version": str(data.get("version") or version or ""),
+        "tab": tab,
+        "slots": slots,
+        "entry": entry,
+        "css": css,
+        "base_path": f"/dashboard-plugins/{name}",
+        "has_api": bool(api_path and api_path.exists()),
+        "api_compat_root": False,
+        "_root": str(plugin_root.resolve()),
+        "_asset_root": str(asset_root),
+        "_dist": str((dash_root / "dist").resolve()),
+        "_api": str(api_path) if api_path and api_path.exists() else "",
+    }
+
+
 def _dashboard_plugin_records(config: Config) -> list[dict[str, Any]]:
+    from . import config as config_paths
     from .plugins import list_manifests, safe_mode_enabled
 
     if safe_mode_enabled():
         return []
     rows: list[dict[str, Any]] = []
+    base = config_paths.sub("plugins")
+    manifest_roots: set[Path] = set()
     for manifest in list_manifests(config):
+        plugin_root = manifest.path.parent if manifest.path.is_file() else manifest.path
+        manifest_roots.add(plugin_root.resolve())
         if not manifest.enabled:
             continue
-        plugin_root = manifest.path.parent if manifest.path.is_file() else manifest.path
         dash_root = plugin_root / "dashboard"
         manifest_path = dash_root / "manifest.json"
         data: dict[str, Any] | None = None
         if manifest_path.exists():
-            try:
-                loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
-            except Exception:  # noqa: BLE001
-                loaded = None
-            if isinstance(loaded, dict):
-                data = loaded
+            data = _read_dashboard_manifest(manifest_path)
         if data is None and isinstance(getattr(manifest, "raw", None), dict):
             raw_dashboard = manifest.raw.get("dashboard") or manifest.raw.get("dashboard_manifest")
             if isinstance(raw_dashboard, dict):
@@ -1564,65 +1685,43 @@ def _dashboard_plugin_records(config: Config) -> list[dict[str, Any]]:
             continue
         if not isinstance(data, dict):
             continue
-        try:
-            name = _safe_resource_name(str(data.get("name") or manifest.name), "plugin")
-        except ValueError:
+        row = _dashboard_plugin_row(
+            config=config,
+            plugin_root=plugin_root,
+            dash_root=dash_root,
+            data=data,
+            plugin_name=manifest.name,
+            key=manifest.key or manifest.name,
+            kind=manifest.kind,
+            category=manifest.category,
+            source=manifest.source,
+            description=manifest.description,
+            version=manifest.version,
+        )
+        if row:
+            rows.append(row)
+    for manifest_path in sorted(base.rglob("dashboard/manifest.json")) if base.exists() else []:
+        plugin_root = manifest_path.parent.parent
+        if plugin_root.resolve() in manifest_roots:
             continue
-        asset_root = dash_root.resolve()
-        entry = _safe_plugin_relpath(str(data.get("entry") or "dist/index.js"))
-        css_raw = data.get("css") or []
-        css = [_safe_plugin_relpath(str(item)) for item in (css_raw if isinstance(css_raw, list) else [css_raw])]
-        css = [item for item in css if item]
-        api_value = str(data.get("api") or "")
-        if not api_value and (dash_root / "plugin_api.py").exists():
-            api_value = "plugin_api.py"
-        api_rel = _safe_plugin_relpath(api_value, suffix=".py")
-        api_path = (dash_root / api_rel).resolve() if api_rel else None
-        api_compat_root = False
-        if api_path is not None and (not _contained(dash_root.resolve(), api_path) or not api_path.exists()):
-            compat_path = (plugin_root / api_rel).resolve()
-            if _contained(plugin_root.resolve(), compat_path) and compat_path.exists():
-                api_path = compat_path
-                api_compat_root = True
-            else:
-                api_path = None
-        raw_tab = data.get("tab", {}) if isinstance(data.get("tab"), dict) else {}
-        tab = {
-            "path": raw_tab.get("path", f"/{name}"),
-            "position": raw_tab.get("position", "end"),
-        }
-        if raw_tab.get("label"):
-            tab["label"] = raw_tab.get("label")
-        override = raw_tab.get("override")
-        if isinstance(override, str) and override.startswith("/"):
-            tab["override"] = override
-        if bool(raw_tab.get("hidden")):
-            tab["hidden"] = True
-        slots = [str(slot) for slot in (data.get("slots") or []) if isinstance(slot, str) and slot]
-        rows.append({
-            "name": name,
-            "plugin": manifest.name,
-            "key": manifest.key or manifest.name,
-            "kind": manifest.kind,
-            "category": manifest.category,
-            "source": manifest.source,
-            "label": str(data.get("label") or data.get("title") or name),
-            "icon": str(data.get("icon") or "Puzzle"),
-            "title": str(data.get("title") or data.get("label") or name),
-            "description": str(data.get("description") or manifest.description or ""),
-            "version": str(data.get("version") or manifest.version or ""),
-            "tab": tab,
-            "slots": slots,
-            "entry": entry,
-            "css": css,
-            "base_path": f"/dashboard-plugins/{name}",
-            "has_api": bool(api_path and api_path.exists()),
-            "api_compat_root": api_compat_root,
-            "_root": str(plugin_root.resolve()),
-            "_asset_root": str(asset_root),
-            "_dist": str((dash_root / "dist").resolve()),
-            "_api": str(api_path) if api_path and api_path.exists() else "",
-        })
+        data = _read_dashboard_manifest(manifest_path)
+        if not data:
+            continue
+        plugin_name = plugin_root.name
+        key, category = _dashboard_plugin_key(plugin_root, base, plugin_name)
+        row = _dashboard_plugin_row(
+            config=config,
+            plugin_root=plugin_root,
+            dash_root=manifest_path.parent,
+            data=data,
+            plugin_name=plugin_name,
+            key=key,
+            kind="dashboard",
+            category=category,
+            source="user",
+        )
+        if row:
+            rows.append(row)
     return rows
 
 
