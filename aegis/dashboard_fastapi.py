@@ -2038,6 +2038,11 @@ def _empty_sessions(older_than_days: float = 0.0, *, dry_run: bool = True) -> di
     return {"ok": True, "ids": removed, "count": len(removed), "dry_run": dry_run}
 
 
+def _empty_session_count(older_than_days: float = 0.0) -> dict:
+    result = _empty_sessions(older_than_days, dry_run=True)
+    return {**result, "empty_sessions": result["count"]}
+
+
 def _delete_sessions(ids: Any) -> dict:
     from .session import SessionStore
 
@@ -2824,6 +2829,12 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
         from .session import SessionStore
 
         return SessionStore().list(100)
+    if path == "/api/sessions/empty/count":
+        older_than_days = float(query.get("older_than_days", ["0"])[0] or 0)
+        return _empty_session_count(older_than_days)
+    if path == "/api/sessions/empty":
+        older_than_days = float(query.get("older_than_days", ["0"])[0] or 0)
+        return _empty_sessions(older_than_days, dry_run=True)
     if path == "/api/session":
         from .session import SessionStore
 
@@ -3033,6 +3044,11 @@ def _api_post(path: str, body: dict, config: Config, chat_runner: Any) -> dict:
                 reason=str(body.get("reason") or "dashboard"),
             )
         return {"error": "bad session request"}
+    if path == "/api/sessions/bulk-delete":
+        ids = body.get("ids") if isinstance(body, dict) else None
+        if not ids and isinstance(body, dict):
+            ids = body.get("session_ids")
+        return _delete_sessions(ids)
     if path == "/api/eval":
         if body.get("action") in {"run", "run_suite"}:
             return dash._dashboard_run_eval(body, config)
@@ -4358,6 +4374,18 @@ def create_app(config: Config) -> FastAPI:
         older_than_days = float(request.query_params.get("older_than_days") or 0)
         return JSONResponse(_empty_sessions(older_than_days, dry_run=True))
 
+    @app.get("/api/sessions/empty/count")
+    async def api_sessions_empty_count(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        older_than_days = float(request.query_params.get("older_than_days") or 0)
+        return JSONResponse(_empty_session_count(older_than_days))
+
+    @app.delete("/api/sessions/empty")
+    async def api_sessions_empty_delete(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        older_than_days = float(request.query_params.get("older_than_days") or 0)
+        return JSONResponse(_empty_sessions(older_than_days, dry_run=False))
+
     @app.post("/api/sessions/prune-empty")
     async def api_sessions_prune_empty(request: Request) -> JSONResponse:
         _require_request(request, config)
@@ -4372,6 +4400,16 @@ def create_app(config: Config) -> FastAPI:
         _require_request(request, config)
         body = await request.json()
         result = _delete_sessions(body.get("ids") if isinstance(body, dict) else None)
+        return JSONResponse(result, status_code=200 if result.get("ok") else 400)
+
+    @app.post("/api/sessions/bulk-delete")
+    async def api_sessions_bulk_delete(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        ids = body.get("ids") if isinstance(body, dict) else None
+        if not ids and isinstance(body, dict):
+            ids = body.get("session_ids")
+        result = _delete_sessions(ids)
         return JSONResponse(result, status_code=200 if result.get("ok") else 400)
 
     @app.get("/api/sessions/{session_id}")

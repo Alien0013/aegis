@@ -327,6 +327,8 @@ def test_fastapi_registers_live_and_pty_websockets(tmp_path, monkeypatch):
         "/api/browser/manage",
         "/api/sessions/search",
         "/api/sessions/stats",
+        "/api/sessions/empty/count",
+        "/api/sessions/bulk-delete",
         "/api/cron/jobs",
         "/api/cron/service",
         "/api/gateway/status",
@@ -1017,9 +1019,14 @@ def test_fastapi_sessions_control_plane(tmp_path, monkeypatch):
     store.save(session)
     empty_session = Session.create("empty dashboard session")
     store.save(empty_session)
+    alias_empty_session = Session.create("empty alias dashboard session")
+    store.save(alias_empty_session)
     bulk_session = Session.create("bulk delete session")
     bulk_session.messages = [Message.user("bulk delete me")]
     store.save(bulk_session)
+    alias_bulk_session = Session.create("bulk alias delete session")
+    alias_bulk_session.messages = [Message.user("bulk alias delete me")]
+    store.save(alias_bulk_session)
 
     listed = asyncio.run(_request(app, "GET", "/api/sessions", headers=headers))
     assert listed.status_code == 200
@@ -1034,6 +1041,12 @@ def test_fastapi_sessions_control_plane(tmp_path, monkeypatch):
     empty = asyncio.run(_request(app, "GET", "/api/sessions/empty", headers=headers))
     assert empty.status_code == 200
     assert empty_session.id in empty.json()["ids"]
+    assert alias_empty_session.id in empty.json()["ids"]
+
+    empty_count = asyncio.run(_request(app, "GET", "/api/sessions/empty/count", headers=headers))
+    assert empty_count.status_code == 200
+    assert empty_count.json()["count"] >= 2
+    assert empty_count.json()["empty_sessions"] == empty_count.json()["count"]
 
     pruned_empty = asyncio.run(_request(
         app,
@@ -1044,6 +1057,14 @@ def test_fastapi_sessions_control_plane(tmp_path, monkeypatch):
     ))
     assert pruned_empty.status_code == 200
     assert empty_session.id in pruned_empty.json()["ids"]
+    assert alias_empty_session.id in pruned_empty.json()["ids"]
+
+    delete_empty_session = Session.create("delete empty alias session")
+    store.save(delete_empty_session)
+    deleted_empty = asyncio.run(_request(app, "DELETE", "/api/sessions/empty", headers=headers))
+    assert deleted_empty.status_code == 200
+    assert deleted_empty.json()["dry_run"] is False
+    assert delete_empty_session.id in deleted_empty.json()["ids"]
 
     deleted_many = asyncio.run(_request(
         app,
@@ -1055,6 +1076,17 @@ def test_fastapi_sessions_control_plane(tmp_path, monkeypatch):
     assert deleted_many.status_code == 200
     assert deleted_many.json()["removed"] == [bulk_session.id]
     assert deleted_many.json()["missing"] == ["missing-session"]
+
+    bulk_deleted = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/sessions/bulk-delete",
+        json={"session_ids": [alias_bulk_session.id, "missing-alias-session"]},
+        headers=headers,
+    ))
+    assert bulk_deleted.status_code == 200
+    assert bulk_deleted.json()["removed"] == [alias_bulk_session.id]
+    assert bulk_deleted.json()["missing"] == ["missing-alias-session"]
 
     found = asyncio.run(_request(
         app,
