@@ -20,6 +20,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import parse_qs, urlsplit
 
 from . import __version__
 from .config import Config
@@ -2084,6 +2085,103 @@ def _delete_managed_file(body: dict[str, Any]) -> dict:
     return {"ok": True, "path": str(target)}
 
 
+def _ws_query(params: Any) -> dict[str, list[str]]:
+    if not isinstance(params, dict):
+        return {}
+    raw = params.get("query") or params.get("params") or {}
+    if isinstance(raw, str):
+        return {key: [str(item) for item in value] for key, value in parse_qs(raw.lstrip("?")).items()}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, list[str]] = {}
+    for key, value in raw.items():
+        if isinstance(value, list):
+            out[str(key)] = [str(item) for item in value]
+        elif value is None:
+            out[str(key)] = [""]
+        else:
+            out[str(key)] = [str(value)]
+    return out
+
+
+def _dashboard_ws_capabilities() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "version": __version__,
+        "transport": {
+            "events": True,
+            "keepalive": True,
+            "jsonrpc": "2.0",
+            "legacy_ping": True,
+        },
+        "methods": [
+            "ping",
+            "dashboard.capabilities",
+            "dashboard.status",
+            "dashboard.get",
+            "api.get",
+        ],
+        "routes": {
+            "events": "/api/ws",
+            "sse": "/api/events",
+            "pty": "/api/pty",
+            "ws_ticket": "/api/auth/ws-ticket",
+        },
+    }
+
+
+def _dashboard_ws_rpc_response(text: str | None, config: Config) -> dict[str, Any] | None:
+    if text is None:
+        return None
+    if text == "ping":
+        return {"type": "pong"}
+    try:
+        message = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(message, dict):
+        return None
+
+    method = str(message.get("method") or message.get("type") or "").strip()
+    request_id = message.get("id")
+    params = message.get("params") if isinstance(message.get("params"), dict) else {}
+    is_jsonrpc = message.get("jsonrpc") == "2.0" or "method" in message
+
+    if method == "ping":
+        result: dict[str, Any] = {"ok": True, "type": "pong"}
+    elif method in {"dashboard.capabilities", "capabilities"}:
+        result = _dashboard_ws_capabilities()
+    elif method in {"dashboard.status", "status"}:
+        result = dash._dashboard_status(config)
+    elif method in {"dashboard.get", "api.get"}:
+        path = str(params.get("path") or "").strip()
+        if not path:
+            return _ws_rpc_error(request_id, -32602, "params.path is required", is_jsonrpc=is_jsonrpc)
+        split = urlsplit(path)
+        route = split.path
+        if not route.startswith("/api/"):
+            return _ws_rpc_error(request_id, -32602, "dashboard.get only supports /api/* paths", is_jsonrpc=is_jsonrpc)
+        query = _ws_query(params)
+        for key, values in parse_qs(split.query).items():
+            query.setdefault(key, [str(item) for item in values])
+        result = _api_get(route, query, config)
+    elif method:
+        return _ws_rpc_error(request_id, -32601, f"unknown dashboard websocket method: {method}", is_jsonrpc=is_jsonrpc)
+    else:
+        return None
+
+    if is_jsonrpc:
+        return {"jsonrpc": "2.0", "id": request_id, "result": result}
+    return {"type": "rpc.result", "id": request_id, "method": method, "result": result}
+
+
+def _ws_rpc_error(request_id: Any, code: int, message: str, *, is_jsonrpc: bool) -> dict[str, Any]:
+    error = {"code": code, "message": message}
+    if is_jsonrpc:
+        return {"jsonrpc": "2.0", "id": request_id, "error": error}
+    return {"type": "rpc.error", "id": request_id, "error": error}
+
+
 def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
     if path == "/api/status":
         return dash._dashboard_status(config)
@@ -2639,6 +2737,11 @@ def create_app(config: Config) -> FastAPI:
         sub = BUS.subscribe()
         await ws.accept()
         loop = asyncio.get_running_loop()
+        send_lock = asyncio.Lock()
+
+        async def send_json(payload: dict[str, Any]) -> None:
+            async with send_lock:
+                await ws.send_json(payload)
 
         async def pump_events() -> None:
             idle_ticks = 0
@@ -2646,12 +2749,12 @@ def create_app(config: Config) -> FastAPI:
                 try:
                     event = await loop.run_in_executor(None, lambda: sub.get(timeout=0.2))
                     idle_ticks = 0
-                    await ws.send_json(event)
+                    await send_json(event)
                 except queue.Empty:
                     idle_ticks += 1
                     if idle_ticks >= 75:
                         idle_ticks = 0
-                        await ws.send_json({"type": "keepalive"})
+                        await send_json({"type": "keepalive"})
                 except Exception:
                     return
 
@@ -2661,8 +2764,9 @@ def create_app(config: Config) -> FastAPI:
                 msg = await ws.receive()
                 if msg.get("type") == "websocket.disconnect":
                     break
-                if msg.get("text") == "ping":
-                    await ws.send_json({"type": "pong"})
+                reply = _dashboard_ws_rpc_response(msg.get("text"), config)
+                if reply is not None:
+                    await send_json(reply)
         finally:
             writer.cancel()
             try:

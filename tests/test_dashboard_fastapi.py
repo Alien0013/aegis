@@ -278,6 +278,38 @@ def test_fastapi_registers_live_and_pty_websockets(tmp_path, monkeypatch):
         assert routes[path] == "APIRoute"
 
 
+def test_fastapi_websocket_jsonrpc_helper(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.config import Config
+    from aegis.dashboard_fastapi import _dashboard_ws_rpc_response
+
+    cfg = Config.load()
+    assert _dashboard_ws_rpc_response("ping", cfg) == {"type": "pong"}
+
+    capabilities = _dashboard_ws_rpc_response(
+        '{"jsonrpc":"2.0","id":1,"method":"dashboard.capabilities"}',
+        cfg,
+    )
+    assert capabilities["jsonrpc"] == "2.0"
+    assert capabilities["id"] == 1
+    assert capabilities["result"]["transport"]["jsonrpc"] == "2.0"
+    assert "/api/ws" == capabilities["result"]["routes"]["events"]
+
+    status = _dashboard_ws_rpc_response(
+        '{"jsonrpc":"2.0","id":"s","method":"dashboard.get","params":{"path":"/api/status"}}',
+        cfg,
+    )
+    assert status["id"] == "s"
+    assert status["result"]["version"]
+    assert status["result"]["model"] == cfg.get("model.default")
+
+    blocked = _dashboard_ws_rpc_response(
+        '{"jsonrpc":"2.0","id":"bad","method":"dashboard.get","params":{"path":"/etc/passwd"}}',
+        cfg,
+    )
+    assert blocked["error"]["code"] == -32602
+
+
 def test_fastapi_browser_manage_route(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
     headers = {"X-Aegis-Token": "t"}
