@@ -16,6 +16,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { aegisCommand, backendEnvironment, resolveAegisHome } = require("./backend-env.cjs");
+const { desktopDiagnostics } = require("./desktop-status.cjs");
 
 // Chromium checks the Linux setuid sandbox before main.js runs, so launch.js
 // puts --no-sandbox on argv; mirror it here so child processes inherit it.
@@ -187,6 +188,16 @@ function connectionDescriptor() {
       userDataPath: app.getPath("userData"),
       env: backendEnvSummary,
     },
+    desktop: desktopDiagnostics({
+      app,
+      env: {
+        ...process.env,
+        AEGIS_HOME: backendEnvSummary.AEGIS_HOME || process.env.AEGIS_HOME || "",
+        AEGIS_BIN: backendEnvSummary.AEGIS_BIN || process.env.AEGIS_BIN || "",
+      },
+      resourcesPath: process.resourcesPath || "",
+      desktopRoot: path.join(__dirname, ".."),
+    }),
   };
 }
 
