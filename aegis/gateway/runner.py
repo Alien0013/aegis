@@ -466,10 +466,11 @@ class GatewayRunner:
                     + ", ".join(self._user_commands()))
         # Intercept control commands before the agent.
         if text == "/stop":
-            generation = self._bump_generation(key)
-            self._persist_generation_marker(key, generation)
-            agent = self._agents.get(key)
+            running = (lk := self._key_locks.get(key)) is not None and lk.locked()
+            agent = self._agents.get(key) if running else None
             if agent is not None and not getattr(agent, "cancel_event", threading.Event()).is_set():
+                generation = self._bump_generation(key)
+                self._persist_generation_marker(key, generation)
                 cancel = getattr(agent, "cancel", None)
                 if callable(cancel):
                     cancel()

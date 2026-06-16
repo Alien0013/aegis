@@ -149,6 +149,59 @@ def test_session_store_rejects_stale_gateway_generation(tmp_path, monkeypatch):
     assert store.load(old.id).messages == []
 
 
+def test_stop_ignores_idle_cached_agent(tmp_path, monkeypatch):
+    import threading
+
+    r = _runner(tmp_path, monkeypatch)
+    ev = _ev("/stop")
+    key = r._key(ev)
+    r._session(key)
+    cancelled = []
+
+    class CachedAgent:
+        cancel_event = threading.Event()
+
+        def cancel(self):
+            cancelled.append("cancel")
+
+    r._agents[key] = CachedAgent()
+
+    out = r.dispatch(ev)
+
+    assert "No active turn is running" in out
+    assert cancelled == []
+    assert r._generation(key) == 0
+
+
+def test_stop_cancels_active_locked_agent(tmp_path, monkeypatch):
+    import threading
+
+    r = _runner(tmp_path, monkeypatch)
+    ev = _ev("/stop")
+    key = r._key(ev)
+    r._session(key)
+    lock = threading.Lock()
+    r._key_locks[key] = lock
+    cancelled = []
+
+    class RunningAgent:
+        cancel_event = threading.Event()
+
+        def cancel(self):
+            cancelled.append("cancel")
+
+    r._agents[key] = RunningAgent()
+    lock.acquire()
+    try:
+        out = r.dispatch(ev)
+    finally:
+        lock.release()
+
+    assert "stop requested" in out
+    assert cancelled == ["cancel"]
+    assert r._generation(key) == 1
+
+
 def test_agent_cache_eviction_closes_cached_agent(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
