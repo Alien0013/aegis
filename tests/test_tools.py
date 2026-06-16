@@ -95,6 +95,16 @@ def test_write_file_safe_root_and_sensitive_system_paths(tmp_path, monkeypatch):
     assert is_sensitive("/run/docker.sock")
 
 
+def test_write_file_blocks_project_env_without_approval(tmp_path):
+    from aegis.tools.builtin import WriteFileTool
+
+    res = WriteFileTool().run({"path": ".env", "content": "OPENAI_API_KEY=secret"}, _ctx(tmp_path))
+
+    assert res.is_error
+    assert "secret-bearing environment file" in res.content
+    assert not (tmp_path / ".env").exists()
+
+
 def test_browser_navigate_blocks_ssrf_before_launch(tmp_path, monkeypatch):
     from aegis.tools.base import ToolContext
     from aegis.tools.browser import BrowserTool
@@ -246,6 +256,18 @@ def test_apply_patch_respects_safe_root(tmp_path, monkeypatch):
     assert res.is_error
     assert "write safe root" in res.content
     assert not (tmp_path / "outside.txt").exists()
+
+
+def test_apply_patch_blocks_project_env_without_approval(tmp_path):
+    from aegis.tools.extra_builtin import ApplyPatchTool
+
+    patch = "--- /dev/null\n+++ b/.env.local\n@@ -0,0 +1 @@\n+OPENAI_API_KEY=secret\n"
+
+    res = ApplyPatchTool().run({"patch": patch}, _ctx(tmp_path))
+
+    assert res.is_error
+    assert "secret-bearing environment file" in res.content
+    assert not (tmp_path / ".env.local").exists()
 
 
 def test_apply_patch_blocks_traversal(tmp_path):

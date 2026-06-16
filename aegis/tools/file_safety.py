@@ -143,6 +143,8 @@ def is_sensitive(path) -> str:
             return f"credentials/keys location (~/{d})"
     if p.parent == home and p.name in _HOME_FILES:
         return f"shell/login configuration (~/{p.name})"
+    if p.name in _PROJECT_ENV_FILES:
+        return "secret-bearing environment file"
     ah = _aegis_home()
     if _inside_or_same(p, ah) and p != ah:
         rel = p.relative_to(ah)
