@@ -7,6 +7,7 @@ Lets any OpenAI-client tool point at AEGIS. Optional bearer auth via
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -1554,6 +1555,12 @@ def make_handler(config: Config):
                 return self._json(code, payload)
             self._send_sse_headers()
 
+            def stop_on_disconnect() -> None:
+                with state_lock:
+                    self._request_stop_run_locked(run_id, "SSE client disconnected")
+
+            self._aegis_on_disconnect = stop_on_disconnect
+
             deadline = time.time() + float(config.get("server.run_events_timeout_seconds", 3600) or 3600)
             sent = 0
             while True:
@@ -2270,6 +2277,12 @@ def make_handler(config: Config):
                         response_store.set_conversation(conversation, response_id)
 
                 self._send_sse_headers(self._session_headers(session_id=session_id, session_key=session_key))
+
+                def cancel_on_disconnect() -> None:
+                    with state_lock:
+                        self._request_cancel_response_locked(response_id, "SSE client disconnected")
+
+                self._aegis_on_disconnect = cancel_on_disconnect
                 created_response = {
                     "id": response_id,
                     "object": "response",
@@ -2930,17 +2943,26 @@ def make_app(config: Config) -> web.Application:
     handler_cls = make_handler(config)
 
     class _AiohttpWFile:
-        def __init__(self, loop: asyncio.AbstractEventLoop, chunks: asyncio.Queue[bytes]):
+        def __init__(self, loop: asyncio.AbstractEventLoop, chunks: asyncio.Queue[tuple[bytes, concurrent.futures.Future[int] | None]]):
             self._loop = loop
             self._chunks = chunks
             self._buffer = bytearray()
+            self._closed = threading.Event()
+            self._streaming = threading.Event()
 
         def write(self, data: bytes | bytearray | memoryview) -> int:
+            if self._closed.is_set():
+                raise BrokenPipeError("SSE client disconnected")
             payload = bytes(data)
             if not payload:
                 return 0
             self._buffer.extend(payload)
-            self._loop.call_soon_threadsafe(self._chunks.put_nowait, payload)
+            ack: concurrent.futures.Future[int] | None = None
+            if self._streaming.is_set():
+                ack = concurrent.futures.Future()
+            self._loop.call_soon_threadsafe(self._chunks.put_nowait, (payload, ack))
+            if ack is not None:
+                return ack.result()
             return len(payload)
 
         def flush(self) -> None:
@@ -2948,6 +2970,16 @@ def make_app(config: Config) -> web.Application:
 
         def getvalue(self) -> bytes:
             return bytes(self._buffer)
+
+        def set_streaming(self) -> None:
+            self._streaming.set()
+
+        def close(self) -> None:
+            self._closed.set()
+
+        @property
+        def closed(self) -> bool:
+            return self._closed.is_set()
 
     async def dispatch(request: web.Request) -> web.StreamResponse:
         origin = str(request.headers.get("Origin", "") or "")
@@ -2966,7 +2998,7 @@ def make_app(config: Config) -> web.Application:
             )
         body = await request.read()
         loop = asyncio.get_running_loop()
-        chunks: asyncio.Queue[bytes] = asyncio.Queue()
+        chunks: asyncio.Queue[tuple[bytes, concurrent.futures.Future[int] | None]] = asyncio.Queue()
         headers_ready = asyncio.Event()
         adapter = object.__new__(handler_cls)
         adapter.path = request.rel_url.raw_path_qs
@@ -2976,6 +3008,25 @@ def make_app(config: Config) -> web.Application:
         adapter._aegis_status = 200
         adapter._aegis_headers: list[tuple[str, str]] = []
         adapter._aegis_headers_sent = False
+        adapter._aegis_on_disconnect = None
+        disconnect_notified = False
+
+        def notify_disconnect() -> None:
+            nonlocal disconnect_notified
+            if disconnect_notified:
+                return
+            disconnect_notified = True
+            adapter.wfile.close()
+            callback = getattr(adapter, "_aegis_on_disconnect", None)
+            if callable(callback):
+                try:
+                    callback()
+                except Exception:  # noqa: BLE001
+                    pass
+
+        def client_disconnected() -> bool:
+            transport = request.transport
+            return bool(transport is None or transport.is_closing())
 
         def send_response(code: int, message: str | None = None) -> None:  # noqa: ARG001
             adapter._aegis_status = int(code)
@@ -3033,26 +3084,52 @@ def make_app(config: Config) -> web.Application:
             headers={**_response_headers(config, origin), **headers},
         )
         await response.prepare(request)
+        adapter.wfile.set_streaming()
         try:
             while True:
                 try:
-                    chunk = await asyncio.wait_for(chunks.get(), timeout=0.1)
-                    await response.write(chunk)
+                    chunk, ack = await asyncio.wait_for(chunks.get(), timeout=0.1)
+                    try:
+                        await response.write(chunk)
+                    except (BrokenPipeError, ConnectionResetError, RuntimeError) as exc:
+                        notify_disconnect()
+                        if ack is not None and not ack.done():
+                            ack.set_exception(BrokenPipeError("SSE client disconnected"))
+                        break
+                    else:
+                        if ack is not None and not ack.done():
+                            ack.set_result(len(chunk))
                 except asyncio.TimeoutError:
+                    if client_disconnected():
+                        notify_disconnect()
+                        break
                     if task.done():
                         break
-            while True:
+            while not adapter.wfile.closed:
                 try:
-                    chunk = chunks.get_nowait()
+                    chunk, ack = chunks.get_nowait()
                 except asyncio.QueueEmpty:
                     break
-                await response.write(chunk)
-            if task.exception() is not None:
+                try:
+                    await response.write(chunk)
+                except (BrokenPipeError, ConnectionResetError, RuntimeError):
+                    notify_disconnect()
+                    if ack is not None and not ack.done():
+                        ack.set_exception(BrokenPipeError("SSE client disconnected"))
+                    break
+                else:
+                    if ack is not None and not ack.done():
+                        ack.set_result(len(chunk))
+            if not adapter.wfile.closed and task.exception() is not None:
                 payload = {"error": f"{type(task.exception()).__name__}: {task.exception()}"}
                 await response.write(f"event: error\ndata: {json.dumps(payload)}\n\n".encode())
         finally:
             header_wait.cancel()
-        await response.write_eof()
+        if not adapter.wfile.closed:
+            try:
+                await response.write_eof()
+            except (BrokenPipeError, ConnectionResetError, RuntimeError):
+                notify_disconnect()
         return response
 
     app = web.Application(client_max_size=_MAX_BODY_BYTES)

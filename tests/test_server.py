@@ -1143,6 +1143,57 @@ def test_responses_stream_cancel_signals_live_agent_and_preserves_cancelled(monk
     assert stored.get("output_text", "") != "late"
 
 
+def test_responses_aiohttp_stream_disconnect_cancels_live_agent(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _BlockingResponsesRunner.reset()
+    monkeypatch.setattr(server, "SurfaceRunner", _BlockingResponsesRunner)
+
+    async def exercise() -> bool:
+        from aiohttp import ClientSession, web
+
+        app = server.make_app(Config.load())
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        try:
+            assert site._server is not None
+            port = site._server.sockets[0].getsockname()[1]
+            async with ClientSession() as session:
+                async with session.post(
+                    f"http://127.0.0.1:{port}/v1/responses",
+                    json={
+                        "stream": True,
+                        "input": "disconnect me",
+                        "metadata": {"session_id": "serve:response-disconnect"},
+                    },
+                ) as resp:
+                    assert resp.status == 200
+                    event_line = await asyncio.wait_for(resp.content.readline(), timeout=1)
+                    data_line = await asyncio.wait_for(resp.content.readline(), timeout=1)
+                    assert event_line == b"event: response.created\n"
+                    assert data_line.startswith(b"data: ")
+                    assert _BlockingResponsesRunner.started.wait(1)
+                    resp.close()
+                    deadline = time.monotonic() + 2
+                    while time.monotonic() < deadline:
+                        if (
+                            _BlockingResponsesRunner.agents
+                            and _BlockingResponsesRunner.agents[0].cancel_event.is_set()
+                        ):
+                            return True
+                        await asyncio.sleep(0.05)
+                    return False
+        finally:
+            _BlockingResponsesRunner.release.set()
+            await runner.cleanup()
+
+    assert asyncio.run(exercise()) is True
+
+
 def test_responses_stream_failure_persists_failed_snapshot(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
