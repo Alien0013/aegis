@@ -1371,7 +1371,9 @@ def test_server_api_jobs_crud_pause_resume_and_run(monkeypatch, tmp_path):
     assert created["enabled_toolsets"] == ["core", "web"]
     assert created["workdir"] == str(tmp_path)
     assert list_status == 200
-    assert any(row["id"] == job_id for row in json.loads(list_data)["data"])
+    listed = json.loads(list_data)
+    assert any(row["id"] == job_id for row in listed["data"])
+    assert any(row["id"] == job_id for row in listed["jobs"])
     assert pause_status == 200
     assert json.loads(pause_data)["job"]["enabled"] is False
     assert resume_status == 200

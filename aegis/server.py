@@ -1143,8 +1143,9 @@ def make_handler(config: Config):
             if path == "/api/jobs":
                 from .cron import CronStore
 
+                jobs = [_job_payload(job) for job in CronStore().list()]
                 return self._json(200, {"ok": True, "object": "list",
-                                        "data": [_job_payload(job) for job in CronStore().list()]})
+                                        "jobs": jobs, "data": jobs})
             if path.startswith("/api/jobs/"):
                 code, payload = self._job_detail(path.rsplit("/", 1)[-1])
                 return self._json(code, payload)

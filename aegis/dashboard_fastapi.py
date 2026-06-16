@@ -1517,6 +1517,99 @@ def _validate_cron_context_refs(store: Any, refs: list[str]) -> str:
     return ""
 
 
+def _cron_jobs_response() -> JSONResponse:
+    jobs = dash._dashboard_cron_jobs()
+    return JSONResponse({"jobs": jobs, "data": jobs})
+
+
+def _cron_job_create_response(config: Config, body: dict[str, Any]) -> JSONResponse:
+    if not body.get("schedule") or not body.get("prompt"):
+        return JSONResponse({"ok": False, "error": "schedule and prompt are required"}, status_code=400)
+    from .cron import CronStore, _scan_cron_prompt
+
+    store = CronStore()
+    skills = body.get("skills") or []
+    if isinstance(skills, str):
+        skills = [s.strip() for s in skills.split(",") if s.strip()]
+    context_from = _cron_context_refs(body.get("context_from"))
+    context_error = _validate_cron_context_refs(store, context_from)
+    if context_error:
+        return JSONResponse({"ok": False, "error": context_error}, status_code=400)
+    prompt_error = _scan_cron_prompt(str(body.get("prompt") or ""))
+    if prompt_error:
+        return JSONResponse({"ok": False, "error": prompt_error}, status_code=400)
+    job = store.add(
+        str(body["schedule"]),
+        str(body["prompt"]),
+        name=str(body.get("name") or ""),
+        channel=str(body.get("channel") or ""),
+        script=str(body.get("script") or ""),
+        skills=list(skills),
+        context_from=context_from,
+        deliver=str(body.get("deliver") or ""),
+        no_agent=bool(body.get("no_agent", False)),
+        model=str(body.get("model") or ""),
+        enabled_toolsets=_cron_context_refs(body.get("enabled_toolsets") or body.get("toolsets")),
+        workdir=str(body.get("workdir") or ""),
+        max_runs=int(body.get("max_runs") or 0),
+    )
+    return JSONResponse({"ok": True, "id": job.id, "job": _cron_job_detail(job.id)["job"]})
+
+
+def _cron_job_patch_response(job_id: str, body: dict[str, Any]) -> JSONResponse:
+    from .cron import CronStore, _scan_cron_prompt
+
+    store = CronStore()
+    updates = {key: body[key] for key in (
+        "schedule", "prompt", "name", "channel", "enabled", "script", "skills", "context_from", "deliver",
+        "no_agent", "max_runs", "model", "enabled_toolsets", "workdir",
+    ) if key in body}
+    if "toolsets" in body and "enabled_toolsets" not in updates:
+        updates["enabled_toolsets"] = body["toolsets"]
+    if "context_from" in updates:
+        updates["context_from"] = _cron_context_refs(updates["context_from"])
+        context_error = _validate_cron_context_refs(store, updates["context_from"])
+        if context_error:
+            return JSONResponse({"ok": False, "error": context_error}, status_code=400)
+    if "enabled_toolsets" in updates:
+        updates["enabled_toolsets"] = _cron_context_refs(updates["enabled_toolsets"])
+    if "prompt" in updates:
+        prompt_error = _scan_cron_prompt(str(updates.get("prompt") or ""))
+        if prompt_error:
+            return JSONResponse({"ok": False, "error": prompt_error}, status_code=400)
+    job = store.update(job_id, **updates)
+    if job is None:
+        return JSONResponse({"ok": False, "error": "cron job not found", "id": job_id}, status_code=404)
+    return JSONResponse({"ok": True, "id": job.id, "job": _cron_job_detail(job.id)["job"]})
+
+
+def _cron_job_delete_response(job_id: str) -> JSONResponse:
+    from .cron import CronStore
+
+    ok = CronStore().remove(job_id)
+    return JSONResponse({"ok": ok, "id": job_id}, status_code=200 if ok else 404)
+
+
+def _cron_job_enabled_response(job_id: str, enabled: bool) -> JSONResponse:
+    from .cron import CronStore
+
+    ok = CronStore().set_enabled(job_id, enabled)
+    if not ok:
+        return JSONResponse({"ok": False, "error": "cron job not found", "id": job_id}, status_code=404)
+    detail = _cron_job_detail(job_id)
+    return JSONResponse({"ok": True, "id": job_id, "paused": not enabled, "job": detail["job"]})
+
+
+def _cron_job_run_response(config: Config, job_id: str) -> JSONResponse:
+    from .cron import CronStore, build_delivery_sink, run_job
+
+    store = CronStore()
+    if store.get(job_id) is None:
+        return JSONResponse({"ok": False, "error": "cron job not found", "id": job_id}, status_code=404)
+    sink = build_delivery_sink(config, verbose=False)
+    return JSONResponse(run_job(config, job_id, sink=sink, store=store, verbose=False))
+
+
 def _service_result(result) -> dict:
     return {"ok": bool(getattr(result, "ok", False)), "message": str(getattr(result, "message", ""))}
 
@@ -3290,43 +3383,13 @@ def create_app(config: Config) -> FastAPI:
     @app.get("/api/cron/jobs")
     async def api_cron_jobs(request: Request) -> JSONResponse:
         _require_request(request, config)
-        return JSONResponse({"jobs": dash._dashboard_cron_jobs()})
+        return _cron_jobs_response()
 
     @app.post("/api/cron/jobs")
     async def api_cron_job_create(request: Request) -> JSONResponse:
         _require_request(request, config)
         body = await request.json()
-        if not body.get("schedule") or not body.get("prompt"):
-            return JSONResponse({"ok": False, "error": "schedule and prompt are required"}, status_code=400)
-        from .cron import CronStore, _scan_cron_prompt
-
-        store = CronStore()
-        skills = body.get("skills") or []
-        if isinstance(skills, str):
-            skills = [s.strip() for s in skills.split(",") if s.strip()]
-        context_from = _cron_context_refs(body.get("context_from"))
-        context_error = _validate_cron_context_refs(store, context_from)
-        if context_error:
-            return JSONResponse({"ok": False, "error": context_error}, status_code=400)
-        prompt_error = _scan_cron_prompt(str(body.get("prompt") or ""))
-        if prompt_error:
-            return JSONResponse({"ok": False, "error": prompt_error}, status_code=400)
-        job = store.add(
-            str(body["schedule"]),
-            str(body["prompt"]),
-            name=str(body.get("name") or ""),
-            channel=str(body.get("channel") or ""),
-            script=str(body.get("script") or ""),
-            skills=list(skills),
-            context_from=context_from,
-            deliver=str(body.get("deliver") or ""),
-            no_agent=bool(body.get("no_agent", False)),
-            model=str(body.get("model") or ""),
-            enabled_toolsets=_cron_context_refs(body.get("enabled_toolsets")),
-            workdir=str(body.get("workdir") or ""),
-            max_runs=int(body.get("max_runs") or 0),
-        )
-        return JSONResponse({"ok": True, "id": job.id, "job": _cron_job_detail(job.id)["job"]})
+        return _cron_job_create_response(config, body)
 
     @app.get("/api/cron/jobs/{job_id}")
     async def api_cron_job_detail(job_id: str, request: Request) -> JSONResponse:
@@ -3338,47 +3401,80 @@ def create_app(config: Config) -> FastAPI:
     async def api_cron_job_patch(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
         body = await request.json()
-        from .cron import CronStore, _scan_cron_prompt
-
-        store = CronStore()
-        updates = {key: body[key] for key in (
-            "schedule", "prompt", "name", "channel", "enabled", "script", "skills", "context_from", "deliver",
-            "no_agent", "max_runs", "model", "enabled_toolsets", "workdir",
-        ) if key in body}
-        if "context_from" in updates:
-            updates["context_from"] = _cron_context_refs(updates["context_from"])
-            context_error = _validate_cron_context_refs(store, updates["context_from"])
-            if context_error:
-                return JSONResponse({"ok": False, "error": context_error}, status_code=400)
-        if "enabled_toolsets" in updates:
-            updates["enabled_toolsets"] = _cron_context_refs(updates["enabled_toolsets"])
-        if "prompt" in updates:
-            prompt_error = _scan_cron_prompt(str(updates.get("prompt") or ""))
-            if prompt_error:
-                return JSONResponse({"ok": False, "error": prompt_error}, status_code=400)
-        job = store.update(job_id, **updates)
-        if job is None:
-            return JSONResponse({"ok": False, "error": "cron job not found", "id": job_id}, status_code=404)
-        return JSONResponse({"ok": True, "id": job.id, "job": _cron_job_detail(job.id)["job"]})
+        return _cron_job_patch_response(job_id, body)
 
     @app.delete("/api/cron/jobs/{job_id}")
     async def api_cron_job_delete(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        from .cron import CronStore
-
-        ok = CronStore().remove(job_id)
-        return JSONResponse({"ok": ok, "id": job_id}, status_code=200 if ok else 404)
+        return _cron_job_delete_response(job_id)
 
     @app.post("/api/cron/jobs/{job_id}/run")
     async def api_cron_job_run(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        from .cron import CronStore, build_delivery_sink, run_job
+        return _cron_job_run_response(config, job_id)
 
-        store = CronStore()
-        if store.get(job_id) is None:
-            return JSONResponse({"ok": False, "error": "cron job not found", "id": job_id}, status_code=404)
-        sink = build_delivery_sink(config, verbose=False)
-        return JSONResponse(run_job(config, job_id, sink=sink, store=store, verbose=False))
+    @app.post("/api/cron/jobs/{job_id}/trigger")
+    async def api_cron_job_trigger(job_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return _cron_job_run_response(config, job_id)
+
+    @app.post("/api/cron/jobs/{job_id}/pause")
+    async def api_cron_job_pause(job_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return _cron_job_enabled_response(job_id, False)
+
+    @app.post("/api/cron/jobs/{job_id}/resume")
+    async def api_cron_job_resume(job_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return _cron_job_enabled_response(job_id, True)
+
+    @app.get("/api/jobs")
+    async def api_jobs(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return _cron_jobs_response()
+
+    @app.post("/api/jobs")
+    async def api_job_create(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        return _cron_job_create_response(config, body)
+
+    @app.get("/api/jobs/{job_id}")
+    async def api_job_detail(job_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        detail = _cron_job_detail(job_id)
+        return JSONResponse(detail, status_code=200 if detail.get("found") else 404)
+
+    @app.patch("/api/jobs/{job_id}")
+    async def api_job_patch(job_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        return _cron_job_patch_response(job_id, body)
+
+    @app.delete("/api/jobs/{job_id}")
+    async def api_job_delete(job_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return _cron_job_delete_response(job_id)
+
+    @app.post("/api/jobs/{job_id}/pause")
+    async def api_job_pause(job_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return _cron_job_enabled_response(job_id, False)
+
+    @app.post("/api/jobs/{job_id}/resume")
+    async def api_job_resume(job_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return _cron_job_enabled_response(job_id, True)
+
+    @app.post("/api/jobs/{job_id}/run")
+    async def api_job_run(job_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return _cron_job_run_response(config, job_id)
+
+    @app.post("/api/jobs/{job_id}/trigger")
+    async def api_job_trigger(job_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return _cron_job_run_response(config, job_id)
 
     @app.get("/api/cron/service")
     async def api_cron_service_get(request: Request) -> JSONResponse:

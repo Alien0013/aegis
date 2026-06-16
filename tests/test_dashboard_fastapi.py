@@ -1031,6 +1031,26 @@ def test_fastapi_cron_control_plane(tmp_path, monkeypatch):
 
     jobs = asyncio.run(_request(app, "GET", "/api/cron/jobs", headers=headers))
     assert any(job["id"] == job_id and job["name"] == "Dashboard digest" for job in jobs.json()["jobs"])
+    alias_jobs = asyncio.run(_request(app, "GET", "/api/jobs", headers=headers))
+    assert alias_jobs.status_code == 200
+    assert any(job["id"] == job_id for job in alias_jobs.json()["jobs"])
+    assert any(job["id"] == job_id for job in alias_jobs.json()["data"])
+
+    alias_create = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/jobs",
+        json={
+            "name": "Alias digest",
+            "schedule": "every 4h",
+            "prompt": "ship alias digest",
+            "toolsets": "core",
+        },
+        headers=headers,
+    ))
+    assert alias_create.status_code == 200
+    alias_job_id = alias_create.json()["id"]
+    assert alias_create.json()["job"]["enabled_toolsets"] == ["core"]
 
     patch = asyncio.run(_request(
         app,
@@ -1052,9 +1072,26 @@ def test_fastapi_cron_control_plane(tmp_path, monkeypatch):
     assert patch.json()["job"]["model"] == "cron-updated"
     assert patch.json()["job"]["enabled_toolsets"] == ["core"]
 
+    alias_detail = asyncio.run(_request(app, "GET", f"/api/jobs/{job_id}", headers=headers))
+    assert alias_detail.status_code == 200
+    assert alias_detail.json()["job"]["id"] == job_id
+
+    alias_pause = asyncio.run(_request(app, "POST", f"/api/jobs/{job_id}/pause", headers=headers))
+    assert alias_pause.status_code == 200
+    assert alias_pause.json()["paused"] is True
+    assert alias_pause.json()["job"]["enabled"] is False
+
+    alias_resume = asyncio.run(_request(app, "POST", f"/api/jobs/{job_id}/resume", headers=headers))
+    assert alias_resume.status_code == 200
+    assert alias_resume.json()["paused"] is False
+    assert alias_resume.json()["job"]["enabled"] is True
+
     run = asyncio.run(_request(app, "POST", f"/api/cron/jobs/{job_id}/run", headers=headers))
     assert run.status_code == 200
     assert run.json()["run_id"] == "run_typed"
+    alias_run = asyncio.run(_request(app, "POST", f"/api/jobs/{job_id}/run", headers=headers))
+    assert alias_run.status_code == 200
+    assert alias_run.json()["run_id"] == "run_typed"
 
     service = asyncio.run(_request(
         app,
@@ -1069,6 +1106,9 @@ def test_fastapi_cron_control_plane(tmp_path, monkeypatch):
     delete = asyncio.run(_request(app, "DELETE", f"/api/cron/jobs/{job_id}", headers=headers))
     assert delete.status_code == 200
     assert delete.json()["ok"] is True
+    alias_delete = asyncio.run(_request(app, "DELETE", f"/api/jobs/{alias_job_id}", headers=headers))
+    assert alias_delete.status_code == 200
+    assert alias_delete.json()["ok"] is True
 
 
 def test_fastapi_gateway_control_plane(tmp_path, monkeypatch):
