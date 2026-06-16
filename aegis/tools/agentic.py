@@ -308,7 +308,7 @@ class SubagentTool(Tool):
                          "description": "Toolsets the children may use (default: core)."},
             "background": {"type": "boolean",
                            "description": "Return immediately and run the task in the background; "
-                                          "its result is announced back when done (single task only)."},
+                                          "results are announced back when done."},
         },
     }
 
@@ -518,11 +518,6 @@ class SubagentTool(Tool):
         """Fire-and-forget delegation: the child runs after this turn ends and its
         result is announced into the originating chat (gateway) or kept for /tasks (CLI)."""
         from ..background import BackgroundCapacityError, get_manager
-        if len(tasks) > 1:
-            return ToolResult.error(
-                "background delegation accepts one task at a time; start separate background "
-                "tasks or run the tasks in the foreground bounded batch."
-            )
         platform = getattr(ctx.agent, "platform", None)
         chat_id = getattr(ctx.agent, "chat_id", None)
         allow_delegation = role == "orchestrator" and depth < max_depth
@@ -552,8 +547,12 @@ class SubagentTool(Tool):
 
         parent_session = getattr(ctx.agent, "session", None)
         try:
+            manager = get_manager()
+            require_capacity = getattr(manager, "require_capacity", None)
+            if callable(require_capacity):
+                require_capacity(child_config, len(tasks))
             ids = [
-                get_manager().spawn(
+                manager.spawn(
                     child_config, t, cwd=ctx.cwd, on_done=_announce,
                     parent_session=parent_session, registry=registry,
                     include_mcp=include_mcp, session_meta=session_meta,

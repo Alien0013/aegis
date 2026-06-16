@@ -250,6 +250,21 @@ def test_background_manager_rejects_at_capacity_and_records_completions(tmp_path
     assert any("ASYNC DELEGATION COMPLETE" in text and "ok task3" in text for _event, text in notifications)
 
 
+def test_background_manager_batch_capacity_preflight():
+    import pytest
+    from aegis.background import BackgroundCapacityError, BackgroundManager
+    from aegis.config import Config
+
+    config = Config({"delegation": {"max_async_children": 2}})
+    mgr = BackgroundManager()
+
+    assert mgr.capacity(config) == {"max": 2, "running": 0, "available": 2}
+    mgr.require_capacity(config, 2)
+    with pytest.raises(BackgroundCapacityError) as exc:
+        mgr.require_capacity(config, 3)
+    assert "3 requested" in str(exc.value)
+
+
 def test_background_manager_prunes_completed_records(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import time
@@ -293,16 +308,33 @@ def test_background_manager_prunes_completed_records(tmp_path, monkeypatch):
     assert len(mgr.completions()) == 5
 
 
-def test_background_subagent_rejects_multiple_tasks(tmp_path):
+def test_background_subagent_dispatches_bounded_multiple_tasks(tmp_path, monkeypatch):
     from aegis.config import Config
     from aegis.tools.agentic import SubagentTool
     from aegis.tools.base import ToolContext
 
+    class Manager:
+        def __init__(self):
+            self.prompts = []
+            self.requested = 0
+
+        def require_capacity(self, _config, requested):
+            self.requested = requested
+
+        def spawn(self, _config, prompt, **_kwargs):
+            self.prompts.append(prompt)
+            return f"bg_{len(self.prompts)}"
+
+    manager = Manager()
+    monkeypatch.setattr("aegis.background.get_manager", lambda: manager)
     ctx = ToolContext(cwd=tmp_path, config=Config.load())
     result = SubagentTool().run({"tasks": ["a", "b"], "background": True}, ctx)
 
-    assert result.is_error
-    assert "one task at a time" in result.content
+    assert not result.is_error
+    assert manager.requested == 2
+    assert manager.prompts == ["a", "b"]
+    assert "bg_1" in result.content
+    assert "bg_2" in result.content
 
 
 # --- iteration-budget refund ------------------------------------------------

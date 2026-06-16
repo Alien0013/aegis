@@ -104,6 +104,27 @@ class BackgroundManager:
     def _running_count_locked(self) -> int:
         return sum(1 for task in self._tasks.values() if task.status == "running")
 
+    def capacity(self, config: Any) -> dict[str, int]:
+        with self._lock:
+            maximum = self._max_workers(config)
+            running = self._running_count_locked()
+        return {
+            "max": maximum,
+            "running": running,
+            "available": max(0, maximum - running),
+        }
+
+    def require_capacity(self, config: Any, requested: int) -> None:
+        requested = max(1, int(requested or 1))
+        snapshot = self.capacity(config)
+        if requested > snapshot["available"]:
+            raise BackgroundCapacityError(
+                "async background delegation capacity reached "
+                f"({snapshot['running']}/{snapshot['max']} running, "
+                f"{requested} requested, {snapshot['available']} available). "
+                "Wait for tasks to finish or raise delegation.max_async_children."
+            )
+
     def _prune_completed_locked(self, config: Any) -> None:
         keep = self._retained_completed(config)
         completed = [
