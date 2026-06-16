@@ -23,13 +23,35 @@ from aiohttp import web
 
 from . import config as cfg_paths
 from .config import Config
-from .surface import SurfaceRunner
+from .surface import SurfaceRunner, runtime_controls_meta
 from .types import Message, ToolCall, new_id
 
 _MAX_BODY_BYTES = 10 * 1024 * 1024
 _DEFAULT_MAX_STORED_RESPONSES = 100
 _TERMINAL_RUN_STATUSES = {"completed", "error", "cancelled"}
 _MAX_SESSION_KEY_CHARS = 256
+
+
+def _api_session_id_from_body(
+    body: dict[str, Any],
+    *,
+    default: str | None = None,
+) -> tuple[str | None, tuple[int, dict[str, Any]] | None]:
+    raw = body.get("id") or body.get("session_id")
+    if raw is None or raw == "":
+        return default, None
+    session_id = str(raw).strip()
+    if (
+        not session_id
+        or any(ch in session_id for ch in "\r\n\x00")
+        or "/" in session_id
+        or "?" in session_id
+        or "#" in session_id
+    ):
+        return None, (400, {"ok": False, "error": "Invalid session ID", "code": "invalid_session_id"})
+    if len(session_id) > _MAX_SESSION_KEY_CHARS:
+        return None, (400, {"ok": False, "error": "Session ID too long", "code": "invalid_session_id"})
+    return session_id, None
 
 
 def _coerce_request_bool(value: Any, default: bool = False) -> bool:
@@ -1242,11 +1264,50 @@ def make_handler(config: Config):
             if path == "/api/sessions":
                 from .session import Session, SessionStore
 
-                session = Session.create(str(body.get("title") or "api session"))
+                store = SessionStore()
+                requested_id, id_error = _api_session_id_from_body(body)
+                if id_error is not None:
+                    code, payload = id_error
+                    return self._json(code, payload)
+                if requested_id and store.load(requested_id) is not None:
+                    return self._json(
+                        409,
+                        {
+                            "ok": False,
+                            "error": f"Session already exists: {requested_id}",
+                            "code": "session_exists",
+                        },
+                    )
+                title = str(body.get("title") or "api session")
+                if requested_id:
+                    session = Session(id=requested_id, title=title or requested_id, profile=cfg_paths.current_profile())
+                else:
+                    session = Session.create(title)
                 if isinstance(body.get("meta"), dict):
                     session.meta.update(body["meta"])
-                SessionStore().save(session)
-                return self._json(201, {"ok": True, "session": _session_payload(session)})
+                if isinstance(body.get("metadata"), dict):
+                    session.meta.update(body["metadata"])
+                session.meta["source"] = "api_server"
+                if body.get("model"):
+                    session.meta.update(runtime_controls_meta({"model": body.get("model")}))
+                if body.get("provider"):
+                    session.meta.update(runtime_controls_meta({"provider": body.get("provider")}))
+                system_prompt = body.get("system_prompt")
+                if system_prompt is not None:
+                    if not isinstance(system_prompt, str):
+                        return self._json(
+                            400,
+                            {
+                                "ok": False,
+                                "error": "system_prompt must be a string",
+                                "code": "invalid_system_prompt",
+                            },
+                        )
+                    session.meta["system_prompt"] = system_prompt
+                    if system_prompt:
+                        session.messages.append(Message.system(system_prompt))
+                store.save(session)
+                return self._json(201, {"ok": True, "object": "hermes.session", "session": _session_payload(session)})
             if path.startswith("/api/sessions/") and path.endswith("/messages"):
                 from .session import SessionStore
 
@@ -1267,11 +1328,34 @@ def make_handler(config: Config):
                 parent = store.load(sid)
                 if parent is None:
                     return self._json(404, {"ok": False, "error": "session not found", "id": sid})
+                requested_id, id_error = _api_session_id_from_body(body)
+                if id_error is not None:
+                    code, payload = id_error
+                    return self._json(code, payload)
+                if requested_id and store.load(requested_id) is not None:
+                    return self._json(
+                        409,
+                        {
+                            "ok": False,
+                            "error": f"Session already exists: {requested_id}",
+                            "code": "session_exists",
+                        },
+                    )
                 child = store.fork(parent, carry_summary=_coerce_request_bool(body.get("carry_summary"), True))
+                if requested_id:
+                    old_id = child.id
+                    child.id = requested_id
+                    child.parent_id = parent.id
+                    store.delete(old_id)
+                child.messages = [Message.from_dict(message.to_dict()) for message in parent.messages]
+                if body.get("model"):
+                    child.meta.update(runtime_controls_meta({"model": body.get("model")}))
+                if body.get("provider"):
+                    child.meta.update(runtime_controls_meta({"provider": body.get("provider")}))
                 if body.get("title"):
                     child.title = str(body["title"])
-                    store.save(child)
-                return self._json(201, {"ok": True, "session": _session_payload(child)})
+                store.save(child)
+                return self._json(201, {"ok": True, "object": "hermes.session", "session": _session_payload(child)})
             if path.startswith("/api/sessions/") and path.endswith(("/chat", "/chat/stream")):
                 parts = path.split("/")
                 session_id = parts[-3] if path.endswith("/chat/stream") else parts[-2]

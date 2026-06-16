@@ -1130,6 +1130,71 @@ def test_server_session_crud_fork_and_chat(monkeypatch, tmp_path):
     assert json.loads(delete_data)["ok"] is True
 
 
+def test_server_session_create_and_fork_honor_hermes_fields(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        create_status, create_data = _request(
+            port,
+            "POST",
+            "/api/sessions",
+            {
+                "id": "api-explicit",
+                "title": "Explicit Session",
+                "model": "gpt-test",
+                "system_prompt": "You are testing.",
+                "metadata": {"client": "hermes-compatible"},
+            },
+        )
+        duplicate_status, duplicate_data = _request(
+            port,
+            "POST",
+            "/api/sessions",
+            {"session_id": "api-explicit", "title": "Duplicate"},
+        )
+        add_status, _add_data = _request(
+            port,
+            "POST",
+            "/api/sessions/api-explicit/messages",
+            {"role": "user", "content": "saved"},
+        )
+        fork_status, fork_data = _request(
+            port,
+            "POST",
+            "/api/sessions/api-explicit/fork",
+            {"id": "api-child", "title": "Explicit Fork"},
+        )
+        messages_status, messages_data = _request(port, "GET", "/api/sessions/api-child/messages")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert create_status == 201
+    created = json.loads(create_data)["session"]
+    assert created["id"] == "api-explicit"
+    assert created["title"] == "Explicit Session"
+    assert created["meta"]["model"] == "gpt-test"
+    assert created["meta"]["runtime_controls"]["model"] == "gpt-test"
+    assert created["meta"]["system_prompt"] == "You are testing."
+    assert created["meta"]["client"] == "hermes-compatible"
+    assert created["messages"][0]["role"] == "system"
+    assert duplicate_status == 409
+    assert json.loads(duplicate_data)["code"] == "session_exists"
+    assert add_status == 200
+    assert fork_status == 201
+    forked = json.loads(fork_data)["session"]
+    assert forked["id"] == "api-child"
+    assert forked["parent_id"] == "api-explicit"
+    assert forked["title"] == "Explicit Fork"
+    assert messages_status == 200
+    messages = json.loads(messages_data)["messages"]
+    assert [message["role"] for message in messages] == ["system", "user"]
+    assert messages[1]["content"] == "saved"
+
+
 def test_server_session_chat_stream_uses_sse_cors_headers(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
