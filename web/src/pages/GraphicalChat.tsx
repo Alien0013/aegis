@@ -150,6 +150,7 @@ export function GraphicalChat({
   const [provider, setProviderState] = useState(() => stored(PROVIDER_KEY));
   const [modelPresets, setModelPresets] = useState<Record<string, ModelPreset>>(() => loadModelPresets());
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningLevel>("medium");
+  const [fastMode, setFastMode] = useState(false);
   const [runtimeDirty, setRuntimeDirty] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
@@ -225,6 +226,7 @@ export function GraphicalChat({
     if (presetHydratedRef.current || sessionId || !modelData || !provider || !model) return;
     presetHydratedRef.current = true;
     setReasoningEffort(reasoningForModel(provider, model));
+    setFastMode(fastForModel(provider, model));
   }, [model, modelData, provider, sessionId]);
 
   // Load a session's transcript when one is opened from the rail.
@@ -244,9 +246,11 @@ export function GraphicalChat({
         const sessionModel = String(controls.model || data.meta?.model || "");
         const sessionProvider = String(controls.provider || data.meta?.provider || "");
         const sessionReasoning = normalizeReasoning(controls.reasoning_effort);
+        const sessionServiceTier = String(controls.service_tier || "").trim().toLowerCase();
         if (sessionModel) setModel(sessionModel, false);
         if (sessionProvider) setProvider(sessionProvider, false);
         if (sessionReasoning) setReasoningEffort(sessionReasoning);
+        if (sessionServiceTier) setFastMode(sessionServiceTier === "priority");
         setTurns(
           data.messages
             .filter((t) => (t.role === "user" || t.role === "assistant") && (t.content || "").trim())
@@ -269,6 +273,27 @@ export function GraphicalChat({
   const supportsReasoning = selectedRow ? selectedRow.capabilities?.reasoning_effort === true : true;
   const reasoningDisabled = knownModel && !supportsReasoning;
 
+  const fastForModel = (nextProvider: string, nextModel: string): boolean => {
+    return modelPresets[presetKey(nextProvider, nextModel)]?.fast === true;
+  };
+
+  const applyFastForModel = (nextProvider: string, nextModel: string, dirty = true) => {
+    setFastMode(fastForModel(nextProvider, nextModel));
+    if (dirty) setRuntimeDirty(true);
+  };
+
+  const changeFastMode = (next: boolean) => {
+    setFastMode(next);
+    setRuntimeDirty(true);
+    const key = presetKey(provider, model);
+    if (!key) return;
+    setModelPresets((current) => {
+      const updated = { ...current, [key]: { ...(current[key] || {}), fast: next } };
+      saveModelPresets(updated);
+      return updated;
+    });
+  };
+
   const switchProvider = (nextProvider: string) => {
     setProvider(nextProvider);
     const nextRows = rowsForProvider(nextProvider);
@@ -276,6 +301,7 @@ export function GraphicalChat({
     const nextModel = nextPresets[0] || model;
     if (nextPresets.length) setModel(nextModel);
     applyReasoningForModel(nextProvider, nextModel);
+    applyFastForModel(nextProvider, nextModel);
   };
 
   const sendRuntime = useMemo(() => {
@@ -285,8 +311,9 @@ export function GraphicalChat({
       model: model.trim(),
       ...(provider.trim() ? { provider: provider.trim() } : {}),
       ...((supportsReasoning || reasoningEffort === "off") ? { reasoning: reasoningEffort } : {}),
+      fast: fastMode,
     };
-  }, [model, provider, reasoningEffort, runtimeDirty, sid, supportsReasoning]);
+  }, [fastMode, model, provider, reasoningEffort, runtimeDirty, sid, supportsReasoning]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -509,6 +536,7 @@ export function GraphicalChat({
                   else {
                     setModel(value);
                     applyReasoningForModel(provider, value);
+                    applyFastForModel(provider, value);
                   }
                 }}
                 className="max-w-[220px] bg-transparent font-mono text-xs text-text outline-none"
@@ -526,6 +554,19 @@ export function GraphicalChat({
               >
                 {REASONING_LEVELS.map((level) => <option key={level} value={level}>{level}</option>)}
               </select>
+              <button
+                type="button"
+                onClick={() => changeFastMode(!fastMode)}
+                aria-pressed={fastMode}
+                title={fastMode ? "Fast mode priority" : "Fast mode normal"}
+                className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius)] border transition-colors ${
+                  fastMode
+                    ? "border-warning/50 bg-warning/15 text-warning"
+                    : "border-border bg-surface-2 text-faint hover:border-border-2 hover:text-text"
+                }`}
+              >
+                <Icon name="zap" size={14} />
+              </button>
               {selectedModel === CUSTOM_VALUE && (
                 <input
                   value={customModel}
