@@ -41,11 +41,31 @@ interface BrowserManageResponse {
   error?: string;
 }
 
+interface ModelCapabilities {
+  tool_calls?: boolean;
+  streaming?: boolean;
+  images?: boolean;
+  reasoning_effort?: boolean;
+  reasoning_stream?: boolean;
+  response_state?: boolean;
+  response_cancel?: boolean;
+  dynamic_tools?: boolean;
+}
+
+interface ModelRow {
+  id: string;
+  label?: string;
+  capabilities?: ModelCapabilities;
+  capability_summary?: string;
+  context_length?: number;
+}
+
 interface ModelsPayload {
   provider?: string;
   model?: string;
   providers?: string[];
   presets?: Record<string, string[]>;
+  preset_rows?: Record<string, ModelRow[]>;
 }
 
 interface SessionPayload {
@@ -59,7 +79,11 @@ interface SessionPayload {
 
 const MODEL_KEY = "aegis.chat.composer.model";
 const PROVIDER_KEY = "aegis.chat.composer.provider";
+const MODEL_PRESETS_KEY = "aegis.chat.modelPresets";
 const CUSTOM_VALUE = "__custom";
+const REASONING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+type ReasoningLevel = typeof REASONING_LEVELS[number];
+type ModelPreset = { effort?: ReasoningLevel; fast?: boolean };
 
 function stored(key: string): string {
   try { return localStorage.getItem(key) || ""; } catch { return ""; }
@@ -70,6 +94,42 @@ function persist(key: string, value: string): void {
     if (value) localStorage.setItem(key, value);
     else localStorage.removeItem(key);
   } catch { /* ignore storage failures */ }
+}
+
+function presetKey(provider: string, model: string): string {
+  const p = provider.trim();
+  const m = model.trim();
+  return p && m ? `${p}::${m}` : "";
+}
+
+function normalizeReasoning(value: unknown): ReasoningLevel | "" {
+  const v = String(value || "").trim().toLowerCase();
+  return (REASONING_LEVELS as readonly string[]).includes(v) ? (v as ReasoningLevel) : "";
+}
+
+function loadModelPresets(): Record<string, ModelPreset> {
+  try {
+    const raw = localStorage.getItem(MODEL_PRESETS_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out: Record<string, ModelPreset> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!key || !value || typeof value !== "object" || Array.isArray(value)) continue;
+      const row = value as Record<string, unknown>;
+      const effort = normalizeReasoning(row.effort);
+      out[key] = {
+        ...(effort ? { effort } : {}),
+        ...(typeof row.fast === "boolean" ? { fast: row.fast } : {}),
+      };
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function saveModelPresets(presets: Record<string, ModelPreset>): void {
+  try { localStorage.setItem(MODEL_PRESETS_KEY, JSON.stringify(presets)); } catch { /* ignore storage failures */ }
 }
 
 export function GraphicalChat({
@@ -88,9 +148,12 @@ export function GraphicalChat({
   const [modelData, setModelData] = useState<ModelsPayload | null>(null);
   const [model, setModelState] = useState(() => stored(MODEL_KEY));
   const [provider, setProviderState] = useState(() => stored(PROVIDER_KEY));
+  const [modelPresets, setModelPresets] = useState<Record<string, ModelPreset>>(() => loadModelPresets());
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningLevel>("medium");
   const [runtimeDirty, setRuntimeDirty] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
+  const presetHydratedRef = useRef(false);
 
   const setModel = (value: string, dirty = true) => {
     setModelState(value);
@@ -102,6 +165,33 @@ export function GraphicalChat({
     setProviderState(value);
     persist(PROVIDER_KEY, value);
     if (dirty) setRuntimeDirty(true);
+  };
+
+  const rowsForProvider = (name: string) => (modelData?.preset_rows || {})[name] || [];
+
+  const reasoningForModel = (nextProvider: string, nextModel: string): ReasoningLevel => {
+    const row = rowsForProvider(nextProvider).find((entry) => entry.id === nextModel);
+    if (row && row.capabilities?.reasoning_effort !== true) return "off";
+    const saved = modelPresets[presetKey(nextProvider, nextModel)]?.effort;
+    return saved || "medium";
+  };
+
+  const applyReasoningForModel = (nextProvider: string, nextModel: string, dirty = true) => {
+    setReasoningEffort(reasoningForModel(nextProvider, nextModel));
+    if (dirty) setRuntimeDirty(true);
+  };
+
+  const changeReasoning = (value: string) => {
+    const next = normalizeReasoning(value) || "medium";
+    setReasoningEffort(next);
+    setRuntimeDirty(true);
+    const key = presetKey(provider, model);
+    if (!key) return;
+    setModelPresets((current) => {
+      const updated = { ...current, [key]: { ...(current[key] || {}), effort: next } };
+      saveModelPresets(updated);
+      return updated;
+    });
   };
 
   useEffect(() => {
@@ -131,6 +221,12 @@ export function GraphicalChat({
     onRuntime?.({ model, provider });
   }, [model, onRuntime, provider]);
 
+  useEffect(() => {
+    if (presetHydratedRef.current || sessionId || !modelData || !provider || !model) return;
+    presetHydratedRef.current = true;
+    setReasoningEffort(reasoningForModel(provider, model));
+  }, [model, modelData, provider, sessionId]);
+
   // Load a session's transcript when one is opened from the rail.
   useEffect(() => {
     let cancelled = false;
@@ -147,8 +243,10 @@ export function GraphicalChat({
         const controls = data.meta?.runtime_controls || {};
         const sessionModel = String(controls.model || data.meta?.model || "");
         const sessionProvider = String(controls.provider || data.meta?.provider || "");
+        const sessionReasoning = normalizeReasoning(controls.reasoning_effort);
         if (sessionModel) setModel(sessionModel, false);
         if (sessionProvider) setProvider(sessionProvider, false);
+        if (sessionReasoning) setReasoningEffort(sessionReasoning);
         setTurns(
           data.messages
             .filter((t) => (t.role === "user" || t.role === "assistant") && (t.content || "").trim())
@@ -162,15 +260,22 @@ export function GraphicalChat({
   }, [sessionId]);
 
   const providers = modelData?.providers || (provider ? [provider] : []);
-  const presets = (modelData?.presets || {})[provider] || [];
+  const presetRows = rowsForProvider(provider);
+  const presets = presetRows.length ? presetRows.map((row) => row.id) : (modelData?.presets || {})[provider] || [];
   const knownModel = presets.includes(model);
   const selectedModel = knownModel ? model : CUSTOM_VALUE;
   const customModel = model && !knownModel ? model : "";
+  const selectedRow = presetRows.find((row) => row.id === model);
+  const supportsReasoning = selectedRow ? selectedRow.capabilities?.reasoning_effort === true : true;
+  const reasoningDisabled = knownModel && !supportsReasoning;
 
   const switchProvider = (nextProvider: string) => {
     setProvider(nextProvider);
-    const nextPresets = (modelData?.presets || {})[nextProvider] || [];
-    if (nextPresets.length) setModel(nextPresets[0]);
+    const nextRows = rowsForProvider(nextProvider);
+    const nextPresets = nextRows.length ? nextRows.map((row) => row.id) : (modelData?.presets || {})[nextProvider] || [];
+    const nextModel = nextPresets[0] || model;
+    if (nextPresets.length) setModel(nextModel);
+    applyReasoningForModel(nextProvider, nextModel);
   };
 
   const sendRuntime = useMemo(() => {
@@ -179,8 +284,9 @@ export function GraphicalChat({
     return {
       model: model.trim(),
       ...(provider.trim() ? { provider: provider.trim() } : {}),
+      ...((supportsReasoning || reasoningEffort === "off") ? { reasoning: reasoningEffort } : {}),
     };
-  }, [model, provider, runtimeDirty, sid]);
+  }, [model, provider, reasoningEffort, runtimeDirty, sid, supportsReasoning]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -400,13 +506,25 @@ export function GraphicalChat({
                 onChange={(e) => {
                   const value = e.target.value;
                   if (value === CUSTOM_VALUE) setModel(customModel || model || "");
-                  else setModel(value);
+                  else {
+                    setModel(value);
+                    applyReasoningForModel(provider, value);
+                  }
                 }}
                 className="max-w-[220px] bg-transparent font-mono text-xs text-text outline-none"
                 title="Model"
               >
                 <option value={CUSTOM_VALUE}>custom</option>
                 {presets.map((m) => <option key={m} value={m}>{m}</option>)}
+              </select>
+              <select
+                value={reasoningDisabled ? "off" : reasoningEffort}
+                onChange={(e) => changeReasoning(e.target.value)}
+                disabled={reasoningDisabled}
+                className="max-w-[120px] bg-transparent font-mono text-xs text-text outline-none disabled:text-faint"
+                title={reasoningDisabled ? "Reasoning is not advertised for this model" : "Reasoning effort"}
+              >
+                {REASONING_LEVELS.map((level) => <option key={level} value={level}>{level}</option>)}
               </select>
               {selectedModel === CUSTOM_VALUE && (
                 <input

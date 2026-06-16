@@ -8,7 +8,18 @@ interface ModelsPayload {
   model?: string;
   providers?: string[];
   presets?: Record<string, string[]>;
+  preset_rows?: Record<string, ModelRow[]>;
   active?: { context_length?: number; error?: string };
+}
+
+interface ModelRow {
+  id: string;
+  label?: string;
+  source?: string;
+  api_mode?: string;
+  capabilities?: Record<string, boolean | undefined>;
+  capability_summary?: string;
+  context_length?: number;
 }
 
 type Window = "7d" | "30d" | "90d";
@@ -25,7 +36,10 @@ export function Models() {
   }, [data]);
 
   const presets = (data?.presets || {})[provider] || [];
-  const modelRows = presets.length ? presets : data?.model ? [data.model] : [];
+  const presetRows = (data?.preset_rows || {})[provider] || [];
+  const modelRows: ModelRow[] = presetRows.length
+    ? presetRows
+    : (presets.length ? presets : data?.model ? [data.model] : []).map((id) => ({ id }));
 
   async function setActive(nextProvider = provider, nextModel = model) {
     setBusy(true);
@@ -101,7 +115,7 @@ export function Models() {
             </Card>
 
             <MetricStrip items={[
-              { label: "models used", value: modelRows.length || 1 },
+              { label: "models", value: modelRows.length || 1 },
               { label: "total sessions", value: data.active?.context_length ? "ctx" : "-" },
               { label: "context", value: data.active?.context_length ? data.active.context_length.toLocaleString() : "-" },
               { label: "window", value: window.toUpperCase() },
@@ -109,30 +123,48 @@ export function Models() {
           </div>
 
           <div className="grid gap-[var(--gap)] md:grid-cols-2 xl:grid-cols-3">
-            {modelRows.map((m, index) => (
-              <Card key={`${provider}:${m}`} pad={false}>
+            {modelRows.map((row, index) => {
+              const caps = row.capabilities || {};
+              const capabilityBadges = [
+                caps.tool_calls ? { label: "Tools", tone: "success" as const } : null,
+                caps.images ? { label: "Vision", tone: "info" as const } : null,
+                caps.reasoning_effort ? { label: "Reasoning", tone: "warning" as const } : null,
+                caps.reasoning_stream ? { label: "Reason stream", tone: "warning" as const } : null,
+                caps.response_state ? { label: "State", tone: "primary" as const } : null,
+                caps.dynamic_tools ? { label: "Dynamic tools", tone: "info" as const } : null,
+              ].filter(Boolean) as { label: string; tone: "success" | "info" | "warning" | "primary" }[];
+              return (
+              <Card key={`${provider}:${row.id}`} pad={false}>
                 <div className="border-b border-border p-[var(--pad)]">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="font-mono text-xs text-faint">#{index + 1}</div>
-                      <div className="truncate font-mono text-base font-semibold text-text">{m}</div>
+                      <div className="truncate font-mono text-base font-semibold text-text">{row.id}</div>
                       <div className="truncate font-mono text-xs text-faint">{provider || data.provider || "provider"}</div>
+                      {(row.context_length || row.api_mode || row.source) && (
+                        <div className="mt-1 truncate font-mono text-[11px] text-faint">
+                          {row.context_length ? `${row.context_length.toLocaleString()} ctx` : ""}
+                          {row.context_length && (row.api_mode || row.source) ? " / " : ""}
+                          {row.api_mode || row.source || ""}
+                        </div>
+                      )}
                     </div>
-                    {m === data.model && provider === data.provider && <Badge tone="primary">main</Badge>}
+                    {row.id === data.model && provider === data.provider && <Badge tone="primary">main</Badge>}
                   </div>
                 </div>
                 <div className="space-y-3 p-[var(--pad)]">
                   <div className="flex flex-wrap gap-1.5">
-                    <Badge tone="success">Tools</Badge>
-                    <Badge tone="info">Vision</Badge>
-                    <Badge tone="warning">Reasoning</Badge>
+                    {capabilityBadges.length
+                      ? capabilityBadges.map((badge) => <Badge key={badge.label} tone={badge.tone}>{badge.label}</Badge>)
+                      : <Badge>basic</Badge>}
                   </div>
-                  <Button sm onClick={() => setActive(provider || data.provider || "", m)} disabled={busy || (m === data.model && provider === data.provider)}>
+                  <Button sm onClick={() => setActive(provider || data.provider || "", row.id)} disabled={busy || (row.id === data.model && provider === data.provider)}>
                     Use as
                   </Button>
                 </div>
               </Card>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
