@@ -52,6 +52,22 @@ def _raw_request(port: int, method: str, path: str, body: bytes, headers: dict |
     return resp.status, data
 
 
+def _sse_events(data: str):
+    event = "message"
+    out = []
+    for line in data.splitlines():
+        if line.startswith("event: "):
+            event = line.removeprefix("event: ").strip()
+        elif line.startswith("data: "):
+            payload = line.removeprefix("data: ").strip()
+            if payload == "[DONE]":
+                out.append(("done", payload))
+            else:
+                out.append((event, json.loads(payload)))
+            event = "message"
+    return out
+
+
 class _Usage:
     def __init__(self, input_tokens=11, output_tokens=7, cache_read=3, cache_write=0):
         self.input_tokens = input_tokens
@@ -682,6 +698,89 @@ def test_responses_conversation_maps_to_latest_response(monkeypatch, tmp_path):
     assert [m.content for m in _FakeRunner.calls[1]["history"][:2]] == ["first", "hello"]
     assert conflict_status == 400
     assert "Cannot use both" in json.loads(conflict_data)["error"]
+
+
+def test_responses_stream_sse_has_openai_event_shape(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "stream": True,
+            "input": "hello",
+            "metadata": {"session_id": "serve:responses-stream"},
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    events = _sse_events(data)
+    names = [name for name, _payload in events]
+    assert names[:4] == [
+        "response.created",
+        "aegis.event",
+        "response.output_item.added",
+        "response.output_text.delta",
+    ]
+    assert "response.output_text.done" in names
+    assert "response.output_item.done" in names
+    assert names[-2:] == ["response.completed", "done"]
+    payloads = [payload for _name, payload in events if isinstance(payload, dict)]
+    assert [p["sequence_number"] for p in payloads] == list(range(len(payloads)))
+    delta = next(payload for name, payload in events if name == "response.output_text.delta")
+    done = next(payload for name, payload in events if name == "response.output_text.done")
+    assert delta["output_index"] == 0
+    assert delta["content_index"] == 0
+    assert delta["item_id"].startswith("msg_")
+    assert done["text"] == "hello"
+    assert done["item_id"] == delta["item_id"]
+    assert _FakeRunner.calls[0]["stream"] is True
+
+
+def test_responses_stream_failure_persists_failed_snapshot(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    class FailingRunner:
+        def __init__(self, config, include_mcp=True):
+            pass
+
+        def run_prompt(self, prompt, **kwargs):
+            kwargs["on_event"]({"type": "assistant_delta", "text": "partial"})
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(server, "SurfaceRunner", FailingRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "stream": True,
+            "input": "hello",
+            "metadata": {"session_id": "serve:responses-failed"},
+        })
+        events = _sse_events(data)
+        failed = next(payload for name, payload in events if name == "response.failed")
+        response_id = failed["response"]["id"]
+        get_status, get_data = _request(port, "GET", f"/v1/responses/{response_id}")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert failed["response"]["status"] == "failed"
+    assert failed["response"]["output_text"] == "partial"
+    assert failed["error"]["message"] == "RuntimeError: boom"
+    assert events[-1] == ("done", "[DONE]")
+    assert get_status == 200
+    stored = json.loads(get_data)
+    assert stored["status"] == "failed"
+    assert stored["output_text"] == "partial"
+    assert stored["error"]["message"] == "RuntimeError: boom"
 
 
 def test_server_session_crud_fork_and_chat(monkeypatch, tmp_path):

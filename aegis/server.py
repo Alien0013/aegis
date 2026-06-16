@@ -1356,52 +1356,37 @@ def make_handler(config: Config):
             provider_name = metadata.get("provider") or body.get("provider")
             cwd = metadata.get("cwd") or body.get("cwd")
             if stream:
-                self._send_sse_headers()
-                self._write_sse({
-                    "type": "response.created",
-                    "response": {
-                        "id": response_id,
-                        "object": "response",
-                        "created_at": int(time.time()),
-                        "status": "in_progress",
-                        "metadata": metadata,
-                    },
-                }, event="response.created")
+                sequence = 0
+                message_item_id = new_id("msg")
+                message_opened = False
+                text_parts: list[str] = []
 
-                def emit(e: dict[str, Any]) -> None:
-                    if e.get("type") == "assistant_delta":
-                        self._write_sse({
-                            "type": "response.output_text.delta",
-                            "response_id": response_id,
-                            "delta": str(e.get("text") or ""),
-                        }, event="response.output_text.delta")
+                def send_event(event_name: str, payload: dict[str, Any]) -> bool:
+                    nonlocal sequence
+                    payload.setdefault("type", event_name)
+                    payload.setdefault("sequence_number", sequence)
+                    sequence += 1
+                    return self._write_sse(payload, event=event_name)
+
+                def open_message_item() -> bool:
+                    nonlocal message_opened
+                    if message_opened:
+                        return True
+                    message_opened = True
+                    return send_event("response.output_item.added", {
+                        "output_index": 0,
+                        "item": {
+                            "id": message_item_id,
+                            "type": "message",
+                            "status": "in_progress",
+                            "role": "assistant",
+                            "content": [],
+                        },
+                    })
+
+                def persist_stream_response(response: dict[str, Any], result=None) -> None:
+                    if not store_response:
                         return
-                    meta = _event_metadata(e)
-                    if meta:
-                        self._write_sse({
-                            "type": "aegis.event",
-                            "response_id": response_id,
-                            "event": meta,
-                        }, event="aegis.event")
-
-                result = runner.run_prompt(
-                    last_user,
-                    session_id=session_id,
-                    history=history,
-                    model=model,
-                    provider_name=provider_name,
-                    cwd=cwd,
-                    stream=True,
-                    surface="serve",
-                    meta={"request_id": response_id, "api": "responses"},
-                    on_event=emit,
-                )
-                response = _response_object(response_id, result, metadata_extra=metadata)
-                response["instructions"] = instructions
-                response["previous_response_id"] = previous_id or None
-                response["conversation"] = conversation or None
-                response["store"] = store_response
-                if store_response:
                     full_history = _response_conversation_history(state_history, last_user, result)
                     response_store.put(response, {
                         "conversation_history": full_history,
@@ -1411,10 +1396,137 @@ def make_handler(config: Config):
                     })
                     if conversation:
                         response_store.set_conversation(conversation, response_id)
-                self._write_sse({
-                    "type": "response.completed",
+
+                self._send_sse_headers()
+                created_response = {
+                    "id": response_id,
+                    "object": "response",
+                    "created_at": int(time.time()),
+                    "status": "in_progress",
+                    "model": model or config.get("model.default", ""),
+                    "output": [],
+                    "metadata": metadata,
+                    "instructions": instructions,
+                    "previous_response_id": previous_id or None,
+                    "conversation": conversation or None,
+                    "store": store_response,
+                }
+                send_event("response.created", {
+                    "response": {
+                        **created_response,
+                    },
+                })
+                if store_response:
+                    response_store.put(created_response, {
+                        "conversation_history": _history_payload(state_history + [last_user]),
+                        "instructions": instructions,
+                        "session_id": session_id,
+                        "conversation": conversation,
+                    })
+
+                def emit(e: dict[str, Any]) -> None:
+                    if e.get("type") == "assistant_delta":
+                        delta = str(e.get("text") or "")
+                        if not delta:
+                            return
+                        if not open_message_item():
+                            return
+                        text_parts.append(delta)
+                        send_event("response.output_text.delta", {
+                            "response_id": response_id,
+                            "item_id": message_item_id,
+                            "output_index": 0,
+                            "content_index": 0,
+                            "delta": delta,
+                            "logprobs": [],
+                        })
+                        return
+                    meta = _event_metadata(e)
+                    if meta:
+                        send_event("aegis.event", {
+                            "response_id": response_id,
+                            "event": meta,
+                        })
+
+                try:
+                    result = runner.run_prompt(
+                        last_user,
+                        session_id=session_id,
+                        history=history,
+                        model=model,
+                        provider_name=provider_name,
+                        cwd=cwd,
+                        stream=True,
+                        surface="serve",
+                        meta={"request_id": response_id, "api": "responses"},
+                        on_event=emit,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    text = "".join(text_parts)
+                    failed = _response_object(
+                        response_id,
+                        None,
+                        status="failed",
+                        metadata_extra=metadata,
+                    )
+                    failed.update({
+                        "model": model or config.get("model.default", ""),
+                        "output": _response_output(text) if text else [],
+                        "output_text": text,
+                        "error": {"message": f"{type(exc).__name__}: {exc}", "type": "server_error"},
+                        "instructions": instructions,
+                        "previous_response_id": previous_id or None,
+                        "conversation": conversation or None,
+                        "store": store_response,
+                    })
+                    if store_response:
+                        history_snapshot = list(state_history)
+                        history_snapshot.append(last_user)
+                        if text:
+                            history_snapshot.append(Message.assistant(text))
+                        response_store.put(failed, {
+                            "conversation_history": _history_payload(history_snapshot),
+                            "instructions": instructions,
+                            "session_id": session_id,
+                            "conversation": conversation,
+                        })
+                        if conversation:
+                            response_store.set_conversation(conversation, response_id)
+                    send_event("response.failed", {"response": failed, "error": failed["error"]})
+                    self.wfile.write(b"data: [DONE]\n\n")
+                    return
+
+                response = _response_object(response_id, result, metadata_extra=metadata)
+                response["instructions"] = instructions
+                response["previous_response_id"] = previous_id or None
+                response["conversation"] = conversation or None
+                response["store"] = store_response
+                final_text = response.get("output_text") or "".join(text_parts)
+                if final_text or message_opened:
+                    if not message_opened:
+                        open_message_item()
+                    send_event("response.output_text.done", {
+                        "response_id": response_id,
+                        "item_id": message_item_id,
+                        "output_index": 0,
+                        "content_index": 0,
+                        "text": final_text,
+                        "logprobs": [],
+                    })
+                    send_event("response.output_item.done", {
+                        "output_index": 0,
+                        "item": {
+                            "id": message_item_id,
+                            "type": "message",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": final_text}],
+                        },
+                    })
+                persist_stream_response(response, result)
+                send_event("response.completed", {
                     "response": response,
-                }, event="response.completed")
+                })
                 self.wfile.write(b"data: [DONE]\n\n")
                 return
             result = runner.run_prompt(
