@@ -30,6 +30,7 @@ import urllib.parse
 import webbrowser
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -190,6 +191,7 @@ CODEX_ORIGINATOR_HEADERS = {
     "originator": "codex_cli_rs",
     "User-Agent": "codex_cli_rs/0.0.0 (AEGIS)",
 }
+CODEX_RATE_LIMITED_CODE = "codex_rate_limited"
 
 
 def _codex_auth_path() -> Path:
@@ -270,16 +272,32 @@ class OAuthAuth(AuthProvider):
     # -- credential state ---------------------------------------------------
     def _creds(self) -> dict | None:
         c = self.store.load(self.oauth.provider)
-        if c and not c.get("quarantined") and not self.missing_required_scopes(c):
+        if c and _oauth_creds_usable(c) and not self.missing_required_scopes(c):
             return c
+        pooled = _pooled_oauth_creds(self.store, self.oauth.provider)
+        if pooled and not self.missing_required_scopes(pooled):
+            return pooled
         return None
 
+    def _rate_limit_status(self) -> dict | None:
+        return _oauth_rate_limit_status(self.store, self.oauth.provider)
+
     def available(self) -> bool:
-        return self._creds() is not None
+        return self._creds() is not None or self._rate_limit_status() is not None
 
     def describe(self) -> str:
+        rate_limit = self._rate_limit_status()
+        if rate_limit:
+            reset_at = rate_limit.get("reset_at")
+            retry = ""
+            if isinstance(reset_at, (int, float)) and reset_at > time.time():
+                retry = f", retry after {max(0, int(reset_at - time.time()))}s"
+            return f"oauth ({self.oauth.provider}: rate limited{retry}; credentials valid)"
         c = self.store.load(self.oauth.provider)
         if not c:
+            pooled = _pooled_oauth_creds(self.store, self.oauth.provider)
+            if pooled:
+                return f"oauth ({self.oauth.provider}: logged in via pool)"
             return f"oauth ({self.oauth.provider}: not logged in)"
         if c.get("quarantined"):
             return f"oauth ({self.oauth.provider}: QUARANTINED — re-login)"
@@ -312,6 +330,27 @@ class OAuthAuth(AuthProvider):
     def headers(self) -> dict[str, str]:
         creds = self._creds()
         if not creds:
+            rate_limit = self._rate_limit_status()
+            if rate_limit:
+                reset_at = rate_limit.get("reset_at")
+                if isinstance(reset_at, (int, float)) and reset_at > time.time():
+                    remaining = max(0, int(reset_at - time.time()))
+                    message = (
+                        f"{self.oauth.provider} OAuth quota exhausted (429); retry after "
+                        f"{remaining}s. Credentials are still valid."
+                    )
+                else:
+                    message = (
+                        f"{self.oauth.provider} OAuth quota exhausted (429). Credentials "
+                        "are still valid; retry after the usage limit resets."
+                    )
+                raise AuthError(
+                    message,
+                    provider=self.oauth.provider,
+                    code=CODEX_RATE_LIMITED_CODE if self.oauth.provider == "openai-codex" else "oauth_rate_limited",
+                    relogin_required=False,
+                    reset_at=reset_at if isinstance(reset_at, (int, float)) else None,
+                )
             missing = self.missing_required_scopes()
             if missing:
                 raise AuthError(
@@ -541,6 +580,130 @@ class AuthStore:
         return [p for p, c in self._all().items() if not c.get("quarantined")]
 
 
+def _parse_reset_at(value) -> float | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, (int, float)):
+        numeric = float(value)
+        if numeric <= 0:
+            return None
+        return numeric / 1000.0 if numeric > 1_000_000_000_000 else numeric
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        try:
+            numeric = float(raw)
+        except ValueError:
+            numeric = None
+        if numeric is not None:
+            return numeric / 1000.0 if numeric > 1_000_000_000_000 else numeric
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return None
+    return None
+
+
+def _oauth_creds_rate_limited(creds: dict) -> bool:
+    code = creds.get("last_error_code") or creds.get("error_code")
+    reason = str(creds.get("last_error_reason") or creds.get("error_reason") or "").lower()
+    message = str(creds.get("last_error_message") or creds.get("error") or "").lower()
+    status = str(creds.get("last_status") or creds.get("status") or "").lower()
+    if status not in {"exhausted", "rate_limited", "rate-limited", "quota_exhausted", "limited"}:
+        status = ""
+    return (
+        code == 429
+        or "rate_limit" in reason
+        or "usage_limit" in reason
+        or "quota" in reason
+        or "rate limit" in message
+        or "usage limit" in message
+        or "quota" in message
+        or bool(status and ("exhaust" in status or "limit" in status))
+    )
+
+
+def _oauth_rate_limit_metadata(creds: dict) -> dict | None:
+    token = creds.get("access_token")
+    if not isinstance(token, str) or not token.strip():
+        return None
+    if not _oauth_creds_rate_limited(creds):
+        return None
+    reset_at = _parse_reset_at(creds.get("last_error_reset_at") or creds.get("reset_at"))
+    if reset_at is not None and reset_at <= time.time():
+        return None
+    return {
+        "label": creds.get("label") or creds.get("email") or creds.get("source"),
+        "last_refresh": creds.get("last_refresh"),
+        "reset_at": reset_at,
+        "reason": creds.get("last_error_reason") or creds.get("error_reason"),
+        "message": creds.get("last_error_message") or creds.get("error"),
+    }
+
+
+def _oauth_creds_usable(creds: dict | None) -> bool:
+    if not isinstance(creds, dict):
+        return False
+    if creds.get("quarantined"):
+        return False
+    token = creds.get("access_token")
+    if not isinstance(token, str) or not token.strip():
+        return False
+    return _oauth_rate_limit_metadata(creds) is None
+
+
+def _pooled_oauth_entries(store: AuthStore, provider: str) -> list[dict]:
+    try:
+        payload = store._all()
+    except Exception:  # noqa: BLE001
+        return []
+    pool = payload.get("credential_pool")
+    if not isinstance(pool, dict):
+        return []
+    entries = pool.get(provider)
+    if not isinstance(entries, list):
+        return []
+    return [entry for entry in entries if isinstance(entry, dict)]
+
+
+def _entry_freshness(entry: dict) -> float:
+    for key in ("last_refresh", "updated_at", "created_at"):
+        parsed = _parse_reset_at(entry.get(key))
+        if parsed is not None:
+            return parsed
+    try:
+        return float(entry.get("priority") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _pooled_oauth_creds(store: AuthStore, provider: str) -> dict | None:
+    candidates = [
+        entry for entry in _pooled_oauth_entries(store, provider)
+        if _oauth_creds_usable(entry)
+    ]
+    if not candidates:
+        return None
+    best = max(candidates, key=_entry_freshness)
+    creds = dict(best)
+    creds.setdefault("token_type", "Bearer")
+    return creds
+
+
+def _oauth_rate_limit_status(store: AuthStore, provider: str) -> dict | None:
+    direct = store.load(provider)
+    if isinstance(direct, dict):
+        status = _oauth_rate_limit_metadata(direct)
+        if status:
+            return status
+    for entry in _pooled_oauth_entries(store, provider):
+        status = _oauth_rate_limit_metadata(entry)
+        if status:
+            return status
+    return None
+
+
 def import_claude_cli_login(store: "AuthStore | None" = None) -> tuple[bool, str]:
     """Reuse an existing Claude Code / Claude CLI login on this host
     instead of running our own claude.ai OAuth. Reads the Claude CLI credential file and
@@ -575,7 +738,20 @@ def import_claude_cli_login(store: "AuthStore | None" = None) -> tuple[bool, str
 
 
 class AuthError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str | None = None,
+        code: str | None = None,
+        relogin_required: bool = True,
+        reset_at: float | None = None,
+    ):
+        self.provider = provider
+        self.code = code
+        self.relogin_required = relogin_required
+        self.reset_at = reset_at
+        super().__init__(message)
 
 
 def _jwt_scopes(token: str) -> set[str]:

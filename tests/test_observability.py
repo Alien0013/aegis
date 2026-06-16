@@ -489,6 +489,68 @@ def test_import_claude_cli_login(monkeypatch, tmp_path):
     assert ok2 is False
 
 
+def test_openai_codex_oauth_uses_pool_credential(tmp_path):
+    import json
+    from aegis.providers.auth import AuthStore, OAuthAuth
+    from aegis.providers.registry import OPENAI_CODEX_OAUTH
+
+    store = AuthStore(tmp_path / "auth.json")
+    store.path.write_text(json.dumps({
+        "credential_pool": {
+            "openai-codex": [{
+                "label": "codex@example.com",
+                "source": "manual:device_code",
+                "access_token": "pool-token",
+                "token_type": "Bearer",
+                "last_refresh": "2026-06-15T10:00:00Z",
+            }]
+        }
+    }))
+
+    auth = OAuthAuth(OPENAI_CODEX_OAUTH, store)
+
+    assert auth.available() is True
+    assert "logged in via pool" in auth.describe()
+    assert auth.headers()["Authorization"] == "Bearer pool-token"
+
+
+def test_openai_codex_pool_rate_limit_is_not_missing_auth(tmp_path):
+    import json
+    import time
+    import pytest
+    from aegis.providers.auth import AuthError, AuthStore, CODEX_RATE_LIMITED_CODE, OAuthAuth
+    from aegis.providers.registry import OPENAI_CODEX_OAUTH
+
+    reset_at = time.time() + 3600
+    store = AuthStore(tmp_path / "auth.json")
+    store.path.write_text(json.dumps({
+        "credential_pool": {
+            "openai-codex": [{
+                "label": "codex@example.com",
+                "source": "manual:device_code",
+                "access_token": "pool-token",
+                "token_type": "Bearer",
+                "last_status": "exhausted",
+                "last_error_code": 429,
+                "last_error_reason": "usage_limit_reached",
+                "last_error_message": "The usage limit has been reached",
+                "last_error_reset_at": reset_at,
+                "last_refresh": "2026-06-15T10:00:00Z",
+            }]
+        }
+    }))
+
+    auth = OAuthAuth(OPENAI_CODEX_OAUTH, store)
+
+    assert auth.available() is True
+    assert "rate limited" in auth.describe()
+    with pytest.raises(AuthError) as exc_info:
+        auth.headers()
+    assert exc_info.value.code == CODEX_RATE_LIMITED_CODE
+    assert exc_info.value.relogin_required is False
+    assert exc_info.value.reset_at == reset_at
+
+
 def test_skill_slash_new_scaffolds(tmp_path):
     import contextlib
     import io
