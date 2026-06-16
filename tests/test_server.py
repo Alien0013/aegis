@@ -777,7 +777,19 @@ def test_server_health_capabilities_and_body_limit(monkeypatch, tmp_path):
     assert json.loads(detailed_data)["max_body_bytes"] == 8
     assert caps_status == 200
     caps = json.loads(caps_data)
+    assert caps["object"] == "hermes.api_server.capabilities"
+    assert caps["legacy_object"] == "capabilities"
+    assert caps["transport"] == "aiohttp"
+    assert caps["auth"]["type"] == "bearer"
+    assert caps["limits"]["max_body_bytes"] == 8
     assert caps["endpoints"]["responses"] is True
+    assert caps["endpoints"]["jobs"] is True
+    routes = {row["name"]: row for row in caps["endpoint_descriptors"]}
+    assert routes["responses"]["path"] == "/v1/responses"
+    assert routes["responses"]["streaming"] is True
+    assert routes["runs.approval"]["methods"] == ["GET", "POST"]
+    assert caps["features"]["responses_persistence"] is True
+    assert caps["features"]["tool_progress_events"] is True
     assert caps["features"]["session_key_header"] == "X-Hermes-Session-Key"
     assert too_large_status == 413
     assert json.loads(too_large_data)["error"] == "request body too large"
