@@ -29,6 +29,7 @@ from .types import Message, ToolCall, new_id
 _MAX_BODY_BYTES = 10 * 1024 * 1024
 _DEFAULT_MAX_STORED_RESPONSES = 100
 _TERMINAL_RUN_STATUSES = {"completed", "error", "cancelled"}
+_MAX_SESSION_KEY_CHARS = 256
 
 
 def _coerce_request_bool(value: Any, default: bool = False) -> bool:
@@ -447,6 +448,8 @@ def _capabilities(config: Config) -> dict[str, Any]:
             "run_history": True,
             "trace_events": True,
             "cancellation": "active server-process runs",
+            "session_continuity_header": "X-Hermes-Session-Id",
+            "session_key_header": "X-Hermes-Session-Key",
         },
         "provider": report.get("active") or report.get("model") or {},
     }
@@ -760,13 +763,44 @@ def make_handler(config: Config):
             self._json(403, {"error": "cors origin not allowed"})
             return True
 
-        def _json(self, code: int, obj: Any) -> None:
+        def _json(self, code: int, obj: Any, extra_headers: dict[str, str] | None = None) -> None:
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
             for name, value in _response_headers(config, self._origin()).items():
                 self.send_header(name, value)
+            for name, value in (extra_headers or {}).items():
+                if value:
+                    self.send_header(name, value)
             self.end_headers()
             self.wfile.write(_json_bytes(obj))
+
+        def _session_key(self) -> tuple[str | None, tuple[int, dict[str, Any]] | None]:
+            raw = str(self.headers.get("X-Hermes-Session-Key") or "").strip()
+            if not raw:
+                return None, None
+            if not api_key:
+                return None, (
+                    403,
+                    {"error": "X-Hermes-Session-Key requires API key authentication"},
+                )
+            if any(ch in raw for ch in "\r\n\x00") or any(ord(ch) < 32 for ch in raw):
+                return None, (400, {"error": "Invalid session key"})
+            if len(raw) > _MAX_SESSION_KEY_CHARS:
+                return None, (400, {"error": "Session key too long"})
+            return raw, None
+
+        def _session_headers(
+            self,
+            *,
+            session_id: str | None = None,
+            session_key: str | None = None,
+        ) -> dict[str, str]:
+            headers: dict[str, str] = {}
+            if session_id:
+                headers["X-Hermes-Session-Id"] = str(session_id)
+            if session_key:
+                headers["X-Hermes-Session-Key"] = str(session_key)
+            return headers
 
         def _write_sse(self, obj: Any, *, event: str = "message") -> bool:
             try:
@@ -815,13 +849,16 @@ def make_handler(config: Config):
                 })
             return payload
 
-        def _send_sse_headers(self) -> None:
+        def _send_sse_headers(self, extra_headers: dict[str, str] | None = None) -> None:
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
             self.send_header("X-Accel-Buffering", "no")
             for name, value in _response_headers(config, self._origin()).items():
                 self.send_header(name, value)
+            for name, value in (extra_headers or {}).items():
+                if value:
+                    self.send_header(name, value)
             self.end_headers()
 
         def _sweep_runs_locked(self) -> None:
@@ -1261,16 +1298,22 @@ def make_handler(config: Config):
             return self._json(404, {"error": "not found"})
 
         def _post_chat_completion(self, body: dict[str, Any]) -> None:
+            session_key, session_key_error = self._session_key()
+            if session_key_error is not None:
+                code, payload = session_key_error
+                return self._json(code, payload)
             history, last_user = _convert(body.get("messages", []))
             model = body.get("model")
             stream = _coerce_request_bool(body.get("stream"), False)
             metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
+            metadata = dict(metadata)
+            if session_key:
+                metadata["session_key"] = session_key
             session_id = (
                 metadata.get("session_id")
                 or body.get("session_id")
                 or self.headers.get("X-Aegis-Session")
                 or self.headers.get("X-Hermes-Session-Id")
-                or self.headers.get("X-Hermes-Session-Key")
                 or None
             )
             provider_name = (
@@ -1290,13 +1333,25 @@ def make_handler(config: Config):
 
             if not stream:
                 idempotency_key = str(self.headers.get("Idempotency-Key", "") or "")
+                idempotency_body = {
+                    **body,
+                    "_session_id_header": self.headers.get("X-Aegis-Session") or self.headers.get("X-Hermes-Session-Id"),
+                    "_session_key_header": session_key,
+                }
                 idempotency_fp = _request_fingerprint(
-                    body,
-                    ["model", "messages", "tools", "tool_choice", "stream"],
+                    idempotency_body,
+                    ["model", "messages", "tools", "tool_choice", "stream", "_session_id_header", "_session_key_header"],
                 )
                 cached = idempotency_cache.get(idempotency_key, idempotency_fp)
                 if cached is not None:
-                    return self._json(200, cached)
+                    cached_session_id = None
+                    if isinstance(cached, dict):
+                        cached_meta = cached.get("metadata") if isinstance(cached.get("metadata"), dict) else {}
+                        cached_session_id = cached_meta.get("session_id")
+                    return self._json(200, cached, self._session_headers(
+                        session_id=str(cached_session_id or session_id or ""),
+                        session_key=session_key,
+                    ))
                 result = runner.run_prompt(
                     last_user,
                     session_id=session_id,
@@ -1306,25 +1361,34 @@ def make_handler(config: Config):
                     cwd=cwd,
                     stream=False,
                     surface="serve",
-                    meta={"request_id": cid},
+                    meta={
+                        "request_id": cid,
+                        **({"gateway_session_key": session_key} if session_key else {}),
+                    },
                 )
+                response_metadata = {
+                    "session_id": result.session.id,
+                    "trace_id": result.trace_id,
+                    "run_id": result.run_id,
+                }
+                if session_key:
+                    response_metadata["session_key"] = session_key
                 response = {
                     "id": cid, "object": "chat.completion", "created": int(time.time()),
                     "model": result.agent.provider.model,
                     "choices": [{"index": 0, "message": {"role": "assistant", "content": result.text},
                                  "finish_reason": "stop"}],
                     "usage": _usage(getattr(result, "usage", None) or result.agent),
-                    "metadata": {
-                        "session_id": result.session.id,
-                        "trace_id": result.trace_id,
-                        "run_id": result.run_id,
-                    },
+                    "metadata": response_metadata,
                 }
                 idempotency_cache.put(idempotency_key, idempotency_fp, response)
-                return self._json(200, response)
+                return self._json(200, response, self._session_headers(
+                    session_id=result.session.id,
+                    session_key=session_key,
+                ))
 
             # streaming
-            self._send_sse_headers()
+            self._send_sse_headers(self._session_headers(session_id=session_id, session_key=session_key))
 
             def emit(e: dict) -> None:
                 if e.get("type") == "assistant_delta":
@@ -1354,26 +1418,38 @@ def make_handler(config: Config):
                 cwd=cwd,
                 stream=True,
                 surface="serve",
-                meta={"request_id": cid},
+                meta={
+                    "request_id": cid,
+                    **({"gateway_session_key": session_key} if session_key else {}),
+                },
                 on_event=emit,
             )
+            final_metadata = {
+                "session_id": result.session.id,
+                "trace_id": result.trace_id,
+                "run_id": result.run_id,
+            }
+            if session_key:
+                final_metadata["session_key"] = session_key
             final = {"id": cid, "object": "chat.completion.chunk", "created": int(time.time()),
                      "model": result.agent.provider.model,
                      "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
                      "usage": _usage(getattr(result, "usage", None) or result.agent),
-                     "metadata": {
-                         "session_id": result.session.id,
-                         "trace_id": result.trace_id,
-                         "run_id": result.run_id,
-                     }}
+                     "metadata": final_metadata}
             self.wfile.write(f"data: {json.dumps(final)}\n\n".encode())
             self.wfile.write(b"data: [DONE]\n\n")
 
         def _post_response(self, body: dict[str, Any]) -> None:
+            session_key, session_key_error = self._session_key()
+            if session_key_error is not None:
+                code, payload = session_key_error
+                return self._json(code, payload)
             response_id = new_id("resp")
             model = body.get("model")
             metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
             metadata = dict(metadata)
+            if session_key:
+                metadata["session_key"] = session_key
             instructions = str(body.get("instructions") or "").strip() or None
             previous_id = str(body.get("previous_response_id") or "").strip()
             conversation = _conversation_id(body.get("conversation"))
@@ -1417,7 +1493,12 @@ def make_handler(config: Config):
                 metadata["previous_response_id"] = previous_id
             store_response = _coerce_request_bool(body.get("store"), True)
             stream = _coerce_request_bool(body.get("stream"), False)
-            session_id = metadata.get("session_id") or body.get("session_id")
+            session_id = (
+                metadata.get("session_id")
+                or body.get("session_id")
+                or self.headers.get("X-Aegis-Session")
+                or self.headers.get("X-Hermes-Session-Id")
+            )
             provider_name = metadata.get("provider") or body.get("provider")
             cwd = metadata.get("cwd") or body.get("cwd")
             if stream:
@@ -1548,7 +1629,7 @@ def make_handler(config: Config):
                     if conversation:
                         response_store.set_conversation(conversation, response_id)
 
-                self._send_sse_headers()
+                self._send_sse_headers(self._session_headers(session_id=session_id, session_key=session_key))
                 created_response = {
                     "id": response_id,
                     "object": "response",
@@ -1615,7 +1696,11 @@ def make_handler(config: Config):
                         cwd=cwd,
                         stream=True,
                         surface="serve",
-                        meta={"request_id": response_id, "api": "responses"},
+                        meta={
+                            "request_id": response_id,
+                            "api": "responses",
+                            **({"gateway_session_key": session_key} if session_key else {}),
+                        },
                         on_event=emit,
                     )
                 except Exception as exc:  # noqa: BLE001
@@ -1690,13 +1775,35 @@ def make_handler(config: Config):
                 self.wfile.write(b"data: [DONE]\n\n")
                 return
             idempotency_key = str(self.headers.get("Idempotency-Key", "") or "")
+            idempotency_body = {
+                **body,
+                "_session_id_header": self.headers.get("X-Aegis-Session") or self.headers.get("X-Hermes-Session-Id"),
+                "_session_key_header": session_key,
+            }
             idempotency_fp = _request_fingerprint(
-                body,
-                ["input", "messages", "instructions", "previous_response_id", "conversation", "model", "tools"],
+                idempotency_body,
+                [
+                    "input",
+                    "messages",
+                    "instructions",
+                    "previous_response_id",
+                    "conversation",
+                    "model",
+                    "tools",
+                    "_session_id_header",
+                    "_session_key_header",
+                ],
             )
             cached = idempotency_cache.get(idempotency_key, idempotency_fp)
             if cached is not None:
-                return self._json(200, cached)
+                cached_session_id = None
+                if isinstance(cached, dict):
+                    cached_meta = cached.get("metadata") if isinstance(cached.get("metadata"), dict) else {}
+                    cached_session_id = cached_meta.get("session_id")
+                return self._json(200, cached, self._session_headers(
+                    session_id=str(cached_session_id or session_id or ""),
+                    session_key=session_key,
+                ))
             result = runner.run_prompt(
                 last_user,
                 session_id=session_id,
@@ -1706,7 +1813,11 @@ def make_handler(config: Config):
                 cwd=cwd,
                 stream=False,
                 surface="serve",
-                meta={"request_id": response_id, "api": "responses"},
+                meta={
+                    "request_id": response_id,
+                    "api": "responses",
+                    **({"gateway_session_key": session_key} if session_key else {}),
+                },
             )
             response = _response_object(response_id, result, metadata_extra=metadata)
             response["instructions"] = instructions
@@ -1724,7 +1835,13 @@ def make_handler(config: Config):
                 if conversation:
                     response_store.set_conversation(conversation, response_id)
             idempotency_cache.put(idempotency_key, idempotency_fp, response)
-            return self._json(200, response)
+            response_session_id = None
+            response_metadata = response.get("metadata") if isinstance(response.get("metadata"), dict) else {}
+            response_session_id = response_metadata.get("session_id")
+            return self._json(200, response, self._session_headers(
+                session_id=str(response_session_id or session_id or ""),
+                session_key=session_key,
+            ))
 
         def _post_session_chat(self, session_id: str, body: dict[str, Any], *, stream: bool = False) -> None:
             from .session import SessionStore
@@ -1775,6 +1892,10 @@ def make_handler(config: Config):
         def _post_run(self, body: dict[str, Any]) -> None:
             from .session import SessionStore
 
+            session_key, session_key_error = self._session_key()
+            if session_key_error is not None:
+                code, payload = session_key_error
+                return self._json(code, payload)
             with state_lock:
                 active_count = self._active_run_count_locked()
                 if active_count >= max_concurrent_runs:
@@ -1789,9 +1910,11 @@ def make_handler(config: Config):
             session_id = str(body.get("session_id") or "") or None
             title = str(body.get("title") or prompt[:80] or run_id)
             store = SessionStore()
-            session = runner.load_or_create_session(session_id, title=title, surface="serve", meta={
+            run_meta = {
                 "server_run_id": run_id,
-            })
+                **({"gateway_session_key": session_key} if session_key else {}),
+            }
+            session = runner.load_or_create_session(session_id, title=title, surface="serve", meta=run_meta)
             now = time.time()
             record = {
                 "id": run_id,
@@ -1811,6 +1934,7 @@ def make_handler(config: Config):
                 "cancel_reason": "",
                 "last_event": "run.queued",
                 "model": body.get("model") or "",
+                "session_key": session_key or "",
             }
             with state_lock:
                 active_runs[run_id] = record
@@ -1862,7 +1986,7 @@ def make_handler(config: Config):
                         session=session,
                         agent=agent,
                         surface="serve",
-                        meta={"server_run_id": run_id},
+                        meta=run_meta,
                         stream=_coerce_request_bool(body.get("stream"), False),
                         on_event=emit,
                     )
@@ -1894,7 +2018,10 @@ def make_handler(config: Config):
             with state_lock:
                 active_runs[run_id]["thread"] = thread
             thread.start()
-            return self._json(202, _public_run_record(record))
+            return self._json(202, _public_run_record(record), self._session_headers(
+                session_id=session.id,
+                session_key=session_key,
+            ))
 
         def _stop_run(self, run_id: str) -> None:
             with state_lock:

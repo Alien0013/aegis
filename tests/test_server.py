@@ -208,6 +208,51 @@ def test_openai_server_auth_protects_models_and_rejects_bad_json(monkeypatch, tm
     assert json.loads(bad_data)["error"] == "invalid json"
 
 
+def test_hermes_session_key_requires_auth_and_rejects_invalid(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        unauthenticated_status, unauthenticated_data = _request(
+            port,
+            "POST",
+            "/v1/chat/completions",
+            {"messages": [{"role": "user", "content": "hi"}]},
+            headers={"X-Hermes-Session-Key": "gateway:user-42"},
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    cfg = Config.load()
+    cfg.data.setdefault("server", {})["api_key"] = "serve-secret"
+    srv2, port2 = _serve(server.make_handler(cfg))
+    try:
+        invalid_status, invalid_data = _request(
+            port2,
+            "POST",
+            "/v1/responses",
+            {"input": "hi"},
+            headers={
+                "Authorization": "Bearer serve-secret",
+                "X-Hermes-Session-Key": "x" * 257,
+            },
+        )
+    finally:
+        srv2.shutdown()
+        srv2.server_close()
+
+    assert unauthenticated_status == 403
+    assert "requires API key" in json.loads(unauthenticated_data)["error"]
+    assert invalid_status == 400
+    assert json.loads(invalid_data)["error"] == "Session key too long"
+    assert _FakeRunner.calls == []
+
+
 def test_openai_chat_completions_http_nonstream_records_run_metadata(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
@@ -249,6 +294,40 @@ def test_openai_chat_completions_http_nonstream_records_run_metadata(monkeypatch
     assert call["model"] == "served-model"
     assert call["provider_name"] == "served-provider"
     assert call["cwd"] == str(tmp_path / "project")
+
+
+def test_hermes_session_key_chat_echoes_and_stays_separate_from_session_id(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    cfg = Config.load()
+    cfg.data.setdefault("server", {})["api_key"] = "serve-secret"
+    srv, port = _serve(server.make_handler(cfg))
+    try:
+        status, headers, data = _request_with_headers(
+            port,
+            "POST",
+            "/v1/chat/completions",
+            {"messages": [{"role": "user", "content": "hi"}]},
+            headers={
+                "Authorization": "Bearer serve-secret",
+                "X-Hermes-Session-Key": "gateway:user-42",
+            },
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    body = json.loads(data)
+    assert status == 200
+    assert headers["X-Hermes-Session-Key"] == "gateway:user-42"
+    assert headers["X-Hermes-Session-Id"] == "serve:test"
+    assert body["metadata"]["session_key"] == "gateway:user-42"
+    assert _FakeRunner.calls[0]["session_id"] is None
+    assert _FakeRunner.calls[0]["meta"]["gateway_session_key"] == "gateway:user-42"
 
 
 def test_openai_chat_completions_aiohttp_transport(monkeypatch, tmp_path):
@@ -497,7 +576,9 @@ def test_server_health_capabilities_and_body_limit(monkeypatch, tmp_path):
     assert detailed_status == 200
     assert json.loads(detailed_data)["max_body_bytes"] == 8
     assert caps_status == 200
-    assert json.loads(caps_data)["endpoints"]["responses"] is True
+    caps = json.loads(caps_data)
+    assert caps["endpoints"]["responses"] is True
+    assert caps["features"]["session_key_header"] == "X-Hermes-Session-Key"
     assert too_large_status == 413
     assert json.loads(too_large_data)["error"] == "request body too large"
 
@@ -586,6 +667,40 @@ def test_responses_create_retrieve_cancel_delete(monkeypatch, tmp_path):
     assert delete_status == 200
     assert json.loads(delete_data)["ok"] is True
     assert _FakeRunner.calls[0]["session_id"] == "serve:responses"
+
+
+def test_responses_echo_hermes_session_key(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    cfg = Config.load()
+    cfg.data.setdefault("server", {})["api_key"] = "serve-secret"
+    srv, port = _serve(server.make_handler(cfg))
+    try:
+        status, headers, data = _request_with_headers(
+            port,
+            "POST",
+            "/v1/responses",
+            {"model": "served-model", "input": "hello"},
+            headers={
+                "Authorization": "Bearer serve-secret",
+                "X-Hermes-Session-Key": "gateway:user-42",
+            },
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    body = json.loads(data)
+    assert status == 200
+    assert headers["X-Hermes-Session-Key"] == "gateway:user-42"
+    assert headers["X-Hermes-Session-Id"] == "serve:test"
+    assert body["metadata"]["session_key"] == "gateway:user-42"
+    assert _FakeRunner.calls[0]["session_id"] is None
+    assert _FakeRunner.calls[0]["meta"]["gateway_session_key"] == "gateway:user-42"
 
 
 def test_responses_persist_store_false_and_previous_id(monkeypatch, tmp_path):
@@ -1128,6 +1243,41 @@ class _BlockingRunRunner:
                 budget=SimpleNamespace(usage=_Usage()),
             ),
         )
+
+
+def test_server_run_echoes_hermes_session_key(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _BlockingRunRunner.reset()
+    monkeypatch.setattr(server, "SurfaceRunner", _BlockingRunRunner)
+    cfg = Config.load()
+    cfg.data.setdefault("server", {})["api_key"] = "serve-secret"
+    srv, port = _serve(server.make_handler(cfg))
+    try:
+        create_status, create_headers, create_data = _request_with_headers(
+            port,
+            "POST",
+            "/v1/runs",
+            {"input": "slow run", "session_id": "serve:run-key"},
+            headers={
+                "Authorization": "Bearer serve-secret",
+                "X-Hermes-Session-Key": "gateway:user-42",
+            },
+        )
+        assert _BlockingRunRunner.started.wait(2)
+    finally:
+        _BlockingRunRunner.release.set()
+        srv.shutdown()
+        srv.server_close()
+
+    body = json.loads(create_data)
+    assert create_status == 202
+    assert create_headers["X-Hermes-Session-Key"] == "gateway:user-42"
+    assert create_headers["X-Hermes-Session-Id"] == "serve:run-key"
+    assert body["session_key"] == "gateway:user-42"
+    assert _BlockingRunRunner.calls[0]["meta"]["gateway_session_key"] == "gateway:user-42"
 
 
 def test_server_run_lifecycle_caps_active_runs_and_stop_wins(monkeypatch, tmp_path):
