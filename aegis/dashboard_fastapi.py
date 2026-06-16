@@ -2207,7 +2207,7 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
         return dash._dashboard_models(config)
     if path == "/api/provider-auth":
         return _provider_auth_payload(config)
-    if path == "/api/analytics":
+    if path in {"/api/analytics", "/api/analytics/usage"}:
         from . import ratelimit
         from .usage_log import cost_report, daily_series
 

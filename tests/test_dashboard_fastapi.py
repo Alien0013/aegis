@@ -255,6 +255,12 @@ def test_fastapi_files_upload_and_mkdir(tmp_path, monkeypatch):
     assert pairing.status_code == 200
     assert set(pairing.json()) >= {"approved", "pending"}
 
+    analytics = asyncio.run(_request(app, "GET", "/api/analytics/usage?days=7", headers=headers))
+    assert analytics.status_code == 200
+    analytics_body = analytics.json()
+    assert "series" in analytics_body
+    assert "balance" in analytics_body
+
 
 def test_fastapi_registers_live_and_pty_websockets(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
@@ -302,6 +308,14 @@ def test_fastapi_websocket_jsonrpc_helper(tmp_path, monkeypatch):
     assert status["id"] == "s"
     assert status["result"]["version"]
     assert status["result"]["model"] == cfg.get("model.default")
+
+    analytics = _dashboard_ws_rpc_response(
+        '{"jsonrpc":"2.0","id":"a","method":"dashboard.get","params":{"path":"/api/analytics/usage?days=7"}}',
+        cfg,
+    )
+    assert analytics["id"] == "a"
+    assert "series" in analytics["result"]
+    assert "balance" in analytics["result"]
 
     blocked = _dashboard_ws_rpc_response(
         '{"jsonrpc":"2.0","id":"bad","method":"dashboard.get","params":{"path":"/etc/passwd"}}',
