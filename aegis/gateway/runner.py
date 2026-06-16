@@ -377,10 +377,41 @@ class GatewayRunner:
         from ..surface import session_runtime_controls
 
         controls = session_runtime_controls(session)
-        provider = controls.get("provider") or self.config.get("model.provider")
-        model = controls.get("model") or self.config.get("model.default")
+        agent = self._agents.get(key)
+        provider_obj = getattr(agent, "provider", None)
+        provider = (
+            getattr(provider_obj, "name", "")
+            or controls.get("provider")
+            or self.config.get("model.provider")
+        )
+        model = (
+            getattr(provider_obj, "model", "")
+            or controls.get("model")
+            or self.config.get("model.default")
+        )
+        try:
+            from ..agent import compaction
+
+            context_used = int(compaction.estimated_tokens(session.messages))
+        except Exception:  # noqa: BLE001
+            context_used = 0
+        try:
+            context_total = int(
+                getattr(provider_obj, "context_length", 0)
+                or self.config.get("model.context_length", 0)
+                or 0
+            )
+        except (TypeError, ValueError):
+            context_total = 0
+        if context_total > 0:
+            pct = min(100, round((context_used / context_total) * 100)) if context_used else 0
+            context = f"context≈{context_used:,}/{context_total:,} tokens ({pct}%)"
+        else:
+            context = f"context≈{context_used:,} tokens"
+        messages = len(session.messages)
         return (
             f"AEGIS gateway · provider={provider} · model={model} · session={key}\n"
+            f"{context} · messages={messages}\n"
             "Commands: /new · /status · /whoami · /model [provider/model] · "
             "/provider [name] · /reasoning [mode] · /compress · /busy [mode] · "
             "/goal <text> · /subgoal <text> · /steer <text> · stop"

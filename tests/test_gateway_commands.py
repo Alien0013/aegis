@@ -60,6 +60,30 @@ def test_handoff_is_adopted_before_control_commands(tmp_path, monkeypatch):
     assert run["data"]["model"] == "handoff-model"
 
 
+def test_status_reports_cached_agent_model_and_context(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from aegis.types import Message
+
+    r = _runner(tmp_path, monkeypatch)
+    ev = _ev("/status")
+    key = r._key(ev)
+    session = r._session(key)
+    session.messages.append(Message.system("system"))
+    session.messages.append(Message.user("hello from the chat"))
+    r._agents[key] = SimpleNamespace(
+        provider=SimpleNamespace(name="cached-provider", model="cached-model", context_length=1000)
+    )
+
+    out = r.dispatch(ev)
+
+    assert "provider=cached-provider" in out
+    assert "model=cached-model" in out
+    assert "context≈" in out
+    assert "/1,000 tokens" in out
+    assert "messages=2" in out
+
+
 def test_new_closes_cached_agent_before_reset(tmp_path, monkeypatch):
     from aegis.types import Message
 
