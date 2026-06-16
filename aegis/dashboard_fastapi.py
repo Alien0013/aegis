@@ -1423,11 +1423,19 @@ def _dashboard_plugin_records(config: Config) -> list[dict[str, Any]]:
         plugin_root = manifest.path.parent if manifest.path.is_file() else manifest.path
         dash_root = plugin_root / "dashboard"
         manifest_path = dash_root / "manifest.json"
-        if not manifest_path.exists():
-            continue
-        try:
-            data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001
+        data: dict[str, Any] | None = None
+        if manifest_path.exists():
+            try:
+                loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                loaded = None
+            if isinstance(loaded, dict):
+                data = loaded
+        if data is None and isinstance(getattr(manifest, "raw", None), dict):
+            raw_dashboard = manifest.raw.get("dashboard") or manifest.raw.get("dashboard_manifest")
+            if isinstance(raw_dashboard, dict):
+                data = raw_dashboard
+        if data is None:
             continue
         if not isinstance(data, dict):
             continue

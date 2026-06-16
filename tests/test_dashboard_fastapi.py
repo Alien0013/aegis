@@ -1162,6 +1162,54 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
     assert enabled_route.json() == {"pulse": True}
 
 
+def test_fastapi_dashboard_plugin_embedded_yaml_dashboard_manifest(tmp_path, monkeypatch):
+    plug = tmp_path / "plugins" / "ops" / "brief"
+    (plug / "dashboard" / "dist").mkdir(parents=True)
+    (plug / "plugin.yaml").write_text(
+        "name: brief\n"
+        "version: 1.2.3\n"
+        "description: Embedded dashboard metadata\n"
+        "kind: backend\n"
+        "dashboard:\n"
+        "  name: brief-panel\n"
+        "  label: Brief\n"
+        "  icon: ClipboardList\n"
+        "  tab:\n"
+        "    path: /brief\n"
+        "  entry: dist/index.js\n"
+        "  css:\n"
+        "    - dist/brief.css\n",
+        encoding="utf-8",
+    )
+    (plug / "__init__.py").write_text("def register(api):\n    pass\n", encoding="utf-8")
+    (plug / "dashboard" / "dist" / "index.js").write_text("window.brief = true;", encoding="utf-8")
+    (plug / "dashboard" / "dist" / "brief.css").write_text(".brief{}", encoding="utf-8")
+
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    manifest = asyncio.run(_request(app, "GET", "/api/dashboard/plugins", headers=headers))
+    assert manifest.status_code == 200
+    row = next(item for item in manifest.json() if item["name"] == "brief-panel")
+    assert row["plugin"] == "brief"
+    assert row["key"] == "ops/brief"
+    assert row["label"] == "Brief"
+    assert row["icon"] == "ClipboardList"
+    assert row["tab"]["path"] == "/brief"
+    assert row["entry"] == "dist/index.js"
+    assert row["css"] == ["dist/brief.css"]
+
+    hub = asyncio.run(_request(app, "GET", "/api/dashboard/plugins/hub", headers=headers))
+    assert hub.status_code == 200
+    hub_row = next(item for item in hub.json()["plugins"] if item["key"] == "ops/brief")
+    assert hub_row["has_dashboard_manifest"] is True
+    assert hub_row["dashboard_manifest"]["name"] == "brief-panel"
+
+    asset = asyncio.run(_request(app, "GET", "/dashboard-plugins/brief-panel/dist/index.js"))
+    assert asset.status_code == 200
+    assert "window.brief" in asset.text
+
+
 def test_fastapi_dashboard_plugin_install_mounts_api_without_restart(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
     headers = {"X-Aegis-Token": "t"}
