@@ -489,6 +489,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "browser": {
         "headless": True,
+        "cdp_url": "",                  # Optional persistent Chromium CDP endpoint; /browser connect uses BROWSER_CDP_URL
     },
     "web": {
         "search_backend": "auto",    # auto | duckduckgo | brave | tavily | serper

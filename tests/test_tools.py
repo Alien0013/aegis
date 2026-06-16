@@ -150,6 +150,71 @@ def test_browser_navigate_blocks_private_final_url_after_redirect(tmp_path):
     assert calls == ["https://example.com/start", "about:blank"]
 
 
+def test_browser_manage_sets_live_cdp_override(monkeypatch):
+    import os
+
+    from aegis import browser_connect
+
+    monkeypatch.delenv("BROWSER_CDP_URL", raising=False)
+    monkeypatch.setattr(browser_connect, "is_browser_debug_ready", lambda *_args, **_kwargs: True)
+
+    result = browser_connect.manage_browser("connect", url="127.0.0.1:9222")
+
+    assert result["connected"] is True
+    assert result["url"] == "http://127.0.0.1:9222"
+    assert os.environ["BROWSER_CDP_URL"] == "http://127.0.0.1:9222"
+    assert browser_connect.manage_browser("status")["url"] == "http://127.0.0.1:9222"
+    assert browser_connect.manage_browser("disconnect")["connected"] is False
+    assert "BROWSER_CDP_URL" not in os.environ
+
+
+def test_browser_tool_uses_live_cdp_override(tmp_path, monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    from aegis.tools.browser import BrowserTool
+
+    calls = {}
+
+    class FakePage:
+        pass
+
+    class FakeContext:
+        pages = [FakePage()]
+
+    class FakeBrowser:
+        contexts = [FakeContext()]
+
+    class FakeChromium:
+        def connect_over_cdp(self, url):
+            calls["cdp_url"] = url
+            return FakeBrowser()
+
+        def launch(self, **_kwargs):
+            calls["launched"] = True
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+
+        def stop(self):
+            calls["stopped"] = True
+
+    monkeypatch.setenv("BROWSER_CDP_URL", "ws://127.0.0.1:9222/devtools/browser/test")
+    monkeypatch.setitem(sys.modules, "playwright", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules,
+        "playwright.sync_api",
+        SimpleNamespace(sync_playwright=lambda: SimpleNamespace(start=lambda: FakePlaywright())),
+    )
+
+    tool = BrowserTool()
+    tool._ensure(_ctx(tmp_path))
+
+    assert calls["cdp_url"] == "ws://127.0.0.1:9222/devtools/browser/test"
+    assert "launched" not in calls
+
+
 def test_browser_and_computer_screenshots_respect_write_safe_root(tmp_path, monkeypatch):
     import sys
     from types import SimpleNamespace

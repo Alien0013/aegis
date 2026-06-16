@@ -6,7 +6,8 @@
 // each tool call shows as a live card (running → ok/error) paired by event id.
 
 import { useEffect, useRef, useState } from "react";
-import { postStream } from "../lib/api";
+import { post, postStream } from "../lib/api";
+import { desktop, isDesktop } from "../lib/desktop";
 import { Icon } from "../components/icons";
 import { Mark } from "../components/Mark";
 import { Markdown } from "../components/Markdown";
@@ -31,6 +32,13 @@ interface Turn {
   text: string;
   reasoning?: string;
   tools?: ToolEvent[];
+}
+
+interface BrowserManageResponse {
+  connected?: boolean;
+  url?: string;
+  messages?: string[];
+  error?: string;
 }
 
 export function GraphicalChat({
@@ -88,19 +96,84 @@ export function GraphicalChat({
     taRef.current?.focus();
   };
 
+  const patchLast = (fn: (turn: Turn) => Turn) =>
+    setTurns((t) => {
+      const copy = t.slice();
+      copy[copy.length - 1] = fn(copy[copy.length - 1]);
+      return copy;
+    });
+
+  const isBrowserSlash = (text: string) => {
+    const raw = text.trim().toLowerCase();
+    return raw === "/browser" || raw.startsWith("/browser ");
+  };
+
+  const runBrowserSlash = async (text: string) => {
+    setInput("");
+    setBusy(true);
+    try {
+      const finish = (reply: string) => {
+        setTurns((t) => [...t, { role: "user", text }, { role: "assistant", text: reply }]);
+      };
+      if (isDesktop) {
+        const connection = await desktop?.getConnection?.();
+        if (connection?.mode === "remote") {
+          finish("/browser manages a Chromium-family browser on the gateway host and is only available with a local gateway.");
+          return;
+        }
+      }
+
+      const [_command, rawAction = "status", ...rest] = text.trim().split(/\s+/).filter(Boolean);
+      const action = rawAction.toLowerCase();
+      if (!["connect", "disconnect", "status"].includes(action)) {
+        finish("usage: /browser [connect|disconnect|status] [url]\npersistent: set browser.cdp_url in config.yaml");
+        return;
+      }
+
+      const url = action === "connect" ? rest.join(" ").trim() || "http://127.0.0.1:9222" : undefined;
+      const lines: string[] = [];
+      if (url) lines.push(`checking Chromium-family browser remote debugging at ${url}...`);
+      const result = await post<BrowserManageResponse>("browser/manage", { action, url, session_id: sid || undefined });
+      (result.messages || []).forEach((message) => lines.push(message));
+      if (result.error) lines.push(`error: ${result.error}`);
+      else if (action === "status") {
+        lines.push(
+          result.connected
+            ? `browser connected: ${result.url || "(url unavailable)"}`
+            : "browser not connected (try /browser connect <url> or set browser.cdp_url in config.yaml)",
+        );
+      } else if (action === "disconnect") {
+        lines.push("browser disconnected");
+      } else if (result.connected) {
+        lines.push("Browser connected to live Chromium-family browser via CDP");
+        lines.push(`Endpoint: ${result.url || "(url unavailable)"}`);
+        lines.push("next browser tool call will use this CDP endpoint");
+      } else {
+        lines.push("Browser not connected - start a Chromium-family browser with remote debugging and retry /browser connect");
+      }
+      finish(lines.join("\n"));
+    } catch (e) {
+      setTurns((t) => [
+        ...t,
+        { role: "user", text },
+        { role: "assistant", text: `error: ${e instanceof Error ? e.message : String(e)}` },
+      ]);
+    } finally {
+      setBusy(false);
+      taRef.current?.focus();
+    }
+  };
+
   const send = async () => {
     const text = input.trim();
     if (!text || busy) return;
+    if (isBrowserSlash(text)) {
+      await runBrowserSlash(text);
+      return;
+    }
     setInput("");
     setBusy(true);
     setTurns((t) => [...t, { role: "user", text }, { role: "assistant", text: "", tools: [] }]);
-
-    const patchLast = (fn: (turn: Turn) => Turn) =>
-      setTurns((t) => {
-        const copy = t.slice();
-        copy[copy.length - 1] = fn(copy[copy.length - 1]);
-        return copy;
-      });
 
     try {
       await postStream("chat/stream", { message: text, session_id: sid || undefined }, (data) => {

@@ -2584,6 +2584,35 @@ def create_app(config: Config) -> FastAPI:
         _require_request(request, config)
         return JSONResponse({"ok": True, "version": __version__})
 
+    @app.get("/api/browser/manage")
+    async def api_browser_manage_get(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from .browser_connect import manage_browser
+
+        return JSONResponse(manage_browser("status", config=config))
+
+    @app.post("/api/browser/manage")
+    async def api_browser_manage(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        raw = await request.body()
+        try:
+            body = json.loads(raw) if raw else {}
+        except ValueError:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        from .browser_connect import manage_browser
+
+        try:
+            result = manage_browser(
+                str(body.get("action") or "status"),
+                url=body.get("url"),
+                config=config,
+            )
+        except ValueError as exc:
+            return JSONResponse({"connected": False, "url": "", "error": str(exc)}, status_code=400)
+        return JSONResponse(result)
+
     @app.get("/api/auth/me")
     async def api_auth_me(request: Request) -> JSONResponse:
         _require_request(request, config)

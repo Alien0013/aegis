@@ -54,19 +54,50 @@ class BrowserTool(Tool):
         self._pw = None
         self._browser = None
         self._page = None
+        self._cdp_url = ""
+        self._external_cdp = False
         self._lock = threading.Lock()
 
+    def _reset(self):
+        try:
+            if self._browser is not None and not self._external_cdp:
+                self._browser.close()
+        except Exception:
+            pass
+        try:
+            if self._pw is not None:
+                self._pw.stop()
+        except Exception:
+            pass
+        self._pw = None
+        self._browser = None
+        self._page = None
+        self._cdp_url = ""
+        self._external_cdp = False
+
     def _ensure(self, ctx: ToolContext):
-        if self._page is not None:
+        from ..browser_connect import current_cdp_url
+
+        cdp_url = current_cdp_url(ctx.config, for_playwright=True)
+        if self._page is not None and self._cdp_url == cdp_url:
             return
+        if self._page is not None:
+            self._reset()
         try:
             from playwright.sync_api import sync_playwright
         except ImportError as e:  # noqa: BLE001
             raise RuntimeError("browser tool needs `pip install playwright` + `playwright install chromium`") from e
+        self._pw = sync_playwright().start()
+        if cdp_url:
+            self._browser = self._pw.chromium.connect_over_cdp(cdp_url)
+            self._external_cdp = True
+            self._cdp_url = cdp_url
+            context = self._browser.contexts[0] if self._browser.contexts else self._browser.new_context()
+            self._page = context.pages[0] if context.pages else context.new_page()
+            return
         headless = True
         if ctx.config is not None:
             headless = bool(ctx.config.get("browser.headless", True))
-        self._pw = sync_playwright().start()
         self._browser = self._pw.chromium.launch(headless=headless)
         self._page = self._browser.new_context(accept_downloads=True).new_page()
 

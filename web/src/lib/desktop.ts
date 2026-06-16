@@ -13,6 +13,8 @@ export interface DesktopBridge {
   onMaximizeChange(cb: (maximized: boolean) => void): () => void;
   openExternal(url: string): void;
   restartBackend(): void;
+  getConnection?(): Promise<{ mode?: string; source?: string; baseUrl?: string }>;
+  api?<T = unknown>(request: { method?: string; path: string; body?: unknown }): Promise<T>;
 }
 
 export const desktop: DesktopBridge | undefined = (

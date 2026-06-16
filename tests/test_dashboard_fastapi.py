@@ -248,6 +248,7 @@ def test_fastapi_registers_live_and_pty_websockets(tmp_path, monkeypatch):
         "/api/config/schema",
         "/api/config/raw",
         "/api/env",
+        "/api/browser/manage",
         "/api/sessions/search",
         "/api/sessions/stats",
         "/api/cron/jobs",
@@ -255,6 +256,40 @@ def test_fastapi_registers_live_and_pty_websockets(tmp_path, monkeypatch):
         "/api/gateway/status",
     ):
         assert routes[path] == "APIRoute"
+
+
+def test_fastapi_browser_manage_route(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    from aegis import browser_connect
+
+    monkeypatch.setattr(browser_connect, "is_browser_debug_ready", lambda *_args, **_kwargs: True)
+
+    connected = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/browser/manage",
+        json={"action": "connect", "url": "127.0.0.1:9222"},
+        headers=headers,
+    ))
+    assert connected.status_code == 200
+    assert connected.json()["connected"] is True
+    assert connected.json()["url"] == "http://127.0.0.1:9222"
+
+    status = asyncio.run(_request(app, "GET", "/api/browser/manage", headers=headers))
+    assert status.status_code == 200
+    assert status.json()["url"] == "http://127.0.0.1:9222"
+
+    bad = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/browser/manage",
+        json={"action": "connect", "url": "file:///tmp/nope"},
+        headers=headers,
+    ))
+    assert bad.status_code == 400
+    assert "unsupported browser url scheme" in bad.json()["error"]
 
 
 def test_fastapi_config_and_env_control_plane(tmp_path, monkeypatch):
