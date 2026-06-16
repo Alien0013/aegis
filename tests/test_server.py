@@ -29,6 +29,20 @@ def _request(port: int, method: str, path: str, body: dict | None = None, header
     return resp.status, data
 
 
+def _request_with_headers(port: int, method: str, path: str, body: dict | None = None,
+                          headers: dict | None = None):
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    payload = json.dumps(body or {}).encode()
+    req_headers = {"Content-Type": "application/json"} if body is not None else {}
+    req_headers.update(headers or {})
+    conn.request(method, path, body=payload if body is not None else None, headers=req_headers)
+    resp = conn.getresponse()
+    data = resp.read().decode()
+    response_headers = dict(resp.getheaders())
+    conn.close()
+    return resp.status, response_headers, data
+
+
 def _raw_request(port: int, method: str, path: str, body: bytes, headers: dict | None = None):
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
     conn.request(method, path, body=body, headers=headers or {})
@@ -523,6 +537,11 @@ def test_responses_create_retrieve_cancel_delete(monkeypatch, tmp_path):
     assert status == 200
     assert body["object"] == "response"
     assert body["output_text"] == "hello"
+    assert body["error"] is None
+    assert body["incomplete_details"] is None
+    assert body["parallel_tool_calls"] is True
+    assert body["instructions"] == "be brief"
+    assert body["previous_response_id"] is None
     assert body["metadata"]["session_id"] == "serve:responses"
     assert get_status == 200
     assert json.loads(get_data)["id"] == response_id
@@ -544,6 +563,7 @@ def test_responses_persist_store_false_and_previous_id(monkeypatch, tmp_path):
     try:
         status, data = _request(port, "POST", "/v1/responses", {
             "input": "first",
+            "instructions": "keep it concise",
             "metadata": {"session_id": "serve:persist"},
         })
         response_id = json.loads(data)["id"]
@@ -577,6 +597,71 @@ def test_responses_persist_store_false_and_previous_id(monkeypatch, tmp_path):
     chained = json.loads(chained_data)
     assert chained["metadata"]["previous_response_id"] == response_id
     assert chained["metadata"]["session_id"] == "serve:persist"
+    second_call = _FakeRunner.calls[-1]
+    assert [m.content for m in second_call["history"][:3]] == [
+        "<system_instructions>\nkeep it concise\n</system_instructions>",
+        "first",
+        "hello",
+    ]
+    assert second_call["prompt"].content == "second"
+
+
+def test_responses_missing_previous_id_404s_without_running(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": "second",
+            "previous_response_id": "resp_missing",
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 404
+    assert "Previous response not found" in json.loads(data)["error"]
+    assert _FakeRunner.calls == []
+
+
+def test_responses_conversation_maps_to_latest_response(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        first_status, first_data = _request(port, "POST", "/v1/responses", {
+            "input": "first",
+            "conversation": "thread-a",
+        })
+        second_status, second_data = _request(port, "POST", "/v1/responses", {
+            "input": "second",
+            "conversation": {"id": "thread-a"},
+        })
+        conflict_status, conflict_data = _request(port, "POST", "/v1/responses", {
+            "input": "bad",
+            "conversation": "thread-a",
+            "previous_response_id": json.loads(first_data)["id"],
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert first_status == 200
+    assert second_status == 200
+    second = json.loads(second_data)
+    assert second["conversation"] == "thread-a"
+    assert second["previous_response_id"] == json.loads(first_data)["id"]
+    assert [m.content for m in _FakeRunner.calls[1]["history"][:2]] == ["first", "hello"]
+    assert conflict_status == 400
+    assert "Cannot use both" in json.loads(conflict_data)["error"]
 
 
 def test_server_session_crud_fork_and_chat(monkeypatch, tmp_path):
@@ -625,6 +710,35 @@ def test_server_session_crud_fork_and_chat(monkeypatch, tmp_path):
     assert any(row["id"] == session_id for row in json.loads(list_data)["sessions"])
     assert delete_status == 200
     assert json.loads(delete_data)["ok"] is True
+
+
+def test_server_session_chat_stream_uses_sse_cors_headers(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        create_status, create_data = _request(port, "POST", "/api/sessions", {"title": "Stream Session"})
+        session_id = json.loads(create_data)["session"]["id"]
+        stream_status, headers, stream_data = _request_with_headers(
+            port,
+            "POST",
+            f"/api/sessions/{session_id}/chat/stream",
+            {"prompt": "reply"},
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert create_status == 201
+    assert stream_status == 200
+    assert headers["Content-Type"].startswith("text/event-stream")
+    assert headers["Access-Control-Allow-Origin"] == "*"
+    assert headers["X-Accel-Buffering"] == "no"
+    assert "data: [DONE]" in stream_data
 
 
 def test_server_run_read_endpoints(monkeypatch, tmp_path):

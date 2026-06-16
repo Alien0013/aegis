@@ -22,9 +22,10 @@ from aiohttp import web
 from . import config as cfg_paths
 from .config import Config
 from .surface import SurfaceRunner
-from .types import Message, new_id
+from .types import Message, ToolCall, new_id
 
 _MAX_BODY_BYTES = 10 * 1024 * 1024
+_DEFAULT_MAX_STORED_RESPONSES = 100
 
 
 def _coerce_request_bool(value: Any, default: bool = False) -> bool:
@@ -83,26 +84,51 @@ def _content(value: Any) -> tuple[str, list[str]]:
     return "\n".join(t for t in texts if t), images
 
 
+def _tool_calls_from_payload(payload: dict[str, Any]) -> list[ToolCall]:
+    calls: list[ToolCall] = []
+    for raw in payload.get("tool_calls", []) or []:
+        if not isinstance(raw, dict):
+            continue
+        call_id = str(raw.get("id") or raw.get("call_id") or new_id("call"))
+        if "function" in raw and isinstance(raw.get("function"), dict):
+            func = raw["function"]
+            name = str(func.get("name") or raw.get("name") or "")
+            args = func.get("arguments", {})
+        else:
+            name = str(raw.get("name") or "")
+            args = raw.get("arguments", {})
+        if isinstance(args, str):
+            try:
+                args = json.loads(args) if args else {}
+            except json.JSONDecodeError:
+                args = {"__raw__": args}
+        if not isinstance(args, dict):
+            args = {"value": args}
+        if name:
+            calls.append(ToolCall(id=call_id, name=name, arguments=args))
+    return calls
+
+
+def _convert_message(m: dict[str, Any]) -> Message:
+    role = str(m.get("role") or "user")
+    text, images = _content(m.get("content", ""))
+    if role in ("system", "developer"):
+        return Message.user(f"<{role}_instructions>\n{text}\n</{role}_instructions>") if text else Message.user("")
+    if role == "assistant":
+        return Message.assistant(text, tool_calls=_tool_calls_from_payload(m))
+    if role == "tool":
+        return Message(
+            role="tool",
+            content=text,
+            tool_call_id=m.get("tool_call_id") or m.get("call_id"),
+            name=m.get("name"),
+        )
+    return Message.user(text, images=images)
+
+
 def _convert(messages: list[dict]) -> tuple[list[Message], Message]:
     """Return (history_without_last_user, last_user_message)."""
-    internal: list[Message] = []
-    for m in messages:
-        role = str(m.get("role") or "user")
-        text, images = _content(m.get("content", ""))
-        if role in ("system", "developer"):
-            if text:
-                internal.append(Message.user(f"<{role}_instructions>\n{text}\n</{role}_instructions>"))
-        elif role == "assistant":
-            internal.append(Message.assistant(text))
-        elif role == "tool":
-            internal.append(Message(
-                role="tool",
-                content=text,
-                tool_call_id=m.get("tool_call_id"),
-                name=m.get("name"),
-            ))
-        else:
-            internal.append(Message.user(text, images=images))
+    internal = [_convert_message(m) for m in messages]
     last_user = Message.user("")
     for i in range(len(internal) - 1, -1, -1):
         if internal[i].role == "user":
@@ -227,6 +253,9 @@ def _response_object(
         "created_at": int(time.time()),
         "status": status,
         "model": getattr(provider, "model", ""),
+        "error": None,
+        "incomplete_details": None,
+        "parallel_tool_calls": True,
         "output": _response_output(text),
         "output_text": text,
         "usage": _usage(getattr(result, "usage", None) or agent),
@@ -248,10 +277,81 @@ def _responses_messages(body: dict[str, Any]) -> tuple[list[Message], Message]:
                 messages.append({"role": "user", "content": item})
     else:
         messages = [{"role": "user", "content": str(raw or "")}]
-    instructions = str(body.get("instructions") or "").strip()
-    if instructions:
-        messages.insert(0, {"role": "system", "content": instructions})
     return _convert(messages)
+
+
+def _parse_response_history(value: Any) -> tuple[list[Message], str]:
+    if value in (None, ""):
+        return [], ""
+    if not isinstance(value, list):
+        return [], "'conversation_history' must be an array of message objects"
+    messages: list[Message] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, dict) or "role" not in item:
+            return [], f"conversation_history[{index}] must have 'role' and 'content' fields"
+        messages.append(_convert_message(item))
+    return messages, ""
+
+
+def _instruction_message(instructions: str | None) -> Message | None:
+    text = str(instructions or "").strip()
+    if not text:
+        return None
+    return Message.user(f"<system_instructions>\n{text}\n</system_instructions>")
+
+
+def _is_instruction_wrapper(message: Message) -> bool:
+    text = (message.content or "").lstrip()
+    return message.role == "user" and (
+        text.startswith("<system_instructions>")
+        or text.startswith("<developer_instructions>")
+    )
+
+
+def _history_payload(messages: list[Message]) -> list[dict[str, Any]]:
+    return [_message_payload(m) for m in messages if not _is_instruction_wrapper(m)]
+
+
+def _history_from_state(state: dict[str, Any] | None) -> list[Message]:
+    if not state:
+        return []
+    raw = state.get("conversation_history")
+    if not isinstance(raw, list):
+        return []
+    messages: list[Message] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        try:
+            messages.append(Message.from_dict(item))
+        except Exception:  # noqa: BLE001
+            try:
+                messages.append(_convert_message(item))
+            except Exception:  # noqa: BLE001
+                continue
+    return messages
+
+
+def _response_conversation_history(
+    prior_history: list[Message],
+    last_user: Message,
+    result,
+) -> list[dict[str, Any]]:
+    session = getattr(result, "session", None)
+    session_messages = getattr(session, "messages", None)
+    if isinstance(session_messages, list) and session_messages:
+        filtered = [
+            m for m in session_messages
+            if isinstance(m, Message) and m.role != "system" and not _is_instruction_wrapper(m)
+        ]
+        if filtered and len(filtered) >= len(prior_history) + 1:
+            return _history_payload(filtered)
+    history = list(prior_history)
+    history.append(last_user)
+    text = getattr(result, "text", "") if result is not None else ""
+    message = getattr(result, "message", None)
+    history.append(message if isinstance(message, Message) else Message.assistant(text))
+    return _history_payload(history)
 
 
 def _capabilities(config: Config) -> dict[str, Any]:
@@ -358,50 +458,160 @@ def _conversation_id(value: Any) -> str:
 
 
 class ResponseStore:
-    """Small SQLite-backed store for the OpenAI-compatible Responses surface."""
+    """SQLite-backed state store for the OpenAI-compatible Responses surface."""
 
     def __init__(self, config: Config):
         self.path = cfg_paths.sub("server_responses.sqlite3")
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.max_size = max(1, int(config.get("server.responses_store_max", _DEFAULT_MAX_STORED_RESPONSES)
+                                   or _DEFAULT_MAX_STORED_RESPONSES))
         self._lock = threading.RLock()
         with self._connect() as db:
+            self._configure_db(db)
             db.execute(
                 "CREATE TABLE IF NOT EXISTS responses ("
                 "id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, "
-                "status TEXT NOT NULL, body TEXT NOT NULL)"
+                "status TEXT NOT NULL, body TEXT NOT NULL, "
+                "accessed_at REAL NOT NULL DEFAULT 0)"
             )
+            columns = {row[1] for row in db.execute("PRAGMA table_info(responses)").fetchall()}
+            if "accessed_at" not in columns:
+                db.execute("ALTER TABLE responses ADD COLUMN accessed_at REAL NOT NULL DEFAULT 0")
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS conversations ("
+                "name TEXT PRIMARY KEY, response_id TEXT NOT NULL)"
+            )
+        self._tighten_file_permissions()
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(str(self.path), timeout=30)
 
-    def put(self, response: dict[str, Any]) -> None:
-        body = json.dumps(response, default=str)
+    def _configure_db(self, db: sqlite3.Connection) -> None:
+        try:
+            db.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.DatabaseError:
+            try:
+                db.execute("PRAGMA journal_mode=DELETE")
+            except sqlite3.DatabaseError:
+                pass
+        try:
+            db.execute("PRAGMA busy_timeout=30000")
+        except sqlite3.DatabaseError:
+            pass
+
+    def _tighten_file_permissions(self) -> None:
+        for candidate in (self.path, self.path.with_name(self.path.name + "-wal"),
+                          self.path.with_name(self.path.name + "-shm")):
+            try:
+                if candidate.exists():
+                    candidate.chmod(0o600)
+            except OSError:
+                pass
+
+    def _state_payload(self, response: dict[str, Any], state: dict[str, Any] | None = None) -> dict[str, Any]:
+        state = dict(state or {})
+        if isinstance(state.get("response"), dict):
+            payload = state
+            payload["response"] = response
+            return payload
+        return {
+            "response": response,
+            "conversation_history": list(state.get("conversation_history") or []),
+            "instructions": state.get("instructions"),
+            "session_id": state.get("session_id") or (response.get("metadata") or {}).get("session_id"),
+            "conversation": state.get("conversation") or (response.get("metadata") or {}).get("conversation"),
+        }
+
+    @staticmethod
+    def _normalize_state(body: dict[str, Any]) -> dict[str, Any]:
+        if isinstance(body.get("response"), dict):
+            body.setdefault("conversation_history", [])
+            body.setdefault("instructions", None)
+            body.setdefault("session_id", (body.get("response", {}).get("metadata") or {}).get("session_id"))
+            return body
+        return {
+            "response": body,
+            "conversation_history": body.get("_conversation_history", []),
+            "instructions": body.get("instructions"),
+            "session_id": (body.get("metadata") or {}).get("session_id"),
+            "conversation": (body.get("metadata") or {}).get("conversation"),
+        }
+
+    def put(self, response: dict[str, Any], state: dict[str, Any] | None = None) -> None:
+        payload = self._state_payload(response, state)
+        body = json.dumps(payload, default=str)
+        response_id = str(response.get("id") or "")
+        now = time.time()
         with self._lock, self._connect() as db:
+            self._configure_db(db)
             db.execute(
-                "INSERT OR REPLACE INTO responses (id, created_at, status, body) VALUES (?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO responses (id, created_at, status, body, accessed_at) "
+                "VALUES (?, ?, ?, ?, ?)",
                 (
-                    str(response.get("id") or ""),
+                    response_id,
                     int(response.get("created_at") or time.time()),
                     str(response.get("status") or ""),
                     body,
+                    now,
                 ),
             )
+            count = int(db.execute("SELECT COUNT(*) FROM responses").fetchone()[0] or 0)
+            if count > self.max_size:
+                evict = [
+                    row[0] for row in db.execute(
+                        "SELECT id FROM responses ORDER BY accessed_at ASC LIMIT ?",
+                        (count - self.max_size,),
+                    ).fetchall()
+                ]
+                if evict:
+                    placeholders = ",".join("?" for _ in evict)
+                    db.execute(f"DELETE FROM conversations WHERE response_id IN ({placeholders})", evict)
+                    db.execute(f"DELETE FROM responses WHERE id IN ({placeholders})", evict)
+        self._tighten_file_permissions()
 
-    def get(self, response_id: str) -> dict[str, Any] | None:
+    def get_state(self, response_id: str) -> dict[str, Any] | None:
         with self._lock, self._connect() as db:
+            self._configure_db(db)
             row = db.execute("SELECT body FROM responses WHERE id = ?", (response_id,)).fetchone()
-        if row is None:
-            return None
+            if row is None:
+                return None
+            db.execute("UPDATE responses SET accessed_at = ? WHERE id = ?", (time.time(), response_id))
         try:
             body = json.loads(row[0])
         except (TypeError, json.JSONDecodeError):
+            with self._lock, self._connect() as db:
+                db.execute("DELETE FROM conversations WHERE response_id = ?", (response_id,))
+                db.execute("DELETE FROM responses WHERE id = ?", (response_id,))
             return None
-        return body if isinstance(body, dict) else None
+        return self._normalize_state(body) if isinstance(body, dict) else None
+
+    def get(self, response_id: str) -> dict[str, Any] | None:
+        state = self.get_state(response_id)
+        if state is None:
+            return None
+        response = state.get("response")
+        return response if isinstance(response, dict) else None
 
     def delete(self, response_id: str) -> bool:
         with self._lock, self._connect() as db:
+            self._configure_db(db)
+            db.execute("DELETE FROM conversations WHERE response_id = ?", (response_id,))
             cur = db.execute("DELETE FROM responses WHERE id = ?", (response_id,))
             return cur.rowcount > 0
+
+    def get_conversation(self, name: str) -> str | None:
+        with self._lock, self._connect() as db:
+            self._configure_db(db)
+            row = db.execute("SELECT response_id FROM conversations WHERE name = ?", (name,)).fetchone()
+        return str(row[0]) if row else None
+
+    def set_conversation(self, name: str, response_id: str) -> None:
+        with self._lock, self._connect() as db:
+            self._configure_db(db)
+            db.execute(
+                "INSERT OR REPLACE INTO conversations (name, response_id) VALUES (?, ?)",
+                (name, response_id),
+            )
 
 
 def make_handler(config: Config):
@@ -769,10 +979,11 @@ def make_handler(config: Config):
                 return self._post_response(body)
             if path.startswith("/v1/responses/") and path.endswith("/cancel"):
                 rid = path.split("/")[-2]
-                response = response_store.get(rid)
-                if response is not None:
+                state = response_store.get_state(rid)
+                response = (state or {}).get("response") if state else None
+                if isinstance(response, dict):
                     response["status"] = "cancelled"
-                    response_store.put(response)
+                    response_store.put(response, state)
                     return self._json(200, response)
                 return self._json(404, {"error": "response not found", "id": rid})
             if path == "/v1/runs":
@@ -817,7 +1028,8 @@ def make_handler(config: Config):
                     store.save(child)
                 return self._json(201, {"ok": True, "session": _session_payload(child)})
             if path.startswith("/api/sessions/") and path.endswith(("/chat", "/chat/stream")):
-                session_id = path.split("/")[-2]
+                parts = path.split("/")
+                session_id = parts[-3] if path.endswith("/chat/stream") else parts[-2]
                 stream = path.endswith("/chat/stream") or _coerce_request_bool(body.get("stream"), False)
                 return self._post_session_chat(session_id, body, stream=stream)
             if path == "/api/jobs":
@@ -941,23 +1153,45 @@ def make_handler(config: Config):
             self.wfile.write(b"data: [DONE]\n\n")
 
         def _post_response(self, body: dict[str, Any]) -> None:
-            history, last_user = _responses_messages(body)
             response_id = new_id("resp")
             model = body.get("model")
             metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
             metadata = dict(metadata)
+            instructions = str(body.get("instructions") or "").strip() or None
             previous_id = str(body.get("previous_response_id") or "").strip()
-            previous = response_store.get(previous_id) if previous_id else None
-            if previous is not None:
-                prev_meta = previous.get("metadata") if isinstance(previous.get("metadata"), dict) else {}
+            conversation = _conversation_id(body.get("conversation"))
+            if previous_id and conversation:
+                return self._json(400, {"error": "Cannot use both 'conversation' and 'previous_response_id'"})
+            if conversation and not previous_id:
+                previous_id = response_store.get_conversation(conversation) or ""
+
+            explicit_history, history_error = _parse_response_history(body.get("conversation_history"))
+            if history_error:
+                return self._json(400, {"error": history_error})
+            previous_state = None
+            if previous_id and not explicit_history:
+                previous_state = response_store.get_state(previous_id)
+                if previous_state is None:
+                    return self._json(404, {"error": f"Previous response not found: {previous_id}"})
+                explicit_history = _history_from_state(previous_state)
+                if instructions is None:
+                    stored_instructions = previous_state.get("instructions")
+                    instructions = str(stored_instructions or "").strip() or None
+
+            input_history, last_user = _responses_messages(body)
+            state_history = list(explicit_history) + list(input_history)
+            history = list(state_history)
+            instruction = _instruction_message(instructions)
+            if instruction is not None:
+                history.insert(0, instruction)
+
+            if previous_state is not None:
+                previous_response = previous_state.get("response") if isinstance(previous_state, dict) else {}
+                prev_meta = previous_response.get("metadata") if isinstance(previous_response, dict) else {}
                 if not metadata.get("session_id") and not body.get("session_id"):
-                    inherited_session = prev_meta.get("session_id")
+                    inherited_session = previous_state.get("session_id") or prev_meta.get("session_id")
                     if inherited_session:
                         metadata["session_id"] = inherited_session
-                prev_text = str(previous.get("output_text") or "")
-                if prev_text:
-                    history.append(Message.assistant(prev_text))
-            conversation = _conversation_id(body.get("conversation"))
             if conversation:
                 metadata["conversation"] = conversation
                 if not metadata.get("session_id") and not body.get("session_id"):
@@ -1011,9 +1245,20 @@ def make_handler(config: Config):
                     on_event=emit,
                 )
                 response = _response_object(response_id, result, metadata_extra=metadata)
+                response["instructions"] = instructions
+                response["previous_response_id"] = previous_id or None
+                response["conversation"] = conversation or None
                 response["store"] = store_response
                 if store_response:
-                    response_store.put(response)
+                    full_history = _response_conversation_history(state_history, last_user, result)
+                    response_store.put(response, {
+                        "conversation_history": full_history,
+                        "instructions": instructions,
+                        "session_id": response.get("metadata", {}).get("session_id") or session_id,
+                        "conversation": conversation,
+                    })
+                    if conversation:
+                        response_store.set_conversation(conversation, response_id)
                 self._write_sse({
                     "type": "response.completed",
                     "response": response,
@@ -1032,9 +1277,20 @@ def make_handler(config: Config):
                 meta={"request_id": response_id, "api": "responses"},
             )
             response = _response_object(response_id, result, metadata_extra=metadata)
+            response["instructions"] = instructions
+            response["previous_response_id"] = previous_id or None
+            response["conversation"] = conversation or None
             response["store"] = store_response
             if store_response:
-                response_store.put(response)
+                full_history = _response_conversation_history(state_history, last_user, result)
+                response_store.put(response, {
+                    "conversation_history": full_history,
+                    "instructions": instructions,
+                    "session_id": response.get("metadata", {}).get("session_id") or session_id,
+                    "conversation": conversation,
+                })
+                if conversation:
+                    response_store.set_conversation(conversation, response_id)
             return self._json(200, response)
 
         def _post_session_chat(self, session_id: str, body: dict[str, Any], *, stream: bool = False) -> None:
@@ -1046,16 +1302,10 @@ def make_handler(config: Config):
                 return self._json(404, {"ok": False, "error": "session not found", "id": session_id})
             prompt = body.get("prompt", body.get("input", body.get("message", "")))
             if stream:
-                self.send_response(200)
-                self.send_header("Content-Type", "text/event-stream")
-                self.end_headers()
+                self._send_sse_headers()
 
                 def emit(ev: dict[str, Any]) -> None:
-                    try:
-                        self.wfile.write(f"data: {json.dumps(ev)}\n\n".encode())
-                        self.wfile.flush()
-                    except (BrokenPipeError, ConnectionResetError):
-                        pass
+                    self._write_sse(ev)
 
                 result = runner.run_prompt(
                     str(prompt),
