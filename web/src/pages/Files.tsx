@@ -28,6 +28,12 @@ export function Files() {
     catch (e) { setFile({ path: target, error: String(e) }); }
   }
 
+  function downloadFile(target: string) {
+    const params = new URLSearchParams({ path: target });
+    if (TOKEN) params.set("token", TOKEN);
+    window.location.href = `/api/files/download?${params.toString()}`;
+  }
+
   async function jumpDefaultCwd() {
     try {
       const r = await api<{ path?: string }>("fs/default-cwd");
@@ -141,6 +147,15 @@ export function Files() {
                         <span className="min-w-0 flex-1 truncate text-sm text-text">{entry.name}</span>
                         <span className="shrink-0 text-[11px] text-faint">{entry.is_dir ? "" : bytes(entry.size)}</span>
                       </button>
+                      {!entry.is_dir && (
+                        <button
+                          onClick={() => downloadFile(target)}
+                          className="shrink-0 text-faint hover:text-primary"
+                          title="Download"
+                        >
+                          <Icon name="download" size={15} />
+                        </button>
+                      )}
                       <button
                         disabled={busy === target}
                         onClick={() => remove(target, entry.is_dir)}

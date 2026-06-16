@@ -193,6 +193,26 @@ def test_fastapi_files_upload_and_mkdir(tmp_path, monkeypatch):
     assert data_url.json()["ok"] is True
     assert data_url.json()["data_url"].startswith("data:text/plain;base64,")
 
+    download = asyncio.run(_request(
+        app,
+        "GET",
+        f"/api/files/download?path={str(note)}",
+        headers=headers,
+    ))
+    assert download.status_code == 200
+    assert download.content == b"hello files\n"
+    assert "attachment" in download.headers.get("content-disposition", "")
+
+    secret = tmp_path / ".env"
+    secret.write_text("TOKEN=secret\n", encoding="utf-8")
+    blocked = asyncio.run(_request(
+        app,
+        "GET",
+        f"/api/files/download?path={str(secret)}",
+        headers=headers,
+    ))
+    assert blocked.status_code == 403
+
     res = asyncio.run(_request(
         app,
         "POST",

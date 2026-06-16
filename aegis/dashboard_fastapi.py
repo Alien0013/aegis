@@ -26,7 +26,7 @@ from .config import Config
 
 try:
     from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket
-    from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
+    from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 except ImportError as exc:  # pragma: no cover - import check covers dependency presence
     raise RuntimeError(
         "AEGIS dashboard requires fastapi and uvicorn. Install with: "
@@ -3950,6 +3950,26 @@ def create_app(config: Config) -> FastAPI:
             "path": plugin_path,
             "error": "dashboard plugin API not mounted",
         }, status_code=404)
+
+    @app.get("/api/files/download")
+    async def download_file(request: Request) -> FileResponse:
+        _require_request(request, config)
+        raw = (request.query_params.get("path") or "").strip()
+        if not raw:
+            raise HTTPException(status_code=400, detail="missing path")
+        try:
+            target = Path(raw).expanduser().resolve()
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail="bad path") from exc
+        if not target.is_file():
+            raise HTTPException(status_code=404, detail="not a file")
+        if dash._is_sensitive_path(target):
+            raise HTTPException(
+                status_code=403,
+                detail="blocked: refusing to download a credential/key/SSH path through the dashboard.",
+            )
+        media_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        return FileResponse(target, media_type=media_type, filename=target.name)
 
     @app.get("/api/{path:path}")
     async def api_get(path: str, request: Request) -> JSONResponse:
