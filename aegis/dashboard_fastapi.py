@@ -1783,21 +1783,24 @@ def _cron_job_create_response(config: Config, body: dict[str, Any]) -> JSONRespo
     prompt_error = _scan_cron_prompt(str(body.get("prompt") or ""))
     if prompt_error:
         return JSONResponse({"ok": False, "error": prompt_error}, status_code=400)
-    job = store.add(
-        str(body["schedule"]),
-        str(body["prompt"]),
-        name=str(body.get("name") or ""),
-        channel=str(body.get("channel") or ""),
-        script=str(body.get("script") or ""),
-        skills=list(skills),
-        context_from=context_from,
-        deliver=str(body.get("deliver") or ""),
-        no_agent=bool(body.get("no_agent", False)),
-        model=str(body.get("model") or ""),
-        enabled_toolsets=_cron_context_refs(body.get("enabled_toolsets") or body.get("toolsets")),
-        workdir=str(body.get("workdir") or ""),
-        max_runs=int(body.get("max_runs") or 0),
-    )
+    try:
+        job = store.add(
+            str(body["schedule"]),
+            str(body["prompt"]),
+            name=str(body.get("name") or ""),
+            channel=str(body.get("channel") or ""),
+            script=str(body.get("script") or ""),
+            skills=list(skills),
+            context_from=context_from,
+            deliver=str(body.get("deliver") or ""),
+            no_agent=bool(body.get("no_agent", False)),
+            model=str(body.get("model") or ""),
+            enabled_toolsets=_cron_context_refs(body.get("enabled_toolsets") or body.get("toolsets")),
+            workdir=str(body.get("workdir") or ""),
+            max_runs=int(body.get("max_runs") or 0),
+        )
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
     return JSONResponse({"ok": True, "id": job.id, "job": _cron_job_detail(job.id)["job"]})
 
 
@@ -1822,7 +1825,10 @@ def _cron_job_patch_response(job_id: str, body: dict[str, Any]) -> JSONResponse:
         prompt_error = _scan_cron_prompt(str(updates.get("prompt") or ""))
         if prompt_error:
             return JSONResponse({"ok": False, "error": prompt_error}, status_code=400)
-    job = store.update(job_id, **updates)
+    try:
+        job = store.update(job_id, **updates)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc), "id": job_id}, status_code=400)
     if job is None:
         return JSONResponse({"ok": False, "error": "cron job not found", "id": job_id}, status_code=404)
     return JSONResponse({"ok": True, "id": job.id, "job": _cron_job_detail(job.id)["job"]})
@@ -2225,20 +2231,23 @@ def _api_post(path: str, body: dict, config: Config, chat_runner: Any) -> dict:
             skills = body.get("skills") or []
             if isinstance(skills, str):
                 skills = [s.strip() for s in skills.split(",") if s.strip()]
-            j = cs.add(
-                body["schedule"],
-                body["prompt"],
-                body.get("channel", ""),
-                script=str(body.get("script") or ""),
-                skills=list(skills),
-                deliver=str(body.get("deliver") or ""),
-                no_agent=bool(body.get("no_agent", False)),
-                context_from=context_from,
-                model=str(body.get("model") or ""),
-                enabled_toolsets=_cron_context_refs(body.get("enabled_toolsets")),
-                workdir=str(body.get("workdir") or ""),
-                max_runs=int(body.get("max_runs") or 0),
-            )
+            try:
+                j = cs.add(
+                    body["schedule"],
+                    body["prompt"],
+                    body.get("channel", ""),
+                    script=str(body.get("script") or ""),
+                    skills=list(skills),
+                    deliver=str(body.get("deliver") or ""),
+                    no_agent=bool(body.get("no_agent", False)),
+                    context_from=context_from,
+                    model=str(body.get("model") or ""),
+                    enabled_toolsets=_cron_context_refs(body.get("enabled_toolsets")),
+                    workdir=str(body.get("workdir") or ""),
+                    max_runs=int(body.get("max_runs") or 0),
+                )
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
             return {"id": j.id}
         if act == "remove" and body.get("id"):
             return {"ok": cs.remove(body["id"])}

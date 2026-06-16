@@ -238,6 +238,30 @@ def _coerce_refs(value) -> list[str]:
     return refs
 
 
+def _normalize_workdir(value: str | None) -> str:
+    """Return a resolved absolute cron cwd, or "" for no override."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    path = Path(text).expanduser()
+    if not path.is_absolute():
+        raise ValueError("workdir must be an absolute existing directory")
+    try:
+        resolved = path.resolve()
+    except OSError as exc:
+        raise ValueError(f"workdir is not accessible: {text}") from exc
+    if not resolved.exists():
+        raise ValueError(f"workdir not found: {text}")
+    if not resolved.is_dir():
+        raise ValueError(f"workdir is not a directory: {text}")
+    return str(resolved)
+
+
+def _validate_job_execution_mode(*, no_agent: bool, script: str) -> None:
+    if bool(no_agent) and not str(script or "").strip():
+        raise ValueError("no_agent jobs require a script")
+
+
 def _safe_job_id(value) -> str:
     text = _coerce_text(value).strip()
     unsafe = (
@@ -664,12 +688,15 @@ class CronStore:
             model: str = "", enabled_toolsets: list[str] | None = None,
             workdir: str = "") -> CronJob:
         run_at = _parse_oneshot(schedule, time.time()) or 0.0
+        normalized_script = str(script or "").strip()
+        normalized_no_agent = bool(no_agent)
+        _validate_job_execution_mode(no_agent=normalized_no_agent, script=normalized_script)
         job = CronJob(id=new_id("cron"), schedule=schedule, prompt=prompt, name=name, channel=channel,
-                      run_at=run_at, script=script, skills=skills or [], deliver=deliver,
-                      context_from=_coerce_refs(context_from), no_agent=no_agent,
+                      run_at=run_at, script=normalized_script, skills=skills or [], deliver=deliver,
+                      context_from=_coerce_refs(context_from), no_agent=normalized_no_agent,
                       model=str(model or "").strip(),
                       enabled_toolsets=list(enabled_toolsets or []),
-                      workdir=str(workdir or "").strip(),
+                      workdir=_normalize_workdir(workdir),
                       max_runs=max(0, int(max_runs or 0)))
         with _jobs_file_lock():
             jobs = self._load_unlocked()
@@ -737,7 +764,18 @@ class CronStore:
                     value = _coerce_refs(value)
                 if key == "enabled_toolsets":
                     value = _coerce_refs(value)
+                if key == "workdir":
+                    value = _normalize_workdir(value)
+                if key == "script":
+                    value = str(value or "").strip()
+                if key == "no_agent":
+                    value = bool(value)
                 found[key] = value
+            if "script" in updates or "no_agent" in updates:
+                _validate_job_execution_mode(
+                    no_agent=bool(found.get("no_agent", False)),
+                    script=str(found.get("script") or ""),
+                )
             if "schedule" in updates:
                 found["run_at"] = _parse_oneshot(str(found.get("schedule", "")), now) or 0.0
                 found["last_run"] = 0.0

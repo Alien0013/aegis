@@ -44,7 +44,7 @@ def test_cronjob_create_list_update_delete(tmp_path):
     assert stored.deliver == "telegram:42"
     assert stored.model == "cron-model"
     assert stored.enabled_toolsets == ["core", "web"]
-    assert stored.workdir == str(tmp_path)
+    assert stored.workdir == str(tmp_path.resolve())
 
     listing = _data(tool.run({"action": "list"}, ctx))
     assert listing["count"] == 1
@@ -60,6 +60,7 @@ def test_cronjob_create_list_update_delete(tmp_path):
         "enabled": False,
         "model": "cron-updated",
         "enabled_toolsets": ["core"],
+        "workdir": "",
     }, ctx))
 
     assert updated["job"]["schedule"] == "1h"
@@ -68,6 +69,8 @@ def test_cronjob_create_list_update_delete(tmp_path):
     assert updated["job"]["state"] == "paused"
     assert updated["job"]["model"] == "cron-updated"
     assert updated["job"]["enabled_toolsets"] == ["core"]
+    assert updated["job"]["workdir"] is None
+    assert CronStore().get(job_id).workdir == ""
 
     deleted = _data(tool.run({"action": "delete", "job_id": job_id}, ctx))
     assert deleted["success"] is True
@@ -118,6 +121,81 @@ def test_cronjob_create_blocks_prompt_injection(tmp_path):
     assert result.is_error
     assert "cron prompt blocked" in result.content
     assert CronStore().list() == []
+
+
+def test_cronjob_rejects_invalid_workdir_and_scriptless_no_agent(tmp_path):
+    from aegis.cron import CronStore
+    from aegis.tools.cronjob_tool import CronJobTool
+
+    tool = CronJobTool()
+    ctx = _ctx(tmp_path)
+    file_path = tmp_path / "not-a-dir.txt"
+    file_path.write_text("x", encoding="utf-8")
+
+    for workdir, needle in (
+        ("relative/path", "absolute existing directory"),
+        (str(tmp_path / "missing"), "workdir not found"),
+        (str(file_path), "workdir is not a directory"),
+    ):
+        result = tool.run({
+            "action": "create",
+            "schedule": "30m",
+            "prompt": "check",
+            "workdir": workdir,
+        }, ctx)
+        assert result.is_error
+        assert needle in result.content
+
+    no_script = tool.run({
+        "action": "create",
+        "schedule": "30m",
+        "prompt": "check",
+        "no_agent": True,
+    }, ctx)
+    assert no_script.is_error
+    assert "no_agent jobs require a script" in no_script.content
+    assert CronStore().list() == []
+
+
+def test_cronjob_update_validates_workdir_and_no_agent(tmp_path):
+    from aegis.cron import CronStore
+    from aegis.tools.cronjob_tool import CronJobTool
+
+    tool = CronJobTool()
+    ctx = _ctx(tmp_path)
+    job_id = _data(tool.run({
+        "action": "create",
+        "schedule": "30m",
+        "prompt": "check",
+    }, ctx))["job_id"]
+
+    bad_workdir = tool.run({
+        "action": "update",
+        "job_id": job_id,
+        "workdir": "relative",
+    }, ctx)
+    assert bad_workdir.is_error
+    assert "absolute existing directory" in bad_workdir.content
+
+    bad_no_agent = tool.run({
+        "action": "update",
+        "job_id": job_id,
+        "no_agent": True,
+    }, ctx)
+    assert bad_no_agent.is_error
+    assert "no_agent jobs require a script" in bad_no_agent.content
+
+    updated = _data(tool.run({
+        "action": "update",
+        "job_id": job_id,
+        "workdir": str(tmp_path),
+        "script": __file__,
+        "no_agent": True,
+    }, ctx))
+    assert updated["job"]["workdir"] == str(tmp_path.resolve())
+    stored = CronStore().get(job_id)
+    assert stored.workdir == str(tmp_path.resolve())
+    assert stored.no_agent is True
 
 
 def test_cron_prompt_scanner_matches_aegis_edges():

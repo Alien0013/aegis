@@ -58,7 +58,10 @@ class CronJobTool(Tool):
                 "items": {"type": "string"},
                 "description": "Optional toolsets enabled only for this job",
             },
-            "workdir": {"type": "string", "description": "Optional working directory for this job"},
+            "workdir": {
+                "type": "string",
+                "description": "Optional absolute existing directory for this job",
+            },
             "skills": {"type": "array", "items": {"type": "string"}},
             "skill": {"type": "string", "description": "Compatibility alias for one skill"},
             "enabled": {"type": "boolean", "description": "Set enabled/paused state on update"},
@@ -120,20 +123,23 @@ class CronJobTool(Tool):
         context_error = _validate_context_refs(store, context_from)
         if context_error:
             return _error(context_error)
-        job = store.add(
-            schedule=schedule,
-            prompt=prompt,
-            deliver=deliver or "",
-            script=str(args.get("script") or "").strip(),
-            skills=skills,
-            context_from=context_from,
-            name=str(args.get("name") or "").strip(),
-            no_agent=bool(args.get("no_agent", False)),
-            max_runs=int(args.get("max_runs", 0) or 0),
-            model=str(args.get("model") or "").strip(),
-            enabled_toolsets=_canonical_refs(args.get("enabled_toolsets")),
-            workdir=str(args.get("workdir") or "").strip(),
-        )
+        try:
+            job = store.add(
+                schedule=schedule,
+                prompt=prompt,
+                deliver=deliver or "",
+                script=str(args.get("script") or "").strip(),
+                skills=skills,
+                context_from=context_from,
+                name=str(args.get("name") or "").strip(),
+                no_agent=bool(args.get("no_agent", False)),
+                max_runs=int(args.get("max_runs", 0) or 0),
+                model=str(args.get("model") or "").strip(),
+                enabled_toolsets=_canonical_refs(args.get("enabled_toolsets")),
+                workdir=str(args.get("workdir") or "").strip(),
+            )
+        except ValueError as exc:
+            return _error(str(exc))
         data = {
             "success": True,
             "job_id": job.id,
@@ -185,7 +191,10 @@ class CronJobTool(Tool):
             updates["enabled_toolsets"] = _canonical_refs(args.get("enabled_toolsets"))
         if not updates:
             return _error("No updates provided.")
-        job = store.update(resolved.id, **updates)
+        try:
+            job = store.update(resolved.id, **updates)
+        except ValueError as exc:
+            return _error(str(exc))
         if job is None:
             return _error(f"Job with ID or name '{args.get('job_id')}' not found.")
         return _json({"success": True, "job": _format_job(job)}, f"updated {job.id}")

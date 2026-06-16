@@ -1210,7 +1210,65 @@ def test_fastapi_cron_control_plane(tmp_path, monkeypatch):
     assert create.json()["job"]["name"] == "Dashboard digest"
     assert create.json()["job"]["model"] == "cron-model"
     assert create.json()["job"]["enabled_toolsets"] == ["core", "web"]
-    assert create.json()["job"]["workdir"] == str(tmp_path)
+    assert create.json()["job"]["workdir"] == str(tmp_path.resolve())
+
+    bad_workdir = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/cron/jobs",
+        json={
+            "schedule": "every 2h",
+            "prompt": "bad cwd",
+            "workdir": "relative/path",
+        },
+        headers=headers,
+    ))
+    assert bad_workdir.status_code == 400
+    assert "absolute existing directory" in bad_workdir.json()["error"]
+
+    bad_no_agent = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/cron/jobs",
+        json={
+            "schedule": "every 2h",
+            "prompt": "scriptless",
+            "no_agent": True,
+        },
+        headers=headers,
+    ))
+    assert bad_no_agent.status_code == 400
+    assert "no_agent jobs require a script" in bad_no_agent.json()["error"]
+
+    alias_bad_workdir = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/jobs",
+        json={
+            "schedule": "every 2h",
+            "prompt": "bad alias cwd",
+            "workdir": "relative/path",
+        },
+        headers=headers,
+    ))
+    assert alias_bad_workdir.status_code == 400
+    assert "absolute existing directory" in alias_bad_workdir.json()["error"]
+
+    legacy_bad_no_agent = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/cron",
+        json={
+            "action": "add",
+            "schedule": "every 2h",
+            "prompt": "legacy scriptless",
+            "no_agent": True,
+        },
+        headers=headers,
+    ))
+    assert legacy_bad_no_agent.status_code == 200
+    assert legacy_bad_no_agent.json()["ok"] is False
+    assert "no_agent jobs require a script" in legacy_bad_no_agent.json()["error"]
 
     jobs = asyncio.run(_request(app, "GET", "/api/cron/jobs", headers=headers))
     assert any(job["id"] == job_id and job["name"] == "Dashboard digest" for job in jobs.json()["jobs"])
@@ -1254,6 +1312,26 @@ def test_fastapi_cron_control_plane(tmp_path, monkeypatch):
     assert patch.json()["job"]["name"] == "Paused digest"
     assert patch.json()["job"]["model"] == "cron-updated"
     assert patch.json()["job"]["enabled_toolsets"] == ["core"]
+
+    bad_patch_workdir = asyncio.run(_request(
+        app,
+        "PATCH",
+        f"/api/cron/jobs/{job_id}",
+        json={"workdir": str(tmp_path / "missing")},
+        headers=headers,
+    ))
+    assert bad_patch_workdir.status_code == 400
+    assert "workdir not found" in bad_patch_workdir.json()["error"]
+
+    bad_patch_no_agent = asyncio.run(_request(
+        app,
+        "PATCH",
+        f"/api/cron/jobs/{job_id}",
+        json={"no_agent": True},
+        headers=headers,
+    ))
+    assert bad_patch_no_agent.status_code == 400
+    assert "no_agent jobs require a script" in bad_patch_no_agent.json()["error"]
 
     alias_detail = asyncio.run(_request(app, "GET", f"/api/jobs/{job_id}", headers=headers))
     assert alias_detail.status_code == 200
