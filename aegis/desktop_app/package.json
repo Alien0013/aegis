@@ -8,9 +8,10 @@
     "start": "node launch.js",
     "start:sandbox": "node launch.js --sandbox",
     "test:desktop": "node --test electron/*.test.cjs scripts/*.test.cjs",
-    "dist": "electron-builder",
-    "dist:linux": "electron-builder --linux AppImage deb",
-    "dist:win": "electron-builder --win nsis",
+    "build:stamp": "node scripts/write-build-stamp.cjs",
+    "dist": "npm run build:stamp && electron-builder",
+    "dist:linux": "electron-builder --linux AppImage deb rpm",
+    "dist:win": "electron-builder --win nsis msi",
     "dist:mac": "electron-builder --mac dmg"
   },
   "dependencies": {
@@ -23,15 +24,26 @@
   "build": {
     "appId": "com.alien0013.aegis",
     "productName": "AEGIS",
+    "executableName": "AEGIS",
+    "protocols": [
+      {
+        "name": "AEGIS Protocol",
+        "schemes": ["aegis"]
+      }
+    ],
     "artifactName": "AEGIS-${version}-${os}-${arch}.${ext}",
     "icon": "build/icon.png",
     "directories": { "output": "release", "buildResources": "build" },
     "publish": [{ "provider": "github", "owner": "Alien0013", "repo": "aegis" }],
     "files": ["electron/**", "!electron/*.test.cjs", "package.json"],
+    "beforeBuild": "scripts/before-build.cjs",
     "beforePack": "scripts/before-pack.cjs",
     "asar": true,
     "asarUnpack": ["**/*.node", "**/prebuilds/**"],
-    "extraResources": [{ "from": "build/icon.png", "to": "icon.png" }],
+    "extraResources": [
+      { "from": "build/install-stamp.json", "to": "install-stamp.json" },
+      { "from": "build/icon.png", "to": "icon.png" }
+    ],
     "mac": {
       "category": "public.app-category.developer-tools",
       "icon": "build/icon.png",
@@ -44,7 +56,7 @@
         { "x": 410, "y": 180, "type": "link", "path": "/Applications" }
       ]
     },
-    "win": { "icon": "build/icon.ico", "target": ["nsis"] },
+    "win": { "icon": "build/icon.ico", "target": ["nsis", "msi"] },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
@@ -56,7 +68,7 @@
       "category": "Development",
       "maintainer": "Alien0013 <taranjot0013@gmail.com>",
       "synopsis": "AEGIS — your terminal AI agent, as a desktop app.",
-      "target": ["AppImage", "deb"],
+      "target": ["AppImage", "deb", "rpm"],
       "executableArgs": ["--no-sandbox"]
     }
   }

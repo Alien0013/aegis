@@ -18,6 +18,8 @@ DESKTOP_FILES = (
     "electron/windows-user-env.cjs", "electron/windows-user-env.test.cjs",
     "electron/preload.js", "electron/preload-app.js", "electron/boot.html",
     "scripts/before-pack.cjs", "scripts/before-pack.test.cjs",
+    "scripts/before-build.cjs", "scripts/write-build-stamp.cjs",
+    "scripts/write-build-stamp.test.cjs",
     "build/icon.png",
 )
 

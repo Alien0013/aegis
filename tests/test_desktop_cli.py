@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
@@ -87,3 +88,22 @@ def test_bundled_desktop_template_matches_source():
         assert (root / "aegis" / "desktop_app" / name).read_bytes() == (
             root / "desktop" / name
         ).read_bytes()
+
+
+def test_desktop_builder_config_matches_release_parity():
+    root = Path(__file__).resolve().parents[1]
+    package = json.loads((root / "desktop" / "package.json").read_text(encoding="utf-8"))
+    bundled = json.loads((root / "aegis" / "desktop_app" / "package.json").read_text(encoding="utf-8"))
+
+    assert bundled == package
+    build = package["build"]
+    assert build["executableName"] == "AEGIS"
+    assert build["protocols"] == [{"name": "AEGIS Protocol", "schemes": ["aegis"]}]
+    assert build["beforeBuild"] == "scripts/before-build.cjs"
+    assert "scripts/write-build-stamp.cjs" in desktop.DESKTOP_FILES
+    resources = {entry["to"]: entry["from"] for entry in build["extraResources"]}
+    assert resources["install-stamp.json"] == "build/install-stamp.json"
+    assert "msi" in build["win"]["target"]
+    assert "rpm" in build["linux"]["target"]
+    assert "msi" in package["scripts"]["dist:win"]
+    assert "rpm" in package["scripts"]["dist:linux"]
