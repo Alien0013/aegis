@@ -5,6 +5,9 @@ from __future__ import annotations
 import pathlib
 
 
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
 def test_pyproject_packages_bundled_skills():
     """The wheel must include SKILL.md data files, not just .py modules."""
     txt = pathlib.Path("pyproject.toml").read_text()
@@ -32,3 +35,26 @@ def test_install_hints_use_correct_distribution_name():
         # any aegis-agent[extra] hint must be the -harness distribution
         for m in re.finditer(r"aegis-agent(-harness)?\[", src):
             assert m.group(1) == "-harness", f"{p}: stale 'aegis-agent[' install hint"
+
+
+def _desktop_manifest(root: pathlib.Path) -> dict[pathlib.Path, bytes]:
+    ignored_dirs = {"node_modules", "dist", "out"}
+    ignored_files = {pathlib.Path("README.md"), pathlib.Path("build/icon.ico")}
+    files: dict[pathlib.Path, bytes] = {}
+    for path in root.rglob("*"):
+        rel = path.relative_to(root)
+        if any(part in ignored_dirs for part in rel.parts) or rel in ignored_files:
+            continue
+        if path.is_file():
+            files[rel] = path.read_bytes()
+    return files
+
+
+def test_desktop_source_and_packaged_copy_stay_in_sync():
+    """The editable Electron app and the wheel-bundled copy must not drift."""
+    source = _desktop_manifest(ROOT / "desktop")
+    packaged = _desktop_manifest(ROOT / "aegis" / "desktop_app")
+
+    assert set(source) == set(packaged)
+    for rel in sorted(source):
+        assert source[rel] == packaged[rel], f"desktop copy drifted: {rel}"
