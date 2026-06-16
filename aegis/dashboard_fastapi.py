@@ -1467,8 +1467,14 @@ def _dashboard_plugin_static(config: Config, name: str, file_path: str) -> Respo
 
 
 def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
-    def dashboard_plugin_auth(request: Request) -> None:
-        _require_request(request, config)
+    def dashboard_plugin_auth(record_name: str, expected_api: str):
+        def auth(request: Request) -> None:
+            _require_request(request, config)
+            live = _dashboard_plugin_record(config, record_name)
+            if not live or str(live.get("_api") or "") != expected_api:
+                raise HTTPException(status_code=404, detail="dashboard plugin API not mounted")
+
+        return auth
 
     for record in _dashboard_plugin_records(config):
         api_path = record.get("_api")
@@ -1498,7 +1504,7 @@ def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
             app.include_router(
                 router,
                 prefix=f"/api/plugins/{record['name']}",
-                dependencies=[Depends(dashboard_plugin_auth)],
+                dependencies=[Depends(dashboard_plugin_auth(str(record["name"]), str(api_path)))],
             )
         except Exception:  # noqa: BLE001
             continue

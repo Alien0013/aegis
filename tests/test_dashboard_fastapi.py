@@ -971,10 +971,15 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
     disabled_row = next(row for row in disabled_hub.json()["plugins"] if row["key"] == "analytics/pulse")
     assert disabled_row["runtime_status"] == "disabled"
     assert disabled_row["has_dashboard_manifest"] is True
+    disabled_route = asyncio.run(_request(app, "GET", "/api/plugins/pulse-panel/pulse", headers=headers))
+    assert disabled_route.status_code == 404
 
     enabled = asyncio.run(_request(app, "POST", "/api/dashboard/agent-plugins/analytics/pulse/enable", headers=headers))
     assert enabled.status_code == 200
     assert "analytics/pulse" in enabled.json()["enabled"]
+    enabled_route = asyncio.run(_request(app, "GET", "/api/plugins/pulse-panel/pulse", headers=headers))
+    assert enabled_route.status_code == 200
+    assert enabled_route.json() == {"pulse": True}
 
 
 def test_fastapi_audio_control_plane(tmp_path, monkeypatch):
