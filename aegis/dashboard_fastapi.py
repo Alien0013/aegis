@@ -956,6 +956,42 @@ def _skill_path_editable(path: Path) -> bool:
     return any(resolved.is_relative_to(root) for root in _skill_writable_roots())
 
 
+def _path_has_symlink(raw_path: Path, root: Path) -> bool:
+    try:
+        rel = raw_path.relative_to(root)
+    except ValueError:
+        return True
+    cursor = root
+    for part in rel.parts:
+        cursor = cursor / part
+        if cursor.is_symlink():
+            return True
+    return False
+
+
+def _validate_skill_delete_target(skill_path: Path) -> tuple[Path | None, str]:
+    if skill_path.name != "SKILL.md":
+        return None, "skill path must point to SKILL.md"
+    roots = _skill_writable_roots()
+    raw_target = skill_path.expanduser().parent.absolute()
+    try:
+        resolved_target = raw_target.resolve(strict=True)
+    except OSError as exc:
+        return None, f"skill path cannot be resolved: {exc}"
+    root = next((candidate for candidate in roots if resolved_target.is_relative_to(candidate)), None)
+    if root is None:
+        return None, "only workspace or personal skills can be deleted"
+    if resolved_target == root:
+        return None, "refusing to delete a skills root"
+    if _path_has_symlink(raw_target, root):
+        return None, "refusing to delete a symlinked skill path"
+    try:
+        (resolved_target / "SKILL.md").resolve(strict=True)
+    except OSError:
+        return None, "skill directory does not contain SKILL.md"
+    return resolved_target, ""
+
+
 def _title_category(value: str) -> str:
     return str(value or "General").replace("_", " ").replace("-", " ").title()
 
@@ -3193,11 +3229,13 @@ def create_app(config: Config) -> FastAPI:
         detail = _skill_detail(config, name)
         if not detail.get("ok"):
             return JSONResponse(detail, status_code=404)
-        skill_path = Path(detail["skill"]["path"]).resolve()
+        skill_path = Path(detail["skill"]["path"])
         if not _skill_path_editable(skill_path):
             return JSONResponse({"ok": False, "error": "only workspace or personal skills can be deleted"}, status_code=403)
-        target = skill_path.parent
-        ok = target.exists()
+        target, err = _validate_skill_delete_target(skill_path)
+        if err:
+            return JSONResponse({"ok": False, "error": err}, status_code=403)
+        ok = bool(target and target.exists())
         if ok:
             shutil.rmtree(target)
         return JSONResponse({"ok": ok, "name": detail["skill"]["name"], **_skills_payload(config)}, status_code=200 if ok else 404)

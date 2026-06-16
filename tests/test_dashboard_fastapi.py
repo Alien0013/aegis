@@ -663,6 +663,39 @@ def test_fastapi_typed_mcp_and_skills_routes(tmp_path, monkeypatch):
     assert deleted_mcp.json()["ok"] is True
 
 
+def test_fastapi_skill_delete_target_validation(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis import config as cfg
+    from aegis.dashboard_fastapi import _validate_skill_delete_target
+
+    skills_root = cfg.skills_dir()
+    safe = skills_root / "safe-skill"
+    safe.mkdir(parents=True)
+    (safe / "SKILL.md").write_text("---\nname: safe-skill\ndescription: Safe skill.\n---\nbody\n")
+
+    target, err = _validate_skill_delete_target(safe / "SKILL.md")
+    assert err == ""
+    assert target == safe.resolve()
+
+    (skills_root / "SKILL.md").write_text("---\nname: root\ndescription: Root.\n---\nbody\n")
+    assert "skills root" in _validate_skill_delete_target(skills_root / "SKILL.md")[1]
+
+    outside = tmp_path / "outside-skill"
+    outside.mkdir()
+    (outside / "SKILL.md").write_text("---\nname: outside-skill\ndescription: Outside.\n---\nbody\n")
+    assert "only workspace or personal skills" in _validate_skill_delete_target(outside / "SKILL.md")[1]
+
+    real = skills_root / "real-skill"
+    real.mkdir()
+    (real / "SKILL.md").write_text("---\nname: real-skill\ndescription: Real.\n---\nbody\n")
+    linked = skills_root / "linked-skill"
+    try:
+        linked.symlink_to(real, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        return
+    assert "symlinked" in _validate_skill_delete_target(linked / "SKILL.md")[1]
+
+
 def test_fastapi_websocket_ticket_flow(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
     headers = {"X-Aegis-Token": "t"}
