@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import zipfile
@@ -63,16 +64,30 @@ def cmd_debug(args, config) -> int:
     """`aegis debug share` — bundle redacted logs + config + doctor output into a zip."""
     from .redact import redact_secrets
 
+    def env_keys(text: str) -> str:
+        rows: list[str] = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            key = stripped.split("=", 1)[0].strip()
+            key = re.sub(r"^export\s+", "", key).strip()
+            if key:
+                rows.append(f"{key}=<redacted>")
+        return "\n".join(rows)
+
     out = cfg.sub("debug-report.zip")
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         # redacted config
         raw = read_text(cfg.config_path())
-        z.writestr("config.yaml", redact_secrets(raw))
+        redacted_config = redact_secrets(raw)
+        z.writestr("config.yaml", redacted_config)
+        z.writestr("config.redacted.yaml", redacted_config)
         # .env keys only (values redacted)
-        env = read_text(cfg.env_path())
-        redacted = "\n".join(ln.split("=")[0] + "=<redacted>" for ln in env.splitlines()
-                             if "=" in ln and not ln.strip().startswith("#"))
-        z.writestr("env.keys.txt", redacted)
+        z.writestr("env.keys.txt", env_keys(read_text(cfg.env_path())))
+        auth = read_text(cfg.auth_path())
+        if auth.strip():
+            z.writestr("auth.redacted.json", redact_secrets(auth))
         # logs
         logs = cfg.logs_dir()
         if logs.exists():
@@ -86,7 +101,7 @@ def cmd_debug(args, config) -> int:
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             cmd_doctor(type("A", (), {"fix": False})(), config)
-        z.writestr("doctor.txt", buf.getvalue())
+        z.writestr("doctor.txt", redact_secrets(buf.getvalue()))
     print(f"wrote debug report → {out}")
     print("Secrets are redacted. Attach this file when reporting an issue.")
     return 0

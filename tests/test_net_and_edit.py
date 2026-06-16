@@ -267,22 +267,35 @@ def test_debug_report_redacts_config_and_logs(monkeypatch, tmp_path):
     import aegis.cli.main as cli_main
 
     cfg.config_path().write_text("OPENAI_API_KEY: sk-proj-ABCDEFGHIJ1234567890\n", encoding="utf-8")
+    cfg.env_path().write_text("export OPENAI_API_KEY=sk-env-secret\n# ignored\n", encoding="utf-8")
+    cfg.auth_path().write_text('{"access_token":"github_pat_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"}', encoding="utf-8")
     cfg.logs_dir().mkdir(parents=True, exist_ok=True)
     (cfg.logs_dir() / "aegis.log").write_text(
         "Authorization: Bearer github_pat_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(cli_main, "cmd_doctor", lambda args, config: print("doctor ok"))
+    monkeypatch.setattr(cli_main, "cmd_doctor", lambda args, config: print("doctor sk-proj-ABCDEFGHIJ1234567890"))
 
     assert ops.cmd_debug(type("A", (), {})(), Config.load()) == 0
 
     with zipfile.ZipFile(cfg.sub("debug-report.zip")) as z:
         config_text = z.read("config.yaml").decode()
+        config_redacted_text = z.read("config.redacted.yaml").decode()
+        env_text = z.read("env.keys.txt").decode()
+        auth_text = z.read("auth.redacted.json").decode()
         log_text = z.read("logs/aegis.log").decode()
+        doctor_text = z.read("doctor.txt").decode()
     assert "sk-proj-" not in config_text
+    assert config_redacted_text == config_text
+    assert "sk-env-secret" not in env_text
+    assert "OPENAI_API_KEY=<redacted>" in env_text
+    assert "github_pat_" not in auth_text
     assert "github_pat_" not in log_text
+    assert "sk-proj-" not in doctor_text
     assert "[REDACTED]" in config_text
+    assert "[REDACTED]" in auth_text
     assert "[REDACTED]" in log_text
+    assert "[REDACTED]" in doctor_text
 
 
 def test_compaction_uses_aux_provider_helper():
