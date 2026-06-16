@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { post } from "../lib/api";
+import { patch, post } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { Badge, Button, Card, Empty, Field, Input, Loading, MetricStrip, PageHeader, Segmented, Select, toast } from "../components/ui";
 
@@ -23,12 +23,21 @@ interface ModelRow {
 }
 
 type Window = "7d" | "30d" | "90d";
+type ReasoningEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+
+const REASONING_VALUES: ReasoningEffort[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+
+function isFastTier(value: unknown): boolean {
+  return ["fast", "priority", "on", "true", "yes"].includes(String(value ?? "").trim().toLowerCase());
+}
 
 export function Models() {
   const { data, loading, error, reload } = useApi<ModelsPayload>("models");
+  const configQ = useApi<Record<string, unknown>>("config");
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
   const [busy, setBusy] = useState(false);
+  const [defaultsBusy, setDefaultsBusy] = useState("");
   const [window, setWindow] = useState<Window>("30d");
 
   useEffect(() => {
@@ -40,6 +49,18 @@ export function Models() {
   const modelRows: ModelRow[] = presetRows.length
     ? presetRows
     : (presets.length ? presets : data?.model ? [data.model] : []).map((id) => ({ id }));
+  const mainProvider = data?.provider || "";
+  const mainModel = data?.model || "";
+  const mainRows = (data?.preset_rows || {})[mainProvider] || [];
+  const mainRow = mainRows.find((row) => row.id === mainModel);
+  const mainCaps = mainRow?.capabilities || {};
+  const reasoningSupported = mainRow ? mainCaps.reasoning_effort !== false : true;
+  const fastSupported = mainCaps.fast_mode === true;
+  const reasoningDefault = String(configQ.data?.["agent.reasoning_effort"] ?? "medium").trim().toLowerCase();
+  const reasoningValue = (REASONING_VALUES.includes(reasoningDefault as ReasoningEffort)
+    ? reasoningDefault
+    : "medium") as ReasoningEffort;
+  const fastOn = isFastTier(configQ.data?.["agent.service_tier"]);
 
   async function setActive(nextProvider = provider, nextModel = model) {
     setBusy(true);
@@ -49,6 +70,18 @@ export function Models() {
       else { toast(r.warning ? `Set note: ${r.warning}` : "Model set", r.warning ? "info" : "ok"); reload(); }
     } catch (e) { toast(String(e), "err"); }
     finally { setBusy(false); }
+  }
+
+  async function setDefault(path: "agent.reasoning_effort" | "agent.service_tier", value: string) {
+    setDefaultsBusy(path);
+    try {
+      const r = await patch<{ ok?: boolean; errors?: Record<string, string> }>("config/fields", {
+        updates: { [path]: value },
+      });
+      if (r.ok === false) toast(Object.values(r.errors || {})[0] || "Failed to save defaults", "err");
+      else { toast("Model defaults saved", "ok"); configQ.reload(); }
+    } catch (e) { toast(String(e), "err"); }
+    finally { setDefaultsBusy(""); }
   }
 
   async function probe() {
@@ -89,6 +122,45 @@ export function Models() {
                   </div>
                   <Badge status={data.active?.error ? "error" : "ready"}>{data.active?.error ? "error" : "ready"}</Badge>
                 </div>
+                {(reasoningSupported || fastSupported) && (
+                  <div className="border border-border bg-surface-2/35 p-3">
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <div>
+                        <div className="font-mono text-xs uppercase tracking-wide text-faint">Defaults</div>
+                        <div className="text-xs text-dim">Applies to new sessions, crons, and gateway chats.</div>
+                      </div>
+                      {configQ.loading && <Badge>loading</Badge>}
+                    </div>
+                    <div className="flex flex-wrap items-end gap-3">
+                      {reasoningSupported && (
+                        <Field label="Reasoning effort">
+                          <Select
+                            value={reasoningValue}
+                            disabled={!!defaultsBusy || configQ.loading}
+                            onChange={(e) => setDefault("agent.reasoning_effort", e.target.value)}
+                          >
+                            {REASONING_VALUES.map((level) => (
+                              <option key={level} value={level}>{level}</option>
+                            ))}
+                          </Select>
+                        </Field>
+                      )}
+                      {fastSupported && (
+                        <div className="space-y-1">
+                          <div className="font-mono text-[10px] font-medium uppercase tracking-wide text-dim">Fast mode</div>
+                          <Button
+                            icon="zap"
+                            variant={fastOn ? "primary" : "outline"}
+                            disabled={!!defaultsBusy || configQ.loading}
+                            onClick={() => setDefault("agent.service_tier", fastOn ? "normal" : "priority")}
+                          >
+                            {fastOn ? "Priority" : "Normal"}
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 <div className="grid gap-3 md:grid-cols-2">
                   <Field label="Provider">
