@@ -145,6 +145,25 @@ def test_token_counting_reasonable():
     assert estimate_tokens("hello world this is a test") >= 4
 
 
+def test_atomic_write_fsyncs_parent_directory(monkeypatch, tmp_path):
+    from aegis import util
+
+    synced: list[str] = []
+    original_fsync_dir = util._fsync_dir
+
+    def fake_fsync_dir(path):
+        synced.append(str(path))
+        original_fsync_dir(path)
+
+    monkeypatch.setattr(util, "_fsync_dir", fake_fsync_dir)
+
+    target = tmp_path / "state" / "jobs.json"
+    util.atomic_write(target, '{"ok": true}\n')
+
+    assert target.read_text(encoding="utf-8") == '{"ok": true}\n'
+    assert synced == [str(target.parent)]
+
+
 def test_provider_retries_transient(monkeypatch):
     from aegis.providers.base import Provider
     from aegis.types import LLMResponse

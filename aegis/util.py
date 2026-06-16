@@ -24,6 +24,19 @@ def ensure_dir(path: Path) -> Path:
     return path
 
 
+def _fsync_dir(path: Path) -> None:
+    try:
+        fd = os.open(str(path), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
 def atomic_write(path: Path, content: str) -> None:
     """Write to a temp file in the same dir, fsync, then os.replace (atomic on POSIX)."""
     ensure_dir(path.parent)
@@ -34,6 +47,7 @@ def atomic_write(path: Path, content: str) -> None:
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)
+        _fsync_dir(path.parent)
     finally:
         if os.path.exists(tmp):
             try:
