@@ -500,14 +500,73 @@ def test_cron_store_normalizes_legacy_rows(monkeypatch, tmp_path):
 
 def test_cron_store_backs_up_corrupt_json(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
-    from aegis.cron import CronStore
+    import pytest
+    from aegis.cron import CronStore, CronStoreCorruptError
 
     (tmp_path / "cron.json").write_text("{not json", encoding="utf-8")
 
-    assert CronStore().list() == []
+    with pytest.raises(CronStoreCorruptError):
+        CronStore().list()
+    with pytest.raises(CronStoreCorruptError):
+        CronStore().list()
     backups = list(tmp_path.glob("cron.json.corrupt.*.bak"))
-    assert backups
+    assert len(backups) == 1
     assert backups[0].read_text(encoding="utf-8") == "{not json"
+
+    (tmp_path / "cron.json").write_text('"not a jobs list"', encoding="utf-8")
+
+    with pytest.raises(CronStoreCorruptError):
+        CronStore().list()
+    assert len(list(tmp_path.glob("cron.json.corrupt.*.bak"))) == 2
+
+
+def test_cron_store_imports_hermes_jobs_object_and_repairs_control_chars(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.cron import CronStore
+
+    (tmp_path / "cron.json").write_text(json.dumps({
+        "jobs": [{"id": "cron_hermes", "schedule": "every 1h", "prompt": "from hermes"}],
+        "updated_at": "2026-06-16T00:00:00Z",
+    }), encoding="utf-8")
+
+    jobs = CronStore().list()
+
+    assert len(jobs) == 1
+    assert jobs[0].id == "cron_hermes"
+    assert jobs[0].prompt == "from hermes"
+    assert isinstance(json.loads((tmp_path / "cron.json").read_text(encoding="utf-8")), list)
+
+    (tmp_path / "cron.json").write_text(
+        '[{"id":"cron_control","schedule":"every 1h","prompt":"bad \x01 char"}]',
+        encoding="utf-8",
+    )
+
+    jobs = CronStore().list()
+
+    assert jobs[0].id == "cron_control"
+    assert "\x01" in jobs[0].prompt
+    assert "\\u0001" in (tmp_path / "cron.json").read_text(encoding="utf-8")
+
+
+def test_cron_store_nested_lock_reuses_cross_process_lock(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from contextlib import contextmanager
+    import aegis.cron as cron
+
+    entries = []
+
+    @contextmanager
+    def fake_file_lock(path):
+        entries.append(path)
+        yield
+
+    monkeypatch.setattr(cron, "file_lock", fake_file_lock)
+
+    with cron._jobs_file_lock():
+        with cron._jobs_file_lock():
+            pass
+
+    assert entries == [tmp_path / "cron.json"]
 
 
 def test_cron_store_cross_process_adds_do_not_clobber(monkeypatch, tmp_path):

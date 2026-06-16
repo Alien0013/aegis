@@ -7,6 +7,7 @@ import os
 import re
 import time
 import threading
+import hashlib
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -19,6 +20,7 @@ from .util import atomic_write, read_text
 
 _TICK_LOCAL = threading.local()
 _JOBS_LOCK = threading.RLock()
+_JOBS_LOCK_STATE = threading.local()
 _CRON_BLOCKED_TOOLS = ("clarify", "send_message", "cronjob", "schedule_task")
 
 
@@ -29,11 +31,23 @@ def _cron_path():
 @contextmanager
 def _jobs_file_lock():
     """Cross-process lock for cron.json load-modify-save transactions."""
-    with _JOBS_LOCK:
-        path = _cron_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with file_lock(path):
+    depth = int(getattr(_JOBS_LOCK_STATE, "depth", 0) or 0)
+    if depth:
+        _JOBS_LOCK_STATE.depth = depth + 1
+        try:
             yield
+        finally:
+            _JOBS_LOCK_STATE.depth -= 1
+        return
+    with _JOBS_LOCK:
+        _JOBS_LOCK_STATE.depth = 1
+        try:
+            path = _cron_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with file_lock(path):
+                yield
+        finally:
+            _JOBS_LOCK_STATE.depth = 0
 
 
 def _fsync_dir(path: Path) -> None:
@@ -54,15 +68,20 @@ def _atomic_write_cron(path: Path, text: str) -> None:
     _fsync_dir(path.parent)
 
 
-def _backup_corrupt_jobs(raw: str) -> None:
+def _backup_corrupt_jobs(raw: str) -> Path | None:
     if not raw:
-        return
+        return None
+    digest = hashlib.sha256(raw.encode("utf-8", "surrogatepass")).hexdigest()[:12]
+    pattern = f"{_cron_path().name}.corrupt.*.{digest}.bak"
+    for existing in _cron_path().parent.glob(pattern):
+        return existing
     stamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    target = _cron_path().with_name(f"{_cron_path().name}.corrupt.{stamp}.bak")
+    target = _cron_path().with_name(f"{_cron_path().name}.corrupt.{stamp}.{digest}.bak")
     try:
         _atomic_write_cron(target, raw)
+        return target
     except OSError:
-        pass
+        return None
 
 
 @contextmanager
@@ -164,6 +183,10 @@ _CRON_PROMPT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 
 class CronPromptInjectionBlocked(RuntimeError):
     """Raised when an assembled unattended cron prompt looks injected."""
+
+
+class CronStoreCorruptError(RuntimeError):
+    """Raised when the cron job store cannot be safely loaded."""
 
 
 def _coerce_text(value, fallback: str = "") -> str:
@@ -565,20 +588,38 @@ class CronStore:
         raw = read_text(_cron_path())
         if not raw.strip():
             return []
+        repaired = False
         try:
             loaded = json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            _backup_corrupt_jobs(raw)
-            return []
+        except json.JSONDecodeError:
+            try:
+                loaded = json.loads(raw, strict=False)
+                repaired = True
+            except (json.JSONDecodeError, TypeError) as exc:
+                backup = _backup_corrupt_jobs(raw)
+                suffix = f"; backup saved to {backup}" if backup else ""
+                raise CronStoreCorruptError(f"cron.json is corrupted and unrepairable{suffix}") from exc
+        except TypeError as exc:
+            backup = _backup_corrupt_jobs(raw)
+            suffix = f"; backup saved to {backup}" if backup else ""
+            raise CronStoreCorruptError(f"cron.json is unreadable{suffix}") from exc
+        if isinstance(loaded, dict):
+            loaded = loaded.get("jobs", [])
+            repaired = True
         if not isinstance(loaded, list):
-            _backup_corrupt_jobs(raw)
-            return []
+            backup = _backup_corrupt_jobs(raw)
+            suffix = f"; backup saved to {backup}" if backup else ""
+            raise CronStoreCorruptError(
+                f"cron.json is corrupted: expected a list or jobs object, got {type(loaded).__name__}{suffix}"
+            )
         seen: set[str] = set()
         jobs: list[dict] = []
         for index, item in enumerate(loaded):
             normalized = _normalize_job_record(item, index=index, seen=seen)
             if normalized is not None:
                 jobs.append(normalized)
+        if repaired:
+            CronStore._save_unlocked(jobs)
         return jobs
 
     @staticmethod
