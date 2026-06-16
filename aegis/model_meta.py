@@ -27,7 +27,9 @@ _BUNDLED: dict[str, int] = {
     "claude-opus-4": 200_000, "claude-sonnet-4": 1_000_000, "claude-haiku-4": 200_000,
     "claude-3-7": 200_000, "claude-3-5": 200_000, "claude": 200_000,
     # OpenAI — GPT-5.x + reasoning
-    "gpt-5.5": 1_050_000, "gpt-5.4": 1_050_000, "gpt-5.3": 400_000, "gpt-5.2": 400_000,
+    "gpt-5.5": 1_050_000, "gpt-5.4-nano": 400_000, "gpt-5.4-mini": 400_000,
+    "gpt-5.4": 1_050_000, "gpt-5.3-codex-spark": 128_000, "gpt-5.3": 400_000,
+    "gpt-5.2": 400_000, "gpt-5.1-chat": 128_000,
     "gpt-5": 400_000, "gpt-4.1": 1_047_576, "gpt-4o": 128_000, "gpt-4-turbo": 128_000,
     "o4": 200_000, "o3": 200_000, "o1": 200_000, "gpt-oss": 131_072,
     # Google — Gemini 2.5 / 3
@@ -39,6 +41,20 @@ _BUNDLED: dict[str, int] = {
     "qwen3": 262_144, "qwen2.5": 131_072, "qwen": 131_072,
     "mistral-large": 131_072, "mistral": 131_072, "grok-4": 256_000, "grok": 131_072,
     "command-r": 131_072, "kimi-k2": 256_000, "kimi": 131_072, "minimax": 1_000_000,
+}
+
+_CODEX_PROVIDER_NAMES = {"codex", "codex-app-server", "openai-codex"}
+_CODEX_CONTEXT_FALLBACK: dict[str, int] = {
+    "gpt-5.1-codex-max": 272_000,
+    "gpt-5.1-codex-mini": 272_000,
+    "gpt-5.3-codex-spark": 128_000,
+    "gpt-5.3-codex": 272_000,
+    "gpt-5.2-codex": 272_000,
+    "gpt-5.4-mini": 272_000,
+    "gpt-5.5": 272_000,
+    "gpt-5.4": 272_000,
+    "gpt-5.2": 272_000,
+    "gpt-5": 272_000,
 }
 
 _cache: dict | None = None
@@ -59,14 +75,73 @@ def _load_cache() -> dict:
     return _cache
 
 
-def context_window(model: str | None, config=None) -> int | None:
-    """Resolve a model's context window: models.dev cache → bundled prefix match → None."""
+def _provider_slug(provider: str | None) -> str:
+    return (provider or "").lower().strip().replace("_", "-")
+
+
+def _is_codex_route(provider: str | None, base_url: str | None = None) -> bool:
+    provider_slug = _provider_slug(provider)
+    if provider_slug in _CODEX_PROVIDER_NAMES:
+        return True
+    url = (base_url or "").lower().strip()
+    return url.startswith("codex://") or "chatgpt.com/backend-api/codex" in url
+
+
+def _codex_context_window(model: str) -> int | None:
+    model_lower = model.lower().strip()
+    for slug, ctx in sorted(_CODEX_CONTEXT_FALLBACK.items(), key=lambda item: len(item[0]), reverse=True):
+        if slug in model_lower:
+            return ctx
+    return None
+
+
+def _cache_keys(model: str, provider: str | None) -> list[str]:
+    keys: list[str] = []
+    provider_slug = _provider_slug(provider)
+    if provider_slug:
+        keys.append(f"{provider_slug}/{model}")
+        keys.append(f"{provider_slug}:{model}")
+    keys.append(model)
+    return keys
+
+
+def _context_from_cache(model: str, provider: str | None = None) -> int | None:
+    cache = _load_cache()
+    for key in _cache_keys(model, provider):
+        cached = cache.get(key)
+        if isinstance(cached, dict) and cached.get("context"):
+            return int(cached["context"])
+    return None
+
+
+def context_window(
+    model: str | None,
+    config=None,
+    *,
+    provider: str | None = None,
+    base_url: str | None = None,
+) -> int | None:
+    """Resolve a model's context window: provider overrides → cache → bundled."""
     m = (model or "").lower().strip()
     if not m:
         return None
-    cached = _load_cache().get(m)
-    if isinstance(cached, dict) and cached.get("context"):
-        return int(cached["context"])
+    if provider is None and config is not None:
+        try:
+            provider = config.get("model.provider")
+        except Exception:  # noqa: BLE001
+            provider = None
+    if base_url is None and config is not None:
+        try:
+            base_url = config.get("model.base_url")
+        except Exception:  # noqa: BLE001
+            base_url = None
+    if _is_codex_route(provider, base_url):
+        codex_ctx = _codex_context_window(m)
+        if codex_ctx:
+            return codex_ctx
+    cached = _context_from_cache(m, provider)
+    if cached:
+        return cached
     for prefix in sorted(_BUNDLED, key=len, reverse=True):
         if prefix in m:
             return _BUNDLED[prefix]
@@ -82,13 +157,16 @@ def refresh(timeout: float = 20.0) -> int:
     data = r.json()
     out: dict[str, dict] = {}
     # models.dev shape: { provider: { models: { id: {limit:{context}, cost:{...} } } } }
-    for prov in (data.values() if isinstance(data, dict) else []):
+    for provider_name, prov in (data.items() if isinstance(data, dict) else []):
         models = (prov or {}).get("models", {}) if isinstance(prov, dict) else {}
         for mid, meta in (models.items() if isinstance(models, dict) else []):
             ctx = (((meta or {}).get("limit") or {}).get("context")
                    or (meta or {}).get("context_window"))
             if ctx:
-                out[str(mid).lower()] = {"context": int(ctx)}
+                model_key = str(mid).lower()
+                row = {"context": int(ctx)}
+                out[f"{str(provider_name).lower()}/{model_key}"] = row
+                out.setdefault(model_key, row)
     from .util import atomic_write
     atomic_write(_cache_path(), json.dumps(out))
     _cache = out
@@ -107,7 +185,12 @@ def cmd_models(args, config) -> int:
             return 1
     # default: show the resolved window for the active model
     model = config.get("model.default", "")
-    win = context_window(model, config)
+    win = context_window(
+        model,
+        config,
+        provider=config.get("model.provider", "") if config is not None else None,
+        base_url=config.get("model.base_url", "") if config is not None else None,
+    )
     print(f"model: {model}")
     print(f"context window: {win:,} tokens" if win else "context window: unknown (using preset default)")
     return 0

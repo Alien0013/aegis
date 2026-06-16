@@ -115,9 +115,20 @@ def test_model_metadata_resolves_current_models():
     from aegis.model_meta import context_window
     assert context_window("claude-sonnet-4-6") == 1_000_000
     assert context_window("gpt-5.5") == 1_050_000
+    assert context_window("gpt-5.4-mini") == 400_000
+    assert context_window("gpt-5.3-codex-spark") == 128_000
     assert context_window("gpt-4o") == 128_000
     assert context_window("gemini-2.5-pro") == 1_048_576
     assert context_window("totally-unknown-model") is None     # falls back to preset
+
+
+def test_model_metadata_is_provider_aware_for_codex_routes():
+    from aegis.model_meta import context_window
+    assert context_window("gpt-5.5", provider="openai") == 1_050_000
+    assert context_window("gpt-5.5", provider="openai-codex") == 272_000
+    assert context_window("gpt-5.4-mini", provider="codex") == 272_000
+    assert context_window("gpt-5.3-codex-spark", provider="codex-app-server") == 128_000
+    assert context_window("openai/gpt-5.5", base_url="https://chatgpt.com/backend-api/codex") == 272_000
 
 
 def test_provider_uses_model_metadata_for_context():

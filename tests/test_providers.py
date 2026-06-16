@@ -1292,6 +1292,7 @@ def test_openai_codex_builds_oauth_responses_provider():
     assert isinstance(provider.transport, ResponsesTransport)
     assert provider.auth.describe() == "oauth (openai-codex: not logged in)"
     assert provider.base_url == "https://chatgpt.com/backend-api/codex"
+    assert provider.context_length == 272_000
 
 
 def test_codex_builds_stateless_backend_responses_provider(monkeypatch, tmp_path):
@@ -1313,6 +1314,7 @@ def test_codex_builds_stateless_backend_responses_provider(monkeypatch, tmp_path
     assert isinstance(provider.transport, ResponsesTransport)
     assert provider.auth.describe() == "codex-backend (run `codex login`)"
     assert provider.base_url == "https://chatgpt.com/backend-api/codex"
+    assert provider.context_length == 272_000
 
 
 def test_codex_app_server_builds_app_server_provider(monkeypatch):
@@ -1338,6 +1340,34 @@ def test_codex_app_server_builds_app_server_provider(monkeypatch):
     assert isinstance(provider.transport, CodexAppServerTransport)
     assert provider.auth.describe() == "codex-cli (ChatGPT login ready)"
     assert provider.base_url == "codex://app-server"
+    assert provider.context_length == 272_000
+
+
+def test_openai_and_codex_context_windows_do_not_drift():
+    from aegis.config import Config
+    from aegis.providers import build_provider
+    from aegis.providers.registry import known_model_entries_for, provider_report
+
+    cfg = Config.load()
+    cfg.data["model"]["provider"] = "openai"
+    cfg.data["model"]["default"] = "gpt-5.5"
+    assert build_provider(cfg).context_length == 1_050_000
+    cfg.data["model"]["default"] = "gpt-5.4-mini"
+    assert build_provider(cfg).context_length == 400_000
+
+    cfg.data["model"]["provider"] = "openai-codex"
+    cfg.data["model"]["default"] = "gpt-5.4-mini"
+    assert build_provider(cfg).context_length == 272_000
+
+    openai_models = {row["id"]: row["context_length"] for row in known_model_entries_for("openai", cfg)}
+    codex_models = {row["id"]: row["context_length"] for row in known_model_entries_for("openai-codex", cfg)}
+    assert openai_models["gpt-5.5"] == 1_050_000
+    assert codex_models["gpt-5.4-mini"] == 272_000
+
+    report = provider_report(cfg)
+    specs = {row["name"]: row for row in report["provider_catalog"]}
+    assert specs["openai"]["context_length"] == 1_050_000
+    assert specs["openai-codex"]["context_length"] == 272_000
 
 
 def test_codex_app_server_projects_dynamic_tools():

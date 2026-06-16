@@ -413,7 +413,15 @@ def known_model_entries_for(provider_name: str, config: cfg.Config | None = None
             "capability_summary": _capability_summary(capabilities),
         }
         if spec is not None:
-            row["context_length"] = spec.context_length
+            from .. import model_meta
+            row["context_length"] = int(
+                model_meta.context_window(
+                    mid,
+                    provider=provider_name,
+                    base_url=spec.base_url,
+                )
+                or spec.context_length
+            )
         rows.append(row)
 
     if spec is not None:
@@ -581,8 +589,16 @@ def build_provider(config: cfg.Config, *, model: str | None = None, name: str | 
     # explicit config > model metadata (the actual model's window) > the preset default
     from .. import model_meta
     resolved_model = model or config.get("model.default") or spec.default_model
-    context_length = int(ctx_override or model_meta.context_window(resolved_model, config)
-                         or spec.context_length)
+    context_length = int(
+        ctx_override
+        or model_meta.context_window(
+            resolved_model,
+            config,
+            provider=name,
+            base_url=base_url,
+        )
+        or spec.context_length
+    )
     if context_length < MIN_CONTEXT_LENGTH:
         raise ValueError(
             f"Provider '{name}' context_length={context_length} < minimum {MIN_CONTEXT_LENGTH}. "
@@ -803,6 +819,18 @@ def _capability_summary(capabilities: dict) -> str:
     return ", ".join(enabled) if enabled else "none"
 
 
+def _resolved_spec_context_length(provider_name: str, spec: ProviderSpec) -> int:
+    from .. import model_meta
+    return int(
+        model_meta.context_window(
+            spec.default_model,
+            provider=provider_name,
+            base_url=spec.base_url,
+        )
+        or spec.context_length
+    )
+
+
 def _provider_status(provider: Provider, *, role: str, configured: dict | None = None) -> dict:
     api_mode = getattr(provider, "api_mode", "")
     capabilities = _model_capabilities(getattr(provider, "model", ""), api_mode)
@@ -824,6 +852,7 @@ def _spec_status(name: str, spec: ProviderSpec, *, origin: str) -> dict:
     auth = _resolve_auth(spec)
     capabilities = _model_capabilities(spec.default_model, spec.api_mode)
     entry = _OAUTH_CATALOG.get(name)
+    context_length = _resolved_spec_context_length(name, spec)
     return {
         "name": name,
         "display_name": entry.display_name if entry else name,
@@ -831,7 +860,7 @@ def _spec_status(name: str, spec: ProviderSpec, *, origin: str) -> dict:
         "default_model": spec.default_model,
         "api_mode": spec.api_mode.value,
         "base_url": spec.base_url,
-        "context_length": spec.context_length,
+        "context_length": context_length,
         "auth_scheme": spec.auth_scheme,
         "auth_methods": _auth_methods_for_spec(spec),
         "env_vars": list(spec.env_vars),
