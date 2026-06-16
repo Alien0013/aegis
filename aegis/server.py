@@ -26,6 +26,7 @@ from .types import Message, ToolCall, new_id
 
 _MAX_BODY_BYTES = 10 * 1024 * 1024
 _DEFAULT_MAX_STORED_RESPONSES = 100
+_TERMINAL_RUN_STATUSES = {"completed", "error", "cancelled"}
 
 
 def _coerce_request_bool(value: Any, default: bool = False) -> bool:
@@ -491,6 +492,10 @@ def _job_payload(job) -> dict[str, Any]:
     }
 
 
+def _public_run_record(record: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in record.items() if k not in {"agent", "thread", "events"}}
+
+
 def _coerce_csv_list(value: Any) -> list[str]:
     if value is None:
         return []
@@ -679,6 +684,8 @@ def make_handler(config: Config):
     active_runs: dict[str, dict[str, Any]] = {}
     approvals: dict[str, dict[str, Any]] = {}
     state_lock = threading.RLock()
+    max_concurrent_runs = max(1, int(config.get("server.max_concurrent_runs", 8) or 8))
+    run_status_ttl = max(0.0, float(config.get("server.run_status_ttl_seconds", 3600) or 3600))
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):  # quiet
@@ -762,6 +769,58 @@ def make_handler(config: Config):
                 self.send_header(name, value)
             self.end_headers()
 
+        def _sweep_runs_locked(self) -> None:
+            if run_status_ttl <= 0:
+                ttl = 0.0
+            else:
+                ttl = run_status_ttl
+            now = time.time()
+            expired: list[str] = []
+            for run_id, rec in list(active_runs.items()):
+                status = str(rec.get("status") or "")
+                if status not in _TERMINAL_RUN_STATUSES:
+                    continue
+                updated = float(rec.get("updated_at_ts") or rec.get("created_at_ts") or now)
+                if now - updated >= ttl:
+                    expired.append(run_id)
+            for run_id in expired:
+                active_runs.pop(run_id, None)
+                for approval_id, pending in list(approvals.items()):
+                    if pending.get("run_id") == run_id:
+                        approvals.pop(approval_id, None)
+
+        def _active_run_count_locked(self) -> int:
+            self._sweep_runs_locked()
+            return sum(
+                1 for rec in active_runs.values()
+                if str(rec.get("status") or "") not in _TERMINAL_RUN_STATUSES
+            )
+
+        def _set_run_state_locked(self, run_id: str, **updates: Any) -> dict[str, Any] | None:
+            rec = active_runs.get(run_id)
+            if rec is None:
+                return None
+            rec.update(updates)
+            now = time.time()
+            rec["updated_at_ts"] = now
+            rec["updated_at"] = int(now)
+            return rec
+
+        def _request_stop_run_locked(self, run_id: str, reason: str = "stop requested") -> dict[str, Any] | None:
+            rec = active_runs.get(run_id)
+            if rec is None:
+                return None
+            rec["cancel_requested"] = True
+            rec["cancel_reason"] = reason
+            agent = rec.get("agent")
+            if agent is not None:
+                cancel = getattr(agent, "cancel", None)
+                if callable(cancel):
+                    cancel()
+                elif getattr(agent, "cancel_event", None) is not None:
+                    agent.cancel_event.set()
+            return self._set_run_state_locked(run_id, status="cancelling", last_event="run.stopping")
+
         def _job_detail(self, job_id: str) -> tuple[int, dict[str, Any]]:
             from .cron import CronStore
 
@@ -843,6 +902,7 @@ def make_handler(config: Config):
 
         def _run_events(self, run_id: str) -> tuple[int, dict[str, Any]]:
             with state_lock:
+                self._sweep_runs_locked()
                 active = active_runs.get(run_id)
                 if active is not None:
                     return 200, {"ok": True, "id": run_id, "events": list(active.get("events") or [])}
@@ -866,6 +926,7 @@ def make_handler(config: Config):
             sent = 0
             while True:
                 with state_lock:
+                    self._sweep_runs_locked()
                     active = active_runs.get(run_id)
                     if active is None:
                         events = list(payload.get("events") or [])
@@ -874,9 +935,11 @@ def make_handler(config: Config):
                     else:
                         events = list(active.get("events") or [])
                         status = str(active.get("status") or "running")
-                        detail = {k: v for k, v in active.items() if k not in {"agent", "thread", "events"}}
+                        detail = _public_run_record(active)
                 for event in events[sent:]:
                     if not self._write_sse(event, event="event"):
+                        with state_lock:
+                            self._request_stop_run_locked(run_id, "SSE client disconnected")
                         return
                 sent = len(events)
                 if status in {"completed", "error", "cancelled"} or active is None:
@@ -906,10 +969,10 @@ def make_handler(config: Config):
 
         def _run_detail(self, run_id: str) -> tuple[int, dict[str, Any]]:
             with state_lock:
+                self._sweep_runs_locked()
                 active = active_runs.get(run_id)
                 if active is not None:
-                    return 200, {"ok": True, "run": {k: v for k, v in active.items()
-                                                     if k not in {"agent", "thread"}}}
+                    return 200, {"ok": True, "run": _public_run_record(active)}
             from .runs import RunStore
 
             run = RunStore().get(run_id)
@@ -945,7 +1008,12 @@ def make_handler(config: Config):
                 from .runs import RunStore
 
                 limit = int((query.get("limit") or ["50"])[0] or 50)
-                return self._json(200, {"object": "list", "data": RunStore().list(limit=max(1, min(limit, 500)))})
+                limit = max(1, min(limit, 500))
+                with state_lock:
+                    self._sweep_runs_locked()
+                    active = [_public_run_record(rec) for rec in active_runs.values()]
+                rows = active + RunStore().list(limit=max(1, limit - len(active)))
+                return self._json(200, {"object": "list", "data": rows[:limit]})
             if path.startswith("/v1/runs/") and path.endswith("/events"):
                 run_id = path.split("/")[-2]
                 stream = (
@@ -1426,25 +1494,42 @@ def make_handler(config: Config):
         def _post_run(self, body: dict[str, Any]) -> None:
             from .session import SessionStore
 
+            with state_lock:
+                active_count = self._active_run_count_locked()
+                if active_count >= max_concurrent_runs:
+                    return self._json(429, {
+                        "error": f"too many concurrent runs (max {max_concurrent_runs})",
+                        "code": "rate_limit_exceeded",
+                    })
             run_id = new_id("run")
             prompt = str(body.get("prompt", body.get("input", "")) or "")
+            if not prompt:
+                return self._json(400, {"error": "missing input"})
             session_id = str(body.get("session_id") or "") or None
             title = str(body.get("title") or prompt[:80] or run_id)
             store = SessionStore()
             session = runner.load_or_create_session(session_id, title=title, surface="serve", meta={
                 "server_run_id": run_id,
             })
+            now = time.time()
             record = {
                 "id": run_id,
                 "object": "run",
                 "status": "queued",
-                "created_at": int(time.time()),
+                "created_at": int(now),
+                "created_at_ts": now,
+                "updated_at": int(now),
+                "updated_at_ts": now,
                 "session_id": session.id,
                 "events": [],
                 "result": "",
                 "error": "",
                 "trace_id": "",
                 "surface_run_id": "",
+                "cancel_requested": False,
+                "cancel_reason": "",
+                "last_event": "run.queued",
+                "model": body.get("model") or "",
             }
             with state_lock:
                 active_runs[run_id] = record
@@ -1478,12 +1563,18 @@ def make_handler(config: Config):
                         approver=approver,
                     )
                     with state_lock:
-                        active_runs[run_id]["status"] = "running"
-                        active_runs[run_id]["agent"] = agent
+                        rec = self._set_run_state_locked(run_id, status="running", agent=agent, last_event="run.running")
+                        if rec is not None and rec.get("cancel_requested"):
+                            self._request_stop_run_locked(run_id, str(rec.get("cancel_reason") or "stop requested"))
 
                     def emit(ev: dict[str, Any]) -> None:
                         with state_lock:
-                            active_runs.get(run_id, {}).setdefault("events", []).append(dict(ev))
+                            rec = active_runs.get(run_id)
+                            if rec is not None:
+                                rec.setdefault("events", []).append(dict(ev))
+                                rec["last_event"] = str(ev.get("type") or ev.get("event") or "event")
+                                rec["updated_at_ts"] = time.time()
+                                rec["updated_at"] = int(rec["updated_at_ts"])
 
                     result = runner.run_prompt(
                         prompt,
@@ -1497,39 +1588,39 @@ def make_handler(config: Config):
                     with state_lock:
                         rec = active_runs.get(run_id)
                         if rec is not None:
-                            rec.update({
-                                "status": "completed",
+                            status = "cancelled" if rec.get("cancel_requested") else "completed"
+                            self._set_run_state_locked(run_id, **{
+                                "status": status,
                                 "result": result.text,
                                 "trace_id": result.trace_id,
                                 "surface_run_id": result.run_id,
                                 "session_id": result.session.id,
+                                "last_event": "run.cancelled" if status == "cancelled" else "run.completed",
                             })
                 except Exception as exc:  # noqa: BLE001
                     with state_lock:
                         rec = active_runs.get(run_id)
                         if rec is not None:
-                            rec.update({"status": "error", "error": f"{type(exc).__name__}: {exc}"})
+                            status = "cancelled" if rec.get("cancel_requested") else "error"
+                            self._set_run_state_locked(
+                                run_id,
+                                status=status,
+                                error=f"{type(exc).__name__}: {exc}" if status == "error" else "",
+                                last_event="run.cancelled" if status == "cancelled" else "run.error",
+                            )
 
             thread = threading.Thread(target=worker, daemon=True, name=f"aegis-api-run-{run_id}")
             with state_lock:
                 active_runs[run_id]["thread"] = thread
             thread.start()
-            return self._json(202, {k: v for k, v in record.items() if k not in {"agent", "thread"}})
+            return self._json(202, _public_run_record(record))
 
         def _stop_run(self, run_id: str) -> None:
             with state_lock:
-                rec = active_runs.get(run_id)
-                agent = (rec or {}).get("agent")
-            if rec is None:
-                return self._json(404, {"ok": False, "error": "active run not found", "id": run_id})
-            if agent is not None:
-                cancel = getattr(agent, "cancel", None)
-                if callable(cancel):
-                    cancel()
-                elif getattr(agent, "cancel_event", None) is not None:
-                    agent.cancel_event.set()
-            with state_lock:
-                rec["status"] = "cancelling"
+                self._sweep_runs_locked()
+                rec = self._request_stop_run_locked(run_id, "API stop requested")
+                if rec is None:
+                    return self._json(404, {"ok": False, "error": "active run not found", "id": run_id})
             return self._json(200, {"ok": True, "id": run_id, "status": "cancelling"})
 
         def _post_approval(self, run_id: str, body: dict[str, Any]) -> None:

@@ -799,6 +799,104 @@ def test_server_run_read_endpoints(monkeypatch, tmp_path):
     assert "data: [DONE]" in stream_data
 
 
+class _BlockingRunRunner:
+    started = threading.Event()
+    release = threading.Event()
+    agents = []
+    calls = []
+
+    def __init__(self, config, include_mcp=True):
+        self.config = config
+        self.include_mcp = include_mcp
+
+    @classmethod
+    def reset(cls):
+        cls.started = threading.Event()
+        cls.release = threading.Event()
+        cls.agents = []
+        cls.calls = []
+
+    def load_or_create_session(self, session_id=None, title=None, surface="", meta=None):
+        return SimpleNamespace(id=session_id or "serve:blocking-run", title=title or "", meta=meta or {})
+
+    def make_agent(self, **kwargs):
+        agent = SimpleNamespace(cancel_event=threading.Event())
+
+        def cancel():
+            agent.cancel_event.set()
+
+        agent.cancel = cancel
+        self.agents.append(agent)
+        return agent
+
+    def run_prompt(self, prompt, **kwargs):
+        self.calls.append({"prompt": prompt, **kwargs})
+        self.started.set()
+        self.release.wait(5)
+        session = kwargs.get("session") or SimpleNamespace(id="serve:blocking-run")
+        return SimpleNamespace(
+            text="finished",
+            session=session,
+            trace_id="trace_blocking",
+            turn_id="turn_blocking",
+            run_id="surface_blocking",
+            agent=SimpleNamespace(
+                provider=SimpleNamespace(model="served-model"),
+                budget=SimpleNamespace(usage=_Usage()),
+            ),
+        )
+
+
+def test_server_run_lifecycle_caps_active_runs_and_stop_wins(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import time
+    import aegis.server as server
+    from aegis.config import Config
+
+    _BlockingRunRunner.reset()
+    monkeypatch.setattr(server, "SurfaceRunner", _BlockingRunRunner)
+    cfg = Config.load()
+    cfg.data.setdefault("server", {})["max_concurrent_runs"] = 1
+    srv, port = _serve(server.make_handler(cfg))
+    try:
+        create_status, create_data = _request(port, "POST", "/v1/runs", {
+            "input": "slow run",
+            "session_id": "serve:blocking-run",
+        })
+        run_id = json.loads(create_data)["id"]
+        assert _BlockingRunRunner.started.wait(2)
+
+        list_status, list_data = _request(port, "GET", "/v1/runs")
+        second_status, second_data = _request(port, "POST", "/v1/runs", {"input": "second"})
+        stop_status, stop_data = _request(port, "POST", f"/v1/runs/{run_id}/stop", {})
+        _BlockingRunRunner.release.set()
+
+        final = {}
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            get_status, get_data = _request(port, "GET", f"/v1/runs/{run_id}")
+            final = json.loads(get_data)
+            if final.get("run", {}).get("status") == "cancelled":
+                break
+            time.sleep(0.05)
+    finally:
+        _BlockingRunRunner.release.set()
+        srv.shutdown()
+        srv.server_close()
+
+    assert create_status == 202
+    listed = json.loads(list_data)["data"]
+    assert list_status == 200
+    assert any(row["id"] == run_id and row["status"] in {"queued", "running"} for row in listed)
+    assert second_status == 429
+    assert json.loads(second_data)["code"] == "rate_limit_exceeded"
+    assert stop_status == 200
+    assert json.loads(stop_data)["status"] == "cancelling"
+    assert _BlockingRunRunner.agents and _BlockingRunRunner.agents[0].cancel_event.is_set()
+    assert final["run"]["status"] == "cancelled"
+    assert final["run"]["result"] == "finished"
+
+
 def test_server_api_jobs_crud_pause_resume_and_run(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
