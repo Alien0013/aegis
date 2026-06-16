@@ -1018,6 +1018,76 @@ def test_responses_stream_maps_tools_to_function_call_items(monkeypatch, tmp_pat
     ]
 
 
+def test_responses_nonstream_maps_tools_to_output_items(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    class ToolBatchRunner:
+        def __init__(self, config, include_mcp=True):
+            pass
+
+        def run_prompt(self, prompt, **kwargs):
+            session_id = kwargs.get("session_id") or "serve:tool-batch"
+            return SimpleNamespace(
+                text="done",
+                session=SimpleNamespace(id=session_id),
+                trace_id="trace_tool_batch",
+                turn_id="turn_tool_batch",
+                run_id="run_tool_batch",
+                events=[
+                    {
+                        "type": "tool_start",
+                        "id": "call_search",
+                        "name": "search",
+                        "args": {"query": "aegis"},
+                    },
+                    {
+                        "type": "tool_result",
+                        "id": "call_search",
+                        "name": "search",
+                        "preview": "found docs",
+                    },
+                ],
+                agent=SimpleNamespace(
+                    provider=SimpleNamespace(model="served-model"),
+                    budget=SimpleNamespace(usage=_Usage()),
+                ),
+            )
+
+    monkeypatch.setattr(server, "SurfaceRunner", ToolBatchRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": "search",
+            "metadata": {"session_id": "serve:tool-batch"},
+        })
+        response = json.loads(data)
+        get_status, get_data = _request(port, "GET", f"/v1/responses/{response['id']}")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert [item["type"] for item in response["output"]] == [
+        "function_call",
+        "function_call_output",
+        "message",
+    ]
+    assert response["output"][0]["name"] == "search"
+    assert json.loads(response["output"][0]["arguments"]) == {"query": "aegis"}
+    assert response["output"][1]["call_id"] == "call_search"
+    assert response["output"][1]["output"][0]["text"] == "found docs"
+    assert response["output_text"] == "done"
+    assert get_status == 200
+    stored = json.loads(get_data)
+    assert [item["type"] for item in stored["output"]] == [
+        "function_call",
+        "function_call_output",
+        "message",
+    ]
+
+
 def test_responses_idempotency_key_replays_matching_request(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server

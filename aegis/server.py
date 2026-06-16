@@ -361,6 +361,38 @@ def _response_output(text: str) -> list[dict[str, Any]]:
     }]
 
 
+def _response_output_items(result, text: str | None = None) -> list[dict[str, Any]]:
+    final_text = text if text is not None else (getattr(result, "text", "") if result is not None else "")
+    items: list[dict[str, Any]] = []
+    pending_calls: set[str] = set()
+    for event in getattr(result, "events", []) or []:
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "tool_start":
+            call_id = str(event.get("id") or event.get("tool_call_id") or new_id("call"))
+            args = event.get("args", event.get("arguments", {}))
+            arguments = args if isinstance(args, str) else json.dumps(args if args is not None else {}, default=str)
+            pending_calls.add(call_id)
+            items.append({
+                "type": "function_call",
+                "name": str(event.get("name") or event.get("tool_name") or ""),
+                "arguments": arguments,
+                "call_id": call_id,
+            })
+            continue
+        if event.get("type") == "tool_result":
+            call_id = str(event.get("id") or event.get("tool_call_id") or "")
+            if not call_id or call_id not in pending_calls:
+                continue
+            result_text = str(event.get("preview") or event.get("summary") or event.get("data") or "")
+            items.append({
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": [{"type": "input_text", "text": result_text}],
+            })
+    return items + _response_output(final_text)
+
+
 def _response_object(
     response_id: str,
     result,
@@ -388,7 +420,7 @@ def _response_object(
         "error": None,
         "incomplete_details": None,
         "parallel_tool_calls": True,
-        "output": _response_output(text),
+        "output": _response_output_items(result, text),
         "output_text": text,
         "usage": _usage(getattr(result, "usage", None) or agent),
         "metadata": metadata,
