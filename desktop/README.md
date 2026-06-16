@@ -28,6 +28,8 @@ Branded with `build/icon.png` / `build/icon.ico` (generated from `assets/logo.sv
 Signed/notarized installers need each platform's signing certs and (usually)
 that platform's machine or CI runner. The app itself just needs `aegis`
 available — set `AEGIS_BIN` to override the executable path.
+Packaging uses `asar` and a `beforePack` cleanup hook that removes stale
+`*-unpacked` build folders left by interrupted `electron-builder` runs.
 
 On Windows, Explorer-launched GUI apps can inherit stale environment variables
 from login time. The desktop backend resolver reads live user-scoped
@@ -56,6 +58,8 @@ A structured Electron app under `electron/`:
 - **`electron/backend-env.cjs`** / **`electron/windows-user-env.cjs`** — resolve
   the backend binary and launch environment, including the Windows registry
   fallback for stale GUI environments.
+- **`scripts/before-pack.cjs`** — makes packaging idempotent after interrupted
+  builds by clearing the stale unpacked output directory before staging.
 - **`electron/boot.html`** — the splash / boot screen: branding, live progress,
   and an **error state** (Retry · Open logs · Quit) if the backend won't start.
 - **`electron/preload.js`** — a locked-down `contextBridge` (the only thing the
