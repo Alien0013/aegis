@@ -16,13 +16,24 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { aegisCommand, backendEnvironment, resolveAegisHome } = require("./backend-env.cjs");
-const { desktopDiagnostics } = require("./desktop-status.cjs");
+const { desktopDiagnostics, detectRemoteDisplay } = require("./desktop-status.cjs");
 
 // Chromium checks the Linux setuid sandbox before main.js runs, so launch.js
 // puts --no-sandbox on argv; mirror it here so child processes inherit it.
 if (process.platform === "linux" && process.env.AEGIS_ELECTRON_SANDBOX !== "1") {
   app.commandLine.appendSwitch("no-sandbox");
 }
+
+const REMOTE_DISPLAY_REASON = detectRemoteDisplay();
+if (REMOTE_DISPLAY_REASON) {
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch("disable-gpu-compositing");
+  console.log(`[aegis] remote display detected (${REMOTE_DISPLAY_REASON}); using software renderer`);
+}
+
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
+app.commandLine.appendSwitch("disable-background-timer-throttling");
 
 const MAX_CRASH_RESTARTS = 3;
 let backend = null;          // child process
@@ -39,6 +50,10 @@ let backendStartedAt = 0;
 let backendCommand = "";
 let backendArgs = [];
 let backendEnvSummary = {};
+let autoUpdater = null;
+let autoUpdaterConfigured = false;
+let updateCheckInFlight = false;
+let updateCheckManual = false;
 const extraWindows = new Set();        // secondary session windows (multi-window)
 const GLOBAL_SHOW_SHORTCUT = "CommandOrControl+Shift+A";
 const DEEP_LINK_SCHEME = "aegis";      // aegis://chat , aegis://config , ...
@@ -60,6 +75,48 @@ function log(line) {
     if (logFd === null) logFd = fs.openSync(logPath(), "a");
     fs.writeSync(logFd, `[${new Date().toISOString()}] ${line}\n`);
   } catch { /* ignore */ }
+}
+
+function hiddenWindowsChildOptions(options = {}) {
+  if (process.platform !== "win32" || Object.prototype.hasOwnProperty.call(options, "windowsHide")) {
+    return options;
+  }
+  return { ...options, windowsHide: true };
+}
+
+function openExternalUrl(rawUrl) {
+  const raw = String(rawUrl || "").trim();
+  if (!raw) return false;
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (!["http:", "https:", "mailto:"].includes(parsed.protocol)) return false;
+  shell.openExternal(parsed.toString()).catch((err) => log(`openExternal failed: ${err.message}`));
+  return true;
+}
+
+function isInternalNavigationUrl(rawUrl) {
+  try {
+    const parsed = new URL(String(rawUrl || ""));
+    return Boolean(backendBaseUrl() && parsed.origin === backendBaseUrl());
+  } catch {
+    return false;
+  }
+}
+
+function wireRendererWindow(w) {
+  w.webContents.setWindowOpenHandler(({ url }) => {
+    openExternalUrl(url);
+    return { action: "deny" };
+  });
+  w.webContents.on("will-navigate", (event, url) => {
+    if (isInternalNavigationUrl(url)) return;
+    event.preventDefault();
+    openExternalUrl(url);
+  });
 }
 
 /* ---------- backend resolution ---------- */
@@ -112,7 +169,7 @@ function startBackend() {
       TERMINAL_CWD: resolvedEnv.TERMINAL_CWD || process.cwd(),
     };
     log(`starting backend: ${bin} dashboard --host 127.0.0.1 --port ${port}`);
-    backend = spawn(bin, backendArgs, {
+    backend = spawn(bin, backendArgs, hiddenWindowsChildOptions({
       env: {
         ...resolvedEnv,
         AEGIS_DASHBOARD_TOKEN: token,
@@ -120,7 +177,7 @@ function startBackend() {
         TERMINAL_CWD: resolvedEnv.TERMINAL_CWD || process.cwd(),
       },
       stdio: ["ignore", "pipe", "pipe"],
-    });
+    }));
     const tail = (buf) => log(String(buf).trimEnd());
     backend.stdout.on("data", tail);
     backend.stderr.on("data", tail);
@@ -265,10 +322,11 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, "preload-app.js"),
       contextIsolation: true, nodeIntegration: false,
+      backgroundThrottling: false,
     },
   });
   if (st.maximized) win.maximize();
-  win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: "deny" }; });
+  wireRendererWindow(win);
   for (const ev of ["resize", "move", "close"]) win.on(ev, saveState);
   const emitMax = () => { try { win.webContents.send("win:maximized", win.isMaximized()); } catch { /* ignore */ } };
   win.on("maximize", emitMax);
@@ -322,9 +380,10 @@ function openExtraWindow(p) {
     webPreferences: {
       preload: path.join(__dirname, "preload-app.js"),
       contextIsolation: true, nodeIntegration: false,
+      backgroundThrottling: false,
     },
   });
-  w.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: "deny" }; });
+  wireRendererWindow(w);
   const emitMax = () => { try { w.webContents.send("win:maximized", w.isMaximized()); } catch { /* ignore */ } };
   w.on("maximize", emitMax);
   w.on("unmaximize", emitMax);
@@ -349,7 +408,7 @@ function createTray() {
     { label: "Sessions", click: () => { showMainWindow(); win && win.loadURL(route("/sessions")); } },
     { label: "Control Panel", click: () => { showMainWindow(); win && win.loadURL(route("/")); } },
     { type: "separator" },
-    { label: "Open in Browser", click: () => dashboardUrl && shell.openExternal(dashboardUrl) },
+    { label: "Open in Browser", click: () => dashboardUrl && openExternalUrl(dashboardUrl) },
     { label: "Restart Backend", click: () => restartFromScratch() },
     { label: "Quit AEGIS", click: () => { quitting = true; app.quit(); } },
   ]);
@@ -386,31 +445,50 @@ function registerGlobalShortcut() {
 // packaged app; a source-run / dev build has no update feed. `manual` = the user
 // asked from the menu, so report "up to date" / errors visibly.
 function initAutoUpdate(manual) {
+  updateCheckManual = Boolean(manual);
   if (!app.isPackaged) {
     if (manual) notify("AEGIS updates", "Auto-update runs in the installed app only.");
     return;
   }
-  let autoUpdater;
-  try { ({ autoUpdater } = require("electron-updater")); }
+  if (updateCheckInFlight) {
+    if (manual) notify("AEGIS updates", "An update check is already running.");
+    return;
+  }
+  try {
+    if (!autoUpdater) ({ autoUpdater } = require("electron-updater"));
+  }
   catch (e) { log(`electron-updater unavailable: ${e.message}`); return; }
-  autoUpdater.autoDownload = true;
-  autoUpdater.removeAllListeners();
-  autoUpdater.on("update-available", (info) => {
-    log(`update available: ${info.version}`);
-    if (manual) notify("AEGIS update", `Downloading ${info.version}…`);
-  });
-  autoUpdater.on("update-not-available", () => { if (manual) notify("AEGIS", "You're on the latest version."); });
-  autoUpdater.on("error", (e) => { log(`updater error: ${e && e.message}`); if (manual) notify("AEGIS update failed", String(e && e.message)); });
-  autoUpdater.on("update-downloaded", (info) => {
-    log(`update downloaded: ${info.version}`);
-    const choice = dialog.showMessageBoxSync(win && !win.isDestroyed() ? win : undefined, {
-      type: "info", buttons: ["Restart now", "Later"], defaultId: 0, cancelId: 1,
-      title: "Update ready", message: `AEGIS ${info.version} is ready to install.`,
-      detail: "Restart AEGIS to apply the update.",
+  if (!autoUpdaterConfigured) {
+    autoUpdater.autoDownload = true;
+    autoUpdater.allowPrerelease = false;
+    autoUpdater.allowDowngrade = false;
+    autoUpdater.removeAllListeners();
+    autoUpdater.on("update-available", (info) => {
+      log(`update available: ${info.version}`);
+      if (updateCheckManual) notify("AEGIS update", `Downloading ${info.version}...`);
     });
-    if (choice === 0) { quitting = true; autoUpdater.quitAndInstall(); }
-  });
-  autoUpdater.checkForUpdates().catch((e) => log(`checkForUpdates failed: ${e && e.message}`));
+    autoUpdater.on("update-not-available", () => {
+      if (updateCheckManual) notify("AEGIS", "You're on the latest version.");
+    });
+    autoUpdater.on("error", (e) => {
+      log(`updater error: ${e && e.message}`);
+      if (updateCheckManual) notify("AEGIS update failed", String(e && e.message));
+    });
+    autoUpdater.on("update-downloaded", (info) => {
+      log(`update downloaded: ${info.version}`);
+      const choice = dialog.showMessageBoxSync(win && !win.isDestroyed() ? win : undefined, {
+        type: "info", buttons: ["Restart now", "Later"], defaultId: 0, cancelId: 1,
+        title: "Update ready", message: `AEGIS ${info.version} is ready to install.`,
+        detail: "Restart AEGIS to apply the update.",
+      });
+      if (choice === 0) { quitting = true; autoUpdater.quitAndInstall(); }
+    });
+    autoUpdaterConfigured = true;
+  }
+  updateCheckInFlight = true;
+  autoUpdater.checkForUpdates()
+    .catch((e) => log(`checkForUpdates failed: ${e && e.message}`))
+    .finally(() => { updateCheckInFlight = false; });
 }
 
 /* ---------- boot sequence ---------- */
@@ -461,7 +539,7 @@ function installMenu() {
       { label: "Settings", accelerator: "CmdOrCtrl+,", click: () => go("/config") },
       { type: "separator" },
       { label: "New Window", accelerator: "CmdOrCtrl+N", click: () => openExtraWindow("/app") },
-      { label: "Open in Browser", click: () => dashboardUrl && shell.openExternal(dashboardUrl) },
+      { label: "Open in Browser", click: () => dashboardUrl && openExternalUrl(dashboardUrl) },
       { label: "Copy Dashboard URL", click: () => dashboardUrl && clipboard.writeText(dashboardUrl) },
       { label: "Restart Backend", click: () => restartFromScratch() },
       { label: "Check for Updates…", click: () => initAutoUpdate(true) },
@@ -515,7 +593,7 @@ ipcMain.on("win:maximizeToggle", (e) => {
 });
 ipcMain.on("win:close", (e) => { const w = senderWindow(e); if (w) w.close(); });
 ipcMain.handle("win:isMaximized", (e) => !!(senderWindow(e) && senderWindow(e).isMaximized()));
-ipcMain.on("win:openExternal", (_e, url) => { if (url && /^https?:/i.test(String(url))) shell.openExternal(url); });
+ipcMain.on("win:openExternal", (_e, url) => { openExternalUrl(url); });
 ipcMain.on("win:restartBackend", () => restartFromScratch());
 ipcMain.handle("aegis:connection", () => connectionDescriptor());
 ipcMain.handle("aegis:api", (_e, request) => apiRequest(request));

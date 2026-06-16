@@ -5,12 +5,18 @@ from __future__ import annotations
 import asyncio
 import os
 
+from ..platforms import chunk_text_by_units, normalize_inbound_command
 from .base import BasePlatformAdapter, Dispatch, MessageEvent
 
 
 class DiscordAdapter(BasePlatformAdapter):
     name = "discord"
     renders_tables = False
+    transport = "gateway"
+    max_message_length = 2000
+    supports_threads = True
+    supports_media = True
+    typed_command_prefix = "!"
 
     def __init__(self, token: str | None = None):
         self.token = token or os.environ.get("DISCORD_BOT_TOKEN")
@@ -18,6 +24,8 @@ class DiscordAdapter(BasePlatformAdapter):
             raise RuntimeError("DISCORD_BOT_TOKEN is not set.")
         allowed = os.environ.get("DISCORD_ALLOWED_USERS", "").strip()
         self.allowed = {u.strip() for u in allowed.split(",") if u.strip()} if allowed else None
+        roles = os.environ.get("DISCORD_ALLOWED_ROLES", "").strip()
+        self.allowed_roles = {r.strip() for r in roles.split(",") if r.strip()} if roles else None
 
     def start(self, dispatch: Dispatch) -> None:
         self._init_inbound_queue(dispatch)
@@ -37,27 +45,117 @@ class DiscordAdapter(BasePlatformAdapter):
             self._loop = asyncio.get_event_loop()
             if message.author == client.user:
                 return
-            if self.allowed and str(message.author.id) not in self.allowed:
+            if not self._message_type_allowed(message):
+                return
+            if not self._bot_author_allowed(message, client):
+                return
+            if not self._channel_allowed(message):
+                return
+            if not self._author_allowed(message):
                 return
             reference = getattr(message, "reference", None)
             replied = getattr(reference, "resolved", None) if reference is not None else None
+            raw_content = message.content or ""
+            content = self._strip_own_mentions(raw_content, client)
+            content = normalize_inbound_command(content, platform="discord")
+            chat_id, thread_id = self._chat_and_thread_ids(message)
             ev = MessageEvent(
-                platform="discord", chat_id=str(message.channel.id),
-                text=message.content, user_id=str(message.author.id),
+                platform="discord", chat_id=chat_id,
+                text=content, user_id=str(message.author.id),
                 user_name=str(message.author),
                 message_id=str(getattr(message, "id", "") or "") or None,
                 reply_to_message_id=str(getattr(replied, "id", "") or "") or None,
                 reply_to_text=getattr(replied, "content", None),
                 timestamp=getattr(message, "created_at", None),
+                thread_id=thread_id,
+                metadata={
+                    "guild_id": str(getattr(getattr(message, "guild", None), "id", "") or ""),
+                    "channel_id": str(getattr(message.channel, "id", "") or ""),
+                    "channel_name": str(getattr(message.channel, "name", "") or ""),
+                },
             )
             ev._discord_channel = message.channel
             ev._discord_loop = self._loop
-            self._submit_inbound(ev, raw_text=message.content)
+            self._submit_inbound(ev, raw_text=raw_content)
 
         client.run(self.token, log_handler=None)
 
-    def send(self, chat_id: str, text: str) -> None:  # replies happen inline
-        pass
+    def _message_type_allowed(self, message) -> bool:  # noqa: ANN001
+        mtype = getattr(message, "type", None)
+        if mtype is None:
+            return True
+        name = str(getattr(mtype, "name", mtype)).lower()
+        return name in {"default", "reply", "messagetype.default", "messagetype.reply"}
+
+    def _bot_author_allowed(self, message, client) -> bool:  # noqa: ANN001
+        if not getattr(message.author, "bot", False):
+            return True
+        mode = os.environ.get("DISCORD_ALLOW_BOTS", "none").strip().lower()
+        if mode in {"all", "true", "1", "yes"}:
+            return True
+        if mode == "mentions":
+            mentions = getattr(message, "mentions", []) or []
+            return bool(getattr(client, "user", None) and client.user in mentions)
+        return False
+
+    def _channel_allowed(self, message) -> bool:  # noqa: ANN001
+        channel_ids = {str(getattr(message.channel, "id", "") or "")}
+        parent = getattr(message.channel, "parent", None)
+        if parent is not None:
+            channel_ids.add(str(getattr(parent, "id", "") or ""))
+        channel_ids.discard("")
+        ignored = {c.strip() for c in os.environ.get("DISCORD_IGNORED_CHANNELS", "").split(",") if c.strip()}
+        if "*" in ignored or channel_ids & ignored:
+            return False
+        allowed = {c.strip() for c in os.environ.get("DISCORD_ALLOWED_CHANNELS", "").split(",") if c.strip()}
+        return not allowed or "*" in allowed or bool(channel_ids & allowed)
+
+    def _author_allowed(self, message) -> bool:  # noqa: ANN001
+        if self.allowed and str(message.author.id) in self.allowed:
+            return True
+        if self.allowed_roles:
+            roles = getattr(message.author, "roles", None) or []
+            role_ids = {str(getattr(role, "id", "") or "") for role in roles}
+            if role_ids & self.allowed_roles:
+                return True
+        return not self.allowed and not self.allowed_roles
+
+    def _strip_own_mentions(self, content: str, client) -> str:  # noqa: ANN001
+        user = getattr(client, "user", None)
+        uid = str(getattr(user, "id", "") or "")
+        if not uid:
+            return content
+        return content.replace(f"<@{uid}>", "").replace(f"<@!{uid}>", "").strip()
+
+    def _chat_and_thread_ids(self, message) -> tuple[str, str | None]:  # noqa: ANN001
+        channel = message.channel
+        channel_id = str(getattr(channel, "id", "") or "")
+        parent = getattr(channel, "parent", None)
+        if parent is not None:
+            parent_id = str(getattr(parent, "id", "") or "")
+            if parent_id and parent_id != channel_id:
+                return parent_id, channel_id
+        return channel_id, None
+
+    def send(self, chat_id: str, text: str, *, metadata: dict | None = None) -> None:
+        client = getattr(self, "_client", None)
+        loop = getattr(self, "_loop", None)
+        if client is None or loop is None:
+            return
+
+        async def send_all():
+            target_id = str((metadata or {}).get("thread_id") or chat_id)
+            channel = client.get_channel(int(target_id)) if str(target_id).isdigit() else None
+            if channel is None:
+                channel = await client.fetch_channel(int(target_id))
+            for chunk in chunk_text_by_units(text, limit=1900):
+                if chunk:
+                    await self._discord_send_text(channel, chunk)
+
+        try:
+            asyncio.run_coroutine_threadsafe(send_all(), loop).result(timeout=60)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _before_dispatch(self, ev: MessageEvent):
         channel = getattr(ev, "_discord_channel", None)
@@ -85,10 +183,9 @@ class DiscordAdapter(BasePlatformAdapter):
             from .base import split_media, tableify
             clean, media = split_media(reply)
             clean = tableify(clean)
-            for i in range(0, len(clean), 1900):
-                chunk = clean[i:i + 1900]
+            for chunk in chunk_text_by_units(clean, limit=1900):
                 if chunk:
-                    await channel.send(chunk)
+                    await self._discord_send_text(channel, chunk)
             for path in media:
                 try:
                     if os.path.exists(path):
@@ -111,3 +208,12 @@ class DiscordAdapter(BasePlatformAdapter):
                     )
                 except Exception:  # noqa: BLE001
                     pass
+
+    async def _discord_send_text(self, channel, text: str):  # noqa: ANN001
+        try:
+            import discord
+
+            allowed_mentions = discord.AllowedMentions.none()
+            return await channel.send(text, allowed_mentions=allowed_mentions)
+        except Exception:  # noqa: BLE001
+            return await channel.send(text)

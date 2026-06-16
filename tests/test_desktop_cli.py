@@ -97,13 +97,21 @@ def test_desktop_builder_config_matches_release_parity():
 
     assert bundled == package
     build = package["build"]
+    assert package["scripts"]["pack"].endswith("npm run builder -- --dir")
     assert build["executableName"] == "AEGIS"
+    assert build["electronVersion"] == "33.4.11"
     assert build["protocols"] == [{"name": "AEGIS Protocol", "schemes": ["aegis"]}]
     assert build["beforeBuild"] == "scripts/before-build.cjs"
     assert "scripts/write-build-stamp.cjs" in desktop.DESKTOP_FILES
+    assert "electron/desktop-status.cjs" in desktop.DESKTOP_FILES
+    assert "build/icon.ico" in desktop.DESKTOP_FILES
     resources = {entry["to"]: entry["from"] for entry in build["extraResources"]}
     assert resources["install-stamp.json"] == "build/install-stamp.json"
     assert "msi" in build["win"]["target"]
+    assert build["win"]["signAndEditExecutable"] is False
+    assert build["nsis"]["warningsAsErrors"] is False
     assert "rpm" in build["linux"]["target"]
+    assert "build:stamp" in package["scripts"]["dist:win"]
     assert "msi" in package["scripts"]["dist:win"]
+    assert "build:stamp" in package["scripts"]["dist:linux"]
     assert "rpm" in package["scripts"]["dist:linux"]

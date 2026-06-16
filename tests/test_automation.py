@@ -5,6 +5,10 @@ from __future__ import annotations
 import http.client
 import json
 import threading
+import base64
+import hashlib
+import hmac
+import time
 from http.server import ThreadingHTTPServer
 
 
@@ -214,6 +218,43 @@ def test_webhook_dedupes_provider_delivery_retries(monkeypatch, tmp_path):
     assert first_body["ok"] is True
     assert second_body == {"ok": True, "duplicate": True}
     assert seen["calls"] == 1
+
+
+def test_webhook_accepts_generic_hmac_signature(monkeypatch, tmp_path):
+    cfg, store, make_handler = _webhook_server(monkeypatch, tmp_path)
+    seen = _fake_agent(monkeypatch, reply="done")
+    secret = "hook-secret"
+    body = b'{"action":"opened"}'
+    sig = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    store.add("ci", "review {action}", secret=secret)
+    srv, port = _serve(make_handler, cfg, store)
+    try:
+        status, response = _post(port, "/hook/ci", body, {"X-Webhook-Signature": sig})
+    finally:
+        srv.shutdown()
+
+    assert status == 200
+    assert response["ok"] is True
+    assert seen["calls"] == 1
+
+
+def test_webhook_rejects_svix_replay_signature():
+    from aegis.webhook import _verify_svix_signature
+
+    body = b'{"type":"test"}'
+    secret = "raw-secret"
+    msg_id = "msg_1"
+    old_ts = str(int(time.time()) - 1000)
+    signed = msg_id.encode() + b"." + old_ts.encode() + b"." + body
+    sig = base64.b64encode(hmac.new(secret.encode(), signed, hashlib.sha256).digest()).decode()
+
+    assert not _verify_svix_signature(
+        secret,
+        body,
+        msg_id=msg_id,
+        timestamp=old_ts,
+        signature_header=f"v1,{sig}",
+    )
 
 
 def test_webhook_delivery_cache_prunes_incrementally():

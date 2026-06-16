@@ -8,6 +8,13 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
+from ..platforms import (
+    known_gateway_commands,
+    normalize_inbound_command,
+    normalize_platform_name,
+    platform_metadata,
+)
+
 # A dispatcher takes a normalized event and returns the agent's reply text.
 Dispatch = Callable[["MessageEvent"], str]
 
@@ -27,6 +34,7 @@ class MessageEvent:
     session_key: str | None = None
     internal: bool = False
     attachments: list[dict] = field(default_factory=list)
+    metadata: dict = field(default_factory=dict)
 
 
 class BasePlatformAdapter:
@@ -34,6 +42,11 @@ class BasePlatformAdapter:
 
     name: str = "base"
     renders_tables: bool = True   # chat surfaces (Telegram/Discord/…) set False -> tables rewritten
+    max_message_length: int | None = None
+    supports_threads: bool = False
+    supports_media: bool = False
+    typed_command_prefix: str = "/"
+    transport: str = "custom"
 
     def start(self, dispatch: Dispatch) -> None:  # pragma: no cover - interface
         """Block, receiving messages and calling ``dispatch(event)``; send replies."""
@@ -41,6 +54,24 @@ class BasePlatformAdapter:
 
     def send(self, chat_id: str, text: str) -> None:  # pragma: no cover - interface
         raise NotImplementedError
+
+    @property
+    def metadata(self) -> dict:
+        data = platform_metadata(self.name)
+        data.update({
+            "id": normalize_platform_name(self.name, default=self.name),
+            "adapter_class": f"{self.__class__.__module__}.{self.__class__.__name__}",
+            "transport": getattr(self, "transport", data.get("transport", "custom")),
+            "max_message_length": getattr(self, "max_message_length", data.get("max_message_length")),
+            "supports_threads": bool(getattr(self, "supports_threads", data.get("supports_threads", False))),
+            "supports_media": bool(getattr(self, "supports_media", data.get("supports_media", False))),
+            "typed_command_prefix": getattr(
+                self,
+                "typed_command_prefix",
+                data.get("typed_command_prefix", "/"),
+            ),
+        })
+        return data
 
     def _init_inbound_queue(self, dispatch: Dispatch) -> None:
         self._dispatch = dispatch
@@ -82,6 +113,29 @@ class BasePlatformAdapter:
         raw_text: str | None = None,
     ) -> str | None:
         self._ensure_inbound_queue(getattr(self, "_dispatch", None))
+        ev.platform = normalize_platform_name(ev.platform, default=getattr(self, "name", "webhook"))
+        extra_commands = []
+        config = getattr(self, "_config", None)
+        if config is not None:
+            try:
+                extra_commands = list(config.get("gateway.user_commands", []) or [])
+            except Exception:  # noqa: BLE001
+                extra_commands = []
+        known_commands = known_gateway_commands(extra_commands)
+        bot_username = getattr(self, "bot_username", None)
+        ev.text = normalize_inbound_command(
+            ev.text,
+            platform=ev.platform,
+            bot_username=bot_username,
+            known_commands=known_commands,
+        )
+        if raw_text is not None:
+            raw_text = normalize_inbound_command(
+                raw_text,
+                platform=ev.platform,
+                bot_username=bot_username,
+                known_commands=known_commands,
+            )
         if self._resolve_clarify_waiter(ev):
             return ""
         if self._handle_inbound_control(ev, raw_text=raw_text):

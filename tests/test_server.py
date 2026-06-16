@@ -2211,6 +2211,9 @@ def test_server_created_run_persists_across_handler_restart(monkeypatch, tmp_pat
     assert events_status == 200
     assert events["ok"] is True
     assert events["run"]["id"] == run_id
+    event_types = [event.get("type") for event in events["events"]]
+    assert event_types[:2] == ["run.queued", "run.running"]
+    assert "run.completed" in event_types
 
 
 def test_server_startup_marks_stale_api_runs_interrupted(monkeypatch, tmp_path):
@@ -2289,7 +2292,7 @@ def test_server_run_approval_choice_unblocks_pending_run(monkeypatch, tmp_path):
             port,
             "POST",
             f"/v1/runs/{run_id}/approval",
-            {"choice": "approve"},
+            {"choice": "approve", "resolve_all": True},
         )
 
         final = {}
@@ -2300,11 +2303,14 @@ def test_server_run_approval_choice_unblocks_pending_run(monkeypatch, tmp_path):
             if final.get("run", {}).get("status") == "completed":
                 break
             time.sleep(0.05)
+        events_status, events_data = _request(port, "GET", f"/v1/runs/{run_id}/events")
     finally:
         srv.shutdown()
         srv.server_close()
 
     approval = json.loads(approval_data)
+    events = json.loads(events_data)["events"]
+    event_types = [event.get("type") for event in events]
     assert create_status == 202
     assert pending_status == 200
     assert pending["pending"] and pending["pending"][0]["prompt"] == "Allow shell command?"
@@ -2314,10 +2320,17 @@ def test_server_run_approval_choice_unblocks_pending_run(monkeypatch, tmp_path):
     assert approval["choice"] == "once"
     assert approval["approved"] is True
     assert approval["resolved"] == 1
+    assert approval["approval_ids"] == [pending["pending"][0]["id"]]
     assert _ApprovalBlockingRunRunner.approval_returned.wait(0.1)
     assert _ApprovalBlockingRunRunner.calls[0]["approved"] is True
     assert final["run"]["status"] == "completed"
     assert final["output"] == "approved=True"
+    assert events_status == 200
+    assert "approval.request" in event_types
+    responded = next(event for event in events if event.get("type") == "approval.responded")
+    assert responded["approval_id"] == pending["pending"][0]["id"]
+    assert responded["approved"] is True
+    assert responded["choice"] == "once"
 
 
 def test_server_stop_releases_pending_approval_waiter(monkeypatch, tmp_path):
@@ -2357,10 +2370,13 @@ def test_server_stop_releases_pending_approval_waiter(monkeypatch, tmp_path):
             if final.get("run", {}).get("status") == "cancelled":
                 break
             time.sleep(0.05)
+        events_status, events_data = _request(port, "GET", f"/v1/runs/{run_id}/events")
     finally:
         srv.shutdown()
         srv.server_close()
 
+    events = json.loads(events_data)["events"]
+    event_types = [event.get("type") for event in events]
     assert create_status == 202
     assert create_body["id"] == run_id
     assert create_body["status"] == "started"
@@ -2375,6 +2391,12 @@ def test_server_stop_releases_pending_approval_waiter(monkeypatch, tmp_path):
     assert _ApprovalBlockingRunRunner.agents[0].cancel_event.is_set()
     assert final["run"]["status"] == "cancelled"
     assert final["run"]["result"] == "approved=False"
+    assert events_status == 200
+    assert "approval.request" in event_types
+    assert "run.stopping" in event_types
+    denied = [event for event in events if event.get("type") == "approval.responded"][-1]
+    assert denied["approved"] is False
+    assert denied["cancelled"] is True
 
 
 def test_server_api_jobs_crud_pause_resume_and_run(monkeypatch, tmp_path):

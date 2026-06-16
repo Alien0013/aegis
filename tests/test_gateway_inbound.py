@@ -243,6 +243,90 @@ def test_shared_inbound_wait_mode_returns_reply_without_delivery():
     assert adapter.sent == []
 
 
+def test_inbound_normalizes_platform_alias_and_bot_command_suffix():
+    from aegis.gateway.base import MessageEvent
+
+    adapter = _adapter()
+    adapter.bot_username = "aegis_bot"
+    seen = []
+    adapter._init_inbound_queue(lambda ev: seen.append((ev.platform, ev.text)) or "ok")
+
+    adapter._submit_inbound(MessageEvent(platform="tg", chat_id="c1", text="/status@aegis_bot", user_id="u1"))
+
+    _wait_for(lambda: seen)
+    assert seen == [("telegram", "/status")]
+
+
+def test_telegram_command_suffix_requires_matching_bot_username():
+    from aegis.platforms import normalize_inbound_command
+
+    assert normalize_inbound_command("/status@other_bot", platform="telegram") == "/status@other_bot"
+    assert (
+        normalize_inbound_command("/status@other_bot", platform="telegram", bot_username="aegis_bot")
+        == "/status@other_bot"
+    )
+
+
+def test_inbound_normalizes_slack_bang_command_alias():
+    from aegis.gateway.base import MessageEvent
+
+    adapter = _adapter()
+    seen = []
+    adapter._init_inbound_queue(lambda ev: seen.append(ev.text) or "ok")
+
+    adapter._submit_inbound(MessageEvent(platform="slack", chat_id="c1", text="!stop", user_id="u1"))
+
+    _wait_for(lambda: seen)
+    assert seen == ["/stop"]
+
+
+def test_platform_helper_command_caps_and_utf16_chunks():
+    from aegis.platforms import capped_command_menu, chunk_text_by_units, utf16_units
+
+    commands = capped_command_menu(["/custom", "/bad command", "/custom"], max_commands=4)
+    assert commands == ["/help", "/whoami", "/status", "/stop"]
+
+    chunks = chunk_text_by_units("😀" * 5, limit=4, len_fn=utf16_units)
+    assert chunks == ["😀😀", "😀😀", "😀"]
+
+
+def test_adapter_metadata_for_core_platforms(monkeypatch):
+    from aegis.gateway.channels import TelegramAdapter
+    from aegis.gateway.discord_channel import DiscordAdapter
+    from aegis.gateway.slack_channel import SlackAdapter
+    from aegis.gateway.webhook_channel import WebhookChannel
+
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+
+    assert TelegramAdapter("token").metadata["transport"] == "long_poll"
+    assert DiscordAdapter("token").metadata["supports_threads"] is True
+    assert SlackAdapter().metadata["typed_command_prefix"] == "!"
+    assert WebhookChannel().metadata["transport"] == "http"
+
+
+def test_gateway_webhook_channel_normalizes_event_body():
+    from aegis.gateway.webhook_channel import WebhookChannel
+
+    ev = WebhookChannel()._event_from_body({
+        "platform": "tg",
+        "chat_id": 42,
+        "text": "hello",
+        "user_id": 7,
+        "thread_id": 9,
+        "message_id": "m1",
+        "attachments": [{"type": "image"}],
+        "metadata": {"source": "bridge"},
+    })
+
+    assert ev.platform == "telegram"
+    assert ev.chat_id == "42"
+    assert ev.thread_id == "9"
+    assert ev.message_id == "m1"
+    assert ev.attachments == [{"type": "image"}]
+    assert ev.metadata == {"source": "bridge"}
+
+
 def test_shared_inbound_records_delivery_runs(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     from aegis.runs import RunStore

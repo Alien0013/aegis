@@ -9,10 +9,12 @@
     "start:sandbox": "node launch.js --sandbox",
     "test:desktop": "node --test electron/*.test.cjs scripts/*.test.cjs",
     "build:stamp": "node scripts/write-build-stamp.cjs",
-    "dist": "npm run build:stamp && electron-builder",
-    "dist:linux": "electron-builder --linux AppImage deb rpm",
-    "dist:win": "electron-builder --win nsis msi",
-    "dist:mac": "electron-builder --mac dmg"
+    "builder": "electron-builder",
+    "pack": "npm run build:stamp && npm run builder -- --dir",
+    "dist": "npm run build:stamp && npm run builder",
+    "dist:linux": "npm run build:stamp && npm run builder -- --linux AppImage deb rpm",
+    "dist:win": "npm run build:stamp && npm run builder -- --win nsis msi",
+    "dist:mac": "npm run build:stamp && npm run builder -- --mac dmg"
   },
   "dependencies": {
     "electron-updater": "^6.3.9"
@@ -22,6 +24,7 @@
     "electron-builder": "^25.0.0"
   },
   "build": {
+    "electronVersion": "33.4.11",
     "appId": "com.alien0013.aegis",
     "productName": "AEGIS",
     "executableName": "AEGIS",
@@ -56,12 +59,19 @@
         { "x": 410, "y": 180, "type": "link", "path": "/Applications" }
       ]
     },
-    "win": { "icon": "build/icon.ico", "target": ["nsis", "msi"] },
+    "win": {
+      "icon": "build/icon.ico",
+      "legalTrademarks": "AEGIS",
+      "signAndEditExecutable": false,
+      "target": ["nsis", "msi"]
+    },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "perMachine": false,
-      "shortcutName": "AEGIS"
+      "shortcutName": "AEGIS",
+      "uninstallDisplayName": "AEGIS",
+      "warningsAsErrors": false
     },
     "linux": {
       "icon": "build/icon.png",

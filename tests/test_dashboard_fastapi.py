@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import types
 import time
 
 import httpx
@@ -1594,6 +1595,7 @@ def test_fastapi_dashboard_plugin_api_must_stay_under_dashboard_dir(tmp_path, mo
 def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api(tmp_path, monkeypatch):
     plug = tmp_path / "plugins" / "analytics" / "pulse"
     (plug / "dashboard" / "dist").mkdir(parents=True)
+    (plug / ".git").mkdir()
     (plug / "plugin.yaml").write_text(
         "name: pulse\n"
         "version: 2.1.0\n"
@@ -1650,7 +1652,10 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
     assert hub_row["runtime_status"] == "enabled"
     assert hub_row["has_dashboard_manifest"] is True
     assert hub_row["dashboard_manifest"]["name"] == "pulse-panel"
+    assert hub_row["dashboard_route"]["path"] == "/overview"
+    assert hub_row["api_mount"]["status"] == "mounted"
     assert hub_row["can_remove"] is True
+    assert hub_row["can_update_git"] is True
     assert "jsonl" in hub_body["providers"]["memory_options"]
     assert "default" in hub_body["providers"]["context_options"]
     assert hub_body["orphan_dashboard_plugins"] == []
@@ -1681,6 +1686,17 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
     assert row["entry"] == "dist/index.js"
     assert row["css"] == ["dist/style.css"]
     assert row["has_api"] is True
+    assert row["route"] == {
+        "path": "/overview",
+        "label": "Pulse",
+        "plugin": "pulse-panel",
+        "hidden": True,
+        "position": "after:sessions",
+        "override": "/overview",
+    }
+    assert row["api_mount"]["status"] == "mounted"
+    assert row["api_mounted"] is True
+    assert "/api/plugins/pulse-panel/pulse" in row["api_routes"]
     assert row["api_compat_root"] is False
 
     asset = asyncio.run(_request(app, "GET", "/dashboard-plugins/pulse-panel/dist/index.js"))
@@ -1708,6 +1724,62 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
     enabled_route = asyncio.run(_request(app, "GET", "/api/plugins/pulse-panel/pulse", headers=headers))
     assert enabled_route.status_code == 200
     assert enabled_route.json() == {"pulse": True}
+
+    providers_saved = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/dashboard/plugin-providers",
+        json={"memory_provider": "jsonl", "context_engine": "default"},
+        headers=headers,
+    ))
+    assert providers_saved.status_code == 200
+    assert providers_saved.json()["providers"]["memory_provider"] == "jsonl"
+    assert providers_saved.json()["providers"]["context_engine"] == "default"
+
+    hidden = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/dashboard/plugins/pulse-panel/visibility",
+        json={"hidden": True},
+        headers=headers,
+    ))
+    assert hidden.status_code == 200
+    hidden_hub_row = next(row for row in hidden.json()["plugins"] if row["key"] == "analytics/pulse")
+    assert hidden_hub_row["user_hidden"] is True
+    hidden_manifest = asyncio.run(_request(app, "GET", "/api/dashboard/plugins", headers=headers))
+    assert all(item["name"] != "pulse-panel" for item in hidden_manifest.json())
+
+    shown = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/dashboard/plugins/pulse-panel/visibility",
+        json={"hidden": False},
+        headers=headers,
+    ))
+    assert shown.status_code == 200
+    shown_hub_row = next(row for row in shown.json()["plugins"] if row["key"] == "analytics/pulse")
+    assert shown_hub_row["user_hidden"] is False
+    shown_manifest = asyncio.run(_request(app, "GET", "/api/dashboard/plugins", headers=headers))
+    assert any(item["name"] == "pulse-panel" for item in shown_manifest.json())
+
+    import aegis.dashboard_fastapi as dash_api
+
+    def fake_git_pull(cmd, **kwargs):  # noqa: ANN001
+        assert cmd[:3] == ["git", "-C", str(plug)]
+        assert cmd[-2:] == ["pull", "--ff-only"]
+        assert kwargs["check"] is False
+        return types.SimpleNamespace(returncode=0, stdout="Already up to date.\n", stderr="")
+
+    monkeypatch.setattr(dash_api.subprocess, "run", fake_git_pull)
+    updated = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/dashboard/agent-plugins/analytics/pulse/update",
+        headers=headers,
+    ))
+    assert updated.status_code == 200
+    assert updated.json()["ok"] is True
+    assert updated.json()["unchanged"] is True
 
 
 def test_fastapi_dashboard_plugin_embedded_yaml_dashboard_manifest(tmp_path, monkeypatch):

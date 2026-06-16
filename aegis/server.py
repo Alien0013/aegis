@@ -31,6 +31,7 @@ from .util import now_iso
 
 _MAX_BODY_BYTES = 10 * 1024 * 1024
 _DEFAULT_MAX_STORED_RESPONSES = 100
+_MAX_STORED_RUN_EVENTS = 500
 _TERMINAL_RUN_STATUSES = {"completed", "error", "cancelled"}
 _MAX_SESSION_KEY_CHARS = 256
 
@@ -883,6 +884,10 @@ def _persist_api_run_record(record: dict[str, Any], *, title: str = "", prompt: 
         "surface_run_id": record.get("surface_run_id") or data.get("surface_run_id", ""),
         "cancel_reason": record.get("cancel_reason") or data.get("cancel_reason", ""),
     })
+    events = record.get("events")
+    if isinstance(events, list):
+        data["events"] = [dict(event) for event in events[-_MAX_STORED_RUN_EVENTS:] if isinstance(event, dict)]
+        data["event_sequence"] = int(record.get("event_sequence") or len(events))
     status = str(record.get("status") or "running")
     if row is None:
         row = {
@@ -1391,6 +1396,41 @@ def make_handler(config: Config):
             rec["updated_at"] = int(now)
             return rec
 
+        def _append_run_event_locked(
+            self,
+            run_id: str,
+            event_type: str,
+            payload: dict[str, Any] | None = None,
+        ) -> dict[str, Any] | None:
+            rec = active_runs.get(run_id)
+            if rec is None:
+                return None
+            events = rec.setdefault("events", [])
+            if not isinstance(events, list):
+                events = []
+                rec["events"] = events
+            sequence = int(rec.get("event_sequence") or len(events))
+            now = time.time()
+            event = {
+                "id": new_id("evt"),
+                "object": "hermes.run.event",
+                "type": event_type,
+                "event": event_type,
+                "run_id": run_id,
+                "sequence_number": sequence,
+                "created_at": int(now),
+            }
+            if payload:
+                event.update(payload)
+            events.append(event)
+            if len(events) > _MAX_STORED_RUN_EVENTS:
+                del events[:-_MAX_STORED_RUN_EVENTS]
+            rec["event_sequence"] = sequence + 1
+            rec["last_event"] = event_type
+            rec["updated_at_ts"] = now
+            rec["updated_at"] = int(now)
+            return event
+
         def _release_run_approvals_locked(self, run_id: str, reason: str) -> None:
             for pending in list(approvals.values()):
                 if pending.get("run_id") != run_id or pending.get("answered"):
@@ -1399,6 +1439,14 @@ def make_handler(config: Config):
                 pending["answered"] = True
                 pending["cancelled"] = True
                 pending["cancel_reason"] = reason
+                self._append_run_event_locked(run_id, "approval.responded", {
+                    "approval_id": pending.get("id"),
+                    "approved": False,
+                    "choice": "deny",
+                    "cancelled": True,
+                    "reason": reason,
+                    "prompt": pending.get("prompt", ""),
+                })
                 event = pending.get("event")
                 if event is not None:
                     event.set()
@@ -1410,6 +1458,7 @@ def make_handler(config: Config):
             rec["cancel_requested"] = True
             rec["cancel_reason"] = reason
             self._release_run_approvals_locked(run_id, reason)
+            self._append_run_event_locked(run_id, "run.stopping", {"reason": reason})
             agent = rec.get("agent")
             if agent is not None:
                 cancel = getattr(agent, "cancel", None)
@@ -1648,13 +1697,15 @@ def make_handler(config: Config):
             run = RunStore().get(run_id)
             if run is None:
                 return 404, {"ok": False, "error": "run not found", "id": run_id}
+            data = run.get("data") if isinstance(run.get("data"), dict) else {}
             trace_id = str(run.get("trace_id") or "")
             trace = TraceStore.from_config(config).get_trace(trace_id) if trace_id else None
+            stored_events = data.get("events") if isinstance(data.get("events"), list) else []
             return 200, {
                 "ok": True,
                 "id": run_id,
                 "run": _public_stored_run_record(run),
-                "events": (trace or {}).get("spans", []),
+                "events": stored_events or (trace or {}).get("spans", []),
                 "trace": trace,
             }
 
@@ -2945,9 +2996,15 @@ def make_handler(config: Config):
                 "model": body.get("model") or "",
                 "service_tier": service_tier,
                 "session_key": session_key or "",
+                "event_sequence": 0,
             }
             with state_lock:
                 active_runs[run_id] = record
+                self._append_run_event_locked(run_id, "run.queued", {
+                    "status": "queued",
+                    "session_id": session.id,
+                    "model": body.get("model") or "",
+                })
             _persist_api_run_record(record, title=title, prompt=prompt)
 
             def approver(question: str) -> bool:
@@ -2962,12 +3019,43 @@ def make_handler(config: Config):
                     "event": event,
                     "created_at": int(time.time()),
                 }
+                run_snapshot = None
                 with state_lock:
                     approvals[approval_id] = pending
+                    self._append_run_event_locked(run_id, "approval.request", {
+                        "approval_id": approval_id,
+                        "prompt": question,
+                        "status": "pending",
+                    })
+                    rec = active_runs.get(run_id)
+                    run_snapshot = dict(rec) if rec is not None else None
+                if run_snapshot is not None:
+                    _persist_api_run_record(run_snapshot, title=title, prompt=prompt)
                 timeout = float(config.get("server.approval_timeout_seconds", 3600) or 3600)
-                event.wait(max(0.1, timeout))
+                answered = event.wait(max(0.1, timeout))
                 with state_lock:
-                    return bool(approvals.get(approval_id, {}).get("approved"))
+                    pending_state = approvals.get(approval_id)
+                    if pending_state is None:
+                        return False
+                    if not answered and not pending_state.get("answered"):
+                        pending_state["approved"] = False
+                        pending_state["choice"] = "timeout"
+                        pending_state["answered"] = True
+                        self._append_run_event_locked(run_id, "approval.responded", {
+                            "approval_id": approval_id,
+                            "approved": False,
+                            "choice": "timeout",
+                            "timeout": True,
+                            "prompt": question,
+                        })
+                        rec = active_runs.get(run_id)
+                        run_snapshot = dict(rec) if rec is not None else None
+                    else:
+                        run_snapshot = None
+                    approved = bool(pending_state.get("approved"))
+                if run_snapshot is not None:
+                    _persist_api_run_record(run_snapshot, title=title, prompt=prompt)
+                return approved
 
             def worker() -> None:
                 try:
@@ -2982,6 +3070,11 @@ def make_handler(config: Config):
                         rec = self._set_run_state_locked(run_id, status="running", agent=agent, last_event="run.running")
                         if rec is not None and rec.get("cancel_requested"):
                             rec = self._request_stop_run_locked(run_id, str(rec.get("cancel_reason") or "stop requested"))
+                        elif rec is not None:
+                            self._append_run_event_locked(run_id, "run.running", {
+                                "status": "running",
+                                "session_id": session.id,
+                            })
                         run_snapshot = dict(rec) if rec is not None else None
                     if run_snapshot is not None:
                         _persist_api_run_record(run_snapshot, title=title, prompt=prompt)
@@ -3016,6 +3109,13 @@ def make_handler(config: Config):
                                 "session_id": result.session.id,
                                 "last_event": "run.cancelled" if status == "cancelled" else "run.completed",
                             })
+                            if rec is not None:
+                                self._append_run_event_locked(run_id, "run.cancelled" if status == "cancelled" else "run.completed", {
+                                    "status": status,
+                                    "session_id": result.session.id,
+                                    "trace_id": result.trace_id,
+                                    "surface_run_id": result.run_id,
+                                })
                             run_snapshot = dict(rec) if rec is not None else None
                         else:
                             run_snapshot = None
@@ -3032,6 +3132,10 @@ def make_handler(config: Config):
                                 error=f"{type(exc).__name__}: {exc}" if status == "error" else "",
                                 last_event="run.cancelled" if status == "cancelled" else "run.error",
                             )
+                            self._append_run_event_locked(run_id, "run.cancelled" if status == "cancelled" else "run.error", {
+                                "status": status,
+                                "error": f"{type(exc).__name__}: {exc}" if status == "error" else "",
+                            })
                             run_snapshot = dict(rec) if rec is not None else None
                         else:
                             run_snapshot = None
@@ -3068,6 +3172,7 @@ def make_handler(config: Config):
 
         def _post_approval(self, run_id: str, body: dict[str, Any]) -> None:
             approval_id = str(body.get("approval_id") or body.get("id") or "")
+            resolve_all = _coerce_request_bool(body.get("resolve_all", body.get("all")), False)
             raw_choice = str(body.get("choice") or "").strip().lower()
             aliases = {"approve": "once", "approved": "once", "allow": "once", "yes": "once", "true": "once"}
             choice = aliases.get(raw_choice, raw_choice)
@@ -3082,12 +3187,19 @@ def make_handler(config: Config):
                 approved = _coerce_request_bool(body.get("approved", body.get("approve")), False)
                 choice = "once" if approved else "deny"
             with state_lock:
-                if approval_id:
+                if resolve_all:
+                    pending_items = [
+                        item for item in approvals.values()
+                        if item.get("run_id") == run_id and not item.get("answered")
+                    ]
+                elif approval_id:
                     pending = approvals.get(approval_id)
+                    pending_items = [pending] if pending is not None and pending.get("run_id") == run_id else []
                 else:
                     pending = next((v for v in approvals.values()
                                     if v.get("run_id") == run_id and not v.get("answered")), None)
-                if pending is None:
+                    pending_items = [pending] if pending is not None else []
+                if not pending_items:
                     return self._json(409, {
                         "ok": False,
                         "error": {
@@ -3096,20 +3208,34 @@ def make_handler(config: Config):
                         },
                         "run_id": run_id,
                     })
-                pending["approved"] = approved
-                pending["choice"] = choice
-                pending["answered"] = True
-                event = pending.get("event")
-            if event is not None:
-                event.set()
+                for pending in pending_items:
+                    pending["approved"] = approved
+                    pending["choice"] = choice
+                    pending["answered"] = True
+                    self._append_run_event_locked(run_id, "approval.responded", {
+                        "approval_id": pending["id"],
+                        "approved": approved,
+                        "choice": choice,
+                        "prompt": pending.get("prompt", ""),
+                    })
+                rec = active_runs.get(run_id)
+                run_snapshot = dict(rec) if rec is not None else None
+                waiter_events = [pending.get("event") for pending in pending_items]
+            if run_snapshot is not None:
+                _persist_api_run_record(run_snapshot)
+            for event in waiter_events:
+                if event is not None:
+                    event.set()
+            first_pending = pending_items[0]
             return self._json(200, {
                 "ok": True,
                 "object": "hermes.run.approval_response",
                 "run_id": run_id,
-                "approval_id": pending["id"],
+                "approval_id": first_pending["id"],
+                "approval_ids": [pending["id"] for pending in pending_items],
                 "approved": approved,
                 "choice": choice,
-                "resolved": 1,
+                "resolved": len(pending_items),
             })
 
     return Handler
@@ -3273,7 +3399,7 @@ def make_app(config: Config) -> web.Application:
                     chunk, ack = await asyncio.wait_for(chunks.get(), timeout=0.1)
                     try:
                         await response.write(chunk)
-                    except (BrokenPipeError, ConnectionResetError, RuntimeError) as exc:
+                    except (BrokenPipeError, ConnectionResetError, RuntimeError):
                         notify_disconnect()
                         if ack is not None and not ack.done():
                             ack.set_exception(BrokenPipeError("SSE client disconnected"))

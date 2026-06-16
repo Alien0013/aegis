@@ -39,7 +39,7 @@ def test_install_hints_use_correct_distribution_name():
 
 def _desktop_manifest(root: pathlib.Path) -> dict[pathlib.Path, bytes]:
     ignored_dirs = {"node_modules", "dist", "out"}
-    ignored_files = {pathlib.Path("README.md"), pathlib.Path("build/icon.ico")}
+    ignored_files = {pathlib.Path("README.md"), pathlib.Path("build/install-stamp.json")}
     files: dict[pathlib.Path, bytes] = {}
     for path in root.rglob("*"):
         rel = path.relative_to(root)

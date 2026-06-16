@@ -67,6 +67,141 @@ export function del<T = unknown>(path: string): Promise<T> {
     .then((r) => parse<T>(r, path));
 }
 
+export interface DashboardPluginManifest {
+  name: string;
+  plugin?: string;
+  key?: string;
+  label?: string;
+  title?: string;
+  description?: string;
+  version?: string;
+  icon?: string;
+  kind?: string;
+  category?: string;
+  source?: string;
+  entry?: string;
+  css?: string[];
+  base_path?: string;
+  has_api?: boolean;
+  api_mounted?: boolean;
+  api_routes?: string[];
+  api_mount?: {
+    status?: string;
+    mounted?: boolean;
+    api?: string;
+    routes?: string[];
+    error?: string;
+  };
+  route?: {
+    path?: string;
+    label?: string;
+    plugin?: string;
+    position?: string;
+    override?: string;
+    hidden?: boolean;
+  };
+  tab?: {
+    path?: string;
+    label?: string;
+    position?: string;
+    override?: string;
+    hidden?: boolean;
+  };
+  slots?: string[];
+  user_hidden?: boolean;
+}
+
+export type PluginProviderOption = string | { name: string; description?: string };
+
+export interface DashboardPluginHubRow {
+  name: string;
+  key?: string;
+  version?: string;
+  description?: string;
+  kind?: string;
+  category?: string;
+  source?: string;
+  status?: string;
+  runtime_status?: string;
+  enabled?: boolean;
+  loaded?: boolean;
+  path?: string;
+  has_dashboard_manifest?: boolean;
+  dashboard_manifest?: DashboardPluginManifest | null;
+  dashboard_route?: DashboardPluginManifest["route"] | null;
+  api_mount?: DashboardPluginManifest["api_mount"] | null;
+  can_remove?: boolean;
+  can_update_git?: boolean;
+  auth_required?: boolean;
+  auth_command?: string;
+  user_hidden?: boolean;
+  tool_names?: string[];
+  channel_names?: string[];
+  provider_names?: string[];
+  hook_names?: string[];
+  middleware_kinds?: string[];
+}
+
+export interface DashboardPluginsHub {
+  ok?: boolean;
+  plugins: DashboardPluginHubRow[];
+  plugin_status?: DashboardPluginHubRow[];
+  manifests?: unknown[];
+  orphan_dashboard_plugins?: DashboardPluginManifest[];
+  providers?: {
+    memory_provider?: string;
+    memory_options?: PluginProviderOption[];
+    context_engine?: string;
+    context_options?: PluginProviderOption[];
+  };
+  loaded?: string[];
+  errors?: Array<{ file?: string; path?: string; error: string }>;
+  enabled?: string[];
+  disabled?: string[];
+  allowlist?: string[];
+  safe_mode?: boolean;
+}
+
+function pluginPath(name: string): string {
+  return String(name || "").split("/").map(encodeURIComponent).join("/");
+}
+
+export const pluginsApi = {
+  hub: () => api<DashboardPluginsHub>("dashboard/plugins/hub"),
+  rescan: () => api<{ ok?: boolean; count?: number }>("dashboard/plugins/rescan"),
+  install: (body: { identifier: string; force?: boolean; enable?: boolean }) =>
+    post<DashboardPluginsHub & { ok?: boolean; name?: string; plugin_name?: string; error?: string }>(
+      "dashboard/agent-plugins/install",
+      body,
+    ),
+  enable: (name: string) =>
+    post<DashboardPluginsHub & { ok?: boolean; name?: string; error?: string }>(
+      `dashboard/agent-plugins/${pluginPath(name)}/enable`,
+      {},
+    ),
+  disable: (name: string) =>
+    post<DashboardPluginsHub & { ok?: boolean; name?: string; error?: string }>(
+      `dashboard/agent-plugins/${pluginPath(name)}/disable`,
+      {},
+    ),
+  update: (name: string) =>
+    post<DashboardPluginsHub & { ok?: boolean; name?: string; output?: string; unchanged?: boolean; error?: string }>(
+      `dashboard/agent-plugins/${pluginPath(name)}/update`,
+      {},
+    ),
+  remove: (name: string) =>
+    del<DashboardPluginsHub & { ok?: boolean; name?: string; error?: string }>(
+      `dashboard/agent-plugins/${pluginPath(name)}`,
+    ),
+  saveProviders: (body: { memory_provider?: string; context_engine?: string }) =>
+    put<DashboardPluginsHub & { ok?: boolean; error?: string }>("dashboard/plugin-providers", body),
+  setVisibility: (name: string, hidden: boolean) =>
+    post<DashboardPluginsHub & { ok?: boolean; name?: string; hidden?: boolean; error?: string }>(
+      `dashboard/plugins/${pluginPath(name)}/visibility`,
+      { hidden },
+    ),
+};
+
 /** Subscribe to a server-sent-events endpoint. Returns an unsubscribe fn. */
 export function sse(path: string, onMessage: (data: unknown) => void): () => void {
   const sep = path.includes("?") ? "&" : "?";

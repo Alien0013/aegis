@@ -7,7 +7,16 @@ import sys
 
 import httpx
 
+from ..platforms import (
+    capped_command_menu,
+    chunk_text_by_units,
+    normalize_inbound_command,
+    normalize_platform_name,
+    utf16_units,
+)
 from .base import BasePlatformAdapter, Dispatch, MessageEvent
+
+MAX_TELEGRAM_COMMANDS = 30
 
 
 class CLIChannel(BasePlatformAdapter):
@@ -38,6 +47,10 @@ class TelegramAdapter(BasePlatformAdapter):
 
     name = "telegram"
     renders_tables = False
+    transport = "long_poll"
+    max_message_length = 4096
+    supports_threads = True
+    supports_media = True
 
     def __init__(self, token: str | None = None):
         self.token = token or os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -45,7 +58,11 @@ class TelegramAdapter(BasePlatformAdapter):
             raise RuntimeError("TELEGRAM_BOT_TOKEN is not set.")
         allowed = os.environ.get("TELEGRAM_ALLOWED_USERS", "").strip()
         self.allowed = {u.strip() for u in allowed.split(",") if u.strip()} if allowed else None
+        self.bot_username = os.environ.get("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@") or None
         self._base = f"https://api.telegram.org/bot{self.token}"
+
+    def command_menu(self, *, max_commands: int = MAX_TELEGRAM_COMMANDS) -> list[str]:
+        return capped_command_menu(max_commands=max_commands)
 
     def _api(self, method: str, **params):
         with httpx.Client(timeout=70) as c:
@@ -77,18 +94,32 @@ class TelegramAdapter(BasePlatformAdapter):
                     self.send(str(msg["chat"]["id"]), "⛔ not authorized.")
                     continue
                 reply_to = msg.get("reply_to_message") or {}
+                raw_text = msg["text"]
+                normalized_text = normalize_inbound_command(
+                    raw_text,
+                    platform="telegram",
+                    bot_username=self.bot_username,
+                )
+                if normalized_text.lstrip().startswith("/"):
+                    event_text = normalized_text
+                else:
+                    event_text = _with_group_context({**msg, "text": normalized_text})
                 ev = MessageEvent(
                     platform="telegram",
                     chat_id=str(msg["chat"]["id"]),
-                    text=_with_group_context(msg),   # prefix sender in groups; DMs untouched
+                    text=event_text,   # prefix sender in groups; commands/DMs untouched
                     user_id=user_id,
                     user_name=username,
                     message_id=str(msg.get("message_id") or "") or None,
                     reply_to_message_id=str(reply_to.get("message_id") or "") or None,
                     reply_to_text=reply_to.get("text") or reply_to.get("caption"),
                     timestamp=msg.get("date"),
+                    metadata={
+                        "chat_type": msg.get("chat", {}).get("type"),
+                        "message_thread_id": msg.get("message_thread_id"),
+                    },
                 )
-                self._submit_inbound(ev, raw_text=msg["text"])
+                self._submit_inbound(ev, raw_text=raw_text)
 
     def _before_dispatch(self, ev: MessageEvent):
         self._typing(ev.chat_id)
@@ -159,18 +190,26 @@ class TelegramAdapter(BasePlatformAdapter):
             else ("sendDocument", "document")
         try:
             with open(path, "rb") as fh, httpx.Client(timeout=120) as c:
-                r = c.post(f"{self._base}/{method}", data={"chat_id": chat_id, "caption": caption},
-                           files={field: fh})
+                data = {"chat_id": chat_id, "caption": caption}
+                if metadata:
+                    thread_id = metadata.get("message_thread_id") or metadata.get("thread_id")
+                    if thread_id:
+                        data["message_thread_id"] = str(thread_id)
+                r = c.post(f"{self._base}/{method}", data=data, files={field: fh})
                 r.raise_for_status()
         except Exception:  # noqa: BLE001 — fall back to a path note
             self.send(chat_id, f"📎 file ready: {path}")
 
-    def send(self, chat_id: str, text: str) -> None:
-        # Telegram caps messages at 4096 chars.
-        for i in range(0, len(text) or 1, 4000):
-            chunk = text[i:i + 4000] or "(empty)"
+    def send(self, chat_id: str, text: str, *, metadata: dict | None = None) -> None:
+        # Telegram caps messages at 4096 UTF-16 code units; leave a small margin.
+        params = {}
+        if metadata:
+            thread_id = metadata.get("message_thread_id") or metadata.get("thread_id")
+            if thread_id:
+                params["message_thread_id"] = str(thread_id)
+        for chunk in chunk_text_by_units(text, limit=4000, len_fn=utf16_units):
             try:
-                self._api("sendMessage", chat_id=chat_id, text=chunk)
+                self._api("sendMessage", chat_id=chat_id, text=chunk, **params)
             except Exception:  # noqa: BLE001
                 pass
 
@@ -187,7 +226,7 @@ def _with_group_context(msg: dict) -> str:
 
 
 def build_adapter(name: str) -> BasePlatformAdapter:
-    name = name.lower()
+    name = normalize_platform_name(name, default=str(name or "").strip().lower())
     if name == "cli":
         return CLIChannel()
     if name == "telegram":

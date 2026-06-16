@@ -5,6 +5,7 @@ const {
   aegisCommand,
   backendEnvironment,
   candidateAegisCommands,
+  hiddenWindowsChildOptions,
   normalizePathEnv,
   resolveAegisHome,
 } = require("./backend-env.cjs");
@@ -40,12 +41,14 @@ test("reads Windows user env for stale Explorer-launched process env", () => {
   const registry = {
     AEGIS_HOME: "D:\\AegisHome",
     AEGIS_BIN: "D:\\Tools\\aegis.exe",
+    Path: "D:\\Tools;C:\\Windows\\System32",
   };
   const readUserEnvVar = (name) => registry[name] || null;
   const env = backendEnvironment({}, { platform: "win32", cwd: "C:\\work", readUserEnvVar });
 
   assert.equal(env.AEGIS_HOME, registry.AEGIS_HOME);
   assert.equal(env.AEGIS_BIN, registry.AEGIS_BIN);
+  assert.equal(env.Path, registry.Path);
   assert.equal(env.TERMINAL_CWD, "C:\\work");
   assert.equal(
     aegisCommand({
@@ -105,8 +108,30 @@ test("preserves Windows Path casing while merging PATH-like entries", () => {
   assert.equal(env.PATH, undefined);
 });
 
+test("merges live Windows user Path with stale process Path", () => {
+  const env = backendEnvironment(
+    { Path: "C:\\Old;C:\\Windows\\System32" },
+    {
+      platform: "win32",
+      readUserEnvVar: (name) => (name === "Path" ? "D:\\Aegis\\bin;C:\\Windows\\System32" : null),
+    },
+  );
+  assert.deepEqual(env.Path.split(";"), ["C:\\Old", "C:\\Windows\\System32", "D:\\Aegis\\bin"]);
+});
+
+test("hides Windows child processes unless a caller opts out", () => {
+  assert.deepEqual(hiddenWindowsChildOptions({ stdio: "ignore" }, { platform: "win32" }), {
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  assert.deepEqual(hiddenWindowsChildOptions({ windowsHide: false }, { platform: "win32" }), {
+    windowsHide: false,
+  });
+  assert.deepEqual(hiddenWindowsChildOptions({}, { platform: "linux" }), {});
+});
+
 test("rejects Windows binaries when resolving inside WSL", () => {
-  const bad = "/mnt/c/Users/Alien/AppData/Local/aegis/venv/Scripts/aegis.exe";
+  const bad = "/mnt/c/Users/Alien/AppData/Local/aegis/venv/Scripts/aegis.bat";
   const good = "/home/alien/.aegis/venv/bin/aegis";
   assert.equal(
     aegisCommand({

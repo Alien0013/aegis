@@ -14,6 +14,7 @@ import os
 import queue
 import re
 import secrets
+import subprocess
 import tempfile
 import time
 import threading
@@ -47,6 +48,7 @@ _BASIC_PASS_ENV = "AEGIS_DASHBOARD_BASIC_AUTH_PASSWORD"
 _BASIC_SECRET_ENV = "AEGIS_DASHBOARD_BASIC_AUTH_SECRET"
 _DESKTOP_CRON_STARTED = False
 _DESKTOP_CRON_LOCK = threading.Lock()
+_DASHBOARD_PLUGIN_API_MOUNT_STATUS: dict[str, dict[str, Any]] = {}
 
 
 def _start_desktop_cron_ticker(config: Config) -> bool:
@@ -1707,7 +1709,7 @@ def _dashboard_plugin_hub(config: Config) -> dict[str, Any]:
     from .memory_providers import memory_provider_catalog
 
     payload = _plugins_payload(config)
-    dashboard_plugins = _dashboard_plugins_payload(config)
+    dashboard_plugins = _dashboard_plugins_payload(config, include_hidden=True)
     plugin_root = config_paths.sub("plugins").resolve()
     hidden = {str(item) for item in (config.get("dashboard.hidden_plugins", []) or [])}
 
@@ -1728,6 +1730,16 @@ def _dashboard_plugin_hub(config: Config) -> dict[str, Any]:
             (dashboard_by_alias[alias] for alias in aliases if alias in dashboard_by_alias),
             None,
         )
+        if dashboard_manifest:
+            aliases.update(
+                str(alias)
+                for alias in (
+                    dashboard_manifest.get("name"),
+                    dashboard_manifest.get("plugin"),
+                    dashboard_manifest.get("key"),
+                )
+                if alias
+            )
         manifest_dir = _plugin_manifest_dir(row)
         source = str(row.get("source") or "")
         can_remove = source in {"user", "git"} and bool(
@@ -1746,6 +1758,8 @@ def _dashboard_plugin_hub(config: Config) -> dict[str, Any]:
             "runtime_status": _plugin_runtime_status(row),
             "has_dashboard_manifest": has_dashboard_manifest,
             "dashboard_manifest": dashboard_manifest,
+            "dashboard_route": dashboard_manifest.get("route") if dashboard_manifest else None,
+            "api_mount": dashboard_manifest.get("api_mount") if dashboard_manifest else None,
             "can_remove": can_remove,
             "can_update_git": can_update_git,
             "auth_required": False,
@@ -1781,6 +1795,8 @@ def _dashboard_plugin_hub(config: Config) -> dict[str, Any]:
             "runtime_status": "dashboard",
             "has_dashboard_manifest": True,
             "dashboard_manifest": record,
+            "dashboard_route": record.get("route"),
+            "api_mount": record.get("api_mount"),
             "can_remove": False,
             "can_update_git": False,
             "auth_required": False,
@@ -1808,6 +1824,69 @@ def _dashboard_plugin_hub(config: Config) -> dict[str, Any]:
         "enabled": payload.get("enabled", []),
         "disabled": payload.get("disabled", []),
         "allowlist": payload.get("allowlist", []),
+    }
+
+
+def _set_dashboard_plugin_providers(config: Config, body: dict[str, Any]) -> dict[str, Any]:
+    if "memory_provider" in body:
+        config.set("memory.provider", str(body.get("memory_provider") or "").strip())
+    if "context_engine" in body:
+        config.set("agent.context_engine", str(body.get("context_engine") or "default").strip() or "default")
+    return {"ok": True, **_dashboard_plugin_hub(config)}
+
+
+def _set_dashboard_plugin_visibility(config: Config, name: str, hidden: bool) -> dict[str, Any]:
+    safe = _safe_plugin_route_name(name)
+    dashboard = config.data.setdefault("dashboard", {})
+    current = dashboard.get("hidden_plugins", [])
+    hidden_list = [str(item) for item in current] if isinstance(current, list) else []
+    hidden_set = set(hidden_list)
+    if hidden:
+        hidden_set.add(safe)
+    else:
+        hidden_set.discard(safe)
+    dashboard["hidden_plugins"] = sorted(hidden_set)
+    config.save()
+    return {"ok": True, "name": safe, "hidden": hidden, **_dashboard_plugin_hub(config)}
+
+
+def _dashboard_agent_plugin_update(config: Config, name: str) -> dict[str, Any]:
+    safe = _safe_plugin_route_name(name)
+    hub = _dashboard_plugin_hub(config)
+    row = next((item for item in hub.get("plugins", []) if _plugin_row_matches(item, safe)), None)
+    if not row:
+        return {"ok": False, "name": safe, "error": "plugin not found"}
+    if not row.get("can_update_git"):
+        return {"ok": False, "name": safe, "error": "plugin is not an updateable git checkout"}
+    manifest_dir = _plugin_manifest_dir(row)
+    if manifest_dir is None:
+        return {"ok": False, "name": safe, "error": "plugin path not found"}
+    repo_dir = manifest_dir
+    if not (repo_dir / ".git").exists() and (repo_dir.parent / ".git").exists():
+        repo_dir = repo_dir.parent
+    if not (repo_dir / ".git").exists():
+        return {"ok": False, "name": safe, "error": "plugin is not a git checkout"}
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_dir), "pull", "--ff-only"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "name": safe, "error": str(exc)}
+    output = ((result.stdout or "") + (result.stderr or "")).strip()
+    if result.returncode != 0:
+        return {"ok": False, "name": safe, "error": output or "git pull failed", "output": output}
+    from . import plugins as plugin_runtime
+
+    plugin_runtime.clear_runtime_cache()
+    return {
+        "ok": True,
+        "name": safe,
+        "output": output,
+        "unchanged": "already up to date" in output.lower(),
     }
 
 
@@ -1868,6 +1947,57 @@ def _dashboard_plugin_enabled(config: Config, name: str, key: str) -> bool:
     allowlist = set((config.get("plugins.allowlist", []) or []))
     aliases = {name, key or name}
     return not (aliases & disabled) and (not allowlist or bool(aliases & allowlist))
+
+
+def _dashboard_plugin_hidden(config: Config, row: dict[str, Any]) -> bool:
+    hidden = {str(item) for item in (config.get("dashboard.hidden_plugins", []) or [])}
+    aliases = {
+        str(row.get("name") or ""),
+        str(row.get("plugin") or ""),
+        str(row.get("key") or ""),
+    }
+    aliases.discard("")
+    return bool(aliases & hidden)
+
+
+def _dashboard_plugin_route_metadata(row: dict[str, Any]) -> dict[str, Any]:
+    name = str(row.get("name") or "")
+    tab = row.get("tab") if isinstance(row.get("tab"), dict) else {}
+    raw_path = str(tab.get("override") or tab.get("path") or f"/plugins/{name}")
+    path = raw_path if raw_path.startswith("/") else f"/{raw_path}"
+    route = {
+        "path": path,
+        "label": str(tab.get("label") or row.get("label") or row.get("title") or name),
+        "plugin": name,
+        "hidden": bool(tab.get("hidden")),
+        "position": str(tab.get("position") or "end"),
+    }
+    if isinstance(tab.get("override"), str) and str(tab.get("override")).startswith("/"):
+        route["override"] = str(tab["override"])
+    return route
+
+
+def _dashboard_plugin_mount_info(row: dict[str, Any]) -> dict[str, Any]:
+    name = str(row.get("name") or "")
+    api_path = str(row.get("_api") or "")
+    if not api_path:
+        return {"status": "skipped", "mounted": False, "api": "", "routes": [], "error": ""}
+    info = dict(_DASHBOARD_PLUGIN_API_MOUNT_STATUS.get(name) or {})
+    if str(info.get("api_path") or "") != api_path:
+        return {
+            "status": "unmounted",
+            "mounted": False,
+            "api": Path(api_path).name,
+            "routes": [],
+            "error": "",
+        }
+    return {
+        "status": str(info.get("status") or "unmounted"),
+        "mounted": bool(info.get("mounted", False)),
+        "api": str(info.get("api") or Path(api_path).name),
+        "routes": list(info.get("routes") or []),
+        "error": str(info.get("error") or ""),
+    }
 
 
 def _read_dashboard_manifest(manifest_path: Path) -> dict[str, Any] | None:
@@ -2016,10 +2146,19 @@ def _dashboard_plugin_records(config: Config) -> list[dict[str, Any]]:
     return rows
 
 
-def _dashboard_plugins_payload(config: Config) -> list[dict[str, Any]]:
+def _dashboard_plugins_payload(config: Config, *, include_hidden: bool = False) -> list[dict[str, Any]]:
     public = []
     for row in _dashboard_plugin_records(config):
-        public.append({key: value for key, value in row.items() if not key.startswith("_")})
+        if not include_hidden and _dashboard_plugin_hidden(config, row):
+            continue
+        item = {key: value for key, value in row.items() if not key.startswith("_")}
+        mount = _dashboard_plugin_mount_info(row)
+        item["route"] = _dashboard_plugin_route_metadata(row)
+        item["api_mount"] = mount
+        item["api_mounted"] = mount["mounted"]
+        item["api_routes"] = mount["routes"]
+        item["user_hidden"] = _dashboard_plugin_hidden(config, row)
+        public.append(item)
     return public
 
 
@@ -2085,13 +2224,30 @@ def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
             except ValueError:
                 pass
         mounted.pop(name, None)
+        _DASHBOARD_PLUGIN_API_MOUNT_STATUS.pop(name, None)
 
     for record in _dashboard_plugin_records(config):
         api_path = record.get("_api")
-        if not api_path:
-            continue
         record_name = str(record["name"])
+        if not api_path:
+            _DASHBOARD_PLUGIN_API_MOUNT_STATUS[record_name] = {
+                "status": "skipped",
+                "mounted": False,
+                "api_path": "",
+                "api": "",
+                "routes": [],
+                "error": "",
+            }
+            continue
         if record_name in mounted and mounted[record_name].get("api") == str(api_path):
+            _DASHBOARD_PLUGIN_API_MOUNT_STATUS[record_name] = {
+                "status": "mounted",
+                "mounted": True,
+                "api_path": str(api_path),
+                "api": Path(str(api_path)).name,
+                "routes": list(mounted[record_name].get("route_paths") or []),
+                "error": "",
+            }
             continue
         path = Path(api_path)
         module_name = "aegis_dashboard_plugin_" + hashlib.sha256(str(path).encode()).hexdigest()[:16]
@@ -2099,6 +2255,14 @@ def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
             before = {id(route) for route in app.router.routes}
             spec = importlib.util.spec_from_file_location(module_name, path)
             if spec is None or spec.loader is None:
+                _DASHBOARD_PLUGIN_API_MOUNT_STATUS[record_name] = {
+                    "status": "error",
+                    "mounted": False,
+                    "api_path": str(api_path),
+                    "api": path.name,
+                    "routes": [],
+                    "error": "could not load api module",
+                }
                 continue
             module = importlib.util.module_from_spec(spec)
             import sys
@@ -2114,7 +2278,22 @@ def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
             if router is None and callable(get_router):
                 router = get_router()
             if router is None:
+                _DASHBOARD_PLUGIN_API_MOUNT_STATUS[record_name] = {
+                    "status": "error",
+                    "mounted": False,
+                    "api_path": str(api_path),
+                    "api": path.name,
+                    "routes": [],
+                    "error": "api module has no router",
+                }
                 continue
+            declared_route_paths = []
+            for plugin_route in getattr(router, "routes", []) or []:
+                plugin_path = str(getattr(plugin_route, "path", "") or "")
+                if plugin_path:
+                    declared_route_paths.append(
+                        f"/api/plugins/{record_name}{plugin_path if plugin_path.startswith('/') else '/' + plugin_path}"
+                    )
             app.include_router(
                 router,
                 prefix=f"/api/plugins/{record_name}",
@@ -2127,11 +2306,33 @@ def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
                 insert_at = _dashboard_plugin_api_insert_at(app)
                 for offset, route in enumerate(new_routes):
                     app.router.routes.insert(insert_at + offset, route)
+            route_paths = sorted({
+                str(getattr(route, "path", ""))
+                for route in new_routes
+                if str(getattr(route, "path", ""))
+            } or set(declared_route_paths))
             mounted[record_name] = {
                 "api": str(api_path),
                 "routes": new_routes,
+                "route_paths": route_paths,
             }
-        except Exception:  # noqa: BLE001
+            _DASHBOARD_PLUGIN_API_MOUNT_STATUS[record_name] = {
+                "status": "mounted",
+                "mounted": True,
+                "api_path": str(api_path),
+                "api": path.name,
+                "routes": route_paths,
+                "error": "",
+            }
+        except Exception as exc:  # noqa: BLE001
+            _DASHBOARD_PLUGIN_API_MOUNT_STATUS[record_name] = {
+                "status": "error",
+                "mounted": False,
+                "api_path": str(api_path),
+                "api": path.name,
+                "routes": [],
+                "error": str(exc),
+            }
             continue
 
 
@@ -4099,7 +4300,7 @@ def create_app(config: Config) -> FastAPI:
     @app.post("/api/skills/bundles")
     async def api_skill_bundle_save(request: Request) -> JSONResponse:
         _require_request(request, config)
-        from .skill_bundles import save_bundle
+        from .skill_bundles import list_bundles, save_bundle
 
         body = await request.json()
         try:
@@ -4368,6 +4569,23 @@ def create_app(config: Config) -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
 
+    @app.put("/api/dashboard/plugin-providers")
+    async def api_dashboard_plugin_providers(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "request body must be an object"}, status_code=400)
+        return JSONResponse(_set_dashboard_plugin_providers(config, body))
+
+    @app.post("/api/dashboard/plugins/{name:path}/visibility")
+    async def api_dashboard_plugin_visibility(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "request body must be an object"}, status_code=400)
+        payload = _set_dashboard_plugin_visibility(config, name, bool(body.get("hidden", False)))
+        return JSONResponse(payload)
+
     @app.get("/api/dashboard/agent-plugins/{name:path}")
     async def api_dashboard_agent_plugin_detail(name: str, request: Request) -> JSONResponse:
         _require_request(request, config)
@@ -4425,6 +4643,15 @@ def create_app(config: Config) -> FastAPI:
         if ok:
             _mount_dashboard_plugin_api_routes(app, config)
         return JSONResponse({"ok": ok, "name": safe, **_dashboard_plugin_hub(config)}, status_code=200 if ok else 404)
+
+    @app.post("/api/dashboard/agent-plugins/{name:path}/update")
+    async def api_dashboard_agent_plugin_update(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        result = _dashboard_agent_plugin_update(config, name)
+        if result.get("ok"):
+            _mount_dashboard_plugin_api_routes(app, config)
+            return JSONResponse({**result, **_dashboard_plugin_hub(config)})
+        return JSONResponse(result, status_code=400 if result.get("error") else 404)
 
     @app.delete("/api/plugins/{name:path}")
     async def api_plugin_delete(name: str, request: Request) -> JSONResponse:

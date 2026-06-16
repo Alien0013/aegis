@@ -48,6 +48,7 @@ const DesktopShell = lazy(() =>
 
 function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
   const loc = useLocation();
+  const { routes: pluginRoutes } = useDashboardPluginHost();
   const status = useApi<{
     active_sessions?: number;
     gateway_running?: boolean;
@@ -59,7 +60,10 @@ function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
     provider_error?: string;
     version?: string;
   }>("status");
-  const current = NAV_ITEMS.find(
+  const pluginCurrent = pluginRoutes.find(
+    (route) => route.path === loc.pathname || (route.path !== "/" && loc.pathname.startsWith(route.path)),
+  );
+  const current = pluginCurrent || NAV_ITEMS.find(
     (i) => i.path === loc.pathname || (i.path !== "/" && loc.pathname.startsWith(i.path)),
   );
   const ready = !status.error && !!status.data && !status.data.provider_error;

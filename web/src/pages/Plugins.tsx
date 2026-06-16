@@ -1,154 +1,407 @@
-import { post } from "../lib/api";
+import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import {
+  pluginsApi,
+  type DashboardPluginHubRow,
+  type DashboardPluginsHub,
+  type PluginProviderOption,
+} from "../lib/api";
 import { useApi } from "../lib/useApi";
-import { Badge, Button, Card, Empty, Loading, PageHeader, toast } from "../components/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  Empty,
+  Field,
+  Input,
+  Loading,
+  MetricStrip,
+  PageHeader,
+  Select,
+  Toggle,
+  toast,
+} from "../components/ui";
 import { Icon } from "../components/icons";
+import { PluginSlot } from "../plugins/host";
 
-interface Manifest {
-  name: string;
-  key?: string;
-  enabled?: boolean;
-  loaded?: boolean;
-  status?: string;
-  description?: string;
-  version?: string;
-  path?: string;
-  entrypoint?: string;
-  author?: string;
-  kind?: string;
-  category?: string;
-  source?: string;
-  tool_names?: string[];
-  channel_names?: string[];
-  provider_names?: string[];
-  hook_names?: string[];
-  middleware_kinds?: string[];
+const BUILTIN_MEMORY = "__aegis_builtin_memory__";
+
+function optionName(option: PluginProviderOption): string {
+  return typeof option === "string" ? option : option.name;
 }
-interface PluginError { file?: string; path?: string; error: string }
-interface PluginsPayload {
-  loaded?: string[];
-  errors?: PluginError[];
-  tools?: number | string[];
-  tool_names?: string[];
-  channels?: string[];
-  providers?: string[];
-  manifests?: Manifest[];
-  plugins?: Manifest[];
-  plugin_status?: Manifest[];
+
+function optionDescription(option: PluginProviderOption): string {
+  return typeof option === "string" ? "" : option.description || "";
+}
+
+function pluginId(row: DashboardPluginHubRow): string {
+  return row.key || row.name;
+}
+
+function rowStatus(row: DashboardPluginHubRow): string {
+  return row.runtime_status || row.status || (row.enabled === false ? "disabled" : "inactive");
+}
+
+function statusTone(status: string): "success" | "danger" | "warning" | "info" | "neutral" {
+  if (status === "enabled" || status === "loaded" || status === "dashboard") return "success";
+  if (status === "disabled") return "danger";
+  if (status === "error") return "danger";
+  if (status === "inactive") return "warning";
+  return "neutral";
+}
+
+function openRoute(row: DashboardPluginHubRow): string {
+  const manifest = row.dashboard_manifest;
+  const route = row.dashboard_route || manifest?.route;
+  const tab = manifest?.tab;
+  if (route?.hidden || tab?.hidden) return "";
+  return route?.override || route?.path || tab?.override || tab?.path || "";
+}
+
+function mountInfo(row: DashboardPluginHubRow) {
+  return row.api_mount || row.dashboard_manifest?.api_mount;
+}
+
+function contributions(row: DashboardPluginHubRow): Array<{ key: string; tone: "info" | "success" | "primary" | "neutral"; icon?: string }> {
+  return [
+    ...(row.tool_names || []).map((key) => ({ key, tone: "info" as const, icon: "tools" })),
+    ...(row.provider_names || []).map((key) => ({ key, tone: "success" as const })),
+    ...(row.channel_names || []).map((key) => ({ key, tone: "primary" as const })),
+    ...(row.hook_names || []).map((key) => ({ key, tone: "neutral" as const })),
+    ...(row.middleware_kinds || []).map((key) => ({ key, tone: "neutral" as const })),
+  ];
 }
 
 export function Plugins() {
-  const { data, loading, error, reload } = useApi<PluginsPayload>("plugins");
+  const { data, loading, error, reload, setData } = useApi<DashboardPluginsHub>("dashboard/plugins/hub");
+  const [installId, setInstallId] = useState("");
+  const [installForce, setInstallForce] = useState(false);
+  const [installEnable, setInstallEnable] = useState(true);
+  const [busy, setBusy] = useState("");
+  const [memoryProvider, setMemoryProvider] = useState(BUILTIN_MEMORY);
+  const [contextEngine, setContextEngine] = useState("default");
 
-  async function reloadPlugins() {
-    try {
-      await post("plugins/reload", {});
-      toast("Reloaded");
-      reload();
-    } catch {
-      try {
-        const r = await post<{ ok?: boolean; error?: string }>("plugins", { action: "reload" });
-        if (r.error) toast(r.error, "err");
-        else { toast("Reloaded"); reload(); }
-      } catch (e) { toast(String(e), "err"); }
-    }
-  }
+  useEffect(() => {
+    const providers = data?.providers;
+    if (!providers) return;
+    setMemoryProvider(providers.memory_provider || BUILTIN_MEMORY);
+    setContextEngine(providers.context_engine || "default");
+  }, [data?.providers]);
 
-  async function setEnabled(name: string, enabled: boolean) {
-    const action = enabled ? "enable" : "disable";
-    try {
-      await post(`plugins/${encodeURIComponent(name)}/${action}`, {});
-      toast(enabled ? "Enabled" : "Disabled");
-      reload();
-    } catch {
-      try {
-        const r = await post<{ ok?: boolean; error?: string }>("plugins", { action, name });
-        if (r.error || r.ok === false) toast(r.error || "Plugin update failed", "err");
-        else { toast(enabled ? "Enabled" : "Disabled"); reload(); }
-      } catch (e) { toast(String(e), "err"); }
-    }
-  }
-
-  const manifests = data?.plugin_status || data?.plugins || data?.manifests || [];
+  const rows = data?.plugins || [];
   const errors = data?.errors || [];
-  const toolNames = Array.isArray(data?.tools) ? data.tools : (data?.tool_names || []);
-  const toolCount = Array.isArray(data?.tools) ? data.tools.length : (data?.tools || toolNames.length || 0);
-  const loaded = data?.loaded || [];
+  const enabledCount = rows.filter((row) => ["enabled", "loaded"].includes(rowStatus(row))).length;
+  const dashboardCount = rows.filter((row) => row.has_dashboard_manifest).length;
+
+  const memoryOptions = useMemo(
+    () => (data?.providers?.memory_options || []).filter((option) => optionName(option)),
+    [data?.providers?.memory_options],
+  );
+  const contextOptions = useMemo(
+    () => (data?.providers?.context_options || []).filter((option) => optionName(option)),
+    [data?.providers?.context_options],
+  );
+
+  async function applyHub(action: () => Promise<DashboardPluginsHub>, message: string) {
+    setBusy(message);
+    try {
+      const result = await action();
+      if (result.plugins) setData(result);
+      else reload();
+      toast(message);
+    } catch (e) {
+      toast(String(e), "err");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  function refresh() {
+    void applyHub(() => pluginsApi.rescan().then(() => pluginsApi.hub()), "Rescanned");
+  }
+
+  function installPlugin() {
+    const identifier = installId.trim();
+    if (!identifier) {
+      toast("Plugin source is required", "err");
+      return;
+    }
+    void applyHub(
+      () => pluginsApi.install({ identifier, force: installForce, enable: installEnable }),
+      "Installed",
+    ).then(() => setInstallId(""));
+  }
+
+  function saveProviders() {
+    void applyHub(
+      () => pluginsApi.saveProviders({
+        memory_provider: memoryProvider === BUILTIN_MEMORY ? "" : memoryProvider,
+        context_engine: contextEngine || "default",
+      }),
+      "Saved providers",
+    );
+  }
 
   return (
     <>
-      <PageHeader title="Plugins"
-        sub={data ? `${manifests.length} package${manifests.length === 1 ? "" : "s"} · ${toolCount} tools` : "Drop-in extensions"}
-        actions={<Button variant="ghost" icon="refresh" onClick={reloadPlugins}>Reload</Button>} />
+      <PageHeader
+        title="Plugins"
+        sub={data ? `${rows.length} packages · ${enabledCount} enabled · ${dashboardCount} dashboard panels` : "Drop-in extensions"}
+        actions={<Button variant="ghost" icon="refresh" disabled={!!busy} onClick={refresh}>Rescan</Button>}
+      />
+
+      <PluginSlot name="plugins:top" className="mb-[var(--gap)]" />
+
       {error && <Card><Empty icon="alert">Couldn't load — {error}</Empty></Card>}
       {loading && <Loading />}
+
       {data && (
         <div className="space-y-[var(--gap)]">
+          <MetricStrip
+            items={[
+              { label: "Packages", value: rows.length },
+              { label: "Enabled", value: enabledCount, tone: "success" },
+              { label: "Dashboard", value: dashboardCount, tone: "info" },
+              { label: "Errors", value: errors.length, tone: errors.length ? "danger" : "neutral" },
+            ]}
+          />
+
           {!!errors.length && (
-            <Card title="Errors">
-              {errors.map((e, i) => (
-                <div key={i} className="text-xs text-danger"><span className="font-mono">{e.path || e.file || "plugin"}</span>: {e.error}</div>
-              ))}
-            </Card>
-          )}
-          <div className="grid gap-[var(--gap)] md:grid-cols-2 xl:grid-cols-3">
-            {!manifests.length && !loaded.length && <Card><Empty icon="plugins">No plugins installed.</Empty></Card>}
-            {manifests.map((m) => (
-              <Card key={m.name} pad={false}>
-                <div className="border-b border-border p-[var(--pad)]">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="truncate font-mono text-base font-semibold text-text">{m.key || m.name}</div>
-                      {m.key && m.key !== m.name && <div className="truncate text-[11px] text-faint">{m.name}</div>}
-                      {m.description && <div className="line-clamp-2 text-xs text-faint">{m.description}</div>}
-                    </div>
-                    <Badge status={m.loaded ? "ok" : undefined} tone={m.loaded ? undefined : (m.enabled ? "info" : "neutral")}>
-                      {m.status || (m.enabled ? "enabled" : "disabled")}
-                    </Badge>
+            <Card title="Load Errors">
+              <div className="space-y-1">
+                {errors.map((item, index) => (
+                  <div key={`${item.path || item.file || "plugin"}-${index}`} className="text-xs text-danger">
+                    <span className="font-mono">{item.path || item.file || "plugin"}</span>: {item.error}
                   </div>
-                </div>
-                <div className="space-y-3 p-[var(--pad)]">
-                  <div className="flex flex-wrap gap-1.5">
-                    {m.version && <Badge tone="neutral">v{m.version}</Badge>}
-                    {m.kind && <Badge tone="info">{m.kind}</Badge>}
-                    {m.source && <Badge tone="neutral">{m.source}</Badge>}
-                    {m.category && <Badge tone="neutral">{m.category}</Badge>}
-                    {m.entrypoint && <Badge tone="neutral">{m.entrypoint.split("/").pop()}</Badge>}
-                  </div>
-                  {!!(m.tool_names?.length || m.channel_names?.length || m.provider_names?.length || m.hook_names?.length || m.middleware_kinds?.length) && (
-                    <div className="flex flex-wrap gap-1.5">
-                      {(m.tool_names || []).map((t) => <Badge key={`tool-${t}`} tone="info"><Icon name="tools" size={11} /> {t}</Badge>)}
-                      {(m.provider_names || []).map((p) => <Badge key={`provider-${p}`} tone="success">{p}</Badge>)}
-                      {(m.channel_names || []).map((c) => <Badge key={`channel-${c}`} tone="primary">{c}</Badge>)}
-                      {(m.hook_names || []).map((h) => <Badge key={`hook-${h}`} tone="neutral">{h}</Badge>)}
-                      {(m.middleware_kinds || []).map((k) => <Badge key={`mw-${k}`} tone="neutral">{k}</Badge>)}
-                    </div>
-                  )}
-                  {m.path && <div className="truncate font-mono text-[11px] text-faint">{m.path}</div>}
-                  <Button sm variant={m.enabled ? "danger" : "primary"} onClick={() => setEnabled(m.key || m.name, !m.enabled)}>
-                    {m.enabled ? "Disable" : "Enable"}
-                  </Button>
-                </div>
-              </Card>
-            ))}
-          </div>
-          {!!loaded.length && (
-            <Card title="Loaded Files">
-              <div className="flex flex-wrap gap-1.5">
-                {loaded.map((file) => <Badge key={file} tone="neutral">{file}</Badge>)}
+                ))}
               </div>
             </Card>
           )}
-          {!!(toolNames.length || data.channels?.length || data.providers?.length) && (
-            <Card title="Contributed">
+
+          {data.providers && (
+            <Card
+              title="Runtime Providers"
+              sub="Provider choices used by plugin-backed memory and context engines."
+              actions={<Button sm variant="primary" disabled={!!busy} onClick={saveProviders}>Save</Button>}
+            >
+              <div className="grid gap-[var(--gap)] md:grid-cols-2">
+                <Field label="Memory Provider">
+                  <Select value={memoryProvider} onChange={(event) => setMemoryProvider(event.target.value)}>
+                    <option value={BUILTIN_MEMORY}>(builtin)</option>
+                    {memoryOptions.map((option) => (
+                      <option key={optionName(option)} value={optionName(option)}>
+                        {optionDescription(option) ? `${optionName(option)} — ${optionDescription(option)}` : optionName(option)}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field label="Context Engine">
+                  <Select value={contextEngine} onChange={(event) => setContextEngine(event.target.value)}>
+                    {!contextOptions.some((option) => optionName(option) === "default") && <option value="default">default</option>}
+                    {contextOptions.map((option) => (
+                      <option key={optionName(option)} value={optionName(option)}>
+                        {optionDescription(option) ? `${optionName(option)} — ${optionDescription(option)}` : optionName(option)}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+              </div>
+            </Card>
+          )}
+
+          <Card
+            title="Install"
+            sub="Local .py files and plugin directories are installed into the AEGIS plugin home."
+            actions={<Button sm variant="primary" disabled={!!busy} icon="download" onClick={installPlugin}>Install</Button>}
+          >
+            <div className="grid gap-[var(--gap)] lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+              <Field label="Source">
+                <Input
+                  spellCheck={false}
+                  className="font-mono"
+                  value={installId}
+                  onChange={(event) => setInstallId(event.target.value)}
+                  placeholder="/path/to/plugin.py or /path/to/plugin-dir"
+                />
+              </Field>
+              <div className="flex flex-wrap gap-5 pb-1">
+                <label className="flex items-center gap-2 text-xs text-dim">
+                  <Toggle on={installForce} onChange={setInstallForce} disabled={!!busy} />
+                  Force
+                </label>
+                <label className="flex items-center gap-2 text-xs text-dim">
+                  <Toggle on={installEnable} onChange={setInstallEnable} disabled={!!busy} />
+                  Enable
+                </label>
+              </div>
+            </div>
+          </Card>
+
+          <div className="grid gap-[var(--gap)] xl:grid-cols-2">
+            {!rows.length && <Card><Empty icon="plugins">No plugins installed.</Empty></Card>}
+            {rows.map((row) => (
+              <PluginRow
+                key={`${pluginId(row)}-${row.dashboard_manifest?.name || ""}`}
+                row={row}
+                busy={busy}
+                run={applyHub}
+              />
+            ))}
+          </div>
+
+          {!!data.orphan_dashboard_plugins?.length && (
+            <Card title="Dashboard Only">
+              <div className="flex flex-wrap gap-2">
+                {data.orphan_dashboard_plugins.map((manifest) => {
+                  const path = manifest.route?.path || manifest.tab?.override || manifest.tab?.path || "";
+                  return (
+                    <Badge key={manifest.name} tone="info">
+                      {path && !manifest.route?.hidden && !manifest.tab?.hidden ? (
+                        <Link to={path} className="inline-flex items-center gap-1">
+                          {manifest.label || manifest.name} <Icon name="external" size={11} />
+                        </Link>
+                      ) : manifest.label || manifest.name}
+                    </Badge>
+                  );
+                })}
+              </div>
+            </Card>
+          )}
+
+          {!!data.loaded?.length && (
+            <Card title="Loaded Files">
               <div className="flex flex-wrap gap-1.5">
-                {toolNames.map((t) => <Badge key={t} tone="info"><Icon name="tools" size={11} /> {t}</Badge>)}
-                {(data.channels || []).map((c) => <Badge key={c} tone="primary">{c}</Badge>)}
-                {(data.providers || []).map((p) => <Badge key={p} tone="success">{p}</Badge>)}
+                {data.loaded.map((file) => <Badge key={file} tone="neutral">{file}</Badge>)}
               </div>
             </Card>
           )}
         </div>
       )}
+
+      <PluginSlot name="plugins:bottom" className="mt-[var(--gap)]" />
     </>
+  );
+}
+
+function PluginRow({
+  row,
+  busy,
+  run,
+}: {
+  row: DashboardPluginHubRow;
+  busy: string;
+  run: (action: () => Promise<DashboardPluginsHub>, message: string) => Promise<void>;
+}) {
+  const id = pluginId(row);
+  const status = rowStatus(row);
+  const route = openRoute(row);
+  const manifest = row.dashboard_manifest;
+  const mount = mountInfo(row);
+  const canToggle = status !== "dashboard";
+  const contrib = contributions(row);
+  const title = row.key && row.key !== row.name ? row.key : row.name;
+
+  function toggleRuntime() {
+    void run(
+      () => status === "enabled" || status === "loaded" ? pluginsApi.disable(id) : pluginsApi.enable(id),
+      status === "enabled" || status === "loaded" ? "Disabled" : "Enabled",
+    );
+  }
+
+  function updatePlugin() {
+    void run(() => pluginsApi.update(id), "Updated");
+  }
+
+  function removePlugin() {
+    if (!window.confirm(`Remove ${title}?`)) return;
+    void run(() => pluginsApi.remove(id), "Removed");
+  }
+
+  function toggleVisibility() {
+    const target = manifest?.name || id;
+    void run(() => pluginsApi.setVisibility(target, !row.user_hidden), row.user_hidden ? "Shown" : "Hidden");
+  }
+
+  return (
+    <Card pad={false} className={busy ? "opacity-70" : ""}>
+      <div className="border-b border-border p-[var(--pad)]">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="truncate font-mono text-base font-semibold text-text">{title}</div>
+            {row.key && row.key !== row.name && <div className="truncate text-[11px] text-faint">{row.name}</div>}
+            {row.description && <div className="mt-1 line-clamp-2 text-xs text-faint">{row.description}</div>}
+          </div>
+          <Badge tone={statusTone(status)} status={status}>{status}</Badge>
+        </div>
+      </div>
+
+      <div className="space-y-3 p-[var(--pad)]">
+        <div className="flex flex-wrap gap-1.5">
+          {row.version && <Badge tone="neutral">v{row.version}</Badge>}
+          {row.kind && <Badge tone="info">{row.kind}</Badge>}
+          {row.source && <Badge tone="neutral">{row.source}</Badge>}
+          {row.category && <Badge tone="neutral">{row.category}</Badge>}
+          {row.user_hidden && <Badge tone="warning">hidden</Badge>}
+          {row.auth_required && <Badge tone="danger">auth required</Badge>}
+          {manifest?.slots?.map((slot) => <Badge key={slot} tone="neutral">{slot}</Badge>)}
+        </div>
+
+        {!!contrib.length && (
+          <div className="flex flex-wrap gap-1.5">
+            {contrib.map((item) => (
+              <Badge key={`${item.tone}-${item.key}`} tone={item.tone}>
+                {item.icon && <Icon name={item.icon} size={11} />} {item.key}
+              </Badge>
+            ))}
+          </div>
+        )}
+
+        {mount && (mount.api || mount.status !== "skipped") && (
+          <div className="flex flex-wrap items-center gap-1.5 text-xs text-faint">
+            <Badge tone={mount.mounted ? "success" : mount.status === "error" ? "danger" : "warning"}>
+              api {mount.status || "unknown"}
+            </Badge>
+            {!!mount.routes?.length && <span className="truncate font-mono">{mount.routes.join(", ")}</span>}
+            {mount.error && <span className="text-danger">{mount.error}</span>}
+          </div>
+        )}
+
+        {row.auth_required && row.auth_command && (
+          <div className="rounded-[var(--radius)] border border-danger/30 bg-danger/10 px-3 py-2 font-mono text-xs text-danger">
+            {row.auth_command}
+          </div>
+        )}
+
+        {row.path && <div className="truncate font-mono text-[11px] text-faint">{row.path}</div>}
+
+        <div className="flex flex-wrap gap-2">
+          {canToggle && (
+            <Button sm variant={status === "enabled" || status === "loaded" ? "danger" : "primary"} disabled={!!busy} onClick={toggleRuntime}>
+              {status === "enabled" || status === "loaded" ? "Disable" : "Enable"}
+            </Button>
+          )}
+          {route && (
+            <Button sm variant="ghost" icon="external" onClick={() => { window.location.hash = route; }}>
+              Open
+            </Button>
+          )}
+          {row.has_dashboard_manifest && (
+            <Button sm variant="ghost" disabled={!!busy} onClick={toggleVisibility}>
+              {row.user_hidden ? "Show" : "Hide"}
+            </Button>
+          )}
+          {row.can_update_git && (
+            <Button sm variant="ghost" disabled={!!busy} icon="refresh" onClick={updatePlugin}>Update</Button>
+          )}
+          {row.can_remove && (
+            <Button sm variant="danger" disabled={!!busy} icon="trash" onClick={removePlugin} aria-label={`Remove ${title}`} />
+          )}
+        </div>
+
+        {!row.has_dashboard_manifest && !manifest && (
+          <div className="text-xs italic text-faint">No dashboard panel.</div>
+        )}
+      </div>
+    </Card>
   );
 }

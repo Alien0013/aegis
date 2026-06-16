@@ -6,6 +6,7 @@ const test = require("node:test");
 const {
   candidateInstallStampPaths,
   desktopDiagnostics,
+  detectRemoteDisplay,
   readInstallStamp,
 } = require("./desktop-status.cjs");
 
@@ -61,9 +62,31 @@ test("desktop diagnostics exposes runtime, stamp, checks, and repair actions", (
   assert.equal(report.packaged, true);
   assert.equal(report.appVersion, "1.2.3");
   assert.equal(report.installStamp.commit, "abc123");
+  assert.equal(report.renderer.gpuFallbackRecommended, false);
   assert.equal(report.checks.find((row) => row.id === "install_stamp").ok, true);
   assert.equal(report.checks.find((row) => row.id === "backend_environment").ok, true);
   assert(report.repair.actions.some((row) => row.id === "restart_backend"));
+});
+
+test("detects remote renderer sessions and honors override", () => {
+  assert.equal(detectRemoteDisplay({ env: { DISPLAY: ":0" }, platform: "linux" }), null);
+  assert.match(String(detectRemoteDisplay({ env: { DISPLAY: "localhost:10.0" }, platform: "linux" })), /x11-forwarding/);
+  assert.match(String(detectRemoteDisplay({ env: { SESSIONNAME: "RDP-Tcp#7" }, platform: "win32" })), /^rdp/);
+  assert.equal(
+    detectRemoteDisplay({ env: { SSH_CONNECTION: "1.2.3.4 5 6.7.8.9 22" }, platform: "darwin" }),
+    "ssh-session",
+  );
+  assert.match(
+    String(detectRemoteDisplay({ env: { AEGIS_DESKTOP_DISABLE_GPU: "yes", DISPLAY: ":0" }, platform: "linux" })),
+    /override/,
+  );
+  assert.equal(
+    detectRemoteDisplay({
+      env: { AEGIS_DESKTOP_DISABLE_GPU: "0", SSH_CONNECTION: "1.2.3.4 5 6.7.8.9 22" },
+      platform: "linux",
+    }),
+    null,
+  );
 });
 
 test("desktop diagnostics warns when packaged build has no backend env or stamp", () => {

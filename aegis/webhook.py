@@ -22,6 +22,8 @@ import hmac
 import json
 import threading
 import time
+import base64
+import binascii
 from collections import deque
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -30,7 +32,8 @@ from . import config as cfg
 from .util import atomic_write, read_text, truncate
 
 MAX_WEBHOOK_BYTES = 10_000_000
-_DELIVERY_ID_HEADERS = ("X-GitHub-Delivery", "X-Request-Id", "Idempotency-Key")
+WEBHOOK_REPLAY_WINDOW_SECONDS = 300
+_DELIVERY_ID_HEADERS = ("X-GitHub-Delivery", "svix-id", "X-Request-ID", "X-Request-Id", "Idempotency-Key")
 
 
 def _webhooks_path():
@@ -124,14 +127,100 @@ def _normalize_hook_record(item) -> dict | None:
 # --------------------------------------------------------------------------- #
 # request helpers
 # --------------------------------------------------------------------------- #
-def verify_signature(secret: str, body: bytes, header: str) -> bool:
-    """Constant-time check of a GitHub-style ``sha256=<hex>`` HMAC header."""
-    if not secret:
-        return True
-    if not header or not header.startswith("sha256="):
+def _headers_get(headers, name: str) -> str:
+    if headers is None:
+        return ""
+    get = getattr(headers, "get", None)
+    if callable(get):
+        return str(get(name, "") or get(name.lower(), "") or get(name.upper(), "") or "")
+    if isinstance(headers, dict):
+        lower = {str(k).lower(): v for k, v in headers.items()}
+        return str(lower.get(name.lower(), "") or "")
+    return ""
+
+
+def _verify_sha256_hmac(secret: str, body: bytes, header: str) -> bool:
+    raw = str(header or "").strip()
+    if raw.startswith("sha256="):
+        raw = raw[len("sha256="):]
+    if not raw:
         return False
     expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, header[len("sha256="):])
+    return hmac.compare_digest(expected, raw)
+
+
+def _verify_svix_signature(
+    secret: str,
+    body: bytes,
+    *,
+    msg_id: str,
+    timestamp: str,
+    signature_header: str,
+    now: int | None = None,
+) -> bool:
+    if not (secret and msg_id and timestamp and signature_header):
+        return False
+    try:
+        ts = int(timestamp)
+    except (TypeError, ValueError):
+        return False
+    current = int(time.time()) if now is None else int(now)
+    if abs(current - ts) > WEBHOOK_REPLAY_WINDOW_SECONDS:
+        return False
+    if secret.startswith("whsec_"):
+        try:
+            key = base64.b64decode(secret.removeprefix("whsec_"), validate=True)
+        except (binascii.Error, ValueError):
+            return False
+    else:
+        key = secret.encode()
+    signed = msg_id.encode() + b"." + timestamp.encode() + b"." + body
+    expected = base64.b64encode(hmac.new(key, signed, hashlib.sha256).digest()).decode()
+    for part in signature_header.split():
+        try:
+            version, signature = part.split(",", 1)
+        except ValueError:
+            continue
+        if version == "v1" and hmac.compare_digest(signature, expected):
+            return True
+    return False
+
+
+def verify_signature(secret: str, body: bytes, header) -> bool:
+    """Constant-time webhook signature verification.
+
+    ``header`` may be a legacy GitHub signature string or a headers mapping.
+    """
+    if not secret:
+        return True
+    if isinstance(header, str):
+        return _verify_sha256_hmac(secret, body, header)
+
+    svix_id = _headers_get(header, "svix-id")
+    svix_timestamp = _headers_get(header, "svix-timestamp")
+    svix_signature = _headers_get(header, "svix-signature")
+    if svix_id or svix_timestamp or svix_signature:
+        return _verify_svix_signature(
+            secret,
+            body,
+            msg_id=svix_id,
+            timestamp=svix_timestamp,
+            signature_header=svix_signature,
+        )
+
+    gitlab_token = _headers_get(header, "X-Gitlab-Token")
+    if gitlab_token:
+        return hmac.compare_digest(gitlab_token, secret)
+
+    github_signature = _headers_get(header, "X-Hub-Signature-256")
+    if github_signature:
+        return _verify_sha256_hmac(secret, body, github_signature)
+
+    generic_signature = _headers_get(header, "X-Webhook-Signature")
+    if generic_signature:
+        return _verify_sha256_hmac(secret, body, generic_signature)
+
+    return False
 
 
 def render_prompt(template: str, name: str, body: bytes) -> str:
@@ -270,8 +359,7 @@ def make_handler(config, store: WebhookStore):
             if length_error == "too_large":
                 return self._json(413, {"error": "payload too large", "limit": MAX_WEBHOOK_BYTES})
             body = self.rfile.read(n) if n else b""
-            sig = self.headers.get("X-Hub-Signature-256", "")
-            if not verify_signature(hook.secret, body, sig):
+            if not verify_signature(hook.secret, body, self.headers):
                 return self._json(401, {"error": "invalid signature"})
 
             # GitHub event allowlist: skip (200) when this event isn't in the hook's filter.

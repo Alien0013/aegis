@@ -21,7 +21,7 @@ function _pathDelimiter(platform) {
 
 function sanePathEntries(platform) {
   if (platform === "darwin") {
-    return ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
+    return ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"];
   }
   if (platform === "linux") {
     return ["/usr/local/bin", "/usr/bin", "/bin", "/usr/local/sbin", "/usr/sbin", "/sbin"];
@@ -62,8 +62,20 @@ function _windowsBinaryOnWsl(candidate, options = {}) {
   if (platform !== "linux" || !_isWsl(options)) return false;
   const normalized = String(candidate || "").replace(/\\/g, "/").toLowerCase();
   return /^\/mnt\/[a-z]\//.test(normalized) && (
-    normalized.endsWith(".exe") || normalized.endsWith(".cmd") || normalized.includes("/windowsapps/")
+    normalized.endsWith(".exe") ||
+    normalized.endsWith(".cmd") ||
+    normalized.endsWith(".bat") ||
+    normalized.endsWith(".ps1") ||
+    normalized.includes("/windowsapps/")
   );
+}
+
+function hiddenWindowsChildOptions(childOptions = {}, options = {}) {
+  const platform = options.platform || process.platform;
+  if (platform !== "win32" || Object.prototype.hasOwnProperty.call(childOptions, "windowsHide")) {
+    return childOptions;
+  }
+  return { ...childOptions, windowsHide: true };
 }
 
 function _probeCommand(command, options = {}) {
@@ -77,6 +89,7 @@ function _probeCommand(command, options = {}) {
       env: normalizePathEnv(options.env || process.env, options),
       stdio: "ignore",
       timeout: options.probeTimeoutMs || DEFAULT_PROBE_TIMEOUT_MS,
+      ...hiddenWindowsChildOptions({}, options),
     });
     return true;
   } catch {
@@ -96,6 +109,18 @@ function _envValue(name, options) {
   if (env[name]) return env[name];
   const read = options.readUserEnvVar || readWindowsUserEnvVar;
   return read(name, options) || "";
+}
+
+function _withWindowsUserPath(baseEnv, options = {}) {
+  const platform = options.platform || process.platform;
+  if (platform !== "win32") return { ...baseEnv };
+  const env = { ...baseEnv };
+  const read = options.readUserEnvVar || readWindowsUserEnvVar;
+  const userPath = read("Path", { ...options, env, platform }) || read("PATH", { ...options, env, platform });
+  if (!userPath) return env;
+  const key = _pathKey(env, platform);
+  env[key] = [env[key], userPath].filter(Boolean).join(_pathDelimiter(platform));
+  return env;
 }
 
 function resolveAegisHome(options = {}) {
@@ -147,7 +172,7 @@ function aegisCommand(options = {}) {
 
 function backendEnvironment(baseEnv = process.env, options = {}) {
   const platform = options.platform || process.platform;
-  const env = normalizePathEnv(baseEnv, { ...options, platform });
+  const env = normalizePathEnv(_withWindowsUserPath(baseEnv, { ...options, platform }), { ...options, platform });
   const readOptions = { ...options, env, platform };
   const read = options.readUserEnvVar || readWindowsUserEnvVar;
   if (!env.AEGIS_HOME) {
@@ -168,6 +193,7 @@ module.exports = {
   aegisCommand,
   backendEnvironment,
   candidateAegisCommands,
+  hiddenWindowsChildOptions,
   normalizePathEnv,
   resolveAegisHome,
   sanePathEntries,
