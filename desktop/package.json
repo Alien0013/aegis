@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node launch.js",
     "start:sandbox": "node launch.js --sandbox",
+    "test:desktop": "node --test electron/*.test.cjs",
     "dist": "electron-builder",
     "dist:linux": "electron-builder --linux AppImage deb",
     "dist:win": "electron-builder --win nsis",

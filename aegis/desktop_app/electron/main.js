@@ -13,9 +13,9 @@ const { spawn } = require("child_process");
 const net = require("net");
 const http = require("http");
 const fs = require("fs");
-const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
+const { aegisCommand, backendEnvironment } = require("./backend-env.cjs");
 
 // Chromium checks the Linux setuid sandbox before main.js runs, so launch.js
 // puts --no-sandbox on argv; mirror it here so child processes inherit it.
@@ -64,13 +64,6 @@ function freePort() {
     s.listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => resolve(p)); });
   });
 }
-function aegisCommand() {
-  if (process.env.AEGIS_BIN && fs.existsSync(process.env.AEGIS_BIN)) return process.env.AEGIS_BIN;
-  const venv = path.join(os.homedir(), ".aegis", "venv", "bin", "aegis");
-  if (fs.existsSync(venv)) return venv;
-  return "aegis"; // rely on PATH
-}
-
 /* ---------- window-state persistence ---------- */
 function loadState() {
   try { return JSON.parse(fs.readFileSync(stateFile(), "utf8")); } catch { return {}; }
@@ -103,14 +96,15 @@ function startBackend() {
     port = await freePort();
     token = crypto.randomBytes(18).toString("hex");
     dashboardUrl = `${backendBaseUrl()}/?token=${token}`;
-    const bin = aegisCommand();
+    const resolvedEnv = backendEnvironment(process.env, { cwd: process.env.TERMINAL_CWD || process.cwd() });
+    const bin = aegisCommand({ env: resolvedEnv });
     log(`starting backend: ${bin} dashboard --host 127.0.0.1 --port ${port}`);
     backend = spawn(bin, ["dashboard", "--host", "127.0.0.1", "--port", String(port), "--no-open"], {
       env: {
-        ...process.env,
+        ...resolvedEnv,
         AEGIS_DASHBOARD_TOKEN: token,
         AEGIS_DESKTOP: "1",
-        TERMINAL_CWD: process.env.TERMINAL_CWD || process.cwd(),
+        TERMINAL_CWD: resolvedEnv.TERMINAL_CWD || process.cwd(),
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -403,7 +397,7 @@ async function run() {
     setTimeout(() => initAutoUpdate(false), 4000);   // quiet check shortly after launch
   } catch (e) {
     log(`boot failed: ${e.message}`);
-    const bin = aegisCommand();
+    const bin = aegisCommand({ env: backendEnvironment(process.env) });
     boot({ error: `${e.message}\n\nTried: ${bin} dashboard\nMake sure AEGIS is installed (or set AEGIS_BIN).` });
   }
 }

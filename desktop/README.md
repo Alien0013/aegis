@@ -10,6 +10,7 @@ cd desktop
 npm install
 npm start            # launches the app (requires `aegis` installed / on PATH)
 npm run start:sandbox  # opt into Chromium's sandbox if your chrome-sandbox is configured
+npm run test:desktop # backend-resolution helper tests
 ```
 
 ## Run from an AEGIS install
@@ -27,6 +28,12 @@ Branded with `build/icon.png` / `build/icon.ico` (generated from `assets/logo.sv
 Signed/notarized installers need each platform's signing certs and (usually)
 that platform's machine or CI runner. The app itself just needs `aegis`
 available — set `AEGIS_BIN` to override the executable path.
+
+On Windows, Explorer-launched GUI apps can inherit stale environment variables
+from login time. The desktop backend resolver reads live user-scoped
+`AEGIS_HOME` and `AEGIS_BIN` from `HKCU\Environment` before falling back to
+`%LOCALAPPDATA%\aegis\venv\Scripts\aegis.exe` or `PATH`, so a value set with
+`setx` works without logging out.
 
 ## Linux sandbox note
 Electron's Chromium needs a root-owned setuid helper that `npm install` can't set,
@@ -46,6 +53,9 @@ A structured Electron app under `electron/`:
   while reporting progress to the splash, then opens the main window and swaps it
   in when loaded. Keeps the backend alive (**restart-on-crash**, up to 3×), stops
   it cleanly on quit, and captures stdout/stderr to a log for the failure screen.
+- **`electron/backend-env.cjs`** / **`electron/windows-user-env.cjs`** — resolve
+  the backend binary and launch environment, including the Windows registry
+  fallback for stale GUI environments.
 - **`electron/boot.html`** — the splash / boot screen: branding, live progress,
   and an **error state** (Retry · Open logs · Quit) if the backend won't start.
 - **`electron/preload.js`** — a locked-down `contextBridge` (the only thing the

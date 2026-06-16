@@ -1,0 +1,46 @@
+const assert = require("node:assert/strict");
+const path = require("node:path");
+const test = require("node:test");
+const {
+  aegisCommand,
+  backendEnvironment,
+  candidateAegisCommands,
+  resolveAegisHome,
+} = require("./backend-env.cjs");
+
+test("prefers explicit AEGIS_BIN when it exists", () => {
+  const env = { AEGIS_BIN: "/opt/aegis/bin/aegis" };
+  assert.equal(aegisCommand({ env, exists: (p) => p === env.AEGIS_BIN }), env.AEGIS_BIN);
+});
+
+test("uses Unix AEGIS_HOME venv before PATH fallback", () => {
+  const env = { AEGIS_HOME: "/srv/aegis" };
+  const expected = path.posix.join(env.AEGIS_HOME, "venv", "bin", "aegis");
+  assert.equal(aegisCommand({ platform: "linux", env, homedir: "/home/alien", exists: (p) => p === expected }), expected);
+});
+
+test("reads Windows user env for stale Explorer-launched process env", () => {
+  const registry = {
+    AEGIS_HOME: "D:\\AegisHome",
+    AEGIS_BIN: "D:\\Tools\\aegis.exe",
+  };
+  const readUserEnvVar = (name) => registry[name] || null;
+  const env = backendEnvironment({}, { platform: "win32", cwd: "C:\\work", readUserEnvVar });
+
+  assert.equal(env.AEGIS_HOME, registry.AEGIS_HOME);
+  assert.equal(env.AEGIS_BIN, registry.AEGIS_BIN);
+  assert.equal(env.TERMINAL_CWD, "C:\\work");
+  assert.equal(
+    aegisCommand({ platform: "win32", env, homedir: "C:\\Users\\Alien", exists: (p) => p === registry.AEGIS_BIN }),
+    registry.AEGIS_BIN,
+  );
+});
+
+test("falls back to LocalAppData Windows venv candidates", () => {
+  const env = { LOCALAPPDATA: "C:\\Users\\Alien\\AppData\\Local" };
+  const home = resolveAegisHome({ platform: "win32", env, homedir: "C:\\Users\\Alien" });
+  const expected = path.win32.join(home, "venv", "Scripts", "aegis.exe");
+  assert.equal(home, "C:\\Users\\Alien\\AppData\\Local\\aegis");
+  assert.equal(candidateAegisCommands({ platform: "win32", env, homedir: "C:\\Users\\Alien" })[0], expected);
+  assert.equal(aegisCommand({ platform: "win32", env, homedir: "C:\\Users\\Alien", exists: (p) => p === expected }), expected);
+});

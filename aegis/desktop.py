@@ -14,7 +14,9 @@ from . import config as cfg
 
 DESKTOP_FILES = (
     "package.json", "package-lock.json", "launch.js",
-    "electron/main.js", "electron/preload.js", "electron/preload-app.js", "electron/boot.html",
+    "electron/main.js", "electron/backend-env.cjs", "electron/backend-env.test.cjs",
+    "electron/windows-user-env.cjs", "electron/windows-user-env.test.cjs",
+    "electron/preload.js", "electron/preload-app.js", "electron/boot.html",
     "build/icon.png",
 )
 
