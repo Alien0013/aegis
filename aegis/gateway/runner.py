@@ -3,15 +3,25 @@
 from __future__ import annotations
 
 import threading
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import urlparse
 
 from ..agent.agent import Agent
 from ..config import Config
 from ..session import Session, SessionStore
 from ..types import Message
 from .base import BasePlatformAdapter, MessageEvent
+
+_AUDIO_ATTACHMENT_EXTENSIONS = (".ogg", ".oga", ".opus", ".mp3", ".m4a", ".wav", ".aac")
+_DISCORD_ATTACHMENT_HOSTS = {
+    "cdn.discordapp.com",
+    "media.discordapp.net",
+    "attachments.discordapp.net",
+}
+_MAX_TRANSCRIBED_ATTACHMENT_BYTES = 25 * 1024 * 1024
 
 
 def _sync_control_session(proxy, session: Session, reply: str) -> str:
@@ -1256,20 +1266,91 @@ class GatewayRunner:
 
     def _maybe_transcribe(self, ev: MessageEvent, text: str) -> str:
         audio = next((a for a in (ev.attachments or [])
-                      if str(a.get("type", "")).startswith("audio") or a.get("path", "").endswith(
-                          (".ogg", ".mp3", ".m4a", ".wav"))), None)
-        if not audio or not audio.get("path"):
+                      if self._is_audio_attachment(a)), None)
+        if not audio:
+            return text
+        cleanup_path = ""
+        audio_path = str(audio.get("path") or "").strip()
+        if not audio_path:
+            audio_path = self._download_transcribable_attachment(ev, audio)
+            cleanup_path = audio_path
+        if not audio_path:
             return text
         try:
             from ..tools.voice import TranscribeTool
             from ..tools.base import ToolContext
-            res = TranscribeTool().run({"path": audio["path"]},
+            res = TranscribeTool().run({"path": audio_path},
                                        ToolContext(cwd=self.cwd, config=self.config))
             if not res.is_error:
                 return (text + "\n\n[voice memo transcript]\n" + res.content).strip()
         except Exception:  # noqa: BLE001
             pass
+        finally:
+            if cleanup_path:
+                try:
+                    Path(cleanup_path).unlink(missing_ok=True)
+                except OSError:
+                    pass
         return text
+
+    def _is_audio_attachment(self, attachment: dict) -> bool:
+        kind = str(attachment.get("type") or attachment.get("media_type") or "").lower()
+        path = str(attachment.get("path") or attachment.get("filename") or "").lower()
+        return kind.startswith("audio") or path.endswith(_AUDIO_ATTACHMENT_EXTENSIONS)
+
+    def _download_transcribable_attachment(self, ev: MessageEvent, attachment: dict) -> str:
+        if ev.platform != "discord":
+            return ""
+        url = str(attachment.get("url") or attachment.get("proxy_url") or "").strip()
+        parsed = urlparse(url)
+        host = str(parsed.hostname or "").lower()
+        if parsed.scheme != "https" or host not in _DISCORD_ATTACHMENT_HOSTS:
+            return ""
+        try:
+            declared_size = int(attachment.get("size") or 0)
+        except (TypeError, ValueError):
+            declared_size = 0
+        if declared_size > _MAX_TRANSCRIBED_ATTACHMENT_BYTES:
+            return ""
+        suffix = Path(str(attachment.get("filename") or "")).suffix or ".audio"
+        tmp_path = ""
+        keep_tmp = False
+        try:
+            import httpx
+
+            with httpx.Client(timeout=30, follow_redirects=False) as client:
+                with client.stream("GET", url) as response:
+                    response.raise_for_status()
+                    try:
+                        content_length = int(response.headers.get("content-length") or 0)
+                    except (TypeError, ValueError):
+                        content_length = 0
+                    if content_length > _MAX_TRANSCRIBED_ATTACHMENT_BYTES:
+                        return ""
+                    with tempfile.NamedTemporaryFile(
+                        prefix="aegis-discord-audio-",
+                        suffix=suffix,
+                        delete=False,
+                    ) as fh:
+                        tmp_path = fh.name
+                        written = 0
+                        for chunk in response.iter_bytes():
+                            if not chunk:
+                                continue
+                            written += len(chunk)
+                            if written > _MAX_TRANSCRIBED_ATTACHMENT_BYTES:
+                                return ""
+                            fh.write(chunk)
+            keep_tmp = True
+            return tmp_path
+        except Exception:  # noqa: BLE001
+            return ""
+        finally:
+            if tmp_path and not keep_tmp:
+                try:
+                    Path(tmp_path).unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     def _submit_process_notification(self, event: dict, text: str) -> bool:
         platform = str(event.get("platform") or "")

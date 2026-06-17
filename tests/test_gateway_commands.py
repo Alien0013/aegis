@@ -80,6 +80,77 @@ def test_gateway_send_via_adapter_passes_thread_metadata_with_fallback(tmp_path,
     assert legacy_adapter.sent == [("C2", "fallback")]
 
 
+def test_gateway_transcribes_discord_audio_url_with_cleanup(tmp_path, monkeypatch):
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    import httpx
+
+    from aegis.gateway.base import MessageEvent
+
+    r = _runner(tmp_path, monkeypatch)
+    downloaded = []
+
+    class FakeStream:
+        headers = {"content-length": "7"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def raise_for_status(self):
+            return None
+
+        def iter_bytes(self):
+            yield b"ogg"
+            yield b"data"
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def stream(self, method, url):
+            assert method == "GET"
+            assert url == "https://cdn.discordapp.com/attachments/voice.ogg"
+            return FakeStream()
+
+    def fake_transcribe(_self, args, _ctx):
+        path = Path(args["path"])
+        assert path.exists()
+        assert path.read_bytes() == b"oggdata"
+        downloaded.append(str(path))
+        return SimpleNamespace(is_error=False, content="hello from audio")
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    monkeypatch.setattr("aegis.tools.voice.TranscribeTool.run", fake_transcribe)
+
+    ev = MessageEvent(
+        platform="discord",
+        chat_id="C1",
+        text="caption",
+        attachments=[{
+            "type": "audio/ogg",
+            "filename": "voice.ogg",
+            "url": "https://cdn.discordapp.com/attachments/voice.ogg",
+            "size": 7,
+        }],
+    )
+
+    text = r._maybe_transcribe(ev, "caption")
+
+    assert text == "caption\n\n[voice memo transcript]\nhello from audio"
+    assert downloaded
+    assert not Path(downloaded[0]).exists()
+
+
 def test_handoff_is_adopted_before_control_commands(tmp_path, monkeypatch):
     from aegis import handoff
     from aegis.session import Session
