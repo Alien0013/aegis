@@ -1049,6 +1049,8 @@ def test_responses_accepts_output_text_content_part(monkeypatch, tmp_path):
                 "content": [{"type": "output_text", "text": "reuse prior output text"}],
             }],
         })
+        response_id = json.loads(data)["id"]
+        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items")
     finally:
         srv.shutdown()
         srv.server_close()
@@ -1056,6 +1058,45 @@ def test_responses_accepts_output_text_content_part(monkeypatch, tmp_path):
     assert status == 200
     assert json.loads(data)["object"] == "response"
     assert _FakeRunner.calls[0]["prompt"].content == "reuse prior output text"
+    assert items_status == 200
+    assert json.loads(items_data)["data"][0]["content"] == [
+        {"type": "input_text", "text": "reuse prior output text"}
+    ]
+
+
+def test_responses_preserves_assistant_output_text_input_item(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": [
+                {
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "prior answer"}],
+                },
+                {"role": "user", "content": "continue"},
+            ],
+        })
+        response_id = json.loads(data)["id"]
+        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert _FakeRunner.calls[0]["history"][0].role == "assistant"
+    assert _FakeRunner.calls[0]["history"][0].content == "prior answer"
+    assert items_status == 200
+    items = json.loads(items_data)["data"]
+    assert items[0]["role"] == "assistant"
+    assert items[0]["content"] == [{"type": "output_text", "text": "prior answer"}]
+    assert items[1]["role"] == "user"
+    assert items[1]["content"] == [{"type": "input_text", "text": "continue"}]
 
 
 def test_responses_rejects_invalid_image_url(monkeypatch, tmp_path):

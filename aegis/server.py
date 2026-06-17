@@ -589,15 +589,19 @@ def _canonical_response_function_output(value: Any) -> Any:
     return value
 
 
-def _canonical_response_function_output_part(part: Any) -> dict[str, Any] | None:
+def _canonical_response_function_output_part(
+    part: Any,
+    *,
+    text_type: str = "input_text",
+) -> dict[str, Any] | None:
     if isinstance(part, str):
-        return {"type": "input_text", "text": part}
+        return {"type": text_type, "text": part}
     if not isinstance(part, dict):
         return None
     ptype = str(part.get("type") or "").strip().lower()
     if ptype in _TEXT_CONTENT_PART_TYPES:
         text = part.get("text", "")
-        return {"type": "input_text", "text": str(text)}
+        return {"type": text_type, "text": str(text)}
     if ptype in _IMAGE_CONTENT_PART_TYPES:
         image = _image_url_from_part(part)
         if not image:
@@ -621,33 +625,35 @@ def _canonical_response_function_output_part(part: Any) -> dict[str, Any] | None
     return None
 
 
-def _canonical_response_message_content(value: Any) -> list[dict[str, Any]]:
+def _canonical_response_message_content(value: Any, *, role: str = "user") -> list[dict[str, Any]]:
+    text_type = "output_text" if str(role or "").lower() == "assistant" else "input_text"
     if isinstance(value, list):
         parts: list[dict[str, Any]] = []
         for part in value:
-            normalized = _canonical_response_function_output_part(part)
+            normalized = _canonical_response_function_output_part(part, text_type=text_type)
             if normalized is not None:
                 parts.append(normalized)
         return parts
     if isinstance(value, dict):
         if "content" in value:
-            return _canonical_response_message_content(value.get("content"))
-        normalized = _canonical_response_function_output_part(value)
+            return _canonical_response_message_content(value.get("content"), role=role)
+        normalized = _canonical_response_function_output_part(value, text_type=text_type)
         if normalized is not None:
             return [normalized]
         for key in ("text", "input_text", "output_text"):
             if key in value:
-                return _canonical_response_message_content(value.get(key))
+                return _canonical_response_message_content(value.get(key), role=role)
     if value is None:
-        return [{"type": "input_text", "text": ""}]
-    return [{"type": "input_text", "text": str(value)}]
+        return [{"type": text_type, "text": ""}]
+    return [{"type": text_type, "text": str(value)}]
 
 
 def _canonical_response_message_item(item: dict[str, Any]) -> dict[str, Any]:
+    role = str(item.get("role") or "user")
     out: dict[str, Any] = {
         "type": "message",
-        "role": str(item.get("role") or "user"),
-        "content": _canonical_response_message_content(item.get("content", "")),
+        "role": role,
+        "content": _canonical_response_message_content(item.get("content", ""), role=role),
     }
     for key in ("id", "status", "name"):
         if item.get(key) is not None:

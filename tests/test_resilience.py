@@ -46,6 +46,65 @@ def test_run_is_interruptible_midturn(tmp_path):
     assert p.n == 1                                   # stopped before the next model call
 
 
+def test_cancel_during_provider_call_drops_late_assistant(tmp_path):
+    from aegis.types import LLMResponse
+
+    class CancelLate:
+        context_length = 200_000
+        name = "f"
+        model = "m"
+        api_mode = None
+        auth = None
+        def __init__(self):
+            self.agent = None
+        def describe(self): return "f"
+        def complete(self, messages, **k):
+            self.agent.cancel_event.set()
+            return LLMResponse(text="late")
+
+    p = CancelLate()
+    a = _agent(p, tmp_path)
+    p.agent = a
+    events = []
+    out = a.run("go", events.append)
+
+    assert out.content == "[interrupted by user]"
+    assert any(e["type"] == "cancelled" for e in events)
+    assert [m.content for m in a.session.messages if m.role == "assistant"] == [
+        "[interrupted by user]"
+    ]
+
+
+def test_cancel_during_budget_grace_call_drops_late_summary(tmp_path):
+    from aegis.types import LLMResponse
+
+    class CancelLateGrace:
+        context_length = 200_000
+        name = "f"
+        model = "m"
+        api_mode = None
+        auth = None
+        def __init__(self):
+            self.agent = None
+        def describe(self): return "f"
+        def complete(self, messages, **k):
+            self.agent.cancel_event.set()
+            return LLMResponse(text="late grace")
+
+    p = CancelLateGrace()
+    a = _agent(p, tmp_path)
+    a.budget.max_iterations = 0
+    p.agent = a
+    events = []
+    out = a.run("go", events.append)
+
+    assert out.content == "[interrupted by user]"
+    assert any(e["type"] == "cancelled" for e in events)
+    assert [m.content for m in a.session.messages if m.role == "assistant"] == [
+        "[interrupted by user]"
+    ]
+
+
 # --- #6 tool availability --------------------------------------------------
 def test_unusable_tools_hidden_from_model():
     from aegis.tools.base import Tool

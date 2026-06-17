@@ -1380,13 +1380,16 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
     def _cancelled() -> bool:
         return cancel is not None and cancel.is_set()
 
+    def _cancelled_result() -> Message:
+        emit({"type": "cancelled"})
+        stop = Message.assistant("[interrupted by user]")
+        session.messages.append(stop)
+        _finish_turn("cancelled")
+        return stop
+
     while budget.should_continue():
         if _cancelled():
-            emit({"type": "cancelled"})
-            stop = Message.assistant("[interrupted by user]")
-            session.messages.append(stop)
-            _finish_turn("cancelled")
-            return stop
+            return _cancelled_result()
         emit({"type": "iteration", "n": budget.api_call_count + 1, "max": budget.max_iterations})
         _drain_steering(agent, session)        # fold in any mid-run /steer guidance
         if len(fresh := _live_schemas()) != len(schemas):   # tool_search activated a deferred tool
@@ -1579,6 +1582,8 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                 agent,
             )
             agent._active_response_id = ""
+            if _cancelled():
+                return _cancelled_result()
         except Exception as e:  # noqa: BLE001
             agent._active_response_id = ""
             from .._log import log_exc
@@ -1887,6 +1892,8 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
             on_response_id=lambda rid: setattr(agent, "_active_response_id", str(rid or "")),
         )
         agent._active_response_id = ""
+        if _cancelled():
+            return _cancelled_result()
         budget.usage.add(grace.usage)
         grace_duration_ms = int((time.perf_counter() - grace_started) * 1000)
         grace_response = _response_trace_data(grace, grace_duration_ms)
