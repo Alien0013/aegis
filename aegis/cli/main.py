@@ -6,6 +6,7 @@ import argparse
 import importlib.metadata as importlib_metadata
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -935,10 +936,88 @@ def cmd_memory(args, config: Config) -> int:
 
 
 def cmd_config(args, config: Config) -> int:
+    def configured_env(*names: str) -> str:
+        return "configured" if any(os.environ.get(name, "").strip() for name in names) else "not set"
+
+    def show_summary() -> int:
+        compression = config.get("agent.compression", {}) or {}
+        platforms = config.get("display.platforms", {}) or {}
+        gateway_channels = set(str(x) for x in (config.get("gateway.channels", []) or []))
+        telegram = "configured" if os.environ.get("TELEGRAM_BOT_TOKEN") or "telegram" in gateway_channels else "not configured"
+        discord = "configured" if os.environ.get("DISCORD_BOT_TOKEN") or "discord" in gateway_channels else "not configured"
+        _print("AEGIS Configuration")
+        _print()
+        _print("Paths")
+        _print(f"  Config:   {cfg.config_path()}")
+        _print(f"  Secrets:  {cfg.env_path()}")
+        _print(f"  Home:     {cfg.get_home()}")
+        _print()
+        _print("API Keys")
+        for label, names in (
+            ("OpenRouter", ("OPENROUTER_API_KEY",)),
+            ("OpenAI", ("OPENAI_API_KEY",)),
+            ("Anthropic", ("ANTHROPIC_API_KEY",)),
+            ("Exa", ("EXA_API_KEY",)),
+            ("Parallel", ("PARALLEL_API_KEY",)),
+            ("Firecrawl", ("FIRECRAWL_API_KEY",)),
+            ("Tavily", ("TAVILY_API_KEY",)),
+            ("Browserbase", ("BROWSERBASE_API_KEY",)),
+            ("FAL", ("FAL_KEY", "FAL_API_KEY")),
+        ):
+            _print(f"  {label:<12} {configured_env(*names)}")
+        _print()
+        _print("Model")
+        _print(f"  Provider: {config.get('model.provider')}")
+        _print(f"  Model:    {config.get('model.default')}")
+        if config.get("model.base_url"):
+            _print(f"  Base URL: {config.get('model.base_url')}")
+        _print(f"  Max turns: {config.get('agent.max_iterations')}")
+        _print()
+        _print("Display")
+        _print(f"  Personality: {config.get('agent.personality', 'none') or 'none'}")
+        _print(f"  Reasoning:   {config.get('agent.reasoning_effort', 'off') or 'off'}")
+        _print(f"  Bell:        {config.get('display.bell', 'off') or 'off'}")
+        if platforms:
+            _print(f"  Platforms:   {', '.join(sorted(platforms))}")
+        _print()
+        _print("Terminal")
+        _print(f"  Backend:     {config.get('tools.terminal_backend')}")
+        _print(f"  Working dir: {Path.cwd()}")
+        _print(f"  Timeout:     {config.get('tools.terminal_lifetime_seconds')}s")
+        _print()
+        _print("Context Compression")
+        _print("  Enabled:        yes")
+        _print(f"  Threshold:      {int(float(compression.get('threshold', 0.5) or 0.5) * 100)}%")
+        _print(f"  Target ratio:   {int(float(compression.get('tail_fraction', 0.25) or 0.25) * 100)}% preserved")
+        _print(f"  Protect last:   {compression.get('preserve_last', 20)} messages")
+        _print(f"  Protect first:  {compression.get('preserve_first', 3)} messages")
+        _print()
+        _print("Messaging Platforms")
+        _print(f"  Telegram: {telegram}")
+        _print(f"  Discord:  {discord}")
+        _print()
+        _print("Commands")
+        _print("  aegis config edit              # Edit config file")
+        _print("  aegis config set <key> <value> # Update a config value")
+        _print("  aegis setup                    # Run setup wizard")
+        return 0
+
     if args.action == "path":
         _print(str(cfg.config_path()))
         _print(str(cfg.env_path()))
         return 0
+    if args.action == "summary":
+        return show_summary()
+    if args.action == "edit":
+        target = cfg.env_path() if getattr(args, "secrets", False) else cfg.config_path()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.touch(exist_ok=True)
+        editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "nano"
+        command = [*shlex.split(editor), str(target)]
+        try:
+            return subprocess.run(command).returncode
+        except FileNotFoundError:
+            return _die(f"editor not found: {command[0]}")
     if args.action == "get":
         _print(str(config.get(args.key)))
         return 0
@@ -1859,11 +1938,13 @@ def build_parser() -> argparse.ArgumentParser:
     mem.add_argument("--user", action="store_true", help="target the user profile")
     mem.set_defaults(func=cmd_memory)
 
-    cf = sub.add_parser("config", help="get/set configuration")
-    cf.add_argument("action", nargs="?", choices=["get", "set", "path", "dump", "check", "migrate"],
-                    default="dump")
+    cf = sub.add_parser("config", help="view, edit, get, or set configuration")
+    cf.add_argument("action", nargs="?",
+                    choices=["summary", "edit", "get", "set", "path", "dump", "check", "migrate"],
+                    default="summary")
     cf.add_argument("key", nargs="?")
     cf.add_argument("value", nargs="?")
+    cf.add_argument("--secrets", action="store_true", help="edit the local secrets .env file")
     cf.set_defaults(func=cmd_config)
 
     sc = sub.add_parser("secret", help="store a local secret in ~/.aegis/.env with hidden input")

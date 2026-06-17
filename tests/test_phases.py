@@ -168,6 +168,43 @@ def test_cli_memory_status_replace_remove(tmp_path, monkeypatch, capsys):
     assert "removed 1 entry" in out
 
 
+def test_cli_config_summary_dump_and_edit(monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    from aegis import config as cfg
+    from aegis.cli.main import main
+
+    assert main(["config"]) == 0
+    out = capsys.readouterr().out
+    assert "AEGIS Configuration" in out
+    assert "Paths" in out
+    assert f"Config:   {cfg.config_path()}" in out
+    assert "API Keys" in out
+    assert "aegis config edit" in out
+
+    assert main(["config", "dump"]) == 0
+    out = capsys.readouterr().out
+    assert "model:" in out
+    assert "agent:" in out
+
+    calls = []
+
+    def fake_run(command):
+        calls.append(command)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setenv("EDITOR", "test-editor --wait")
+    monkeypatch.setattr("aegis.cli.main.subprocess.run", fake_run)
+
+    assert main(["config", "edit"]) == 0
+    assert calls[-1] == ["test-editor", "--wait", str(cfg.config_path())]
+    assert cfg.config_path().exists()
+
+    assert main(["config", "edit", "--secrets"]) == 0
+    assert calls[-1] == ["test-editor", "--wait", str(cfg.env_path())]
+    assert cfg.env_path().exists()
+
+
 def test_cli_bare_first_run_guard(capsys):
     from aegis.cli.main import main
 

@@ -26,6 +26,8 @@ def test_cli_parser_exposes_upgrade_commands():
     assert parser.parse_args(["skills", "uninstall", "demo-skill"]).action == "uninstall"
     assert parser.parse_args(["memory", "status"]).action == "status"
     assert parser.parse_args(["memory", "replace", "--old-text", "old", "new"]).old_text == "old"
+    assert parser.parse_args(["config"]).action == "summary"
+    assert parser.parse_args(["config", "edit", "--secrets"]).secrets is True
 
 
 def test_model_doctor_prints_resolver_report(capsys):
