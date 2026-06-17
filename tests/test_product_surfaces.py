@@ -2888,6 +2888,9 @@ def test_dashboard_chat_page_sends_runtime_controls():
     assert "model:model" in html
     assert "postStream('chat/stream',payload" in html
     assert "post('chat',payload" in html
+    assert "new AbortController()" in html
+    assert "function cancelStream()" in html
+    assert "if(!active())return" in html
 
 
 def test_dashboard_run_detail_uses_configured_trace_path(tmp_path):

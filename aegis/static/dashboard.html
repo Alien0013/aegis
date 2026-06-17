@@ -251,11 +251,13 @@ if(tok)localStorage.aegisToken=tok;
 const withTok=p=>'/api/'+p+(tok?(p.includes('?')?'&':'?')+'token='+encodeURIComponent(tok):'');
 async function api(p){const r=await fetch(withTok(p));if(!r.ok)throw new Error(r.status);return r.json()}
 async function post(p,b){const r=await fetch(withTok(p),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)});return r.json()}
-async function postStream(p,b,onMsg){
-  const r=await fetch(withTok(p),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)});
+async function postStream(p,b,onMsg,opts){
+  const signal=opts&&opts.signal;
+  const r=await fetch(withTok(p),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b),signal});
   if(!r.ok||!r.body)throw new Error(r.status||'stream');
   const rd=r.body.getReader(),dec=new TextDecoder();let buf='';
   while(true){
+    if(signal&&signal.aborted)break;
     const x=await rd.read();if(x.done)break;buf+=dec.decode(x.value,{stream:true});
     let i;while((i=buf.indexOf('\n\n'))>=0){const chunk=buf.slice(0,i);buf=buf.slice(i+2);
       chunk.split(/\n/).filter(l=>l.startsWith('data:')).forEach(l=>{try{onMsg(JSON.parse(l.slice(5).trim()))}catch(_){}});
@@ -485,6 +487,8 @@ PAGES.chat=()=>{
     '<div class="chatbar"><textarea id="cin" rows="1" placeholder="Message AEGIS…  (Enter to send · Shift+Enter for newline)"></textarea>'+
     '<button class="btn" id="csend">Send</button><button class="btn ghost" id="cnew" title="new conversation">＋</button></div></div>';
   const log=$('#clog'),inp=$('#cin'),cwdInp=$('#ccwd'),providerInp=$('#cprov'),modelInp=$('#cmodel');let sid=sessionStorage.aegisChatSid||null;
+  let streamToken=0,streamController=null;
+  function cancelStream(){streamToken++;if(streamController)streamController.abort();streamController=null}
   function add(role,text,raw){const w=document.createElement('div');w.className='msg '+role;
     w.innerHTML='<div class="av">'+(role==='user'?'You':'Æ')+'</div><div class="bub">'+(raw?text:md(text))+'</div>';
     log.appendChild(w);log.scrollTop=log.scrollHeight;return w}
@@ -509,6 +513,8 @@ PAGES.chat=()=>{
   }
   async function send(){
     const m=inp.value.trim();if(!m)return;inp.value='';inp.style.height='auto';
+    cancelStream();const controller=new AbortController(),token=streamToken+1;streamToken=token;streamController=controller;
+    const active=()=>streamToken===token&&streamController===controller&&!controller.signal.aborted;
     add('user',m);
     const w=add('assistant','<span class="typing"><i></i><i></i><i></i></span>',true);
     const cwd=cwdInp.value.trim();if(cwd)sessionStorage.aegisChatCwd=cwd;else sessionStorage.removeItem('aegisChatCwd');
@@ -518,16 +524,18 @@ PAGES.chat=()=>{
     const payload={message:m,session_id:sid,cwd:cwd,provider:provider,model:model};
     const state={events:[],reply:'',session_id:sid||'',trace_id:'',turn_id:'',run_id:'',cwd:cwd};
     try{await postStream('chat/stream',payload,ev=>{
+      if(!active())return;
       if(ev.type==='start'){state.session_id=ev.session_id||state.session_id;state.cwd=ev.cwd||state.cwd}
       else if(ev.type==='event'&&ev.event){state.events.push(ev.event);renderChatBubble(w,state,true)}
       else if(ev.type==='final'||ev.type==='error'){Object.assign(state,ev)}
-    });sid=state.session_id;sessionStorage.aegisChatSid=sid;renderChatBubble(w,state,false);
-    }catch(e){try{const r=await post('chat',payload);Object.assign(state,r);sid=r.session_id;sessionStorage.aegisChatSid=sid;renderChatBubble(w,state,false)}
-      catch(_){w.querySelector('.bub').innerHTML='<span class="err">request failed — is a provider configured?</span>'}}
+    },{signal:controller.signal});if(active()){sid=state.session_id;sessionStorage.aegisChatSid=sid;renderChatBubble(w,state,false)}
+    }catch(e){if(active()){try{const r=await post('chat',payload);Object.assign(state,r);sid=r.session_id;sessionStorage.aegisChatSid=sid;renderChatBubble(w,state,false)}
+      catch(_){w.querySelector('.bub').innerHTML='<span class="err">request failed — is a provider configured?</span>'}}}
+    finally{if(streamToken===token)streamController=null}
     log.scrollTop=log.scrollHeight;
   }
   $('#csend').onclick=send;
-  $('#cnew').onclick=()=>{sid=null;sessionStorage.removeItem('aegisChatSid');log.innerHTML='';toast('new conversation')};
+  $('#cnew').onclick=()=>{cancelStream();sid=null;sessionStorage.removeItem('aegisChatSid');log.innerHTML='';toast('new conversation')};
   $('#cctxclear').onclick=()=>{cwdInp.value='';providerInp.value='';modelInp.value='';
     sessionStorage.removeItem('aegisChatCwd');sessionStorage.removeItem('aegisChatProvider');sessionStorage.removeItem('aegisChatModel');toast('chat context cleared')};
   inp.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}};
