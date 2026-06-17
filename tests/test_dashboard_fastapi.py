@@ -1478,6 +1478,42 @@ def test_fastapi_session_checks_reports_cross_session_integrity(tmp_path, monkey
     assert alias.json()["ok"] is True
 
 
+def test_fastapi_webhooks_status_redacts_security_posture(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    from aegis.webhook import WebhookStore
+
+    WebhookStore().add(
+        "ci",
+        "summarize {body}",
+        secret="super-secret",
+        deliver="telegram:1, discord:2",
+        events=["push"],
+        skills=["github-review"],
+    )
+
+    legacy = asyncio.run(_request(app, "GET", "/api/webhooks", headers=headers))
+    status = asyncio.run(_request(app, "GET", "/api/webhooks/status", headers=headers))
+
+    assert legacy.status_code == 200
+    assert legacy.json() == [{"name": "ci", "prompt": "summarize {body}"}]
+    assert status.status_code == 200
+    body = status.json()
+    rendered = json.dumps(body)
+    hook = body["hooks"][0]
+    assert body["ok"] is True
+    assert body["count"] == 1
+    assert hook["name"] == "ci"
+    assert hook["secret_configured"] is True
+    assert hook["deliver"] == ["telegram:1", "discord:2"]
+    assert hook["events"] == ["push"]
+    assert hook["skills"] == ["github-review"]
+    assert "super-secret" not in rendered
+    assert body["security"]["rate_limit_per_minute"] >= 1
+    assert "X-Hub-Signature-256" in body["security"]["signature_schemes"]
+
+
 def test_fastapi_config_preferences_memory_provider_and_plugins(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
     headers = {"X-Aegis-Token": "t"}

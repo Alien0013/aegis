@@ -1681,6 +1681,47 @@ def _plugins_payload(config: Config) -> dict:
     }
 
 
+def _webhooks_status_payload(config: Config) -> dict[str, Any]:
+    from .webhook import MAX_WEBHOOK_BYTES, WEBHOOK_REPLAY_WINDOW_SECONDS, WebhookStore
+
+    hooks = []
+    for hook in WebhookStore().list():
+        deliver = [item.strip() for item in str(hook.deliver or "").split(",") if item.strip()]
+        hooks.append({
+            "name": hook.name,
+            "prompt_preview": str(hook.prompt or "")[:160],
+            "secret_configured": bool(hook.secret),
+            "deliver": deliver,
+            "delivery_count": len(deliver),
+            "events": list(hook.events or []),
+            "skills": list(hook.skills or []),
+        })
+    insecure_env = any(
+        os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+        for name in ("AEGIS_WEBHOOK_INSECURE_NO_AUTH", "WEBHOOK_INSECURE_NO_AUTH")
+    )
+    return {
+        "ok": True,
+        "count": len(hooks),
+        "hooks": hooks,
+        "security": {
+            "allow_unsigned_loopback": bool(config.get("webhook.allow_unsigned_loopback", True)),
+            "unsigned_auth_env_override": insecure_env,
+            "rate_limit_per_minute": int(config.get("webhook.rate_limit_per_minute", 60) or 60),
+            "idempotency_ttl_seconds": int(config.get("webhook.idempotency_ttl_seconds", 3600) or 3600),
+            "idempotency_cache_max": int(config.get("webhook.idempotency_cache_max", 10000) or 10000),
+            "max_body_bytes": MAX_WEBHOOK_BYTES,
+            "replay_window_seconds": WEBHOOK_REPLAY_WINDOW_SECONDS,
+            "signature_schemes": [
+                "X-Hub-Signature-256",
+                "X-Webhook-Signature",
+                "svix-signature",
+                "X-Gitlab-Token",
+            ],
+        },
+    }
+
+
 def _safe_plugin_route_name(name: str) -> str:
     value = str(name or "").strip().strip("/")
     if (
@@ -3342,6 +3383,8 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
         from .webhook import WebhookStore
 
         return [{"name": w.name, "prompt": w.prompt} for w in WebhookStore().list()]
+    if path in {"/api/webhooks/status", "/api/automation/webhooks/status"}:
+        return _webhooks_status_payload(config)
     if path == "/api/curator":
         from .curator import apply_transitions
 
