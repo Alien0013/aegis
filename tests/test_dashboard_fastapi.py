@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+from pathlib import Path
 import types
 import time
 
@@ -1881,6 +1882,96 @@ def test_fastapi_dashboard_plugin_install_mounts_api_without_restart(tmp_path, m
     assert enabled.status_code == 200
     assert enabled_route.status_code == 200
     assert enabled_route.json() == {"live": True}
+
+
+def test_fastapi_dashboard_agent_plugin_install_supports_git_identifier(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    import aegis.plugins as plugin_runtime
+
+    clone_calls: list[list[str]] = []
+
+    def fake_git_clone(cmd, **kwargs):  # noqa: ANN001
+        clone_calls.append(list(cmd))
+        assert cmd[1:5] == ["clone", "--depth", "1", "https://github.com/alien/remote-pulse.git"]
+        assert kwargs["check"] is False
+        clone_root = Path(cmd[-1])
+        (clone_root / ".git").mkdir(parents=True)
+        (clone_root / "dashboard").mkdir()
+        (clone_root / "plugin.yaml").write_text(
+            "name: remote-pulse\n"
+            "version: 1.0.0\n"
+            "kind: backend\n"
+            "requires_env:\n"
+            "  - REMOTE_PULSE_TOKEN\n",
+            encoding="utf-8",
+        )
+        (clone_root / "__init__.py").write_text("def register(api):\n    pass\n", encoding="utf-8")
+        (clone_root / "dashboard" / "manifest.json").write_text(
+            json.dumps({
+                "name": "remote-pulse-panel",
+                "entry": "dist/index.js",
+                "api": "plugin_api.py",
+            }),
+            encoding="utf-8",
+        )
+        (clone_root / "dashboard" / "plugin_api.py").write_text(
+            "from fastapi import APIRouter\n"
+            "router = APIRouter()\n"
+            "@router.get('/ping')\n"
+            "def ping():\n"
+            "    return {'remote': True}\n",
+            encoding="utf-8",
+        )
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(plugin_runtime.subprocess, "run", fake_git_clone)
+
+    validated = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/plugins/validate",
+        json={"source": "alien/remote-pulse"},
+        headers=headers,
+    ))
+    installed = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/dashboard/agent-plugins/install",
+        json={"identifier": "alien/remote-pulse", "force": "false", "enable": "true"},
+        headers=headers,
+    ))
+    route = asyncio.run(_request(app, "GET", "/api/plugins/remote-pulse-panel/ping", headers=headers))
+    duplicate = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/dashboard/agent-plugins/install",
+        json={"identifier": "alien/remote-pulse", "force": "false"},
+        headers=headers,
+    ))
+
+    assert validated.status_code == 200
+    assert validated.json()["kind"] == "git"
+    assert validated.json()["git_url"] == "https://github.com/alien/remote-pulse.git"
+    assert installed.status_code == 200
+    body = installed.json()
+    assert body["plugin_name"] == "remote-pulse"
+    assert body["source"] == "git"
+    assert body["install_url"] == "https://github.com/alien/remote-pulse.git"
+    assert body["missing_env"] == ["REMOTE_PULSE_TOKEN"]
+    row = next(item for item in body["plugins"] if item["name"] == "remote-pulse")
+    assert row["source"] == "git"
+    assert row["installed_from"] == "alien/remote-pulse"
+    assert row["install_url"] == "https://github.com/alien/remote-pulse.git"
+    assert row["trusted"] is False
+    assert row["can_remove"] is True
+    assert row["can_update_git"] is True
+    assert route.status_code == 200
+    assert route.json() == {"remote": True}
+    assert duplicate.status_code == 400
+    assert "already exists" in duplicate.json()["error"]
+    assert len(clone_calls) == 2
 
 
 def test_fastapi_audio_control_plane(tmp_path, monkeypatch):

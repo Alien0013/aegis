@@ -51,6 +51,22 @@ _DESKTOP_CRON_LOCK = threading.Lock()
 _DASHBOARD_PLUGIN_API_MOUNT_STATUS: dict[str, dict[str, Any]] = {}
 
 
+def _coerce_dashboard_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        stripped = value.strip().lower()
+        if stripped in {"1", "true", "yes", "on"}:
+            return True
+        if stripped in {"0", "false", "no", "off", ""}:
+            return False
+    return default
+
+
 def _start_desktop_cron_ticker(config: Config) -> bool:
     """Start the in-dashboard cron ticker for Electron desktop launches."""
     global _DESKTOP_CRON_STARTED
@@ -1508,7 +1524,19 @@ def _validate_plugin_source(source: str) -> dict:
     if not source:
         return {"ok": False, "error": "source is required"}
     if not path.exists():
-        return {"ok": False, "source": source, "error": "source does not exist"}
+        try:
+            from . import plugins as plugin_runtime
+
+            git_url, subdir = plugin_runtime._resolve_git_url(str(source or ""))
+            return {
+                "ok": True,
+                "source": source,
+                "kind": "git",
+                "git_url": git_url,
+                "subdir": subdir or "",
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "source": source, "error": str(exc) or "source does not exist"}
     if path.is_file() and path.suffix != ".py":
         return {"ok": False, "source": str(path), "error": "plugin file must be a .py file"}
     if path.is_dir() and not any((path / name).exists() for name in ("plugin.yaml", "plugin.yml", "plugin.json", "aegis-plugin.json")):
@@ -1742,7 +1770,7 @@ def _dashboard_plugin_hub(config: Config) -> dict[str, Any]:
             )
         manifest_dir = _plugin_manifest_dir(row)
         source = str(row.get("source") or "")
-        can_remove = source in {"user", "git"} and bool(
+        can_remove = source in {"user", "git", "local"} and bool(
             row.get("path") and _plugin_path_under(str(row.get("path")), plugin_root)
         )
         can_update_git = bool(
@@ -3674,12 +3702,13 @@ def _api_post(path: str, body: dict, config: Config, chat_runner: Any) -> dict:
             if act == "validate":
                 return _validate_plugin_source(str(body.get("source") or ""))
             if act == "install" and body.get("source"):
-                installed = plugin_runtime.install(
+                installed = plugin_runtime.install_details(
                     str(body["source"]),
                     config,
-                    force=bool(body.get("force", False)),
+                    force=_coerce_dashboard_bool(body.get("force"), False),
+                    enable_now=_coerce_dashboard_bool(body.get("enable"), True),
                 )
-                return {"ok": True, "name": installed}
+                return installed
             if act == "enable" and name:
                 return {"ok": plugin_runtime.enable(name, config)}
             if act == "disable" and name:
@@ -4545,9 +4574,14 @@ def create_app(config: Config) -> FastAPI:
         try:
             from . import plugins as plugin_runtime
 
-            name = plugin_runtime.install(source, config, force=bool(body.get("force", False)))
+            result = plugin_runtime.install_details(
+                source,
+                config,
+                force=_coerce_dashboard_bool(body.get("force"), False),
+                enable_now=_coerce_dashboard_bool(body.get("enable"), True),
+            )
             _mount_dashboard_plugin_api_routes(app, config)
-            return JSONResponse({"ok": True, "name": name, **_plugins_payload(config)})
+            return JSONResponse({**result, **_plugins_payload(config)})
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
 
@@ -4561,11 +4595,14 @@ def create_app(config: Config) -> FastAPI:
         try:
             from . import plugins as plugin_runtime
 
-            name = plugin_runtime.install(source, config, force=bool(body.get("force", False)))
-            if body.get("enable") is False:
-                plugin_runtime.disable(name, config)
+            result = plugin_runtime.install_details(
+                source,
+                config,
+                force=_coerce_dashboard_bool(body.get("force"), False),
+                enable_now=_coerce_dashboard_bool(body.get("enable"), True),
+            )
             _mount_dashboard_plugin_api_routes(app, config)
-            return JSONResponse({"ok": True, "name": name, **_dashboard_plugin_hub(config)})
+            return JSONResponse({**result, **_dashboard_plugin_hub(config)})
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
 

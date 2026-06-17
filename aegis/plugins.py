@@ -24,7 +24,9 @@ import json
 import importlib.util
 import re
 import shutil
+import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -106,8 +108,21 @@ _PLUGIN_MODULES: dict[Path, str] = {}
 
 
 MANIFEST_NAMES = ("plugin.yaml", "plugin.yml", "aegis-plugin.json", "plugin.json")
+INSTALL_METADATA_NAME = ".aegis-install.json"
 ENTRY_POINT_GROUPS = ("hermes_agent.plugins", "aegis.plugins")
 _VALID_PLUGIN_KINDS = {"standalone", "backend", "exclusive", "platform", "model-provider"}
+_SUPPORTED_MANIFEST_VERSION = 1
+_GITHUB_BROWSER_SEGMENTS = {
+    "blob",
+    "commit",
+    "commits",
+    "issues",
+    "pull",
+    "pulls",
+    "releases",
+    "tree",
+    "wiki",
+}
 
 
 @dataclass
@@ -132,6 +147,11 @@ class PluginManifest:
     provides_providers: list[str] = field(default_factory=list)
     permissions: list[str] = field(default_factory=list)
     enabled: bool = True
+    installed_from: str = ""
+    install_url: str = ""
+    install_subdir: str = ""
+    trusted: bool = True
+    install_metadata: dict[str, Any] = field(default_factory=dict)
     raw: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -156,6 +176,11 @@ class PluginManifest:
             "provides_providers": self.provides_providers,
             "permissions": self.permissions,
             "enabled": self.enabled,
+            "installed_from": self.installed_from,
+            "install_url": self.install_url,
+            "install_subdir": self.install_subdir,
+            "trusted": self.trusted,
+            "install_metadata": self.install_metadata,
         }
 
 
@@ -265,6 +290,58 @@ def _read_manifest_data(path: Path) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+def _metadata_path(path: Path) -> Path:
+    return path / INSTALL_METADATA_NAME
+
+
+def _read_install_metadata(path: Path) -> dict[str, Any]:
+    """Return install metadata for a plugin dir or any child below it."""
+
+    base = _plugin_base().resolve()
+    current = path if path.is_dir() else path.parent
+    try:
+        current = current.resolve()
+    except OSError:
+        return {}
+    while True:
+        meta_path = _metadata_path(current)
+        if meta_path.exists():
+            try:
+                data = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                return {}
+            return data if isinstance(data, dict) else {}
+        if current == base:
+            return {}
+        try:
+            current.relative_to(base)
+        except ValueError:
+            return {}
+        parent = current.parent
+        if parent == current:
+            return {}
+        current = parent
+
+
+def _write_install_metadata(
+    target: Path,
+    *,
+    source: str,
+    installed_from: str,
+    install_url: str = "",
+    install_subdir: str = "",
+    trusted: bool = True,
+) -> None:
+    data = {
+        "source": source,
+        "installed_from": installed_from,
+        "install_url": install_url,
+        "install_subdir": install_subdir,
+        "trusted": bool(trusted),
+    }
+    _metadata_path(target).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def _list_field(value: Any) -> list[Any]:
     if value is None:
         return []
@@ -351,6 +428,9 @@ def _read_manifest(path: Path, config=None, *, base: Path | None = None,
     data = _read_manifest_data(path)
     if not data:
         return None
+    metadata = _read_install_metadata(path.parent)
+    if metadata:
+        source = str(metadata.get("source") or source)
     name = str(data.get("name") or path.parent.name)
     key = str(data.get("key") or "")
     category = str(data.get("category") or "")
@@ -370,6 +450,13 @@ def _read_manifest(path: Path, config=None, *, base: Path | None = None,
         candidate = (path.parent / str(entry)).resolve()
         if _contained_path(root, candidate):
             entrypoint = candidate
+    try:
+        manifest_version = int(data.get("manifest_version") or 1)
+    except (TypeError, ValueError):
+        manifest_version = 1
+    trusted = metadata.get("trusted")
+    if trusted is None:
+        trusted = source != "git"
     return PluginManifest(
         name=name,
         path=path,
@@ -381,7 +468,7 @@ def _read_manifest(path: Path, config=None, *, base: Path | None = None,
         key=key or name,
         category=category,
         source=source,
-        manifest_version=int(data.get("manifest_version") or 1),
+        manifest_version=manifest_version,
         requires_env=_list_field(data.get("requires_env") or data.get("required_env")),
         provides_tools=_string_list(data.get("provides_tools")),
         provides_hooks=_string_list(data.get("provides_hooks") or data.get("hooks")),
@@ -390,6 +477,11 @@ def _read_manifest(path: Path, config=None, *, base: Path | None = None,
         provides_providers=_string_list(data.get("provides_providers") or data.get("providers")),
         permissions=_string_list(data.get("permissions")),
         enabled=_manifest_enabled(name, key or name, config),
+        installed_from=str(metadata.get("installed_from") or ""),
+        install_url=str(metadata.get("install_url") or ""),
+        install_subdir=str(metadata.get("install_subdir") or ""),
+        trusted=bool(trusted),
+        install_metadata=metadata,
         raw=data,
     )
 
@@ -582,18 +674,162 @@ def disable(name: str, config) -> bool:
     return True
 
 
-def install(source: str, config, *, force: bool = False) -> str:
+def _resolve_git_url(identifier: str) -> tuple[str, str | None]:
+    value = str(identifier or "").strip()
+    if not value:
+        raise ValueError("plugin identifier is required")
+    if _looks_like_local_path(value):
+        raise ValueError("local plugin source does not exist")
+    if value.startswith(("https://", "http://", "git@", "ssh://", "file://")):
+        if value.startswith("https://github.com/"):
+            path = value[len("https://github.com/"):]
+            path = path.split("?", 1)[0].split("#", 1)[0].strip("/")
+            parts = path.split("/")
+            if len(parts) >= 3 and all(parts[:2]) and parts[2] in _GITHUB_BROWSER_SEGMENTS:
+                repo = parts[1].removesuffix(".git")
+                subdir = None
+                if parts[2] == "tree" and len(parts) >= 5:
+                    subdir = "/".join(p for p in parts[4:] if p).strip("/") or None
+                return f"https://github.com/{parts[0]}/{repo}.git", subdir
+        if "#" in value:
+            git_url, _, fragment = value.partition("#")
+            return git_url, (fragment.strip("/") or None)
+        marker = ".git/"
+        index = value.find(marker)
+        if index != -1:
+            git_url = value[: index + len(".git")]
+            subdir = value[index + len(marker):].strip("/")
+            return git_url, (subdir or None)
+        return value, None
+
+    parts = [p for p in value.strip("/").split("/") if p]
+    if len(parts) >= 2:
+        owner, repo = parts[0], parts[1]
+        subdir = "/".join(parts[2:]).strip("/")
+        return f"https://github.com/{owner}/{repo}.git", (subdir or None)
+
+    raise ValueError(
+        f"Invalid plugin identifier: '{value}'. "
+        "Use a local path, Git URL, or 'owner/repo' shorthand."
+    )
+
+
+def _looks_like_local_path(value: str) -> bool:
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+    expanded = Path(raw).expanduser()
+    if expanded.is_absolute():
+        return True
+    if raw.startswith(("./", "../", "~", ".\\", "..\\")):
+        return True
+    return bool(re.match(r"^[A-Za-z]:[\\/]", raw))
+
+
+def _repo_name_from_url(url: str) -> str:
+    value = url.rstrip("/")
+    if value.endswith(".git"):
+        value = value[:-4]
+    name = value.rsplit("/", 1)[-1]
+    if ":" in name:
+        name = name.rsplit(":", 1)[-1].rsplit("/", 1)[-1]
+    return name or "plugin"
+
+
+def _safe_install_target(base: Path, name: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(name or "")).strip(".-")
+    if not safe or safe in {".", ".."}:
+        raise ValueError(f"invalid plugin name: {name!r}")
+    target = (base / safe).resolve()
+    root = base.resolve()
+    if target == root or not _contained_path(root, target):
+        raise ValueError(f"invalid plugin install target: {name!r}")
+    return target
+
+
+def _resolve_subdir_within(clone_root: Path, subdir: str) -> Path:
+    root = clone_root.resolve()
+    candidate = (clone_root / subdir).resolve()
+    if candidate != root and root not in candidate.parents:
+        raise ValueError(f"plugin subdirectory '{subdir}' escapes the repository")
+    if not candidate.exists():
+        raise ValueError(f"plugin subdirectory '{subdir}' does not exist in the repository")
+    if not candidate.is_dir():
+        raise ValueError(f"plugin subdirectory '{subdir}' is not a directory")
+    return candidate
+
+
+def _first_manifest(path: Path, config, *, base: Path, source: str) -> PluginManifest | None:
+    return next(
+        (
+            _read_manifest(path / name, config, base=base, source=source)
+            for name in MANIFEST_NAMES
+            if (path / name).exists()
+        ),
+        None,
+    )
+
+
+def _manifest_data_for_install(plugin_dir: Path) -> dict[str, Any]:
+    for name in MANIFEST_NAMES:
+        data = _read_manifest_data(plugin_dir / name)
+        if data:
+            return data
+    return {}
+
+
+def _check_manifest_version(data: dict[str, Any], plugin_name: str) -> None:
+    raw = data.get("manifest_version")
+    if raw is None:
+        return
+    try:
+        version = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"Plugin '{plugin_name}' has invalid manifest_version '{raw}' (expected an integer)."
+        ) from None
+    if version > _SUPPORTED_MANIFEST_VERSION:
+        raise ValueError(
+            f"Plugin '{plugin_name}' requires manifest_version {version}, "
+            f"but this AEGIS build supports up to {_SUPPORTED_MANIFEST_VERSION}."
+        )
+
+
+def _copy_example_files(plugin_dir: Path) -> None:
+    for example in plugin_dir.glob("*.example"):
+        target = plugin_dir / example.stem
+        if not target.exists():
+            shutil.copy2(example, target)
+
+
+def _missing_requires_env_names(manifest_data: dict[str, Any]) -> list[str]:
+    missing: list[str] = []
+    for item in _list_field(manifest_data.get("requires_env") or manifest_data.get("required_env")):
+        if isinstance(item, dict):
+            name = str(item.get("name") or item.get("key") or "").strip()
+        else:
+            name = str(item or "").strip()
+        if name and not os.environ.get(name):
+            missing.append(name)
+    return sorted(dict.fromkeys(missing))
+
+
+def _install_local(source: str, config, *, force: bool) -> dict[str, Any]:
     src = Path(source).expanduser()
     base = _plugin_base()
     base.mkdir(parents=True, exist_ok=True)
     if not src.exists():
-        raise ValueError("plugin install currently expects a local .py file or directory")
+        raise ValueError("local plugin source does not exist")
     if src.is_file():
+        if src.suffix != ".py":
+            raise ValueError("plugin file must be a .py file")
         dest = base / src.name
         if dest.exists() and not force:
             raise ValueError(f"{dest.name} already exists; pass --force to replace")
         shutil.copy2(src, dest)
         name = dest.stem
+        target = dest
+        manifest_data: dict[str, Any] = {}
     else:
         dest = base / src.name
         if dest.exists():
@@ -601,12 +837,126 @@ def install(source: str, config, *, force: bool = False) -> str:
                 raise ValueError(f"{dest.name} already exists; pass --force to replace")
             shutil.rmtree(dest)
         shutil.copytree(src, dest)
-        manifest = next((_read_manifest(dest / n, config, base=base, source="user") for n in MANIFEST_NAMES
-                         if (dest / n).exists()), None)
+        _write_install_metadata(
+            dest,
+            source="local",
+            installed_from=str(src),
+            trusted=True,
+        )
+        manifest = _first_manifest(dest, config, base=base, source="local")
+        manifest_data = manifest.raw if manifest and manifest.raw else {}
         name = manifest.name if manifest else dest.name
-    enable(name, config)
+        target = dest
+    return {
+        "ok": True,
+        "plugin_name": name,
+        "name": name,
+        "target": str(target),
+        "source": "local",
+        "installed_from": str(src),
+        "install_url": "",
+        "install_subdir": "",
+        "warnings": [],
+        "missing_env": _missing_requires_env_names(manifest_data),
+        "trusted": True,
+    }
+
+
+def _install_git(identifier: str, config, *, force: bool) -> dict[str, Any]:
+    git_url, subdir = _resolve_git_url(identifier)
+    base = _plugin_base()
+    base.mkdir(parents=True, exist_ok=True)
+    warnings: list[str] = []
+    if git_url.startswith(("http://", "file://")):
+        warnings.append("Insecure URL scheme; prefer https:// or git@ for production installs.")
+
+    git_exe = shutil.which("git") or "git"
+    with tempfile.TemporaryDirectory(prefix="aegis-plugin-") as tmp:
+        clone_root = Path(tmp) / "plugin"
+        try:
+            result = subprocess.run(
+                [git_exe, "clone", "--depth", "1", git_url, str(clone_root)],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError("git is not installed or not in PATH") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("Git clone timed out after 120 seconds") from exc
+        if result.returncode != 0:
+            output = (result.stderr or result.stdout or "").strip()
+            raise RuntimeError(f"Git clone failed: {output or 'unknown error'}")
+
+        plugin_dir = _resolve_subdir_within(clone_root, subdir) if subdir else clone_root
+        manifest_data = _manifest_data_for_install(plugin_dir)
+        plugin_name = str(
+            manifest_data.get("name")
+            or (subdir.rstrip("/").rsplit("/", 1)[-1] if subdir else _repo_name_from_url(git_url))
+            or "plugin"
+        )
+        _check_manifest_version(manifest_data, plugin_name)
+        target = _safe_install_target(base, plugin_name)
+        if target.exists():
+            if not force:
+                raise ValueError(
+                    f"Plugin '{plugin_name}' already exists. Pass --force to replace or update it."
+                )
+            shutil.rmtree(target)
+        shutil.move(str(plugin_dir), str(target))
+
+    if not any((target / name).exists() for name in MANIFEST_NAMES) and not (target / "__init__.py").exists():
+        warnings.append(f"{plugin_name} has no plugin.yaml or __init__.py; it may not be a valid plugin.")
+    _copy_example_files(target)
+    _write_install_metadata(
+        target,
+        source="git",
+        installed_from=identifier,
+        install_url=git_url,
+        install_subdir=subdir or "",
+        trusted=False,
+    )
+    installed_manifest = _first_manifest(target, config, base=base, source="git")
+    installed_name = installed_manifest.name if installed_manifest else plugin_name
+    installed_data = installed_manifest.raw if installed_manifest and installed_manifest.raw else manifest_data
+    return {
+        "ok": True,
+        "plugin_name": installed_name,
+        "name": installed_name,
+        "target": str(target),
+        "source": "git",
+        "installed_from": identifier,
+        "install_url": git_url,
+        "install_subdir": subdir or "",
+        "warnings": warnings,
+        "missing_env": _missing_requires_env_names(installed_data),
+        "trusted": False,
+    }
+
+
+def install_details(source: str, config, *, force: bool = False, enable_now: bool = True) -> dict[str, Any]:
+    raw_source = str(source or "")
+    src = Path(raw_source).expanduser()
+    if src.exists():
+        result = _install_local(str(src), config, force=force)
+    elif _looks_like_local_path(raw_source):
+        raise ValueError("local plugin source does not exist")
+    else:
+        result = _install_git(raw_source, config, force=force)
+    name = str(result.get("plugin_name") or result.get("name") or "")
+    if enable_now:
+        enable(name, config)
+    else:
+        disable(name, config)
     clear_runtime_cache()
-    return name
+    result["enabled"] = bool(enable_now)
+    return result
+
+
+def install(source: str, config, *, force: bool = False) -> str:
+    result = install_details(source, config, force=force, enable_now=True)
+    return str(result["plugin_name"])
 
 
 def remove(name: str, config) -> bool:
