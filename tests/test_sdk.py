@@ -96,6 +96,33 @@ def test_sdk_provider_metadata_includes_run_id(tmp_path):
     assert provider.metadata["run_id"] == result.run_id
 
 
+def test_sdk_resume_redirects_to_compression_tip():
+    from aegis.config import Config
+    from aegis.sdk import AegisClient
+    from aegis.session import Session, SessionStore
+    from aegis.types import Message
+
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = False
+    store = SessionStore()
+    parent = Session(id="sdk-parent", title="long task")
+    parent.messages = [Message.user("before compaction")]
+    store.save(parent)
+    child = store.fork(parent)
+    child.id = "sdk-child"
+    child.parent_id = parent.id
+    child.meta["creator_kind"] = "compression"
+    child.messages.append(Message.user("after compaction"))
+    store.save(child)
+
+    client = AegisClient(config=cfg, store=store, include_mcp=False)
+
+    resumed = client.resume(parent.id)
+
+    assert resumed.id == child.id
+    assert [m.content for m in resumed.messages if m.role == "user"] == ["after compaction"]
+
+
 def test_sdk_resume_branch_replay_and_eval_suite(tmp_path):
     import json
 

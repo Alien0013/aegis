@@ -263,7 +263,7 @@ class AegisClient:
         session = self.store.load(session_id)
         if session is None:
             raise LookupError(f"session not found: {session_id}")
-        return session
+        return self.store.compression_tip(session.id) or session
 
     def list_sessions(self, limit: int = 50) -> list[dict[str, Any]]:
         return self.store.list(limit=limit)
