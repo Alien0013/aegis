@@ -2167,12 +2167,21 @@ def test_fastapi_dashboard_plugin_embedded_yaml_dashboard_manifest(tmp_path, mon
         "    path: /brief\n"
         "  entry: dist/index.js\n"
         "  css:\n"
-        "    - dist/brief.css\n",
+        "    - dist/brief.css\n"
+        "  api: plugin_api.py\n",
         encoding="utf-8",
     )
     (plug / "__init__.py").write_text("def register(api):\n    pass\n", encoding="utf-8")
     (plug / "dashboard" / "dist" / "index.js").write_text("window.brief = true;", encoding="utf-8")
     (plug / "dashboard" / "dist" / "brief.css").write_text(".brief{}", encoding="utf-8")
+    (plug / "dashboard" / "plugin_api.py").write_text(
+        "from fastapi import APIRouter\n"
+        "router = APIRouter()\n"
+        "@router.get('/brief')\n"
+        "def brief():\n"
+        "    return {'brief': True}\n",
+        encoding="utf-8",
+    )
 
     app = _app(tmp_path, monkeypatch)
     headers = {"X-Aegis-Token": "t"}
@@ -2187,16 +2196,23 @@ def test_fastapi_dashboard_plugin_embedded_yaml_dashboard_manifest(tmp_path, mon
     assert row["tab"]["path"] == "/brief"
     assert row["entry"] == "dist/index.js"
     assert row["css"] == ["dist/brief.css"]
+    assert row["has_api"] is True
+    assert row["api_mount"]["status"] == "mounted"
+    assert "/api/plugins/brief-panel/brief" in row["api_routes"]
 
     hub = asyncio.run(_request(app, "GET", "/api/dashboard/plugins/hub", headers=headers))
     assert hub.status_code == 200
     hub_row = next(item for item in hub.json()["plugins"] if item["key"] == "ops/brief")
     assert hub_row["has_dashboard_manifest"] is True
     assert hub_row["dashboard_manifest"]["name"] == "brief-panel"
+    assert hub_row["api_mount"]["status"] == "mounted"
 
     asset = asyncio.run(_request(app, "GET", "/dashboard-plugins/brief-panel/dist/index.js"))
     assert asset.status_code == 200
     assert "window.brief" in asset.text
+    route = asyncio.run(_request(app, "GET", "/api/plugins/brief-panel/brief", headers=headers))
+    assert route.status_code == 200
+    assert route.json() == {"brief": True}
 
 
 def test_fastapi_dashboard_plugin_install_mounts_api_without_restart(tmp_path, monkeypatch):

@@ -2338,6 +2338,53 @@ def test_hermes_style_plugin_yaml_metadata_category_key_and_safe_mode(tmp_path, 
     assert plugins.load_plugins(config=cfg).tools == []
 
 
+def test_plugin_yaml_nested_provides_contributions_are_reported(tmp_path):
+    from aegis import config as cfg_paths
+    from aegis import plugins
+    from aegis.config import Config
+
+    cfg = Config.load()
+    pkg = cfg_paths.sub("plugins") / "observability" / "deep"
+    pkg.mkdir(parents=True, exist_ok=True)
+    (pkg / "plugin.yaml").write_text(
+        "name: deep\n"
+        "version: 1.0.0\n"
+        "description: Nested manifest metadata\n"
+        "kind: observability\n"
+        "provides:\n"
+        "  tools:\n"
+        "    - name: trace_export\n"
+        "  hooks:\n"
+        "    - event: post_llm_call\n"
+        "  middleware:\n"
+        "    - kind: llm_request\n"
+        "  channels:\n"
+        "    - name: mattermost\n"
+        "  providers:\n"
+        "    - name: langfuse-provider\n"
+        "contributions:\n"
+        "  tools:\n"
+        "    - audit_tool\n"
+        "  model_providers:\n"
+        "    - name: audit-provider\n",
+        encoding="utf-8",
+    )
+    (pkg / "__init__.py").write_text("def register(api):\n    pass\n", encoding="utf-8")
+
+    manifest = next(m for m in plugins.list_manifests(cfg) if m.name == "deep")
+
+    assert manifest.kind == "observability"
+    assert manifest.provides_tools == ["audit_tool", "trace_export"]
+    assert manifest.provides_hooks == ["post_llm_call"]
+    assert manifest.provides_middleware == ["llm_request"]
+    assert manifest.provides_channels == ["mattermost"]
+    assert manifest.provides_providers == ["audit-provider", "langfuse-provider"]
+    row = next(r for r in plugins.plugin_status(cfg) if r["key"] == "observability/deep")
+    assert row["declared_contributions"]["tools"] == ["audit_tool", "trace_export"]
+    assert row["contribution_drift"]["tools"]["missing"] == ["audit_tool", "trace_export"]
+    assert row["contribution_drift"]["providers"]["missing"] == ["audit-provider", "langfuse-provider"]
+
+
 def test_hermes_entrypoint_plugins_are_discovered_opt_in_and_reported(tmp_path, monkeypatch):
     import sys
     from types import SimpleNamespace

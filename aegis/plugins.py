@@ -113,7 +113,19 @@ _PLUGIN_LOADS: dict[Path, dict[str, Any]] = {}
 MANIFEST_NAMES = ("plugin.yaml", "plugin.yml", "aegis-plugin.json", "plugin.json")
 INSTALL_METADATA_NAME = ".aegis-install.json"
 ENTRY_POINT_GROUPS = ("hermes_agent.plugins", "aegis.plugins")
-_VALID_PLUGIN_KINDS = {"standalone", "backend", "exclusive", "platform", "model-provider"}
+_VALID_PLUGIN_KINDS = {
+    "standalone",
+    "backend",
+    "exclusive",
+    "platform",
+    "model-provider",
+    "dashboard",
+    "tool",
+    "channel",
+    "memory",
+    "context-engine",
+    "observability",
+}
 _SUPPORTED_MANIFEST_VERSION = 1
 _GITHUB_BROWSER_SEGMENTS = {
     "blob",
@@ -370,6 +382,52 @@ def _string_list(value: Any) -> list[str]:
     return [str(item) for item in _list_field(value) if str(item).strip()]
 
 
+def _named_string_list(value: Any, *, key_hints: tuple[str, ...] = ("name", "key", "id")) -> list[str]:
+    rows: list[str] = []
+    for item in _list_field(value):
+        if isinstance(item, dict):
+            text = ""
+            for key in key_hints:
+                if item.get(key) is not None:
+                    text = str(item.get(key) or "").strip()
+                    if text:
+                        break
+        else:
+            text = str(item or "").strip()
+        if text:
+            rows.append(text)
+    return rows
+
+
+def _manifest_nested_items(data: dict[str, Any], kind: str, *aliases: str) -> list[Any]:
+    rows: list[Any] = []
+    for section_name in ("provides", "contributions", "contributes"):
+        section = data.get(section_name)
+        if not isinstance(section, dict):
+            continue
+        for key in (kind, *aliases):
+            if key in section:
+                rows.extend(_list_field(section.get(key)))
+    return rows
+
+
+def _manifest_contribution_names(
+    data: dict[str, Any],
+    *flat_keys: str,
+    nested: str,
+    aliases: tuple[str, ...] = (),
+    key_hints: tuple[str, ...] = ("name", "key", "id"),
+) -> list[str]:
+    rows: list[str] = []
+    for key in flat_keys:
+        rows.extend(_named_string_list(data.get(key), key_hints=key_hints))
+    rows.extend(_named_string_list(
+        _manifest_nested_items(data, nested, *aliases),
+        key_hints=key_hints,
+    ))
+    return sorted(dict.fromkeys(rows))
+
+
 def _manifest_key(path: Path, name: str, base: Path | None) -> tuple[str, str]:
     if base is None:
         return name, ""
@@ -486,11 +544,42 @@ def _read_manifest(path: Path, config=None, *, base: Path | None = None,
         source=source,
         manifest_version=manifest_version,
         requires_env=_list_field(data.get("requires_env") or data.get("required_env")),
-        provides_tools=_string_list(data.get("provides_tools")),
-        provides_hooks=_string_list(data.get("provides_hooks") or data.get("hooks")),
-        provides_middleware=_string_list(data.get("provides_middleware") or data.get("middleware")),
-        provides_channels=_string_list(data.get("provides_channels") or data.get("channels")),
-        provides_providers=_string_list(data.get("provides_providers") or data.get("providers")),
+        provides_tools=_manifest_contribution_names(
+            data,
+            "provides_tools",
+            nested="tools",
+            aliases=("tool",),
+        ),
+        provides_hooks=_manifest_contribution_names(
+            data,
+            "provides_hooks",
+            "hooks",
+            nested="hooks",
+            aliases=("hook",),
+            key_hints=("name", "event", "key", "id"),
+        ),
+        provides_middleware=_manifest_contribution_names(
+            data,
+            "provides_middleware",
+            "middleware",
+            nested="middleware",
+            aliases=("middlewares",),
+            key_hints=("kind", "name", "key", "id"),
+        ),
+        provides_channels=_manifest_contribution_names(
+            data,
+            "provides_channels",
+            "channels",
+            nested="channels",
+            aliases=("channel", "platforms", "platform"),
+        ),
+        provides_providers=_manifest_contribution_names(
+            data,
+            "provides_providers",
+            "providers",
+            nested="providers",
+            aliases=("provider", "models", "model_providers"),
+        ),
         permissions=_string_list(data.get("permissions")),
         enabled=_manifest_enabled(name, key or name, config),
         installed_from=str(metadata.get("installed_from") or ""),
