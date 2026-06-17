@@ -286,6 +286,7 @@ def test_platform_helper_command_caps_and_utf16_chunks():
         capped_command_menu,
         chunk_text_by_units,
         discord_application_command_menu,
+        platform_metadata,
         utf16_units,
     )
 
@@ -301,6 +302,16 @@ def test_platform_helper_command_caps_and_utf16_chunks():
 
     chunks = chunk_text_by_units("😀" * 5, limit=4, len_fn=utf16_units)
     assert chunks == ["😀😀", "😀😀", "😀"]
+
+    assert platform_metadata("signal-cli")["id"] == "signal"
+    assert platform_metadata("matrix")["transport"] == "matrix_sync"
+    assert platform_metadata("mail")["required_env"] == [
+        "EMAIL_IMAP_HOST",
+        "EMAIL_SMTP_HOST",
+        "EMAIL_ADDRESS",
+        "EMAIL_PASSWORD",
+    ]
+    assert platform_metadata("ntfy.sh")["optional_env"] == ["NTFY_SERVER", "NTFY_TOKEN"]
 
 
 def test_adapter_metadata_for_core_platforms(monkeypatch):
