@@ -216,13 +216,20 @@ def test_desktop_sync_manifest_tracks_main_cjs_requires():
 def test_desktop_builder_config_matches_release_parity():
     root = Path(__file__).resolve().parents[1]
     package = json.loads((root / "desktop" / "package.json").read_text(encoding="utf-8"))
+    lock = json.loads((root / "desktop" / "package-lock.json").read_text(encoding="utf-8"))
     bundled = json.loads((root / "aegis" / "desktop_app" / "package.json").read_text(encoding="utf-8"))
 
     assert bundled == package
     build = package["build"]
+    assert lock["packages"][""]["dependencies"] == package["dependencies"]
+    assert lock["packages"][""]["devDependencies"] == package["devDependencies"]
+    for section in ("dependencies", "devDependencies"):
+        for dep_name, spec in package.get(section, {}).items():
+            assert spec == lock["packages"][f"node_modules/{dep_name}"]["version"]
     assert package["scripts"]["pack"].endswith("npm run builder -- --dir")
     assert build["executableName"] == "AEGIS"
     assert build["electronVersion"] == "33.4.11"
+    assert package["devDependencies"]["electron"] == build["electronVersion"]
     assert build["protocols"] == [{"name": "AEGIS Protocol", "schemes": ["aegis"]}]
     assert build["beforeBuild"] == "scripts/before-build.cjs"
     assert "scripts/write-build-stamp.cjs" in desktop.DESKTOP_FILES
