@@ -1161,6 +1161,105 @@ def test_responses_input_items_persist_paginate_and_replay(monkeypatch, tmp_path
     ]
 
 
+def test_responses_accepts_function_call_output_input_item(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    function_output = {
+        "type": "function_call_output",
+        "call_id": "call_fetch",
+        "output": "tool says hi",
+    }
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": [
+                {"role": "user", "content": "start"},
+                function_output,
+                {"role": "user", "content": "continue"},
+            ],
+        })
+        response_id = json.loads(data)["id"]
+        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    call = _FakeRunner.calls[0]
+    assert call["prompt"].content == "continue"
+    assert [(m.role, m.content) for m in call["history"]] == [
+        ("user", "start"),
+        ("tool", "tool says hi"),
+    ]
+    assert call["history"][1].tool_call_id == "call_fetch"
+    assert items_status == 200
+    items = json.loads(items_data)["data"]
+    assert [item["type"] for item in items] == [
+        "message",
+        "function_call_output",
+        "message",
+    ]
+    assert items[1]["call_id"] == "call_fetch"
+    assert items[1]["output"] == "tool says hi"
+
+
+def test_responses_function_call_output_continues_previous_response(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    output_parts = [{"type": "input_text", "text": "lookup result"}]
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        first_status, first_data = _request(port, "POST", "/v1/responses", {
+            "input": "first",
+        })
+        first_id = json.loads(first_data)["id"]
+        second_status, second_data = _request(port, "POST", "/v1/responses", {
+            "previous_response_id": first_id,
+            "input": [{
+                "type": "function_call_output",
+                "call_id": "call_lookup",
+                "output": output_parts,
+            }],
+        })
+        second_id = json.loads(second_data)["id"]
+        items_status, items_data = _request(port, "GET", f"/v1/responses/{second_id}/input_items")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert first_status == 200
+    assert second_status == 200
+    second_call = _FakeRunner.calls[1]
+    assert second_call["prompt"].role == "user"
+    assert second_call["prompt"].content == ""
+    assert second_call["prompt"].meta["_responses_synthetic_prompt"] is True
+    assert [(m.role, m.content) for m in second_call["history"]] == [
+        ("user", "first"),
+        ("assistant", "hello"),
+        ("tool", "lookup result"),
+    ]
+    assert second_call["history"][2].tool_call_id == "call_lookup"
+    assert items_status == 200
+    items = json.loads(items_data)["data"]
+    assert items[-1]["type"] == "function_call_output"
+    assert items[-1]["call_id"] == "call_lookup"
+    assert items[-1]["output"] == output_parts
+    assert not any(
+        item["type"] == "message"
+        and item.get("role") == "user"
+        and item.get("content") == [{"type": "input_text", "text": ""}]
+        for item in items
+    )
+
+
 def test_responses_missing_previous_id_404s_without_running(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server

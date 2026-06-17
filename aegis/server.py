@@ -240,6 +240,20 @@ def _content_part_validation_error(value: Any, *, param: str) -> dict[str, Any] 
 
 def _response_content_validation_error(value: Any, *, param: str) -> dict[str, Any] | None:
     if isinstance(value, dict):
+        if _is_function_call_output_input_item(value):
+            if not str(value.get("call_id") or value.get("tool_call_id") or "").strip():
+                return _openai_error(
+                    "function_call_output input items require a non-empty 'call_id'",
+                    code="invalid_function_call_output",
+                    param=f"{param}.call_id",
+                )
+            if "output" not in value:
+                return _openai_error(
+                    "function_call_output input items require an 'output' field",
+                    code="invalid_function_call_output",
+                    param=f"{param}.output",
+                )
+            return None
         if "content" in value:
             return _content_part_validation_error(value.get("content"), param=f"{param}.content")
         if "type" in value:
@@ -259,9 +273,15 @@ def _content_has_visible_payload(value: Any) -> bool:
     return bool(str(text or "").strip() or images)
 
 
+def _is_function_call_output_input_item(item: Any) -> bool:
+    return isinstance(item, dict) and str(item.get("type") or "") == "function_call_output"
+
+
 def _response_input_item_visible(item: Any) -> bool:
     if not isinstance(item, dict):
         return _content_has_visible_payload(item)
+    if _is_function_call_output_input_item(item):
+        return bool(str(item.get("call_id") or item.get("tool_call_id") or "").strip())
     if "content" in item:
         return _content_has_visible_payload(item.get("content"))
     text = item.get("text", item.get("input_text"))
@@ -355,6 +375,39 @@ def _tool_calls_from_payload(payload: dict[str, Any]) -> list[ToolCall]:
         if name:
             calls.append(ToolCall(id=call_id, name=name, arguments=args))
     return calls
+
+
+def _response_function_output_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        text, _images = _content(value)
+        if text or not value:
+            return text
+    if isinstance(value, dict):
+        if "content" in value:
+            return _response_function_output_text(value.get("content"))
+        for key in ("text", "input_text", "output"):
+            if key in value:
+                return _response_function_output_text(value.get(key))
+    if value is None:
+        return ""
+    try:
+        return json.dumps(value, sort_keys=True, default=str)
+    except TypeError:
+        return str(value)
+
+
+def _function_call_output_message(item: dict[str, Any]) -> Message:
+    call_id = str(item.get("call_id") or item.get("tool_call_id") or "")
+    message = Message(
+        role="tool",
+        content=_response_function_output_text(item.get("output")),
+        tool_call_id=call_id,
+        name=item.get("name"),
+        meta={"response_input_item": dict(item)},
+    )
+    return message
 
 
 def _convert_message(m: dict[str, Any]) -> Message:
@@ -585,21 +638,43 @@ def _response_object(
     }
 
 
+def _response_input_item_to_message(item: Any) -> Message:
+    if _is_function_call_output_input_item(item):
+        return _function_call_output_message(item)
+    if isinstance(item, dict):
+        if str(item.get("type") or "") == "message":
+            payload = dict(item)
+            payload.pop("type", None)
+            payload.setdefault("role", "user")
+            return _convert_message(payload)
+        if "role" in item:
+            return _convert_message(item)
+        if "type" in item:
+            return _convert_message({"role": "user", "content": [item]})
+        return _convert_message({"role": "user", "content": item})
+    return _convert_message({"role": "user", "content": item})
+
+
 def _responses_messages(body: dict[str, Any]) -> tuple[list[Message], Message]:
     raw = body.get("messages", body.get("input", ""))
-    messages: list[dict[str, Any]]
     if isinstance(raw, str):
-        messages = [{"role": "user", "content": raw}]
+        internal = [Message.user(raw)]
     elif isinstance(raw, list):
-        messages = []
-        for item in raw:
-            if isinstance(item, dict) and "role" in item:
-                messages.append(item)
-            else:
-                messages.append({"role": "user", "content": item})
+        internal = [_response_input_item_to_message(item) for item in raw]
+    elif isinstance(raw, dict):
+        internal = [_response_input_item_to_message(raw)]
     else:
-        messages = [{"role": "user", "content": str(raw or "")}]
-    return _convert(messages)
+        internal = [Message.user(str(raw or ""))]
+
+    last_user: Message | None = None
+    for i in range(len(internal) - 1, -1, -1):
+        if internal[i].role == "user":
+            last_user = internal.pop(i)
+            break
+    if last_user is None:
+        last_user = Message.user("")
+        last_user.meta["_responses_synthetic_prompt"] = True
+    return internal, last_user
 
 
 def _parse_response_history(value: Any) -> tuple[list[Message], str]:
@@ -630,8 +705,16 @@ def _is_instruction_wrapper(message: Message) -> bool:
     )
 
 
+def _is_synthetic_response_prompt(message: Message) -> bool:
+    return bool((getattr(message, "meta", {}) or {}).get("_responses_synthetic_prompt"))
+
+
 def _history_payload(messages: list[Message]) -> list[dict[str, Any]]:
-    return [_message_payload(m) for m in messages if not _is_instruction_wrapper(m)]
+    return [
+        _message_payload(m)
+        for m in messages
+        if not _is_instruction_wrapper(m) and not _is_synthetic_response_prompt(m)
+    ]
 
 
 def _history_from_state(state: dict[str, Any] | None) -> list[Message]:
@@ -664,7 +747,12 @@ def _response_conversation_history(
     if isinstance(session_messages, list) and session_messages:
         filtered = [
             m for m in session_messages
-            if isinstance(m, Message) and m.role != "system" and not _is_instruction_wrapper(m)
+            if (
+                isinstance(m, Message)
+                and m.role != "system"
+                and not _is_instruction_wrapper(m)
+                and not _is_synthetic_response_prompt(m)
+            )
         ]
         if filtered and len(filtered) >= len(prior_history) + 1:
             return _history_payload(filtered)
@@ -685,7 +773,22 @@ def _response_input_items(messages: list[Message], instructions: str | None = No
             "content": [{"type": "input_text", "text": str(instructions)}],
         })
     for message in messages:
-        if not isinstance(message, Message) or _is_instruction_wrapper(message):
+        if (
+            not isinstance(message, Message)
+            or _is_instruction_wrapper(message)
+            or _is_synthetic_response_prompt(message)
+        ):
+            continue
+        raw_item = (message.meta or {}).get("response_input_item")
+        if _is_function_call_output_input_item(raw_item):
+            items.append(dict(raw_item))
+            continue
+        if message.role == "tool":
+            items.append({
+                "type": "function_call_output",
+                "call_id": message.tool_call_id or "",
+                "output": [{"type": "input_text", "text": str(message.content or "")}],
+            })
             continue
         items.append({
             "type": "message",
