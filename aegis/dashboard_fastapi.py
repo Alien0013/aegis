@@ -7,6 +7,7 @@ import base64
 import copy
 import hashlib
 import hmac
+import importlib
 import importlib.util
 import json
 import mimetypes
@@ -2378,6 +2379,30 @@ def _dashboard_plugin_api_insert_at(app: FastAPI) -> int:
     return len(app.router.routes)
 
 
+def _dashboard_plugin_api_fingerprint(api_path: str | Path) -> str:
+    try:
+        stat = Path(api_path).stat()
+    except OSError:
+        return ""
+    return f"{int(stat.st_mtime_ns)}:{int(stat.st_size)}"
+
+
+def _clear_dashboard_plugin_api_bytecode(path: Path) -> None:
+    try:
+        cached = importlib.util.cache_from_source(str(path))
+    except (NotImplementedError, ValueError):
+        cached = ""
+    candidates: list[Path] = []
+    if cached:
+        candidates.append(Path(cached))
+    candidates.extend((path.parent / "__pycache__").glob(f"{path.stem}.*.pyc"))
+    for candidate in candidates:
+        try:
+            candidate.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
     def dashboard_plugin_auth(record_name: str, expected_api: str):
         def auth(request: Request) -> None:
@@ -2398,7 +2423,13 @@ def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
     }
     for name, row in list(mounted.items()):
         live = records.get(name)
-        if live and str(live.get("_api") or "") == str(row.get("api") or ""):
+        live_api = str(live.get("_api") or "") if live else ""
+        live_fingerprint = _dashboard_plugin_api_fingerprint(live_api) if live_api else ""
+        if (
+            live
+            and live_api == str(row.get("api") or "")
+            and live_fingerprint == str(row.get("fingerprint") or "")
+        ):
             continue
         for route in row.get("routes", []):
             try:
@@ -2422,7 +2453,12 @@ def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
                 "error": "",
             })
             continue
-        if record_name in mounted and mounted[record_name].get("api") == str(api_path):
+        fingerprint = _dashboard_plugin_api_fingerprint(str(api_path))
+        if (
+            record_name in mounted
+            and mounted[record_name].get("api") == str(api_path)
+            and mounted[record_name].get("fingerprint") == fingerprint
+        ):
             _set_dashboard_plugin_api_mount_status(record_name, {
                 "status": "mounted",
                 "mounted": True,
@@ -2435,6 +2471,8 @@ def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
         path = Path(api_path)
         module_name = "aegis_dashboard_plugin_" + hashlib.sha256(str(path).encode()).hexdigest()[:16]
         try:
+            importlib.invalidate_caches()
+            _clear_dashboard_plugin_api_bytecode(path)
             before = {id(route) for route in app.router.routes}
             spec = importlib.util.spec_from_file_location(module_name, path)
             if spec is None or spec.loader is None:
@@ -2496,6 +2534,7 @@ def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
             } or set(declared_route_paths))
             mounted[record_name] = {
                 "api": str(api_path),
+                "fingerprint": fingerprint,
                 "routes": new_routes,
                 "route_paths": route_paths,
             }

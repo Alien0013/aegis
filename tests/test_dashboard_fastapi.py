@@ -2212,6 +2212,17 @@ def test_fastapi_dashboard_plugin_install_mounts_api_without_restart(tmp_path, m
     disabled_route = asyncio.run(_request(app, "GET", "/api/plugins/live-panel/ping", headers=headers))
     enabled = asyncio.run(_request(app, "POST", "/api/plugins/live-plugin/enable", headers=headers))
     enabled_route = asyncio.run(_request(app, "GET", "/api/plugins/live-panel/ping", headers=headers))
+    installed_api = Path(install.json()["target"]) / "dashboard" / "plugin_api.py"
+    installed_api.write_text(
+        "from fastapi import APIRouter\n"
+        "router = APIRouter()\n"
+        "@router.get('/ping')\n"
+        "def ping():\n"
+        "    return {'live': False, 'version': 2}\n",
+        encoding="utf-8",
+    )
+    rescan = asyncio.run(_request(app, "POST", "/api/dashboard/plugins/rescan", headers=headers))
+    reloaded_route = asyncio.run(_request(app, "GET", "/api/plugins/live-panel/ping", headers=headers))
 
     assert missing.status_code == 404
     assert install.status_code == 200
@@ -2223,6 +2234,9 @@ def test_fastapi_dashboard_plugin_install_mounts_api_without_restart(tmp_path, m
     assert enabled.status_code == 200
     assert enabled_route.status_code == 200
     assert enabled_route.json() == {"live": True}
+    assert rescan.status_code == 200
+    assert reloaded_route.status_code == 200
+    assert reloaded_route.json() == {"live": False, "version": 2}
 
 
 def test_fastapi_dashboard_agent_plugin_install_supports_git_identifier(tmp_path, monkeypatch):
