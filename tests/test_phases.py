@@ -177,13 +177,24 @@ def test_cli_config_summary_dump_and_edit(monkeypatch, capsys):
     assert main(["config"]) == 0
     out = capsys.readouterr().out
     assert "AEGIS Configuration" in out
+    assert "+----------------------------------------------------------+" in out
     assert "Paths" in out
-    assert f"Config:   {cfg.config_path()}" in out
+    assert f"Config:       {cfg.config_path()}" in out
     assert "Install:" in out
     assert "API Keys" in out
+    assert "OpenAI (STT/TTS)" in out
     assert "Browser Use" in out
+    assert "Model effort:" in out
     assert "Timezone" in out
     assert "aegis config edit" in out
+
+    assert main(["config", "path"]) == 0
+    out = capsys.readouterr().out
+    assert out.strip() == str(cfg.config_path())
+
+    assert main(["config", "env-path"]) == 0
+    out = capsys.readouterr().out
+    assert out.strip() == str(cfg.env_path())
 
     assert main(["config", "dump"]) == 0
     out = capsys.readouterr().out
@@ -202,10 +213,21 @@ def test_cli_config_summary_dump_and_edit(monkeypatch, capsys):
     assert main(["config", "edit"]) == 0
     assert calls[-1] == ["test-editor", "--wait", str(cfg.config_path())]
     assert cfg.config_path().exists()
+    out = capsys.readouterr().out
+    assert "Opening" in out
 
     assert main(["config", "edit", "--secrets"]) == 0
     assert calls[-1] == ["test-editor", "--wait", str(cfg.env_path())]
     assert cfg.env_path().exists()
+
+    assert main(["config", "set"]) == 1
+    out = capsys.readouterr().out
+    assert "Usage: aegis config set <key> <value>" in out
+
+    assert main(["config", "set", "model.base_url", ""]) == 0
+    capsys.readouterr()
+    assert main(["config", "get", "model.base_url"]) == 0
+    assert capsys.readouterr().out == "\n"
 
 
 def test_cli_bare_first_run_guard(capsys):

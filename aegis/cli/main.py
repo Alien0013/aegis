@@ -939,24 +939,53 @@ def cmd_config(args, config: Config) -> int:
     def configured_env(*names: str) -> str:
         return "configured" if any(os.environ.get(name, "").strip() for name in names) else "not set"
 
+    def print_config_usage() -> None:
+        _print("Usage: aegis config set <key> <value>")
+        _print()
+        _print("Examples:")
+        _print("  aegis config set model.provider openai")
+        _print("  aegis config set model.base_url http://localhost:8080/v1")
+        _print("  aegis config set OPENAI_API_KEY sk-...")
+
+    def editor_command(target: Path) -> list[str] | None:
+        import shutil
+
+        editor = os.environ.get("EDITOR") or os.environ.get("VISUAL")
+        if editor:
+            return [*shlex.split(editor), str(target)]
+        candidates = (
+            ("notepad", "code", "vim", "vi", "nano")
+            if sys.platform == "win32"
+            else ("nano", "vim", "vi", "code")
+        )
+        for candidate in candidates:
+            if shutil.which(candidate):
+                return [candidate, str(target)]
+        return None
+
     def show_summary() -> int:
         compression = config.get("agent.compression", {}) or {}
         platforms = config.get("display.platforms", {}) or {}
         gateway_channels = set(str(x) for x in (config.get("gateway.channels", []) or []))
         telegram = "configured" if os.environ.get("TELEGRAM_BOT_TOKEN") or "telegram" in gateway_channels else "not configured"
         discord = "configured" if os.environ.get("DISCORD_BOT_TOKEN") or "discord" in gateway_channels else "not configured"
-        _print("AEGIS Configuration")
+        title = " AEGIS Configuration "
+        rule = "+" + "-" * 58 + "+"
+        _print(rule)
+        _print("|" + title.center(58) + "|")
+        _print(rule)
         _print()
         _print("Paths")
-        _print(f"  Config:   {cfg.config_path()}")
-        _print(f"  Secrets:  {cfg.env_path()}")
-        _print(f"  Home:     {cfg.get_home()}")
-        _print(f"  Install:  {Path(__file__).resolve().parents[2]}")
+        _print(f"  Config:       {cfg.config_path()}")
+        _print(f"  Secrets:      {cfg.env_path()}")
+        _print(f"  Home:         {cfg.get_home()}")
+        _print(f"  Install:      {Path(__file__).resolve().parents[2]}")
         _print()
         _print("API Keys")
         for label, names in (
             ("OpenRouter", ("OPENROUTER_API_KEY",)),
             ("OpenAI", ("OPENAI_API_KEY",)),
+            ("OpenAI (STT/TTS)", ("VOICE_TOOLS_OPENAI_KEY",)),
             ("Anthropic", ("ANTHROPIC_API_KEY",)),
             ("Exa", ("EXA_API_KEY",)),
             ("Parallel", ("PARALLEL_API_KEY",)),
@@ -966,7 +995,7 @@ def cmd_config(args, config: Config) -> int:
             ("Browser Use", ("BROWSER_USE_API_KEY",)),
             ("FAL", ("FAL_KEY", "FAL_API_KEY")),
         ):
-            _print(f"  {label:<12} {configured_env(*names)}")
+            _print(f"  {label:<17} {configured_env(*names)}")
         _print()
         _print("Model")
         _print(f"  Provider: {config.get('model.provider')}")
@@ -977,7 +1006,8 @@ def cmd_config(args, config: Config) -> int:
         _print()
         _print("Display")
         _print(f"  Personality: {config.get('agent.personality', 'none') or 'none'}")
-        _print(f"  Reasoning:   {config.get('agent.reasoning_effort', 'off') or 'off'}")
+        _print(f"  Reasoning:   {config.get('display.reasoning', 'off') or 'off'}")
+        _print(f"  Model effort: {config.get('agent.reasoning_effort', 'off') or 'off'}")
         _print(f"  Bell:        {config.get('display.bell', 'off') or 'off'}")
         if platforms:
             _print(f"  Platforms:   {', '.join(sorted(platforms))}")
@@ -1009,7 +1039,13 @@ def cmd_config(args, config: Config) -> int:
 
     if args.action == "path":
         _print(str(cfg.config_path()))
+        return 0
+    if args.action == "env-path":
         _print(str(cfg.env_path()))
+        return 0
+    if args.action == "paths":
+        _print(f"Config:  {cfg.config_path()}")
+        _print(f"Secrets: {cfg.env_path()}")
         return 0
     if args.action == "summary":
         return show_summary()
@@ -1017,16 +1053,25 @@ def cmd_config(args, config: Config) -> int:
         target = cfg.env_path() if getattr(args, "secrets", False) else cfg.config_path()
         target.parent.mkdir(parents=True, exist_ok=True)
         target.touch(exist_ok=True)
-        editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "nano"
-        command = [*shlex.split(editor), str(target)]
+        command = editor_command(target)
+        if not command:
+            _print("No editor found. Config file is at:")
+            _print(f"  {target}")
+            return 1
+        _print(f"Opening {target} in {' '.join(command[:-1])}...")
         try:
             return subprocess.run(command).returncode
         except FileNotFoundError:
             return _die(f"editor not found: {command[0]}")
     if args.action == "get":
+        if not args.key:
+            return _die("usage: aegis config get <key>")
         _print(str(config.get(args.key)))
         return 0
     if args.action == "set":
+        if not args.key or args.value is None:
+            print_config_usage()
+            return 1
         where = config.set(args.key, args.value)
         _print(f"set {args.key} -> {where}")
         return 0
@@ -1945,7 +1990,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     cf = sub.add_parser("config", help="view, edit, get, or set configuration")
     cf.add_argument("action", nargs="?",
-                    choices=["summary", "edit", "get", "set", "path", "dump", "check", "migrate"],
+                    choices=[
+                        "summary", "edit", "get", "set", "path", "env-path", "paths",
+                        "dump", "check", "migrate",
+                    ],
                     default="summary")
     cf.add_argument("key", nargs="?")
     cf.add_argument("value", nargs="?")

@@ -667,7 +667,7 @@ def _coerce(value: Any) -> Any:
     low = value.lower()
     if low in ("true", "false"):
         return low == "true"
-    if low in ("null", "none", ""):
+    if low in ("null", "none"):
         return None
     try:
         if "." in value:
