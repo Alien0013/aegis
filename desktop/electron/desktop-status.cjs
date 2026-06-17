@@ -40,6 +40,34 @@ function readInstallStamp(options = {}) {
   return { found: false, path: "", payload: null, error: "install stamp not found" };
 }
 
+function releaseUpdateEligibility({
+  packaged = false,
+  stamp = null,
+  platform = process.platform,
+} = {}) {
+  if (!packaged) {
+    return { ok: false, reason: "auto-update runs in the installed app only" };
+  }
+  if (!stamp || !stamp.found || !stamp.payload) {
+    return { ok: false, reason: stamp && stamp.error ? stamp.error : "install stamp not found" };
+  }
+  const payload = stamp.payload;
+  if (Number(payload.schemaVersion || 0) < 2) {
+    return { ok: false, reason: "install stamp is too old for safe updates" };
+  }
+  if (!payload.release || !payload.trustedRelease) {
+    return { ok: false, reason: "installed package is not stamped as a trusted release" };
+  }
+  if (payload.dirty) {
+    return { ok: false, reason: "installed package was built from a dirty worktree" };
+  }
+  const targets = Array.isArray(payload.targetPlatforms) ? payload.targetPlatforms : [];
+  if (targets.length && !targets.includes(platform)) {
+    return { ok: false, reason: `install stamp target does not match ${platform}` };
+  }
+  return { ok: true, reason: "installed package is eligible for auto-update" };
+}
+
 function detectRemoteDisplay({ env = process.env, platform = process.platform } = {}) {
   const override = String(env.AEGIS_DESKTOP_DISABLE_GPU || "").trim().toLowerCase();
   if (GPU_OVERRIDE_ON.has(override)) return "override (AEGIS_DESKTOP_DISABLE_GPU)";
@@ -73,6 +101,7 @@ function desktopDiagnostics({
 } = {}) {
   const packaged = Boolean(app && app.isPackaged);
   const stamp = readInstallStamp({ desktopRoot, resourcesPath });
+  const updateEligibility = releaseUpdateEligibility({ packaged, stamp, platform });
   const userDataPath = app && typeof app.getPath === "function" ? _safeAppCall(app, "getPath", "") : "";
   const backendConfigured = Boolean(env.AEGIS_HOME || env.AEGIS_BIN);
   const remoteDisplayReason = detectRemoteDisplay({ env, platform });
@@ -82,6 +111,12 @@ function desktopDiagnostics({
       ok: stamp.found,
       severity: stamp.found ? "ok" : "warning",
       detail: stamp.found ? "desktop build stamp is available" : stamp.error,
+    },
+    {
+      id: "release_update_eligibility",
+      ok: updateEligibility.ok,
+      severity: updateEligibility.ok || !packaged ? "ok" : "warning",
+      detail: updateEligibility.reason,
     },
     {
       id: "backend_environment",
@@ -109,6 +144,7 @@ function desktopDiagnostics({
       installStamp: stamp.path,
     },
     installStamp: stamp.payload,
+    updateEligibility,
     renderer: {
       remoteDisplayReason,
       gpuFallbackRecommended: Boolean(remoteDisplayReason),
@@ -142,4 +178,5 @@ module.exports = {
   desktopDiagnostics,
   detectRemoteDisplay,
   readInstallStamp,
+  releaseUpdateEligibility,
 };

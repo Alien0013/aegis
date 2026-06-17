@@ -16,7 +16,12 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { aegisCommand, backendEnvironment, resolveAegisHome } = require("./backend-env.cjs");
-const { desktopDiagnostics, detectRemoteDisplay } = require("./desktop-status.cjs");
+const {
+  desktopDiagnostics,
+  detectRemoteDisplay,
+  readInstallStamp,
+  releaseUpdateEligibility,
+} = require("./desktop-status.cjs");
 
 // Chromium checks the Linux setuid sandbox before main.js runs, so launch.js
 // puts --no-sandbox on argv; mirror it here so child processes inherit it.
@@ -448,6 +453,16 @@ function initAutoUpdate(manual) {
   updateCheckManual = Boolean(manual);
   if (!app.isPackaged) {
     if (manual) notify("AEGIS updates", "Auto-update runs in the installed app only.");
+    return;
+  }
+  const updateEligibility = releaseUpdateEligibility({
+    packaged: app.isPackaged,
+    stamp: readInstallStamp(),
+    platform: process.platform,
+  });
+  if (!updateEligibility.ok) {
+    log(`auto-update disabled: ${updateEligibility.reason}`);
+    if (manual) notify("AEGIS updates", updateEligibility.reason);
     return;
   }
   if (updateCheckInFlight) {

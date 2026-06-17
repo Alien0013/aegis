@@ -36,6 +36,8 @@ test("background backend processes hide Windows consoles", () => {
 test("auto-updater setup is idempotent and bounded", () => {
   requireSnippet("autoUpdaterConfigured");
   requireSnippet("updateCheckInFlight");
+  requireSnippet("releaseUpdateEligibility");
+  requireSnippet("auto-update disabled");
   requireSnippet("autoUpdater.allowPrerelease = false");
   requireSnippet("autoUpdater.allowDowngrade = false");
 });

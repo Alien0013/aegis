@@ -30,6 +30,13 @@ that platform's machine or CI runner. The app itself just needs `aegis`
 available — set `AEGIS_BIN` to override the executable path.
 Packaging uses `asar` and a `beforePack` cleanup hook that removes stale
 `*-unpacked` build folders left by interrupted `electron-builder` runs.
+Every package includes `build/install-stamp.json` with the git commit, app
+version, Electron version, host platform, and target platform. Set
+`AEGIS_RELEASE=1` (or `AEGIS_DESKTOP_RELEASE=1`) for a release build; the build
+will fail early if the stamp is local/dirty, GitHub publishing lacks a token, or
+Windows/macOS signing is disabled. For intentional internal builds, use the
+explicit overrides named in the error message, such as
+`AEGIS_ALLOW_UNSIGNED_DESKTOP_RELEASE=1`.
 
 On Windows, Explorer-launched GUI apps can inherit stale environment variables
 from login time. The desktop backend resolver reads live user-scoped

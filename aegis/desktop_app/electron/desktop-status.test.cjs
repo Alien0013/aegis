@@ -8,6 +8,7 @@ const {
   desktopDiagnostics,
   detectRemoteDisplay,
   readInstallStamp,
+  releaseUpdateEligibility,
 } = require("./desktop-status.cjs");
 
 function fakeApp({ packaged = false, version = "0.1.0", userData = "" } = {}) {
@@ -46,7 +47,15 @@ test("desktop diagnostics exposes runtime, stamp, checks, and repair actions", (
   fs.mkdirSync(path.join(root, "build"), { recursive: true });
   fs.writeFileSync(
     path.join(root, "build", "install-stamp.json"),
-    JSON.stringify({ commit: "abc123", branch: "main" }),
+    JSON.stringify({
+      schemaVersion: 2,
+      commit: "abc123",
+      branch: "main",
+      release: true,
+      trustedRelease: true,
+      dirty: false,
+      targetPlatforms: ["linux"],
+    }),
   );
 
   const report = desktopDiagnostics({
@@ -62,10 +71,66 @@ test("desktop diagnostics exposes runtime, stamp, checks, and repair actions", (
   assert.equal(report.packaged, true);
   assert.equal(report.appVersion, "1.2.3");
   assert.equal(report.installStamp.commit, "abc123");
+  assert.equal(report.updateEligibility.ok, true);
   assert.equal(report.renderer.gpuFallbackRecommended, false);
   assert.equal(report.checks.find((row) => row.id === "install_stamp").ok, true);
+  assert.equal(report.checks.find((row) => row.id === "release_update_eligibility").ok, true);
   assert.equal(report.checks.find((row) => row.id === "backend_environment").ok, true);
   assert(report.repair.actions.some((row) => row.id === "restart_backend"));
+});
+
+test("releaseUpdateEligibility rejects dev, dirty, stale, and mismatched install stamps", () => {
+  assert.equal(releaseUpdateEligibility({ packaged: false }).ok, false);
+  assert.match(
+    releaseUpdateEligibility({ packaged: true, stamp: { found: false, error: "missing" } }).reason,
+    /missing/,
+  );
+  assert.match(
+    releaseUpdateEligibility({
+      packaged: true,
+      stamp: { found: true, payload: { schemaVersion: 1, release: true, trustedRelease: true } },
+    }).reason,
+    /too old/,
+  );
+  assert.match(
+    releaseUpdateEligibility({
+      packaged: true,
+      stamp: { found: true, payload: { schemaVersion: 2, release: false, trustedRelease: false } },
+    }).reason,
+    /trusted release/,
+  );
+  assert.match(
+    releaseUpdateEligibility({
+      packaged: true,
+      stamp: {
+        found: true,
+        payload: { schemaVersion: 2, release: true, trustedRelease: true, dirty: true },
+      },
+    }).reason,
+    /dirty/,
+  );
+  assert.match(
+    releaseUpdateEligibility({
+      packaged: true,
+      platform: "linux",
+      stamp: {
+        found: true,
+        payload: { schemaVersion: 2, release: true, trustedRelease: true, dirty: false, targetPlatforms: ["win32"] },
+      },
+    }).reason,
+    /does not match linux/,
+  );
+  assert.equal(
+    releaseUpdateEligibility({
+      packaged: true,
+      platform: "linux",
+      stamp: {
+        found: true,
+        payload: { schemaVersion: 2, release: true, trustedRelease: true, dirty: false, targetPlatforms: ["linux"] },
+      },
+    }).ok,
+    true,
+  );
 });
 
 test("detects remote renderer sessions and honors override", () => {
@@ -101,5 +166,6 @@ test("desktop diagnostics warns when packaged build has no backend env or stamp"
 
   assert.equal(report.installStamp, null);
   assert.equal(report.checks.find((row) => row.id === "install_stamp").severity, "warning");
+  assert.equal(report.checks.find((row) => row.id === "release_update_eligibility").severity, "warning");
   assert.equal(report.checks.find((row) => row.id === "backend_environment").severity, "warning");
 });
