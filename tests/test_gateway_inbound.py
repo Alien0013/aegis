@@ -311,13 +311,19 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
 
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
     monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+    monkeypatch.delenv("WEBHOOK_CHANNEL_SECRET", raising=False)
 
     assert TelegramAdapter("token").metadata["transport"] == "long_poll"
     assert DiscordAdapter("token").metadata["supports_threads"] is True
     assert DiscordAdapter("token").metadata["command_cap"] == 100
     assert len(DiscordAdapter("token").command_menu(max_commands=500)) <= 100
     assert SlackAdapter().metadata["typed_command_prefix"] == "!"
-    assert WebhookChannel().metadata["transport"] == "http"
+    webhook = WebhookChannel().metadata
+    assert webhook["transport"] == "http"
+    assert webhook["security"]["secret_configured"] is False
+    assert "X-Secret" in webhook["security"]["signature_schemes"]
+    assert webhook["idempotency"]["delivery_cache"]["entries"] == 0
+    assert webhook["rate_limiter"]["limit"] >= 1
 
 
 def test_gateway_webhook_channel_normalizes_event_body():

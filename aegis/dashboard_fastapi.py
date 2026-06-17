@@ -1683,7 +1683,7 @@ def _plugins_payload(config: Config) -> dict:
 
 
 def _webhooks_status_payload(config: Config) -> dict[str, Any]:
-    from .webhook import MAX_WEBHOOK_BYTES, WEBHOOK_REPLAY_WINDOW_SECONDS, WebhookStore
+    from .webhook import MAX_WEBHOOK_BYTES, WEBHOOK_REPLAY_WINDOW_SECONDS, WebhookStore, webhook_runtime_status
 
     hooks = []
     for hook in WebhookStore().list():
@@ -1705,6 +1705,7 @@ def _webhooks_status_payload(config: Config) -> dict[str, Any]:
         "ok": True,
         "count": len(hooks),
         "hooks": hooks,
+        "runtime": webhook_runtime_status(config),
         "security": {
             "allow_unsigned_loopback": bool(config.get("webhook.allow_unsigned_loopback", True)),
             "unsigned_auth_env_override": insecure_env,

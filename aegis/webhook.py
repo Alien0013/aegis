@@ -308,6 +308,7 @@ class DeliveryIdCache:
             return True
         timestamp = time.time() if now is None else float(now)
         with self._lock:
+            self._prune_locked(timestamp)
             seen_at = self._seen.get(key)
             if seen_at is not None and timestamp - seen_at < self.ttl_seconds:
                 return False
@@ -318,6 +319,18 @@ class DeliveryIdCache:
             self._prune_locked(timestamp)
             return True
 
+    def stats(self, *, now: float | None = None) -> dict[str, float | int]:
+        timestamp = time.time() if now is None else float(now)
+        with self._lock:
+            self._prune_locked(timestamp)
+            oldest = timestamp - self._order[0][0] if self._order else 0.0
+            return {
+                "entries": len(self._seen),
+                "max_items": self.max_items,
+                "ttl_seconds": self.ttl_seconds,
+                "oldest_age_seconds": max(0.0, oldest),
+            }
+
 
 class FixedWindowRateLimiter:
     def __init__(self, *, limit: int, window_seconds: float = 60.0) -> None:
@@ -326,12 +339,19 @@ class FixedWindowRateLimiter:
         self._hits: dict[str, tuple[float, int]] = {}
         self._lock = threading.RLock()
 
+    def _prune_locked(self, now: float) -> None:
+        cutoff = now - self.window_seconds
+        for key, (window_start, _count) in list(self._hits.items()):
+            if window_start < cutoff:
+                self._hits.pop(key, None)
+
     def allow(self, key: str, *, now: float | None = None) -> bool:
         if self.limit <= 0:
             return True
         timestamp = time.time() if now is None else float(now)
         window_start = timestamp - (timestamp % self.window_seconds)
         with self._lock:
+            self._prune_locked(timestamp)
             old_start, count = self._hits.get(key, (window_start, 0))
             if old_start != window_start:
                 old_start, count = window_start, 0
@@ -340,6 +360,17 @@ class FixedWindowRateLimiter:
                 return False
             self._hits[key] = (old_start, count + 1)
             return True
+
+    def stats(self, *, now: float | None = None) -> dict[str, float | int]:
+        timestamp = time.time() if now is None else float(now)
+        with self._lock:
+            self._prune_locked(timestamp)
+            return {
+                "entries": len(self._hits),
+                "active_hits": sum(count for _start, count in self._hits.values()),
+                "limit": self.limit,
+                "window_seconds": self.window_seconds,
+            }
 
 
 def _delivery_cache(config) -> DeliveryIdCache:
@@ -359,6 +390,72 @@ def _rate_limiter(config) -> FixedWindowRateLimiter:
     )
 
 
+_RUNTIME_LOCK = threading.RLock()
+_RUNTIME: dict[str, object] = {}
+
+
+def _configured_runtime_status(config) -> dict[str, dict[str, float | int]]:
+    ttl = config.get("webhook.idempotency_ttl_seconds", None)
+    if ttl is None:
+        ttl = config.get("server.idempotency_ttl_seconds", 3600)
+    return {
+        "delivery_cache": {
+            "entries": 0,
+            "max_items": int(config.get("webhook.idempotency_cache_max", 10000) or 10000),
+            "ttl_seconds": float(ttl or 3600),
+            "oldest_age_seconds": 0.0,
+        },
+        "rate_limiter": {
+            "entries": 0,
+            "active_hits": 0,
+            "limit": int(config.get("webhook.rate_limit_per_minute", 60) or 0),
+            "window_seconds": 60.0,
+        },
+    }
+
+
+def _register_runtime(
+    delivery_cache: DeliveryIdCache,
+    rate_limiter: FixedWindowRateLimiter,
+    *,
+    hook_count: int,
+) -> None:
+    with _RUNTIME_LOCK:
+        _RUNTIME.clear()
+        _RUNTIME.update({
+            "started_at": time.time(),
+            "hook_count": int(hook_count),
+            "delivery_cache": delivery_cache,
+            "rate_limiter": rate_limiter,
+        })
+
+
+def webhook_runtime_status(config) -> dict[str, object]:
+    configured = _configured_runtime_status(config)
+    with _RUNTIME_LOCK:
+        delivery_cache = _RUNTIME.get("delivery_cache")
+        rate_limiter = _RUNTIME.get("rate_limiter")
+        started_at = float(_RUNTIME.get("started_at") or 0.0)
+        hook_count = int(_RUNTIME.get("hook_count") or 0)
+    active = isinstance(delivery_cache, DeliveryIdCache) and isinstance(rate_limiter, FixedWindowRateLimiter)
+    if not active:
+        return {
+            "active": False,
+            "started_at": None,
+            "uptime_seconds": 0.0,
+            "hook_count": 0,
+            **configured,
+        }
+    return {
+        "active": True,
+        "started_at": started_at,
+        "uptime_seconds": max(0.0, time.time() - started_at),
+        "hook_count": hook_count,
+        "delivery_cache": delivery_cache.stats(),
+        "rate_limiter": rate_limiter.stats(),
+    }
+
+
 def _delivery_id(name: str, headers) -> str:
     for header in _DELIVERY_ID_HEADERS:
         value = str(headers.get(header, "") or "").strip()
@@ -376,8 +473,14 @@ def make_handler(config, store: WebhookStore):
     runner = SurfaceRunner(config, include_mcp=True)
     delivery_cache = _delivery_cache(config)
     rate_limiter = _rate_limiter(config)
+    _register_runtime(delivery_cache, rate_limiter, hook_count=len(store.list()))
+    handler_delivery_cache = delivery_cache
+    handler_rate_limiter = rate_limiter
 
     class Handler(BaseHTTPRequestHandler):
+        delivery_cache = handler_delivery_cache
+        rate_limiter = handler_rate_limiter
+
         def log_message(self, *a):  # quiet
             pass
 

@@ -304,6 +304,39 @@ def test_webhook_delivery_cache_prunes_incrementally():
     assert cache.record("fresh-sibling", now=200.0) is False
     assert "expired-sibling" not in cache._seen
     assert cache._seen["expired-target"] == 200.0
+    stats = cache.stats(now=200.0)
+    assert stats["entries"] == 2
+    assert stats["max_items"] == 3
+    assert stats["ttl_seconds"] == 60.0
+
+
+def test_webhook_delivery_cache_caps_entries_and_reports_stats():
+    from aegis.webhook import DeliveryIdCache
+
+    cache = DeliveryIdCache(ttl_seconds=600, max_items=2)
+    assert cache.record("one", now=1.0) is True
+    assert cache.record("two", now=2.0) is True
+    assert cache.record("three", now=3.0) is True
+
+    stats = cache.stats(now=4.0)
+    assert stats["entries"] == 2
+    assert stats["max_items"] == 2
+    assert "one" not in cache._seen
+
+
+def test_webhook_rate_limiter_prunes_stale_windows_and_reports_stats():
+    from aegis.webhook import FixedWindowRateLimiter
+
+    limiter = FixedWindowRateLimiter(limit=2, window_seconds=60)
+    assert limiter.allow("client-a", now=0.0) is True
+    assert limiter.allow("client-b", now=1.0) is True
+    assert limiter.stats(now=30.0)["entries"] == 2
+
+    stats = limiter.stats(now=121.0)
+    assert stats["entries"] == 0
+    assert stats["active_hits"] == 0
+    assert stats["limit"] == 2
+    assert stats["window_seconds"] == 60.0
 
 
 # --- TASK 2: cron script / skills / multi-deliver / [SILENT] ----------------

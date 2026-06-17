@@ -50,6 +50,42 @@ class WebhookChannel(BasePlatformAdapter):
             window_seconds=60,
         )
 
+    @property
+    def metadata(self) -> dict:
+        data = super().metadata
+        data.update({
+            "port": self.port,
+            "security": {
+                "secret_configured": bool(self.secret),
+                "loopback_unsigned_allowed": True,
+                "insecure_env_override": _env_truthy("WEBHOOK_CHANNEL_INSECURE_NO_AUTH"),
+                "max_body_bytes": MAX_CHANNEL_WEBHOOK_BYTES,
+                "signature_schemes": [
+                    "X-Secret",
+                    "X-Hub-Signature-256",
+                    "X-Webhook-Signature",
+                    "svix-signature",
+                    "X-Gitlab-Token",
+                ],
+            },
+            "idempotency": {
+                "delivery_id_sources": [
+                    "X-GitHub-Delivery",
+                    "svix-id",
+                    "X-Request-ID",
+                    "X-Request-Id",
+                    "Idempotency-Key",
+                    "body.delivery_id",
+                    "body.event_id",
+                    "body.message_id",
+                    "body.id",
+                ],
+                "delivery_cache": self._delivery_cache.stats(),
+            },
+            "rate_limiter": self._rate_limiter.stats(),
+        })
+        return data
+
     def _delivery_id(self, headers, body: dict) -> str:
         for name in ("X-GitHub-Delivery", "svix-id", "X-Request-ID", "X-Request-Id", "Idempotency-Key"):
             value = str(headers.get(name, "") or "").strip()

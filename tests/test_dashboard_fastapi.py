@@ -1512,6 +1512,10 @@ def test_fastapi_webhooks_status_redacts_security_posture(tmp_path, monkeypatch)
     assert "super-secret" not in rendered
     assert body["security"]["rate_limit_per_minute"] >= 1
     assert "X-Hub-Signature-256" in body["security"]["signature_schemes"]
+    assert body["runtime"]["active"] in {True, False}
+    assert body["runtime"]["delivery_cache"]["max_items"] >= 1
+    assert body["runtime"]["delivery_cache"]["entries"] >= 0
+    assert body["runtime"]["rate_limiter"]["limit"] >= 0
 
 
 def test_fastapi_config_preferences_memory_provider_and_plugins(tmp_path, monkeypatch):
