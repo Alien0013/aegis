@@ -423,6 +423,7 @@ class SendMessageTool(Tool):
         "properties": {
             "text": {"type": "string", "description": "the message to send"},
             "chat_id": {"type": "string", "description": "target conversation id (default: current)"},
+            "thread_id": {"type": "string", "description": "target thread/topic id (default: current thread)"},
             "platform": {"type": "string",
                          "description": "channel name, e.g. telegram, discord (default: current)"},
         },
@@ -435,15 +436,20 @@ class SendMessageTool(Tool):
             return ToolResult.error("send_message: 'text' is required.")
         agent = ctx.agent
         platform = args.get("platform") or getattr(agent, "platform", None)
-        chat_id = args.get("chat_id") or getattr(agent, "chat_id", None)
+        explicit_chat_id = args.get("chat_id")
+        chat_id = explicit_chat_id or getattr(agent, "chat_id", None)
+        thread_id = args.get("thread_id")
+        if thread_id is None and not explicit_chat_id:
+            thread_id = getattr(agent, "thread_id", None)
         if not platform or not chat_id:
             return ToolResult.error(
                 "send_message needs an active channel + conversation. It works inside the "
                 "gateway (`aegis gateway`); otherwise pass both platform and chat_id.")
         from ..gateway.queue import DeliveryQueue
         from ..redact import redact_secrets
-        DeliveryQueue().enqueue(str(platform), str(chat_id), redact_secrets(text))
-        return ToolResult.ok(f"queued message to {platform}:{chat_id}", display="message queued")
+        DeliveryQueue().enqueue(str(platform), str(chat_id), redact_secrets(text), thread_id=thread_id)
+        target = f"{platform}:{chat_id}" + (f" thread:{thread_id}" if thread_id else "")
+        return ToolResult.ok(f"queued message to {target}", display="message queued")
 
 
 def extra_tools() -> list[Tool]:

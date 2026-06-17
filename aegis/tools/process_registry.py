@@ -604,7 +604,12 @@ class ProcessRegistry:
             try:
                 from ..gateway.queue import DeliveryQueue
 
-                DeliveryQueue().enqueue(platform, chat_id, text)
+                DeliveryQueue().enqueue(
+                    platform,
+                    chat_id,
+                    text,
+                    thread_id=str(event.get("thread_id") or "") or None,
+                )
             except Exception:
                 pass
         try:
@@ -639,6 +644,7 @@ class ProcessRegistry:
                     session.watcher_platform,
                     session.watcher_chat_id,
                     f"background process finished: {title}",
+                    thread_id=session.watcher_thread_id or None,
                 )
             except Exception:
                 pass

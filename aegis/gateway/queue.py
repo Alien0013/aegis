@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
+from typing import Any
 
 from .. import config as cfg
 
@@ -17,16 +19,43 @@ class DeliveryQueue:
                            platform TEXT, chat_id TEXT, text TEXT,
                            attempts INTEGER DEFAULT 0, status TEXT DEFAULT 'pending',
                            next_at REAL DEFAULT 0, created_at REAL)""")
+            columns = {row["name"] for row in c.execute("PRAGMA table_info(outbox)").fetchall()}
+            if "thread_id" not in columns:
+                c.execute("ALTER TABLE outbox ADD COLUMN thread_id TEXT DEFAULT ''")
+            if "metadata" not in columns:
+                c.execute("ALTER TABLE outbox ADD COLUMN metadata TEXT DEFAULT '{}'")
 
     def _c(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db)
         conn.row_factory = sqlite3.Row
         return conn
 
-    def enqueue(self, platform: str, chat_id: str, text: str) -> None:
+    def enqueue(
+        self,
+        platform: str,
+        chat_id: str,
+        text: str,
+        *,
+        thread_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        metadata = dict(metadata or {})
+        if thread_id:
+            metadata.setdefault("thread_id", str(thread_id))
         with self._c() as c:
-            c.execute("INSERT INTO outbox (platform, chat_id, text, next_at, created_at) "
-                      "VALUES (?,?,?,?,?)", (platform, chat_id, text, time.time(), time.time()))
+            c.execute(
+                "INSERT INTO outbox (platform, chat_id, text, thread_id, metadata, next_at, created_at) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (
+                    platform,
+                    chat_id,
+                    text,
+                    str(thread_id or ""),
+                    json.dumps(metadata, sort_keys=True),
+                    time.time(),
+                    time.time(),
+                ),
+            )
 
     def due(self) -> list[sqlite3.Row]:
         with self._c() as c:
@@ -56,7 +85,13 @@ class DeliveryQueue:
         while True:
             for row in self.due():
                 try:
-                    ok = send_fn(row["platform"], row["chat_id"], row["text"])
+                    metadata = _row_metadata(row)
+                    ok = send_fn(row["platform"], row["chat_id"], row["text"], metadata=metadata)
+                except TypeError:
+                    try:
+                        ok = send_fn(row["platform"], row["chat_id"], row["text"])
+                    except Exception:  # noqa: BLE001
+                        ok = False
                 except Exception:  # noqa: BLE001
                     ok = False
                 if ok:
@@ -64,3 +99,16 @@ class DeliveryQueue:
                 else:
                     self.mark_failed(row["id"], row["attempts"])
             time.sleep(poll)
+
+
+def _row_metadata(row: sqlite3.Row) -> dict[str, Any]:
+    try:
+        data = json.loads(row["metadata"] or "{}")
+    except Exception:  # noqa: BLE001
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    thread_id = str(row["thread_id"] or "")
+    if thread_id:
+        data.setdefault("thread_id", thread_id)
+    return data

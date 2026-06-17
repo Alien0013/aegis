@@ -181,7 +181,7 @@ class TelegramAdapter(BasePlatformAdapter):
     ) -> None:
         import os
         if not os.path.exists(path):
-            self.send(chat_id, f"(file not found: {path})")
+            self.send(chat_id, f"(file not found: {path})", metadata=metadata)
             return
         ext = os.path.splitext(path)[1].lower()
         method, field = ("sendPhoto", "photo") if ext in (".png", ".jpg", ".jpeg", ".webp") \

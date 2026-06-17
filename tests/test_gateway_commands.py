@@ -33,6 +33,53 @@ def test_whoami_and_help(tmp_path, monkeypatch):
     assert all(row["trace_id"].startswith("trace_") for row in runs)
 
 
+def test_gateway_session_keys_are_thread_aware(tmp_path, monkeypatch):
+    r = _runner(tmp_path, monkeypatch)
+    first = _ev("topic one")
+    second = _ev("topic two")
+    first.thread_id = "topic-a"
+    second.thread_id = "topic-b"
+
+    assert r._key(first) == "telegram:c1:thread:topic-a:u1"
+    assert r._key(second) == "telegram:c1:thread:topic-b:u1"
+    assert r._key(first) != r._key(second)
+    assert r._key(_ev("plain")) == "telegram:c1:u1"
+
+
+def test_gateway_send_via_adapter_passes_thread_metadata_with_fallback(tmp_path, monkeypatch):
+    from aegis.gateway.base import BasePlatformAdapter
+
+    r = _runner(tmp_path, monkeypatch)
+
+    class MetadataAdapter(BasePlatformAdapter):
+        name = "slack"
+
+        def __init__(self):
+            self.sent = []
+
+        def send(self, chat_id: str, text: str, *, metadata=None):  # noqa: ANN001
+            self.sent.append((chat_id, text, metadata))
+
+    class LegacyAdapter(BasePlatformAdapter):
+        name = "legacy"
+
+        def __init__(self):
+            self.sent = []
+
+        def send(self, chat_id: str, text: str):
+            self.sent.append((chat_id, text))
+
+    metadata_adapter = MetadataAdapter()
+    legacy_adapter = LegacyAdapter()
+    r.add(metadata_adapter)
+    r.add(legacy_adapter)
+
+    assert r._send_via_adapter("slack", "C1", "hello", metadata={"thread_id": "167.1"}) is True
+    assert r._send_via_adapter("legacy", "C2", "fallback", metadata={"thread_id": "ignored"}) is True
+    assert metadata_adapter.sent == [("C1", "hello", {"thread_id": "167.1"})]
+    assert legacy_adapter.sent == [("C2", "fallback")]
+
+
 def test_handoff_is_adopted_before_control_commands(tmp_path, monkeypatch):
     from aegis import handoff
     from aegis.session import Session

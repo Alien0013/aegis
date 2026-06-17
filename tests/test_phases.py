@@ -6,9 +6,11 @@ from __future__ import annotations
 def test_delivery_queue_backoff():
     from aegis.gateway.queue import DeliveryQueue
     q = DeliveryQueue()
-    q.enqueue("telegram", "chat1", "hello")
+    q.enqueue("telegram", "chat1", "hello", thread_id="topic-1")
     due = q.due()
     assert len(due) == 1 and q.pending_count() == 1
+    assert due[0]["thread_id"] == "topic-1"
+    assert '"thread_id": "topic-1"' in due[0]["metadata"]
     q.mark_failed(due[0]["id"], attempts=0)        # schedules a retry, still pending
     assert q.pending_count() == 1
     q.mark_sent(due[0]["id"])

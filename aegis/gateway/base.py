@@ -52,7 +52,7 @@ class BasePlatformAdapter:
         """Block, receiving messages and calling ``dispatch(event)``; send replies."""
         raise NotImplementedError
 
-    def send(self, chat_id: str, text: str) -> None:  # pragma: no cover - interface
+    def send(self, chat_id: str, text: str, *, metadata: dict | None = None) -> None:  # pragma: no cover - interface
         raise NotImplementedError
 
     @property
@@ -103,7 +103,7 @@ class BasePlatformAdapter:
                     return str(key)
             except Exception:  # noqa: BLE001
                 pass
-        return ev.chat_id
+        return f"{ev.chat_id}:thread:{ev.thread_id}" if ev.thread_id else ev.chat_id
 
     def _submit_inbound(
         self,
@@ -353,10 +353,15 @@ class BasePlatformAdapter:
         """Send a file as a native attachment. Default: mention it as text (adapters that
         support native uploads — Telegram, Discord — override this)."""
         import os
+        def send_text(message: str) -> None:
+            try:
+                self.send(chat_id, message, metadata=metadata)
+            except TypeError:
+                self.send(chat_id, message)
         if os.path.exists(path):
-            self.send(chat_id, (caption + "\n" if caption else "") + f"📎 file ready: {path}")
+            send_text((caption + "\n" if caption else "") + f"📎 file ready: {path}")
         else:
-            self.send(chat_id, f"(file not found: {path})")
+            send_text(f"(file not found: {path})")
 
     def send_image(self, chat_id: str, path: str, caption: str = "", *, metadata: dict | None = None, **kwargs) -> None:
         self.send_media(chat_id, path, caption, metadata=metadata, **kwargs)
@@ -483,23 +488,33 @@ class BasePlatformAdapter:
         waiter["event"].set()
         return True
 
-    def deliver(self, chat_id: str, text: str) -> None:
+    def deliver(self, chat_id: str, text: str, *, metadata: dict | None = None) -> None:
         """Send a reply, extracting any ``MEDIA:/abs/path`` lines and sending each as a native
         attachment. Adapters should call this (not ``send``) to deliver agent replies."""
+
+        def send_text(message: str) -> None:
+            try:
+                self.send(chat_id, message, metadata=metadata)
+            except TypeError:
+                self.send(chat_id, message)
+
         clean, media = split_media(text)
         if clean and not self.renders_tables:
             clean = tableify(clean)             # pipe tables don't render on chat surfaces
         if clean:
-            self.send(chat_id, clean)
+            send_text(clean)
         for path in media:
             try:
                 allowed, reason = self.filter_media_path(path)
                 if not allowed:
-                    self.send(chat_id, f"📎 blocked media path: {reason}")
+                    send_text(f"📎 blocked media path: {reason}")
                     continue
-                self.send_media(chat_id, path)
+                try:
+                    self.send_media(chat_id, path, metadata=metadata)
+                except TypeError:
+                    self.send_media(chat_id, path)
             except Exception:  # noqa: BLE001
-                self.send(chat_id, f"📎 {path}")
+                send_text(f"📎 {path}")
 
 
 _CONTROL_RE = re.compile(r"^\s*/?(stop|cancel|abort|halt)\s*!?\s*$", re.IGNORECASE)

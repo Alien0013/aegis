@@ -325,6 +325,7 @@ def test_compaction_uses_aux_provider_helper():
 # --- send_message tool (proactive channel push) -----------------------------
 def test_send_message_tool(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from types import SimpleNamespace
     from aegis.tools.extra_builtin import SendMessageTool
     from aegis.tools.base import ToolContext
     from aegis.tools.registry import default_registry
@@ -340,6 +341,14 @@ def test_send_message_tool(tmp_path, monkeypatch):
     from aegis.gateway.queue import DeliveryQueue
     row = DeliveryQueue().due()[0]
     assert row["platform"] == "telegram" and "[REDACTED]" in row["text"]   # redacted on the way out
+
+    agent = SimpleNamespace(platform="slack", chat_id="C1", thread_id="167.1")
+    r = SendMessageTool().run({"text": "thread reply"}, ToolContext(agent=agent))
+    assert not r.is_error and "thread:167.1" in r.content
+    row = DeliveryQueue().due()[1]
+    assert row["platform"] == "slack"
+    assert row["chat_id"] == "C1"
+    assert row["thread_id"] == "167.1"
 
 
 # --- ntfy push-notification channel -----------------------------------------

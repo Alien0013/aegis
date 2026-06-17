@@ -237,13 +237,14 @@ class GatewayRunner:
             return str(ev.session_key)
         uid = ev.user_id or "anon"
         mode = self.session_mode
+        thread = f":thread:{ev.thread_id}" if ev.thread_id else ""
         if mode == "main":
             return f"{ev.platform}:main"
         if mode == "per_channel":
-            return f"{ev.platform}:{ev.chat_id}"
+            return f"{ev.platform}:{ev.chat_id}{thread}"
         if mode == "per_peer":
-            return f"{ev.platform}:peer:{uid}"
-        return f"{ev.platform}:{ev.chat_id}:{uid}"  # per_channel_peer (default)
+            return f"{ev.platform}:peer:{uid}{thread}"
+        return f"{ev.platform}:{ev.chat_id}{thread}:{uid}"  # per_channel_peer (default)
 
     _ALWAYS_ALLOWED = {"/help", "/whoami", "/status"}
 
@@ -1302,21 +1303,41 @@ class GatewayRunner:
             self._drain_process_notifications()
             time.sleep(interval)
 
-    def enqueue(self, platform: str, chat_id: str, text: str) -> None:
+    def enqueue(
+        self,
+        platform: str,
+        chat_id: str,
+        text: str,
+        *,
+        thread_id: str | None = None,
+        metadata: dict | None = None,
+    ) -> None:
         """Durably queue an outbound message (used by cron + retry on send failure)."""
         from .queue import DeliveryQueue
-        DeliveryQueue().enqueue(platform, chat_id, text)
+        DeliveryQueue().enqueue(platform, chat_id, text, thread_id=thread_id, metadata=metadata)
 
-    def _send_via_adapter(self, platform: str, chat_id: str, text: str) -> bool:
+    def _send_via_adapter(
+        self,
+        platform: str,
+        chat_id: str,
+        text: str,
+        metadata: dict | None = None,
+    ) -> bool:
         adapter = next((a for a in self.adapters if a.name == platform), None)
         if adapter is None:
             return False
         try:
             deliver = getattr(adapter, "deliver", None)
             if callable(deliver):
-                deliver(chat_id, text)
+                try:
+                    deliver(chat_id, text, metadata=metadata or {})
+                except TypeError:
+                    deliver(chat_id, text)
             else:
-                adapter.send(chat_id, text)
+                try:
+                    adapter.send(chat_id, text, metadata=metadata or {})
+                except TypeError:
+                    adapter.send(chat_id, text)
             return True
         except Exception:  # noqa: BLE001
             return False
