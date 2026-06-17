@@ -38,6 +38,23 @@ _MAX_SESSION_KEY_CHARS = 256
 _TEXT_CONTENT_PART_TYPES = {"text", "input_text", "output_text"}
 _IMAGE_CONTENT_PART_TYPES = {"image_url", "input_image"}
 _FILE_CONTENT_PART_TYPES = {"file", "input_file"}
+_OPAQUE_RESPONSE_INPUT_ITEM_TYPES = {
+    "code_interpreter_call",
+    "computer_call",
+    "computer_call_output",
+    "custom_tool_call",
+    "custom_tool_call_output",
+    "file_search_call",
+    "image_generation_call",
+    "local_shell_call",
+    "local_shell_call_output",
+    "mcp_approval_request",
+    "mcp_approval_response",
+    "mcp_call",
+    "mcp_list_tools",
+    "reasoning",
+    "web_search_call",
+}
 _CHAT_IDEMPOTENCY_FINGERPRINT_KEYS = [
     "model",
     "messages",
@@ -399,6 +416,8 @@ def _response_content_validation_error(value: Any, *, param: str) -> dict[str, A
                     param=f"{param}.arguments",
                 )
             return None
+        if _is_opaque_response_input_item(value):
+            return None
         if "content" in value:
             return _content_part_validation_error(
                 value.get("content"),
@@ -430,6 +449,18 @@ def _is_function_call_input_item(item: Any) -> bool:
     return isinstance(item, dict) and str(item.get("type") or "") == "function_call"
 
 
+def _response_item_type(item: dict[str, Any]) -> str:
+    return str(item.get("type") or "").strip().lower()
+
+
+def _is_opaque_response_input_item(item: Any) -> bool:
+    return (
+        isinstance(item, dict)
+        and "role" not in item
+        and _response_item_type(item) in _OPAQUE_RESPONSE_INPUT_ITEM_TYPES
+    )
+
+
 def _function_output_validation_error(value: Any, *, param: str) -> dict[str, Any] | None:
     if isinstance(value, list):
         return _content_part_validation_error(value, param=param, allow_files=True)
@@ -451,6 +482,8 @@ def _response_input_item_visible(item: Any) -> bool:
     if _is_function_call_output_input_item(item):
         return bool(str(item.get("call_id") or item.get("tool_call_id") or "").strip())
     if _is_function_call_input_item(item):
+        return False
+    if _is_opaque_response_input_item(item):
         return False
     if "content" in item:
         return _content_has_visible_payload(item.get("content"))
@@ -693,6 +726,10 @@ def _canonical_function_call_item(item: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _canonical_opaque_response_input_item(item: dict[str, Any]) -> dict[str, Any]:
+    return dict(item)
+
+
 def _function_call_message(item: dict[str, Any]) -> Message:
     canonical = _canonical_function_call_item(item)
     arguments = canonical.get("arguments") or "{}"
@@ -727,6 +764,19 @@ def _function_call_output_message(item: dict[str, Any]) -> Message:
         meta={"response_input_item": canonical},
     )
     return message
+
+
+def _opaque_response_input_item_message(item: dict[str, Any]) -> Message:
+    item_type = _response_item_type(item)
+    role = "tool" if item_type.endswith("_output") or item_type.endswith("_response") else "assistant"
+    return Message(
+        role=role,
+        content="",
+        meta={
+            "response_input_item": _canonical_opaque_response_input_item(item),
+            "_responses_opaque_input_item": True,
+        },
+    )
 
 
 def _message_with_response_input_item(item: dict[str, Any]) -> Message:
@@ -973,6 +1023,8 @@ def _response_input_item_to_message(item: Any) -> Message:
         return _function_call_message(item)
     if _is_function_call_output_input_item(item):
         return _function_call_output_message(item)
+    if _is_opaque_response_input_item(item):
+        return _opaque_response_input_item_message(item)
     if isinstance(item, dict):
         if str(item.get("type") or "") == "message":
             return _message_with_response_input_item(item)
@@ -1042,11 +1094,19 @@ def _is_synthetic_response_prompt(message: Message) -> bool:
     return bool((getattr(message, "meta", {}) or {}).get("_responses_synthetic_prompt"))
 
 
+def _is_opaque_response_item_message(message: Message) -> bool:
+    return bool((getattr(message, "meta", {}) or {}).get("_responses_opaque_input_item"))
+
+
 def _history_payload(messages: list[Message]) -> list[dict[str, Any]]:
     return [
         _message_payload(m)
         for m in messages
-        if not _is_instruction_wrapper(m) and not _is_synthetic_response_prompt(m)
+        if (
+            not _is_instruction_wrapper(m)
+            and not _is_synthetic_response_prompt(m)
+            and not _is_opaque_response_item_message(m)
+        )
     ]
 
 
@@ -1114,6 +1174,9 @@ def _response_input_items(messages: list[Message], instructions: str | None = No
             continue
         if _is_function_call_input_item(raw_item):
             items.append(_canonical_function_call_item(raw_item))
+            continue
+        if _is_opaque_response_input_item(raw_item):
+            items.append(_canonical_opaque_response_input_item(raw_item))
             continue
         if isinstance(raw_item, dict) and str(raw_item.get("type") or "") == "message":
             items.append(_canonical_response_message_item(raw_item))
@@ -3138,7 +3201,7 @@ def make_handler(config: Config):
             input_history, last_user = _responses_messages(body)
             state_history = list(explicit_history) + list(input_history)
             state_history = _maybe_truncate_response_history(state_history, body, config)
-            history = list(state_history)
+            history = [m for m in state_history if not _is_opaque_response_item_message(m)]
             instruction = _instruction_message(instructions)
             if instruction is not None:
                 history.insert(0, instruction)

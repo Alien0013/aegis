@@ -1414,6 +1414,103 @@ def test_responses_preserves_message_input_item_identity(monkeypatch, tmp_path):
     ]
 
 
+def test_responses_preserves_opaque_assistant_toolish_input_items(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    reasoning_item = {
+        "id": "rs_client_1",
+        "type": "reasoning",
+        "status": "completed",
+        "summary": [{"type": "summary_text", "text": "prior reasoning"}],
+    }
+    web_search_item = {
+        "id": "ws_client_1",
+        "type": "web_search_call",
+        "status": "completed",
+        "action": {"type": "search", "query": "aegis responses"},
+    }
+    mcp_item = {
+        "id": "mcp_client_1",
+        "type": "mcp_call",
+        "status": "completed",
+        "server_label": "docs",
+        "name": "lookup",
+        "arguments": {"topic": "responses"},
+        "output": [{"type": "text", "text": "result"}],
+    }
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": [
+                reasoning_item,
+                web_search_item,
+                mcp_item,
+                {"role": "user", "content": "continue"},
+            ],
+        })
+        response_id = json.loads(data)["id"]
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    srv2, port2 = _serve(server.make_handler(Config.load()))
+    try:
+        items_status, items_data = _request(port2, "GET", f"/v1/responses/{response_id}/input_items")
+    finally:
+        srv2.shutdown()
+        srv2.server_close()
+
+    assert status == 200
+    call = _FakeRunner.calls[0]
+    assert call["prompt"].content == "continue"
+    assert call["history"] == []
+    assert items_status == 200
+    items = json.loads(items_data)["data"]
+    assert [item["type"] for item in items] == [
+        "reasoning",
+        "web_search_call",
+        "mcp_call",
+        "message",
+    ]
+    assert items[0]["summary"] == reasoning_item["summary"]
+    assert items[1]["action"] == web_search_item["action"]
+    assert items[2]["output"] == mcp_item["output"]
+    assert all(item["response_id"] == response_id for item in items)
+
+
+def test_responses_still_rejects_malformed_message_content_with_opaque_types(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "summary_text", "text": "not valid message content"}],
+                },
+            ],
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 400
+    error = json.loads(data)["error"]
+    assert error["code"] == "unsupported_content_part"
+    assert error["param"] == "input[0].content[0].type"
+    assert _FakeRunner.calls == []
+
+
 def test_responses_accepts_function_call_output_input_item(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
