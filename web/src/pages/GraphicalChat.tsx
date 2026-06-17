@@ -156,6 +156,7 @@ export function GraphicalChat({
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const presetHydratedRef = useRef(false);
+  const streamRef = useRef<{ token: number; controller: AbortController | null }>({ token: 0, controller: null });
 
   const setModel = (value: string, dirty = true) => {
     setModelState(value);
@@ -223,6 +224,12 @@ export function GraphicalChat({
     onRuntime?.({ model, provider });
   }, [model, onRuntime, provider]);
 
+  useEffect(() => () => {
+    streamRef.current.token += 1;
+    streamRef.current.controller?.abort();
+    streamRef.current.controller = null;
+  }, []);
+
   useEffect(() => {
     if (presetHydratedRef.current || sessionId || !modelData || !provider || !model) return;
     presetHydratedRef.current = true;
@@ -233,6 +240,10 @@ export function GraphicalChat({
   // Load a session's transcript when one is opened from the rail.
   useEffect(() => {
     let cancelled = false;
+    streamRef.current.token += 1;
+    streamRef.current.controller?.abort();
+    streamRef.current.controller = null;
+    setBusy(false);
     setSid(sessionId || "");
     setTurns([]);
     setRuntimeDirty(false);
@@ -340,6 +351,7 @@ export function GraphicalChat({
 
   const patchLast = (fn: (turn: Turn) => Turn) =>
     setTurns((t) => {
+      if (!t.length) return t;
       const copy = t.slice();
       copy[copy.length - 1] = fn(copy[copy.length - 1]);
       return copy;
@@ -416,9 +428,18 @@ export function GraphicalChat({
     setInput("");
     setBusy(true);
     setTurns((t) => [...t, { role: "user", text }, { role: "assistant", text: "", tools: [] }]);
+    streamRef.current.controller?.abort();
+    const controller = new AbortController();
+    const token = streamRef.current.token + 1;
+    streamRef.current = { token, controller };
+    const streamActive = () =>
+      streamRef.current.token === token
+      && streamRef.current.controller === controller
+      && !controller.signal.aborted;
 
     try {
       await postStream("chat/stream", { message: text, session_id: sid || undefined, ...sendRuntime }, (data) => {
+        if (!streamActive()) return;
         const type = String(data.type || "");
         if (type === "start") {
           const s = String(data.session_id || "");
@@ -488,12 +509,17 @@ export function GraphicalChat({
             return { ...turn, tools };
           });
         }
-      });
+      }, { signal: controller.signal });
     } catch (e) {
-      patchLast((turn) => ({ ...turn, text: turn.text || `connection error: ${String(e)}` }));
+      if (streamActive()) {
+        patchLast((turn) => ({ ...turn, text: turn.text || `connection error: ${String(e)}` }));
+      }
     } finally {
-      setBusy(false);
-      taRef.current?.focus();
+      if (streamRef.current.token === token) {
+        streamRef.current.controller = null;
+        setBusy(false);
+        taRef.current?.focus();
+      }
     }
   };
 

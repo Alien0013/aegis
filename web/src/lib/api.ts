@@ -218,11 +218,13 @@ export async function postStream(
   path: string,
   body: unknown,
   onEvent: (data: Record<string, unknown>) => void,
+  options: { signal?: AbortSignal } = {},
 ): Promise<void> {
   const r = await fetch(`/api/${path}`, {
     method: "POST",
     headers: headers({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
+    signal: options.signal,
   });
   if (!r.ok) throw new ApiError(path, r.status);
   if (!r.body) throw new ApiError(path, 0, "no stream body");
