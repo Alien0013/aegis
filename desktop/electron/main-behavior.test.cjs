@@ -57,6 +57,7 @@ test("auto-updater setup is idempotent and bounded", () => {
   requireSnippet("auto-update disabled");
   requireSnippet("autoUpdater.allowPrerelease = false");
   requireSnippet("autoUpdater.allowDowngrade = false");
+  requireSnippet('if (updateCheckManual) notify("AEGIS update failed", message);');
 });
 
 test("renderer diagnostics and logs bridge is bounded", () => {

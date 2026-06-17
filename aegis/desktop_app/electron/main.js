@@ -557,7 +557,11 @@ function initAutoUpdate(manual) {
   }
   updateCheckInFlight = true;
   autoUpdater.checkForUpdates()
-    .catch((e) => log(`checkForUpdates failed: ${e && e.message}`))
+    .catch((e) => {
+      const message = String((e && e.message) || e || "Update check failed.");
+      log(`checkForUpdates failed: ${message}`);
+      if (updateCheckManual) notify("AEGIS update failed", message);
+    })
     .finally(() => { updateCheckInFlight = false; });
 }
 
