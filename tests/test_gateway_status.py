@@ -124,6 +124,52 @@ def test_gateway_shutdown_marks_locked_session_resume_pending(tmp_path, monkeypa
     assert loaded.meta["last_resume_marked_at"]
 
 
+def test_planned_stop_watcher_marks_locked_session_and_interrupts(tmp_path, monkeypatch):
+    import threading
+
+    from aegis.config import Config
+    from aegis.gateway import status
+    from aegis.gateway.base import MessageEvent
+    from aegis.gateway.runner import GatewayRunner
+
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    monkeypatch.setattr(status, "_get_process_start_time", lambda pid: "42")
+    status.write_planned_stop_marker(os.getpid())
+
+    runner = GatewayRunner(Config.load(), cwd=tmp_path)
+    ev = MessageEvent(platform="telegram", chat_id="c1", text="work", user_id="u1")
+    key = runner._key(ev)
+    session = runner._session(key)
+    runner.store.save(session)
+    lock = threading.Lock()
+    runner._key_locks[key] = lock
+    lock.acquire()
+    interrupted = []
+    try:
+        assert runner._consume_planned_stop_request(
+            interrupt_main=lambda: interrupted.append(True),
+        ) is True
+    finally:
+        lock.release()
+
+    loaded = runner.store.load(key)
+    assert loaded.meta["resume_pending"] is True
+    assert loaded.meta["resume_reason"] == "planned_stop"
+    assert loaded.meta["last_resume_marked_at"]
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "logs" / "shutdowns.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert rows[-1]["cause"] == "planned_stop"
+    assert interrupted == [True]
+    assert not (tmp_path / ".gateway-planned-stop.json").exists()
+    assert runner._consume_planned_stop_request(
+        interrupt_main=lambda: interrupted.append(False),
+    ) is False
+    assert interrupted == [True]
+
+
 def test_gateway_startup_recovers_stale_running_gateway_runs(tmp_path, monkeypatch):
     from aegis.config import Config
     from aegis.gateway.runner import GatewayRunner

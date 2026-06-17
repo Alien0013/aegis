@@ -399,6 +399,33 @@ class GatewayRunner:
             pass
         return count
 
+    def _consume_planned_stop_request(self, *, interrupt_main=None) -> bool:
+        try:
+            from .status import consume_planned_stop_marker_for_self
+
+            if not consume_planned_stop_marker_for_self():
+                return False
+        except Exception:  # noqa: BLE001
+            return False
+        self._mark_running_sessions_resume_pending("planned_stop")
+        self._record_shutdown("planned_stop")
+        if interrupt_main is None:
+            import _thread
+
+            interrupt_main = _thread.interrupt_main
+        interrupt_main()
+        return True
+
+    def _planned_stop_watcher(self, stop_event: threading.Event, interval: float = 0.5) -> None:
+        """Fallback for service stops in environments that do not deliver signals."""
+        while not stop_event.is_set():
+            try:
+                if self._consume_planned_stop_request():
+                    return
+            except Exception:  # noqa: BLE001
+                pass
+            stop_event.wait(interval)
+
     def _recover_stale_gateway_runs(self) -> int:
         try:
             from ..runs import RunStore
@@ -1390,6 +1417,13 @@ class GatewayRunner:
                 signal.signal(sig, self._on_shutdown_signal)
             except (ValueError, OSError):     # not on the main thread / unsupported
                 pass
+        planned_stop_watcher_stop = threading.Event()
+        threading.Thread(
+            target=self._planned_stop_watcher,
+            args=(planned_stop_watcher_stop,),
+            daemon=True,
+        ).start()
+        print("  ▸ planned-stop watcher up")
         # Restart forensics: tell the operator when the PREVIOUS run died uncleanly.
         try:
             from ..doctor import crash_report, record_start
@@ -1414,6 +1448,8 @@ class GatewayRunner:
         except KeyboardInterrupt:
             self._record_shutdown("KeyboardInterrupt")
             print("\nGateway stopped.")
+        finally:
+            planned_stop_watcher_stop.set()
 
     def _on_shutdown_signal(self, signum, _frame) -> None:
         import signal
