@@ -514,6 +514,148 @@ def test_telegram_adapter_enforces_chat_filters_and_group_addressing(monkeypatch
     })
 
 
+def test_telegram_adapter_builds_inbound_attachment_rows(monkeypatch):
+    from aegis.gateway.channels import TelegramAdapter
+
+    for name in (
+        "TELEGRAM_ALLOWED_USERS",
+        "TELEGRAM_ALLOWED_CHATS",
+        "TELEGRAM_IGNORED_CHATS",
+        "TELEGRAM_ALLOWED_CHAT_TYPES",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    adapter = TelegramAdapter("token")
+    msg = {
+        "voice": {
+            "file_id": "voice-file",
+            "file_unique_id": "voice-unique",
+            "mime_type": "audio/ogg",
+            "duration": 4,
+            "file_size": 1024,
+        },
+        "audio": {
+            "file_id": "audio-file",
+            "mime_type": "audio/mpeg",
+            "file_name": "song.mp3",
+            "file_size": 2048,
+        },
+        "document": {
+            "file_id": "doc-file",
+            "mime_type": "application/pdf",
+            "file_name": "brief.pdf",
+            "file_size": 4096,
+        },
+        "photo": [
+            {"file_id": "small-photo", "width": 90, "height": 90, "file_size": 100},
+            {"file_id": "large-photo", "width": 900, "height": 600, "file_size": 5000},
+        ],
+        "video": {
+            "file_id": "video-file",
+            "mime_type": "video/mp4",
+            "file_name": "clip.mp4",
+            "width": 640,
+            "height": 480,
+            "duration": 9,
+            "file_size": 8192,
+        },
+    }
+
+    rows = adapter._attachments_from_message(msg)
+
+    assert [row["kind"] for row in rows] == ["voice", "audio", "document", "photo", "video"]
+    assert rows[0] == {
+        "id": "voice-file",
+        "type": "audio/ogg",
+        "media_type": "audio/ogg",
+        "filename": "voice.ogg",
+        "size": 1024,
+        "source": "telegram",
+        "kind": "voice",
+        "file_id": "voice-file",
+        "file_unique_id": "voice-unique",
+        "duration": 4,
+    }
+    assert rows[1]["filename"] == "song.mp3"
+    assert rows[2]["type"] == "application/pdf"
+    assert rows[3]["file_id"] == "large-photo"
+    assert rows[4]["width"] == 640
+    assert adapter._event_text(
+        {"chat": {"type": "private"}},
+        "",
+        attachments=[rows[0]],
+    ) == "[voice attached: voice.ogg]"
+
+
+def test_telegram_long_poll_submits_media_only_updates(monkeypatch):
+    import pytest
+
+    from aegis.gateway.channels import TelegramAdapter
+
+    for name in (
+        "TELEGRAM_ALLOWED_USERS",
+        "TELEGRAM_ALLOWED_CHATS",
+        "TELEGRAM_IGNORED_CHATS",
+        "TELEGRAM_ALLOWED_CHAT_TYPES",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    adapter = TelegramAdapter("token")
+    update = {
+        "update_id": 1,
+        "message": {
+            "message_id": 10,
+            "date": 123456,
+            "chat": {"id": 42, "type": "private"},
+            "from": {"id": 7, "username": "ada"},
+            "voice": {
+                "file_id": "voice-file",
+                "mime_type": "audio/ogg",
+                "duration": 3,
+                "file_size": 12,
+            },
+        },
+    }
+    seen = []
+    api_calls = []
+
+    def fake_api(method, **params):
+        api_calls.append((method, params))
+        if len(api_calls) > 1:
+            raise KeyboardInterrupt
+        return {"result": [update]}
+
+    def fake_submit(ev, *, raw_text=None):
+        seen.append((ev, raw_text))
+        raise KeyboardInterrupt
+
+    adapter._api = fake_api
+    adapter._submit_inbound = fake_submit
+
+    with pytest.raises(KeyboardInterrupt):
+        adapter.start(lambda _ev: "")
+
+    assert api_calls[0] == ("getUpdates", {"offset": 0, "timeout": 60})
+    ev, raw_text = seen[0]
+    assert raw_text == ""
+    assert ev.platform == "telegram"
+    assert ev.chat_id == "42"
+    assert ev.user_id == "7"
+    assert ev.user_name == "ada"
+    assert ev.text == "[voice attached: voice.ogg]"
+    assert ev.message_id == "10"
+    assert ev.timestamp == 123456
+    assert ev.attachments == [{
+        "id": "voice-file",
+        "type": "audio/ogg",
+        "media_type": "audio/ogg",
+        "filename": "voice.ogg",
+        "size": 12,
+        "source": "telegram",
+        "kind": "voice",
+        "file_id": "voice-file",
+        "duration": 3,
+    }]
+
+
 def test_slack_adapter_enforces_workspace_filters_and_strips_mentions(monkeypatch):
     from aegis.gateway.slack_channel import SlackAdapter
 

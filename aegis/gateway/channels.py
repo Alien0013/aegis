@@ -106,7 +106,11 @@ class TelegramAdapter(BasePlatformAdapter):
             for upd in data.get("result", []):
                 offset = upd["update_id"] + 1
                 msg = upd.get("message") or upd.get("edited_message")
-                if not msg or "text" not in msg:
+                if not msg:
+                    continue
+                attachments = self._attachments_from_message(msg)
+                raw_text = self._raw_message_text(msg)
+                if not raw_text and not attachments:
                     continue
                 user_id = str(msg["from"]["id"])
                 username = msg["from"].get("username")
@@ -114,7 +118,6 @@ class TelegramAdapter(BasePlatformAdapter):
                     self.send(str(msg["chat"]["id"]), "⛔ not authorized.")
                     continue
                 reply_to = msg.get("reply_to_message") or {}
-                raw_text = msg["text"]
                 normalized_text = normalize_inbound_command(
                     raw_text,
                     platform="telegram",
@@ -122,7 +125,7 @@ class TelegramAdapter(BasePlatformAdapter):
                 )
                 if not self._message_allowed(msg, normalized_text):
                     continue
-                event_text = self._event_text(msg, normalized_text)
+                event_text = self._event_text(msg, normalized_text, attachments=attachments)
                 thread_id = self._message_thread_id(msg)
                 ev = MessageEvent(
                     platform="telegram",
@@ -135,6 +138,7 @@ class TelegramAdapter(BasePlatformAdapter):
                     reply_to_message_id=str(reply_to.get("message_id") or "") or None,
                     reply_to_text=reply_to.get("text") or reply_to.get("caption"),
                     timestamp=msg.get("date"),
+                    attachments=attachments,
                     metadata={
                         "chat_type": msg.get("chat", {}).get("type"),
                         "message_thread_id": thread_id,
@@ -146,16 +150,117 @@ class TelegramAdapter(BasePlatformAdapter):
         thread_id = str(msg.get("message_thread_id") or "").strip()
         return thread_id or None
 
+    def _raw_message_text(self, msg: dict) -> str:
+        return str(msg.get("text") or msg.get("caption") or "")
+
     def _strip_own_addressing(self, text: str) -> str:
         if not self.bot_username:
             return str(text or "").strip()
         pattern = re.compile(rf"@{re.escape(self.bot_username)}\b", re.IGNORECASE)
         return pattern.sub("", str(text or "")).strip()
 
-    def _event_text(self, msg: dict, normalized_text: str) -> str:
-        if normalized_text.lstrip().startswith("/"):
-            return normalized_text
-        return _with_group_context({**msg, "text": self._strip_own_addressing(normalized_text)})
+    def _event_text(self, msg: dict, normalized_text: str, *, attachments: list[dict] | None = None) -> str:
+        text = normalized_text
+        if not text.strip() and attachments:
+            text = self._attachment_reference_text(attachments)
+        if text.lstrip().startswith("/"):
+            return text
+        return _with_group_context({**msg, "text": self._strip_own_addressing(text)})
+
+    def _attachments_from_message(self, msg: dict) -> list[dict]:
+        rows: list[dict] = []
+        for kind, default_type, default_filename in (
+            ("voice", "audio/ogg", "voice.ogg"),
+            ("audio", "audio", "audio"),
+            ("document", "document", "document"),
+        ):
+            payload = msg.get(kind)
+            if isinstance(payload, dict):
+                row = self._telegram_file_attachment(
+                    kind,
+                    payload,
+                    default_type=default_type,
+                    default_filename=default_filename,
+                )
+                if row:
+                    rows.append(row)
+        photos = [p for p in (msg.get("photo") or []) if isinstance(p, dict)]
+        if photos:
+            photo = max(
+                photos,
+                key=lambda p: self._safe_int(p.get("file_size"))
+                or self._safe_int(p.get("width")) * self._safe_int(p.get("height")),
+            )
+            row = self._telegram_file_attachment(
+                "photo",
+                photo,
+                default_type="image/jpeg",
+                default_filename="photo.jpg",
+            )
+            if row:
+                rows.append(row)
+        video = msg.get("video")
+        if isinstance(video, dict):
+            row = self._telegram_file_attachment(
+                "video",
+                video,
+                default_type="video/mp4",
+                default_filename="video.mp4",
+            )
+            if row:
+                rows.append(row)
+        return rows
+
+    def _telegram_file_attachment(
+        self,
+        kind: str,
+        payload: dict,
+        *,
+        default_type: str,
+        default_filename: str,
+    ) -> dict | None:
+        file_id = str(payload.get("file_id") or "").strip()
+        if not file_id:
+            return None
+        content_type = str(payload.get("mime_type") or default_type or "").strip()
+        filename = str(payload.get("file_name") or default_filename or "").strip()
+        row: dict = {
+            "id": file_id,
+            "type": content_type or kind,
+            "media_type": content_type,
+            "filename": filename,
+            "size": self._safe_int(payload.get("file_size")),
+            "source": "telegram",
+            "kind": kind,
+            "file_id": file_id,
+        }
+        file_unique_id = str(payload.get("file_unique_id") or "").strip()
+        if file_unique_id:
+            row["file_unique_id"] = file_unique_id
+        for key in ("duration", "width", "height"):
+            value = self._safe_int(payload.get(key))
+            if value:
+                row[key] = value
+        return row
+
+    def _attachment_reference_text(self, attachments: list[dict]) -> str:
+        labels = []
+        for attachment in attachments:
+            kind = str(attachment.get("kind") or "file").strip()
+            name = str(
+                attachment.get("filename")
+                or attachment.get("file_id")
+                or attachment.get("id")
+                or "file"
+            ).strip()
+            labels.append(f"[{kind} attached: {name}]")
+        return "\n".join(labels)
+
+    def _safe_int(self, value) -> int:  # noqa: ANN001
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
 
     def _author_allowed(self, user_id: str, username: str | None = None) -> bool:
         if not self.allowed:
@@ -180,13 +285,14 @@ class TelegramAdapter(BasePlatformAdapter):
         mode = self.group_trigger_mode
         if mode in {"", "all", "always", "true", "1", "yes"}:
             return True
-        text = normalized_text if normalized_text is not None else str(msg.get("text", "") or "")
+        raw_text = self._raw_message_text(msg)
+        text = normalized_text if normalized_text is not None else raw_text
         if mode in {"command", "commands"}:
             return text.lstrip().startswith("/")
         if mode in {"addressed", "mention", "mentions", "reply", "replies"}:
             return (
                 text.lstrip().startswith("/")
-                or self._mentions_bot(str(msg.get("text", "") or ""))
+                or self._mentions_bot(raw_text)
                 or self._is_reply_to_bot(msg.get("reply_to_message") or {})
             )
         return True
