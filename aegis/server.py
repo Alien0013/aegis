@@ -512,6 +512,40 @@ def _canonical_response_function_output_part(part: Any) -> dict[str, Any] | None
     return None
 
 
+def _canonical_response_message_content(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        parts: list[dict[str, Any]] = []
+        for part in value:
+            normalized = _canonical_response_function_output_part(part)
+            if normalized is not None:
+                parts.append(normalized)
+        return parts
+    if isinstance(value, dict):
+        if "content" in value:
+            return _canonical_response_message_content(value.get("content"))
+        normalized = _canonical_response_function_output_part(value)
+        if normalized is not None:
+            return [normalized]
+        for key in ("text", "input_text", "output_text"):
+            if key in value:
+                return _canonical_response_message_content(value.get(key))
+    if value is None:
+        return [{"type": "input_text", "text": ""}]
+    return [{"type": "input_text", "text": str(value)}]
+
+
+def _canonical_response_message_item(item: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "type": "message",
+        "role": str(item.get("role") or "user"),
+        "content": _canonical_response_message_content(item.get("content", "")),
+    }
+    for key in ("id", "status", "name"):
+        if item.get(key) is not None:
+            out[key] = item[key]
+    return out
+
+
 def _canonical_function_call_output_item(item: dict[str, Any]) -> dict[str, Any]:
     out = dict(item)
     call_id = str(out.get("call_id") or out.get("tool_call_id") or "")
@@ -577,6 +611,15 @@ def _function_call_output_message(item: dict[str, Any]) -> Message:
         name=item.get("name"),
         meta={"response_input_item": canonical},
     )
+    return message
+
+
+def _message_with_response_input_item(item: dict[str, Any]) -> Message:
+    payload = dict(item)
+    payload.pop("type", None)
+    payload.setdefault("role", "user")
+    message = _convert_message(payload)
+    message.meta["response_input_item"] = _canonical_response_message_item(item)
     return message
 
 
@@ -817,14 +860,15 @@ def _response_input_item_to_message(item: Any) -> Message:
         return _function_call_output_message(item)
     if isinstance(item, dict):
         if str(item.get("type") or "") == "message":
-            payload = dict(item)
-            payload.pop("type", None)
-            payload.setdefault("role", "user")
-            return _convert_message(payload)
+            return _message_with_response_input_item(item)
         if "role" in item:
-            return _convert_message(item)
+            return _message_with_response_input_item(item)
         if "type" in item:
-            return _convert_message({"role": "user", "content": [item]})
+            return _message_with_response_input_item({
+                "type": "message",
+                "role": "user",
+                "content": [item],
+            })
         return _convert_message({"role": "user", "content": item})
     return _convert_message({"role": "user", "content": item})
 
@@ -947,11 +991,7 @@ def _response_input_items(messages: list[Message], instructions: str | None = No
             "content": [{"type": "input_text", "text": str(instructions)}],
         })
     for message in messages:
-        if (
-            not isinstance(message, Message)
-            or _is_instruction_wrapper(message)
-            or _is_synthetic_response_prompt(message)
-        ):
+        if not isinstance(message, Message) or _is_synthetic_response_prompt(message):
             continue
         raw_item = (message.meta or {}).get("response_input_item")
         if _is_function_call_output_input_item(raw_item):
@@ -959,6 +999,11 @@ def _response_input_items(messages: list[Message], instructions: str | None = No
             continue
         if _is_function_call_input_item(raw_item):
             items.append(_canonical_function_call_item(raw_item))
+            continue
+        if isinstance(raw_item, dict) and str(raw_item.get("type") or "") == "message":
+            items.append(_canonical_response_message_item(raw_item))
+            continue
+        if _is_instruction_wrapper(message):
             continue
         if message.role == "tool":
             items.append({

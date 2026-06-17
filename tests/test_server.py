@@ -1288,6 +1288,57 @@ def test_responses_input_items_persist_paginate_and_replay(monkeypatch, tmp_path
     ]
 
 
+def test_responses_preserves_message_input_item_identity(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    image_url = "data:image/png;base64,XYZ"
+    message_item = {
+        "id": "msg_client_1",
+        "type": "message",
+        "status": "completed",
+        "role": "user",
+        "content": [
+            {"type": "input_text", "text": "look at this"},
+            {"type": "input_image", "image_url": {"url": image_url, "detail": "low"}},
+        ],
+    }
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {"input": [message_item]})
+        response_id = json.loads(data)["id"]
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    srv2, port2 = _serve(server.make_handler(Config.load()))
+    try:
+        items_status, items_data = _request(port2, "GET", f"/v1/responses/{response_id}/input_items")
+    finally:
+        srv2.shutdown()
+        srv2.server_close()
+
+    assert status == 200
+    call = _FakeRunner.calls[0]
+    assert call["prompt"].content == "look at this"
+    assert call["prompt"].images == [image_url]
+    assert items_status == 200
+    items = json.loads(items_data)["data"]
+    assert len(items) == 1
+    assert items[0]["id"] == "msg_client_1"
+    assert items[0]["object"] == "response.input_item"
+    assert items[0]["response_id"] == response_id
+    assert items[0]["status"] == "completed"
+    assert items[0]["role"] == "user"
+    assert items[0]["content"] == [
+        {"type": "input_text", "text": "look at this"},
+        {"type": "input_image", "image_url": image_url, "detail": "low"},
+    ]
+
+
 def test_responses_accepts_function_call_output_input_item(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
