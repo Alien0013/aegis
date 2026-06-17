@@ -2254,9 +2254,16 @@ def test_hermes_style_plugin_yaml_metadata_category_key_and_safe_mode(tmp_path, 
     api = plugins.load_plugins(config=cfg)
     row = next(r for r in plugins.plugin_status(cfg, api) if r["key"] == "observability/langfuse")
     assert row["status"] == "loaded"
+    assert row["load_status"] == "loaded"
+    assert row["load_duration_ms"] >= 0
+    assert row["loaded_at"]
     assert row["tool_names"] == ["trace_export"]
     assert row["hook_names"] == ["post_llm_call"]
     assert row["middleware_kinds"] == ["tool_request"]
+    assert row["declared_contributions"]["tools"] == ["trace_export"]
+    assert row["runtime_contributions"]["tools"] == ["trace_export"]
+    assert row["contribution_drift"]["channels"]["missing"] == ["webhook"]
+    assert row["contribution_drift"]["providers"]["missing"] == ["langfuse-provider"]
     assert row["provides_middleware"] == ["tool_request"]
     assert row["provides_channels"] == ["webhook"]
     assert row["provides_providers"] == ["langfuse-provider"]
@@ -2313,8 +2320,12 @@ def test_hermes_entrypoint_plugins_are_discovered_opt_in_and_reported(tmp_path, 
     assert [tool.name for tool in api.tools] == ["entry_tool"]
     assert row["source"] == "entrypoint"
     assert row["status"] == "loaded"
+    assert row["load_status"] == "loaded"
+    assert row["load_duration_ms"] >= 0
+    assert row["loaded_at"]
     assert row["tool_names"] == ["entry_tool"]
     assert row["hook_names"] == ["on_session_start"]
+    assert row["runtime_contributions"]["tools"] == ["entry_tool"]
 
     monkeypatch.setenv("HERMES_SAFE_MODE", "1")
     assert plugins.list_manifests(cfg) == []

@@ -19,16 +19,18 @@ from __future__ import annotations
 import hashlib
 import importlib
 import importlib.metadata as importlib_metadata
-import os
 import json
 import importlib.util
+import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 from . import config as cfg
@@ -105,6 +107,7 @@ _PLUGIN_PROVIDERS: dict[Path, list[str]] = {}
 _PLUGIN_TOOLS: dict[Path, list[str]] = {}
 _PLUGIN_CHANNELS: dict[Path, list[str]] = {}
 _PLUGIN_MODULES: dict[Path, str] = {}
+_PLUGIN_LOADS: dict[Path, dict[str, Any]] = {}
 
 
 MANIFEST_NAMES = ("plugin.yaml", "plugin.yml", "aegis-plugin.json", "plugin.json")
@@ -292,6 +295,19 @@ def _read_manifest_data(path: Path) -> dict[str, Any] | None:
 
 def _metadata_path(path: Path) -> Path:
     return path / INSTALL_METADATA_NAME
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _record_plugin_load(path: Path, *, status: str, started: float, error: str = "") -> None:
+    _PLUGIN_LOADS[path.resolve()] = {
+        "status": status,
+        "loaded_at": _now_iso(),
+        "duration_ms": round((perf_counter() - started) * 1000, 3),
+        "error": str(error or ""),
+    }
 
 
 def _read_install_metadata(path: Path) -> dict[str, Any]:
@@ -547,6 +563,7 @@ def _clear_plugin_side_effects(path: Path) -> None:
             pass
     _PLUGIN_TOOLS.pop(path, None)
     _PLUGIN_CHANNELS.pop(path, None)
+    _PLUGIN_LOADS.pop(path, None)
 
 
 def _module_name_for(path: Path) -> str:
@@ -567,6 +584,7 @@ def _load_plugin_file(api: PluginAPI, path: Path, *, quiet: bool) -> None:
     path = path.resolve()
     api.files.append(path)
     _clear_plugin_side_effects(path)
+    started = perf_counter()
     try:
         module_name = _module_name_for(path)
         spec = importlib.util.spec_from_file_location(module_name, path)
@@ -586,7 +604,9 @@ def _load_plugin_file(api: PluginAPI, path: Path, *, quiet: bool) -> None:
                 module.register(api)
             finally:
                 api._current_plugin = None
+        _record_plugin_load(path, status="loaded", started=started)
     except Exception as e:  # noqa: BLE001
+        _record_plugin_load(path, status="error", started=started, error=str(e))
         api.errors.append((path, str(e)))
         if not quiet:
             print(f"  ! plugin {path.name} failed to load: {e}")
@@ -609,6 +629,7 @@ def _load_plugin_entrypoint(api: PluginAPI, manifest: PluginManifest, *, quiet: 
         return
     api.files.append(identity)
     _clear_plugin_side_effects(identity)
+    started = perf_counter()
     try:
         target = _load_entry_ref(manifest.entry_ref)
         register = getattr(target, "register", None)
@@ -618,6 +639,7 @@ def _load_plugin_entrypoint(api: PluginAPI, manifest: PluginManifest, *, quiet: 
                 register(api)
             finally:
                 api._current_plugin = None
+            _record_plugin_load(identity, status="loaded", started=started)
             return
         if callable(target):
             api._current_plugin = identity
@@ -625,9 +647,11 @@ def _load_plugin_entrypoint(api: PluginAPI, manifest: PluginManifest, *, quiet: 
                 target(api)
             finally:
                 api._current_plugin = None
+            _record_plugin_load(identity, status="loaded", started=started)
             return
         raise ValueError("entry point has no register(api) function")
     except Exception as e:  # noqa: BLE001
+        _record_plugin_load(identity, status="error", started=started, error=str(e))
         api.errors.append((identity, str(e)))
         if not quiet:
             print(f"  ! plugin {manifest.name} failed to load: {e}")
@@ -996,8 +1020,46 @@ def clear_runtime_cache() -> None:
     paths.update(_PLUGIN_TOOLS)
     paths.update(_PLUGIN_CHANNELS)
     paths.update(_PLUGIN_MODULES)
+    paths.update(_PLUGIN_LOADS)
     for path in list(paths):
         _clear_plugin_side_effects(path)
+
+
+def _plugin_declared_contributions(manifest: PluginManifest) -> dict[str, list[str]]:
+    return {
+        "tools": sorted(dict.fromkeys(manifest.provides_tools)),
+        "channels": sorted(dict.fromkeys(manifest.provides_channels)),
+        "providers": sorted(dict.fromkeys(manifest.provides_providers)),
+        "hooks": sorted(dict.fromkeys(manifest.provides_hooks)),
+        "middleware": sorted(dict.fromkeys(manifest.provides_middleware)),
+    }
+
+
+def _plugin_runtime_contributions(entrypoint: Path | None) -> dict[str, list[str]]:
+    if entrypoint is None:
+        return {"tools": [], "channels": [], "providers": [], "hooks": [], "middleware": []}
+    return {
+        "tools": sorted(dict.fromkeys(_PLUGIN_TOOLS.get(entrypoint, []))),
+        "channels": sorted(dict.fromkeys(_PLUGIN_CHANNELS.get(entrypoint, []))),
+        "providers": sorted(dict.fromkeys(_PLUGIN_PROVIDERS.get(entrypoint, []))),
+        "hooks": sorted(dict.fromkeys(event for event, _fn in _PLUGIN_HOOKS.get(entrypoint, []))),
+        "middleware": sorted(dict.fromkeys(kind for kind, _fn in _PLUGIN_MIDDLEWARE.get(entrypoint, []))),
+    }
+
+
+def _plugin_contribution_drift(
+    declared: dict[str, list[str]],
+    runtime: dict[str, list[str]],
+) -> dict[str, dict[str, list[str]]]:
+    drift: dict[str, dict[str, list[str]]] = {}
+    for kind in sorted(set(declared) | set(runtime)):
+        expected = set(declared.get(kind, []))
+        actual = set(runtime.get(kind, []))
+        missing = sorted(expected - actual)
+        extra = sorted(actual - expected)
+        if missing or extra:
+            drift[kind] = {"missing": missing, "extra": extra}
+    return drift
 
 
 def plugin_status(config=None, api: PluginAPI | None = None) -> list[dict[str, Any]]:
@@ -1008,6 +1070,10 @@ def plugin_status(config=None, api: PluginAPI | None = None) -> list[dict[str, A
     for manifest in list_manifests(config):
         row = manifest.to_dict()
         entrypoint = _manifest_identity(manifest)
+        load_info = dict(_PLUGIN_LOADS.get(entrypoint, {})) if entrypoint else {}
+        declared = _plugin_declared_contributions(manifest)
+        runtime = _plugin_runtime_contributions(entrypoint)
+        drift = _plugin_contribution_drift(declared, runtime)
         if not manifest.enabled:
             status = "disabled"
         elif entrypoint is None:
@@ -1022,11 +1088,18 @@ def plugin_status(config=None, api: PluginAPI | None = None) -> list[dict[str, A
         row.update({
             "status": status,
             "loaded": status == "loaded",
-            "tool_names": sorted(_PLUGIN_TOOLS.get(entrypoint, [])) if entrypoint else [],
-            "channel_names": sorted(_PLUGIN_CHANNELS.get(entrypoint, [])) if entrypoint else [],
-            "provider_names": sorted(_PLUGIN_PROVIDERS.get(entrypoint, [])) if entrypoint else [],
-            "hook_names": sorted(event for event, _fn in _PLUGIN_HOOKS.get(entrypoint, [])) if entrypoint else [],
-            "middleware_kinds": sorted(kind for kind, _fn in _PLUGIN_MIDDLEWARE.get(entrypoint, [])) if entrypoint else [],
+            "load_status": str(load_info.get("status") or status),
+            "load_duration_ms": load_info.get("duration_ms", 0),
+            "loaded_at": str(load_info.get("loaded_at") or ""),
+            "load_error": str(load_info.get("error") or row.get("error") or ""),
+            "declared_contributions": declared,
+            "runtime_contributions": runtime,
+            "contribution_drift": drift,
+            "tool_names": runtime["tools"],
+            "channel_names": runtime["channels"],
+            "provider_names": runtime["providers"],
+            "hook_names": runtime["hooks"],
+            "middleware_kinds": runtime["middleware"],
         })
         row["tools_registered"] = len(row["tool_names"])
         row["channels_registered"] = len(row["channel_names"])

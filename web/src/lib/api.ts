@@ -113,6 +113,16 @@ export interface DashboardPluginManifest {
 
 export type PluginProviderOption = string | { name: string; description?: string };
 
+export interface PluginContributionMap {
+  tools?: string[];
+  channels?: string[];
+  providers?: string[];
+  hooks?: string[];
+  middleware?: string[];
+}
+
+export type PluginContributionDrift = Record<string, { missing?: string[]; extra?: string[] }>;
+
 export interface DashboardPluginHubRow {
   name: string;
   key?: string;
@@ -123,6 +133,10 @@ export interface DashboardPluginHubRow {
   source?: string;
   status?: string;
   runtime_status?: string;
+  load_status?: string;
+  load_duration_ms?: number;
+  loaded_at?: string;
+  load_error?: string;
   enabled?: boolean;
   loaded?: boolean;
   path?: string;
@@ -140,6 +154,9 @@ export interface DashboardPluginHubRow {
   provider_names?: string[];
   hook_names?: string[];
   middleware_kinds?: string[];
+  declared_contributions?: PluginContributionMap;
+  runtime_contributions?: PluginContributionMap;
+  contribution_drift?: PluginContributionDrift;
 }
 
 export interface DashboardPluginsHub {

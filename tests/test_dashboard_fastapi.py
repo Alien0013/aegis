@@ -1817,6 +1817,16 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
     hub_body = hub.json()
     hub_row = next(row for row in hub_body["plugins"] if row["key"] == "analytics/pulse")
     assert hub_row["runtime_status"] == "enabled"
+    assert hub_row["load_status"] == "loaded"
+    assert hub_row["load_duration_ms"] >= 0
+    assert hub_row["loaded_at"]
+    assert hub_row["runtime_contributions"] == {
+        "tools": [],
+        "channels": [],
+        "providers": [],
+        "hooks": [],
+        "middleware": [],
+    }
     assert hub_row["has_dashboard_manifest"] is True
     assert hub_row["dashboard_manifest"]["name"] == "pulse-panel"
     assert hub_row["dashboard_route"]["path"] == "/overview"

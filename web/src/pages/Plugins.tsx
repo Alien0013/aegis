@@ -50,6 +50,18 @@ function statusTone(status: string): "success" | "danger" | "warning" | "info" |
   return "neutral";
 }
 
+function loadLabel(row: DashboardPluginHubRow): string {
+  if (!row.loaded_at && row.load_duration_ms == null) return "";
+  const ms = Number(row.load_duration_ms || 0);
+  return ms < 1000 ? `${ms.toFixed(ms < 10 ? 1 : 0)}ms` : `${(ms / 1000).toFixed(2)}s`;
+}
+
+function driftCount(row: DashboardPluginHubRow): number {
+  return Object.values(row.contribution_drift || {}).reduce((count, item) => (
+    count + (item.missing || []).length + (item.extra || []).length
+  ), 0);
+}
+
 function openRoute(row: DashboardPluginHubRow): string {
   const manifest = row.dashboard_manifest;
   const route = row.dashboard_route || manifest?.route;
@@ -300,6 +312,8 @@ function PluginRow({
   const canToggle = status !== "dashboard";
   const contrib = contributions(row);
   const title = row.key && row.key !== row.name ? row.key : row.name;
+  const load = loadLabel(row);
+  const drift = driftCount(row);
 
   function toggleRuntime() {
     void run(
@@ -341,6 +355,8 @@ function PluginRow({
           {row.kind && <Badge tone="info">{row.kind}</Badge>}
           {row.source && <Badge tone="neutral">{row.source}</Badge>}
           {row.category && <Badge tone="neutral">{row.category}</Badge>}
+          {load && <Badge tone={row.load_status === "error" ? "danger" : "neutral"}>load {load}</Badge>}
+          {!!drift && <Badge tone="warning">drift {drift}</Badge>}
           {row.user_hidden && <Badge tone="warning">hidden</Badge>}
           {row.auth_required && <Badge tone="danger">auth required</Badge>}
           {manifest?.slots?.map((slot) => <Badge key={slot} tone="neutral">{slot}</Badge>)}
@@ -369,6 +385,12 @@ function PluginRow({
         {row.auth_required && row.auth_command && (
           <div className="rounded-[var(--radius)] border border-danger/30 bg-danger/10 px-3 py-2 font-mono text-xs text-danger">
             {row.auth_command}
+          </div>
+        )}
+
+        {row.load_error && (
+          <div className="rounded-[var(--radius)] border border-danger/30 bg-danger/10 px-3 py-2 font-mono text-xs text-danger">
+            {row.load_error}
           </div>
         )}
 
