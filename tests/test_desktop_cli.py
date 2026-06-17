@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
@@ -193,6 +194,17 @@ def test_bundled_desktop_template_matches_source():
         ).read_bytes()
 
 
+def test_desktop_sync_manifest_tracks_main_cjs_requires():
+    root = Path(__file__).resolve().parents[1]
+    main_js = (root / "desktop" / "electron" / "main.js").read_text(encoding="utf-8")
+    required = {
+        f"electron/{match}"
+        for match in re.findall(r"""require\(["']\./([^"']+\.cjs)["']\)""", main_js)
+    }
+
+    assert required <= set(desktop.DESKTOP_FILES)
+
+
 def test_desktop_builder_config_matches_release_parity():
     root = Path(__file__).resolve().parents[1]
     package = json.loads((root / "desktop" / "package.json").read_text(encoding="utf-8"))
@@ -207,6 +219,7 @@ def test_desktop_builder_config_matches_release_parity():
     assert build["beforeBuild"] == "scripts/before-build.cjs"
     assert "scripts/write-build-stamp.cjs" in desktop.DESKTOP_FILES
     assert "electron/desktop-status.cjs" in desktop.DESKTOP_FILES
+    assert "electron/updater-status.cjs" in desktop.DESKTOP_FILES
     assert "build/icon.ico" in desktop.DESKTOP_FILES
     resources = {entry["to"]: entry["from"] for entry in build["extraResources"]}
     assert resources["install-stamp.json"] == "build/install-stamp.json"
