@@ -18,7 +18,7 @@ from collections import OrderedDict
 from datetime import datetime
 from io import BytesIO
 from http.server import BaseHTTPRequestHandler
-from typing import Any
+from typing import Any, Iterable
 from urllib.parse import parse_qs, urlparse
 
 from aiohttp import web
@@ -1599,7 +1599,18 @@ def make_handler(config: Config):
                 self.wfile.flush()
                 return True
             except (BrokenPipeError, ConnectionResetError):
+                self._notify_sse_disconnect()
                 return False
+
+        def _notify_sse_disconnect(self) -> None:
+            callback = getattr(self, "_aegis_on_disconnect", None)
+            if not callable(callback):
+                return
+            self._aegis_on_disconnect = None
+            try:
+                callback()
+            except Exception:  # noqa: BLE001
+                pass
 
         def _route(self) -> tuple[str, dict[str, list[str]]]:
             parsed = urlparse(self.path)
@@ -1850,6 +1861,41 @@ def make_handler(config: Config):
             cancel_event = getattr(agent, "cancel_event", None)
             if cancel_event is not None:
                 cancel_event.set()
+
+        def _prepare_stream_agent(
+            self,
+            runner: Any,
+            *,
+            session: Any = None,
+            session_id: str | None = None,
+            title: str | None = None,
+            history: Iterable[Message] | None = None,
+            model: str | None = None,
+            provider_name: str | None = None,
+            cwd: str | None = None,
+            surface: str = "serve",
+            meta: dict[str, Any] | None = None,
+        ) -> tuple[Any, Any | None]:
+            """Best-effort explicit session/agent binding for cancellable streams."""
+
+            load_session = getattr(runner, "load_or_create_session", None)
+            if session is None and callable(load_session):
+                session = load_session(
+                    session_id,
+                    title=title,
+                    history=history,
+                    surface=surface,
+                    meta=meta,
+                )
+            make_agent = getattr(runner, "make_agent", None)
+            if session is not None and callable(make_agent):
+                return session, make_agent(
+                    session=session,
+                    cwd=cwd,
+                    model=model,
+                    provider_name=provider_name,
+                )
+            return session, None
 
         def _mark_response_cancelled(self, response: dict[str, Any], reason: str) -> dict[str, Any]:
             cancelled = dict(response)
@@ -2589,8 +2635,35 @@ def make_handler(config: Config):
                 ))
 
             # streaming
-            self._send_sse_headers(self._session_headers(session_id=session_id, session_key=session_key))
+            run_meta = {
+                "request_id": cid,
+                **({"gateway_session_key": session_key} if session_key else {}),
+            }
+            if service_tier:
+                run_meta.update(runtime_controls_meta({"service_tier": service_tier}))
+            stream_session, stream_agent = self._prepare_stream_agent(
+                runner,
+                session_id=str(session_id) if session_id else None,
+                history=history,
+                model=model,
+                provider_name=provider_name,
+                cwd=cwd,
+                surface="serve",
+                meta=run_meta,
+            )
             stream_closed = False
+            disconnect_cancelled = False
+
+            def cancel_stream_agent() -> None:
+                nonlocal disconnect_cancelled
+                if disconnect_cancelled:
+                    return
+                disconnect_cancelled = True
+                self._cancel_agent(stream_agent)
+
+            if stream_agent is not None:
+                self._aegis_on_disconnect = cancel_stream_agent
+            self._send_sse_headers(self._session_headers(session_id=session_id, session_key=session_key))
 
             def write_sse_payload(payload: dict[str, Any], *, event: str | None = None) -> bool:
                 nonlocal stream_closed
@@ -2604,6 +2677,7 @@ def make_handler(config: Config):
                     return True
                 except (BrokenPipeError, ConnectionResetError):
                     stream_closed = True
+                    self._notify_sse_disconnect()
                     return False
 
             def write_sse_done() -> None:
@@ -2615,6 +2689,7 @@ def make_handler(config: Config):
                     self.wfile.flush()
                 except (BrokenPipeError, ConnectionResetError):
                     stream_closed = True
+                    self._notify_sse_disconnect()
 
             role_chunk = {
                 "id": cid,
@@ -2623,10 +2698,12 @@ def make_handler(config: Config):
                 "model": model or config.get("model.default", ""),
                 "choices": [{"index": 0, "delta": {"role": "assistant"}}],
             }
-            write_sse_payload(role_chunk)
+            if not write_sse_payload(role_chunk):
+                return
 
             def emit(e: dict) -> None:
                 if stream_closed:
+                    cancel_stream_agent()
                     return
                 if e.get("type") == "assistant_delta":
                     chunk = {"id": cid, "object": "chat.completion.chunk", "created": int(time.time()),
@@ -2653,26 +2730,26 @@ def make_handler(config: Config):
                         }, event="hermes.tool.progress")
                         if stream_closed:
                             return
-                write_sse_payload(chunk)
+                if not write_sse_payload(chunk):
+                    cancel_stream_agent()
 
-            run_meta = {
-                "request_id": cid,
-                **({"gateway_session_key": session_key} if session_key else {}),
+            run_kwargs: dict[str, Any] = {
+                "model": model,
+                "provider_name": provider_name,
+                "cwd": cwd,
+                "stream": True,
+                "surface": "serve",
+                "meta": run_meta,
+                "on_event": emit,
             }
-            if service_tier:
-                run_meta.update(runtime_controls_meta({"service_tier": service_tier}))
-            result = runner.run_prompt(
-                last_user,
-                session_id=session_id,
-                history=history,
-                model=model,
-                provider_name=provider_name,
-                cwd=cwd,
-                stream=True,
-                surface="serve",
-                meta=run_meta,
-                on_event=emit,
-            )
+            if stream_session is not None and stream_agent is not None:
+                run_kwargs.update({"session": stream_session, "agent": stream_agent, "reuse_agent": False})
+            else:
+                run_kwargs.update({"session_id": session_id, "history": history})
+            try:
+                result = runner.run_prompt(last_user, **run_kwargs)
+            finally:
+                self._aegis_on_disconnect = None
             final_metadata = {
                 "session_id": result.session.id,
                 "trace_id": result.trace_id,
@@ -3231,38 +3308,7 @@ def make_handler(config: Config):
                 stream_run_id = new_id("run")
                 message_id = new_id("msg")
                 sequence = 0
-                self._send_sse_headers(self._session_headers(session_id=session.id, session_key=session_key))
-
-                def send_event(event_name: str, payload: dict[str, Any]) -> bool:
-                    nonlocal sequence
-                    sequence += 1
-                    payload.setdefault("session_id", session.id)
-                    payload.setdefault("run_id", stream_run_id)
-                    payload.setdefault("sequence_number", sequence)
-                    payload.setdefault("created_at", int(time.time()))
-                    return self._write_sse(payload, event=event_name)
-
-                send_event("run.started", {
-                    "user_message": {"role": "user", "content": str(prompt)},
-                })
-                send_event("message.started", {
-                    "message": {"id": message_id, "role": "assistant", "status": "in_progress"},
-                    "message_id": message_id,
-                })
-
-                def emit(ev: dict[str, Any]) -> None:
-                    if ev.get("type") == "assistant_delta":
-                        delta = str(ev.get("text") or "")
-                        if delta:
-                            send_event("assistant.delta", {
-                                "message_id": message_id,
-                                "delta": delta,
-                            })
-                        return
-                    meta = _event_metadata(ev)
-                    if meta:
-                        send_event("event", {"message_id": message_id, "event": meta})
-
+                stream_closed = False
                 run_meta = {
                     "request_id": stream_run_id,
                     "api": "session_chat_stream",
@@ -3270,17 +3316,88 @@ def make_handler(config: Config):
                 }
                 if service_tier:
                     run_meta.update(runtime_controls_meta({"service_tier": service_tier}))
-                result = runner.run_prompt(
-                    str(prompt),
+                stream_session, stream_agent = self._prepare_stream_agent(
+                    runner,
                     session=session,
                     model=body.get("model"),
                     provider_name=body.get("provider"),
                     cwd=body.get("cwd"),
                     surface="serve",
-                    stream=True,
                     meta=run_meta,
-                    on_event=emit,
                 )
+                session = stream_session or session
+                disconnect_cancelled = False
+
+                def cancel_stream_agent() -> None:
+                    nonlocal disconnect_cancelled
+                    if disconnect_cancelled:
+                        return
+                    disconnect_cancelled = True
+                    self._cancel_agent(stream_agent)
+
+                if stream_agent is not None:
+                    self._aegis_on_disconnect = cancel_stream_agent
+                self._send_sse_headers(self._session_headers(session_id=session.id, session_key=session_key))
+
+                def send_event(event_name: str, payload: dict[str, Any]) -> bool:
+                    nonlocal sequence, stream_closed
+                    if stream_closed:
+                        return False
+                    sequence += 1
+                    payload.setdefault("session_id", session.id)
+                    payload.setdefault("run_id", stream_run_id)
+                    payload.setdefault("sequence_number", sequence)
+                    payload.setdefault("created_at", int(time.time()))
+                    ok = self._write_sse(payload, event=event_name)
+                    if not ok:
+                        stream_closed = True
+                        cancel_stream_agent()
+                    return ok
+
+                if not send_event("run.started", {
+                    "user_message": {"role": "user", "content": str(prompt)},
+                }):
+                    return
+                if not send_event("message.started", {
+                    "message": {"id": message_id, "role": "assistant", "status": "in_progress"},
+                    "message_id": message_id,
+                }):
+                    return
+
+                def emit(ev: dict[str, Any]) -> None:
+                    if stream_closed:
+                        cancel_stream_agent()
+                        return
+                    if ev.get("type") == "assistant_delta":
+                        delta = str(ev.get("text") or "")
+                        if delta:
+                            if not send_event("assistant.delta", {
+                                "message_id": message_id,
+                                "delta": delta,
+                            }):
+                                cancel_stream_agent()
+                        return
+                    meta = _event_metadata(ev)
+                    if meta:
+                        if not send_event("event", {"message_id": message_id, "event": meta}):
+                            cancel_stream_agent()
+
+                run_kwargs: dict[str, Any] = {
+                    "session": session,
+                    "model": body.get("model"),
+                    "provider_name": body.get("provider"),
+                    "cwd": body.get("cwd"),
+                    "surface": "serve",
+                    "stream": True,
+                    "meta": run_meta,
+                    "on_event": emit,
+                }
+                if stream_agent is not None:
+                    run_kwargs.update({"agent": stream_agent, "reuse_agent": False})
+                try:
+                    result = runner.run_prompt(str(prompt), **run_kwargs)
+                finally:
+                    self._aegis_on_disconnect = None
                 final_session_id = getattr(getattr(result, "session", None), "id", session.id)
                 completed_common = {
                     "session_id": final_session_id,
@@ -3306,7 +3423,13 @@ def make_handler(config: Config):
                     **completed_common,
                     "message_id": message_id,
                 })
-                self.wfile.write(b"data: [DONE]\n\n")
+                if not stream_closed:
+                    try:
+                        self.wfile.write(b"data: [DONE]\n\n")
+                        self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError):
+                        stream_closed = True
+                        self._notify_sse_disconnect()
                 return
             run_meta = {
                 **({"gateway_session_key": session_key} if session_key else {}),

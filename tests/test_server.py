@@ -783,6 +783,57 @@ def test_openai_chat_completions_stream_sse_contract(monkeypatch, tmp_path):
     assert _FakeRunner.calls[0]["cwd"] == str(tmp_path / "stream-project")
 
 
+def test_chat_completions_aiohttp_stream_disconnect_cancels_live_agent(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _BlockingResponsesRunner.reset()
+    monkeypatch.setattr(server, "SurfaceRunner", _BlockingResponsesRunner)
+
+    async def exercise() -> bool:
+        from aiohttp import ClientSession, web
+
+        app = server.make_app(Config.load())
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        try:
+            assert site._server is not None
+            port = site._server.sockets[0].getsockname()[1]
+            async with ClientSession() as session:
+                async with session.post(
+                    f"http://127.0.0.1:{port}/v1/chat/completions",
+                    json={
+                        "stream": True,
+                        "messages": [{"role": "user", "content": "disconnect me"}],
+                        "session_id": "serve:chat-disconnect",
+                    },
+                ) as resp:
+                    assert resp.status == 200
+                    data_line = await asyncio.wait_for(resp.content.readline(), timeout=1)
+                    blank_line = await asyncio.wait_for(resp.content.readline(), timeout=1)
+                    assert data_line.startswith(b"data: ")
+                    assert blank_line == b"\n"
+                    assert _BlockingResponsesRunner.started.wait(1)
+                    resp.close()
+                    deadline = time.monotonic() + 2
+                    while time.monotonic() < deadline:
+                        if (
+                            _BlockingResponsesRunner.agents
+                            and _BlockingResponsesRunner.agents[0].cancel_event.is_set()
+                        ):
+                            return True
+                        await asyncio.sleep(0.05)
+                    return False
+        finally:
+            _BlockingResponsesRunner.release.set()
+            await runner.cleanup()
+
+    assert asyncio.run(exercise()) is True
+
+
 def test_server_health_capabilities_and_body_limit(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
@@ -2089,6 +2140,56 @@ def test_server_session_chat_stream_uses_sse_cors_headers(monkeypatch, tmp_path)
     assert started["user_message"]["content"] == "reply"
     assert completed["content"] == "hello"
     assert completed["trace_id"] == "trace_http"
+
+
+def test_session_chat_aiohttp_stream_disconnect_cancels_live_agent(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+    from aegis.session import Session, SessionStore
+
+    _BlockingResponsesRunner.reset()
+    monkeypatch.setattr(server, "SurfaceRunner", _BlockingResponsesRunner)
+    session_id = "serve:session-disconnect"
+    SessionStore().save(Session(id=session_id, title="disconnect session"))
+
+    async def exercise() -> bool:
+        from aiohttp import ClientSession, web
+
+        app = server.make_app(Config.load())
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        try:
+            assert site._server is not None
+            port = site._server.sockets[0].getsockname()[1]
+            async with ClientSession() as client:
+                async with client.post(
+                    f"http://127.0.0.1:{port}/api/sessions/{session_id}/chat/stream",
+                    json={"prompt": "disconnect me"},
+                ) as resp:
+                    assert resp.status == 200
+                    event_line = await asyncio.wait_for(resp.content.readline(), timeout=1)
+                    data_line = await asyncio.wait_for(resp.content.readline(), timeout=1)
+                    assert event_line == b"event: run.started\n"
+                    assert data_line.startswith(b"data: ")
+                    assert _BlockingResponsesRunner.started.wait(1)
+                    resp.close()
+                    deadline = time.monotonic() + 2
+                    while time.monotonic() < deadline:
+                        if (
+                            _BlockingResponsesRunner.agents
+                            and _BlockingResponsesRunner.agents[0].cancel_event.is_set()
+                        ):
+                            return True
+                        await asyncio.sleep(0.05)
+                    return False
+        finally:
+            _BlockingResponsesRunner.release.set()
+            await runner.cleanup()
+
+    assert asyncio.run(exercise()) is True
 
 
 def test_server_run_read_endpoints(monkeypatch, tmp_path):
