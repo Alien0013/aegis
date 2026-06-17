@@ -1,6 +1,7 @@
 """Message-list hygiene run before every model call.
 
 Keeps the wire valid across compaction/interrupts:
+  * strip interrupted assistant->tool blocks before replay
   * drop orphan tool results (no preceding assistant tool_call)
   * backfill missing tool results for assistant tool_calls (synthetic error)
 """
@@ -58,11 +59,54 @@ def _sanitize_message(m: Message) -> None:
         tc.arguments = _sanitize_value(tc.arguments)
 
 
+def _is_interrupted_tool_result(content: str) -> bool:
+    if not isinstance(content, str):
+        return False
+    lowered = content.lower()
+    if "[command interrupted]" in lowered or "[interrupted by user]" in lowered:
+        return True
+    if "exit_code" in lowered and ("130" in lowered or "-1" in lowered):
+        return "interrupt" in lowered
+    return False
+
+
+def _strip_interrupted_tool_blocks(messages: list[Message]) -> list[Message]:
+    """Remove persisted interrupted tool-call blocks before provider replay."""
+    if not messages:
+        return messages
+    out: list[Message] = []
+    i = 0
+    total = len(messages)
+    while i < total:
+        m = messages[i]
+        if m.role == "assistant" and m.tool_calls:
+            call_ids = {tc.id for tc in m.tool_calls}
+            j = i + 1
+            tool_results: list[Message] = []
+            while (
+                j < total
+                and messages[j].role == "tool"
+                and messages[j].tool_call_id in call_ids
+            ):
+                tool_results.append(messages[j])
+                j += 1
+            if tool_results and any(_is_interrupted_tool_result(t.content) for t in tool_results):
+                i = j
+                continue
+        if m.role == "tool" and _is_interrupted_tool_result(m.content):
+            i += 1
+            continue
+        out.append(m)
+        i += 1
+    return out
+
+
 def normalize(messages: list[Message]) -> list[Message]:
     # Defensive: scrub lone surrogates a model may have emitted in any field that
     # can reach provider wire JSON. Mutate in place so ids stay paired.
     for m in messages:
         _sanitize_message(m)
+    messages = _strip_interrupted_tool_blocks(messages)
     # Pass 1: drop tool results whose call id was never requested before them.
     seen_call_ids: set[str] = set()
     pass1: list[Message] = []

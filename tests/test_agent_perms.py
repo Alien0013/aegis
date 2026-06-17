@@ -227,6 +227,31 @@ def test_governance_normalizes():
     assert ("tool", "c1") in ids
 
 
+def test_governance_strips_interrupted_tool_replay_blocks():
+    from aegis.agent import governance
+    from aegis.types import Message, ToolCall
+
+    msgs = [
+        Message.user("start"),
+        Message.assistant("", [ToolCall("c1", "terminal", {"command": "sleep 30"})]),
+        Message.tool("c1", "terminal", "[command interrupted] exit_code=130"),
+        Message.user("next real message"),
+        Message.assistant("", [ToolCall("c2", "read_file", {"path": "README.md"})]),
+        Message.tool("c2", "read_file", "ok"),
+        Message.tool("ghost", "terminal", "[interrupted by user]"),
+    ]
+
+    out = governance.normalize(msgs)
+    pairs = [(m.role, m.tool_call_id, [tc.id for tc in m.tool_calls], m.content) for m in out]
+
+    assert ("user", None, [], "start") in pairs
+    assert ("user", None, [], "next real message") in pairs
+    assert not any("c1" in ids or tool_id == "c1" for _role, tool_id, ids, _content in pairs)
+    assert not any(tool_id == "ghost" for _role, tool_id, _ids, _content in pairs)
+    assert any(ids == ["c2"] for _role, _tool_id, ids, _content in pairs)
+    assert any(tool_id == "c2" and content == "ok" for _role, tool_id, _ids, content in pairs)
+
+
 def test_governance_scrubs_nested_surrogates_and_reasoning_tags():
     import json
     from aegis.agent import governance
