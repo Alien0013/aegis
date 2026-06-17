@@ -981,6 +981,32 @@ def test_responses_create_retrieve_cancel_delete(monkeypatch, tmp_path):
     assert _FakeRunner.calls[0]["session_id"] == "serve:responses"
 
 
+def test_responses_preserves_parallel_tool_calls_false(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": "hello",
+            "parallel_tool_calls": False,
+        })
+        body = json.loads(data)
+        response_id = body["id"]
+        get_status, get_data = _request(port, "GET", f"/v1/responses/{response_id}")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert body["parallel_tool_calls"] is False
+    assert get_status == 200
+    assert json.loads(get_data)["parallel_tool_calls"] is False
+
+
 def test_responses_rejects_missing_or_empty_user_input(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
@@ -1879,6 +1905,7 @@ def test_responses_stream_sse_has_openai_event_shape(monkeypatch, tmp_path):
         status, data = _request(port, "POST", "/v1/responses", {
             "stream": True,
             "input": "hello",
+            "parallel_tool_calls": False,
             "metadata": {"session_id": "serve:responses-stream"},
         })
     finally:
@@ -1906,6 +1933,10 @@ def test_responses_stream_sse_has_openai_event_shape(monkeypatch, tmp_path):
     assert delta["item_id"].startswith("msg_")
     assert done["text"] == "hello"
     assert done["item_id"] == delta["item_id"]
+    created = next(payload for name, payload in events if name == "response.created")
+    completed = next(payload for name, payload in events if name == "response.completed")
+    assert created["response"]["parallel_tool_calls"] is False
+    assert completed["response"]["parallel_tool_calls"] is False
     assert _FakeRunner.calls[0]["stream"] is True
 
 

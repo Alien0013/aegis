@@ -990,6 +990,7 @@ def _response_object(
     *,
     status: str = "completed",
     metadata_extra: dict[str, Any] | None = None,
+    parallel_tool_calls: bool = True,
 ) -> dict[str, Any]:
     text = getattr(result, "text", "") if result is not None else ""
     agent = getattr(result, "agent", None)
@@ -1010,7 +1011,7 @@ def _response_object(
         "model": getattr(provider, "model", ""),
         "error": None,
         "incomplete_details": None,
-        "parallel_tool_calls": True,
+        "parallel_tool_calls": parallel_tool_calls,
         "output": _response_output_items(result, text),
         "output_text": text,
         "usage": _usage(getattr(result, "usage", None) or agent),
@@ -3232,6 +3233,7 @@ def make_handler(config: Config):
             service_tier = _request_service_tier(body, metadata)
             if service_tier:
                 metadata["service_tier"] = service_tier
+            parallel_tool_calls = _coerce_request_bool(body.get("parallel_tool_calls"), True)
             response_title = last_user.content[:80] or response_id
             if stream:
                 sequence = 0
@@ -3381,6 +3383,7 @@ def make_handler(config: Config):
                     "previous_response_id": previous_id or None,
                     "conversation": conversation or None,
                     "store": store_response,
+                    "parallel_tool_calls": parallel_tool_calls,
                 }
                 send_event("response.created", {
                     "response": {
@@ -3486,6 +3489,7 @@ def make_handler(config: Config):
                         None,
                         status="cancelled" if cancelled else "failed",
                         metadata_extra=metadata,
+                        parallel_tool_calls=parallel_tool_calls,
                     )
                     failed.update({
                         "model": model or config.get("model.default", ""),
@@ -3533,6 +3537,7 @@ def make_handler(config: Config):
                     result,
                     status="cancelled" if cancelled else "completed",
                     metadata_extra=metadata,
+                    parallel_tool_calls=parallel_tool_calls,
                 )
                 response["instructions"] = instructions
                 response["previous_response_id"] = previous_id or None
@@ -3645,6 +3650,7 @@ def make_handler(config: Config):
                         result,
                         status="cancelled" if cancelled else "completed",
                         metadata_extra=metadata,
+                        parallel_tool_calls=parallel_tool_calls,
                     )
                     if cancelled:
                         response = self._mark_response_cancelled(response, cancel_reason)
