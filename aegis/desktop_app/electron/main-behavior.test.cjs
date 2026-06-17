@@ -53,8 +53,16 @@ test("restart and splash lifecycle is single-flight", () => {
 test("auto-updater setup is idempotent and bounded", () => {
   requireSnippet("autoUpdaterConfigured");
   requireSnippet("updateCheckInFlight");
+  requireSnippet("let updaterStatus = initialUpdaterStatus();");
+  requireSnippet("function setUpdaterStatus");
+  requireSnippet("descriptor.desktop.updater = { ...updaterStatus };");
   requireSnippet("releaseUpdateEligibility");
   requireSnippet("auto-update disabled");
+  requireSnippet('setUpdaterStatus("disabled", { reason: updateEligibility.reason });');
+  requireSnippet('setUpdaterStatus("checking");');
+  requireSnippet('setUpdaterStatus("available", { info });');
+  requireSnippet('setUpdaterStatus("ready", { info });');
+  requireSnippet('setUpdaterStatus("error", { error: message });');
   requireSnippet("autoUpdater.allowPrerelease = false");
   requireSnippet("autoUpdater.allowDowngrade = false");
   requireSnippet('if (updateCheckManual) notify("AEGIS update failed", message);');

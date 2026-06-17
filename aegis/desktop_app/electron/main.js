@@ -22,6 +22,10 @@ const {
   readInstallStamp,
   releaseUpdateEligibility,
 } = require("./desktop-status.cjs");
+const {
+  initialUpdaterStatus,
+  transitionUpdaterStatus,
+} = require("./updater-status.cjs");
 
 // Chromium checks the Linux setuid sandbox before main.js runs, so launch.js
 // puts --no-sandbox on argv; mirror it here so child processes inherit it.
@@ -65,6 +69,7 @@ let autoUpdater = null;
 let autoUpdaterConfigured = false;
 let updateCheckInFlight = false;
 let updateCheckManual = false;
+let updaterStatus = initialUpdaterStatus();
 const extraWindows = new Set();        // secondary session windows (multi-window)
 const GLOBAL_SHOW_SHORTCUT = "CommandOrControl+Shift+A";
 const DEEP_LINK_SCHEME = "aegis";      // aegis://chat , aegis://config , ...
@@ -95,6 +100,13 @@ function readRecentLogLines(maxLines = 200) {
   } catch {
     return [];
   }
+}
+
+function setUpdaterStatus(event, details = {}) {
+  updaterStatus = transitionUpdaterStatus(updaterStatus, event, details);
+  const summary = updaterStatus.message || updaterStatus.error || updaterStatus.stage;
+  log(`updater status: ${updaterStatus.stage}${summary ? `: ${summary}` : ""}`);
+  return updaterStatus;
 }
 
 function hiddenWindowsChildOptions(options = {}) {
@@ -269,7 +281,7 @@ function probe(url, tries, onTick) {
 function connectionDescriptor() {
   const baseUrl = backendBaseUrl();
   const running = !!(backend && !backend.killed);
-  return {
+  const descriptor = {
     baseUrl,
     mode: "local",
     source: "local",
@@ -301,6 +313,8 @@ function connectionDescriptor() {
       desktopRoot: path.join(__dirname, ".."),
     }),
   };
+  descriptor.desktop.updater = { ...updaterStatus };
+  return descriptor;
 }
 
 function runtimeDiagnostics() {
@@ -507,7 +521,9 @@ function registerGlobalShortcut() {
 function initAutoUpdate(manual) {
   updateCheckManual = Boolean(manual);
   if (!app.isPackaged) {
-    if (manual) notify("AEGIS updates", "Auto-update runs in the installed app only.");
+    const message = "Auto-update runs in the installed app only.";
+    setUpdaterStatus("disabled", { message });
+    if (manual) notify("AEGIS updates", message);
     return;
   }
   const updateEligibility = releaseUpdateEligibility({
@@ -517,6 +533,7 @@ function initAutoUpdate(manual) {
   });
   if (!updateEligibility.ok) {
     log(`auto-update disabled: ${updateEligibility.reason}`);
+    setUpdaterStatus("disabled", { reason: updateEligibility.reason });
     if (manual) notify("AEGIS updates", updateEligibility.reason);
     return;
   }
@@ -527,24 +544,34 @@ function initAutoUpdate(manual) {
   try {
     if (!autoUpdater) ({ autoUpdater } = require("electron-updater"));
   }
-  catch (e) { log(`electron-updater unavailable: ${e.message}`); return; }
+  catch (e) {
+    const message = `electron-updater unavailable: ${e.message}`;
+    log(message);
+    setUpdaterStatus("error", { error: message });
+    if (manual) notify("AEGIS update failed", message);
+    return;
+  }
   if (!autoUpdaterConfigured) {
     autoUpdater.autoDownload = true;
     autoUpdater.allowPrerelease = false;
     autoUpdater.allowDowngrade = false;
     autoUpdater.removeAllListeners();
     autoUpdater.on("update-available", (info) => {
+      setUpdaterStatus("available", { info });
       log(`update available: ${info.version}`);
       if (updateCheckManual) notify("AEGIS update", `Downloading ${info.version}...`);
     });
     autoUpdater.on("update-not-available", () => {
+      setUpdaterStatus("current");
       if (updateCheckManual) notify("AEGIS", "You're on the latest version.");
     });
     autoUpdater.on("error", (e) => {
+      setUpdaterStatus("error", { error: e });
       log(`updater error: ${e && e.message}`);
       if (updateCheckManual) notify("AEGIS update failed", String(e && e.message));
     });
     autoUpdater.on("update-downloaded", (info) => {
+      setUpdaterStatus("ready", { info });
       log(`update downloaded: ${info.version}`);
       const choice = dialog.showMessageBoxSync(win && !win.isDestroyed() ? win : undefined, {
         type: "info", buttons: ["Restart now", "Later"], defaultId: 0, cancelId: 1,
@@ -556,10 +583,12 @@ function initAutoUpdate(manual) {
     autoUpdaterConfigured = true;
   }
   updateCheckInFlight = true;
+  setUpdaterStatus("checking");
   autoUpdater.checkForUpdates()
     .catch((e) => {
       const message = String((e && e.message) || e || "Update check failed.");
       log(`checkForUpdates failed: ${message}`);
+      setUpdaterStatus("error", { error: message });
       if (updateCheckManual) notify("AEGIS update failed", message);
     })
     .finally(() => { updateCheckInFlight = false; });
