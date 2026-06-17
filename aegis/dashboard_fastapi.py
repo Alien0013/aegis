@@ -1665,10 +1665,24 @@ def _plugins_payload(config: Config) -> dict:
 
     api = load_plugins(quiet=True, config=config)
     status_rows = plugin_status(config, api)
+    dashboard_plugins = _dashboard_plugins_payload(config, include_hidden=True)
+    dashboard_mounts = {
+        str(row.get("name") or ""): row.get("api_mount") or {}
+        for row in dashboard_plugins
+        if row.get("name")
+    }
     return {
         "plugins": status_rows,
         "manifests": [m.to_dict() for m in list_manifests(config)],
         "plugin_status": status_rows,
+        "dashboard_plugins": dashboard_plugins,
+        "dashboard_plugin_count": len(dashboard_plugins),
+        "dashboard_api_mounts": dashboard_mounts,
+        "dashboard_api_route_count": sum(
+            len(mount.get("routes") or [])
+            for mount in dashboard_mounts.values()
+            if mount.get("mounted")
+        ),
         "loaded": [str(p) for p in api.files if p not in {e[0] for e in api.errors}],
         "tools": [getattr(t, "name", "") for t in api.tools],
         "tool_names": [getattr(t, "name", "") for t in api.tools],

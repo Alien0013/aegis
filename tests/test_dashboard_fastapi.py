@@ -1956,6 +1956,18 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
     route = asyncio.run(_request(app, "GET", "/api/plugins/pulse-panel/pulse", headers=headers))
     assert route.status_code == 200
     assert route.json() == {"pulse": True}
+    observed = asyncio.run(_request(app, "GET", "/api/plugins", headers=headers))
+    assert observed.status_code == 200
+    observed_body = observed.json()
+    assert observed_body["dashboard_plugin_count"] >= 1
+    assert observed_body["dashboard_api_route_count"] >= 1
+    assert any(row["name"] == "pulse-panel" for row in observed_body["dashboard_plugins"])
+    pulse_mount = observed_body["dashboard_api_mounts"]["pulse-panel"]
+    assert pulse_mount["mounted"] is True
+    assert "/api/plugins/pulse-panel/pulse" in pulse_mount["routes"]
+    assert pulse_mount["request_count"] >= 1
+    assert pulse_mount["last_request_path"] == "/api/plugins/pulse-panel/pulse"
+    assert pulse_mount["last_request_method"] == "GET"
 
     disabled = asyncio.run(_request(app, "POST", "/api/plugins/analytics/pulse/disable", headers=headers))
     assert disabled.status_code == 200
