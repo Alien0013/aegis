@@ -85,6 +85,10 @@ def test_desktop_launch_skips_install_when_dependencies_exist(monkeypatch, tmp_p
 
     def fake_run(cmd, cwd, env=None):
         calls.append({"cmd": cmd, "cwd": cwd, "env": env})
+        if cmd == ["/usr/bin/npm", "run", "pack"]:
+            exe = desktop._unpacked_executable(target)
+            exe.parent.mkdir(parents=True, exist_ok=True)
+            exe.write_text("#!/bin/sh\n", encoding="utf-8")
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setenv("AEGIS_DESKTOP_DIR", str(target))
@@ -95,17 +99,20 @@ def test_desktop_launch_skips_install_when_dependencies_exist(monkeypatch, tmp_p
     monkeypatch.setattr(desktop.subprocess, "run", fake_run)
     monkeypatch.chdir(project)
 
-    args = Namespace(install_only=False, reinstall=False, sandbox=False, cwd=None)
+    args = Namespace(install_only=False, reinstall=False, sandbox=False, source=False, cwd=None)
     assert desktop.cmd_desktop(args, object()) == 0
 
-    assert len(calls) == 1
-    assert calls[0]["cmd"] == ["/usr/bin/npm", "start"]
+    assert [call["cmd"] for call in calls] == [
+        ["/usr/bin/npm", "run", "pack"],
+        desktop._packaged_launch_command(target),
+    ]
     assert calls[0]["cwd"] == target
-    assert calls[0]["env"]["AEGIS_BIN"] == "/usr/local/bin/aegis"
-    assert calls[0]["env"]["TERMINAL_CWD"] == str(project)
+    assert calls[1]["cwd"] == target
+    assert calls[1]["env"]["AEGIS_BIN"] == "/usr/local/bin/aegis"
+    assert calls[1]["env"]["TERMINAL_CWD"] == str(project)
 
 
-def test_desktop_launch_accepts_explicit_cwd(monkeypatch, tmp_path):
+def test_desktop_source_launch_accepts_explicit_cwd(monkeypatch, tmp_path):
     source = _write_desktop_template(tmp_path / "source")
     target = tmp_path / "runtime"
     project = tmp_path / "project"
@@ -123,7 +130,7 @@ def test_desktop_launch_accepts_explicit_cwd(monkeypatch, tmp_path):
         "env": env,
     }) or SimpleNamespace(returncode=0))
 
-    args = Namespace(install_only=False, reinstall=False, sandbox=False, cwd=str(project))
+    args = Namespace(install_only=False, reinstall=False, sandbox=False, source=True, cwd=str(project))
     assert desktop.cmd_desktop(args, object()) == 0
 
     assert calls[0]["cmd"] == ["/usr/bin/npm", "start"]
@@ -177,8 +184,9 @@ def test_desktop_parser_and_typo_alias():
     assert status_args.func is desktop.cmd_desktop
     assert status_args.status is True
 
-    cwd_args = parser.parse_args(["desktop", "--cwd", "/tmp/project"])
+    cwd_args = parser.parse_args(["desktop", "--source", "--cwd", "/tmp/project"])
     assert cwd_args.func is desktop.cmd_desktop
+    assert cwd_args.source is True
     assert cwd_args.cwd == "/tmp/project"
 
     typo_args = parser.parse_args(["deksktop", "--install-only", "--status"])

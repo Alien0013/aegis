@@ -146,6 +146,35 @@ def _npm_install_command(npm: str, target: Path, *, package_lock: bool | None = 
     return [npm, "install"]
 
 
+def _unpacked_executable_candidates(target: Path, *, platform: str | None = None) -> list[Path]:
+    platform = platform or sys.platform
+    release = target / "release"
+    if platform.startswith("linux"):
+        return [release / "linux-unpacked" / "AEGIS"]
+    if platform.startswith("win"):
+        return [release / "win-unpacked" / "AEGIS.exe"]
+    if platform == "darwin":
+        return [
+            release / "mac" / "AEGIS.app" / "Contents" / "MacOS" / "AEGIS",
+            release / "mac-arm64" / "AEGIS.app" / "Contents" / "MacOS" / "AEGIS",
+        ]
+    return [release / "linux-unpacked" / "AEGIS"]
+
+
+def _unpacked_executable(target: Path, *, platform: str | None = None) -> Path:
+    candidates = _unpacked_executable_candidates(target, platform=platform)
+    return next((path for path in candidates if path.exists()), candidates[0])
+
+
+def _packaged_launch_command(target: Path, *, sandbox: bool = False,
+                             platform: str | None = None) -> list[str]:
+    platform = platform or sys.platform
+    cmd = [str(_unpacked_executable(target, platform=platform))]
+    if platform.startswith("linux") and not sandbox:
+        cmd.append("--no-sandbox")
+    return cmd
+
+
 def _desktop_status(source: Any, target: Path, *, npm: str | None = None) -> dict[str, Any]:
     missing: list[str] = []
     for name in DESKTOP_FILES:
@@ -162,6 +191,7 @@ def _desktop_status(source: Any, target: Path, *, npm: str | None = None) -> dic
         "npm": npm or "",
         "package_lock": (target / "package-lock.json").exists(),
         "dependencies_installed": (target / "node_modules" / "electron").exists(),
+        "packaged_app": _unpacked_executable(target).exists(),
         "managed_files": len(DESKTOP_FILES),
         "missing_template_files": missing,
         "install_command": install_cmd,
@@ -252,5 +282,22 @@ def cmd_desktop(args, config) -> int:  # noqa: ARG001
             _print(f"done — installer(s) written to {target / 'release'}")
         return rc
 
-    run_cmd = [npm, "run", "start:sandbox"] if getattr(args, "sandbox", False) else [npm, "start"]
+    if getattr(args, "source", False):
+        run_cmd = [npm, "run", "start:sandbox"] if getattr(args, "sandbox", False) else [npm, "start"]
+        return subprocess.run(run_cmd, cwd=target, env=env).returncode
+
+    unpacked = _unpacked_executable(target)
+    if template_changed or getattr(args, "reinstall", False) or not unpacked.exists():
+        _print("building unpacked desktop app with npm run pack...")
+        rc = subprocess.run([npm, "run", "pack"], cwd=target, env=env).returncode
+        if rc != 0:
+            return rc
+        unpacked = _unpacked_executable(target)
+        if not unpacked.exists():
+            return _die(f"packaged desktop executable was not created: {unpacked}")
+
+    run_cmd = _packaged_launch_command(
+        target,
+        sandbox=getattr(args, "sandbox", False),
+    )
     return subprocess.run(run_cmd, cwd=target, env=env).returncode
