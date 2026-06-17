@@ -406,6 +406,27 @@ def test_discord_adapter_enforces_guild_filters_and_trigger_mode(monkeypatch):
     assert adapter._trigger_allowed(message("hello", guild_id="G1", reply_author_id="BOT"), client) is True
     assert adapter._trigger_allowed(message("plain dm", guild_id=""), client) is True
 
+    attachment = Obj(
+        id="A1",
+        filename="voice.ogg",
+        url="https://cdn.discord.test/voice.ogg",
+        proxy_url="https://proxy.discord.test/voice.ogg",
+        content_type="audio/ogg",
+        size=12345,
+        description="voice memo",
+    )
+    rows = adapter._attachments_from_message(Obj(attachments=[attachment]))
+    assert rows == [{
+        "id": "A1",
+        "type": "audio/ogg",
+        "media_type": "audio/ogg",
+        "filename": "voice.ogg",
+        "url": "https://cdn.discord.test/voice.ogg",
+        "proxy_url": "https://proxy.discord.test/voice.ogg",
+        "size": 12345,
+        "description": "voice memo",
+    }]
+
 
 def test_telegram_adapter_enforces_chat_filters_and_group_addressing(monkeypatch):
     from aegis.gateway.base import MessageEvent

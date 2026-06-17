@@ -98,6 +98,7 @@ class DiscordAdapter(BasePlatformAdapter):
                 reply_to_text=getattr(replied, "content", None),
                 timestamp=getattr(message, "created_at", None),
                 thread_id=thread_id,
+                attachments=self._attachments_from_message(message),
                 metadata={
                     "guild_id": str(getattr(getattr(message, "guild", None), "id", "") or ""),
                     "channel_id": str(getattr(message.channel, "id", "") or ""),
@@ -203,6 +204,29 @@ class DiscordAdapter(BasePlatformAdapter):
         if not uid:
             return content
         return content.replace(f"<@{uid}>", "").replace(f"<@!{uid}>", "").strip()
+
+    def _attachments_from_message(self, message) -> list[dict]:  # noqa: ANN001
+        rows: list[dict] = []
+        for attachment in getattr(message, "attachments", []) or []:
+            content_type = str(getattr(attachment, "content_type", "") or "").strip()
+            filename = str(getattr(attachment, "filename", "") or "").strip()
+            media_type = content_type.split("/", 1)[0] if "/" in content_type else content_type
+            if not media_type and filename.lower().endswith((".ogg", ".oga", ".opus", ".mp3", ".wav", ".m4a", ".aac")):
+                media_type = "audio"
+            row = {
+                "id": str(getattr(attachment, "id", "") or ""),
+                "type": content_type or media_type or "file",
+                "media_type": content_type,
+                "filename": filename,
+                "url": str(getattr(attachment, "url", "") or ""),
+                "proxy_url": str(getattr(attachment, "proxy_url", "") or ""),
+                "size": int(getattr(attachment, "size", 0) or 0),
+            }
+            description = str(getattr(attachment, "description", "") or "").strip()
+            if description:
+                row["description"] = description
+            rows.append(row)
+        return rows
 
     def _chat_and_thread_ids(self, message) -> tuple[str, str | None]:  # noqa: ANN001
         channel = message.channel
