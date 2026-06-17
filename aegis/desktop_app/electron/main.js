@@ -561,6 +561,9 @@ function initAutoUpdate(manual) {
       log(`update available: ${info.version}`);
       if (updateCheckManual) notify("AEGIS update", `Downloading ${info.version}...`);
     });
+    autoUpdater.on("download-progress", (progress) => {
+      setUpdaterStatus("progress", { progress });
+    });
     autoUpdater.on("update-not-available", () => {
       setUpdaterStatus("current");
       if (updateCheckManual) notify("AEGIS", "You're on the latest version.");

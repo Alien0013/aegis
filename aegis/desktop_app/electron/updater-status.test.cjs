@@ -15,6 +15,12 @@ test("updater status starts idle with bounded public fields", () => {
     version: "",
     checking: false,
     lastCheckedAt: "",
+    downloadProgress: {
+      percent: 0,
+      transferred: 0,
+      total: 0,
+      bytesPerSecond: 0,
+    },
     updatedAt: "2026-06-17T10:00:00.000Z",
   });
 });
@@ -48,6 +54,29 @@ test("updater status preserves available version when update is ready", () => {
   assert.equal(status.stage, "downloading");
   assert.equal(status.version, "1.2.3");
   assert.equal(status.message, "Downloading 1.2.3...");
+  assert.deepEqual(status.downloadProgress, {
+    percent: 0,
+    transferred: 0,
+    total: 0,
+    bytesPerSecond: 0,
+  });
+
+  status = transitionUpdaterStatus(
+    status,
+    "progress",
+    { progress: { percent: 42.345, transferred: 4200, total: 10000, bytesPerSecond: 900 } },
+    at("2026-06-17T10:00:01.500Z"),
+  );
+
+  assert.equal(status.stage, "downloading");
+  assert.equal(status.version, "1.2.3");
+  assert.equal(status.message, "Downloading 1.2.3 (42.3%)...");
+  assert.deepEqual(status.downloadProgress, {
+    percent: 42.3,
+    transferred: 4200,
+    total: 10000,
+    bytesPerSecond: 900,
+  });
 
   status = transitionUpdaterStatus(status, "ready", {}, at("2026-06-17T10:00:02.000Z"));
 
@@ -55,6 +84,7 @@ test("updater status preserves available version when update is ready", () => {
   assert.equal(status.version, "1.2.3");
   assert.equal(status.message, "AEGIS 1.2.3 is ready to install.");
   assert.equal(status.lastCheckedAt, "2026-06-17T10:00:02.000Z");
+  assert.equal(status.downloadProgress.percent, 100);
 });
 
 test("updater status surfaces errors and disabled reasons", () => {

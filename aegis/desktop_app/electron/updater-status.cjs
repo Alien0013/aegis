@@ -20,6 +20,22 @@ function _errorMessage(details = {}) {
   return _text(error && error.message ? error.message : error) || "Update check failed.";
 }
 
+function _number(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function _downloadProgress(details = {}) {
+  const progress = details.progress && typeof details.progress === "object" ? details.progress : details;
+  const percent = Math.max(0, Math.min(100, _number(progress.percent)));
+  return {
+    percent: Math.round(percent * 10) / 10,
+    transferred: Math.floor(_number(progress.transferred)),
+    total: Math.floor(_number(progress.total)),
+    bytesPerSecond: Math.floor(_number(progress.bytesPerSecond)),
+  };
+}
+
 function initialUpdaterStatus(now) {
   return {
     stage: "idle",
@@ -28,6 +44,12 @@ function initialUpdaterStatus(now) {
     version: "",
     checking: false,
     lastCheckedAt: "",
+    downloadProgress: {
+      percent: 0,
+      transferred: 0,
+      total: 0,
+      bytesPerSecond: 0,
+    },
     updatedAt: _isoNow(now),
   };
 }
@@ -48,6 +70,7 @@ function transitionUpdaterStatus(current = {}, event = "idle", details = {}, now
       message: _text(details.message) || "Checking for AEGIS updates...",
       error: "",
       checking: true,
+      downloadProgress: initialUpdaterStatus(() => at).downloadProgress,
     };
   }
 
@@ -57,6 +80,7 @@ function transitionUpdaterStatus(current = {}, event = "idle", details = {}, now
       message: _text(details.message || details.reason) || "Auto-update is disabled.",
       error: "",
       checking: false,
+      downloadProgress: initialUpdaterStatus(() => at).downloadProgress,
     };
   }
 
@@ -69,6 +93,22 @@ function transitionUpdaterStatus(current = {}, event = "idle", details = {}, now
       error: "",
       version,
       checking: false,
+      downloadProgress: initialUpdaterStatus(() => at).downloadProgress,
+    };
+  }
+
+  if (stage === "progress" || stage === "download-progress") {
+    const version = _version(details) || base.version;
+    const progress = _downloadProgress(details);
+    const label = progress.percent ? ` (${progress.percent}%)` : "";
+    return {
+      ...next,
+      stage: "downloading",
+      message: version ? `Downloading ${version}${label}...` : `Downloading update${label}...`,
+      error: "",
+      version,
+      checking: false,
+      downloadProgress: progress,
     };
   }
 
@@ -79,11 +119,13 @@ function transitionUpdaterStatus(current = {}, event = "idle", details = {}, now
       error: "",
       checking: false,
       lastCheckedAt: at,
+      downloadProgress: initialUpdaterStatus(() => at).downloadProgress,
     };
   }
 
   if (stage === "ready") {
     const version = _version(details) || base.version;
+    const progress = base.downloadProgress || initialUpdaterStatus(() => at).downloadProgress;
     return {
       ...next,
       message: version ? `AEGIS ${version} is ready to install.` : "Update is ready to install.",
@@ -91,6 +133,10 @@ function transitionUpdaterStatus(current = {}, event = "idle", details = {}, now
       version,
       checking: false,
       lastCheckedAt: at,
+      downloadProgress: {
+        ...progress,
+        percent: progress.total || progress.transferred ? 100 : progress.percent,
+      },
     };
   }
 
