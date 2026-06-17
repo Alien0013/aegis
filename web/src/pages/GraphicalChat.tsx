@@ -135,10 +135,12 @@ function saveModelPresets(presets: Record<string, ModelPreset>): void {
 
 export function GraphicalChat({
   sessionId,
+  resetToken,
   onSession,
   onRuntime,
 }: {
   sessionId?: string;
+  resetToken?: string | number;
   onSession?: (id: string) => void;
   onRuntime?: (runtime: { model: string; provider: string }) => void;
 }) {
@@ -237,7 +239,8 @@ export function GraphicalChat({
     setFastMode(fastForModel(provider, model));
   }, [model, modelData, provider, sessionId]);
 
-  // Load a session's transcript when one is opened from the rail.
+  // Load a session's transcript when one is opened from the rail, or hard-reset
+  // when the shell asks for a fresh chat while already on the empty route.
   useEffect(() => {
     let cancelled = false;
     streamRef.current.token += 1;
@@ -273,7 +276,7 @@ export function GraphicalChat({
     return () => {
       cancelled = true;
     };
-  }, [sessionId]);
+  }, [resetToken, sessionId]);
 
   const providers = modelData?.providers || (provider ? [provider] : []);
   const presetRows = rowsForProvider(provider);

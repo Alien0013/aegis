@@ -31,6 +31,7 @@ export function DesktopShell() {
   const model = String(cfg.data?.["model.default"] ?? "");
   const provider = String(cfg.data?.["model.provider"] ?? "");
   const [runtime, setRuntime] = useState({ model: "", provider: "" });
+  const [chatResetToken, setChatResetToken] = useState(0);
   const shownModel = runtime.model || model;
   const shownProvider = runtime.provider || provider;
   const sessions = (data || []).slice(0, 50);
@@ -38,6 +39,7 @@ export function DesktopShell() {
   const open = (id: string) => nav(`/app?id=${encodeURIComponent(id)}`);
   const newChat = () => {
     nav("/app");
+    setChatResetToken((value) => value + 1);
     setTimeout(reload, 500);
   };
 
@@ -118,6 +120,7 @@ export function DesktopShell() {
       <main className="min-w-0 flex-1">
         <GraphicalChat
           sessionId={activeId}
+          resetToken={chatResetToken}
           onRuntime={setRuntime}
           onSession={(id) => {
             if (id && id !== activeId) nav(`/app?id=${encodeURIComponent(id)}`, { replace: true });
