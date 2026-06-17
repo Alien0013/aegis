@@ -63,6 +63,7 @@ def test_cross_session_integrity_report_detects_replay_and_lineage_gaps(tmp_path
     runs.finish(orphan_run["id"], status="ok", result="orphan")
 
     runs.start(surface="serve", kind="serve", session_id=clean.id, prompt="stale")
+    runs.start(surface="serve", kind="serve", session_id=clean.id, prompt="duplicate")
 
     report = cross_session_integrity_report(stale_running_seconds=0, stale_resume_pending_seconds=60)
     codes = {issue["code"] for issue in report["issues"]}
@@ -79,9 +80,11 @@ def test_cross_session_integrity_report_detects_replay_and_lineage_gaps(tmp_path
     assert "stale_resume_pending" in codes
     assert "run_missing_session" in codes
     assert "stale_running_run" in codes
+    assert "duplicate_running_runs" in codes
     assert any(check["id"] == "session_store" and check["ok"] is True for check in report["checks"])
     assert any(check["id"] == "session_run_links" and check["ok"] is False for check in report["checks"])
     assert any(check["id"] == "resume_pending" and check["ok"] is False for check in report["checks"])
+    assert report["counts"]["sessions_with_duplicate_running_runs"] == 1
     assert report["counts"]["resume_pending_sessions"] == 2
 
 
@@ -146,3 +149,34 @@ def test_repair_cross_session_integrity_interrupts_stale_running_runs(tmp_path, 
     assert loaded.meta["resume_pending"] is True
     assert loaded.meta["resume_reason"] == "cross_session_repair"
     assert "stale_running_run" not in {issue["code"] for issue in report["issues"]}
+
+
+def test_repair_cross_session_integrity_interrupts_duplicate_running_runs(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+
+    from aegis.runs import RunStore
+    from aegis.session import Session, SessionStore
+    from aegis.session_checks import cross_session_integrity_report, repair_cross_session_integrity
+
+    store = SessionStore()
+    runs = RunStore()
+    session = Session(id="sess-duplicates", title="duplicate runs")
+    store.save(session)
+    older = runs.start(surface="gateway", kind="chat", session_id=session.id, prompt="older")
+    older["started_at"] = (datetime.now(timezone.utc) - timedelta(minutes=3)).isoformat()
+    runs.write(older)
+    newer = runs.start(surface="gateway", kind="chat", session_id=session.id, prompt="newer")
+    newer["started_at"] = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    runs.write(newer)
+
+    before = cross_session_integrity_report(stale_running_seconds=3600, stale_resume_pending_seconds=3600)
+    repair = repair_cross_session_integrity(stale_running_seconds=3600, run_limit=10)
+    after = cross_session_integrity_report(stale_running_seconds=3600, stale_resume_pending_seconds=3600)
+
+    assert "duplicate_running_runs" in {issue["code"] for issue in before["issues"]}
+    assert repair["repaired_duplicate_running_runs"] == 1
+    assert runs.get(older["id"])["status"] == "interrupted"
+    assert runs.get(older["id"])["data"]["repair_kind"] == "duplicate_running"
+    assert runs.get(newer["id"])["status"] == "running"
+    assert store.load(session.id).meta["resume_pending"] is True
+    assert "duplicate_running_runs" not in {issue["code"] for issue in after["issues"]}

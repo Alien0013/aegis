@@ -225,6 +225,27 @@ def cross_session_integrity_report(
                     details={"age_seconds": int(age), "threshold_seconds": int(stale_running_seconds)},
                 )
 
+    running_by_session: dict[str, list[dict[str, Any]]] = {}
+    for run in run_rows:
+        if str(run.get("status") or "").lower() != "running":
+            continue
+        session_id = str(run.get("session_id") or "")
+        if not session_id:
+            continue
+        running_by_session.setdefault(session_id, []).append(run)
+    for session_id, rows in running_by_session.items():
+        if len(rows) <= 1:
+            continue
+        run_ids = [str(run.get("id") or "") for run in rows if run.get("id")]
+        _issue(
+            issues,
+            code="duplicate_running_runs",
+            severity="warning",
+            session_id=session_id,
+            message="session has multiple runs still marked running",
+            details={"run_ids": run_ids},
+        )
+
     error_count = sum(1 for issue in issues if issue.get("severity") == "error")
     warning_count = sum(1 for issue in issues if issue.get("severity") == "warning")
     checks.extend([
@@ -258,8 +279,8 @@ def cross_session_integrity_report(
         },
         {
             "id": "stale_running_runs",
-            "ok": not any(issue["code"] == "stale_running_run" for issue in issues),
-            "detail": "no stale running runs detected",
+            "ok": not any(issue["code"] in {"stale_running_run", "duplicate_running_runs"} for issue in issues),
+            "detail": "no stale or duplicate running runs detected",
         },
         {
             "id": "resume_pending",
@@ -286,6 +307,14 @@ def cross_session_integrity_report(
         "counts": {
             "sessions": len(sessions),
             "runs": len(run_rows),
+            "running_runs": sum(
+                1 for run in run_rows
+                if str(run.get("status") or "").lower() == "running"
+            ),
+            "sessions_with_duplicate_running_runs": sum(
+                1 for rows in running_by_session.values()
+                if len(rows) > 1
+            ),
             "sessions_with_last_run": sum(
                 1 for session in sessions.values()
                 if isinstance(session.meta, dict) and session.meta.get("last_run_id")
@@ -324,6 +353,9 @@ def repair_cross_session_integrity(
     repaired: list[dict[str, Any]] = []
     marked_resume = 0
     skipped = 0
+    stale_interrupted = 0
+    duplicate_interrupted = 0
+    repaired_ids: set[str] = set()
 
     for run in runs.list(status="running", limit=run_limit):
         started_at = _utc(_parse_iso(str(run.get("started_at") or "")))
@@ -369,11 +401,73 @@ def repair_cross_session_integrity(
             "status": "interrupted",
             "age_seconds": int(age),
             "resume_pending": marked,
+            "repair_kind": "stale_running",
         })
+        stale_interrupted += 1
+        repaired_ids.add(run_id)
+
+    running_by_session: dict[str, list[dict[str, Any]]] = {}
+    for run in runs.list(status="running", limit=run_limit):
+        session_id = str(run.get("session_id") or "")
+        if session_id:
+            running_by_session.setdefault(session_id, []).append(run)
+    for session_id, rows in running_by_session.items():
+        if len(rows) <= 1:
+            continue
+        rows.sort(
+            key=lambda row: (
+                _utc(_parse_iso(str(row.get("started_at") or "")))
+                or datetime.min.replace(tzinfo=timezone.utc)
+            ),
+            reverse=True,
+        )
+        for run in rows[1:]:
+            run_id = str(run.get("id") or "")
+            if not run_id or run_id in repaired_ids:
+                continue
+            marked = False
+            if store.load(session_id) is not None:
+                try:
+                    marked = store.mark_resume_pending(session_id, reason)
+                except Exception:  # noqa: BLE001
+                    marked = False
+            if marked:
+                marked_resume += 1
+            try:
+                runs.finish(
+                    run_id,
+                    status="interrupted",
+                    error="Duplicate running run was interrupted during cross-session repair.",
+                    data={
+                        "recovered_by_session_check": True,
+                        "resume_pending": marked,
+                        "repair_reason": reason,
+                        "repair_kind": "duplicate_running",
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001
+                skipped += 1
+                repaired.append({
+                    "run_id": run_id,
+                    "session_id": session_id,
+                    "status": "error",
+                    "error": f"{type(exc).__name__}: {exc}",
+                })
+                continue
+            duplicate_interrupted += 1
+            repaired_ids.add(run_id)
+            repaired.append({
+                "run_id": run_id,
+                "session_id": session_id,
+                "status": "interrupted",
+                "resume_pending": marked,
+                "repair_kind": "duplicate_running",
+            })
 
     return {
         "ok": skipped == 0,
-        "repaired_running_runs": sum(1 for row in repaired if row.get("status") == "interrupted"),
+        "repaired_running_runs": stale_interrupted,
+        "repaired_duplicate_running_runs": duplicate_interrupted,
         "marked_resume_pending": marked_resume,
         "skipped": skipped,
         "runs": repaired,

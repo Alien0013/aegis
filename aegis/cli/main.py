@@ -1213,6 +1213,7 @@ def cmd_sessions(args, config: Config) -> int:
             _print("Repair")
             _print(
                 f"  interrupted stale runs: {repair.get('repaired_running_runs', 0)}; "
+                f"duplicate runs cleaned: {repair.get('repaired_duplicate_running_runs', 0)}; "
                 f"resume-pending sessions marked: {repair.get('marked_resume_pending', 0)}; "
                 f"skipped: {repair.get('skipped', 0)}"
             )
