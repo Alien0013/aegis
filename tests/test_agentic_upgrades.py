@@ -363,6 +363,24 @@ def test_background_manager_prunes_completed_records(tmp_path, monkeypatch):
     assert len(mgr.completions()) == 5
 
 
+def test_background_completions_can_consume_by_parent_session():
+    from aegis.background import BackgroundManager
+
+    mgr = BackgroundManager()
+    with mgr._lock:
+        mgr._completion_events = [
+            {"id": "bg_a1", "parent_session_id": "sess-a"},
+            {"id": "bg_b1", "parent_session_id": "sess-b"},
+            {"id": "bg_a2", "parent_session_id": "sess-a"},
+        ]
+
+    assert [event["id"] for event in mgr.completions(parent_session_id="sess-a")] == ["bg_a1", "bg_a2"]
+    consumed = mgr.completions(parent_session_id="sess-a", consume=True)
+
+    assert [event["id"] for event in consumed] == ["bg_a1", "bg_a2"]
+    assert [event["id"] for event in mgr.completions()] == ["bg_b1"]
+
+
 def test_background_subagent_dispatches_bounded_multiple_tasks(tmp_path, monkeypatch):
     from aegis.config import Config
     from aegis.tools.agentic import SubagentTool

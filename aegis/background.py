@@ -424,11 +424,29 @@ class BackgroundManager:
                     return t
         return None
 
-    def completions(self, *, consume: bool = False) -> list[dict[str, Any]]:
+    def completions(
+        self,
+        *,
+        consume: bool = False,
+        parent_session_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        parent_session_id = str(parent_session_id or "")
         with self._lock:
-            events = list(self._completion_events)
+            if parent_session_id:
+                events = [
+                    event for event in self._completion_events
+                    if str(event.get("parent_session_id") or "") == parent_session_id
+                ]
+            else:
+                events = list(self._completion_events)
             if consume:
-                self._completion_events.clear()
+                if parent_session_id:
+                    self._completion_events = [
+                        event for event in self._completion_events
+                        if str(event.get("parent_session_id") or "") != parent_session_id
+                    ]
+                else:
+                    self._completion_events.clear()
             return events
 
 
