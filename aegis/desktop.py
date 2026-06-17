@@ -138,6 +138,35 @@ def _needs_npm_install(target: Path, *, force: bool, template_changed: bool) -> 
     return force or template_changed or not (target / "node_modules" / "electron").exists()
 
 
+def _npm_install_command(npm: str, target: Path, *, package_lock: bool | None = None) -> list[str]:
+    has_lock = (target / "package-lock.json").exists() if package_lock is None else bool(package_lock)
+    if has_lock:
+        return [npm, "ci"]
+    return [npm, "install"]
+
+
+def _desktop_status(source: Any, target: Path, *, npm: str | None = None) -> dict[str, Any]:
+    missing: list[str] = []
+    for name in DESKTOP_FILES:
+        try:
+            _read_source_file(source, name)
+        except RuntimeError:
+            missing.append(name)
+    source_has_lock = "package-lock.json" not in missing
+    install_cmd = _npm_install_command(npm or "npm", target, package_lock=source_has_lock)
+    return {
+        "ok": bool(npm) and not missing,
+        "target": str(target),
+        "source": str(source),
+        "npm": npm or "",
+        "package_lock": (target / "package-lock.json").exists(),
+        "dependencies_installed": (target / "node_modules" / "electron").exists(),
+        "managed_files": len(DESKTOP_FILES),
+        "missing_template_files": missing,
+        "install_command": install_cmd,
+    }
+
+
 def _aegis_bin() -> str:
     env_bin = os.environ.get("AEGIS_BIN")
     if env_bin:
@@ -155,12 +184,18 @@ def _aegis_bin() -> str:
 def cmd_desktop(args, config) -> int:  # noqa: ARG001
     """Install/update the Electron source-run app, then launch it."""
     npm = shutil.which("npm")
+    source = _desktop_source()
+    target = _desktop_dir()
+
+    if getattr(args, "status", False):
+        _print(json.dumps(_desktop_status(source, target, npm=npm), indent=2, sort_keys=True))
+        return 0
+
     if not npm:
         return _die("`npm` was not found. Install Node.js/npm, then run `aegis desktop` again.")
 
-    target = _desktop_dir()
     try:
-        template_changed = _sync_desktop_app(_desktop_source(), target)
+        template_changed = _sync_desktop_app(source, target)
     except RuntimeError as exc:
         return _die(str(exc))
 
@@ -169,8 +204,9 @@ def cmd_desktop(args, config) -> int:  # noqa: ARG001
 
     if _needs_npm_install(target, force=getattr(args, "reinstall", False),
                           template_changed=template_changed):
-        _print("installing desktop dependencies with npm...")
-        install = subprocess.run([npm, "install"], cwd=target)
+        install_cmd = _npm_install_command(npm, target)
+        _print(f"installing desktop dependencies with {' '.join(install_cmd[1:])}...")
+        install = subprocess.run(install_cmd, cwd=target)
         if install.returncode != 0:
             return install.returncode
     else:

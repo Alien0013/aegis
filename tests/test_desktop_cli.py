@@ -37,9 +37,37 @@ def test_desktop_install_only_syncs_and_installs(monkeypatch, tmp_path):
     args = Namespace(install_only=True, reinstall=False, sandbox=False)
     assert desktop.cmd_desktop(args, object()) == 0
 
-    assert calls == [{"cmd": ["/usr/bin/npm", "install"], "cwd": target, "env": None}]
+    assert calls == [{"cmd": ["/usr/bin/npm", "ci"], "cwd": target, "env": None}]
     for name in desktop.DESKTOP_FILES:
         assert (target / name).read_text(encoding="utf-8") == f"{name}\n"
+
+
+def test_desktop_status_reports_bootstrap_without_running_npm(monkeypatch, tmp_path, capsys):
+    source = _write_desktop_template(tmp_path / "source")
+    target = tmp_path / "runtime"
+    calls: list[dict] = []
+
+    monkeypatch.setenv("AEGIS_DESKTOP_DIR", str(target))
+    monkeypatch.setattr(desktop, "_desktop_source", lambda: source)
+    monkeypatch.setattr(desktop.shutil, "which", lambda name: "/usr/bin/npm" if name == "npm" else None)
+    monkeypatch.setattr(desktop.subprocess, "run", lambda *a, **k: calls.append({"args": a, "kwargs": k}))
+
+    args = Namespace(status=True, install_only=False, reinstall=False, sandbox=False)
+    assert desktop.cmd_desktop(args, object()) == 0
+
+    body = json.loads(capsys.readouterr().out)
+    assert calls == []
+    assert body["ok"] is True
+    assert body["target"] == str(target)
+    assert body["dependencies_installed"] is False
+    assert body["package_lock"] is False
+    assert body["install_command"] == ["/usr/bin/npm", "ci"]
+
+
+def test_desktop_npm_install_command_uses_lockfile(tmp_path):
+    assert desktop._npm_install_command("/usr/bin/npm", tmp_path) == ["/usr/bin/npm", "install"]
+    (tmp_path / "package-lock.json").write_text("{}", encoding="utf-8")
+    assert desktop._npm_install_command("/usr/bin/npm", tmp_path) == ["/usr/bin/npm", "ci"]
 
 
 def test_desktop_launch_skips_install_when_dependencies_exist(monkeypatch, tmp_path):
@@ -100,8 +128,13 @@ def test_desktop_parser_and_typo_alias():
     assert args.func is desktop.cmd_desktop
     assert args.install_only is True
 
-    typo_args = parser.parse_args(["deksktop", "--install-only"])
+    status_args = parser.parse_args(["desktop", "--status"])
+    assert status_args.func is desktop.cmd_desktop
+    assert status_args.status is True
+
+    typo_args = parser.parse_args(["deksktop", "--install-only", "--status"])
     assert typo_args.func is desktop.cmd_desktop
+    assert typo_args.status is True
 
 
 def test_bundled_desktop_template_matches_source():

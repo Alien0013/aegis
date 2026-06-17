@@ -1616,6 +1616,8 @@ def build_parser() -> argparse.ArgumentParser:
         if _name == "deksktop":
             help_text = argparse.SUPPRESS
         ds = sub.add_parser(_name, help=help_text)
+        ds.add_argument("--status", action="store_true",
+                        help="print desktop bootstrap status without syncing, installing, or launching")
         ds.add_argument("--install-only", action="store_true",
                         help="install/update desktop dependencies without launching")
         ds.add_argument("--reinstall", action="store_true",
