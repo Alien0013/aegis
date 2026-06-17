@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import pathlib
 
 
@@ -58,3 +59,17 @@ def test_desktop_source_and_packaged_copy_stay_in_sync():
     assert set(source) == set(packaged)
     for rel in sorted(source):
         assert source[rel] == packaged[rel], f"desktop copy drifted: {rel}"
+
+
+def test_desktop_lockfiles_cover_runtime_dependencies():
+    """npm ci must be able to install every runtime dependency declared by the desktop app."""
+    for root in (ROOT / "desktop", ROOT / "aegis" / "desktop_app"):
+        package = json.loads((root / "package.json").read_text(encoding="utf-8"))
+        lock = json.loads((root / "package-lock.json").read_text(encoding="utf-8"))
+        locked_root = lock.get("packages", {}).get("", {})
+        locked_deps = locked_root.get("dependencies", {})
+        for name, spec in (package.get("dependencies") or {}).items():
+            assert locked_deps.get(name) == spec, f"{root}: lockfile missing dependency {name}"
+            assert f"node_modules/{name}" in lock.get("packages", {}), (
+                f"{root}: lockfile missing package node_modules/{name}"
+            )
