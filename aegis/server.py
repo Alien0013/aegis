@@ -676,6 +676,67 @@ def _response_conversation_history(
     return _history_payload(history)
 
 
+def _response_input_items(messages: list[Message], instructions: str | None = None) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    if instructions:
+        items.append({
+            "type": "message",
+            "role": "system",
+            "content": [{"type": "input_text", "text": str(instructions)}],
+        })
+    for message in messages:
+        if not isinstance(message, Message) or _is_instruction_wrapper(message):
+            continue
+        items.append({
+            "type": "message",
+            "role": message.role or "user",
+            "content": [{"type": "input_text", "text": str(message.content or "")}],
+        })
+    return items
+
+
+def _state_input_items(state: dict[str, Any], response_id: str) -> list[dict[str, Any]]:
+    raw = state.get("input_items")
+    if isinstance(raw, list) and raw:
+        items = [item for item in raw if isinstance(item, dict)]
+    else:
+        items = _response_input_items(_history_from_state(state), state.get("instructions"))
+    out: list[dict[str, Any]] = []
+    for index, item in enumerate(items):
+        row = dict(item)
+        row.setdefault("id", f"{response_id}_input_{index}")
+        row.setdefault("object", "response.input_item")
+        row.setdefault("response_id", response_id)
+        out.append(row)
+    return out
+
+
+def _response_input_items_payload(
+    state: dict[str, Any],
+    response_id: str,
+    query: dict[str, list[str]],
+) -> dict[str, Any]:
+    try:
+        limit = int((query.get("limit") or ["100"])[0] or 100)
+    except (TypeError, ValueError):
+        limit = 100
+    limit = max(1, min(limit, 100))
+    after = str((query.get("after") or [""])[0] or "")
+    items = _state_input_items(state, response_id)
+    start = 0
+    if after:
+        ids = [str(item.get("id") or "") for item in items]
+        start = ids.index(after) + 1 if after in ids else len(items)
+    data = items[start:start + limit]
+    return {
+        "object": "list",
+        "data": data,
+        "has_more": start + limit < len(items),
+        "first_id": data[0]["id"] if data else None,
+        "last_id": data[-1]["id"] if data else None,
+    }
+
+
 def _response_truncation_mode(value: Any) -> str:
     if isinstance(value, dict):
         value = value.get("type") or value.get("mode")
@@ -715,6 +776,7 @@ def _capabilities(config: Config) -> dict[str, Any]:
         {"name": "responses", "path": "/v1/responses", "methods": ["POST"], "streaming": True,
          "stateful": True},
         {"name": "responses.retrieve", "path": "/v1/responses/{response_id}", "methods": ["GET", "DELETE"]},
+        {"name": "responses.input_items", "path": "/v1/responses/{response_id}/input_items", "methods": ["GET"]},
         {"name": "responses.cancel", "path": "/v1/responses/{response_id}/cancel", "methods": ["POST"]},
         {"name": "models", "path": "/v1/models", "methods": ["GET"]},
         {"name": "health", "path": "/v1/health", "methods": ["GET"]},
@@ -767,6 +829,7 @@ def _capabilities(config: Config) -> dict[str, Any]:
             "run_history": True,
             "trace_events": True,
             "responses_persistence": True,
+            "response_input_items": True,
             "previous_response_id": True,
             "response_conversations": True,
             "responses_truncation_auto": True,
@@ -1151,6 +1214,7 @@ class ResponseStore:
         return {
             "response": response,
             "conversation_history": list(state.get("conversation_history") or []),
+            "input_items": list(state.get("input_items") or []),
             "instructions": state.get("instructions"),
             "session_id": state.get("session_id") or (response.get("metadata") or {}).get("session_id"),
             "conversation": state.get("conversation") or (response.get("metadata") or {}).get("conversation"),
@@ -1160,12 +1224,14 @@ class ResponseStore:
     def _normalize_state(body: dict[str, Any]) -> dict[str, Any]:
         if isinstance(body.get("response"), dict):
             body.setdefault("conversation_history", [])
+            body.setdefault("input_items", [])
             body.setdefault("instructions", None)
             body.setdefault("session_id", (body.get("response", {}).get("metadata") or {}).get("session_id"))
             return body
         return {
             "response": body,
             "conversation_history": body.get("_conversation_history", []),
+            "input_items": body.get("_input_items", []),
             "instructions": body.get("instructions"),
             "session_id": (body.get("metadata") or {}).get("session_id"),
             "conversation": (body.get("metadata") or {}).get("conversation"),
@@ -1993,6 +2059,12 @@ def make_handler(config: Config):
                 return self._json(200, _skills_payload(config))
             if path == "/v1/toolsets":
                 return self._json(200, _toolsets_payload(config))
+            if path.startswith("/v1/responses/") and path.endswith("/input_items"):
+                rid = path.split("/")[-2]
+                state = response_store.get_state(rid)
+                if state is None:
+                    return self._json(404, {"error": "response not found", "id": rid})
+                return self._json(200, _response_input_items_payload(state, rid, query))
             if path.startswith("/v1/responses/"):
                 rid = path.rsplit("/", 1)[-1]
                 response = response_store.get(rid)
@@ -2696,6 +2768,7 @@ def make_handler(config: Config):
                     full_history = _response_conversation_history(state_history, last_user, result)
                     response_store.put(response, {
                         "conversation_history": full_history,
+                        "input_items": _response_input_items(state_history + [last_user], instructions),
                         "instructions": instructions,
                         "session_id": response.get("metadata", {}).get("session_id") or session_id,
                         "conversation": conversation,
@@ -2731,6 +2804,7 @@ def make_handler(config: Config):
                 if store_response:
                     response_store.put(created_response, {
                         "conversation_history": _history_payload(state_history + [last_user]),
+                        "input_items": _response_input_items(state_history + [last_user], instructions),
                         "instructions": instructions,
                         "session_id": session_id,
                         "conversation": conversation,
@@ -2849,6 +2923,7 @@ def make_handler(config: Config):
                             history_snapshot.append(Message.assistant(text))
                         response_store.put(failed, {
                             "conversation_history": _history_payload(history_snapshot),
+                            "input_items": _response_input_items(state_history + [last_user], instructions),
                             "instructions": instructions,
                             "session_id": session_id,
                             "conversation": conversation,
@@ -3006,6 +3081,7 @@ def make_handler(config: Config):
                         full_history = _response_conversation_history(state_history, last_user, result)
                         response_store.put(response, {
                             "conversation_history": full_history,
+                            "input_items": _response_input_items(state_history + [last_user], instructions),
                             "instructions": instructions,
                             "session_id": response.get("metadata", {}).get("session_id") or session_id,
                             "conversation": conversation,

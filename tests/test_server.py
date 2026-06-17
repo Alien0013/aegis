@@ -822,6 +822,8 @@ def test_server_health_capabilities_and_body_limit(monkeypatch, tmp_path):
     routes = {row["name"]: row for row in caps["endpoint_descriptors"]}
     assert routes["responses"]["path"] == "/v1/responses"
     assert routes["responses"]["streaming"] is True
+    assert routes["responses.input_items"]["path"] == "/v1/responses/{response_id}/input_items"
+    assert caps["features"]["response_input_items"] is True
     assert routes["runs.approval"]["methods"] == ["GET", "POST"]
     assert caps["features"]["responses_persistence"] is True
     assert caps["features"]["responses_truncation_auto"] is True
@@ -1093,6 +1095,70 @@ def test_responses_persist_store_false_and_previous_id(monkeypatch, tmp_path):
         "hello",
     ]
     assert second_call["prompt"].content == "second"
+
+
+def test_responses_input_items_persist_paginate_and_replay(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": [
+                {"role": "user", "content": "first"},
+                {"role": "user", "content": "second"},
+            ],
+            "instructions": "be direct",
+            "metadata": {"session_id": "serve:input-items"},
+        })
+        response_id = json.loads(data)["id"]
+        first_status, first_page = _request(
+            port,
+            "GET",
+            f"/v1/responses/{response_id}/input_items?limit=2",
+        )
+        first_body = json.loads(first_page)
+        second_status, second_page = _request(
+            port,
+            "GET",
+            f"/v1/responses/{response_id}/input_items?after={first_body['last_id']}",
+        )
+        missing_status, missing_data = _request(port, "GET", "/v1/responses/resp_missing/input_items")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    srv2, port2 = _serve(server.make_handler(Config.load()))
+    try:
+        replay_status, replay_data = _request(port2, "GET", f"/v1/responses/{response_id}/input_items")
+    finally:
+        srv2.shutdown()
+        srv2.server_close()
+
+    assert status == 200
+    assert first_status == 200
+    assert second_status == 200
+    assert missing_status == 404
+    assert "response not found" in json.loads(missing_data)["error"]
+    assert first_body["object"] == "list"
+    assert first_body["has_more"] is True
+    assert [row["role"] for row in first_body["data"]] == ["system", "user"]
+    assert first_body["data"][0]["object"] == "response.input_item"
+    assert first_body["data"][0]["response_id"] == response_id
+    assert first_body["data"][0]["content"][0]["text"] == "be direct"
+    second_body = json.loads(second_page)
+    assert second_body["has_more"] is False
+    assert [row["content"][0]["text"] for row in second_body["data"]] == ["second"]
+    assert replay_status == 200
+    replay_body = json.loads(replay_data)
+    assert [row["content"][0]["text"] for row in replay_body["data"]] == [
+        "be direct",
+        "first",
+        "second",
+    ]
 
 
 def test_responses_missing_previous_id_404s_without_running(monkeypatch, tmp_path):
