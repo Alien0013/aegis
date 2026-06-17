@@ -72,6 +72,28 @@ def test_desktop_launch_skips_install_when_dependencies_exist(monkeypatch, tmp_p
     assert calls[0]["env"]["AEGIS_BIN"] == "/usr/local/bin/aegis"
 
 
+def test_desktop_sync_cleans_only_previous_managed_files(tmp_path):
+    source = _write_desktop_template(tmp_path / "source")
+    target = tmp_path / "runtime"
+    (target / "electron").mkdir(parents=True)
+    (target / "electron" / "old-main.js").write_text("stale", encoding="utf-8")
+    (target / "user-note.txt").write_text("keep me", encoding="utf-8")
+    (target / "node_modules" / "electron").mkdir(parents=True)
+    (target / desktop.DESKTOP_MANIFEST).write_text(
+        json.dumps({"schema_version": 1, "files": ["electron/old-main.js", "package.json"]}),
+        encoding="utf-8",
+    )
+
+    changed = desktop._sync_desktop_app(source, target)
+
+    assert changed is True
+    assert not (target / "electron" / "old-main.js").exists()
+    assert (target / "user-note.txt").read_text(encoding="utf-8") == "keep me"
+    assert (target / "node_modules" / "electron").is_dir()
+    manifest = json.loads((target / desktop.DESKTOP_MANIFEST).read_text(encoding="utf-8"))
+    assert manifest["files"] == sorted(desktop.DESKTOP_FILES)
+
+
 def test_desktop_parser_and_typo_alias():
     parser = build_parser()
     args = parser.parse_args(["desktop", "--install-only"])

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -24,6 +25,7 @@ DESKTOP_FILES = (
     "scripts/write-build-stamp.test.cjs",
     "build/icon.png", "build/icon.ico",
 )
+DESKTOP_MANIFEST = ".aegis-desktop-files.json"
 
 
 def _print(message: str = "") -> None:
@@ -60,10 +62,67 @@ def _read_source_file(source: Any, name: str) -> bytes:
         raise RuntimeError(f"desktop template is missing {name}") from exc
 
 
+def _read_desktop_manifest(target: Path) -> set[str]:
+    path = target / DESKTOP_MANIFEST
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return set()
+    if isinstance(data, dict):
+        data = data.get("files")
+    if not isinstance(data, list):
+        return set()
+    return {str(item) for item in data if isinstance(item, str) and item}
+
+
+def _write_desktop_manifest(target: Path) -> None:
+    payload = {
+        "schema_version": 1,
+        "files": sorted(DESKTOP_FILES),
+    }
+    (target / DESKTOP_MANIFEST).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _safe_relative_file(name: str) -> bool:
+    rel = Path(name)
+    return bool(name and not rel.is_absolute() and ".." not in rel.parts and rel.parts)
+
+
+def _cleanup_removed_desktop_files(target: Path, previous: set[str]) -> bool:
+    changed = False
+    current = set(DESKTOP_FILES)
+    for name in sorted(previous - current):
+        if not _safe_relative_file(name):
+            continue
+        path = target / name
+        try:
+            resolved = path.resolve()
+            resolved.relative_to(target.resolve())
+        except (OSError, RuntimeError, ValueError):
+            continue
+        try:
+            if path.is_file() or path.is_symlink():
+                path.unlink()
+                changed = True
+                parent = path.parent
+                while parent != target and parent.exists():
+                    try:
+                        parent.rmdir()
+                    except OSError:
+                        break
+                    parent = parent.parent
+        except OSError:
+            continue
+    return changed
+
+
 def _sync_desktop_app(source: Any, target: Path) -> bool:
     """Copy packaged desktop files into a writable runtime directory."""
     target.mkdir(parents=True, exist_ok=True)
     changed = False
+    previous = _read_desktop_manifest(target)
+    if previous and _cleanup_removed_desktop_files(target, previous):
+        changed = True
     for name in DESKTOP_FILES:
         data = _read_source_file(source, name)
         dst = target / name
@@ -71,6 +130,7 @@ def _sync_desktop_app(source: Any, target: Path) -> bool:
         if not dst.exists() or dst.read_bytes() != data:
             dst.write_bytes(data)
             changed = True
+    _write_desktop_manifest(target)
     return changed
 
 
