@@ -1049,9 +1049,12 @@ def cmd_config(args, config: Config) -> int:
         _print(f"  Discord:  {discord}")
         _print()
         _print("Commands")
-        _print("  aegis config edit              # Edit config file")
-        _print("  aegis config set <key> <value> # Update a config value")
-        _print("  aegis setup                    # Run setup wizard")
+        _print("  aegis config edit                 # Edit config file")
+        _print("  aegis config edit --secrets       # Edit local .env secrets")
+        _print("  aegis config get <key>            # Print a config value")
+        _print("  aegis config set <key> <value>    # Update a config value")
+        _print("  aegis config setup                # Run setup wizard from config")
+        _print("  aegis setup                       # Run setup wizard")
         return 0
 
     if args.action == "path":
@@ -1613,6 +1616,14 @@ def _add_onboard_automation_args(parser: argparse.ArgumentParser) -> None:
                         help="install dashboard/gateway services in noninteractive mode")
 
 
+def _add_setup_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--quick", action="store_true", help="apply fast local defaults")
+    parser.add_argument("--advanced", action="store_true", help="show advanced setup choices")
+    parser.add_argument("--no-probe", action="store_true", help="skip provider connection test")
+    parser.add_argument("--no-services", action="store_true", help="skip user systemd service setup")
+    _add_onboard_automation_args(parser)
+
+
 def _needs_first_run() -> bool:
     if os.environ.get("AEGIS_SKIP_FIRST_RUN", "").strip().lower() in {"1", "true", "yes"}:
         return False
@@ -1664,19 +1675,11 @@ def build_parser() -> argparse.ArgumentParser:
     a.set_defaults(func=cmd_auth)
 
     s = sub.add_parser("setup", help="interactive setup wizard")
-    s.add_argument("--quick", action="store_true", help="apply fast local defaults")
-    s.add_argument("--advanced", action="store_true", help="show advanced setup choices")
-    s.add_argument("--no-probe", action="store_true", help="skip provider connection test")
-    s.add_argument("--no-services", action="store_true", help="skip user systemd service setup")
-    _add_onboard_automation_args(s)
+    _add_setup_args(s)
     s.set_defaults(func=cmd_setup)
 
     ob = sub.add_parser("onboard", help="interactive setup wizard (alias of setup)")
-    ob.add_argument("--quick", action="store_true", help="apply fast local defaults")
-    ob.add_argument("--advanced", action="store_true", help="show advanced setup choices")
-    ob.add_argument("--no-probe", action="store_true", help="skip provider connection test")
-    ob.add_argument("--no-services", action="store_true", help="skip user systemd service setup")
-    _add_onboard_automation_args(ob)
+    _add_setup_args(ob)
     ob.set_defaults(func=cmd_setup)
 
     up = sub.add_parser("update", help="update AEGIS to the latest version")
@@ -2078,6 +2081,7 @@ def build_parser() -> argparse.ArgumentParser:
     cf.add_argument("key", nargs="?")
     cf.add_argument("value", nargs="?")
     cf.add_argument("--secrets", action="store_true", help="edit the local secrets .env file")
+    _add_setup_args(cf)
     cf.set_defaults(func=cmd_config)
 
     sc = sub.add_parser("secret", help="store a local secret in ~/.aegis/.env with hidden input")

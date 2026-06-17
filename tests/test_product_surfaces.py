@@ -30,6 +30,51 @@ def test_cli_parser_exposes_upgrade_commands():
     assert parser.parse_args(["config", "show"]).action == "show"
     assert parser.parse_args(["config", "edit", "--secrets"]).secrets is True
     assert parser.parse_args(["config", "setup"]).action == "setup"
+    cfg_setup = parser.parse_args([
+        "config",
+        "setup",
+        "--non-interactive",
+        "--accept-risk",
+        "--json",
+        "--provider",
+        "openai",
+        "--model",
+        "gpt-5.5",
+        "--toolsets",
+        "core,browser",
+        "--install-services",
+    ])
+    assert cfg_setup.non_interactive is True
+    assert cfg_setup.accept_risk is True
+    assert cfg_setup.json is True
+    assert cfg_setup.provider == "openai"
+    assert cfg_setup.model == "gpt-5.5"
+    assert cfg_setup.toolsets == "core,browser"
+    assert cfg_setup.install_services is True
+
+
+def test_config_summary_prints_hermes_style_terminal_surface(monkeypatch, capsys):
+    from argparse import Namespace
+
+    from aegis.cli import main
+    from aegis.config import Config
+
+    cfg = Config.load()
+    cfg.data["model"] = {"provider": "openai", "default": "gpt-5.5"}
+    cfg.data["gateway"]["channels"] = ["telegram"]
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    assert main.cmd_config(Namespace(action="summary"), cfg) == 0
+
+    out = capsys.readouterr().out
+    assert "AEGIS Configuration" in out
+    assert "Paths" in out and "Config:" in out and "Secrets:" in out
+    assert "API Keys" in out and "OpenAI" in out and "configured" in out
+    assert "Model" in out and "Provider: openai" in out and "Model:    gpt-5.5" in out
+    assert "Messaging Platforms" in out and "Telegram: configured" in out
+    assert "aegis config edit --secrets" in out
+    assert "aegis config get <key>" in out
+    assert "aegis config setup" in out
 
 
 def test_model_doctor_prints_resolver_report(capsys):
