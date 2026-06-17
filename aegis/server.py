@@ -287,6 +287,27 @@ def _response_content_validation_error(value: Any, *, param: str) -> dict[str, A
                     param=f"{param}.output",
                 )
             return _function_output_validation_error(value.get("output"), param=f"{param}.output")
+        if _is_function_call_input_item(value):
+            if not str(value.get("call_id") or value.get("id") or "").strip():
+                return _openai_error(
+                    "function_call input items require a non-empty 'call_id'",
+                    code="invalid_function_call",
+                    param=f"{param}.call_id",
+                )
+            if not str(value.get("name") or "").strip():
+                return _openai_error(
+                    "function_call input items require a non-empty 'name'",
+                    code="invalid_function_call",
+                    param=f"{param}.name",
+                )
+            arguments = value.get("arguments", {})
+            if arguments is not None and not isinstance(arguments, (str, dict, list)):
+                return _openai_error(
+                    "function_call input items require 'arguments' to be a string, object, or array",
+                    code="invalid_function_call",
+                    param=f"{param}.arguments",
+                )
+            return None
         if "content" in value:
             return _content_part_validation_error(value.get("content"), param=f"{param}.content")
         if "type" in value:
@@ -310,6 +331,10 @@ def _is_function_call_output_input_item(item: Any) -> bool:
     return isinstance(item, dict) and str(item.get("type") or "") == "function_call_output"
 
 
+def _is_function_call_input_item(item: Any) -> bool:
+    return isinstance(item, dict) and str(item.get("type") or "") == "function_call"
+
+
 def _function_output_validation_error(value: Any, *, param: str) -> dict[str, Any] | None:
     if isinstance(value, list):
         return _content_part_validation_error(value, param=param)
@@ -326,6 +351,8 @@ def _response_input_item_visible(item: Any) -> bool:
         return _content_has_visible_payload(item)
     if _is_function_call_output_input_item(item):
         return bool(str(item.get("call_id") or item.get("tool_call_id") or "").strip())
+    if _is_function_call_input_item(item):
+        return False
     if "content" in item:
         return _content_has_visible_payload(item.get("content"))
     text = item.get("text", item.get("input_text"))
@@ -493,6 +520,51 @@ def _canonical_function_call_output_item(item: dict[str, Any]) -> dict[str, Any]
     if "output" in out:
         out["output"] = _canonical_response_function_output(out.get("output"))
     return out
+
+
+def _canonical_function_call_item(item: dict[str, Any]) -> dict[str, Any]:
+    call_id = str(item.get("call_id") or item.get("id") or "")
+    name = str(item.get("name") or "")
+    arguments = item.get("arguments", {})
+    if isinstance(arguments, str):
+        arguments_text = arguments
+    else:
+        arguments_text = json.dumps(
+            arguments if arguments is not None else {},
+            sort_keys=True,
+            default=str,
+        )
+    out = dict(item)
+    out.update({
+        "type": "function_call",
+        "call_id": call_id,
+        "name": name,
+        "arguments": arguments_text,
+    })
+    return out
+
+
+def _function_call_message(item: dict[str, Any]) -> Message:
+    canonical = _canonical_function_call_item(item)
+    arguments = canonical.get("arguments") or "{}"
+    try:
+        parsed_arguments = json.loads(arguments) if isinstance(arguments, str) and arguments else {}
+    except json.JSONDecodeError:
+        parsed_arguments = {"__raw__": str(arguments)}
+    if not isinstance(parsed_arguments, dict):
+        parsed_arguments = {"value": parsed_arguments}
+    message = Message.assistant(
+        "",
+        tool_calls=[
+            ToolCall(
+                id=str(canonical.get("call_id") or ""),
+                name=str(canonical.get("name") or ""),
+                arguments=parsed_arguments,
+            )
+        ],
+    )
+    message.meta["response_input_item"] = canonical
+    return message
 
 
 def _function_call_output_message(item: dict[str, Any]) -> Message:
@@ -739,6 +811,8 @@ def _response_object(
 
 
 def _response_input_item_to_message(item: Any) -> Message:
+    if _is_function_call_input_item(item):
+        return _function_call_message(item)
     if _is_function_call_output_input_item(item):
         return _function_call_output_message(item)
     if isinstance(item, dict):
@@ -882,6 +956,9 @@ def _response_input_items(messages: list[Message], instructions: str | None = No
         raw_item = (message.meta or {}).get("response_input_item")
         if _is_function_call_output_input_item(raw_item):
             items.append(_canonical_function_call_output_item(raw_item))
+            continue
+        if _is_function_call_input_item(raw_item):
+            items.append(_canonical_function_call_item(raw_item))
             continue
         if message.role == "tool":
             items.append({

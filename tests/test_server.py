@@ -1334,6 +1334,88 @@ def test_responses_accepts_function_call_output_input_item(monkeypatch, tmp_path
     assert items[1]["output"] == "tool says hi"
 
 
+def test_responses_accepts_function_call_input_item(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    function_call = {
+        "type": "function_call",
+        "call_id": "call_fetch",
+        "name": "fetch",
+        "arguments": {"url": "https://example.test"},
+    }
+    function_output = {
+        "type": "function_call_output",
+        "call_id": "call_fetch",
+        "output": "tool says hi",
+    }
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": [
+                function_call,
+                function_output,
+                {"role": "user", "content": "continue"},
+            ],
+        })
+        response_id = json.loads(data)["id"]
+        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    call = _FakeRunner.calls[0]
+    assert call["prompt"].content == "continue"
+    assert len(call["history"]) == 2
+    assert call["history"][0].role == "assistant"
+    assert call["history"][0].tool_calls[0].id == "call_fetch"
+    assert call["history"][0].tool_calls[0].name == "fetch"
+    assert call["history"][0].tool_calls[0].arguments == {"url": "https://example.test"}
+    assert call["history"][1].role == "tool"
+    assert call["history"][1].tool_call_id == "call_fetch"
+    assert items_status == 200
+    items = json.loads(items_data)["data"]
+    assert [item["type"] for item in items] == [
+        "function_call",
+        "function_call_output",
+        "message",
+    ]
+    assert items[0]["call_id"] == "call_fetch"
+    assert items[0]["name"] == "fetch"
+    assert json.loads(items[0]["arguments"]) == {"url": "https://example.test"}
+    assert items[1]["call_id"] == "call_fetch"
+
+
+def test_responses_rejects_invalid_function_call_input_item(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": [
+                {"type": "function_call", "call_id": "call_fetch", "arguments": {}},
+                {"role": "user", "content": "continue"},
+            ],
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 400
+    body = json.loads(data)
+    assert body["error"]["code"] == "invalid_function_call"
+    assert body["error"]["param"] == "input[0].name"
+    assert _FakeRunner.calls == []
+
+
 def test_responses_function_call_output_preserves_multimodal_output_parts(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
