@@ -14,6 +14,11 @@ from ..platforms import (
 from .base import BasePlatformAdapter, Dispatch, MessageEvent
 
 
+def _csv_set(value: str) -> set[str] | None:
+    items = {item.strip() for item in str(value or "").split(",") if item.strip()}
+    return items or None
+
+
 class DiscordAdapter(BasePlatformAdapter):
     name = "discord"
     renders_tables = False
@@ -27,10 +32,23 @@ class DiscordAdapter(BasePlatformAdapter):
         self.token = token or os.environ.get("DISCORD_BOT_TOKEN")
         if not self.token:
             raise RuntimeError("DISCORD_BOT_TOKEN is not set.")
-        allowed = os.environ.get("DISCORD_ALLOWED_USERS", "").strip()
-        self.allowed = {u.strip() for u in allowed.split(",") if u.strip()} if allowed else None
-        roles = os.environ.get("DISCORD_ALLOWED_ROLES", "").strip()
-        self.allowed_roles = {r.strip() for r in roles.split(",") if r.strip()} if roles else None
+        self.allowed = _csv_set(os.environ.get("DISCORD_ALLOWED_USERS", ""))
+        self.allowed_roles = _csv_set(os.environ.get("DISCORD_ALLOWED_ROLES", ""))
+        self.allowed_guilds = _csv_set(os.environ.get("DISCORD_ALLOWED_GUILDS", ""))
+        self.ignored_guilds = _csv_set(os.environ.get("DISCORD_IGNORED_GUILDS", ""))
+        self.trigger_mode = os.environ.get("DISCORD_TRIGGER_MODE", "all").strip().lower() or "all"
+
+    @property
+    def metadata(self) -> dict:
+        data = super().metadata
+        data["security"] = {
+            "allowed_users_configured": bool(self.allowed),
+            "allowed_roles_configured": bool(self.allowed_roles),
+            "allowed_guilds_configured": bool(self.allowed_guilds),
+            "ignored_guilds_configured": bool(self.ignored_guilds),
+            "trigger_mode": self.trigger_mode,
+        }
+        return data
 
     def command_menu(self, *, max_commands: int = MAX_DISCORD_APP_COMMANDS) -> list[str]:
         return discord_application_command_menu(max_commands=max_commands)
@@ -57,9 +75,13 @@ class DiscordAdapter(BasePlatformAdapter):
                 return
             if not self._bot_author_allowed(message, client):
                 return
+            if not self._guild_allowed(message):
+                return
             if not self._channel_allowed(message):
                 return
             if not self._author_allowed(message):
+                return
+            if not self._trigger_allowed(message, client):
                 return
             reference = getattr(message, "reference", None)
             replied = getattr(reference, "resolved", None) if reference is not None else None
@@ -106,6 +128,20 @@ class DiscordAdapter(BasePlatformAdapter):
             return bool(getattr(client, "user", None) and client.user in mentions)
         return False
 
+    def _guild_allowed(self, message) -> bool:  # noqa: ANN001
+        guild = getattr(message, "guild", None)
+        guild_id = str(getattr(guild, "id", "") or "")
+        is_dm = not guild_id
+        ignored = self.ignored_guilds or set()
+        if "*" in ignored or (is_dm and "dm" in ignored) or (guild_id and guild_id in ignored):
+            return False
+        allowed = self.allowed_guilds or set()
+        if not allowed or "*" in allowed:
+            return True
+        if is_dm:
+            return "dm" in allowed
+        return guild_id in allowed
+
     def _channel_allowed(self, message) -> bool:  # noqa: ANN001
         channel_ids = {str(getattr(message.channel, "id", "") or "")}
         parent = getattr(message.channel, "parent", None)
@@ -127,6 +163,39 @@ class DiscordAdapter(BasePlatformAdapter):
             if role_ids & self.allowed_roles:
                 return True
         return not self.allowed and not self.allowed_roles
+
+    def _trigger_allowed(self, message, client) -> bool:  # noqa: ANN001
+        if not getattr(message, "guild", None):
+            return True
+        mode = self.trigger_mode
+        if mode in {"", "all", "always", "true", "1", "yes"}:
+            return True
+        content = str(getattr(message, "content", "") or "")
+        if mode in {"command", "commands"}:
+            return content.lstrip().startswith(("/", "!"))
+        if mode in {"addressed", "mention", "mentions", "reply", "replies"}:
+            return (
+                content.lstrip().startswith(("/", "!"))
+                or self._mentions_self(message, client)
+                or self._is_reply_to_self(message, client)
+            )
+        return True
+
+    def _mentions_self(self, message, client) -> bool:  # noqa: ANN001
+        user = getattr(client, "user", None)
+        if user is not None and user in (getattr(message, "mentions", []) or []):
+            return True
+        uid = str(getattr(user, "id", "") or "")
+        content = str(getattr(message, "content", "") or "")
+        return bool(uid and (f"<@{uid}>" in content or f"<@!{uid}>" in content))
+
+    def _is_reply_to_self(self, message, client) -> bool:  # noqa: ANN001
+        user = getattr(client, "user", None)
+        uid = str(getattr(user, "id", "") or "")
+        reference = getattr(message, "reference", None)
+        replied = getattr(reference, "resolved", None) if reference is not None else None
+        author = getattr(replied, "author", None)
+        return bool(uid and str(getattr(author, "id", "") or "") == uid)
 
     def _strip_own_mentions(self, content: str, client) -> str:  # noqa: ANN001
         user = getattr(client, "user", None)

@@ -335,6 +335,14 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
         "TELEGRAM_BOT_ID",
     ):
         monkeypatch.delenv(key, raising=False)
+    for key in (
+        "DISCORD_ALLOWED_USERS",
+        "DISCORD_ALLOWED_ROLES",
+        "DISCORD_ALLOWED_GUILDS",
+        "DISCORD_IGNORED_GUILDS",
+        "DISCORD_TRIGGER_MODE",
+    ):
+        monkeypatch.delenv(key, raising=False)
     monkeypatch.delenv("WEBHOOK_CHANNEL_SECRET", raising=False)
 
     assert TelegramAdapter("token").metadata["transport"] == "long_poll"
@@ -342,6 +350,8 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert TelegramAdapter("token").metadata["security"]["group_trigger_mode"] == "all"
     assert DiscordAdapter("token").metadata["supports_threads"] is True
     assert DiscordAdapter("token").metadata["command_cap"] == 100
+    assert "DISCORD_ALLOWED_GUILDS" in DiscordAdapter("token").metadata["optional_env"]
+    assert DiscordAdapter("token").metadata["security"]["trigger_mode"] == "all"
     assert len(DiscordAdapter("token").command_menu(max_commands=500)) <= 100
     assert SlackAdapter().metadata["typed_command_prefix"] == "!"
     assert "SLACK_ALLOWED_CHANNELS" in SlackAdapter().metadata["optional_env"]
@@ -355,6 +365,45 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert "X-Secret" in webhook["security"]["signature_schemes"]
     assert webhook["idempotency"]["delivery_cache"]["entries"] == 0
     assert webhook["rate_limiter"]["limit"] >= 1
+
+
+def test_discord_adapter_enforces_guild_filters_and_trigger_mode(monkeypatch):
+    from aegis.gateway.discord_channel import DiscordAdapter
+
+    class Obj:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    bot = Obj(id="BOT")
+    client = Obj(user=bot)
+
+    def message(content="hello", *, guild_id="G1", mentions=None, reply_author_id="", channel_id="C1"):
+        reference = Obj(resolved=Obj(author=Obj(id=reply_author_id))) if reply_author_id else None
+        return Obj(
+            content=content,
+            guild=Obj(id=guild_id) if guild_id else None,
+            channel=Obj(id=channel_id, parent=None, name="ops"),
+            author=Obj(id="U1", roles=[], bot=False),
+            mentions=mentions or [],
+            reference=reference,
+            type=None,
+        )
+
+    monkeypatch.setenv("DISCORD_ALLOWED_GUILDS", "G1,dm")
+    monkeypatch.setenv("DISCORD_IGNORED_GUILDS", "G9")
+    monkeypatch.setenv("DISCORD_TRIGGER_MODE", "addressed")
+
+    adapter = DiscordAdapter("token")
+
+    assert adapter._guild_allowed(message(guild_id="G1")) is True
+    assert adapter._guild_allowed(message(guild_id="G2")) is False
+    assert adapter._guild_allowed(message(guild_id="G9")) is False
+    assert adapter._guild_allowed(message(guild_id="")) is True
+    assert adapter._trigger_allowed(message("plain", guild_id="G1"), client) is False
+    assert adapter._trigger_allowed(message("!status", guild_id="G1"), client) is True
+    assert adapter._trigger_allowed(message("hello", guild_id="G1", mentions=[bot]), client) is True
+    assert adapter._trigger_allowed(message("hello", guild_id="G1", reply_author_id="BOT"), client) is True
+    assert adapter._trigger_allowed(message("plain dm", guild_id=""), client) is True
 
 
 def test_telegram_adapter_enforces_chat_filters_and_group_addressing(monkeypatch):
