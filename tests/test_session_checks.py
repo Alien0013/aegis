@@ -116,3 +116,33 @@ def test_cross_session_integrity_report_is_clean_for_consistent_state(tmp_path, 
     assert report["counts"]["sessions_with_last_run"] == 1
     assert report["counts"]["resume_pending_sessions"] == 1
     assert any(check["id"] == "resume_pending" and check["ok"] is True for check in report["checks"])
+
+
+def test_repair_cross_session_integrity_interrupts_stale_running_runs(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+
+    from aegis.runs import RunStore
+    from aegis.session import Session, SessionStore
+    from aegis.session_checks import cross_session_integrity_report, repair_cross_session_integrity
+
+    store = SessionStore()
+    runs = RunStore()
+    session = Session(id="sess-repair", title="repair me")
+    store.save(session)
+    run = runs.start(surface="gateway", kind="chat", session_id=session.id, prompt="stale")
+    run["started_at"] = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    runs.write(run)
+
+    repair = repair_cross_session_integrity(stale_running_seconds=0, run_limit=10)
+
+    saved = runs.get(run["id"])
+    loaded = store.load(session.id)
+    report = cross_session_integrity_report(stale_running_seconds=0, stale_resume_pending_seconds=3600)
+
+    assert repair["repaired_running_runs"] == 1
+    assert repair["marked_resume_pending"] == 1
+    assert saved["status"] == "interrupted"
+    assert saved["data"]["recovered_by_session_check"] is True
+    assert loaded.meta["resume_pending"] is True
+    assert loaded.meta["resume_reason"] == "cross_session_repair"
+    assert "stale_running_run" not in {issue["code"] for issue in report["issues"]}

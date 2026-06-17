@@ -1047,7 +1047,7 @@ def cmd_config(args, config: Config) -> int:
         _print(f"Config:  {cfg.config_path()}")
         _print(f"Secrets: {cfg.env_path()}")
         return 0
-    if args.action == "summary":
+    if args.action in ("summary", "show"):
         return show_summary()
     if args.action == "edit":
         target = cfg.env_path() if getattr(args, "secrets", False) else cfg.config_path()
@@ -1072,7 +1072,10 @@ def cmd_config(args, config: Config) -> int:
         if not args.key or args.value is None:
             print_config_usage()
             return 1
-        where = config.set(args.key, args.value)
+        try:
+            where = config.set(args.key, args.value)
+        except ValueError as exc:
+            return _die(str(exc))
         _print(f"set {args.key} -> {where}")
         return 0
     if args.action in ("check", "migrate"):
@@ -1136,6 +1139,62 @@ def cmd_sessions(args, config: Config) -> int:
     from ..session import SessionStore
 
     store = SessionStore()
+    if args.action == "check":
+        from ..session_checks import cross_session_integrity_report, repair_cross_session_integrity
+
+        stale_running_arg = getattr(args, "stale_running_seconds", None)
+        stale_resume_arg = getattr(args, "stale_resume_pending_seconds", None)
+        session_limit_arg = getattr(args, "session_limit", None)
+        run_limit_arg = getattr(args, "run_limit", None)
+        stale_running = 21600.0 if stale_running_arg is None else float(stale_running_arg)
+        stale_resume = 86400.0 if stale_resume_arg is None else float(stale_resume_arg)
+        session_limit = 500 if session_limit_arg is None else int(session_limit_arg)
+        run_limit = 500 if run_limit_arg is None else int(run_limit_arg)
+        repair = None
+        if getattr(args, "repair", False):
+            repair = repair_cross_session_integrity(
+                run_limit=run_limit,
+                stale_running_seconds=stale_running,
+            )
+        report = cross_session_integrity_report(
+            session_limit=session_limit,
+            run_limit=run_limit,
+            stale_running_seconds=stale_running,
+            stale_resume_pending_seconds=stale_resume,
+        )
+        if getattr(args, "json", False):
+            payload = {"report": report}
+            if repair is not None:
+                payload["repair"] = repair
+            _print(json.dumps(payload, indent=2, sort_keys=True))
+            return 0 if report.get("error_count", 0) == 0 else 1
+        state = "ok" if report.get("ok") else "degraded"
+        _print(f"Cross-session checks: {state}")
+        _print(
+            f"  sessions={report.get('counts', {}).get('sessions', 0)} "
+            f"runs={report.get('counts', {}).get('runs', 0)} "
+            f"errors={report.get('error_count', 0)} warnings={report.get('warning_count', 0)}"
+        )
+        for check in report.get("checks", []):
+            marker = "ok" if check.get("ok") else "fail"
+            _print(f"  [{marker}] {check.get('id')}: {check.get('detail')}")
+        issues = report.get("issues", [])
+        if issues:
+            _print("Issues")
+            for issue in issues[:12]:
+                target = issue.get("session_id") or issue.get("run_id") or ""
+                label = f" {target}" if target else ""
+                _print(f"  {issue.get('severity')} {issue.get('code')}{label}: {issue.get('message')}")
+            if len(issues) > 12:
+                _print(f"  ... {len(issues) - 12} more issue(s)")
+        if repair is not None:
+            _print("Repair")
+            _print(
+                f"  interrupted stale runs: {repair.get('repaired_running_runs', 0)}; "
+                f"resume-pending sessions marked: {repair.get('marked_resume_pending', 0)}; "
+                f"skipped: {repair.get('skipped', 0)}"
+            )
+        return 0 if report.get("error_count", 0) == 0 else 1
     if args.action == "show":
         s = store.load(args.id) if args.id else None
         if not s:
@@ -1991,7 +2050,7 @@ def build_parser() -> argparse.ArgumentParser:
     cf = sub.add_parser("config", help="view, edit, get, or set configuration")
     cf.add_argument("action", nargs="?",
                     choices=[
-                        "summary", "edit", "get", "set", "path", "env-path", "paths",
+                        "summary", "show", "edit", "get", "set", "path", "env-path", "paths",
                         "dump", "check", "migrate",
                     ],
                     default="summary")
@@ -2006,10 +2065,16 @@ def build_parser() -> argparse.ArgumentParser:
     sc.add_argument("--stdin", action="store_true", help="read the value from stdin instead of prompting")
     sc.set_defaults(func=cmd_secret)
 
-    se = sub.add_parser("sessions", help="list/show/remove sessions")
-    se.add_argument("action", nargs="?", choices=["list", "show", "rm", "summarize", "search"],
+    se = sub.add_parser("sessions", help="list/show/remove/check sessions")
+    se.add_argument("action", nargs="?", choices=["list", "show", "rm", "summarize", "search", "check"],
                     default="list")
     se.add_argument("id", nargs="?")
+    se.add_argument("--json", action="store_true", help="print session check output as JSON")
+    se.add_argument("--repair", action="store_true", help="repair stale running run records")
+    se.add_argument("--session-limit", type=int, default=500)
+    se.add_argument("--run-limit", type=int, default=500)
+    se.add_argument("--stale-running-seconds", type=float, default=21600)
+    se.add_argument("--stale-resume-pending-seconds", type=float, default=86400)
     se.set_defaults(func=cmd_sessions)
 
     g = sub.add_parser("gateway", help="run the multi-channel gateway")

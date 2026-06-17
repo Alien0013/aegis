@@ -620,28 +620,73 @@ class Config:
     def get(self, dotted: str, default: Any = None) -> Any:
         node: Any = self.data
         for part in dotted.split("."):
-            if not isinstance(node, dict) or part not in node:
+            if isinstance(node, dict):
+                if part not in node:
+                    return default
+                node = node[part]
+            elif isinstance(node, list):
+                try:
+                    node = node[int(part)]
+                except (TypeError, ValueError, IndexError):
+                    return default
+            else:
                 return default
-            node = node[part]
         return node
 
     def set(self, dotted: str, value: Any) -> str:
-        """Set a value. Secret-looking keys go to .env; the rest to config.yaml.
+        """Set a value. Env-style secret keys go to .env; config paths stay in YAML.
 
         Returns a short string describing where it was stored.
         """
         low = dotted.lower()
-        # Heuristic: an UPPER_SNAKE key or a secret-suffixed key is an env secret.
-        if dotted.isupper() or any(low.endswith(s) for s in SECRET_SUFFIXES):
+        # Heuristic: UPPER_SNAKE or bare secret-suffixed keys are env secrets.
+        # Dotted paths like server.api_key are real config settings and must
+        # remain addressable through config.yaml.
+        if "." not in dotted and (dotted.isupper() or any(low.endswith(s) for s in SECRET_SUFFIXES)):
             set_env_var(dotted if dotted.isupper() else dotted.upper(), str(value))
             return f".env ({dotted.upper() if not dotted.isupper() else dotted})"
-        node = self.data
-        parts = dotted.split(".")
-        for part in parts[:-1]:
-            node = node.setdefault(part, {})
-        node[parts[-1]] = _coerce(value)
+        _set_nested(self.data, dotted, _coerce(value))
         self.save()
         return f"config.yaml ({dotted})"
+
+
+def _list_index(items: list[Any], segment: str, dotted: str) -> int:
+    try:
+        index = int(segment)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"cannot navigate list in {dotted!r}: segment {segment!r} is not an index"
+        ) from exc
+    try:
+        items[index]
+    except IndexError as exc:
+        raise ValueError(
+            f"cannot navigate list in {dotted!r}: index {index} is out of range"
+        ) from exc
+    return index
+
+
+def _set_nested(config: dict[str, Any], dotted: str, value: Any) -> None:
+    """Set dotted paths without replacing existing list nodes."""
+    parts = dotted.split(".")
+    node: Any = config
+    for part in parts[:-1]:
+        if isinstance(node, list):
+            node = node[_list_index(node, part, dotted)]
+        elif isinstance(node, dict):
+            existing = node.get(part)
+            if part not in node or not isinstance(existing, (dict, list)):
+                node[part] = {}
+            node = node[part]
+        else:
+            raise ValueError(f"cannot navigate {type(node).__name__} in {dotted!r}")
+    last = parts[-1]
+    if isinstance(node, list):
+        node[_list_index(node, last, dotted)] = value
+    elif isinstance(node, dict):
+        node[last] = value
+    else:
+        raise ValueError(f"cannot set {dotted!r} on {type(node).__name__}")
 
 
 def _config_delta(data: dict, defaults: dict) -> dict:

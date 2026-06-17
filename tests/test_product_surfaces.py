@@ -27,6 +27,7 @@ def test_cli_parser_exposes_upgrade_commands():
     assert parser.parse_args(["memory", "status"]).action == "status"
     assert parser.parse_args(["memory", "replace", "--old-text", "old", "new"]).old_text == "old"
     assert parser.parse_args(["config"]).action == "summary"
+    assert parser.parse_args(["config", "show"]).action == "show"
     assert parser.parse_args(["config", "edit", "--secrets"]).secrets is True
 
 

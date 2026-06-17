@@ -86,6 +86,53 @@ def test_config_set_setting_to_yaml_and_persists():
     assert Config.load().get("agent.max_iterations") == 9
 
 
+def test_config_set_dotted_secret_path_stays_in_yaml():
+    from aegis import config as cfg
+    from aegis.config import Config
+
+    c = Config.load()
+    where = c.set("server.api_key", "dev-secret")
+
+    assert where == "config.yaml (server.api_key)"
+    assert Config.load().get("server.api_key") == "dev-secret"
+    assert not cfg.env_path().exists() or "SERVER.API_KEY" not in cfg.env_path().read_text(encoding="utf-8")
+
+
+def test_config_set_indexed_list_path_preserves_siblings():
+    from aegis import config as cfg
+    from aegis.config import Config
+
+    cfg.config_path().write_text(
+        "custom_providers:\n"
+        "- name: provider-a\n"
+        "  env_var: OLD_A_KEY\n"
+        "  base_url: https://a.example.test/v1\n"
+        "- name: provider-b\n"
+        "  env_var: OLD_B_KEY\n"
+        "  base_url: https://b.example.test/v1\n",
+        encoding="utf-8",
+    )
+
+    where = Config.load().set("custom_providers.0.env_var", "NEW_A_KEY")
+    reloaded = Config.load()
+    providers = reloaded.get("custom_providers")
+
+    assert where == "config.yaml (custom_providers.0.env_var)"
+    assert reloaded.get("custom_providers.0.env_var") == "NEW_A_KEY"
+    assert providers == [
+        {
+            "name": "provider-a",
+            "env_var": "NEW_A_KEY",
+            "base_url": "https://a.example.test/v1",
+        },
+        {
+            "name": "provider-b",
+            "env_var": "OLD_B_KEY",
+            "base_url": "https://b.example.test/v1",
+        },
+    ]
+
+
 def test_config_get_dotted_default():
     from aegis.config import Config
     c = Config.load()

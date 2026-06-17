@@ -188,6 +188,10 @@ def test_cli_config_summary_dump_and_edit(monkeypatch, capsys):
     assert "Timezone" in out
     assert "aegis config edit" in out
 
+    assert main(["config", "show"]) == 0
+    out = capsys.readouterr().out
+    assert "AEGIS Configuration" in out
+
     assert main(["config", "path"]) == 0
     out = capsys.readouterr().out
     assert out.strip() == str(cfg.config_path())
@@ -228,6 +232,30 @@ def test_cli_config_summary_dump_and_edit(monkeypatch, capsys):
     capsys.readouterr()
     assert main(["config", "get", "model.base_url"]) == 0
     assert capsys.readouterr().out == "\n"
+
+
+def test_cli_sessions_check_reports_and_repairs_stale_runs(capsys):
+    from datetime import datetime, timedelta, timezone
+
+    from aegis.cli.main import main
+    from aegis.runs import RunStore
+    from aegis.session import Session, SessionStore
+
+    store = SessionStore()
+    runs = RunStore()
+    session = Session(id="cli-cross-session", title="cli cross session")
+    store.save(session)
+    run = runs.start(surface="gateway", kind="chat", session_id=session.id, prompt="stale")
+    run["started_at"] = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    runs.write(run)
+
+    assert main(["sessions", "check", "--repair", "--stale-running-seconds", "0"]) == 0
+    out = capsys.readouterr().out
+
+    assert "Cross-session checks: ok" in out
+    assert "interrupted stale runs: 1" in out
+    assert runs.get(run["id"])["status"] == "interrupted"
+    assert store.load(session.id).meta["resume_pending"] is True
 
 
 def test_cli_bare_first_run_guard(capsys):

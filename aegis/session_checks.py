@@ -296,3 +296,85 @@ def cross_session_integrity_report(
             ),
         },
     }
+
+
+def repair_cross_session_integrity(
+    *,
+    run_limit: int = 500,
+    stale_running_seconds: float = 6 * 60 * 60,
+    resume_reason: str = "cross_session_repair",
+) -> dict[str, Any]:
+    """Conservatively repair durable run/session state after a restart.
+
+    This does not delete transcripts or rewrite user-visible messages.  It only
+    closes stale ``running`` run records as ``interrupted`` and marks their
+    linked sessions ``resume_pending`` so the next gateway turn gets the same
+    recovery directive used by gateway startup recovery.
+    """
+
+    from .runs import RunStore
+    from .session import SessionStore
+
+    run_limit = max(1, int(run_limit or 1))
+    stale_running_seconds = max(0.0, float(stale_running_seconds or 0))
+    reason = str(resume_reason or "cross_session_repair")
+    runs = RunStore()
+    store = SessionStore()
+    now = datetime.now(timezone.utc)
+    repaired: list[dict[str, Any]] = []
+    marked_resume = 0
+    skipped = 0
+
+    for run in runs.list(status="running", limit=run_limit):
+        started_at = _utc(_parse_iso(str(run.get("started_at") or "")))
+        if started_at is None:
+            skipped += 1
+            continue
+        age = max(0.0, (now - started_at).total_seconds())
+        if age < stale_running_seconds:
+            continue
+        run_id = str(run.get("id") or "")
+        session_id = str(run.get("session_id") or "")
+        marked = False
+        if session_id and store.load(session_id) is not None:
+            try:
+                marked = store.mark_resume_pending(session_id, reason)
+            except Exception:  # noqa: BLE001
+                marked = False
+        if marked:
+            marked_resume += 1
+        try:
+            runs.finish(
+                run_id,
+                status="interrupted",
+                error="Run was still marked running during cross-session repair.",
+                data={
+                    "recovered_by_session_check": True,
+                    "resume_pending": marked,
+                    "repair_reason": reason,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            skipped += 1
+            repaired.append({
+                "run_id": run_id,
+                "session_id": session_id,
+                "status": "error",
+                "error": f"{type(exc).__name__}: {exc}",
+            })
+            continue
+        repaired.append({
+            "run_id": run_id,
+            "session_id": session_id,
+            "status": "interrupted",
+            "age_seconds": int(age),
+            "resume_pending": marked,
+        })
+
+    return {
+        "ok": skipped == 0,
+        "repaired_running_runs": sum(1 for row in repaired if row.get("status") == "interrupted"),
+        "marked_resume_pending": marked_resume,
+        "skipped": skipped,
+        "runs": repaired,
+    }
