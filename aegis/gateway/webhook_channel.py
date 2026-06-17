@@ -71,7 +71,7 @@ def _first_string(source: dict, paths: tuple[tuple[str, ...], ...]) -> str:
 class WebhookChannel(BasePlatformAdapter):
     name = "webhook"
     transport = "http"
-    supports_threads = False
+    supports_threads = True
     supports_media = False
 
     def __init__(self):
@@ -114,6 +114,7 @@ class WebhookChannel(BasePlatformAdapter):
                     "body.delivery_id",
                     "body.event_id",
                     "body.message_id",
+                    "body.key.id",
                     "body.id",
                 ],
                 "delivery_cache": self._delivery_cache.stats(),
@@ -131,6 +132,10 @@ class WebhookChannel(BasePlatformAdapter):
             value = str(body.get(key, "") or "").strip()
             if value:
                 return f"body:{key}:{value}"
+        for path in (("key", "id"), ("message", "key", "id"), ("data", "key", "id")):
+            value = _first_string(body, (path,))
+            if value:
+                return f"body:{'.'.join(path)}:{value}"
         return ""
 
     def _event_from_body(self, body: dict) -> MessageEvent:
@@ -146,6 +151,8 @@ class WebhookChannel(BasePlatformAdapter):
             ("room",),
             ("remote_jid",),
             ("remoteJid",),
+            ("key", "remoteJid"),
+            ("key", "remote_jid"),
             ("jid",),
             ("from",),
             ("source",),
@@ -176,6 +183,7 @@ class WebhookChannel(BasePlatformAdapter):
             ("sender_id",),
             ("senderId",),
             ("participant",),
+            ("key", "participant"),
             ("author",),
             ("sender",),
             ("sender", "id"),
@@ -209,6 +217,27 @@ class WebhookChannel(BasePlatformAdapter):
             ("message", "id"),
             ("data", "id"),
         ))
+        reply_to_message_id = _first_string(body, (
+            ("reply_to_message_id",),
+            ("replyToMessageId",),
+            ("message", "extendedTextMessage", "contextInfo", "stanzaId"),
+            ("message", "imageMessage", "contextInfo", "stanzaId"),
+            ("message", "videoMessage", "contextInfo", "stanzaId"),
+            ("message", "audioMessage", "contextInfo", "stanzaId"),
+            ("contextInfo", "stanzaId"),
+        ))
+        reply_to_text = _first_string(body, (
+            ("reply_to_text",),
+            ("replyToText",),
+            ("message", "extendedTextMessage", "contextInfo", "quotedMessage", "conversation"),
+            ("message", "extendedTextMessage", "contextInfo", "quotedMessage", "extendedTextMessage", "text"),
+            ("message", "extendedTextMessage", "contextInfo", "quotedMessage", "imageMessage", "caption"),
+            ("message", "extendedTextMessage", "contextInfo", "quotedMessage", "videoMessage", "caption"),
+            ("message", "imageMessage", "contextInfo", "quotedMessage", "conversation"),
+            ("message", "videoMessage", "contextInfo", "quotedMessage", "conversation"),
+            ("contextInfo", "quotedMessage", "conversation"),
+            ("contextInfo", "quotedMessage", "extendedTextMessage", "text"),
+        ))
         return MessageEvent(
             platform=platform,
             chat_id=chat_id,
@@ -217,8 +246,8 @@ class WebhookChannel(BasePlatformAdapter):
             user_name=user_name or None,
             thread_id=thread_id or None,
             message_id=message_id or None,
-            reply_to_message_id=str(body.get("reply_to_message_id") or "") or None,
-            reply_to_text=str(body.get("reply_to_text") or "") or None,
+            reply_to_message_id=reply_to_message_id or None,
+            reply_to_text=reply_to_text or None,
             timestamp=body.get("timestamp") or body.get("ts"),
             attachments=attachments,
             metadata=metadata,

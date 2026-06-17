@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 
 import httpx
@@ -121,26 +122,40 @@ class TelegramAdapter(BasePlatformAdapter):
                 )
                 if not self._message_allowed(msg, normalized_text):
                     continue
-                if normalized_text.lstrip().startswith("/"):
-                    event_text = normalized_text
-                else:
-                    event_text = _with_group_context({**msg, "text": normalized_text})
+                event_text = self._event_text(msg, normalized_text)
+                thread_id = self._message_thread_id(msg)
                 ev = MessageEvent(
                     platform="telegram",
                     chat_id=str(msg["chat"]["id"]),
                     text=event_text,   # prefix sender in groups; commands/DMs untouched
                     user_id=user_id,
                     user_name=username,
+                    thread_id=thread_id,
                     message_id=str(msg.get("message_id") or "") or None,
                     reply_to_message_id=str(reply_to.get("message_id") or "") or None,
                     reply_to_text=reply_to.get("text") or reply_to.get("caption"),
                     timestamp=msg.get("date"),
                     metadata={
                         "chat_type": msg.get("chat", {}).get("type"),
-                        "message_thread_id": msg.get("message_thread_id"),
+                        "message_thread_id": thread_id,
                     },
                 )
                 self._submit_inbound(ev, raw_text=raw_text)
+
+    def _message_thread_id(self, msg: dict) -> str | None:
+        thread_id = str(msg.get("message_thread_id") or "").strip()
+        return thread_id or None
+
+    def _strip_own_addressing(self, text: str) -> str:
+        if not self.bot_username:
+            return str(text or "").strip()
+        pattern = re.compile(rf"@{re.escape(self.bot_username)}\b", re.IGNORECASE)
+        return pattern.sub("", str(text or "")).strip()
+
+    def _event_text(self, msg: dict, normalized_text: str) -> str:
+        if normalized_text.lstrip().startswith("/"):
+            return normalized_text
+        return _with_group_context({**msg, "text": self._strip_own_addressing(normalized_text)})
 
     def _author_allowed(self, user_id: str, username: str | None = None) -> bool:
         if not self.allowed:
@@ -191,21 +206,40 @@ class TelegramAdapter(BasePlatformAdapter):
         return bool(self.bot_username and username == self.bot_username.lower())
 
     def _before_dispatch(self, ev: MessageEvent):
-        self._typing(ev.chat_id)
-        return self._send_status(ev.chat_id, "🤔 working…")
+        metadata = self._reply_metadata(ev)
+        self._typing(ev.chat_id, metadata=metadata)
+        return {
+            "status_id": self._send_status(ev.chat_id, "🤔 working…", metadata=metadata),
+            "metadata": metadata,
+        }
 
     def _deliver_reply(self, ev: MessageEvent, reply: str, state=None) -> None:
         self._finish(ev.chat_id, state, reply)
 
-    def _typing(self, chat_id: str) -> None:
+    def _reply_metadata(self, ev: MessageEvent) -> dict:
+        metadata = dict(ev.metadata or {})
+        if ev.thread_id and not metadata.get("message_thread_id"):
+            metadata["message_thread_id"] = ev.thread_id
+        return metadata
+
+    def _thread_params(self, metadata: dict | None = None) -> dict[str, str]:
+        thread_id = (metadata or {}).get("message_thread_id") or (metadata or {}).get("thread_id")
+        return {"message_thread_id": str(thread_id)} if thread_id else {}
+
+    def _typing(self, chat_id: str, *, metadata: dict | None = None) -> None:
         try:
-            self._api("sendChatAction", chat_id=chat_id, action="typing")
+            self._api("sendChatAction", chat_id=chat_id, action="typing", **self._thread_params(metadata))
         except Exception:  # noqa: BLE001 — a missing indicator must never block the reply
             pass
 
-    def _send_status(self, chat_id: str, text: str) -> int | None:
+    def _send_status(self, chat_id: str, text: str, *, metadata: dict | None = None) -> int | None:
         try:
-            return self._api("sendMessage", chat_id=chat_id, text=text).get("result", {}).get("message_id")
+            return self._api(
+                "sendMessage",
+                chat_id=chat_id,
+                text=text,
+                **self._thread_params(metadata),
+            ).get("result", {}).get("message_id")
         except Exception:  # noqa: BLE001
             return None
 
@@ -222,10 +256,16 @@ class TelegramAdapter(BasePlatformAdapter):
         except Exception:  # noqa: BLE001
             pass
 
-    def _finish(self, chat_id: str, status_id: int | None, reply: str) -> None:
+    def _finish(self, chat_id: str, state, reply: str) -> None:
         """Turn the status bubble into the answer: edit it in place for a short single-message
         text reply; otherwise drop the bubble and deliver normally (chunking/media/tables)."""
         from .base import split_media, tableify
+        if isinstance(state, dict):
+            status_id = state.get("status_id")
+            metadata = state.get("metadata") if isinstance(state.get("metadata"), dict) else None
+        else:
+            status_id = state
+            metadata = None
         if not reply:
             if status_id:
                 self._delete(chat_id, status_id)
@@ -237,7 +277,7 @@ class TelegramAdapter(BasePlatformAdapter):
                 return                                # edited in place — no extra bubble
         if status_id:
             self._delete(chat_id, status_id)
-        self.deliver(chat_id, reply)
+        self.deliver(chat_id, reply, metadata=metadata)
 
     def send_media(
         self,
@@ -261,9 +301,7 @@ class TelegramAdapter(BasePlatformAdapter):
             with open(path, "rb") as fh, httpx.Client(timeout=120) as c:
                 data = {"chat_id": chat_id, "caption": caption}
                 if metadata:
-                    thread_id = metadata.get("message_thread_id") or metadata.get("thread_id")
-                    if thread_id:
-                        data["message_thread_id"] = str(thread_id)
+                    data.update(self._thread_params(metadata))
                 r = c.post(f"{self._base}/{method}", data=data, files={field: fh})
                 r.raise_for_status()
         except Exception:  # noqa: BLE001 — fall back to a path note
@@ -271,11 +309,7 @@ class TelegramAdapter(BasePlatformAdapter):
 
     def send(self, chat_id: str, text: str, *, metadata: dict | None = None) -> None:
         # Telegram caps messages at 4096 UTF-16 code units; leave a small margin.
-        params = {}
-        if metadata:
-            thread_id = metadata.get("message_thread_id") or metadata.get("thread_id")
-            if thread_id:
-                params["message_thread_id"] = str(thread_id)
+        params = self._thread_params(metadata)
         for chunk in chunk_text_by_units(text, limit=4000, len_fn=utf16_units):
             try:
                 self._api("sendMessage", chat_id=chat_id, text=chunk, **params)

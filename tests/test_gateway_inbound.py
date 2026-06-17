@@ -361,6 +361,7 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert mattermost["security"]["auth_type"] == "bearer"
     webhook = WebhookChannel().metadata
     assert webhook["transport"] == "http"
+    assert webhook["supports_threads"] is True
     assert webhook["security"]["secret_configured"] is False
     assert "X-Secret" in webhook["security"]["signature_schemes"]
     assert webhook["idempotency"]["delivery_cache"]["entries"] == 0
@@ -407,6 +408,7 @@ def test_discord_adapter_enforces_guild_filters_and_trigger_mode(monkeypatch):
 
 
 def test_telegram_adapter_enforces_chat_filters_and_group_addressing(monkeypatch):
+    from aegis.gateway.base import MessageEvent
     from aegis.gateway.channels import TelegramAdapter
 
     monkeypatch.setenv("TELEGRAM_ALLOWED_USERS", "7,@ada")
@@ -435,6 +437,56 @@ def test_telegram_adapter_enforces_chat_filters_and_group_addressing(monkeypatch
     assert adapter._message_allowed({**base, "chat": {"id": 43, "type": "supergroup"}}, "/status") is False
     assert adapter._message_allowed({**base, "chat": {"id": 42, "type": "group"}}, "/status") is False
 
+    topic_msg = {
+        **base,
+        "text": "@aegis_bot hello",
+        "message_thread_id": 77,
+        "from": {"id": 7, "username": "ada"},
+    }
+    assert adapter._message_thread_id(topic_msg) == "77"
+    assert adapter._event_text(topic_msg, "@aegis_bot hello") == "[ada]: hello"
+    assert adapter._conversation_key(MessageEvent(
+        platform="telegram",
+        chat_id="42",
+        text="hello",
+        thread_id="77",
+    )) == "42:thread:77"
+
+    api_calls = []
+
+    def fake_api(method, **params):
+        api_calls.append((method, params))
+        if method == "sendMessage":
+            return {"result": {"message_id": 123}}
+        return {}
+
+    adapter._api = fake_api
+    adapter._edit = lambda *_args: False
+    ev = MessageEvent(
+        platform="telegram",
+        chat_id="42",
+        text="hello",
+        thread_id="77",
+        metadata={"message_thread_id": "77"},
+    )
+    state = adapter._before_dispatch(ev)
+    adapter._deliver_reply(ev, "topic reply", state)
+    assert api_calls[0] == ("sendChatAction", {
+        "chat_id": "42",
+        "action": "typing",
+        "message_thread_id": "77",
+    })
+    assert api_calls[1] == ("sendMessage", {
+        "chat_id": "42",
+        "text": "🤔 working…",
+        "message_thread_id": "77",
+    })
+    assert api_calls[-1] == ("sendMessage", {
+        "chat_id": "42",
+        "text": "topic reply",
+        "message_thread_id": "77",
+    })
+
 
 def test_slack_adapter_enforces_workspace_filters_and_strips_mentions(monkeypatch):
     from aegis.gateway.slack_channel import SlackAdapter
@@ -458,6 +510,21 @@ def test_slack_adapter_enforces_workspace_filters_and_strips_mentions(monkeypatc
     assert adapter._event_allowed({"user": "U1", "channel": "C1", "team": "T1", "subtype": "message_changed"}) is False
     assert adapter._strip_own_mentions("<@UBOT> !status") == "!status"
     assert adapter._strip_own_mentions("<@UBOT|aegis> hello") == "hello"
+
+    monkeypatch.setenv("SLACK_ALLOW_BOTS", "1")
+    bot_adapter = SlackAdapter()
+    assert bot_adapter._event_allowed({
+        "bot_id": "B1",
+        "subtype": "bot_message",
+        "channel": "C1",
+        "team": "T1",
+    }) is True
+    assert bot_adapter._event_allowed({
+        "bot_id": "B1",
+        "subtype": "message_changed",
+        "channel": "C1",
+        "team": "T1",
+    }) is False
 
 
 def test_gateway_webhook_channel_normalizes_event_body():
@@ -504,6 +571,33 @@ def test_gateway_webhook_channel_accepts_whatsapp_bridge_aliases():
     assert ev.user_name == "Ada Lovelace"
     assert ev.message_id == "BAE512345"
     assert ev.metadata == {"bridge": "baileys"}
+
+    nested = WebhookChannel()._event_from_body({
+        "platform": "baileys",
+        "key": {
+            "remoteJid": "12025550123-111@g.us",
+            "participant": "15551234567@s.whatsapp.net",
+            "id": "BAE599999",
+        },
+        "message": {
+            "extendedTextMessage": {
+                "text": "replying from nested shape",
+                "contextInfo": {
+                    "stanzaId": "QUOTE123",
+                    "quotedMessage": {"conversation": "the previous message"},
+                },
+            },
+        },
+    })
+
+    assert nested.platform == "whatsapp"
+    assert nested.chat_id == "12025550123-111@g.us"
+    assert nested.text == "replying from nested shape"
+    assert nested.user_id == "15551234567@s.whatsapp.net"
+    assert nested.message_id == "BAE599999"
+    assert nested.reply_to_message_id == "QUOTE123"
+    assert nested.reply_to_text == "the previous message"
+    assert WebhookChannel()._delivery_id({}, {"key": {"id": "BAE599999"}}) == "body:key.id:BAE599999"
 
 
 def test_gateway_mattermost_channel_normalizes_event_body_and_alias(monkeypatch):

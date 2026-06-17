@@ -89,12 +89,16 @@ class SlackAdapter(BasePlatformAdapter):
         SocketModeHandler(app, self.app_token).start()
 
     def _event_allowed(self, event: dict) -> bool:
-        if event.get("subtype"):
+        subtype = str(event.get("subtype") or "")
+        is_bot = bool(event.get("bot_id"))
+        if subtype and subtype != "bot_message":
             return False
-        if event.get("bot_id") and not self.allow_bots:
+        if subtype == "bot_message" and not is_bot:
+            return False
+        if is_bot and not self.allow_bots:
             return False
         user = str(event.get("user") or "")
-        if self.allowed_users and user not in self.allowed_users:
+        if self.allowed_users and user not in self.allowed_users and not (is_bot and self.allow_bots):
             return False
         team = str(event.get("team") or "")
         if self.allowed_teams and team not in self.allowed_teams:
