@@ -1892,21 +1892,24 @@ def make_handler(config: Config):
             if prompt_error:
                 return 400, {"ok": False, "error": prompt_error}
             store = CronStore()
-            job = store.add(
-                str(body["schedule"]),
-                str(body["prompt"]),
-                name=str(body.get("name") or ""),
-                channel=str(body.get("channel") or ""),
-                script=str(body.get("script") or ""),
-                skills=_coerce_csv_list(body.get("skills")),
-                context_from=_coerce_csv_list(body.get("context_from")),
-                deliver=str(body.get("deliver") or ""),
-                no_agent=_coerce_request_bool(body.get("no_agent"), False),
-                model=str(body.get("model") or ""),
-                enabled_toolsets=_coerce_csv_list(body.get("enabled_toolsets") or body.get("toolsets")),
-                workdir=str(body.get("workdir") or ""),
-                max_runs=int(body.get("max_runs") or 0),
-            )
+            try:
+                job = store.add(
+                    str(body["schedule"]),
+                    str(body["prompt"]),
+                    name=str(body.get("name") or ""),
+                    channel=str(body.get("channel") or ""),
+                    script=str(body.get("script") or ""),
+                    skills=_coerce_csv_list(body.get("skills")),
+                    context_from=_coerce_csv_list(body.get("context_from")),
+                    deliver=str(body.get("deliver") or ""),
+                    no_agent=_coerce_request_bool(body.get("no_agent"), False),
+                    model=str(body.get("model") or ""),
+                    enabled_toolsets=_coerce_csv_list(body.get("enabled_toolsets") or body.get("toolsets")),
+                    workdir=str(body.get("workdir") or ""),
+                    max_runs=int(body.get("max_runs") or 0),
+                )
+            except (TypeError, ValueError) as exc:
+                return 400, {"ok": False, "error": str(exc)}
             return 201, {"ok": True, "id": job.id, "job": _job_payload(job)}
 
         def _update_job(self, job_id: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
@@ -1932,7 +1935,12 @@ def make_handler(config: Config):
                 updates["enabled"] = _coerce_request_bool(updates["enabled"], True)
             if "no_agent" in updates:
                 updates["no_agent"] = _coerce_request_bool(updates["no_agent"], False)
-            job = CronStore().update(job_id, **updates)
+            try:
+                if "max_runs" in updates:
+                    updates["max_runs"] = int(updates["max_runs"] or 0)
+                job = CronStore().update(job_id, **updates)
+            except (TypeError, ValueError) as exc:
+                return 400, {"ok": False, "error": str(exc), "id": job_id}
             if job is None:
                 return 404, {"ok": False, "error": "job not found", "id": job_id}
             return 200, {"ok": True, "id": job.id, "job": _job_payload(job)}

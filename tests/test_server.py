@@ -2819,3 +2819,47 @@ def test_server_api_jobs_crud_pause_resume_and_run(monkeypatch, tmp_path):
     assert json.loads(run_data)["job_id"] == job_id
     assert delete_status == 200
     assert json.loads(delete_data)["ok"] is True
+
+
+def test_server_api_jobs_validation_errors_are_400(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        invalid_workdir_status, invalid_workdir_data = _request(port, "POST", "/api/jobs", {
+            "schedule": "every 1h",
+            "prompt": "check status",
+            "workdir": "relative/path",
+        })
+        invalid_max_status, invalid_max_data = _request(port, "POST", "/api/jobs", {
+            "schedule": "every 1h",
+            "prompt": "check status",
+            "max_runs": "many",
+        })
+        create_status, create_data = _request(port, "POST", "/api/jobs", {
+            "schedule": "every 1h",
+            "prompt": "check status",
+            "workdir": str(tmp_path),
+        })
+        job_id = json.loads(create_data)["id"]
+        patch_workdir_status, patch_workdir_data = _request(port, "PATCH", f"/api/jobs/{job_id}", {
+            "workdir": str(tmp_path / "missing"),
+        })
+        patch_max_status, patch_max_data = _request(port, "PATCH", f"/api/jobs/{job_id}", {
+            "max_runs": "many",
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert invalid_workdir_status == 400
+    assert "workdir" in json.loads(invalid_workdir_data)["error"]
+    assert invalid_max_status == 400
+    assert json.loads(invalid_max_data)["ok"] is False
+    assert create_status == 201
+    assert patch_workdir_status == 400
+    assert "workdir" in json.loads(patch_workdir_data)["error"]
+    assert patch_max_status == 400
+    assert json.loads(patch_max_data)["id"] == job_id
