@@ -1334,6 +1334,85 @@ def test_responses_accepts_function_call_output_input_item(monkeypatch, tmp_path
     assert items[1]["output"] == "tool says hi"
 
 
+def test_responses_function_call_output_preserves_multimodal_output_parts(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    function_output = {
+        "type": "function_call_output",
+        "call_id": "call_vision",
+        "output": [
+            {"type": "text", "text": "Image loaded."},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,XYZ"}},
+        ],
+    }
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": [
+                {"role": "user", "content": "inspect"},
+                function_output,
+                {"role": "user", "content": "continue"},
+            ],
+        })
+        response_id = json.loads(data)["id"]
+        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    call = _FakeRunner.calls[0]
+    assert [(m.role, m.content) for m in call["history"]] == [
+        ("user", "inspect"),
+        ("tool", "Image loaded."),
+    ]
+    assert call["history"][1].tool_call_id == "call_vision"
+    assert items_status == 200
+    items = json.loads(items_data)["data"]
+    assert items[1]["type"] == "function_call_output"
+    assert items[1]["call_id"] == "call_vision"
+    assert items[1]["output"] == [
+        {"type": "input_text", "text": "Image loaded."},
+        {"type": "input_image", "image_url": "data:image/png;base64,XYZ"},
+    ]
+
+
+def test_responses_rejects_invalid_function_call_output_image(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_vision",
+                    "output": [
+                        {"type": "input_image", "image_url": "data:text/plain;base64,SGVsbG8="},
+                    ],
+                },
+                {"role": "user", "content": "continue"},
+            ],
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 400
+    error = json.loads(data)["error"]
+    assert error["code"] == "unsupported_content_type"
+    assert error["param"] == "input[0].output[0].image_url"
+    assert _FakeRunner.calls == []
+
+
 def test_responses_function_call_output_continues_previous_response(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server

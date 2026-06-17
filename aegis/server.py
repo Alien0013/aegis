@@ -286,7 +286,7 @@ def _response_content_validation_error(value: Any, *, param: str) -> dict[str, A
                     code="invalid_function_call_output",
                     param=f"{param}.output",
                 )
-            return None
+            return _function_output_validation_error(value.get("output"), param=f"{param}.output")
         if "content" in value:
             return _content_part_validation_error(value.get("content"), param=f"{param}.content")
         if "type" in value:
@@ -308,6 +308,17 @@ def _content_has_visible_payload(value: Any) -> bool:
 
 def _is_function_call_output_input_item(item: Any) -> bool:
     return isinstance(item, dict) and str(item.get("type") or "") == "function_call_output"
+
+
+def _function_output_validation_error(value: Any, *, param: str) -> dict[str, Any] | None:
+    if isinstance(value, list):
+        return _content_part_validation_error(value, param=param)
+    if isinstance(value, dict):
+        if "content" in value:
+            return _content_part_validation_error(value.get("content"), param=f"{param}.content")
+        if "type" in value:
+            return _content_part_validation_error([value], param=param)
+    return None
 
 
 def _response_input_item_visible(item: Any) -> bool:
@@ -409,6 +420,7 @@ def _tool_calls_from_payload(payload: dict[str, Any]) -> list[ToolCall]:
 
 
 def _response_function_output_text(value: Any) -> str:
+    value = _canonical_response_function_output(value)
     if isinstance(value, str):
         return value
     if isinstance(value, list):
@@ -429,14 +441,69 @@ def _response_function_output_text(value: Any) -> str:
         return str(value)
 
 
+def _canonical_response_function_output(value: Any) -> Any:
+    if isinstance(value, list):
+        parts: list[dict[str, Any]] = []
+        for part in value:
+            normalized = _canonical_response_function_output_part(part)
+            if normalized is not None:
+                parts.append(normalized)
+        return parts if parts else ""
+    if isinstance(value, dict):
+        if "content" in value:
+            return _canonical_response_function_output(value.get("content"))
+        normalized = _canonical_response_function_output_part(value)
+        if normalized is not None:
+            return [normalized]
+        for key in ("text", "input_text", "output"):
+            if key in value:
+                return _canonical_response_function_output(value.get(key))
+    return value
+
+
+def _canonical_response_function_output_part(part: Any) -> dict[str, Any] | None:
+    if isinstance(part, str):
+        return {"type": "input_text", "text": part}
+    if not isinstance(part, dict):
+        return None
+    ptype = str(part.get("type") or "").strip().lower()
+    if ptype in _TEXT_CONTENT_PART_TYPES:
+        text = part.get("text", "")
+        return {"type": "input_text", "text": str(text)}
+    if ptype in _IMAGE_CONTENT_PART_TYPES:
+        image = _image_url_from_part(part)
+        if not image:
+            return None
+        out: dict[str, Any] = {"type": "input_image", "image_url": str(image)}
+        detail = part.get("detail")
+        image_obj = part.get("image_url") or part.get("image")
+        if isinstance(image_obj, dict):
+            detail = image_obj.get("detail", detail)
+        if detail is not None:
+            out["detail"] = str(detail)
+        return out
+    return None
+
+
+def _canonical_function_call_output_item(item: dict[str, Any]) -> dict[str, Any]:
+    out = dict(item)
+    call_id = str(out.get("call_id") or out.get("tool_call_id") or "")
+    if call_id:
+        out["call_id"] = call_id
+    if "output" in out:
+        out["output"] = _canonical_response_function_output(out.get("output"))
+    return out
+
+
 def _function_call_output_message(item: dict[str, Any]) -> Message:
     call_id = str(item.get("call_id") or item.get("tool_call_id") or "")
+    canonical = _canonical_function_call_output_item(item)
     message = Message(
         role="tool",
-        content=_response_function_output_text(item.get("output")),
+        content=_response_function_output_text(canonical.get("output")),
         tool_call_id=call_id,
         name=item.get("name"),
-        meta={"response_input_item": dict(item)},
+        meta={"response_input_item": canonical},
     )
     return message
 
@@ -814,7 +881,7 @@ def _response_input_items(messages: list[Message], instructions: str | None = No
             continue
         raw_item = (message.meta or {}).get("response_input_item")
         if _is_function_call_output_input_item(raw_item):
-            items.append(dict(raw_item))
+            items.append(_canonical_function_call_output_item(raw_item))
             continue
         if message.role == "tool":
             items.append({
