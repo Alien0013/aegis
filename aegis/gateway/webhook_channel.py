@@ -17,7 +17,7 @@ import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ..platforms import normalize_platform_name
-from ..webhook import DeliveryIdCache, verify_signature
+from ..webhook import DeliveryIdCache, FixedWindowRateLimiter, _env_truthy, _is_loopback_host, verify_signature
 from .base import BasePlatformAdapter, Dispatch, MessageEvent
 
 
@@ -44,6 +44,10 @@ class WebhookChannel(BasePlatformAdapter):
         self._delivery_cache = DeliveryIdCache(
             ttl_seconds=float(os.environ.get("WEBHOOK_CHANNEL_IDEMPOTENCY_TTL_SECONDS", "3600") or "3600"),
             max_items=int(os.environ.get("WEBHOOK_CHANNEL_IDEMPOTENCY_CACHE_MAX", "10000") or "10000"),
+        )
+        self._rate_limiter = FixedWindowRateLimiter(
+            limit=int(os.environ.get("WEBHOOK_CHANNEL_RATE_LIMIT_PER_MINUTE", "60") or "60"),
+            window_seconds=60,
         )
 
     def _delivery_id(self, headers, body: dict) -> str:
@@ -97,11 +101,20 @@ class WebhookChannel(BasePlatformAdapter):
                     self.end_headers()
                     return
                 raw_body = self.rfile.read(n) if n else b"{}"
-                if secret and self.headers.get("X-Secret") != secret:
-                    if not verify_signature(secret, raw_body, self.headers):
-                        self.send_response(401)
-                        self.end_headers()
-                        return
+                client_host = str((self.client_address or ("",))[0] or "")
+                if not adapter._rate_limiter.allow(client_host):
+                    self.send_response(429)
+                    self.end_headers()
+                    return
+                insecure = _env_truthy("WEBHOOK_CHANNEL_INSECURE_NO_AUTH")
+                if not secret and not (insecure or _is_loopback_host(client_host)):
+                    self.send_response(401)
+                    self.end_headers()
+                    return
+                if secret and self.headers.get("X-Secret") != secret and not verify_signature(secret, raw_body, self.headers):
+                    self.send_response(401)
+                    self.end_headers()
+                    return
                 try:
                     body = json.loads(raw_body or b"{}")
                 except json.JSONDecodeError:

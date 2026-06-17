@@ -202,6 +202,41 @@ def test_webhook_rejects_oversized_content_length(monkeypatch, tmp_path):
     assert body["error"] == "payload too large"
 
 
+def test_webhook_requires_secret_when_unsigned_loopback_disabled(monkeypatch, tmp_path):
+    cfg, store, make_handler = _webhook_server(monkeypatch, tmp_path)
+    cfg.data.setdefault("webhook", {})["allow_unsigned_loopback"] = False
+    seen = _fake_agent(monkeypatch)
+    store.add("ci", "review")
+    srv, port = _serve(make_handler, cfg, store)
+    try:
+        status, body = _post(port, "/hook/ci", b"{}")
+    finally:
+        srv.shutdown()
+
+    assert status == 401
+    assert body["error"] == "webhook secret required"
+    assert seen["calls"] == 0
+
+
+def test_webhook_rate_limits_per_hook_client(monkeypatch, tmp_path):
+    cfg, store, make_handler = _webhook_server(monkeypatch, tmp_path)
+    cfg.data.setdefault("webhook", {})["rate_limit_per_minute"] = 1
+    seen = _fake_agent(monkeypatch, reply="done")
+    store.add("ci", "review")
+    srv, port = _serve(make_handler, cfg, store)
+    try:
+        first_status, first_body = _post(port, "/hook/ci", b"{}")
+        second_status, second_body = _post(port, "/hook/ci", b"{}")
+    finally:
+        srv.shutdown()
+
+    assert first_status == 200
+    assert first_body["ok"] is True
+    assert second_status == 429
+    assert second_body["error"] == "rate limit exceeded"
+    assert seen["calls"] == 1
+
+
 def test_webhook_dedupes_provider_delivery_retries(monkeypatch, tmp_path):
     cfg, store, make_handler = _webhook_server(monkeypatch, tmp_path)
     seen = _fake_agent(monkeypatch, reply="done")

@@ -399,6 +399,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "webhook": {
         "idempotency_ttl_seconds": 3600,  # provider retry/delivery IDs dedupe within this window
         "idempotency_cache_max": 10000,   # bounded in-process delivery-id cache
+        "allow_unsigned_loopback": True,  # local dev/test webhooks may omit HMAC unless disabled
+        "rate_limit_per_minute": 60,      # fixed-window limit per hook/client (0 disables)
     },
     "delegation": {
         "subagent_auto_approve": False,  # child approval prompts auto-deny unless opted in

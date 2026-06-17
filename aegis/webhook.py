@@ -20,10 +20,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 import threading
 import time
 import base64
 import binascii
+import ipaddress
 from collections import deque
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -137,6 +139,24 @@ def _headers_get(headers, name: str) -> str:
         lower = {str(k).lower(): v for k, v in headers.items()}
         return str(lower.get(name.lower(), "") or "")
     return ""
+
+
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_loopback_host(host: str) -> bool:
+    try:
+        return ipaddress.ip_address(str(host or "")).is_loopback
+    except ValueError:
+        return str(host or "").lower() in {"localhost"}
+
+
+def _unsigned_webhook_allowed(config, client_host: str) -> bool:
+    if _env_truthy("AEGIS_WEBHOOK_INSECURE_NO_AUTH") or _env_truthy("WEBHOOK_INSECURE_NO_AUTH"):
+        return True
+    allow_loopback = bool(config.get("webhook.allow_unsigned_loopback", True))
+    return allow_loopback and _is_loopback_host(client_host)
 
 
 def _verify_sha256_hmac(secret: str, body: bytes, header: str) -> bool:
@@ -299,6 +319,29 @@ class DeliveryIdCache:
             return True
 
 
+class FixedWindowRateLimiter:
+    def __init__(self, *, limit: int, window_seconds: float = 60.0) -> None:
+        self.limit = max(0, int(limit or 0))
+        self.window_seconds = max(1.0, float(window_seconds or 60))
+        self._hits: dict[str, tuple[float, int]] = {}
+        self._lock = threading.RLock()
+
+    def allow(self, key: str, *, now: float | None = None) -> bool:
+        if self.limit <= 0:
+            return True
+        timestamp = time.time() if now is None else float(now)
+        window_start = timestamp - (timestamp % self.window_seconds)
+        with self._lock:
+            old_start, count = self._hits.get(key, (window_start, 0))
+            if old_start != window_start:
+                old_start, count = window_start, 0
+            if count >= self.limit:
+                self._hits[key] = (old_start, count)
+                return False
+            self._hits[key] = (old_start, count + 1)
+            return True
+
+
 def _delivery_cache(config) -> DeliveryIdCache:
     ttl = config.get("webhook.idempotency_ttl_seconds", None)
     if ttl is None:
@@ -306,6 +349,13 @@ def _delivery_cache(config) -> DeliveryIdCache:
     return DeliveryIdCache(
         ttl_seconds=float(ttl or 3600),
         max_items=int(config.get("webhook.idempotency_cache_max", 10000) or 10000),
+    )
+
+
+def _rate_limiter(config) -> FixedWindowRateLimiter:
+    return FixedWindowRateLimiter(
+        limit=int(config.get("webhook.rate_limit_per_minute", 60) or 0),
+        window_seconds=60,
     )
 
 
@@ -325,6 +375,7 @@ def make_handler(config, store: WebhookStore):
 
     runner = SurfaceRunner(config, include_mcp=True)
     delivery_cache = _delivery_cache(config)
+    rate_limiter = _rate_limiter(config)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):  # quiet
@@ -352,6 +403,9 @@ def make_handler(config, store: WebhookStore):
             hook = store.get(name)
             if hook is None:
                 return self._json(404, {"error": f"unknown hook: {name}"})
+            client_host = str((self.client_address or ("",))[0] or "")
+            if not rate_limiter.allow(f"{name}:{client_host}"):
+                return self._json(429, {"error": "rate limit exceeded"})
 
             n, length_error = _request_length(self.headers)
             if length_error == "invalid":
@@ -359,6 +413,8 @@ def make_handler(config, store: WebhookStore):
             if length_error == "too_large":
                 return self._json(413, {"error": "payload too large", "limit": MAX_WEBHOOK_BYTES})
             body = self.rfile.read(n) if n else b""
+            if not hook.secret and not _unsigned_webhook_allowed(config, client_host):
+                return self._json(401, {"error": "webhook secret required"})
             if not verify_signature(hook.secret, body, self.headers):
                 return self._json(401, {"error": "invalid signature"})
 
