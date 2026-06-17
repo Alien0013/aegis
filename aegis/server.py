@@ -38,6 +38,64 @@ _MAX_SESSION_KEY_CHARS = 256
 _TEXT_CONTENT_PART_TYPES = {"text", "input_text", "output_text"}
 _IMAGE_CONTENT_PART_TYPES = {"image_url", "input_image"}
 _FILE_CONTENT_PART_TYPES = {"file", "input_file"}
+_CHAT_IDEMPOTENCY_FINGERPRINT_KEYS = [
+    "model",
+    "messages",
+    "metadata",
+    "session_id",
+    "provider",
+    "cwd",
+    "tools",
+    "tool_choice",
+    "parallel_tool_calls",
+    "temperature",
+    "top_p",
+    "max_tokens",
+    "max_completion_tokens",
+    "response_format",
+    "seed",
+    "stop",
+    "stream",
+    "service_tier",
+    "fast",
+    "_session_id_header",
+    "_provider_header",
+    "_cwd_header",
+    "_session_key_header",
+]
+_RESPONSES_IDEMPOTENCY_FINGERPRINT_KEYS = [
+    "input",
+    "messages",
+    "instructions",
+    "previous_response_id",
+    "conversation",
+    "conversation_history",
+    "metadata",
+    "session_id",
+    "model",
+    "provider",
+    "cwd",
+    "tools",
+    "tool_choice",
+    "parallel_tool_calls",
+    "temperature",
+    "top_p",
+    "max_output_tokens",
+    "max_completion_tokens",
+    "response_format",
+    "reasoning",
+    "text",
+    "include",
+    "store",
+    "truncation",
+    "stream",
+    "service_tier",
+    "fast",
+    "_session_id_header",
+    "_provider_header",
+    "_cwd_header",
+    "_session_key_header",
+]
 
 
 def _api_session_id_from_body(
@@ -2803,15 +2861,11 @@ def make_handler(config: Config):
                 idempotency_body = {
                     **body,
                     "_session_id_header": self.headers.get("X-Aegis-Session") or self.headers.get("X-Hermes-Session-Id"),
+                    "_provider_header": self.headers.get("X-Aegis-Provider"),
+                    "_cwd_header": self.headers.get("X-Aegis-Cwd"),
                     "_session_key_header": session_key,
                 }
-                idempotency_fp = _request_fingerprint(
-                    idempotency_body,
-                    [
-                        "model", "messages", "tools", "tool_choice", "stream",
-                        "service_tier", "fast", "_session_id_header", "_session_key_header",
-                    ],
-                )
+                idempotency_fp = _request_fingerprint(idempotency_body, _CHAT_IDEMPOTENCY_FINGERPRINT_KEYS)
                 def compute_response() -> dict[str, Any]:
                     run_meta = {
                         "request_id": cid,
@@ -3411,22 +3465,11 @@ def make_handler(config: Config):
             idempotency_body = {
                 **body,
                 "_session_id_header": self.headers.get("X-Aegis-Session") or self.headers.get("X-Hermes-Session-Id"),
+                "_provider_header": self.headers.get("X-Aegis-Provider"),
+                "_cwd_header": self.headers.get("X-Aegis-Cwd"),
                 "_session_key_header": session_key,
             }
-            idempotency_fp = _request_fingerprint(
-                idempotency_body,
-                [
-                    "input",
-                    "messages",
-                    "instructions",
-                    "previous_response_id",
-                    "conversation",
-                    "model",
-                    "tools",
-                    "_session_id_header",
-                    "_session_key_header",
-                ],
-            )
+            idempotency_fp = _request_fingerprint(idempotency_body, _RESPONSES_IDEMPOTENCY_FINGERPRINT_KEYS)
             def compute_response() -> dict[str, Any]:
                 response: dict[str, Any] | None = None
                 with state_lock:

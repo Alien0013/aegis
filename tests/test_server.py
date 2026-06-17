@@ -2064,6 +2064,10 @@ def test_responses_idempotency_key_replays_matching_request(monkeypatch, tmp_pat
             "input": "different",
             "metadata": {"session_id": "serve:idem"},
         }, headers=headers)
+        fourth_status, fourth_data = _request(port, "POST", "/v1/responses", {
+            "input": "same",
+            "metadata": {"session_id": "serve:idem-other"},
+        }, headers=headers)
     finally:
         srv.shutdown()
         srv.server_close()
@@ -2071,12 +2075,15 @@ def test_responses_idempotency_key_replays_matching_request(monkeypatch, tmp_pat
     first = json.loads(first_data)
     second = json.loads(second_data)
     third = json.loads(third_data)
-    assert first_status == second_status == third_status == 200
+    fourth = json.loads(fourth_data)
+    assert first_status == second_status == third_status == fourth_status == 200
     assert second["id"] == first["id"]
     assert second["output_text"] == "reply-1"
     assert third["id"] != first["id"]
     assert third["output_text"] == "reply-2"
-    assert CountingRunner.calls == 2
+    assert fourth["id"] != first["id"]
+    assert fourth["output_text"] == "reply-3"
+    assert CountingRunner.calls == 3
 
 
 def test_chat_completions_idempotency_key_replays_matching_request(monkeypatch, tmp_path):
@@ -2119,6 +2126,13 @@ def test_chat_completions_idempotency_key_replays_matching_request(monkeypatch, 
             {"messages": [{"role": "user", "content": "different"}]},
             headers=headers,
         )
+        fourth_status, fourth_data = _request(
+            port,
+            "POST",
+            "/v1/chat/completions",
+            {"messages": [{"role": "user", "content": "same"}], "metadata": {"session_id": "serve:chat-other"}},
+            headers=headers,
+        )
     finally:
         srv.shutdown()
         srv.server_close()
@@ -2126,12 +2140,15 @@ def test_chat_completions_idempotency_key_replays_matching_request(monkeypatch, 
     first = json.loads(first_data)
     second = json.loads(second_data)
     third = json.loads(third_data)
-    assert first_status == second_status == third_status == 200
+    fourth = json.loads(fourth_data)
+    assert first_status == second_status == third_status == fourth_status == 200
     assert second["id"] == first["id"]
     assert second["choices"][0]["message"]["content"] == "chat-1"
     assert third["id"] != first["id"]
     assert third["choices"][0]["message"]["content"] == "chat-2"
-    assert CountingRunner.calls == 2
+    assert fourth["id"] != first["id"]
+    assert fourth["choices"][0]["message"]["content"] == "chat-3"
+    assert CountingRunner.calls == 3
 
 
 def test_chat_completions_idempotency_key_single_flights_concurrent_requests(monkeypatch, tmp_path):
