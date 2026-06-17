@@ -11,7 +11,7 @@ list of shell commands in config under ``hooks.{event}``::
 
 Recognised events: ``session_start``, ``user_prompt``, ``pre_tool``,
 ``post_tool``, ``pre_api_request``, ``post_api_request``,
-``api_request_error``, ``session_stop``.
+``api_request_error``, ``session_stop``, ``session:compress``.
 
 Each command runs through the shell with the event and context exposed as
 environment variables: ``AEGIS_HOOK_EVENT`` plus ``AEGIS_HOOK_<KEY>`` for every
@@ -36,6 +36,7 @@ EVENTS: tuple[str, ...] = (
     "post_api_request",
     "api_request_error",
     "session_stop",
+    "session:compress",
 )
 
 _TIMEOUT = 10  # seconds, per command

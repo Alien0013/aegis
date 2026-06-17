@@ -41,6 +41,7 @@ class ProviderSpec:
     max_tokens: int = 8192
     extra_headers: dict[str, str] = field(default_factory=dict)
     models: list[str] = field(default_factory=list)
+    discover_models: bool = True
 
 
 @dataclass(frozen=True)
@@ -359,6 +360,11 @@ def _custom_specs(config: cfg.Config) -> dict[str, ProviderSpec]:
     out: dict[str, ProviderSpec] = {}
     for c in config.get("custom_providers", []) or []:
         try:
+            raw_discover = c.get("discover_models", True)
+            if isinstance(raw_discover, str):
+                discover_models = raw_discover.strip().lower() not in {"0", "false", "no", "off"}
+            else:
+                discover_models = bool(raw_discover)
             models: list[str] = []
             raw_models = c.get("models") or []
             if isinstance(raw_models, dict):
@@ -383,6 +389,7 @@ def _custom_specs(config: cfg.Config) -> dict[str, ProviderSpec]:
                 env_vars=[env_var] if env_var else [],
                 auth_scheme=c.get("auth_scheme", "none" if not env_var else "bearer"),
                 models=models,
+                discover_models=discover_models,
             )
         except (KeyError, ValueError):
             continue
@@ -429,13 +436,25 @@ def _parse_model_ids(payload) -> list[str]:
 
 
 def _model_listing_url(base_url: str, api_mode: ApiMode | str) -> str:
+    urls = _model_listing_urls(base_url, api_mode)
+    return urls[0] if urls else ""
+
+
+def _model_listing_urls(base_url: str, api_mode: ApiMode | str) -> list[str]:
     base = str(base_url or "").strip().rstrip("/")
     if not base:
-        return ""
+        return []
     mode = api_mode.value if isinstance(api_mode, ApiMode) else str(api_mode or "")
     if mode == ApiMode.ANTHROPIC_MESSAGES.value and not base.endswith("/v1"):
-        return f"{base}/v1/models"
-    return f"{base}/models"
+        primary_base = f"{base}/v1"
+    else:
+        primary_base = base
+    urls = [f"{primary_base}/models"]
+    alternate_base = primary_base[:-3].rstrip("/") if primary_base.endswith("/v1") else f"{primary_base}/v1"
+    alternate_url = f"{alternate_base}/models" if alternate_base else ""
+    if alternate_url and alternate_url not in urls:
+        urls.append(alternate_url)
+    return urls
 
 
 def _effective_model_listing_base(provider_name: str, spec: ProviderSpec, config: cfg.Config | None) -> str:
@@ -450,6 +469,8 @@ def _effective_model_listing_base(provider_name: str, spec: ProviderSpec, config
 
 def _live_model_fetch_allowed(provider_name: str, spec: ProviderSpec, config: cfg.Config | None) -> bool:
     if spec.api_mode == ApiMode.CODEX_APP_SERVER:
+        return False
+    if not spec.discover_models:
         return False
     if config is not None and config.get("models.live_fetch") is False:
         return False
@@ -467,8 +488,8 @@ def _live_model_ids_for(provider_name: str, spec: ProviderSpec, config: cfg.Conf
     if not _live_model_fetch_allowed(provider_name, spec, config):
         return []
     base_url = _effective_model_listing_base(provider_name, spec, config)
-    url = _model_listing_url(base_url, spec.api_mode)
-    if not url:
+    urls = _model_listing_urls(base_url, spec.api_mode)
+    if not urls:
         return []
     cache_key = (provider_name, spec.api_mode.value, base_url.rstrip("/"))
     now = time.monotonic()
@@ -486,15 +507,19 @@ def _live_model_ids_for(provider_name: str, spec: ProviderSpec, config: cfg.Conf
         return []
     headers = dict(headers or {})
     headers.setdefault("Accept", "application/json")
-    try:
-        timeout = 2.0
-        if config is not None:
-            timeout = float(config.get("models.live_fetch_timeout_seconds", timeout) or timeout)
-        response = httpx.get(url, headers=headers, timeout=max(0.2, min(timeout, 10.0)))
-        response.raise_for_status()
-        models = _parse_model_ids(response.json())
-    except Exception:  # noqa: BLE001
-        models = []
+    timeout = 2.0
+    if config is not None:
+        timeout = float(config.get("models.live_fetch_timeout_seconds", timeout) or timeout)
+    request_timeout = max(0.2, min(timeout, 10.0))
+    models: list[str] = []
+    for url in urls:
+        try:
+            response = httpx.get(url, headers=headers, timeout=request_timeout)
+            response.raise_for_status()
+            models = _parse_model_ids(response.json())
+            break
+        except Exception:  # noqa: BLE001
+            continue
     _LIVE_MODEL_CACHE[cache_key] = (now, list(models))
     return models
 

@@ -169,6 +169,13 @@ def test_manual_compress_child_inherits_runtime_controls(monkeypatch, tmp_path):
         store=store,
         event_callback=lambda event_type, payload: callback_events.append((event_type, payload)),
     )
+    hook_events = []
+
+    def fake_run_hooks(_config, event, context=None):
+        hook_events.append((event, dict(context or {})))
+        return []
+
+    monkeypatch.setattr("aegis.hooks.run_hooks", fake_run_hooks)
     monkeypatch.setattr(loop, "_engine", lambda _agent: Engine())
     events = []
 
@@ -183,6 +190,9 @@ def test_manual_compress_child_inherits_runtime_controls(monkeypatch, tmp_path):
     assert compress_event["compression_count"] == 1
     assert callback_events[-1][0] == EventType.SESSION_COMPRESS
     assert callback_events[-1][1]["session_id"] == child.id
+    assert hook_events[-1][0] == EventType.SESSION_COMPRESS
+    assert hook_events[-1][1]["session_id"] == child.id
+    assert hook_events[-1][1]["old_session_id"] == session.id
 
 
 def test_session_compress_callback_failure_does_not_break_compaction(monkeypatch, tmp_path):

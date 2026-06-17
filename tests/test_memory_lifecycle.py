@@ -389,6 +389,35 @@ def test_hooks_are_fail_soft(tmp_path, monkeypatch):
     assert mm.on_pre_compress([]) == ""
 
 
+def test_session_compress_shell_hook_is_registered(tmp_path, monkeypatch):
+    import shlex
+    import sys
+
+    config = _cfg(tmp_path, monkeypatch)
+    from aegis.hooks import run_hooks
+
+    marker = tmp_path / "compress-hook.txt"
+    config.data["hooks"] = {
+        "session:compress": (
+            f"{shlex.quote(sys.executable)} -c "
+            "\"import os, pathlib; "
+            "pathlib.Path(os.environ['AEGIS_HOOK_MARKER']).write_text("
+            "os.environ['AEGIS_HOOK_SESSION_ID'] + ':' + "
+            "os.environ['AEGIS_HOOK_OLD_SESSION_ID'])\""
+        )
+    }
+
+    results = run_hooks(
+        config,
+        "session:compress",
+        {"session_id": "child", "old_session_id": "parent", "marker": str(marker)},
+    )
+
+    assert len(results) == 1
+    assert results[0].ok is True
+    assert marker.read_text() == "child:parent"
+
+
 def test_prefetch_sanitizes_provider_context_fences(tmp_path, monkeypatch):
     config = _cfg(tmp_path, monkeypatch)
     from aegis.memory import MemoryManager

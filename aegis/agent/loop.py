@@ -959,6 +959,11 @@ def _emit_session_compress(agent, emit: OnEvent | None, payload: dict[str, Any])
             callback(EventType.SESSION_COMPRESS, dict(payload))
         except Exception:  # noqa: BLE001
             pass
+    try:
+        from ..hooks import run_hooks
+        run_hooks(agent.config, EventType.SESSION_COMPRESS, _shell_hook_context(payload))
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _force_compact(agent, session):

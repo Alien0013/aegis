@@ -2868,10 +2868,13 @@ def _provider_probe(config: Config, body: dict[str, Any]) -> dict:
     probe_config = Config(copy.deepcopy(config.data))
     provider = str(body.get("provider") or "").strip()
     model = str(body.get("model") or "").strip()
+    base_url = str(body.get("base_url") or "").strip()
     if provider:
         probe_config.data.setdefault("model", {})["provider"] = provider
     if model:
         probe_config.data.setdefault("model", {})["default"] = model
+    if base_url:
+        probe_config.data.setdefault("model", {})["base_url"] = base_url
     ok, detail = probe_provider(probe_config)
     return {
         "ok": bool(ok),
