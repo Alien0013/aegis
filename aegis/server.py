@@ -1505,10 +1505,15 @@ def make_handler(config: Config):
 
                     stale_seconds = float(config.get("server.stale_run_health_seconds", 6 * 60 * 60)
                                           or 6 * 60 * 60)
+                    stale_resume_seconds = float(
+                        config.get("server.stale_resume_pending_health_seconds", 24 * 60 * 60)
+                        or 24 * 60 * 60
+                    )
                     report = cross_session_integrity_report(
                         session_limit=100,
                         run_limit=500,
                         stale_running_seconds=stale_seconds,
+                        stale_resume_pending_seconds=stale_resume_seconds,
                     )
                     diagnostics["cross_session"] = report
                     if not bool(report.get("ok", True)):

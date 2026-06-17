@@ -11,6 +11,9 @@ from typing import Any
 
 
 _GATEWAY_GENERATION_META = "_gateway_generation"
+_RESUME_PENDING_META = "resume_pending"
+_RESUME_REASON_META = "resume_reason"
+_RESUME_MARKED_AT_META = "last_resume_marked_at"
 
 
 def _parse_iso(value: str) -> datetime | None:
@@ -20,6 +23,14 @@ def _parse_iso(value: str) -> datetime | None:
         return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def _utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _issue(
@@ -51,6 +62,7 @@ def cross_session_integrity_report(
     session_limit: int = 500,
     run_limit: int = 500,
     stale_running_seconds: float = 6 * 60 * 60,
+    stale_resume_pending_seconds: float = 24 * 60 * 60,
 ) -> dict[str, Any]:
     """Return a Hermes-style restart/replay health report for session state.
 
@@ -65,6 +77,7 @@ def cross_session_integrity_report(
     session_limit = max(1, int(session_limit or 1))
     run_limit = max(1, int(run_limit or 1))
     stale_running_seconds = max(0.0, float(stale_running_seconds or 0))
+    stale_resume_pending_seconds = max(0.0, float(stale_resume_pending_seconds or 0))
     issues: list[dict[str, Any]] = []
     checks: list[dict[str, Any]] = []
 
@@ -81,6 +94,8 @@ def cross_session_integrity_report(
             sessions[sid] = session
 
     run_rows = runs.list(limit=run_limit)
+    run_by_id = {str(row.get("id") or ""): row for row in run_rows if row.get("id")}
+    now = datetime.now(timezone.utc)
 
     for sid, session in sessions.items():
         if session.parent_id and store.load(session.parent_id) is None:
@@ -111,7 +126,7 @@ def cross_session_integrity_report(
 
         last_run_id = str(meta.get("last_run_id") or "")
         if last_run_id:
-            run = runs.get(last_run_id)
+            run = run_by_id.get(last_run_id) or runs.get(last_run_id)
             if run is None:
                 _issue(
                     issues,
@@ -133,8 +148,56 @@ def cross_session_integrity_report(
                         message="session last_run_id points at a run owned by another session",
                         details={"run_session_id": run_session_id},
                     )
+                last_trace_id = str(meta.get("last_trace_id") or meta.get("trace_id") or "")
+                run_trace_id = str(run.get("trace_id") or "")
+                if last_trace_id and run_trace_id and last_trace_id != run_trace_id:
+                    _issue(
+                        issues,
+                        code="last_trace_mismatch",
+                        severity="warning",
+                        session_id=sid,
+                        run_id=str(run.get("id") or last_run_id),
+                        message="session last_trace_id does not match the last run trace_id",
+                        details={"session_trace_id": last_trace_id, "run_trace_id": run_trace_id},
+                    )
 
-    now = datetime.now(timezone.utc)
+        if meta.get(_RESUME_PENDING_META):
+            reason = str(meta.get(_RESUME_REASON_META) or "")
+            marked_raw = str(meta.get(_RESUME_MARKED_AT_META) or "")
+            marked_at = _utc(_parse_iso(marked_raw))
+            if not reason:
+                _issue(
+                    issues,
+                    code="missing_resume_reason",
+                    severity="warning",
+                    session_id=sid,
+                    message="resume_pending session is missing a resume reason",
+                )
+            if marked_at is None:
+                _issue(
+                    issues,
+                    code="malformed_resume_pending",
+                    severity="warning",
+                    session_id=sid,
+                    message="resume_pending session is missing or has an invalid timestamp",
+                    details={"last_resume_marked_at": marked_raw},
+                )
+            else:
+                age = max(0.0, (now - marked_at).total_seconds())
+                if age >= stale_resume_pending_seconds:
+                    _issue(
+                        issues,
+                        code="stale_resume_pending",
+                        severity="warning",
+                        session_id=sid,
+                        message="resume_pending session has not been resumed within the stale threshold",
+                        details={
+                            "age_seconds": int(age),
+                            "threshold_seconds": int(stale_resume_pending_seconds),
+                            "resume_reason": reason,
+                        },
+                    )
+
     for run in run_rows:
         run_id = str(run.get("id") or "")
         session_id = str(run.get("session_id") or "")
@@ -148,9 +211,9 @@ def cross_session_integrity_report(
                 message="run references a session that is not in SessionStore",
             )
         status = str(run.get("status") or "").lower()
-        started_at = _parse_iso(str(run.get("started_at") or ""))
+        started_at = _utc(_parse_iso(str(run.get("started_at") or "")))
         if status == "running" and started_at is not None:
-            age = max(0.0, (now - started_at.astimezone(timezone.utc)).total_seconds())
+            age = max(0.0, (now - started_at).total_seconds())
             if age >= stale_running_seconds:
                 _issue(
                     issues,
@@ -179,9 +242,9 @@ def cross_session_integrity_report(
         },
         {
             "id": "session_run_links",
-            "ok": not any(issue["code"] in {"missing_last_run", "last_run_session_mismatch"}
+            "ok": not any(issue["code"] in {"missing_last_run", "last_run_session_mismatch", "last_trace_mismatch"}
                           for issue in issues),
-            "detail": "session last_run_id links are consistent",
+            "detail": "session last_run_id and trace links are consistent",
         },
         {
             "id": "lineage",
@@ -198,6 +261,14 @@ def cross_session_integrity_report(
             "ok": not any(issue["code"] == "stale_running_run" for issue in issues),
             "detail": "no stale running runs detected",
         },
+        {
+            "id": "resume_pending",
+            "ok": not any(
+                issue["code"] in {"missing_resume_reason", "malformed_resume_pending", "stale_resume_pending"}
+                for issue in issues
+            ),
+            "detail": "resume-pending gateway sessions are fresh and well formed",
+        },
     ])
     return {
         "ok": error_count == 0,
@@ -210,6 +281,7 @@ def cross_session_integrity_report(
             "sessions": session_limit,
             "runs": run_limit,
             "stale_running_seconds": stale_running_seconds,
+            "stale_resume_pending_seconds": stale_resume_pending_seconds,
         },
         "counts": {
             "sessions": len(sessions),
@@ -217,6 +289,10 @@ def cross_session_integrity_report(
             "sessions_with_last_run": sum(
                 1 for session in sessions.values()
                 if isinstance(session.meta, dict) and session.meta.get("last_run_id")
+            ),
+            "resume_pending_sessions": sum(
+                1 for session in sessions.values()
+                if isinstance(session.meta, dict) and session.meta.get(_RESUME_PENDING_META)
             ),
         },
     }

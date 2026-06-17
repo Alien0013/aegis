@@ -1464,7 +1464,7 @@ def test_fastapi_session_checks_reports_cross_session_integrity(tmp_path, monkey
     res = asyncio.run(_request(
         app,
         "GET",
-        "/api/session-checks?session_limit=20&run_limit=20",
+        "/api/session-checks?session_limit=20&run_limit=20&stale_resume_pending_seconds=42",
         headers=headers,
     ))
     alias = asyncio.run(_request(app, "GET", "/api/harness/cross-session", headers=headers))
@@ -1473,7 +1473,9 @@ def test_fastapi_session_checks_reports_cross_session_integrity(tmp_path, monkey
     body = res.json()
     assert body["ok"] is True
     assert body["counts"]["sessions_with_last_run"] == 1
+    assert body["limits"]["stale_resume_pending_seconds"] == 42.0
     assert any(check["id"] == "session_run_links" for check in body["checks"])
+    assert any(check["id"] == "resume_pending" for check in body["checks"])
     assert alias.status_code == 200
     assert alias.json()["ok"] is True
 

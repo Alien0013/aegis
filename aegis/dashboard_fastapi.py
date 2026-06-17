@@ -3341,10 +3341,15 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
             stale_seconds = float((query.get("stale_running_seconds") or ["21600"])[0] or 21600)
         except (TypeError, ValueError):
             stale_seconds = 21600.0
+        try:
+            stale_resume_seconds = float((query.get("stale_resume_pending_seconds") or ["86400"])[0] or 86400)
+        except (TypeError, ValueError):
+            stale_resume_seconds = 86400.0
         return cross_session_integrity_report(
             session_limit=session_limit,
             run_limit=run_limit,
             stale_running_seconds=stale_seconds,
+            stale_resume_pending_seconds=stale_resume_seconds,
         )
     if path == "/api/auth/providers":
         return _auth_providers_payload(config)

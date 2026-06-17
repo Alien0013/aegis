@@ -871,6 +871,7 @@ def test_server_health_skills_toolsets_and_cors_options(monkeypatch, tmp_path):
     assert detailed["stores"]["jobs"]["count"] == 0
     assert detailed["diagnostics"]["cross_session"]["ok"] is True
     assert "session_run_links" in {row["id"] for row in detailed["diagnostics"]["cross_session"]["checks"]}
+    assert "resume_pending" in {row["id"] for row in detailed["diagnostics"]["cross_session"]["checks"]}
     assert health_headers["Content-Security-Policy"] == "default-src 'none'; frame-ancestors 'none'"
     assert health_headers["X-Content-Type-Options"] == "nosniff"
     assert "Access-Control-Allow-Origin" not in health_headers

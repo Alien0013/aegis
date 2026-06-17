@@ -529,6 +529,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "dashboard_host": "127.0.0.1",
         "dashboard_port": 9119,
         "dashboard_token": None,      # optional bearer/query token for `aegis dashboard`
+        "stale_run_health_seconds": 21600,          # detailed health flags running runs older than this
+        "stale_resume_pending_health_seconds": 86400,  # detailed health flags old restart-resume markers
     },
     "gateway": {
         "channels": [],

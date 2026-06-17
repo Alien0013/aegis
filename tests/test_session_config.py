@@ -104,6 +104,8 @@ def test_config_deep_merge_keeps_user_and_defaults():
     assert c.get("delegation.retain_completed_background_tasks") == 50
     assert c.get("webhook.idempotency_ttl_seconds") == 3600
     assert c.get("webhook.idempotency_cache_max") == 10000
+    assert c.get("server.stale_run_health_seconds") == 21600
+    assert c.get("server.stale_resume_pending_health_seconds") == 86400
 
 
 def test_workspace_rules_merge(tmp_path):
