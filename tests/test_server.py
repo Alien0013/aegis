@@ -2085,6 +2085,35 @@ class _BlockingRunRunner:
         )
 
 
+class _EmittingRunRunner(_BlockingRunRunner):
+    @classmethod
+    def reset(cls):
+        cls.started = threading.Event()
+        cls.release = threading.Event()
+        cls.agents = []
+        cls.calls = []
+
+    def run_prompt(self, prompt, **kwargs):
+        self.calls.append({"prompt": prompt, **kwargs})
+        if kwargs.get("on_event"):
+            kwargs["on_event"]({"type": "assistant_delta", "text": "hel"})
+            kwargs["on_event"]({"type": "tool_start", "name": "read_file", "summary": "reading"})
+            kwargs["on_event"]({"type": "assistant_delta", "text": "lo"})
+        self.started.set()
+        session = kwargs.get("session") or SimpleNamespace(id="serve:event-run")
+        return SimpleNamespace(
+            text="hello",
+            session=session,
+            trace_id="trace_events",
+            turn_id="turn_events",
+            run_id="surface_events",
+            agent=SimpleNamespace(
+                provider=SimpleNamespace(model="served-model"),
+                budget=SimpleNamespace(usage=_Usage()),
+            ),
+        )
+
+
 class _ApprovalBlockingRunRunner:
     approval_returned = threading.Event()
     calls = []
@@ -2224,6 +2253,105 @@ def test_server_run_lifecycle_caps_active_runs_and_stop_wins(monkeypatch, tmp_pa
     assert _BlockingRunRunner.agents and _BlockingRunRunner.agents[0].cancel_event.is_set()
     assert final["run"]["status"] == "cancelled"
     assert final["run"]["result"] == "finished"
+
+
+def test_server_run_events_disconnect_does_not_cancel_run(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _BlockingRunRunner.reset()
+    monkeypatch.setattr(server, "SurfaceRunner", _BlockingRunRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    stream_conn = None
+    try:
+        create_status, create_data = _request(port, "POST", "/v1/runs", {
+            "input": "slow event stream",
+            "session_id": "serve:events-disconnect",
+        })
+        create_body = json.loads(create_data)
+        run_id = create_body["run_id"]
+        assert _BlockingRunRunner.started.wait(2)
+
+        stream_conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        stream_conn.request("GET", f"/v1/runs/{run_id}/events", headers={"Accept": "text/event-stream"})
+        resp = stream_conn.getresponse()
+        first_event = _read_sse_event(resp)
+        stream_conn.close()
+        stream_conn = None
+
+        _BlockingRunRunner.release.set()
+        final = {}
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            get_status, get_data = _request(port, "GET", f"/v1/runs/{run_id}")
+            final = json.loads(get_data)
+            if final.get("run", {}).get("status") == "completed":
+                break
+            time.sleep(0.05)
+    finally:
+        if stream_conn is not None:
+            stream_conn.close()
+        _BlockingRunRunner.release.set()
+        srv.shutdown()
+        srv.server_close()
+
+    assert create_status == 202
+    assert first_event[0] == "event"
+    assert first_event[1]["type"] == "run.queued"
+    assert _BlockingRunRunner.agents
+    assert _BlockingRunRunner.agents[0].cancel_event.is_set() is False
+    assert final["run"]["status"] == "completed"
+    assert final["run"]["output"] == "finished"
+
+
+def test_server_run_events_normalize_agent_emitted_events(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _EmittingRunRunner.reset()
+    monkeypatch.setattr(server, "SurfaceRunner", _EmittingRunRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        create_status, create_data = _request(port, "POST", "/v1/runs", {
+            "input": "emit events",
+            "session_id": "serve:events-normalized",
+        })
+        run_id = json.loads(create_data)["run_id"]
+        assert _EmittingRunRunner.started.wait(2)
+
+        events_status = 0
+        events_payload = {}
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            events_status, events_data = _request(port, "GET", f"/v1/runs/{run_id}/events")
+            events_payload = json.loads(events_data)
+            types = [event.get("type") for event in events_payload.get("events", [])]
+            if "run.completed" in types:
+                break
+            time.sleep(0.05)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert create_status == 202
+    assert events_status == 200
+    events = events_payload["events"]
+    event_types = [event.get("type") for event in events]
+    assert "assistant_delta" in event_types
+    assert "tool_start" in event_types
+    assert "run.completed" in event_types
+    assert [event["sequence_number"] for event in events] == list(range(len(events)))
+    for event in events:
+        assert event["object"] == "hermes.run.event"
+        assert event["run_id"] == run_id
+        assert isinstance(event["id"], str) and event["id"].startswith("evt_")
+    tool_event = next(event for event in events if event["type"] == "tool_start")
+    assert tool_event["name"] == "read_file"
+    assert tool_event["metadata"]["type"] == "tool_start"
+    delta_event = next(event for event in events if event["type"] == "assistant_delta")
+    assert delta_event["text"] == "hel"
 
 
 def test_server_run_approval_without_pending_returns_409(monkeypatch, tmp_path):

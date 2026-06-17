@@ -1670,8 +1670,9 @@ def make_handler(config: Config):
                 rec["events"] = events
             sequence = int(rec.get("event_sequence") or len(events))
             now = time.time()
+            event_id = new_id("evt")
             event = {
-                "id": new_id("evt"),
+                "id": event_id,
                 "object": "hermes.run.event",
                 "type": event_type,
                 "event": event_type,
@@ -1681,6 +1682,15 @@ def make_handler(config: Config):
             }
             if payload:
                 event.update(payload)
+                event.update({
+                    "id": event_id,
+                    "object": "hermes.run.event",
+                    "type": event_type,
+                    "event": event_type,
+                    "run_id": run_id,
+                    "sequence_number": sequence,
+                    "created_at": int(event.get("created_at") or now),
+                })
             events.append(event)
             if len(events) > _MAX_STORED_RUN_EVENTS:
                 del events[:-_MAX_STORED_RUN_EVENTS]
@@ -1974,12 +1984,6 @@ def make_handler(config: Config):
                 return self._json(code, payload)
             self._send_sse_headers()
 
-            def stop_on_disconnect() -> None:
-                with state_lock:
-                    self._request_stop_run_locked(run_id, "SSE client disconnected")
-
-            self._aegis_on_disconnect = stop_on_disconnect
-
             deadline = time.time() + float(config.get("server.run_events_timeout_seconds", 3600) or 3600)
             sent = 0
             while True:
@@ -1997,8 +2001,6 @@ def make_handler(config: Config):
                         detail = _public_run_record(active)
                 for event in events[sent:]:
                     if not self._write_sse(event, event="event"):
-                        with state_lock:
-                            self._request_stop_run_locked(run_id, "SSE client disconnected")
                         return
                 sent = len(events)
                 if status in _TERMINAL_RUN_STATUSES or active is None:
@@ -3353,10 +3355,12 @@ def make_handler(config: Config):
                         with state_lock:
                             rec = active_runs.get(run_id)
                             if rec is not None:
-                                rec.setdefault("events", []).append(dict(ev))
-                                rec["last_event"] = str(ev.get("type") or ev.get("event") or "event")
-                                rec["updated_at_ts"] = time.time()
-                                rec["updated_at"] = int(rec["updated_at_ts"])
+                                event_type = str(ev.get("type") or ev.get("event") or "event")
+                                payload = dict(ev)
+                                meta = _event_metadata(ev)
+                                if meta:
+                                    payload.setdefault("metadata", meta)
+                                self._append_run_event_locked(run_id, event_type, payload)
 
                     result = runner.run_prompt(
                         prompt,
