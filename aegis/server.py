@@ -254,6 +254,10 @@ def _content(value: Any) -> tuple[str, list[str]]:
             image = _image_url_from_part(part)
             if image:
                 images.append(str(image))
+        elif ptype in _FILE_CONTENT_PART_TYPES:
+            label = _file_label_from_part(part)
+            if label:
+                texts.append(f"[file: {label}]")
     return "\n".join(t for t in texts if t), images
 
 
@@ -262,6 +266,16 @@ def _image_url_from_part(part: dict[str, Any]) -> Any:
     if isinstance(image, dict):
         image = image.get("url")
     return image
+
+
+def _file_label_from_part(part: dict[str, Any]) -> str:
+    for key in ("file_id", "filename", "name"):
+        value = part.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    if part.get("file_data") is not None:
+        return "inline file"
+    return ""
 
 
 def _image_url_validation_error(image: Any, *, param: str) -> dict[str, Any] | None:
@@ -290,7 +304,12 @@ def _image_url_validation_error(image: Any, *, param: str) -> dict[str, Any] | N
     return None
 
 
-def _content_part_validation_error(value: Any, *, param: str) -> dict[str, Any] | None:
+def _content_part_validation_error(
+    value: Any,
+    *,
+    param: str,
+    allow_files: bool = False,
+) -> dict[str, Any] | None:
     if value is None or isinstance(value, str):
         return None
     if not isinstance(value, list):
@@ -305,11 +324,25 @@ def _content_part_validation_error(value: Any, *, param: str) -> dict[str, Any] 
             )
         ptype = str(part.get("type") or "").strip().lower()
         if ptype in _FILE_CONTENT_PART_TYPES:
-            return _openai_error(
-                "Inline image inputs are supported, but uploaded files and document inputs are not supported.",
-                code="unsupported_content_type",
-                param=f"{part_param}.type",
-            )
+            if not allow_files:
+                return _openai_error(
+                    "Inline image inputs are supported, but uploaded files and document inputs are not supported.",
+                    code="unsupported_content_type",
+                    param=f"{part_param}.type",
+                )
+            if not _file_label_from_part(part):
+                return _openai_error(
+                    "File content parts require 'file_id', 'filename', or 'file_data'.",
+                    code="invalid_file_content",
+                    param=f"{part_param}.file_id",
+                )
+            if "file_data" in part and not isinstance(part.get("file_data"), str):
+                return _openai_error(
+                    "File content parts require string 'file_data' when provided.",
+                    code="invalid_file_content",
+                    param=f"{part_param}.file_data",
+                )
+            continue
         if ptype not in _TEXT_CONTENT_PART_TYPES | _IMAGE_CONTENT_PART_TYPES:
             return _openai_error(
                 f"Unsupported content part type: {ptype or '<missing>'}",
@@ -367,9 +400,13 @@ def _response_content_validation_error(value: Any, *, param: str) -> dict[str, A
                 )
             return None
         if "content" in value:
-            return _content_part_validation_error(value.get("content"), param=f"{param}.content")
+            return _content_part_validation_error(
+                value.get("content"),
+                param=f"{param}.content",
+                allow_files=True,
+            )
         if "type" in value:
-            return _content_part_validation_error([value], param=param)
+            return _content_part_validation_error([value], param=param, allow_files=True)
         return None
     if isinstance(value, list):
         for index, item in enumerate(value):
@@ -377,7 +414,7 @@ def _response_content_validation_error(value: Any, *, param: str) -> dict[str, A
             if err is not None:
                 return err
         return None
-    return _content_part_validation_error(value, param=param)
+    return _content_part_validation_error(value, param=param, allow_files=True)
 
 
 def _content_has_visible_payload(value: Any) -> bool:
@@ -395,12 +432,16 @@ def _is_function_call_input_item(item: Any) -> bool:
 
 def _function_output_validation_error(value: Any, *, param: str) -> dict[str, Any] | None:
     if isinstance(value, list):
-        return _content_part_validation_error(value, param=param)
+        return _content_part_validation_error(value, param=param, allow_files=True)
     if isinstance(value, dict):
         if "content" in value:
-            return _content_part_validation_error(value.get("content"), param=f"{param}.content")
+            return _content_part_validation_error(
+                value.get("content"),
+                param=f"{param}.content",
+                allow_files=True,
+            )
         if "type" in value:
-            return _content_part_validation_error([value], param=param)
+            return _content_part_validation_error([value], param=param, allow_files=True)
     return None
 
 
@@ -416,6 +457,8 @@ def _response_input_item_visible(item: Any) -> bool:
     text = item.get("text", item.get("input_text"))
     if text is not None and str(text).strip():
         return True
+    if str(item.get("type") or "").strip().lower() in _FILE_CONTENT_PART_TYPES:
+        return bool(_file_label_from_part(item))
     image = _image_url_from_part(item)
     return bool(image)
 
@@ -566,6 +609,14 @@ def _canonical_response_function_output_part(part: Any) -> dict[str, Any] | None
             detail = image_obj.get("detail", detail)
         if detail is not None:
             out["detail"] = str(detail)
+        return out
+    if ptype in _FILE_CONTENT_PART_TYPES:
+        if not _file_label_from_part(part):
+            return None
+        out: dict[str, Any] = {"type": "input_file"}
+        for key in ("file_id", "filename", "file_data", "mime_type"):
+            if part.get(key) is not None:
+                out[key] = str(part[key])
         return out
     return None
 

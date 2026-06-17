@@ -1084,7 +1084,7 @@ def test_responses_rejects_invalid_image_url(monkeypatch, tmp_path):
     assert _FakeRunner.calls == []
 
 
-def test_responses_rejects_input_file_parts(monkeypatch, tmp_path):
+def test_responses_accepts_input_file_parts_as_document_references(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
     from aegis.config import Config
@@ -1096,7 +1096,41 @@ def test_responses_rejects_input_file_parts(monkeypatch, tmp_path):
         status, data = _request(port, "POST", "/v1/responses", {
             "input": [{
                 "role": "user",
-                "content": [{"type": "input_file", "file_id": "file_123"}],
+                "content": [
+                    {"type": "input_text", "text": "review this"},
+                    {"type": "input_file", "file_id": "file_123", "filename": "brief.pdf"},
+                ],
+            }],
+        })
+        response_id = json.loads(data)["id"]
+        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert _FakeRunner.calls[0]["prompt"].content == "review this\n[file: file_123]"
+    assert items_status == 200
+    items = json.loads(items_data)["data"]
+    assert items[0]["content"] == [
+        {"type": "input_text", "text": "review this"},
+        {"type": "input_file", "file_id": "file_123", "filename": "brief.pdf"},
+    ]
+
+
+def test_responses_rejects_malformed_input_file_parts(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": [{
+                "role": "user",
+                "content": [{"type": "input_file"}],
             }],
         })
     finally:
@@ -1105,8 +1139,8 @@ def test_responses_rejects_input_file_parts(monkeypatch, tmp_path):
 
     assert status == 400
     error = json.loads(data)["error"]
-    assert error["code"] == "unsupported_content_type"
-    assert error["param"] == "input[0].content[0].type"
+    assert error["code"] == "invalid_file_content"
+    assert error["param"] == "input[0].content[0].file_id"
     assert _FakeRunner.calls == []
 
 
