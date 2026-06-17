@@ -4,7 +4,7 @@
 // chat app: a slim session rail on the left and the real AEGIS terminal filling the rest.
 // The Electron app opens straight into `#/app`; the full control panel stays one click away.
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useApi } from "../lib/useApi";
 import { Icon } from "../components/icons";
@@ -42,6 +42,11 @@ export function DesktopShell() {
     setChatResetToken((value) => value + 1);
     setTimeout(reload, 500);
   };
+  const recoverMissingSession = useCallback(() => {
+    nav("/app", { replace: true });
+    setChatResetToken((value) => value + 1);
+    reload();
+  }, [nav, reload]);
 
   return (
     <div className="flex h-full overflow-hidden bg-bg text-text">
@@ -122,6 +127,7 @@ export function DesktopShell() {
           sessionId={activeId}
           resetToken={chatResetToken}
           onRuntime={setRuntime}
+          onMissingSession={recoverMissingSession}
           onSession={(id) => {
             if (id && id !== activeId) nav(`/app?id=${encodeURIComponent(id)}`, { replace: true });
             reload();

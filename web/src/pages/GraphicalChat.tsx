@@ -70,6 +70,8 @@ interface ModelsPayload {
 }
 
 interface SessionPayload {
+  found?: boolean;
+  error?: string;
   messages?: { role: string; content: string }[];
   meta?: {
     model?: string;
@@ -137,11 +139,13 @@ export function GraphicalChat({
   sessionId,
   resetToken,
   onSession,
+  onMissingSession,
   onRuntime,
 }: {
   sessionId?: string;
   resetToken?: string | number;
   onSession?: (id: string) => void;
+  onMissingSession?: (id: string) => void;
   onRuntime?: (runtime: { model: string; provider: string }) => void;
 }) {
   const [turns, setTurns] = useState<Turn[]>([]);
@@ -254,9 +258,16 @@ export function GraphicalChat({
     fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
       headers: { "X-Aegis-Token": localStorage.getItem("aegis_token") || "" },
     })
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => (r.ok ? r.json() : { found: r.status === 404 ? false : undefined, error: `session load failed: ${r.status}` }))
       .then((data: SessionPayload | null) => {
-        if (cancelled || !data?.messages) return;
+        if (cancelled) return;
+        if (!data || data.found === false) {
+          setSid("");
+          setTurns([]);
+          onMissingSession?.(sessionId);
+          return;
+        }
+        if (!data.messages) return;
         const controls = data.meta?.runtime_controls || {};
         const sessionModel = String(controls.model || data.meta?.model || "");
         const sessionProvider = String(controls.provider || data.meta?.provider || "");
@@ -276,7 +287,7 @@ export function GraphicalChat({
     return () => {
       cancelled = true;
     };
-  }, [resetToken, sessionId]);
+  }, [onMissingSession, resetToken, sessionId]);
 
   const providers = modelData?.providers || (provider ? [provider] : []);
   const presetRows = rowsForProvider(provider);

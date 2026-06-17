@@ -2893,6 +2893,23 @@ def test_dashboard_chat_page_sends_runtime_controls():
     assert "if(!active())return" in html
 
 
+def test_react_dashboard_recovers_missing_deep_linked_sessions():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / "web" / "src" / "pages"
+    chat = (root / "GraphicalChat.tsx").read_text(encoding="utf-8")
+    shell = (root / "DesktopShell.tsx").read_text(encoding="utf-8")
+    tab = (root / "ChatGraphical.tsx").read_text(encoding="utf-8")
+
+    assert "onMissingSession?: (id: string) => void" in chat
+    assert "data.found === false" in chat
+    assert "onMissingSession?.(sessionId)" in chat
+    assert "nav(\"/app\", { replace: true })" in shell
+    assert "onMissingSession={recoverMissingSession}" in shell
+    assert "nav(\"/chat\", { replace: true })" in tab
+    assert "onMissingSession={missing}" in tab
+
+
 def test_dashboard_run_detail_uses_configured_trace_path(tmp_path):
     from aegis.config import Config
     from aegis.dashboard import _dashboard_run_detail

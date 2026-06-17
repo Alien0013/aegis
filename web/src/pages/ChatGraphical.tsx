@@ -3,6 +3,7 @@
 // page; opening one there deep-links to /chat?id=… and resumes it here. The raw
 // xterm/PTY terminal still lives in the dashboard under the Terminal tab.
 
+import { useCallback } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { GraphicalChat } from "./GraphicalChat";
 
@@ -10,9 +11,13 @@ export function ChatGraphical() {
   const [params] = useSearchParams();
   const nav = useNavigate();
   const id = params.get("id") || "";
+  const missing = useCallback(() => {
+    nav("/chat", { replace: true });
+  }, [nav]);
   return (
     <GraphicalChat
       sessionId={id}
+      onMissingSession={missing}
       onSession={(sid) => {
         if (sid && sid !== id) nav(`/chat?id=${encodeURIComponent(sid)}`, { replace: true });
       }}
