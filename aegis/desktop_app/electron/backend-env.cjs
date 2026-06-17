@@ -50,6 +50,7 @@ function normalizePathEnv(baseEnv = process.env, options = {}) {
     seen.add(marker);
     merged.push(text);
   };
+  for (const entry of options.prependPathEntries || []) remember(entry);
   for (const entry of sanePathEntries(platform)) remember(entry);
   for (const entry of raw.split(delimiter)) remember(entry);
   if (merged.length) env[key] = merged.join(delimiter);
@@ -191,6 +192,20 @@ function candidatePackagedAegisCommands(options = {}) {
   return Array.from(new Set(candidates.filter(Boolean)));
 }
 
+function packagedBackendPathEntries(options = {}) {
+  const platform = options.platform || process.platform;
+  const pathMod = _pathFor(platform);
+  const exists = options.exists || fs.existsSync;
+  const entries = [];
+  for (const candidate of candidatePackagedAegisCommands({ ...options, platform })) {
+    const dir = pathMod.dirname(candidate);
+    try {
+      if ((exists(candidate) || exists(dir)) && !entries.includes(dir)) entries.push(dir);
+    } catch { /* ignore inaccessible packaged paths */ }
+  }
+  return entries;
+}
+
 function candidateAegisCommands(options = {}) {
   const platform = options.platform || process.platform;
   const env = options.env || process.env;
@@ -229,7 +244,12 @@ function aegisCommand(options = {}) {
 
 function backendEnvironment(baseEnv = process.env, options = {}) {
   const platform = options.platform || process.platform;
-  const env = normalizePathEnv(_withWindowsUserPath(baseEnv, { ...options, platform }), { ...options, platform });
+  const packagedPathEntries = packagedBackendPathEntries({ ...options, platform });
+  const env = normalizePathEnv(_withWindowsUserPath(baseEnv, { ...options, platform }), {
+    ...options,
+    platform,
+    prependPathEntries: packagedPathEntries,
+  });
   const readOptions = { ...options, env, platform };
   const read = options.readUserEnvVar || readWindowsUserEnvVar;
   if (!env.AEGIS_HOME) {
@@ -253,6 +273,7 @@ module.exports = {
   candidatePackagedAegisCommands,
   hiddenWindowsChildOptions,
   normalizePathEnv,
+  packagedBackendPathEntries,
   resolveAegisHome,
   sanePathEntries,
 };

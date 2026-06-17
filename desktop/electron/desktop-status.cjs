@@ -2,7 +2,10 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { candidatePackagedAegisCommands } = require("./backend-env.cjs");
+const {
+  candidatePackagedAegisCommands,
+  packagedBackendPathEntries,
+} = require("./backend-env.cjs");
 
 const GPU_OVERRIDE_ON = new Set(["1", "true", "yes", "on"]);
 const GPU_OVERRIDE_OFF = new Set(["0", "false", "no", "off"]);
@@ -109,6 +112,9 @@ function desktopDiagnostics({
   const packagedBackendCandidates = packaged
     ? candidatePackagedAegisCommands({ platform, resourcesPath, appPath })
     : [];
+  const packagedPathEntries = packaged
+    ? packagedBackendPathEntries({ platform, resourcesPath, appPath, exists })
+    : [];
   const bundledBackend = packagedBackendCandidates.some((candidate) => {
     try { return exists(candidate); } catch { return false; }
   });
@@ -162,6 +168,7 @@ function desktopDiagnostics({
       configured: backendConfigured,
       bundled: bundledBackend,
       packagedCandidates: packagedBackendCandidates,
+      packagedPathEntries,
     },
     checks,
     repair: {

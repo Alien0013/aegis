@@ -101,6 +101,7 @@ test("desktop diagnostics treats a packaged resource backend as configured", () 
   assert.equal(report.backendDiscovery.configured, true);
   assert.equal(report.backendDiscovery.bundled, true);
   assert(report.backendDiscovery.packagedCandidates.includes(bundled));
+  assert(report.backendDiscovery.packagedPathEntries.includes(path.dirname(bundled)));
   assert.equal(report.checks.find((row) => row.id === "backend_environment").severity, "ok");
 });
 

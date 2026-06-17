@@ -8,6 +8,7 @@ const {
   candidatePackagedAegisCommands,
   hiddenWindowsChildOptions,
   normalizePathEnv,
+  packagedBackendPathEntries,
   resolveAegisHome,
 } = require("./backend-env.cjs");
 
@@ -130,6 +131,31 @@ test("normalizes PATH for GUI-launched POSIX desktop processes", () => {
   assert.equal(entries[0], "/opt/homebrew/bin");
   assert(entries.includes("/usr/local/bin"));
   assert.equal(entries.filter((entry) => entry === "/usr/bin").length, 1);
+});
+
+test("prepends packaged backend path entries for child subprocess discovery", () => {
+  const resourcesPath = "/opt/AEGIS/resources";
+  const bundledBin = path.posix.join(resourcesPath, "aegis", "bin");
+  const entries = packagedBackendPathEntries({
+    platform: "linux",
+    resourcesPath,
+    packaged: true,
+    exists: (p) => p === bundledBin || p === path.posix.join(bundledBin, "aegis"),
+  });
+
+  assert.deepEqual(entries, [bundledBin]);
+
+  const env = backendEnvironment(
+    { PATH: "/usr/bin" },
+    {
+      platform: "linux",
+      resourcesPath,
+      packaged: true,
+      exists: (p) => p === bundledBin || p === path.posix.join(bundledBin, "aegis"),
+    },
+  );
+  assert.equal(env.PATH.split(":")[0], bundledBin);
+  assert.equal(env.PATH.split(":").filter((entry) => entry === bundledBin).length, 1);
 });
 
 test("preserves Windows Path casing while merging PATH-like entries", () => {
