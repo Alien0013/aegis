@@ -3274,6 +3274,78 @@ def _dashboard_events_response(config: Config, request: Request) -> StreamingRes
     )
 
 
+def _cancel_dashboard_stream_agent(agent: Any) -> None:
+    if agent is None:
+        return
+    try:
+        cancel = getattr(agent, "cancel", None)
+        if callable(cancel):
+            cancel()
+            return
+        cancel_event = getattr(agent, "cancel_event", None)
+        if cancel_event is not None:
+            cancel_event.set()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _dashboard_chat_streaming_response(body: dict, chat_runner, request: Request) -> StreamingResponse:
+    events_q: queue.Queue[dict | object] = queue.Queue()
+    sentinel = object()
+    cancelled = threading.Event()
+    active: dict[str, Any] = {}
+
+    def on_agent(agent: Any) -> None:
+        active["agent"] = agent
+        if cancelled.is_set():
+            _cancel_dashboard_stream_agent(agent)
+
+    def cancel_active_agent() -> None:
+        if cancelled.is_set():
+            return
+        cancelled.set()
+        _cancel_dashboard_stream_agent(active.get("agent"))
+
+    def worker() -> None:
+        try:
+            dash._dashboard_chat_stream(
+                body,
+                chat_runner,
+                events_q.put,
+                on_agent=on_agent,
+                cancel_event=cancelled,
+            )
+        finally:
+            events_q.put(sentinel)
+
+    threading.Thread(target=worker, daemon=True).start()
+
+    async def stream():
+        saw_sentinel = False
+        try:
+            while True:
+                if await request.is_disconnected():
+                    cancel_active_agent()
+                    break
+                try:
+                    item = events_q.get_nowait()
+                except queue.Empty:
+                    await asyncio.sleep(0.05)
+                    continue
+                if item is sentinel:
+                    saw_sentinel = True
+                    break
+                yield f"data: {json.dumps(item)}\n\n".encode()
+        except asyncio.CancelledError:
+            cancel_active_agent()
+            raise
+        finally:
+            if not saw_sentinel:
+                cancel_active_agent()
+
+    return StreamingResponse(stream(), media_type="text/event-stream")
+
+
 def _dashboard_ws_rpc_response(text: str | None, config: Config) -> dict[str, Any] | None:
     if text is None:
         return None
@@ -5682,25 +5754,7 @@ def create_app(config: Config) -> FastAPI:
     async def chat_stream(request: Request) -> StreamingResponse:
         _require_request(request, config)
         body = await request.json()
-        events_q: queue.Queue[dict | object] = queue.Queue()
-        sentinel = object()
-
-        def worker() -> None:
-            try:
-                dash._dashboard_chat_stream(body, chat_runner, events_q.put)
-            finally:
-                events_q.put(sentinel)
-
-        threading.Thread(target=worker, daemon=True).start()
-
-        def stream():
-            while True:
-                item = events_q.get()
-                if item is sentinel:
-                    break
-                yield f"data: {json.dumps(item)}\n\n".encode()
-
-        return StreamingResponse(stream(), media_type="text/event-stream")
+        return _dashboard_chat_streaming_response(body, chat_runner, request)
 
     @app.post("/api/files/upload")
     async def upload_file(request: Request) -> JSONResponse:

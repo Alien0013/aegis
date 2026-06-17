@@ -179,6 +179,7 @@ class SurfaceRunner:
         history: Iterable[Message] | None = None,
         model: str | None = None,
         provider_name: str | None = None,
+        service_tier: str | None = None,
         cwd: str | Path | None = None,
         approver: Approver | None = None,
         asker: Asker | None = None,

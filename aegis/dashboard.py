@@ -1327,7 +1327,14 @@ def _dashboard_chat_response(body: dict, chat_runner) -> dict:
     }
 
 
-def _dashboard_chat_stream(body: dict, chat_runner, send) -> dict:
+def _dashboard_chat_stream(
+    body: dict,
+    chat_runner,
+    send,
+    *,
+    on_agent=None,
+    cancel_event=None,
+) -> dict:
     events: list[dict] = []
     result = None
     cwd = _dashboard_chat_cwd(body)
@@ -1341,14 +1348,44 @@ def _dashboard_chat_stream(body: dict, chat_runner, send) -> dict:
         send({"type": "event", "event": row})
 
     try:
+        runtime = _dashboard_chat_runtime(body)
+        meta = _dashboard_chat_meta(body, "/api/chat/stream")
+        run_kwargs = {
+            "cwd": cwd or None,
+            **runtime,
+            "surface": "dashboard",
+            "meta": meta,
+            "on_event": on_event,
+        }
+        if (
+            on_agent is not None
+            and hasattr(chat_runner, "load_or_create_session")
+            and hasattr(chat_runner, "make_agent")
+        ):
+            session = chat_runner.load_or_create_session(
+                body.get("session_id") or None,
+                surface="dashboard",
+                meta=meta,
+            )
+            agent = chat_runner.make_agent(
+                session=session,
+                cwd=cwd or None,
+                model=runtime.get("model"),
+                provider_name=runtime.get("provider_name"),
+            )
+            on_agent(agent)
+            if cancel_event is not None and cancel_event.is_set():
+                cancel = getattr(agent, "cancel", None)
+                if callable(cancel):
+                    cancel()
+                elif getattr(agent, "cancel_event", None) is not None:
+                    agent.cancel_event.set()
+            run_kwargs.update({"session": session, "agent": agent, "reuse_agent": False})
+        else:
+            run_kwargs["session_id"] = body.get("session_id") or None
         result = chat_runner.run_prompt(
             body.get("message", ""),
-            session_id=body.get("session_id") or None,
-            cwd=cwd or None,
-            **_dashboard_chat_runtime(body),
-            surface="dashboard",
-            meta=_dashboard_chat_meta(body, "/api/chat/stream"),
-            on_event=on_event,
+            **run_kwargs,
         )
         final = {
             "type": "final",
