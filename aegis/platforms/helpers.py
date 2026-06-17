@@ -33,6 +33,11 @@ PLATFORM_ALIASES = {
     "hook": "webhook",
     "hooks": "webhook",
     "webhooks": "webhook",
+    "wa": "whatsapp",
+    "whatsapp-web": "whatsapp",
+    "whatsapp_web": "whatsapp",
+    "whatsapp-web.js": "whatsapp",
+    "baileys": "whatsapp",
 }
 
 

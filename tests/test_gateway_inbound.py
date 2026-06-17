@@ -366,6 +366,30 @@ def test_gateway_webhook_channel_normalizes_event_body():
     assert ev.metadata == {"source": "bridge"}
 
 
+def test_gateway_webhook_channel_accepts_whatsapp_bridge_aliases():
+    from aegis.gateway.webhook_channel import WebhookChannel
+    from aegis.platforms import normalize_platform_name
+
+    ev = WebhookChannel()._event_from_body({
+        "platform": "baileys",
+        "remote_jid": "12025550123@s.whatsapp.net",
+        "message": {"extendedTextMessage": {"text": "hello from whatsapp"}},
+        "sender": {"id": "15551234567@s.whatsapp.net", "name": "Ada"},
+        "key": {"id": "BAE512345"},
+        "pushName": "Ada Lovelace",
+        "metadata": {"bridge": "baileys"},
+    })
+
+    assert normalize_platform_name("wa") == "whatsapp"
+    assert ev.platform == "whatsapp"
+    assert ev.chat_id == "12025550123@s.whatsapp.net"
+    assert ev.text == "hello from whatsapp"
+    assert ev.user_id == "15551234567@s.whatsapp.net"
+    assert ev.user_name == "Ada Lovelace"
+    assert ev.message_id == "BAE512345"
+    assert ev.metadata == {"bridge": "baileys"}
+
+
 def test_gateway_mattermost_channel_normalizes_event_body_and_alias(monkeypatch):
     from aegis.gateway.mattermost_channel import MattermostAdapter
     from aegis.platforms import normalize_platform_name

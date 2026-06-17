@@ -32,6 +32,42 @@ def _max_channel_webhook_bytes() -> int:
 MAX_CHANNEL_WEBHOOK_BYTES = _max_channel_webhook_bytes()
 
 
+def _dig(source: dict, *path: str):
+    cur = source
+    for key in path:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(key)
+    return cur
+
+
+def _string_value(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (str, int, float, bool)):
+        return str(value).strip()
+    return ""
+
+
+def _first_string(source: dict, paths: tuple[tuple[str, ...], ...]) -> str:
+    for path in paths:
+        value = _dig(source, *path)
+        text = _string_value(value)
+        if text:
+            return text
+        if isinstance(value, dict):
+            nested = _first_string(value, (
+                ("text",),
+                ("body",),
+                ("content",),
+                ("conversation",),
+                ("caption",),
+            ))
+            if nested:
+                return nested
+    return ""
+
+
 class WebhookChannel(BasePlatformAdapter):
     name = "webhook"
     transport = "http"
@@ -99,16 +135,88 @@ class WebhookChannel(BasePlatformAdapter):
 
     def _event_from_body(self, body: dict) -> MessageEvent:
         platform = normalize_platform_name(body.get("platform", "webhook"), default="webhook")
-        metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
+        metadata = dict(body.get("metadata")) if isinstance(body.get("metadata"), dict) else {}
         attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
+        chat_id = _first_string(body, (
+            ("chat_id",),
+            ("chatId",),
+            ("channel_id",),
+            ("channel",),
+            ("room_id",),
+            ("room",),
+            ("remote_jid",),
+            ("remoteJid",),
+            ("jid",),
+            ("from",),
+            ("source",),
+        )) or "unknown"
+        text = _first_string(body, (
+            ("text",),
+            ("body",),
+            ("content",),
+            ("caption",),
+            ("conversation",),
+            ("message",),
+            ("message", "text"),
+            ("message", "body"),
+            ("message", "content"),
+            ("message", "conversation"),
+            ("message", "caption"),
+            ("message", "extendedTextMessage", "text"),
+            ("message", "imageMessage", "caption"),
+            ("message", "videoMessage", "caption"),
+            ("data", "text"),
+            ("data", "body"),
+            ("data", "message"),
+            ("data", "message", "text"),
+        ))
+        user_id = _first_string(body, (
+            ("user_id",),
+            ("userId",),
+            ("sender_id",),
+            ("senderId",),
+            ("participant",),
+            ("author",),
+            ("sender",),
+            ("sender", "id"),
+            ("sender", "jid"),
+            ("from_user",),
+        ))
+        user_name = _first_string(body, (
+            ("user_name",),
+            ("userName",),
+            ("username",),
+            ("pushName",),
+            ("sender_name",),
+            ("senderName",),
+            ("sender", "name"),
+            ("sender", "username"),
+        ))
+        thread_id = _first_string(body, (
+            ("thread_id",),
+            ("threadId",),
+            ("thread_ts",),
+            ("root_id",),
+            ("topic",),
+        ))
+        message_id = _first_string(body, (
+            ("message_id",),
+            ("messageId",),
+            ("event_id",),
+            ("eventId",),
+            ("id",),
+            ("key", "id"),
+            ("message", "id"),
+            ("data", "id"),
+        ))
         return MessageEvent(
             platform=platform,
-            chat_id=str(body.get("chat_id", "unknown")),
-            text=str(body.get("text", "")),
-            user_id=str(body.get("user_id")) if body.get("user_id") else None,
-            user_name=str(body.get("user_name")) if body.get("user_name") else None,
-            thread_id=str(body.get("thread_id")) if body.get("thread_id") else None,
-            message_id=str(body.get("message_id") or body.get("event_id") or body.get("id") or "") or None,
+            chat_id=chat_id,
+            text=text,
+            user_id=user_id or None,
+            user_name=user_name or None,
+            thread_id=thread_id or None,
+            message_id=message_id or None,
             reply_to_message_id=str(body.get("reply_to_message_id") or "") or None,
             reply_to_text=str(body.get("reply_to_text") or "") or None,
             timestamp=body.get("timestamp") or body.get("ts"),
