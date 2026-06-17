@@ -38,6 +38,7 @@ _MAX_SESSION_KEY_CHARS = 256
 _TEXT_CONTENT_PART_TYPES = {"text", "input_text", "output_text"}
 _IMAGE_CONTENT_PART_TYPES = {"image_url", "input_image"}
 _FILE_CONTENT_PART_TYPES = {"file", "input_file"}
+_REFUSAL_CONTENT_PART_TYPES = {"refusal"}
 _OPAQUE_RESPONSE_INPUT_ITEM_TYPES = {
     "code_interpreter_call",
     "computer_call",
@@ -267,6 +268,8 @@ def _content(value: Any) -> tuple[str, list[str]]:
         ptype = str(part.get("type") or "").strip().lower()
         if ptype in _TEXT_CONTENT_PART_TYPES:
             texts.append(str(part.get("text", "")))
+        elif ptype in _REFUSAL_CONTENT_PART_TYPES:
+            texts.append(str(part.get("refusal", "")))
         elif ptype in _IMAGE_CONTENT_PART_TYPES:
             image = _image_url_from_part(part)
             if image:
@@ -358,6 +361,14 @@ def _content_part_validation_error(
                     "File content parts require string 'file_data' when provided.",
                     code="invalid_file_content",
                     param=f"{part_param}.file_data",
+                )
+            continue
+        if ptype in _REFUSAL_CONTENT_PART_TYPES:
+            if not isinstance(part.get("refusal", ""), str):
+                return _openai_error(
+                    "Refusal content parts require a string 'refusal' field",
+                    code="invalid_refusal_content",
+                    param=f"{part_param}.refusal",
                 )
             continue
         if ptype not in _TEXT_CONTENT_PART_TYPES | _IMAGE_CONTENT_PART_TYPES:
@@ -634,7 +645,12 @@ def _canonical_response_function_output_part(
     ptype = str(part.get("type") or "").strip().lower()
     if ptype in _TEXT_CONTENT_PART_TYPES:
         text = part.get("text", "")
-        return {"type": text_type, "text": str(text)}
+        out: dict[str, Any] = {"type": text_type, "text": str(text)}
+        if "annotations" in part:
+            out["annotations"] = part["annotations"]
+        return out
+    if ptype in _REFUSAL_CONTENT_PART_TYPES:
+        return {"type": "refusal", "refusal": str(part.get("refusal", ""))}
     if ptype in _IMAGE_CONTENT_PART_TYPES:
         image = _image_url_from_part(part)
         if not image:

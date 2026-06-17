@@ -1090,6 +1090,81 @@ def test_responses_accepts_output_text_content_part(monkeypatch, tmp_path):
     ]
 
 
+def test_responses_preserves_text_part_annotations_in_input_items(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    annotations = [{"type": "file_citation", "file_id": "file_123", "index": 0}]
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": [{
+                "role": "assistant",
+                "content": [{
+                    "type": "output_text",
+                    "text": "cited output",
+                    "annotations": annotations,
+                }],
+            }, {
+                "role": "user",
+                "content": "continue",
+            }],
+        })
+        response_id = json.loads(data)["id"]
+        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert _FakeRunner.calls[0]["history"][0].content == "cited output"
+    assert items_status == 200
+    items = json.loads(items_data)["data"]
+    assert items[0]["content"] == [{
+        "type": "output_text",
+        "text": "cited output",
+        "annotations": annotations,
+    }]
+
+
+def test_responses_accepts_refusal_content_part_as_assistant_history(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": [{
+                "role": "assistant",
+                "content": [{"type": "refusal", "refusal": "I cannot help with that."}],
+            }, {
+                "role": "user",
+                "content": "try a safe version",
+            }],
+        })
+        response_id = json.loads(data)["id"]
+        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    call = _FakeRunner.calls[0]
+    assert call["prompt"].content == "try a safe version"
+    assert [(m.role, m.content) for m in call["history"]] == [
+        ("assistant", "I cannot help with that."),
+    ]
+    assert items_status == 200
+    items = json.loads(items_data)["data"]
+    assert items[0]["content"] == [{"type": "refusal", "refusal": "I cannot help with that."}]
+
+
 def test_responses_preserves_assistant_output_text_input_item(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
