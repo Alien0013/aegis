@@ -306,11 +306,14 @@ def test_platform_helper_command_caps_and_utf16_chunks():
 def test_adapter_metadata_for_core_platforms(monkeypatch):
     from aegis.gateway.channels import TelegramAdapter
     from aegis.gateway.discord_channel import DiscordAdapter
+    from aegis.gateway.mattermost_channel import MattermostAdapter
     from aegis.gateway.slack_channel import SlackAdapter
     from aegis.gateway.webhook_channel import WebhookChannel
 
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
     monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+    monkeypatch.setenv("MATTERMOST_URL", "https://mattermost.test")
+    monkeypatch.setenv("MATTERMOST_BOT_TOKEN", "mm-token")
     monkeypatch.delenv("WEBHOOK_CHANNEL_SECRET", raising=False)
 
     assert TelegramAdapter("token").metadata["transport"] == "long_poll"
@@ -318,6 +321,10 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert DiscordAdapter("token").metadata["command_cap"] == 100
     assert len(DiscordAdapter("token").command_menu(max_commands=500)) <= 100
     assert SlackAdapter().metadata["typed_command_prefix"] == "!"
+    mattermost = MattermostAdapter().metadata
+    assert mattermost["transport"] == "http_webhook"
+    assert mattermost["supports_threads"] is True
+    assert mattermost["security"]["auth_type"] == "bearer"
     webhook = WebhookChannel().metadata
     assert webhook["transport"] == "http"
     assert webhook["security"]["secret_configured"] is False
@@ -346,6 +353,87 @@ def test_gateway_webhook_channel_normalizes_event_body():
     assert ev.message_id == "m1"
     assert ev.attachments == [{"type": "image"}]
     assert ev.metadata == {"source": "bridge"}
+
+
+def test_gateway_mattermost_channel_normalizes_event_body_and_alias(monkeypatch):
+    from aegis.gateway.mattermost_channel import MattermostAdapter
+    from aegis.platforms import normalize_platform_name
+
+    monkeypatch.setenv("MATTERMOST_URL", "https://mattermost.test")
+    monkeypatch.setenv("MATTERMOST_BOT_TOKEN", "mm-token")
+
+    adapter = MattermostAdapter()
+    ev = adapter._event_from_body({
+        "channel_id": "channel-1",
+        "text": "!status",
+        "user_id": "user-1",
+        "user_name": "ada",
+        "post_id": "post-1",
+        "root_id": "root-1",
+        "team_id": "team-1",
+        "channel_name": "ops",
+    })
+
+    assert normalize_platform_name("mm") == "mattermost"
+    assert ev.platform == "mattermost"
+    assert ev.chat_id == "channel-1"
+    assert ev.text == "/status"
+    assert ev.user_id == "user-1"
+    assert ev.user_name == "ada"
+    assert ev.thread_id == "root-1"
+    assert ev.message_id == "post-1"
+    assert ev.metadata["team_id"] == "team-1"
+
+
+def test_gateway_mattermost_webhook_secret_accepts_headers_and_body(monkeypatch):
+    from aegis.gateway.mattermost_channel import MattermostAdapter
+
+    monkeypatch.setenv("MATTERMOST_URL", "https://mattermost.test")
+    monkeypatch.setenv("MATTERMOST_BOT_TOKEN", "mm-token")
+    monkeypatch.setenv("MATTERMOST_WEBHOOK_SECRET", "secret-token")
+
+    adapter = MattermostAdapter()
+
+    assert adapter._verify_webhook({"X-Secret": "secret-token"}, {}) is True
+    assert adapter._verify_webhook({"X-Mattermost-Token": "secret-token"}, {}) is True
+    assert adapter._verify_webhook({}, {"token": "secret-token"}) is True
+    assert adapter._verify_webhook({}, {"token": "wrong"}) is False
+
+
+def test_gateway_mattermost_send_uses_clean_root_id(monkeypatch):
+    from aegis.gateway import mattermost_channel
+    from aegis.gateway.mattermost_channel import MattermostAdapter
+
+    monkeypatch.setenv("MATTERMOST_URL", "https://mattermost.test")
+    monkeypatch.setenv("MATTERMOST_BOT_TOKEN", "mm-token")
+    sent = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, url, *, headers, json):
+            sent.append((url, headers, dict(json)))
+            return FakeResponse()
+
+    monkeypatch.setattr(mattermost_channel.httpx, "Client", FakeClient)
+
+    adapter = MattermostAdapter()
+    adapter.send("channel-1", "first", metadata={"thread_id": "channel-1"})
+    adapter.send("channel-1", "reply", metadata={"thread_id": "root-1"})
+
+    assert sent[0][2] == {"channel_id": "channel-1", "message": "first"}
+    assert sent[1][2] == {"channel_id": "channel-1", "message": "reply", "root_id": "root-1"}
 
 
 def test_shared_inbound_records_delivery_runs(monkeypatch, tmp_path):

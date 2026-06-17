@@ -236,6 +236,9 @@ def build_adapter(name: str) -> BasePlatformAdapter:
     if name == "slack":
         from .slack_channel import SlackAdapter
         return SlackAdapter()
+    if name == "mattermost":
+        from .mattermost_channel import MattermostAdapter
+        return MattermostAdapter()
     if name == "signal":
         from .signal_channel import SignalAdapter
         return SignalAdapter()
@@ -266,4 +269,4 @@ def build_adapter(name: str) -> BasePlatformAdapter:
     except Exception as exc:  # noqa: BLE001
         raise ValueError(f"Plugin channel '{name}' failed to load: {exc}") from exc
     raise ValueError(f"Unknown channel '{name}'. Available: cli, telegram, discord, slack, "
-                     "signal, matrix, email, webhook, ntfy, or a plugin channel.")
+                     "signal, matrix, email, webhook, mattermost, ntfy, or a plugin channel.")

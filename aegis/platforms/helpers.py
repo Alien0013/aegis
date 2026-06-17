@@ -22,6 +22,9 @@ PLATFORM_ALIASES = {
     "dc": "discord",
     "discordapp": "discord",
     "sl": "slack",
+    "mm": "mattermost",
+    "mattermost-webhook": "mattermost",
+    "mattermost_webhook": "mattermost",
     "hook": "webhook",
     "hooks": "webhook",
     "webhooks": "webhook",
@@ -66,6 +69,21 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
         "required_env": ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"],
         "optional_env": ["SLACK_ALLOW_BOTS"],
         "max_message_length": 39000,
+        "message_length_units": "codepoints",
+        "supports_threads": True,
+        "supports_media": False,
+        "typed_command_prefix": "!",
+    },
+    "mattermost": {
+        "display_name": "Mattermost",
+        "transport": "http_webhook",
+        "required_env": ["MATTERMOST_URL", "MATTERMOST_BOT_TOKEN"],
+        "optional_env": [
+            "MATTERMOST_WEBHOOK_SECRET",
+            "MATTERMOST_OUTGOING_TOKEN",
+            "MATTERMOST_CHANNEL_PORT",
+        ],
+        "max_message_length": 16000,
         "message_length_units": "codepoints",
         "supports_threads": True,
         "supports_media": False,
@@ -199,7 +217,7 @@ def normalize_inbound_command(
 
     Supported cases:
       - Telegram bot-menu forms like ``/status@aegis_bot`` become ``/status``.
-      - Slack/Discord thread-friendly ``!stop`` aliases become ``/stop`` when
+      - Slack/Discord/Mattermost thread-friendly ``!stop`` aliases become ``/stop`` when
         the command is known.
     """
 
@@ -222,7 +240,7 @@ def normalize_inbound_command(
         return text
 
     if prefix == "!":
-        if platform_name not in {"slack", "discord"}:
+        if platform_name not in {"slack", "discord", "mattermost"}:
             return text
     elif suffix:
         expected = (bot_username or "").strip().lstrip("@").lower()
