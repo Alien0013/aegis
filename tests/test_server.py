@@ -2189,6 +2189,12 @@ def test_server_created_run_persists_across_handler_restart(monkeypatch, tmp_pat
         get_status, get_data = _request(port, "GET", f"/v1/runs/{run_id}")
         list_status, list_data = _request(port, "GET", "/v1/runs")
         events_status, events_data = _request(port, "GET", f"/v1/runs/{run_id}/events")
+        sse_status, sse_headers, sse_data = _request_with_headers(
+            port,
+            "GET",
+            f"/v1/runs/{run_id}/events",
+            headers={"Accept": "text/event-stream"},
+        )
     finally:
         srv.shutdown()
         srv.server_close()
@@ -2214,6 +2220,19 @@ def test_server_created_run_persists_across_handler_restart(monkeypatch, tmp_pat
     event_types = [event.get("type") for event in events["events"]]
     assert event_types[:2] == ["run.queued", "run.running"]
     assert "run.completed" in event_types
+    assert sse_status == 200
+    assert "text/event-stream" in sse_headers["Content-Type"]
+    sse_events = _sse_events(sse_data)
+    replayed_types = [
+        payload.get("type")
+        for event_name, payload in sse_events
+        if event_name == "event" and isinstance(payload, dict)
+    ]
+    assert replayed_types[:2] == ["run.queued", "run.running"]
+    assert "run.completed" in replayed_types
+    assert sse_events[-2][0] == "done"
+    assert sse_events[-2][1]["id"] == run_id
+    assert sse_events[-1] == ("done", "[DONE]")
 
 
 def test_server_startup_marks_stale_api_runs_interrupted(monkeypatch, tmp_path):
@@ -2308,9 +2327,18 @@ def test_server_run_approval_choice_unblocks_pending_run(monkeypatch, tmp_path):
         srv.shutdown()
         srv.server_close()
 
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        restart_events_status, restart_events_data = _request(port, "GET", f"/v1/runs/{run_id}/events")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
     approval = json.loads(approval_data)
     events = json.loads(events_data)["events"]
+    restart_events = json.loads(restart_events_data)["events"]
     event_types = [event.get("type") for event in events]
+    restart_event_types = [event.get("type") for event in restart_events]
     assert create_status == 202
     assert pending_status == 200
     assert pending["pending"] and pending["pending"][0]["prompt"] == "Allow shell command?"
@@ -2331,6 +2359,12 @@ def test_server_run_approval_choice_unblocks_pending_run(monkeypatch, tmp_path):
     assert responded["approval_id"] == pending["pending"][0]["id"]
     assert responded["approved"] is True
     assert responded["choice"] == "once"
+    assert restart_events_status == 200
+    assert "approval.request" in restart_event_types
+    restart_responded = next(event for event in restart_events if event.get("type") == "approval.responded")
+    assert restart_responded["approval_id"] == pending["pending"][0]["id"]
+    assert restart_responded["approved"] is True
+    assert restart_responded["choice"] == "once"
 
 
 def test_server_stop_releases_pending_approval_waiter(monkeypatch, tmp_path):

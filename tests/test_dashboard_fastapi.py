@@ -1361,6 +1361,91 @@ def test_fastapi_sessions_control_plane(tmp_path, monkeypatch):
     assert deleted.json()["ok"] is True
 
 
+def test_fastapi_dashboard_chat_stream_persists_session_and_run_across_app_recreate(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    monkeypatch.setenv("AEGIS_DASHBOARD_TOKEN", "t")
+
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.dashboard_fastapi import create_app
+    from aegis.types import Message
+
+    class FakeAgent:
+        stream = False
+
+        def __init__(self, session, store):
+            self.session = session
+            self.store = store
+            self.provider = types.SimpleNamespace(name="fake", model="fake-model", api_mode="fake")
+            self.budget = types.SimpleNamespace(
+                usage=types.SimpleNamespace(input_tokens=0, output_tokens=0, cache_read=0, cache_write=0),
+            )
+            self.tool_context = types.SimpleNamespace(session=session)
+            self._trace_context = {"trace_id": "trace_cross_session", "turn_id": "turn_cross_session"}
+
+        def run(self, prompt, on_event=None):  # noqa: ANN001
+            if on_event:
+                on_event({"type": "iteration", "n": 1, "max": 1})
+            self.session.messages.append(Message.user(str(prompt)))
+            reply = Message.assistant(f"persisted:{prompt}")
+            self.session.messages.append(reply)
+            self.store.save(self.session)
+            return reply
+
+    monkeypatch.setattr(
+        Agent,
+        "create",
+        staticmethod(lambda _config, **kwargs: FakeAgent(kwargs["session"], kwargs["store"])),
+    )
+
+    app = create_app(Config.load())
+    headers = {"X-Aegis-Token": "t"}
+    streamed = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/chat/stream",
+        json={"message": "remember this", "session_id": "dash:cross-session"},
+        headers=headers,
+    ))
+    frames = [
+        json.loads(line.removeprefix("data: "))
+        for line in streamed.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    final = next(frame for frame in frames if frame.get("type") == "final")
+    session_id = final["session_id"]
+    run_id = final["run_id"]
+
+    recreated = create_app(Config.load())
+    session_detail = asyncio.run(_request(recreated, "GET", f"/api/sessions/{session_id}", headers=headers))
+    run_detail = asyncio.run(_request(recreated, "GET", f"/api/run?id={run_id}", headers=headers))
+
+    assert streamed.status_code == 200
+    assert final["reply"] == "persisted:remember this"
+    assert final["trace_id"] == "trace_cross_session"
+    assert run_id
+    assert session_detail.status_code == 200
+    session_body = session_detail.json()
+    assert session_body["found"] is True
+    assert [m["content"] for m in session_body["messages"]] == [
+        "remember this",
+        "persisted:remember this",
+    ]
+    assert session_body["meta"]["last_run_id"] == run_id
+    assert session_body["meta"]["last_trace_id"] == "trace_cross_session"
+    assert run_detail.status_code == 200
+    run_body = run_detail.json()
+    assert run_body["found"] is True
+    assert run_body["run"]["id"] == run_id
+    assert run_body["run"]["session_id"] == session_id
+    assert run_body["run"]["status"] == "ok"
+    assert run_body["run"]["trace_id"] == "trace_cross_session"
+    assert [m["content"] for m in run_body["messages"]] == [
+        "remember this",
+        "persisted:remember this",
+    ]
+
+
 def test_fastapi_config_preferences_memory_provider_and_plugins(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
     headers = {"X-Aegis-Token": "t"}
