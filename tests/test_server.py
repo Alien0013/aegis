@@ -602,7 +602,7 @@ def test_openai_chat_completions_rejects_unsupported_content_parts(monkeypatch, 
     assert unsupported_status == malformed_status == 400
     unsupported = json.loads(unsupported_data)["error"]
     malformed = json.loads(malformed_data)["error"]
-    assert unsupported["code"] == "unsupported_content_part"
+    assert unsupported["code"] == "unsupported_content_type"
     assert unsupported["param"] == "messages[0].content[0].type"
     assert malformed["code"] == "invalid_image_content"
     assert _FakeRunner.calls == []
@@ -1032,6 +1032,82 @@ def test_responses_accepts_messages_alias_and_image_only_input(monkeypatch, tmp_
     assert status == 200
     assert json.loads(data)["object"] == "response"
     assert _FakeRunner.calls[0]["prompt"].images == ["data:image/png;base64,abc"]
+
+
+def test_responses_accepts_output_text_content_part(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": [{
+                "role": "user",
+                "content": [{"type": "output_text", "text": "reuse prior output text"}],
+            }],
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert json.loads(data)["object"] == "response"
+    assert _FakeRunner.calls[0]["prompt"].content == "reuse prior output text"
+
+
+def test_responses_rejects_invalid_image_url(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": [{
+                "role": "user",
+                "content": [{"type": "input_image", "image_url": "ftp://example.test/image.png"}],
+            }],
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 400
+    error = json.loads(data)["error"]
+    assert error["code"] == "invalid_image_url"
+    assert error["param"] == "input[0].content[0].image_url"
+    assert _FakeRunner.calls == []
+
+
+def test_responses_rejects_input_file_parts(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": [{
+                "role": "user",
+                "content": [{"type": "input_file", "file_id": "file_123"}],
+            }],
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 400
+    error = json.loads(data)["error"]
+    assert error["code"] == "unsupported_content_type"
+    assert error["param"] == "input[0].content[0].type"
+    assert _FakeRunner.calls == []
 
 
 def test_responses_rejects_unsupported_content_parts(monkeypatch, tmp_path):

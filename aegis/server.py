@@ -35,6 +35,9 @@ _DEFAULT_RESPONSE_AUTO_TRUNCATION_MESSAGES = 100
 _MAX_STORED_RUN_EVENTS = 500
 _TERMINAL_RUN_STATUSES = {"completed", "error", "cancelled", "interrupted"}
 _MAX_SESSION_KEY_CHARS = 256
+_TEXT_CONTENT_PART_TYPES = {"text", "input_text", "output_text"}
+_IMAGE_CONTENT_PART_TYPES = {"image_url", "input_image"}
+_FILE_CONTENT_PART_TYPES = {"file", "input_file"}
 
 
 def _api_session_id_from_body(
@@ -186,16 +189,47 @@ def _content(value: Any) -> tuple[str, list[str]]:
         if not isinstance(part, dict):
             texts.append(str(part))
             continue
-        ptype = part.get("type")
-        if ptype in ("text", "input_text"):
+        ptype = str(part.get("type") or "").strip().lower()
+        if ptype in _TEXT_CONTENT_PART_TYPES:
             texts.append(str(part.get("text", "")))
-        elif ptype in ("image_url", "input_image"):
-            image = part.get("image_url") or part.get("image")
-            if isinstance(image, dict):
-                image = image.get("url")
+        elif ptype in _IMAGE_CONTENT_PART_TYPES:
+            image = _image_url_from_part(part)
             if image:
                 images.append(str(image))
     return "\n".join(t for t in texts if t), images
+
+
+def _image_url_from_part(part: dict[str, Any]) -> Any:
+    image = part.get("image_url") or part.get("image")
+    if isinstance(image, dict):
+        image = image.get("url")
+    return image
+
+
+def _image_url_validation_error(image: Any, *, param: str) -> dict[str, Any] | None:
+    if not isinstance(image, str) or not image.strip():
+        return _openai_error(
+            "Image content parts require a non-empty image URL",
+            code="invalid_image_content",
+            param=param,
+        )
+    url = image.strip()
+    lowered = url.lower()
+    if lowered.startswith("data:"):
+        if not lowered.startswith("data:image/") or "," not in url:
+            return _openai_error(
+                "Only image data URLs are supported. Non-image data payloads are not supported.",
+                code="unsupported_content_type",
+                param=param,
+            )
+        return None
+    if not (lowered.startswith("http://") or lowered.startswith("https://")):
+        return _openai_error(
+            "Image inputs must use http(s) URLs or data:image/... URLs.",
+            code="invalid_image_url",
+            param=param,
+        )
+    return None
 
 
 def _content_part_validation_error(value: Any, *, param: str) -> dict[str, Any] | None:
@@ -203,7 +237,6 @@ def _content_part_validation_error(value: Any, *, param: str) -> dict[str, Any] 
         return None
     if not isinstance(value, list):
         return None
-    supported = {"text", "input_text", "image_url", "input_image"}
     for index, part in enumerate(value):
         part_param = f"{param}[{index}]"
         if not isinstance(part, dict):
@@ -212,29 +245,29 @@ def _content_part_validation_error(value: Any, *, param: str) -> dict[str, Any] 
                 code="invalid_content_part",
                 param=part_param,
             )
-        ptype = str(part.get("type") or "")
-        if ptype not in supported:
+        ptype = str(part.get("type") or "").strip().lower()
+        if ptype in _FILE_CONTENT_PART_TYPES:
+            return _openai_error(
+                "Inline image inputs are supported, but uploaded files and document inputs are not supported.",
+                code="unsupported_content_type",
+                param=f"{part_param}.type",
+            )
+        if ptype not in _TEXT_CONTENT_PART_TYPES | _IMAGE_CONTENT_PART_TYPES:
             return _openai_error(
                 f"Unsupported content part type: {ptype or '<missing>'}",
                 code="unsupported_content_part",
                 param=f"{part_param}.type",
             )
-        if ptype in {"text", "input_text"} and not isinstance(part.get("text", ""), str):
+        if ptype in _TEXT_CONTENT_PART_TYPES and not isinstance(part.get("text", ""), str):
             return _openai_error(
                 "Text content parts require a string 'text' field",
                 code="invalid_text_content",
                 param=f"{part_param}.text",
             )
-        if ptype in {"image_url", "input_image"}:
-            image = part.get("image_url") or part.get("image")
-            if isinstance(image, dict):
-                image = image.get("url")
-            if not isinstance(image, str) or not image.strip():
-                return _openai_error(
-                    "Image content parts require a non-empty image URL",
-                    code="invalid_image_content",
-                    param=f"{part_param}.image_url",
-                )
+        if ptype in _IMAGE_CONTENT_PART_TYPES:
+            err = _image_url_validation_error(_image_url_from_part(part), param=f"{part_param}.image_url")
+            if err is not None:
+                return err
     return None
 
 
@@ -287,9 +320,7 @@ def _response_input_item_visible(item: Any) -> bool:
     text = item.get("text", item.get("input_text"))
     if text is not None and str(text).strip():
         return True
-    image = item.get("image_url") or item.get("image")
-    if isinstance(image, dict):
-        image = image.get("url")
+    image = _image_url_from_part(item)
     return bool(image)
 
 
@@ -446,6 +477,8 @@ def _content_seed_text(content: Any) -> str:
         for item in content:
             if isinstance(item, dict):
                 text = item.get("text") or item.get("input_text")
+                if text is None and str(item.get("type") or "").strip().lower() == "output_text":
+                    text = item.get("text")
                 if text is not None:
                     parts.append(str(text))
             elif item is not None:
