@@ -73,6 +73,8 @@ def test_desktop_npm_install_command_uses_lockfile(tmp_path):
 def test_desktop_launch_skips_install_when_dependencies_exist(monkeypatch, tmp_path):
     source = _write_desktop_template(tmp_path / "source")
     target = tmp_path / "runtime"
+    project = tmp_path / "project"
+    project.mkdir()
     desktop._sync_desktop_app(source, target)
     (target / "node_modules" / "electron").mkdir(parents=True)
     calls: list[dict] = []
@@ -90,14 +92,56 @@ def test_desktop_launch_skips_install_when_dependencies_exist(monkeypatch, tmp_p
     monkeypatch.setattr(desktop.shutil, "which", fake_which)
     monkeypatch.setattr(desktop.sys, "argv", ["aegis"])
     monkeypatch.setattr(desktop.subprocess, "run", fake_run)
+    monkeypatch.chdir(project)
 
-    args = Namespace(install_only=False, reinstall=False, sandbox=False)
+    args = Namespace(install_only=False, reinstall=False, sandbox=False, cwd=None)
     assert desktop.cmd_desktop(args, object()) == 0
 
     assert len(calls) == 1
     assert calls[0]["cmd"] == ["/usr/bin/npm", "start"]
     assert calls[0]["cwd"] == target
     assert calls[0]["env"]["AEGIS_BIN"] == "/usr/local/bin/aegis"
+    assert calls[0]["env"]["TERMINAL_CWD"] == str(project)
+
+
+def test_desktop_launch_accepts_explicit_cwd(monkeypatch, tmp_path):
+    source = _write_desktop_template(tmp_path / "source")
+    target = tmp_path / "runtime"
+    project = tmp_path / "project"
+    project.mkdir()
+    desktop._sync_desktop_app(source, target)
+    (target / "node_modules" / "electron").mkdir(parents=True)
+    calls: list[dict] = []
+
+    monkeypatch.setenv("AEGIS_DESKTOP_DIR", str(target))
+    monkeypatch.setattr(desktop, "_desktop_source", lambda: source)
+    monkeypatch.setattr(desktop.shutil, "which", lambda name: "/usr/bin/npm" if name == "npm" else "/usr/local/bin/aegis")
+    monkeypatch.setattr(desktop.subprocess, "run", lambda cmd, cwd, env=None: calls.append({
+        "cmd": cmd,
+        "cwd": cwd,
+        "env": env,
+    }) or SimpleNamespace(returncode=0))
+
+    args = Namespace(install_only=False, reinstall=False, sandbox=False, cwd=str(project))
+    assert desktop.cmd_desktop(args, object()) == 0
+
+    assert calls[0]["cmd"] == ["/usr/bin/npm", "start"]
+    assert calls[0]["env"]["TERMINAL_CWD"] == str(project)
+
+
+def test_desktop_launch_rejects_invalid_cwd(monkeypatch, tmp_path, capsys):
+    source = _write_desktop_template(tmp_path / "source")
+    target = tmp_path / "runtime"
+    desktop._sync_desktop_app(source, target)
+    (target / "node_modules" / "electron").mkdir(parents=True)
+
+    monkeypatch.setenv("AEGIS_DESKTOP_DIR", str(target))
+    monkeypatch.setattr(desktop, "_desktop_source", lambda: source)
+    monkeypatch.setattr(desktop.shutil, "which", lambda name: "/usr/bin/npm" if name == "npm" else "/usr/local/bin/aegis")
+
+    args = Namespace(install_only=False, reinstall=False, sandbox=False, cwd=str(tmp_path / "missing"))
+    assert desktop.cmd_desktop(args, object()) == 1
+    assert "desktop cwd not found" in capsys.readouterr().err
 
 
 def test_desktop_sync_cleans_only_previous_managed_files(tmp_path):
@@ -131,6 +175,10 @@ def test_desktop_parser_and_typo_alias():
     status_args = parser.parse_args(["desktop", "--status"])
     assert status_args.func is desktop.cmd_desktop
     assert status_args.status is True
+
+    cwd_args = parser.parse_args(["desktop", "--cwd", "/tmp/project"])
+    assert cwd_args.func is desktop.cmd_desktop
+    assert cwd_args.cwd == "/tmp/project"
 
     typo_args = parser.parse_args(["deksktop", "--install-only", "--status"])
     assert typo_args.func is desktop.cmd_desktop

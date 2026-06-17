@@ -181,6 +181,20 @@ def _aegis_bin() -> str:
     return shutil.which("aegis") or "aegis"
 
 
+def _terminal_cwd(args) -> str:
+    raw = getattr(args, "cwd", None)
+    path = Path(raw).expanduser() if raw else Path.cwd()
+    try:
+        resolved = path.resolve()
+    except OSError as exc:
+        raise RuntimeError(f"desktop cwd is not accessible: {path}") from exc
+    if not resolved.exists():
+        raise RuntimeError(f"desktop cwd not found: {resolved}")
+    if not resolved.is_dir():
+        raise RuntimeError(f"desktop cwd is not a directory: {resolved}")
+    return str(resolved)
+
+
 def cmd_desktop(args, config) -> int:  # noqa: ARG001
     """Install/update the Electron source-run app, then launch it."""
     npm = shutil.which("npm")
@@ -216,8 +230,14 @@ def cmd_desktop(args, config) -> int:  # noqa: ARG001
         _print(f"desktop ready at {target}")
         return 0
 
+    try:
+        terminal_cwd = _terminal_cwd(args)
+    except RuntimeError as exc:
+        return _die(str(exc))
+
     env = os.environ.copy()
     env.setdefault("AEGIS_BIN", _aegis_bin())
+    env["TERMINAL_CWD"] = terminal_cwd
 
     package = getattr(args, "package", None)
     if package:
