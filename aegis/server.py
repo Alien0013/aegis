@@ -1217,6 +1217,23 @@ class ResponseStore:
                 (name, response_id),
             )
 
+    def stats(self) -> dict[str, Any]:
+        with self._lock, self._connect() as db:
+            self._configure_db(db)
+            response_count = int(db.execute("SELECT COUNT(*) FROM responses").fetchone()[0] or 0)
+            conversation_count = int(db.execute("SELECT COUNT(*) FROM conversations").fetchone()[0] or 0)
+            statuses = {
+                str(row[0] or "unknown"): int(row[1] or 0)
+                for row in db.execute("SELECT status, COUNT(*) FROM responses GROUP BY status").fetchall()
+            }
+        return {
+            "path": str(self.path),
+            "max_size": self.max_size,
+            "responses": response_count,
+            "conversations": conversation_count,
+            "statuses": statuses,
+        }
+
 
 class IdempotencyCache:
     """Small in-process LRU cache for OpenAI-style Idempotency-Key replays."""
@@ -1415,10 +1432,76 @@ def make_handler(config: Config):
                 "time": int(time.time()),
             }
             if detailed:
+                stores: dict[str, Any] = {}
+                runtime: dict[str, Any] = {}
+                diagnostics: dict[str, Any] = {}
+                try:
+                    stores["responses"] = response_store.stats()
+                except Exception as exc:  # noqa: BLE001
+                    stores["responses"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                    payload["ok"] = False
+                    payload["status"] = "degraded"
+                try:
+                    from .runs import RunStore
+
+                    run_rows = RunStore().list(limit=500)
+                    run_statuses: dict[str, int] = {}
+                    for row in run_rows:
+                        status = str(row.get("status") or "unknown")
+                        run_statuses[status] = run_statuses.get(status, 0) + 1
+                    stores["runs"] = {
+                        "count": len(run_rows),
+                        "statuses": run_statuses,
+                    }
+                except Exception as exc:  # noqa: BLE001
+                    stores["runs"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                    payload["ok"] = False
+                    payload["status"] = "degraded"
+                try:
+                    from .cron import CronStore
+
+                    jobs = CronStore().list()
+                    stores["jobs"] = {
+                        "count": len(jobs),
+                        "enabled": sum(1 for job in jobs if bool(getattr(job, "enabled", False))),
+                        "paused": sum(1 for job in jobs if not bool(getattr(job, "enabled", False))),
+                    }
+                except Exception as exc:  # noqa: BLE001
+                    stores["jobs"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                    payload["ok"] = False
+                    payload["status"] = "degraded"
+                try:
+                    from .session_checks import cross_session_integrity_report
+
+                    stale_seconds = float(config.get("server.stale_run_health_seconds", 6 * 60 * 60)
+                                          or 6 * 60 * 60)
+                    report = cross_session_integrity_report(
+                        session_limit=100,
+                        run_limit=500,
+                        stale_running_seconds=stale_seconds,
+                    )
+                    diagnostics["cross_session"] = report
+                    if not bool(report.get("ok", True)):
+                        payload["ok"] = False
+                        payload["status"] = "degraded"
+                except Exception as exc:  # noqa: BLE001
+                    diagnostics["cross_session"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                    payload["ok"] = False
+                    payload["status"] = "degraded"
+                with state_lock:
+                    self._sweep_runs_locked()
+                    runtime = {
+                        "active_runs": self._active_run_count_locked(),
+                        "pending_approvals": len(approvals),
+                        "active_responses": len(active_responses),
+                    }
                 payload.update({
                     "models": _models(config),
                     "capabilities": _capabilities(config),
                     "max_body_bytes": _MAX_BODY_BYTES,
+                    "runtime": runtime,
+                    "stores": stores,
+                    "diagnostics": diagnostics,
                 })
             return payload
 

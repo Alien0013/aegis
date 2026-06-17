@@ -839,6 +839,7 @@ def test_server_health_skills_toolsets_and_cors_options(monkeypatch, tmp_path):
     srv, port = _serve(server.make_handler(cfg))
     try:
         health_status, health_headers, health_data = _request_with_headers(port, "GET", "/v1/health")
+        detailed_status, detailed_data = _request(port, "GET", "/v1/health/detailed")
         skills_status, skills_data = _request(port, "GET", "/v1/skills")
         toolsets_status, toolsets_data = _request(port, "GET", "/v1/toolsets")
         options_status, options_headers, _options_data = _request_with_headers(
@@ -859,6 +860,15 @@ def test_server_health_skills_toolsets_and_cors_options(monkeypatch, tmp_path):
 
     assert health_status == 200
     assert json.loads(health_data)["ok"] is True
+    assert detailed_status == 200
+    detailed = json.loads(detailed_data)
+    assert detailed["ok"] is True
+    assert detailed["runtime"]["active_runs"] == 0
+    assert detailed["stores"]["responses"]["responses"] == 0
+    assert detailed["stores"]["runs"]["count"] == 0
+    assert detailed["stores"]["jobs"]["count"] == 0
+    assert detailed["diagnostics"]["cross_session"]["ok"] is True
+    assert "session_run_links" in {row["id"] for row in detailed["diagnostics"]["cross_session"]["checks"]}
     assert health_headers["Content-Security-Policy"] == "default-src 'none'; frame-ancestors 'none'"
     assert health_headers["X-Content-Type-Options"] == "nosniff"
     assert "Access-Control-Allow-Origin" not in health_headers
