@@ -951,6 +951,7 @@ def cmd_config(args, config: Config) -> int:
         _print(f"  Config:   {cfg.config_path()}")
         _print(f"  Secrets:  {cfg.env_path()}")
         _print(f"  Home:     {cfg.get_home()}")
+        _print(f"  Install:  {Path(__file__).resolve().parents[2]}")
         _print()
         _print("API Keys")
         for label, names in (
@@ -962,6 +963,7 @@ def cmd_config(args, config: Config) -> int:
             ("Firecrawl", ("FIRECRAWL_API_KEY",)),
             ("Tavily", ("TAVILY_API_KEY",)),
             ("Browserbase", ("BROWSERBASE_API_KEY",)),
+            ("Browser Use", ("BROWSER_USE_API_KEY",)),
             ("FAL", ("FAL_KEY", "FAL_API_KEY")),
         ):
             _print(f"  {label:<12} {configured_env(*names)}")
@@ -984,6 +986,9 @@ def cmd_config(args, config: Config) -> int:
         _print(f"  Backend:     {config.get('tools.terminal_backend')}")
         _print(f"  Working dir: {Path.cwd()}")
         _print(f"  Timeout:     {config.get('tools.terminal_lifetime_seconds')}s")
+        _print()
+        _print("Timezone")
+        _print(f"  Timezone:    {os.environ.get('TZ') or time.tzname[0] or '(server-local)'}")
         _print()
         _print("Context Compression")
         _print("  Enabled:        yes")

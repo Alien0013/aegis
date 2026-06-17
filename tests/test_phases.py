@@ -179,7 +179,10 @@ def test_cli_config_summary_dump_and_edit(monkeypatch, capsys):
     assert "AEGIS Configuration" in out
     assert "Paths" in out
     assert f"Config:   {cfg.config_path()}" in out
+    assert "Install:" in out
     assert "API Keys" in out
+    assert "Browser Use" in out
+    assert "Timezone" in out
     assert "aegis config edit" in out
 
     assert main(["config", "dump"]) == 0
