@@ -951,6 +951,15 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
         "id": "telegram",
         "label": "Telegram",
         "env": ["TELEGRAM_BOT_TOKEN"],
+        "optional_env": [
+            "TELEGRAM_ALLOWED_USERS",
+            "TELEGRAM_ALLOWED_CHATS",
+            "TELEGRAM_IGNORED_CHATS",
+            "TELEGRAM_ALLOWED_CHAT_TYPES",
+            "TELEGRAM_GROUP_TRIGGER_MODE",
+            "TELEGRAM_BOT_USERNAME",
+            "TELEGRAM_BOT_ID",
+        ],
         "setup": "Create a bot with BotFather, set TELEGRAM_BOT_TOKEN, start the gateway, then approve the pairing code.",
         "pairing": True,
         "adapter_class": "aegis.gateway.channels.TelegramAdapter",
@@ -964,6 +973,16 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
         "id": "discord",
         "label": "Discord",
         "env": ["DISCORD_BOT_TOKEN"],
+        "optional_env": [
+            "DISCORD_ALLOWED_USERS",
+            "DISCORD_ALLOWED_ROLES",
+            "DISCORD_ALLOW_BOTS",
+            "DISCORD_ALLOWED_CHANNELS",
+            "DISCORD_IGNORED_CHANNELS",
+            "DISCORD_ALLOWED_GUILDS",
+            "DISCORD_IGNORED_GUILDS",
+            "DISCORD_TRIGGER_MODE",
+        ],
         "setup": "Create a Discord bot token and install the discord extra when using this adapter.",
         "pairing": True,
         "adapter_class": "aegis.gateway.discord_channel.DiscordAdapter",
@@ -977,6 +996,14 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
         "id": "slack",
         "label": "Slack",
         "env": ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"],
+        "optional_env": [
+            "SLACK_ALLOW_BOTS",
+            "SLACK_ALLOWED_USERS",
+            "SLACK_ALLOWED_CHANNELS",
+            "SLACK_IGNORED_CHANNELS",
+            "SLACK_ALLOWED_TEAMS",
+            "SLACK_BOT_USER_ID",
+        ],
         "setup": "Use Socket Mode with a bot token and app-level token.",
         "pairing": True,
         "adapter_class": "aegis.gateway.slack_channel.SlackAdapter",
@@ -1058,6 +1085,18 @@ def _channel_catalog_map() -> dict[str, dict[str, Any]]:
     return {row["id"]: row for row in _CHANNEL_CATALOG}
 
 
+def _platform_required_env(item: dict[str, Any]) -> list[str]:
+    return [str(key) for key in (item.get("env") or item.get("env_vars") or [])]
+
+
+def _platform_optional_env(item: dict[str, Any]) -> list[str]:
+    return [str(key) for key in (item.get("optional_env") or item.get("optional_env_vars") or [])]
+
+
+def _platform_configurable_env(item: dict[str, Any]) -> set[str]:
+    return set(_platform_required_env(item)) | set(_platform_optional_env(item))
+
+
 def _gateway_channel_payload(config: Config, channel: str | None = None) -> dict:
     from .doctor import CHANNEL_PROBES
 
@@ -1066,13 +1105,15 @@ def _gateway_channel_payload(config: Config, channel: str | None = None) -> dict
     rows = []
     for item in _CHANNEL_CATALOG:
         row = dict(item)
-        env_vars = list(row.get("env") or [])
+        env_vars = _platform_required_env(row)
+        optional_env_vars = _platform_optional_env(row)
         missing = [key for key in env_vars if not _env_key_is_set(str(key))]
         channel_id = str(row["id"])
         row.update({
             "enabled": channel_id in enabled,
             "configured": channel_id in enabled and not missing,
             "env_vars": env_vars,
+            "optional_env_vars": optional_env_vars,
             "missing_env_vars": missing,
             "probe_available": channel_id in CHANNEL_PROBES,
             "profile": profiles.get(channel_id, {}) if isinstance(profiles, dict) else {},
@@ -1115,13 +1156,21 @@ def _set_gateway_channel(config: Config, channel: str, body: dict) -> dict:
 
 def _messaging_platform_env_fields(item: dict[str, Any]) -> list[dict[str, Any]]:
     fields: list[dict[str, Any]] = []
-    for key in list(item.get("env") or item.get("env_vars") or []):
+    for key in _platform_required_env(item):
         key_text = str(key)
         fields.append({
             "key": key_text,
             "required": True,
             "set": _env_key_is_set(key_text),
             "description": f"Required for {item.get('label') or item.get('id')}",
+        })
+    for key in _platform_optional_env(item):
+        key_text = str(key)
+        fields.append({
+            "key": key_text,
+            "required": False,
+            "set": _env_key_is_set(key_text),
+            "description": f"Optional control for {item.get('label') or item.get('id')}",
         })
     return fields
 
@@ -1134,6 +1183,8 @@ def _messaging_platform_metadata(item: dict[str, Any]) -> dict[str, Any]:
         "capabilities": list(item.get("capabilities", []) or []),
         "delivery_modes": list(item.get("delivery_modes", []) or []),
         "security": copy.deepcopy(item.get("security", {}) or {}),
+        "required_env": _platform_required_env(item),
+        "optional_env": _platform_optional_env(item),
         "pairing": bool(item.get("pairing", False)),
         "source": item.get("source", "builtin"),
     }
@@ -1143,7 +1194,7 @@ def _messaging_platform_row(config: Config, item: dict[str, Any]) -> dict[str, A
     gateway_payload = _gateway_channel_payload(config, str(item["id"]))
     channel = gateway_payload.get("channel") or {}
     env_fields = _messaging_platform_env_fields(item)
-    missing = [field["key"] for field in env_fields if not field["set"]]
+    missing = [field["key"] for field in env_fields if field["required"] and not field["set"]]
     enabled = bool(channel.get("enabled", False))
     configured = not missing
     if not enabled:
@@ -1163,6 +1214,8 @@ def _messaging_platform_row(config: Config, item: dict[str, Any]) -> dict[str, A
         "configured": configured,
         "state": state,
         "env_vars": env_fields,
+        "required_env_vars": _platform_required_env(item),
+        "optional_env_vars": _platform_optional_env(item),
         "missing_env_vars": missing,
         "pairing": bool(item.get("pairing", False)),
         "profile": channel.get("profile", {}),
@@ -1216,7 +1269,7 @@ def _messaging_platform_update(config: Config, platform_id: str, body: dict[str,
     item = _channel_catalog_map().get(safe)
     if not item:
         return {"ok": False, "error": "unknown messaging platform", "platform": safe}
-    allowed_env = {str(key) for key in (item.get("env") or [])}
+    allowed_env = _platform_configurable_env(item)
     clear_env = body.get("clear_env") or []
     if isinstance(clear_env, str):
         clear_env = [clear_env]

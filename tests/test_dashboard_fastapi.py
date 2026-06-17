@@ -797,6 +797,13 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     assert telegram["enabled"] is False
     assert telegram["state"] == "disabled"
     assert any(field["key"] == "TELEGRAM_BOT_TOKEN" and field["required"] for field in telegram["env_vars"])
+    assert any(
+        field["key"] == "TELEGRAM_ALLOWED_CHATS" and not field["required"]
+        for field in telegram["env_vars"]
+    )
+    assert "TELEGRAM_ALLOWED_CHATS" in telegram["optional_env_vars"]
+    assert "TELEGRAM_ALLOWED_CHATS" in telegram["metadata"]["optional_env"]
+    assert "TELEGRAM_ALLOWED_CHATS" not in telegram["missing_env_vars"]
     assert telegram["auth_type"] == "bot_token"
     assert telegram["transport"] == "long_poll"
     assert "media" in telegram["capabilities"]
@@ -826,12 +833,22 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
         app,
         "PUT",
         "/api/messaging/platforms/telegram",
-        json={"enabled": True, "env": {"TELEGRAM_BOT_TOKEN": "test-token"}},
+        json={
+            "enabled": True,
+            "env": {
+                "TELEGRAM_BOT_TOKEN": "test-token",
+                "TELEGRAM_ALLOWED_CHATS": "42,99",
+                "TELEGRAM_GROUP_TRIGGER_MODE": "addressed",
+            },
+        },
         headers=headers,
     ))
     assert updated.status_code == 200
     assert updated.json()["platform"]["enabled"] is True
     assert updated.json()["platform"]["configured"] is True
+    updated_fields = {field["key"]: field for field in updated.json()["platform"]["env_vars"]}
+    assert updated_fields["TELEGRAM_ALLOWED_CHATS"]["set"] is True
+    assert updated_fields["TELEGRAM_GROUP_TRIGGER_MODE"]["set"] is True
 
     import aegis.doctor as doctor
 
@@ -845,12 +862,75 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
         app,
         "PUT",
         "/api/messaging/platforms/telegram",
-        json={"enabled": False, "clear_env": ["TELEGRAM_BOT_TOKEN"]},
+        json={"enabled": False, "clear_env": ["TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_CHATS"]},
         headers=headers,
     ))
     assert cleared.status_code == 200
     assert cleared.json()["platform"]["state"] == "disabled"
     assert "TELEGRAM_BOT_TOKEN" in cleared.json()["platform"]["missing_env_vars"]
+    cleared_fields = {field["key"]: field for field in cleared.json()["platform"]["env_vars"]}
+    assert cleared_fields["TELEGRAM_ALLOWED_CHATS"]["set"] is False
+
+
+def test_fastapi_messaging_platform_optional_controls(tmp_path, monkeypatch):
+    for key in (
+        "DISCORD_BOT_TOKEN",
+        "DISCORD_ALLOWED_GUILDS",
+        "DISCORD_TRIGGER_MODE",
+        "SLACK_BOT_TOKEN",
+        "SLACK_APP_TOKEN",
+        "SLACK_ALLOWED_CHANNELS",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    discord = asyncio.run(_request(app, "GET", "/api/platforms/discord", headers=headers))
+    assert discord.status_code == 200
+    discord_fields = {field["key"]: field for field in discord.json()["platform"]["env_vars"]}
+    assert discord_fields["DISCORD_BOT_TOKEN"]["required"] is True
+    assert discord_fields["DISCORD_ALLOWED_GUILDS"]["required"] is False
+    assert discord_fields["DISCORD_TRIGGER_MODE"]["required"] is False
+    assert "DISCORD_ALLOWED_GUILDS" not in discord.json()["platform"]["missing_env_vars"]
+
+    updated = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/messaging/platforms/discord",
+        json={
+            "env": {
+                "DISCORD_ALLOWED_GUILDS": "G1,dm",
+                "DISCORD_TRIGGER_MODE": "addressed",
+            },
+        },
+        headers=headers,
+    ))
+    assert updated.status_code == 200
+    updated_fields = {field["key"]: field for field in updated.json()["platform"]["env_vars"]}
+    assert updated_fields["DISCORD_ALLOWED_GUILDS"]["set"] is True
+    assert updated_fields["DISCORD_TRIGGER_MODE"]["set"] is True
+    assert "DISCORD_BOT_TOKEN" in updated.json()["platform"]["missing_env_vars"]
+
+    invalid = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/messaging/platforms/slack",
+        json={"env": {"DISCORD_ALLOWED_GUILDS": "wrong-platform"}},
+        headers=headers,
+    ))
+    assert invalid.status_code == 400
+
+    slack = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/messaging/platforms/slack",
+        json={"env": {"SLACK_ALLOWED_CHANNELS": "C1,C2"}},
+        headers=headers,
+    ))
+    assert slack.status_code == 200
+    slack_fields = {field["key"]: field for field in slack.json()["platform"]["env_vars"]}
+    assert slack_fields["SLACK_ALLOWED_CHANNELS"]["required"] is False
+    assert slack_fields["SLACK_ALLOWED_CHANNELS"]["set"] is True
 
 
 def test_fastapi_typed_config_profile_gateway_and_plugin_routes(tmp_path, monkeypatch):
