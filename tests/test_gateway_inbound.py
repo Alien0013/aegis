@@ -325,9 +325,21 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
     monkeypatch.setenv("MATTERMOST_URL", "https://mattermost.test")
     monkeypatch.setenv("MATTERMOST_BOT_TOKEN", "mm-token")
+    for key in (
+        "TELEGRAM_ALLOWED_USERS",
+        "TELEGRAM_ALLOWED_CHATS",
+        "TELEGRAM_IGNORED_CHATS",
+        "TELEGRAM_ALLOWED_CHAT_TYPES",
+        "TELEGRAM_GROUP_TRIGGER_MODE",
+        "TELEGRAM_BOT_USERNAME",
+        "TELEGRAM_BOT_ID",
+    ):
+        monkeypatch.delenv(key, raising=False)
     monkeypatch.delenv("WEBHOOK_CHANNEL_SECRET", raising=False)
 
     assert TelegramAdapter("token").metadata["transport"] == "long_poll"
+    assert "TELEGRAM_ALLOWED_CHATS" in TelegramAdapter("token").metadata["optional_env"]
+    assert TelegramAdapter("token").metadata["security"]["group_trigger_mode"] == "all"
     assert DiscordAdapter("token").metadata["supports_threads"] is True
     assert DiscordAdapter("token").metadata["command_cap"] == 100
     assert len(DiscordAdapter("token").command_menu(max_commands=500)) <= 100
@@ -343,6 +355,36 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert "X-Secret" in webhook["security"]["signature_schemes"]
     assert webhook["idempotency"]["delivery_cache"]["entries"] == 0
     assert webhook["rate_limiter"]["limit"] >= 1
+
+
+def test_telegram_adapter_enforces_chat_filters_and_group_addressing(monkeypatch):
+    from aegis.gateway.channels import TelegramAdapter
+
+    monkeypatch.setenv("TELEGRAM_ALLOWED_USERS", "7,@ada")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHATS", "42")
+    monkeypatch.setenv("TELEGRAM_IGNORED_CHATS", "99")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_TYPES", "private,supergroup")
+    monkeypatch.setenv("TELEGRAM_GROUP_TRIGGER_MODE", "addressed")
+    monkeypatch.setenv("TELEGRAM_BOT_USERNAME", "aegis_bot")
+    monkeypatch.setenv("TELEGRAM_BOT_ID", "123")
+
+    adapter = TelegramAdapter("token")
+
+    assert adapter._author_allowed("7", "ada") is True
+    assert adapter._author_allowed("8", "ada") is True
+    assert adapter._author_allowed("8", "grace") is False
+
+    base = {"chat": {"id": 42, "type": "supergroup"}, "text": "hello", "from": {"id": 7}}
+    assert adapter._message_allowed(base, "hello") is False
+    assert adapter._message_allowed({**base, "text": "@aegis_bot hello"}, "@aegis_bot hello") is True
+    assert adapter._message_allowed({**base, "text": "/status"}, "/status") is True
+    assert adapter._message_allowed({
+        **base,
+        "reply_to_message": {"from": {"id": 123, "username": "aegis_bot"}},
+    }, "hello") is True
+    assert adapter._message_allowed({**base, "chat": {"id": 99, "type": "supergroup"}}, "/status") is False
+    assert adapter._message_allowed({**base, "chat": {"id": 43, "type": "supergroup"}}, "/status") is False
+    assert adapter._message_allowed({**base, "chat": {"id": 42, "type": "group"}}, "/status") is False
 
 
 def test_slack_adapter_enforces_workspace_filters_and_strips_mentions(monkeypatch):

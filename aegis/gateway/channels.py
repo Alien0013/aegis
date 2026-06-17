@@ -18,6 +18,11 @@ from ..platforms import (
 from .base import BasePlatformAdapter, Dispatch, MessageEvent
 
 
+def _csv_set(value: str) -> set[str] | None:
+    items = {item.strip() for item in str(value or "").split(",") if item.strip()}
+    return items or None
+
+
 class CLIChannel(BasePlatformAdapter):
     """Reads stdin lines and prints replies. Lets you exercise the gateway locally."""
 
@@ -55,10 +60,28 @@ class TelegramAdapter(BasePlatformAdapter):
         self.token = token or os.environ.get("TELEGRAM_BOT_TOKEN")
         if not self.token:
             raise RuntimeError("TELEGRAM_BOT_TOKEN is not set.")
-        allowed = os.environ.get("TELEGRAM_ALLOWED_USERS", "").strip()
-        self.allowed = {u.strip() for u in allowed.split(",") if u.strip()} if allowed else None
+        self.allowed = _csv_set(os.environ.get("TELEGRAM_ALLOWED_USERS", ""))
+        self.allowed_chats = _csv_set(os.environ.get("TELEGRAM_ALLOWED_CHATS", ""))
+        self.ignored_chats = _csv_set(os.environ.get("TELEGRAM_IGNORED_CHATS", ""))
+        self.allowed_chat_types = _csv_set(os.environ.get("TELEGRAM_ALLOWED_CHAT_TYPES", ""))
+        self.group_trigger_mode = os.environ.get("TELEGRAM_GROUP_TRIGGER_MODE", "all").strip().lower() or "all"
         self.bot_username = os.environ.get("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@") or None
+        self.bot_id = os.environ.get("TELEGRAM_BOT_ID", "").strip() or None
         self._base = f"https://api.telegram.org/bot{self.token}"
+
+    @property
+    def metadata(self) -> dict:
+        data = super().metadata
+        data["security"] = {
+            "allowed_users_configured": bool(self.allowed),
+            "allowed_chats_configured": bool(self.allowed_chats),
+            "ignored_chats_configured": bool(self.ignored_chats),
+            "allowed_chat_types": sorted(self.allowed_chat_types or []),
+            "group_trigger_mode": self.group_trigger_mode,
+            "bot_username_configured": bool(self.bot_username),
+            "bot_id_configured": bool(self.bot_id),
+        }
+        return data
 
     def command_menu(self, *, max_commands: int = MAX_TELEGRAM_COMMANDS) -> list[str]:
         return capped_command_menu(max_commands=max_commands)
@@ -86,10 +109,7 @@ class TelegramAdapter(BasePlatformAdapter):
                     continue
                 user_id = str(msg["from"]["id"])
                 username = msg["from"].get("username")
-                names = {user_id}
-                if username:
-                    names.update({username, f"@{username}"})
-                if self.allowed and not (names & self.allowed):
+                if not self._author_allowed(user_id, username):
                     self.send(str(msg["chat"]["id"]), "⛔ not authorized.")
                     continue
                 reply_to = msg.get("reply_to_message") or {}
@@ -99,6 +119,8 @@ class TelegramAdapter(BasePlatformAdapter):
                     platform="telegram",
                     bot_username=self.bot_username,
                 )
+                if not self._message_allowed(msg, normalized_text):
+                    continue
                 if normalized_text.lstrip().startswith("/"):
                     event_text = normalized_text
                 else:
@@ -119,6 +141,54 @@ class TelegramAdapter(BasePlatformAdapter):
                     },
                 )
                 self._submit_inbound(ev, raw_text=raw_text)
+
+    def _author_allowed(self, user_id: str, username: str | None = None) -> bool:
+        if not self.allowed:
+            return True
+        names = {str(user_id)}
+        if username:
+            names.update({str(username), f"@{username}"})
+        return bool(names & self.allowed)
+
+    def _message_allowed(self, msg: dict, normalized_text: str | None = None) -> bool:
+        chat = msg.get("chat", {}) or {}
+        chat_id = str(chat.get("id", "") or "")
+        if self.ignored_chats and ("*" in self.ignored_chats or chat_id in self.ignored_chats):
+            return False
+        if self.allowed_chats and "*" not in self.allowed_chats and chat_id not in self.allowed_chats:
+            return False
+        chat_type = str(chat.get("type", "") or "")
+        if self.allowed_chat_types and chat_type not in self.allowed_chat_types:
+            return False
+        if chat_type not in {"group", "supergroup"}:
+            return True
+        mode = self.group_trigger_mode
+        if mode in {"", "all", "always", "true", "1", "yes"}:
+            return True
+        text = normalized_text if normalized_text is not None else str(msg.get("text", "") or "")
+        if mode in {"command", "commands"}:
+            return text.lstrip().startswith("/")
+        if mode in {"addressed", "mention", "mentions", "reply", "replies"}:
+            return (
+                text.lstrip().startswith("/")
+                or self._mentions_bot(str(msg.get("text", "") or ""))
+                or self._is_reply_to_bot(msg.get("reply_to_message") or {})
+            )
+        return True
+
+    def _mentions_bot(self, text: str) -> bool:
+        if not self.bot_username:
+            return False
+        return f"@{self.bot_username.lower()}" in str(text or "").lower()
+
+    def _is_reply_to_bot(self, reply_to: dict) -> bool:
+        if not isinstance(reply_to, dict):
+            return False
+        author = reply_to.get("from") or {}
+        if self.bot_id and str(author.get("id", "") or "") == self.bot_id:
+            return True
+        username = str(author.get("username", "") or "").strip().lstrip("@").lower()
+        return bool(self.bot_username and username == self.bot_username.lower())
 
     def _before_dispatch(self, ev: MessageEvent):
         self._typing(ev.chat_id)
