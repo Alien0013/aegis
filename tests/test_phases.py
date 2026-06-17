@@ -180,12 +180,17 @@ def test_cli_config_summary_dump_and_edit(monkeypatch, capsys):
     assert "+----------------------------------------------------------+" in out
     assert "Paths" in out
     assert f"Config:       {cfg.config_path()}" in out
+    assert "Profile:      default" in out
     assert "Install:" in out
     assert "API Keys" in out
     assert "OpenAI (STT/TTS)" in out
+    assert "Google" in out
+    assert "DeepSeek" in out
     assert "Browser Use" in out
     assert "Model effort:" in out
+    assert "User preview:" in out
     assert "Timezone" in out
+    assert "Model:          (auto)" in out
     assert "aegis config edit" in out
 
     assert main(["config", "show"]) == 0
@@ -232,6 +237,25 @@ def test_cli_config_summary_dump_and_edit(monkeypatch, capsys):
     capsys.readouterr()
     assert main(["config", "get", "model.base_url"]) == 0
     assert capsys.readouterr().out == "\n"
+
+
+def test_cli_config_setup_alias_dispatches_setup(monkeypatch):
+    from argparse import Namespace
+
+    from aegis.cli import main as cli_main
+    from aegis.config import Config
+
+    calls = []
+    monkeypatch.setattr(
+        cli_main,
+        "cmd_setup",
+        lambda args, config: calls.append((args, config)) or 0,
+    )
+
+    cfg = Config.load()
+    assert cli_main.cmd_config(Namespace(action="setup"), cfg) == 0
+    assert calls and calls[0][0].action == "setup"
+    assert calls[0][1] is cfg
 
 
 def test_cli_sessions_check_reports_and_repairs_stale_runs(capsys):

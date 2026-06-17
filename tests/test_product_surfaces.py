@@ -29,6 +29,7 @@ def test_cli_parser_exposes_upgrade_commands():
     assert parser.parse_args(["config"]).action == "summary"
     assert parser.parse_args(["config", "show"]).action == "show"
     assert parser.parse_args(["config", "edit", "--secrets"]).secrets is True
+    assert parser.parse_args(["config", "setup"]).action == "setup"
 
 
 def test_model_doctor_prints_resolver_report(capsys):

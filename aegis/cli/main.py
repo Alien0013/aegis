@@ -969,6 +969,7 @@ def cmd_config(args, config: Config) -> int:
         gateway_channels = set(str(x) for x in (config.get("gateway.channels", []) or []))
         telegram = "configured" if os.environ.get("TELEGRAM_BOT_TOKEN") or "telegram" in gateway_channels else "not configured"
         discord = "configured" if os.environ.get("DISCORD_BOT_TOKEN") or "discord" in gateway_channels else "not configured"
+        active_profile = cfg.current_profile() or "default"
         title = " AEGIS Configuration "
         rule = "+" + "-" * 58 + "+"
         _print(rule)
@@ -979,6 +980,7 @@ def cmd_config(args, config: Config) -> int:
         _print(f"  Config:       {cfg.config_path()}")
         _print(f"  Secrets:      {cfg.env_path()}")
         _print(f"  Home:         {cfg.get_home()}")
+        _print(f"  Profile:      {active_profile}")
         _print(f"  Install:      {Path(__file__).resolve().parents[2]}")
         _print()
         _print("API Keys")
@@ -987,6 +989,12 @@ def cmd_config(args, config: Config) -> int:
             ("OpenAI", ("OPENAI_API_KEY",)),
             ("OpenAI (STT/TTS)", ("VOICE_TOOLS_OPENAI_KEY",)),
             ("Anthropic", ("ANTHROPIC_API_KEY",)),
+            ("Google", ("GOOGLE_API_KEY", "GEMINI_API_KEY")),
+            ("Groq", ("GROQ_API_KEY",)),
+            ("DeepSeek", ("DEEPSEEK_API_KEY",)),
+            ("XAI", ("XAI_API_KEY",)),
+            ("Mistral", ("MISTRAL_API_KEY",)),
+            ("Together", ("TOGETHER_API_KEY",)),
             ("Exa", ("EXA_API_KEY",)),
             ("Parallel", ("PARALLEL_API_KEY",)),
             ("Firecrawl", ("FIRECRAWL_API_KEY",)),
@@ -1009,6 +1017,14 @@ def cmd_config(args, config: Config) -> int:
         _print(f"  Reasoning:   {config.get('display.reasoning', 'off') or 'off'}")
         _print(f"  Model effort: {config.get('agent.reasoning_effort', 'off') or 'off'}")
         _print(f"  Bell:        {config.get('display.bell', 'off') or 'off'}")
+        preview = config.get("display.user_message_preview", {}) or {}
+        if not isinstance(preview, dict):
+            preview = {}
+        _print(
+            "  User preview: "
+            f"first {preview.get('first_lines', 2)} line(s), "
+            f"last {preview.get('last_lines', 2)} line(s)"
+        )
         if platforms:
             _print(f"  Platforms:   {', '.join(sorted(platforms))}")
         _print()
@@ -1026,6 +1042,7 @@ def cmd_config(args, config: Config) -> int:
         _print(f"  Target ratio:   {int(float(compression.get('tail_fraction', 0.25) or 0.25) * 100)}% preserved")
         _print(f"  Protect last:   {compression.get('preserve_last', 20)} messages")
         _print(f"  Protect first:  {compression.get('preserve_first', 3)} messages")
+        _print(f"  Model:          {compression.get('model', '') or '(auto)'}")
         _print()
         _print("Messaging Platforms")
         _print(f"  Telegram: {telegram}")
@@ -1049,6 +1066,8 @@ def cmd_config(args, config: Config) -> int:
         return 0
     if args.action in ("summary", "show"):
         return show_summary()
+    if args.action == "setup":
+        return cmd_setup(args, config)
     if args.action == "edit":
         target = cfg.env_path() if getattr(args, "secrets", False) else cfg.config_path()
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -2051,7 +2070,7 @@ def build_parser() -> argparse.ArgumentParser:
     cf.add_argument("action", nargs="?",
                     choices=[
                         "summary", "show", "edit", "get", "set", "path", "env-path", "paths",
-                        "dump", "check", "migrate",
+                        "dump", "check", "migrate", "setup",
                     ],
                     default="summary")
     cf.add_argument("key", nargs="?")
