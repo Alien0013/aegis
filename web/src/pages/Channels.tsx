@@ -1,29 +1,50 @@
 import { useState } from "react";
 import { useApi } from "../lib/useApi";
-import { patch, post } from "../lib/api";
+import { patch, post, put } from "../lib/api";
 import { Badge, Button, Card, Empty, Field, Input, Loading, PageHeader, toast } from "../components/ui";
 import { titleCase } from "../lib/format";
 import { Icon } from "../components/icons";
 
+interface EnvField {
+  key: string;
+  required?: boolean;
+  set?: boolean;
+  description?: string;
+}
 interface ChannelRow {
   id?: string; channel?: string; name?: string; label?: string;
   configured?: boolean; ready?: boolean; enabled?: boolean; active?: boolean;
   env?: string[]; env_vars?: string[]; missing_env_vars?: string[];
   setup?: string; profile?: Record<string, unknown>;
 }
+interface PlatformRow extends Omit<ChannelRow, "env_vars"> {
+  env_vars?: EnvField[];
+  required_env_vars?: string[];
+  optional_env_vars?: string[];
+  metadata?: { optional_env?: string[]; required_env?: string[] } & Record<string, unknown>;
+}
 type CatalogPayload = { channels?: ChannelRow[]; catalog?: ChannelRow[]; enabled?: string[] } & Record<string, unknown>;
+type PlatformPayload = { platforms?: PlatformRow[] };
 
-function channelId(row: ChannelRow): string {
+function channelId(row: { id?: string; channel?: string; name?: string; label?: string }): string {
   return row.id || row.channel || row.name || (row.label || "").toLowerCase().replace(/\s+/g, "-");
+}
+function envFieldKey(field: string | EnvField): string {
+  return typeof field === "string" ? field : field.key;
+}
+function envFieldSet(field: string | EnvField): boolean | undefined {
+  return typeof field === "string" ? undefined : field.set;
 }
 
 export function Channels() {
   const { data, loading, error, reload } = useApi<CatalogPayload>("gateway/channels/catalog");
+  const platforms = useApi<PlatformPayload>("messaging/platforms");
   const status = useApi<Record<string, unknown>>("gateway/status");
-  const [configuring, setConfiguring] = useState<ChannelRow | null>(null);
+  const [configuring, setConfiguring] = useState<{ row: ChannelRow; platform?: PlatformRow } | null>(null);
 
   const rows: ChannelRow[] = (Array.isArray(data?.channels) ? data!.channels
     : Array.isArray(data?.catalog) ? data!.catalog : []) as ChannelRow[];
+  const platformRows = new Map((platforms.data?.platforms || []).map((row) => [channelId(row), row]));
   const activeChannels = ((status.data?.channels as string[]) || data?.enabled || []) as string[];
 
   async function probe(ch: string) {
@@ -47,8 +68,10 @@ export function Channels() {
           {!rows.length && <Card><Empty icon="channels">No channel catalog available.</Empty></Card>}
           {rows.map((c) => {
             const id = channelId(c);
+            const platform = platformRows.get(id);
             const on = activeChannels.includes(id);
-            const configured = c.configured ?? c.ready ?? false;
+            const configured = platform?.configured ?? c.configured ?? c.ready ?? false;
+            const optionalCount = platform?.optional_env_vars?.length || platform?.metadata?.optional_env?.length || 0;
             return (
               <Card key={id} pad={false}>
                 <div className="border-b border-border p-[var(--pad)]">
@@ -65,9 +88,15 @@ export function Channels() {
                     <Icon name="channels" size={14} className={on ? "text-success" : "text-faint"} />
                     {on ? "Delivery enabled for inbound and outbound messages." : "Enable this adapter when credentials are ready."}
                   </div>
+                  {optionalCount > 0 && (
+                    <div className="flex items-center gap-2 text-xs text-dim">
+                      <Icon name="shield" size={14} className="text-faint" />
+                      {optionalCount} hardening control{optionalCount === 1 ? "" : "s"}
+                    </div>
+                  )}
                   <div className="grid grid-cols-3 gap-2">
                     <Button sm onClick={() => probe(id)}>Test</Button>
-                    <Button sm onClick={() => setConfiguring(c)}>Configure</Button>
+                    <Button sm onClick={() => setConfiguring({ row: c, platform })}>Configure</Button>
                     <Button sm variant={on ? "danger" : "primary"}
                       onClick={() => setActive(on ? activeChannels.filter((x) => x !== id) : [...activeChannels, id])}>
                       {on ? "Disable" : "Enable"}
@@ -81,20 +110,33 @@ export function Channels() {
       )}
       {configuring && (
         <ChannelConfig
-          row={configuring}
+          row={configuring.row}
+          platform={configuring.platform}
           onClose={() => setConfiguring(null)}
-          onSaved={() => { setConfiguring(null); status.reload(); reload(); }}
+          onSaved={() => { setConfiguring(null); status.reload(); platforms.reload(); reload(); }}
         />
       )}
     </>
   );
 }
 
-function ChannelConfig({ row, onClose, onSaved }: { row: ChannelRow; onClose: () => void; onSaved: () => void }) {
+function ChannelConfig({
+  row,
+  platform,
+  onClose,
+  onSaved,
+}: {
+  row: ChannelRow;
+  platform?: PlatformRow;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
   const id = channelId(row);
   const profile = row.profile || {};
-  const envVars = row.env_vars || row.env || [];
-  const missing = new Set(row.missing_env_vars || []);
+  const envVars: (string | EnvField)[] = platform?.env_vars || row.env_vars || row.env || [];
+  const missing = new Set(platform?.missing_env_vars || row.missing_env_vars || []);
+  const [envForm, setEnvForm] = useState<Record<string, string>>({});
+  const [clearEnv, setClearEnv] = useState<Record<string, boolean>>({});
   const [form, setForm] = useState({
     personality: String(profile.personality || profile.profile || ""),
     provider: String(profile.provider || ""),
@@ -106,6 +148,15 @@ function ChannelConfig({ row, onClose, onSaved }: { row: ChannelRow; onClose: ()
 
   async function save() {
     try {
+      const env = Object.fromEntries(Object.entries(envForm).filter(([, value]) => value.trim()));
+      const clear_env = Object.entries(clearEnv).filter(([, value]) => value).map(([key]) => key);
+      if (Object.keys(env).length || clear_env.length) {
+        const r = await put<{ ok?: boolean; error?: string }>(`messaging/platforms/${encodeURIComponent(id)}`, {
+          env,
+          clear_env,
+        });
+        if (r.ok === false) { toast(r.error || "Environment save failed", "err"); return; }
+      }
       const r = await patch<{ ok?: boolean; error?: string }>(`gateway/channels/${encodeURIComponent(id)}`, {
         enabled: true,
         ...form,
@@ -117,7 +168,7 @@ function ChannelConfig({ row, onClose, onSaved }: { row: ChannelRow; onClose: ()
 
   return (
     <div className="fixed inset-0 z-[200] flex items-start justify-center bg-black/55 pt-[8vh] backdrop-blur-sm" onMouseDown={onClose}>
-      <div className="w-full max-w-xl border border-border bg-bg shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="max-h-[84vh] w-full max-w-xl overflow-y-auto border border-border bg-bg shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <div>
             <div className="font-mono text-base font-semibold text-text">Configure {titleCase(id)}</div>
@@ -130,14 +181,46 @@ function ChannelConfig({ row, onClose, onSaved }: { row: ChannelRow; onClose: ()
             <div>{row.setup || "Credentials are read from environment variables."}</div>
             {!!envVars.length && (
               <div className="mt-2 flex flex-wrap gap-1.5">
-                {envVars.map((key) => (
-                  <Badge key={key} tone={missing.has(key) ? "warning" : "success"}>
-                    {key}
-                  </Badge>
-                ))}
+                {envVars.map((field) => {
+                  const key = envFieldKey(field);
+                  const isSet = envFieldSet(field);
+                  return (
+                    <Badge key={key} tone={missing.has(key) ? "warning" : isSet === false ? "neutral" : "success"}>
+                      {key}
+                    </Badge>
+                  );
+                })}
               </div>
             )}
           </div>
+          {!!envVars.length && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {envVars.map((field) => {
+                const key = envFieldKey(field);
+                const required = typeof field !== "string" && !!field.required;
+                const isSet = envFieldSet(field);
+                return (
+                  <div key={key} className="space-y-1.5">
+                    <Field label={key} hint={required ? "required" : "optional"}>
+                      <Input
+                        value={envForm[key] || ""}
+                        placeholder={isSet ? "set" : "unset"}
+                        onChange={(e) => setEnvForm({ ...envForm, [key]: e.target.value })}
+                      />
+                    </Field>
+                    <label className="flex items-center gap-2 font-mono text-[11px] text-dim">
+                      <input
+                        type="checkbox"
+                        checked={!!clearEnv[key]}
+                        onChange={(e) => setClearEnv({ ...clearEnv, [key]: e.target.checked })}
+                      />
+                      Clear
+                    </label>
+                  </div>
+                );
+              })}
+            </div>
+          )}
           <Field label="Profile"><Input value={form.personality} placeholder="default personality" onChange={(e) => setForm({ ...form, personality: e.target.value })} /></Field>
           <Field label="Provider"><Input value={form.provider} placeholder="provider override" onChange={(e) => setForm({ ...form, provider: e.target.value })} /></Field>
           <Field label="Model"><Input value={form.model} placeholder="model override" onChange={(e) => setForm({ ...form, model: e.target.value })} /></Field>
