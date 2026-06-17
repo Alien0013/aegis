@@ -31,6 +31,7 @@ from .util import now_iso
 
 _MAX_BODY_BYTES = 10 * 1024 * 1024
 _DEFAULT_MAX_STORED_RESPONSES = 100
+_DEFAULT_RESPONSE_AUTO_TRUNCATION_MESSAGES = 100
 _MAX_STORED_RUN_EVENTS = 500
 _TERMINAL_RUN_STATUSES = {"completed", "error", "cancelled", "interrupted"}
 _MAX_SESSION_KEY_CHARS = 256
@@ -675,6 +676,33 @@ def _response_conversation_history(
     return _history_payload(history)
 
 
+def _response_truncation_mode(value: Any) -> str:
+    if isinstance(value, dict):
+        value = value.get("type") or value.get("mode")
+    return str(value or "").strip().lower()
+
+
+def _responses_auto_truncation_limit(config: Config) -> int:
+    raw = config.get(
+        "server.responses_auto_truncation_messages",
+        _DEFAULT_RESPONSE_AUTO_TRUNCATION_MESSAGES,
+    )
+    return max(1, int(raw or _DEFAULT_RESPONSE_AUTO_TRUNCATION_MESSAGES))
+
+
+def _maybe_truncate_response_history(
+    messages: list[Message],
+    body: dict[str, Any],
+    config: Config,
+) -> list[Message]:
+    if _response_truncation_mode(body.get("truncation")) != "auto":
+        return messages
+    limit = _responses_auto_truncation_limit(config)
+    if len(messages) <= limit:
+        return messages
+    return list(messages[-limit:])
+
+
 def _capabilities(config: Config) -> dict[str, Any]:
     from .providers import registry
 
@@ -717,6 +745,7 @@ def _capabilities(config: Config) -> dict[str, Any]:
             "max_body_bytes": _MAX_BODY_BYTES,
             "max_concurrent_runs": int(config.get("server.max_concurrent_runs", 8) or 8),
             "run_events_timeout_seconds": float(config.get("server.run_events_timeout_seconds", 3600) or 3600),
+            "responses_auto_truncation_messages": _responses_auto_truncation_limit(config),
         },
         "endpoints": {
             "chat_completions": True,
@@ -740,6 +769,7 @@ def _capabilities(config: Config) -> dict[str, Any]:
             "responses_persistence": True,
             "previous_response_id": True,
             "response_conversations": True,
+            "responses_truncation_auto": True,
             "idempotency_keys": True,
             "sse_named_events": True,
             "tool_progress_events": True,
@@ -2507,6 +2537,7 @@ def make_handler(config: Config):
 
             input_history, last_user = _responses_messages(body)
             state_history = list(explicit_history) + list(input_history)
+            state_history = _maybe_truncate_response_history(state_history, body, config)
             history = list(state_history)
             instruction = _instruction_message(instructions)
             if instruction is not None:

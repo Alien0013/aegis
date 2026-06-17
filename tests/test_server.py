@@ -816,6 +816,7 @@ def test_server_health_capabilities_and_body_limit(monkeypatch, tmp_path):
     assert caps["transport"] == "aiohttp"
     assert caps["auth"]["type"] == "bearer"
     assert caps["limits"]["max_body_bytes"] == 8
+    assert caps["limits"]["responses_auto_truncation_messages"] == 100
     assert caps["endpoints"]["responses"] is True
     assert caps["endpoints"]["jobs"] is True
     routes = {row["name"]: row for row in caps["endpoint_descriptors"]}
@@ -823,6 +824,7 @@ def test_server_health_capabilities_and_body_limit(monkeypatch, tmp_path):
     assert routes["responses"]["streaming"] is True
     assert routes["runs.approval"]["methods"] == ["GET", "POST"]
     assert caps["features"]["responses_persistence"] is True
+    assert caps["features"]["responses_truncation_auto"] is True
     assert caps["features"]["tool_progress_events"] is True
     assert caps["features"]["session_key_header"] == "X-Hermes-Session-Key"
     assert too_large_status == 413
@@ -1148,6 +1150,44 @@ def test_responses_conversation_maps_to_latest_response(monkeypatch, tmp_path):
     assert [m.content for m in _FakeRunner.calls[1]["history"][:2]] == ["first", "hello"]
     assert conflict_status == 400
     assert "Cannot use both" in json.loads(conflict_data)["error"]
+
+
+def test_responses_truncation_auto_limits_previous_history(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    long_input = [{"role": "user", "content": f"msg {i}"} for i in range(150)]
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        first_status, first_data = _request(port, "POST", "/v1/responses", {
+            "input": long_input,
+        })
+        response_id = json.loads(first_data)["id"]
+        auto_status, _auto_data = _request(port, "POST", "/v1/responses", {
+            "input": "follow up",
+            "previous_response_id": response_id,
+            "truncation": "auto",
+        })
+        full_status, _full_data = _request(port, "POST", "/v1/responses", {
+            "input": "follow up without truncation",
+            "previous_response_id": response_id,
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert first_status == 200
+    assert auto_status == 200
+    assert full_status == 200
+    auto_history = _FakeRunner.calls[1]["history"]
+    full_history = _FakeRunner.calls[2]["history"]
+    assert len(auto_history) == 100
+    assert len(full_history) == 151
+    assert auto_history[0].content == "msg 51"
+    assert auto_history[-1].content == "hello"
 
 
 def test_responses_stream_sse_has_openai_event_shape(monkeypatch, tmp_path):
