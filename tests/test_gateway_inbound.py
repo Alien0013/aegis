@@ -332,6 +332,7 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert DiscordAdapter("token").metadata["command_cap"] == 100
     assert len(DiscordAdapter("token").command_menu(max_commands=500)) <= 100
     assert SlackAdapter().metadata["typed_command_prefix"] == "!"
+    assert "SLACK_ALLOWED_CHANNELS" in SlackAdapter().metadata["optional_env"]
     mattermost = MattermostAdapter().metadata
     assert mattermost["transport"] == "http_webhook"
     assert mattermost["supports_threads"] is True
@@ -342,6 +343,30 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert "X-Secret" in webhook["security"]["signature_schemes"]
     assert webhook["idempotency"]["delivery_cache"]["entries"] == 0
     assert webhook["rate_limiter"]["limit"] >= 1
+
+
+def test_slack_adapter_enforces_workspace_filters_and_strips_mentions(monkeypatch):
+    from aegis.gateway.slack_channel import SlackAdapter
+
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+    monkeypatch.setenv("SLACK_ALLOWED_USERS", "U1,U2")
+    monkeypatch.setenv("SLACK_ALLOWED_CHANNELS", "C1")
+    monkeypatch.setenv("SLACK_IGNORED_CHANNELS", "C9")
+    monkeypatch.setenv("SLACK_ALLOWED_TEAMS", "T1")
+    monkeypatch.setenv("SLACK_BOT_USER_ID", "UBOT")
+
+    adapter = SlackAdapter()
+
+    assert adapter._event_allowed({"user": "U1", "channel": "C1", "team": "T1"}) is True
+    assert adapter._event_allowed({"user": "U3", "channel": "C1", "team": "T1"}) is False
+    assert adapter._event_allowed({"user": "U1", "channel": "C2", "team": "T1"}) is False
+    assert adapter._event_allowed({"user": "U1", "channel": "C9", "team": "T1"}) is False
+    assert adapter._event_allowed({"user": "U1", "channel": "C1", "team": "T2"}) is False
+    assert adapter._event_allowed({"user": "U1", "channel": "C1", "team": "T1", "bot_id": "B1"}) is False
+    assert adapter._event_allowed({"user": "U1", "channel": "C1", "team": "T1", "subtype": "message_changed"}) is False
+    assert adapter._strip_own_mentions("<@UBOT> !status") == "!status"
+    assert adapter._strip_own_mentions("<@UBOT|aegis> hello") == "hello"
 
 
 def test_gateway_webhook_channel_normalizes_event_body():

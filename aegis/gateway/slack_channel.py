@@ -6,9 +6,19 @@ Needs SLACK_BOT_TOKEN (xoxb-…) and SLACK_APP_TOKEN (xapp-…, connections:writ
 from __future__ import annotations
 
 import os
+import re
 
 from ..platforms import chunk_text_by_units, normalize_inbound_command
 from .base import BasePlatformAdapter, Dispatch, MessageEvent
+
+
+def _csv_set(value: str) -> set[str] | None:
+    items = {item.strip() for item in str(value or "").split(",") if item.strip()}
+    return items or None
+
+
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on", "all"}
 
 
 class SlackAdapter(BasePlatformAdapter):
@@ -25,6 +35,25 @@ class SlackAdapter(BasePlatformAdapter):
         self.app_token = os.environ.get("SLACK_APP_TOKEN")
         if not self.bot_token or not self.app_token:
             raise RuntimeError("SLACK_BOT_TOKEN and SLACK_APP_TOKEN must be set.")
+        self.allow_bots = _env_truthy("SLACK_ALLOW_BOTS")
+        self.allowed_users = _csv_set(os.environ.get("SLACK_ALLOWED_USERS", ""))
+        self.allowed_channels = _csv_set(os.environ.get("SLACK_ALLOWED_CHANNELS", ""))
+        self.ignored_channels = _csv_set(os.environ.get("SLACK_IGNORED_CHANNELS", ""))
+        self.allowed_teams = _csv_set(os.environ.get("SLACK_ALLOWED_TEAMS", ""))
+        self.bot_user_id = os.environ.get("SLACK_BOT_USER_ID", "").strip()
+
+    @property
+    def metadata(self) -> dict:
+        data = super().metadata
+        data["security"] = {
+            "allow_bots": self.allow_bots,
+            "allowed_users_configured": bool(self.allowed_users),
+            "allowed_channels_configured": bool(self.allowed_channels),
+            "ignored_channels_configured": bool(self.ignored_channels),
+            "allowed_teams_configured": bool(self.allowed_teams),
+            "bot_user_id_configured": bool(self.bot_user_id),
+        }
+        return data
 
     def start(self, dispatch: Dispatch) -> None:
         self._init_inbound_queue(dispatch)
@@ -39,10 +68,10 @@ class SlackAdapter(BasePlatformAdapter):
 
         @app.event("message")
         def handle_message(event, say):  # noqa: ANN001
-            if event.get("subtype") or event.get("bot_id"):
-                return  # ignore bot/system messages to avoid loops
+            if not self._event_allowed(event):
+                return
             raw_text = event.get("text", "")
-            text = normalize_inbound_command(raw_text, platform="slack")
+            text = normalize_inbound_command(self._strip_own_mentions(raw_text), platform="slack")
             thread_id = event.get("thread_ts") or event.get("ts")
             ev = MessageEvent(
                 platform="slack", chat_id=event["channel"],
@@ -58,6 +87,30 @@ class SlackAdapter(BasePlatformAdapter):
             self._submit_inbound(ev, raw_text=raw_text)
 
         SocketModeHandler(app, self.app_token).start()
+
+    def _event_allowed(self, event: dict) -> bool:
+        if event.get("subtype"):
+            return False
+        if event.get("bot_id") and not self.allow_bots:
+            return False
+        user = str(event.get("user") or "")
+        if self.allowed_users and user not in self.allowed_users:
+            return False
+        team = str(event.get("team") or "")
+        if self.allowed_teams and team not in self.allowed_teams:
+            return False
+        channel = str(event.get("channel") or "")
+        if self.ignored_channels and ("*" in self.ignored_channels or channel in self.ignored_channels):
+            return False
+        if self.allowed_channels and "*" not in self.allowed_channels and channel not in self.allowed_channels:
+            return False
+        return True
+
+    def _strip_own_mentions(self, text: str) -> str:
+        if not self.bot_user_id:
+            return str(text or "")
+        pattern = re.compile(rf"<@{re.escape(self.bot_user_id)}(?:\|[^>]+)?>")
+        return pattern.sub("", str(text or "")).strip()
 
     def send(self, chat_id: str, text: str, *, metadata: dict | None = None) -> None:
         try:
