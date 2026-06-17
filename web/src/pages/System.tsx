@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useApi } from "../lib/useApi";
 import { ago } from "../lib/format";
-import { Card, Empty, Loading, PageHeader, Stat } from "../components/ui";
+import { Button, Card, Empty, Loading, PageHeader, Stat } from "../components/ui";
 import { desktop, isDesktop } from "../lib/desktop";
 import type { DesktopConnection } from "../lib/desktop";
 
@@ -15,6 +15,7 @@ export function System() {
   const { data, loading, error } = useApi<SysInfo>("system");
   const stats = useApi<Record<string, unknown>>("system/stats");
   const [desktopConnection, setDesktopConnection] = useState<DesktopConnection | null>(null);
+  const [checkingUpdates, setCheckingUpdates] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -24,6 +25,26 @@ export function System() {
       .catch(() => { if (!cancelled) setDesktopConnection(null); });
     return () => { cancelled = true; };
   }, []);
+
+  async function checkDesktopUpdates() {
+    if (!desktop?.checkForUpdates) return;
+    setCheckingUpdates(true);
+    try {
+      const updater = await desktop.checkForUpdates();
+      const connection = await desktop.getConnection?.();
+      setDesktopConnection({
+        ...(connection || desktopConnection || {}),
+        desktop: {
+          ...((connection || desktopConnection)?.desktop || {}),
+          updater: updater || (connection || desktopConnection)?.desktop?.updater,
+        },
+      });
+    } finally {
+      setCheckingUpdates(false);
+    }
+  }
+
+  const updater = desktopConnection?.desktop?.updater;
 
   return (
     <>
@@ -48,10 +69,23 @@ export function System() {
             </dl>
           </Card>
           {isDesktop && (
-            <Card title="Desktop backend">
+            <Card
+              title="Desktop backend"
+              actions={
+                desktop?.checkForUpdates ? (
+                  <Button sm icon="refresh" disabled={checkingUpdates || updater?.checking} onClick={checkDesktopUpdates}>
+                    Check for updates
+                  </Button>
+                ) : undefined
+              }
+            >
               <dl className="grid gap-y-2 text-sm sm:grid-cols-2">
                 <Row k="Mode" v={desktopConnection?.mode || "local"} />
                 <Row k="Backend" v={desktopConnection?.backend?.running ? "running" : "offline"} />
+                <Row k="Updater" v={updater?.stage} />
+                <Row k="Update note" v={updater?.message || updater?.error} />
+                <Row k="Update version" v={updater?.version} />
+                <Row k="Last checked" v={updater?.lastCheckedAt ? ago(updater.lastCheckedAt) : ""} />
                 <Row k="PID" v={desktopConnection?.backend?.pid ? String(desktopConnection.backend.pid) : ""} />
                 <Row k="Port" v={desktopConnection?.backend?.port ? String(desktopConnection.backend.port) : ""} />
                 <Row k="Uptime" v={formatDuration(desktopConnection?.backend?.uptimeMs || 0)} />

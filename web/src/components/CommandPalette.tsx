@@ -95,6 +95,13 @@ export function CommandPalette() {
         id: "restart-backend", label: "Restart backend", group: "Desktop", icon: "refresh",
         run: () => desktop?.restartBackend(),
       });
+      const checkForUpdates = desktop?.checkForUpdates;
+      if (checkForUpdates) {
+        list.push({
+          id: "check-updates", label: "Check for updates", group: "Desktop", icon: "refresh",
+          run: () => { void checkForUpdates(); },
+        });
+      }
     }
     return list;
   }, [nav, pluginRoutes, themes, setTheme, theme.name]);

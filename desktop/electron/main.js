@@ -522,9 +522,9 @@ function initAutoUpdate(manual) {
   updateCheckManual = Boolean(manual);
   if (!app.isPackaged) {
     const message = "Auto-update runs in the installed app only.";
-    setUpdaterStatus("disabled", { message });
+    const status = setUpdaterStatus("disabled", { message });
     if (manual) notify("AEGIS updates", message);
-    return;
+    return status;
   }
   const updateEligibility = releaseUpdateEligibility({
     packaged: app.isPackaged,
@@ -533,13 +533,13 @@ function initAutoUpdate(manual) {
   });
   if (!updateEligibility.ok) {
     log(`auto-update disabled: ${updateEligibility.reason}`);
-    setUpdaterStatus("disabled", { reason: updateEligibility.reason });
+    const status = setUpdaterStatus("disabled", { reason: updateEligibility.reason });
     if (manual) notify("AEGIS updates", updateEligibility.reason);
-    return;
+    return status;
   }
   if (updateCheckInFlight) {
     if (manual) notify("AEGIS updates", "An update check is already running.");
-    return;
+    return updaterStatus;
   }
   try {
     if (!autoUpdater) ({ autoUpdater } = require("electron-updater"));
@@ -547,9 +547,9 @@ function initAutoUpdate(manual) {
   catch (e) {
     const message = `electron-updater unavailable: ${e.message}`;
     log(message);
-    setUpdaterStatus("error", { error: message });
+    const status = setUpdaterStatus("error", { error: message });
     if (manual) notify("AEGIS update failed", message);
-    return;
+    return status;
   }
   if (!autoUpdaterConfigured) {
     autoUpdater.autoDownload = true;
@@ -583,7 +583,7 @@ function initAutoUpdate(manual) {
     autoUpdaterConfigured = true;
   }
   updateCheckInFlight = true;
-  setUpdaterStatus("checking");
+  const status = setUpdaterStatus("checking");
   autoUpdater.checkForUpdates()
     .catch((e) => {
       const message = String((e && e.message) || e || "Update check failed.");
@@ -592,6 +592,7 @@ function initAutoUpdate(manual) {
       if (updateCheckManual) notify("AEGIS update failed", message);
     })
     .finally(() => { updateCheckInFlight = false; });
+  return status;
 }
 
 /* ---------- boot sequence ---------- */
@@ -717,6 +718,7 @@ ipcMain.handle("aegis:diagnostics", () => runtimeDiagnostics());
 ipcMain.handle("aegis:api", (_e, request) => apiRequest(request));
 ipcMain.handle("aegis:logs:recent", (_e, options = {}) => readRecentLogLines(options && options.limit));
 ipcMain.handle("aegis:logs:reveal", () => shell.openPath(logPath()));
+ipcMain.handle("aegis:update:check", () => initAutoUpdate(true));
 
 /* ---------- deep links (aegis://) ---------- */
 function pickDeepLink(argv) {

@@ -8,6 +8,10 @@ export interface DesktopConnection {
   source?: string;
   baseUrl?: string;
   wsUrl?: string;
+  desktop?: {
+    updater?: DesktopUpdaterStatus;
+    updateEligibility?: { ok?: boolean; reason?: string };
+  };
   backend?: {
     running?: boolean;
     pid?: number | null;
@@ -24,6 +28,16 @@ export interface DesktopConnection {
   };
 }
 
+export interface DesktopUpdaterStatus {
+  stage?: string;
+  message?: string;
+  error?: string;
+  version?: string;
+  checking?: boolean;
+  lastCheckedAt?: string;
+  updatedAt?: string;
+}
+
 export interface DesktopBridge {
   isDesktop: boolean;
   platform: string;
@@ -35,6 +49,7 @@ export interface DesktopBridge {
   openExternal(url: string): void;
   restartBackend(): void;
   getConnection?(): Promise<DesktopConnection>;
+  checkForUpdates?(): Promise<DesktopUpdaterStatus>;
   api?<T = unknown>(request: { method?: string; path: string; body?: unknown }): Promise<T>;
 }
 
