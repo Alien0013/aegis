@@ -5,7 +5,12 @@ from __future__ import annotations
 import asyncio
 import os
 
-from ..platforms import chunk_text_by_units, normalize_inbound_command
+from ..platforms import (
+    MAX_DISCORD_APP_COMMANDS,
+    chunk_text_by_units,
+    discord_application_command_menu,
+    normalize_inbound_command,
+)
 from .base import BasePlatformAdapter, Dispatch, MessageEvent
 
 
@@ -26,6 +31,9 @@ class DiscordAdapter(BasePlatformAdapter):
         self.allowed = {u.strip() for u in allowed.split(",") if u.strip()} if allowed else None
         roles = os.environ.get("DISCORD_ALLOWED_ROLES", "").strip()
         self.allowed_roles = {r.strip() for r in roles.split(",") if r.strip()} if roles else None
+
+    def command_menu(self, *, max_commands: int = MAX_DISCORD_APP_COMMANDS) -> list[str]:
+        return discord_application_command_menu(max_commands=max_commands)
 
     def start(self, dispatch: Dispatch) -> None:
         self._init_inbound_queue(dispatch)

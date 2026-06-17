@@ -8,6 +8,7 @@ import sys
 import httpx
 
 from ..platforms import (
+    MAX_TELEGRAM_COMMANDS,
     capped_command_menu,
     chunk_text_by_units,
     normalize_inbound_command,
@@ -15,8 +16,6 @@ from ..platforms import (
     utf16_units,
 )
 from .base import BasePlatformAdapter, Dispatch, MessageEvent
-
-MAX_TELEGRAM_COMMANDS = 30
 
 
 class CLIChannel(BasePlatformAdapter):

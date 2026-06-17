@@ -281,10 +281,23 @@ def test_inbound_normalizes_slack_bang_command_alias():
 
 
 def test_platform_helper_command_caps_and_utf16_chunks():
-    from aegis.platforms import capped_command_menu, chunk_text_by_units, utf16_units
+    from aegis.platforms import (
+        MAX_DISCORD_APP_COMMANDS,
+        capped_command_menu,
+        chunk_text_by_units,
+        discord_application_command_menu,
+        utf16_units,
+    )
 
     commands = capped_command_menu(["/custom", "/bad command", "/custom"], max_commands=4)
     assert commands == ["/help", "/whoami", "/status", "/stop"]
+
+    many_commands = [f"/custom{i}" for i in range(MAX_DISCORD_APP_COMMANDS + 50)]
+    discord_commands = discord_application_command_menu(many_commands, max_commands=999)
+    assert len(discord_commands) == MAX_DISCORD_APP_COMMANDS
+    assert len(set(discord_commands)) == MAX_DISCORD_APP_COMMANDS
+    assert discord_commands[0] == "/help"
+    assert discord_commands[-1].startswith("/custom")
 
     chunks = chunk_text_by_units("😀" * 5, limit=4, len_fn=utf16_units)
     assert chunks == ["😀😀", "😀😀", "😀"]
@@ -301,6 +314,8 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
 
     assert TelegramAdapter("token").metadata["transport"] == "long_poll"
     assert DiscordAdapter("token").metadata["supports_threads"] is True
+    assert DiscordAdapter("token").metadata["command_cap"] == 100
+    assert len(DiscordAdapter("token").command_menu(max_commands=500)) <= 100
     assert SlackAdapter().metadata["typed_command_prefix"] == "!"
     assert WebhookChannel().metadata["transport"] == "http"
 

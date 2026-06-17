@@ -12,6 +12,9 @@ from copy import deepcopy
 from typing import Any, Callable
 
 
+MAX_TELEGRAM_COMMANDS = 30
+MAX_DISCORD_APP_COMMANDS = 100
+
 PLATFORM_ALIASES = {
     "tg": "telegram",
     "telegram-bot": "telegram",
@@ -36,6 +39,7 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
         "supports_threads": True,
         "supports_media": True,
         "typed_command_prefix": "/",
+        "command_cap": MAX_TELEGRAM_COMMANDS,
     },
     "discord": {
         "display_name": "Discord",
@@ -53,6 +57,8 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
         "supports_threads": True,
         "supports_media": True,
         "typed_command_prefix": "!",
+        "command_cap": MAX_DISCORD_APP_COMMANDS,
+        "slash_command_cap": MAX_DISCORD_APP_COMMANDS,
     },
     "slack": {
         "display_name": "Slack",
@@ -166,6 +172,20 @@ def capped_command_menu(
         if len(out) >= cap:
             break
     return out
+
+
+def discord_application_command_menu(
+    extra_commands: Iterable[Any] | None = None,
+    *,
+    max_commands: int = MAX_DISCORD_APP_COMMANDS,
+) -> list[str]:
+    """Return a slash-command menu bounded by Discord's app-command hard cap."""
+
+    requested = max(1, int(max_commands or MAX_DISCORD_APP_COMMANDS))
+    return capped_command_menu(
+        extra_commands,
+        max_commands=min(requested, MAX_DISCORD_APP_COMMANDS),
+    )
 
 
 def normalize_inbound_command(
