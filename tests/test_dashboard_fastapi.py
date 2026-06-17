@@ -785,7 +785,15 @@ def test_fastapi_model_route_aliases(tmp_path, monkeypatch):
 
 
 def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
-    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    for key in (
+        "TELEGRAM_BOT_TOKEN",
+        "MATTERMOST_URL",
+        "MATTERMOST_BOT_TOKEN",
+        "MATTERMOST_WEBHOOK_SECRET",
+        "WEBHOOK_CHANNEL_SECRET",
+        "WEBHOOK_CHANNEL_RATE_LIMIT_PER_MINUTE",
+    ):
+        monkeypatch.delenv(key, raising=False)
     app = _app(tmp_path, monkeypatch)
     headers = {"X-Aegis-Token": "t"}
 
@@ -808,16 +816,35 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     assert telegram["transport"] == "long_poll"
     assert "media" in telegram["capabilities"]
     assert telegram["metadata"]["adapter_class"].endswith("TelegramAdapter")
+    mattermost = next(row for row in rows if row["id"] == "mattermost")
+    assert mattermost["transport"] == "http_webhook"
+    assert mattermost["auth_type"] == "bearer_and_webhook_secret"
+    assert "MATTERMOST_WEBHOOK_SECRET" in mattermost["optional_env_vars"]
+    assert "threads" in mattermost["capabilities"]
+    assert mattermost["metadata"]["security"]["auth_type"] == "bearer"
+    webhook = next(row for row in rows if row["id"] == "webhook")
+    assert webhook["transport"] == "http"
+    assert "WEBHOOK_CHANNEL_RATE_LIMIT_PER_MINUTE" in webhook["optional_env_vars"]
+    assert "idempotency" in webhook["capabilities"]
+    assert "thread" in webhook["delivery_modes"]
+    assert "X-Webhook-Signature" in webhook["metadata"]["security"]["signature_schemes"]
 
     registry = asyncio.run(_request(app, "GET", "/api/platforms/registry", headers=headers))
     assert registry.status_code == 200
     assert registry.json()["count"] >= len(rows)
     reg_telegram = next(row for row in registry.json()["registry"] if row["id"] == "telegram")
     assert reg_telegram["metadata"]["auth_type"] == "bot_token"
+    reg_mattermost = next(row for row in registry.json()["registry"] if row["id"] == "mattermost")
+    assert reg_mattermost["metadata"]["adapter_class"].endswith("MattermostAdapter")
 
     detail = asyncio.run(_request(app, "GET", "/api/platforms/telegram", headers=headers))
     assert detail.status_code == 200
     assert detail.json()["platform"]["metadata"]["transport"] == "long_poll"
+
+    mattermost_detail = asyncio.run(_request(app, "GET", "/api/platforms/mattermost", headers=headers))
+    assert mattermost_detail.status_code == 200
+    assert mattermost_detail.json()["platform"]["state"] == "disabled"
+    assert "MATTERMOST_URL" in mattermost_detail.json()["platform"]["missing_env_vars"]
 
     invalid = asyncio.run(_request(
         app,

@@ -312,6 +312,11 @@ def test_platform_helper_command_caps_and_utf16_chunks():
         "EMAIL_PASSWORD",
     ]
     assert platform_metadata("ntfy.sh")["optional_env"] == ["NTFY_SERVER", "NTFY_TOKEN"]
+    assert platform_metadata("mattermost-webhook")["security"]["auth_type"] == "bearer"
+    webhook_meta = platform_metadata("webhooks")
+    assert webhook_meta["supports_threads"] is True
+    assert "WEBHOOK_CHANNEL_RATE_LIMIT_PER_MINUTE" in webhook_meta["optional_env"]
+    assert "X-Webhook-Signature" in webhook_meta["security"]["signature_schemes"]
 
 
 def test_adapter_metadata_for_core_platforms(monkeypatch):

@@ -116,6 +116,11 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
         "supports_threads": True,
         "supports_media": False,
         "typed_command_prefix": "!",
+        "security": {
+            "auth_type": "bearer",
+            "webhook_secret_env": "MATTERMOST_WEBHOOK_SECRET",
+            "outgoing_token_env": "MATTERMOST_OUTGOING_TOKEN",
+        },
     },
     "signal": {
         "display_name": "Signal",
@@ -169,12 +174,31 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
             "WEBHOOK_CHANNEL_SECRET",
             "WEBHOOK_CHANNEL_PORT",
             "WEBHOOK_CHANNEL_MAX_BYTES",
+            "WEBHOOK_CHANNEL_RATE_LIMIT_PER_MINUTE",
+            "WEBHOOK_CHANNEL_IDEMPOTENCY_TTL_SECONDS",
+            "WEBHOOK_CHANNEL_IDEMPOTENCY_CACHE_MAX",
+            "WEBHOOK_CHANNEL_INSECURE_NO_AUTH",
         ],
         "max_message_length": None,
         "message_length_units": "codepoints",
-        "supports_threads": False,
+        "supports_threads": True,
         "supports_media": False,
         "typed_command_prefix": "/",
+        "security": {
+            "secret_env": "WEBHOOK_CHANNEL_SECRET",
+            "signature_schemes": [
+                "X-Secret",
+                "X-Hub-Signature-256",
+                "X-Webhook-Signature",
+                "svix-signature",
+                "X-Gitlab-Token",
+            ],
+            "rate_limit_env": "WEBHOOK_CHANNEL_RATE_LIMIT_PER_MINUTE",
+            "idempotency_env": [
+                "WEBHOOK_CHANNEL_IDEMPOTENCY_TTL_SECONDS",
+                "WEBHOOK_CHANNEL_IDEMPOTENCY_CACHE_MAX",
+            ],
+        },
     },
 }
 
