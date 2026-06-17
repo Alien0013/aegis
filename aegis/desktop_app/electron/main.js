@@ -719,6 +719,7 @@ ipcMain.handle("aegis:api", (_e, request) => apiRequest(request));
 ipcMain.handle("aegis:logs:recent", (_e, options = {}) => readRecentLogLines(options && options.limit));
 ipcMain.handle("aegis:logs:reveal", () => shell.openPath(logPath()));
 ipcMain.handle("aegis:update:check", () => initAutoUpdate(true));
+ipcMain.handle("aegis:update:status", () => ({ ...updaterStatus }));
 
 /* ---------- deep links (aegis://) ---------- */
 function pickDeepLink(argv) {

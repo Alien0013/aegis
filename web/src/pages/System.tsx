@@ -3,7 +3,7 @@ import { useApi } from "../lib/useApi";
 import { ago } from "../lib/format";
 import { Button, Card, Empty, Loading, PageHeader, Stat } from "../components/ui";
 import { desktop, isDesktop } from "../lib/desktop";
-import type { DesktopConnection } from "../lib/desktop";
+import type { DesktopConnection, DesktopUpdaterStatus } from "../lib/desktop";
 
 interface SysInfo {
   version?: string; python?: string; platform?: string; aegis_home?: string;
@@ -17,14 +17,50 @@ export function System() {
   const [desktopConnection, setDesktopConnection] = useState<DesktopConnection | null>(null);
   const [checkingUpdates, setCheckingUpdates] = useState(false);
 
+  function applyDesktopSnapshot(connection?: DesktopConnection | null, updater?: DesktopUpdaterStatus | null) {
+    setDesktopConnection((current) => {
+      const base = connection || current || {};
+      const desktopData = {
+        ...(current?.desktop || {}),
+        ...(connection?.desktop || {}),
+      };
+      if (updater) desktopData.updater = updater;
+      return {
+        ...(current || {}),
+        ...(base || {}),
+        desktop: desktopData,
+      };
+    });
+  }
+
   useEffect(() => {
     let cancelled = false;
     if (!isDesktop || !desktop?.getConnection) return;
     desktop.getConnection()
-      .then((connection) => { if (!cancelled) setDesktopConnection(connection); })
+      .then((connection) => { if (!cancelled) applyDesktopSnapshot(connection); })
       .catch(() => { if (!cancelled) setDesktopConnection(null); });
     return () => { cancelled = true; };
   }, []);
+
+  const updater = desktopConnection?.desktop?.updater;
+
+  useEffect(() => {
+    const active = updater?.checking || ["checking", "available", "downloading"].includes(updater?.stage || "");
+    if (!isDesktop || !desktop?.getUpdateStatus || !active) return;
+    const getUpdateStatus = desktop.getUpdateStatus;
+    let cancelled = false;
+    const poll = () => {
+      getUpdateStatus()
+        .then((status) => { if (!cancelled) applyDesktopSnapshot(null, status); })
+        .catch(() => undefined);
+    };
+    const timer = window.setInterval(poll, 1000);
+    poll();
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [updater?.checking, updater?.stage]);
 
   async function checkDesktopUpdates() {
     if (!desktop?.checkForUpdates) return;
@@ -32,19 +68,11 @@ export function System() {
     try {
       const updater = await desktop.checkForUpdates();
       const connection = await desktop.getConnection?.();
-      setDesktopConnection({
-        ...(connection || desktopConnection || {}),
-        desktop: {
-          ...((connection || desktopConnection)?.desktop || {}),
-          updater: updater || (connection || desktopConnection)?.desktop?.updater,
-        },
-      });
+      applyDesktopSnapshot(connection, updater);
     } finally {
       setCheckingUpdates(false);
     }
   }
-
-  const updater = desktopConnection?.desktop?.updater;
 
   return (
     <>

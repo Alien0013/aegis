@@ -50,6 +50,7 @@ export interface DesktopBridge {
   restartBackend(): void;
   getConnection?(): Promise<DesktopConnection>;
   checkForUpdates?(): Promise<DesktopUpdaterStatus>;
+  getUpdateStatus?(): Promise<DesktopUpdaterStatus>;
   api?<T = unknown>(request: { method?: string; path: string; body?: unknown }): Promise<T>;
 }
 

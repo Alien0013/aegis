@@ -67,6 +67,7 @@ test("auto-updater setup is idempotent and bounded", () => {
   requireSnippet("autoUpdater.allowDowngrade = false");
   requireSnippet('if (updateCheckManual) notify("AEGIS update failed", message);');
   requireSnippet('ipcMain.handle("aegis:update:check"');
+  requireSnippet('ipcMain.handle("aegis:update:status"');
 });
 
 test("renderer diagnostics and logs bridge is bounded", () => {
@@ -78,4 +79,5 @@ test("renderer diagnostics and logs bridge is bounded", () => {
   assert.notEqual(preload.indexOf("getDiagnostics"), -1);
   assert.notEqual(preload.indexOf("getRecentLogs: (limit)"), -1);
   assert.notEqual(preload.indexOf("checkForUpdates"), -1);
+  assert.notEqual(preload.indexOf("getUpdateStatus"), -1);
 });

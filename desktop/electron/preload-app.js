@@ -26,4 +26,5 @@ contextBridge.exposeInMainWorld("aegisDesktop", {
   getRecentLogs: (limit) => ipcRenderer.invoke("aegis:logs:recent", { limit }),
   revealLogs: () => ipcRenderer.invoke("aegis:logs:reveal"),
   checkForUpdates: () => ipcRenderer.invoke("aegis:update:check"),
+  getUpdateStatus: () => ipcRenderer.invoke("aegis:update:status"),
 });
