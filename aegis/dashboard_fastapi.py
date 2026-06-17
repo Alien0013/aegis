@@ -49,6 +49,7 @@ _BASIC_SECRET_ENV = "AEGIS_DASHBOARD_BASIC_AUTH_SECRET"
 _DESKTOP_CRON_STARTED = False
 _DESKTOP_CRON_LOCK = threading.Lock()
 _DASHBOARD_PLUGIN_API_MOUNT_STATUS: dict[str, dict[str, Any]] = {}
+_DASHBOARD_PLUGIN_API_MOUNT_LOCK = threading.Lock()
 
 
 def _coerce_dashboard_bool(value: Any, default: bool = False) -> bool:
@@ -2046,12 +2047,53 @@ def _dashboard_plugin_route_metadata(row: dict[str, Any]) -> dict[str, Any]:
     return route
 
 
+def _dashboard_plugin_api_observability(info: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "request_count": int(info.get("request_count") or 0),
+        "last_request_at": str(info.get("last_request_at") or ""),
+        "last_request_path": str(info.get("last_request_path") or ""),
+        "last_request_method": str(info.get("last_request_method") or ""),
+    }
+
+
+def _set_dashboard_plugin_api_mount_status(name: str, status: dict[str, Any]) -> None:
+    with _DASHBOARD_PLUGIN_API_MOUNT_LOCK:
+        previous = _DASHBOARD_PLUGIN_API_MOUNT_STATUS.get(name) or {}
+        status.update({
+            key: previous.get(key, status.get(key, "" if key != "request_count" else 0))
+            for key in (
+                "request_count",
+                "last_request_at",
+                "last_request_path",
+                "last_request_method",
+            )
+        })
+        _DASHBOARD_PLUGIN_API_MOUNT_STATUS[name] = status
+
+
+def _record_dashboard_plugin_api_request(name: str, request: Request) -> None:
+    with _DASHBOARD_PLUGIN_API_MOUNT_LOCK:
+        info = _DASHBOARD_PLUGIN_API_MOUNT_STATUS.setdefault(name, {})
+        info["request_count"] = int(info.get("request_count") or 0) + 1
+        info["last_request_at"] = datetime.now(timezone.utc).isoformat()
+        info["last_request_path"] = request.url.path
+        info["last_request_method"] = request.method
+
+
 def _dashboard_plugin_mount_info(row: dict[str, Any]) -> dict[str, Any]:
     name = str(row.get("name") or "")
     api_path = str(row.get("_api") or "")
     if not api_path:
-        return {"status": "skipped", "mounted": False, "api": "", "routes": [], "error": ""}
-    info = dict(_DASHBOARD_PLUGIN_API_MOUNT_STATUS.get(name) or {})
+        return {
+            "status": "skipped",
+            "mounted": False,
+            "api": "",
+            "routes": [],
+            "error": "",
+            **_dashboard_plugin_api_observability({}),
+        }
+    with _DASHBOARD_PLUGIN_API_MOUNT_LOCK:
+        info = dict(_DASHBOARD_PLUGIN_API_MOUNT_STATUS.get(name) or {})
     if str(info.get("api_path") or "") != api_path:
         return {
             "status": "unmounted",
@@ -2059,6 +2101,7 @@ def _dashboard_plugin_mount_info(row: dict[str, Any]) -> dict[str, Any]:
             "api": Path(api_path).name,
             "routes": [],
             "error": "",
+            **_dashboard_plugin_api_observability(info),
         }
     return {
         "status": str(info.get("status") or "unmounted"),
@@ -2066,6 +2109,7 @@ def _dashboard_plugin_mount_info(row: dict[str, Any]) -> dict[str, Any]:
         "api": str(info.get("api") or Path(api_path).name),
         "routes": list(info.get("routes") or []),
         "error": str(info.get("error") or ""),
+        **_dashboard_plugin_api_observability(info),
     }
 
 
@@ -2273,6 +2317,7 @@ def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
             live = _dashboard_plugin_record(config, record_name)
             if not live or str(live.get("_api") or "") != expected_api:
                 raise HTTPException(status_code=404, detail="dashboard plugin API not mounted")
+            _record_dashboard_plugin_api_request(record_name, request)
 
         return auth
 
@@ -2293,30 +2338,31 @@ def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
             except ValueError:
                 pass
         mounted.pop(name, None)
-        _DASHBOARD_PLUGIN_API_MOUNT_STATUS.pop(name, None)
+        with _DASHBOARD_PLUGIN_API_MOUNT_LOCK:
+            _DASHBOARD_PLUGIN_API_MOUNT_STATUS.pop(name, None)
 
     for record in _dashboard_plugin_records(config):
         api_path = record.get("_api")
         record_name = str(record["name"])
         if not api_path:
-            _DASHBOARD_PLUGIN_API_MOUNT_STATUS[record_name] = {
+            _set_dashboard_plugin_api_mount_status(record_name, {
                 "status": "skipped",
                 "mounted": False,
                 "api_path": "",
                 "api": "",
                 "routes": [],
                 "error": "",
-            }
+            })
             continue
         if record_name in mounted and mounted[record_name].get("api") == str(api_path):
-            _DASHBOARD_PLUGIN_API_MOUNT_STATUS[record_name] = {
+            _set_dashboard_plugin_api_mount_status(record_name, {
                 "status": "mounted",
                 "mounted": True,
                 "api_path": str(api_path),
                 "api": Path(str(api_path)).name,
                 "routes": list(mounted[record_name].get("route_paths") or []),
                 "error": "",
-            }
+            })
             continue
         path = Path(api_path)
         module_name = "aegis_dashboard_plugin_" + hashlib.sha256(str(path).encode()).hexdigest()[:16]
@@ -2324,14 +2370,14 @@ def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
             before = {id(route) for route in app.router.routes}
             spec = importlib.util.spec_from_file_location(module_name, path)
             if spec is None or spec.loader is None:
-                _DASHBOARD_PLUGIN_API_MOUNT_STATUS[record_name] = {
+                _set_dashboard_plugin_api_mount_status(record_name, {
                     "status": "error",
                     "mounted": False,
                     "api_path": str(api_path),
                     "api": path.name,
                     "routes": [],
                     "error": "could not load api module",
-                }
+                })
                 continue
             module = importlib.util.module_from_spec(spec)
             import sys
@@ -2347,14 +2393,14 @@ def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
             if router is None and callable(get_router):
                 router = get_router()
             if router is None:
-                _DASHBOARD_PLUGIN_API_MOUNT_STATUS[record_name] = {
+                _set_dashboard_plugin_api_mount_status(record_name, {
                     "status": "error",
                     "mounted": False,
                     "api_path": str(api_path),
                     "api": path.name,
                     "routes": [],
                     "error": "api module has no router",
-                }
+                })
                 continue
             declared_route_paths = []
             for plugin_route in getattr(router, "routes", []) or []:
@@ -2385,23 +2431,23 @@ def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
                 "routes": new_routes,
                 "route_paths": route_paths,
             }
-            _DASHBOARD_PLUGIN_API_MOUNT_STATUS[record_name] = {
+            _set_dashboard_plugin_api_mount_status(record_name, {
                 "status": "mounted",
                 "mounted": True,
                 "api_path": str(api_path),
                 "api": path.name,
                 "routes": route_paths,
                 "error": "",
-            }
+            })
         except Exception as exc:  # noqa: BLE001
-            _DASHBOARD_PLUGIN_API_MOUNT_STATUS[record_name] = {
+            _set_dashboard_plugin_api_mount_status(record_name, {
                 "status": "error",
                 "mounted": False,
                 "api_path": str(api_path),
                 "api": path.name,
                 "routes": [],
                 "error": str(exc),
-            }
+            })
             continue
 
 

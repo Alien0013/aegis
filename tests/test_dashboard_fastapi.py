@@ -1666,6 +1666,13 @@ def test_fastapi_dashboard_plugins_manifest_assets_and_api(tmp_path, monkeypatch
     assert allowed.status_code == 200
     assert allowed.json() == {"pong": True}
 
+    observed = asyncio.run(_request(app, "GET", "/api/dashboard/plugins", headers=headers))
+    observed_row = next(item for item in observed.json() if item["name"] == "demo-panel")
+    assert observed_row["api_mount"]["request_count"] == 1
+    assert observed_row["api_mount"]["last_request_path"] == "/api/plugins/demo-panel/ping"
+    assert observed_row["api_mount"]["last_request_method"] == "GET"
+    assert observed_row["api_mount"]["last_request_at"]
+
 
 def test_fastapi_dashboard_only_plugins_are_discovered_and_mounted(tmp_path, monkeypatch):
     plug = tmp_path / "plugins" / "status"
