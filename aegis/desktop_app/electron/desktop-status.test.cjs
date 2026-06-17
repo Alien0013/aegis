@@ -11,11 +11,12 @@ const {
   releaseUpdateEligibility,
 } = require("./desktop-status.cjs");
 
-function fakeApp({ packaged = false, version = "0.1.0", userData = "" } = {}) {
+function fakeApp({ packaged = false, version = "0.1.0", userData = "", appPath = "" } = {}) {
   return {
     isPackaged: packaged,
     getVersion: () => version,
     getPath: (name) => (name === "userData" ? userData : ""),
+    getAppPath: () => appPath,
   };
 }
 
@@ -73,10 +74,34 @@ test("desktop diagnostics exposes runtime, stamp, checks, and repair actions", (
   assert.equal(report.installStamp.commit, "abc123");
   assert.equal(report.updateEligibility.ok, true);
   assert.equal(report.renderer.gpuFallbackRecommended, false);
+  assert.equal(report.backendDiscovery.configured, true);
+  assert.equal(report.backendDiscovery.bundled, false);
   assert.equal(report.checks.find((row) => row.id === "install_stamp").ok, true);
   assert.equal(report.checks.find((row) => row.id === "release_update_eligibility").ok, true);
   assert.equal(report.checks.find((row) => row.id === "backend_environment").ok, true);
   assert(report.repair.actions.some((row) => row.id === "restart_backend"));
+});
+
+test("desktop diagnostics treats a packaged resource backend as configured", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "aegis-desktop-status-"));
+  const resources = path.join(root, "resources");
+  const bundled = path.join(resources, "aegis", "bin", "aegis");
+  fs.mkdirSync(path.dirname(bundled), { recursive: true });
+  fs.writeFileSync(bundled, "echo aegis\n");
+
+  const report = desktopDiagnostics({
+    app: fakeApp({ packaged: true, appPath: path.join(resources, "app.asar") }),
+    desktopRoot: root,
+    resourcesPath: resources,
+    env: {},
+    platform: "linux",
+    versions: {},
+  });
+
+  assert.equal(report.backendDiscovery.configured, true);
+  assert.equal(report.backendDiscovery.bundled, true);
+  assert(report.backendDiscovery.packagedCandidates.includes(bundled));
+  assert.equal(report.checks.find((row) => row.id === "backend_environment").severity, "ok");
 });
 
 test("releaseUpdateEligibility rejects dev, dirty, stale, and mismatched install stamps", () => {

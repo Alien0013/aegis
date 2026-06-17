@@ -21,7 +21,8 @@ contextBridge.exposeInMainWorld("aegisDesktop", {
   openExternal: (url) => ipcRenderer.send("win:openExternal", url),
   restartBackend: () => ipcRenderer.send("win:restartBackend"),
   getConnection: () => ipcRenderer.invoke("aegis:connection"),
+  getDiagnostics: () => ipcRenderer.invoke("aegis:diagnostics"),
   api: (request) => ipcRenderer.invoke("aegis:api", request),
-  getRecentLogs: () => ipcRenderer.invoke("aegis:logs:recent"),
+  getRecentLogs: (limit) => ipcRenderer.invoke("aegis:logs:recent", { limit }),
   revealLogs: () => ipcRenderer.invoke("aegis:logs:reveal"),
 });

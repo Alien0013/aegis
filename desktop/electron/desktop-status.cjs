@@ -2,6 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { candidatePackagedAegisCommands } = require("./backend-env.cjs");
 
 const GPU_OVERRIDE_ON = new Set(["1", "true", "yes", "on"]);
 const GPU_OVERRIDE_OFF = new Set(["0", "false", "no", "off"]);
@@ -98,12 +99,20 @@ function desktopDiagnostics({
   arch = process.arch,
   desktopRoot = path.resolve(__dirname, ".."),
   resourcesPath = process.resourcesPath || "",
+  exists = fs.existsSync,
 } = {}) {
   const packaged = Boolean(app && app.isPackaged);
   const stamp = readInstallStamp({ desktopRoot, resourcesPath });
   const updateEligibility = releaseUpdateEligibility({ packaged, stamp, platform });
   const userDataPath = app && typeof app.getPath === "function" ? _safeAppCall(app, "getPath", "") : "";
-  const backendConfigured = Boolean(env.AEGIS_HOME || env.AEGIS_BIN);
+  const appPath = app && typeof app.getAppPath === "function" ? _safeAppCall(app, "getAppPath", "") : "";
+  const packagedBackendCandidates = packaged
+    ? candidatePackagedAegisCommands({ platform, resourcesPath, appPath })
+    : [];
+  const bundledBackend = packagedBackendCandidates.some((candidate) => {
+    try { return exists(candidate); } catch { return false; }
+  });
+  const backendConfigured = Boolean(env.AEGIS_HOME || env.AEGIS_BIN || bundledBackend);
   const remoteDisplayReason = detectRemoteDisplay({ env, platform });
   const checks = [
     {
@@ -123,7 +132,7 @@ function desktopDiagnostics({
       ok: backendConfigured || !packaged,
       severity: backendConfigured || !packaged ? "ok" : "warning",
       detail: backendConfigured
-        ? "AEGIS_HOME or AEGIS_BIN is configured"
+        ? (bundledBackend ? "packaged backend candidate is bundled" : "AEGIS_HOME or AEGIS_BIN is configured")
         : "packaged desktop will use default backend discovery",
     },
   ];
@@ -148,6 +157,11 @@ function desktopDiagnostics({
     renderer: {
       remoteDisplayReason,
       gpuFallbackRecommended: Boolean(remoteDisplayReason),
+    },
+    backendDiscovery: {
+      configured: backendConfigured,
+      bundled: bundledBackend,
+      packagedCandidates: packagedBackendCandidates,
     },
     checks,
     repair: {

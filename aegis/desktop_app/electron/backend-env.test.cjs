@@ -5,6 +5,7 @@ const {
   aegisCommand,
   backendEnvironment,
   candidateAegisCommands,
+  candidatePackagedAegisCommands,
   hiddenWindowsChildOptions,
   normalizePathEnv,
   resolveAegisHome,
@@ -35,6 +36,35 @@ test("uses Unix AEGIS_HOME venv before PATH fallback", () => {
     }),
     expected,
   );
+});
+
+test("prefers packaged resource backend before user install fallbacks", () => {
+  const resourcesPath = "/opt/AEGIS/resources";
+  const bundled = path.posix.join(resourcesPath, "aegis", "bin", "aegis");
+  const home = "/home/alien/.aegis";
+  const installed = path.posix.join(home, "venv", "bin", "aegis");
+
+  assert.equal(
+    aegisCommand({
+      platform: "linux",
+      packaged: true,
+      resourcesPath,
+      env: { AEGIS_HOME: home },
+      exists: (p) => p === bundled || p === installed,
+      probeCommand: (p) => p === bundled || p === installed,
+    }),
+    bundled,
+  );
+});
+
+test("enumerates common packaged backend executable layouts", () => {
+  const resourcesPath = "C:\\Program Files\\AEGIS\\resources";
+  const candidates = candidatePackagedAegisCommands({ platform: "win32", resourcesPath });
+
+  assert(candidates.includes(path.win32.join(resourcesPath, "aegis", "Scripts", "aegis.exe")));
+  assert(candidates.includes(path.win32.join(resourcesPath, "backend", "Scripts", "aegis.cmd")));
+  assert(candidates.includes(path.win32.join(resourcesPath, "venv", "Scripts", "aegis.bat")));
+  assert(candidates.includes(path.win32.join(resourcesPath, "app.asar.unpacked", "aegis", "Scripts", "aegis.exe")));
 });
 
 test("reads Windows user env for stale Explorer-launched process env", () => {

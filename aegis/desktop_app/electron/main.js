@@ -40,6 +40,10 @@ app.commandLine.appendSwitch("disable-renderer-backgrounding");
 app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
 app.commandLine.appendSwitch("disable-background-timer-throttling");
 
+app.on("web-contents-created", (_event, contents) => {
+  contents.on("will-attach-webview", (event) => event.preventDefault());
+});
+
 const MAX_CRASH_RESTARTS = 3;
 let backend = null;          // child process
 let splash = null;           // splash BrowserWindow
@@ -55,6 +59,8 @@ let backendStartedAt = 0;
 let backendCommand = "";
 let backendArgs = [];
 let backendEnvSummary = {};
+let restartingBackend = false;
+let lastBootPhase = null;
 let autoUpdater = null;
 let autoUpdaterConfigured = false;
 let updateCheckInFlight = false;
@@ -80,6 +86,15 @@ function log(line) {
     if (logFd === null) logFd = fs.openSync(logPath(), "a");
     fs.writeSync(logFd, `[${new Date().toISOString()}] ${line}\n`);
   } catch { /* ignore */ }
+}
+
+function readRecentLogLines(maxLines = 200) {
+  const limit = Math.max(1, Math.min(1000, Number(maxLines) || 200));
+  try {
+    return fs.readFileSync(logPath(), "utf8").split(/\r?\n/).slice(-limit);
+  } catch {
+    return [];
+  }
 }
 
 function hiddenWindowsChildOptions(options = {}) {
@@ -145,15 +160,30 @@ function saveState() {
 
 /* ---------- splash ---------- */
 function createSplash() {
-  splash = new BrowserWindow({
+  const current = new BrowserWindow({
     width: 460, height: 340, frame: false, resizable: false, show: false,
     backgroundColor: "#0b0d10", center: true, transparent: false, alwaysOnTop: true,
-    webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false },
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
   });
-  splash.loadFile(path.join(__dirname, "boot.html"));
-  splash.once("ready-to-show", () => splash && splash.show());
+  splash = current;
+  current.loadFile(path.join(__dirname, "boot.html"));
+  current.webContents.once("did-finish-load", () => {
+    if (lastBootPhase && !current.isDestroyed()) current.webContents.send("boot:status", lastBootPhase);
+  });
+  current.once("ready-to-show", () => !current.isDestroyed() && current.show());
+  current.on("closed", () => { if (splash === current) splash = null; });
+}
+function ensureSplash() {
+  if (!splash || splash.isDestroyed()) createSplash();
+  return splash;
 }
 function boot(phase) {
+  lastBootPhase = phase;
   if (splash && !splash.isDestroyed()) splash.webContents.send("boot:status", phase);
 }
 
@@ -163,20 +193,30 @@ function startBackend() {
     port = await freePort();
     token = crypto.randomBytes(18).toString("hex");
     dashboardUrl = `${backendBaseUrl()}/?token=${token}`;
-    const resolvedEnv = backendEnvironment(process.env, { cwd: process.env.TERMINAL_CWD || process.cwd() });
-    const bin = aegisCommand({ env: resolvedEnv });
+    const backendOptions = {
+      cwd: process.env.TERMINAL_CWD || process.cwd(),
+      packaged: app.isPackaged,
+      resourcesPath: process.resourcesPath || "",
+      appPath: typeof app.getAppPath === "function" ? app.getAppPath() : "",
+    };
+    const resolvedEnv = backendEnvironment(process.env, backendOptions);
+    const bin = aegisCommand({ ...backendOptions, env: resolvedEnv });
+    const resolvedBin = resolvedEnv.AEGIS_BIN || (bin !== "aegis" ? bin : "");
     backendCommand = bin;
     backendArgs = ["dashboard", "--host", "127.0.0.1", "--port", String(port), "--no-open"];
     backendStartedAt = Date.now();
     backendEnvSummary = {
       AEGIS_HOME: resolvedEnv.AEGIS_HOME || resolveAegisHome({ env: resolvedEnv }),
-      AEGIS_BIN: resolvedEnv.AEGIS_BIN || "",
+      AEGIS_BIN: resolvedBin,
       TERMINAL_CWD: resolvedEnv.TERMINAL_CWD || process.cwd(),
+      packaged: app.isPackaged,
+      resourcesPath: backendOptions.resourcesPath,
     };
     log(`starting backend: ${bin} dashboard --host 127.0.0.1 --port ${port}`);
     backend = spawn(bin, backendArgs, hiddenWindowsChildOptions({
       env: {
         ...resolvedEnv,
+        ...(resolvedBin ? { AEGIS_BIN: resolvedBin } : {}),
         AEGIS_DASHBOARD_TOKEN: token,
         AEGIS_DESKTOP: "1",
         TERMINAL_CWD: resolvedEnv.TERMINAL_CWD || process.cwd(),
@@ -191,7 +231,7 @@ function startBackend() {
       log(`backend exited code=${code} sig=${sig}`);
       backend = null;
       backendStartedAt = 0;
-      if (quitting) return;
+      if (quitting || restartingBackend) return;
       onBackendCrash();
     });
     // resolve immediately; health probing happens next
@@ -263,6 +303,22 @@ function connectionDescriptor() {
   };
 }
 
+function runtimeDiagnostics() {
+  const descriptor = connectionDescriptor();
+  return {
+    mode: descriptor.mode,
+    source: descriptor.source,
+    baseUrl: descriptor.baseUrl,
+    authMode: descriptor.authMode,
+    backend: descriptor.backend,
+    desktop: descriptor.desktop,
+    logs: {
+      path: logPath(),
+      recent: readRecentLogLines(80),
+    },
+  };
+}
+
 function apiRequest({ method = "GET", path: requestPath = "", body = null } = {}) {
   return new Promise((resolve, reject) => {
     if (!port || !token) { reject(new Error("backend is not connected")); return; }
@@ -293,13 +349,10 @@ function apiRequest({ method = "GET", path: requestPath = "", body = null } = {}
 }
 
 async function onBackendCrash() {
-  if (quitting) return;
+  if (quitting || restartingBackend) return;
   if (crashRestarts >= MAX_CRASH_RESTARTS) {
-    if (splash && !splash.isDestroyed())
-      boot({ error: "The AEGIS backend stopped repeatedly. Open logs for details." });
-    else if (win && !win.isDestroyed())
-      win.loadFile(path.join(__dirname, "boot.html")).then(() =>
-        boot({ error: "The AEGIS backend stopped. Open logs for details." }));
+    ensureSplash();
+    boot({ error: "The AEGIS backend stopped repeatedly. Open logs for details." });
     return;
   }
   crashRestarts += 1;
@@ -327,6 +380,7 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, "preload-app.js"),
       contextIsolation: true, nodeIntegration: false,
+      sandbox: true,
       backgroundThrottling: false,
     },
   });
@@ -385,6 +439,7 @@ function openExtraWindow(p) {
     webPreferences: {
       preload: path.join(__dirname, "preload-app.js"),
       contextIsolation: true, nodeIntegration: false,
+      sandbox: true,
       backgroundThrottling: false,
     },
   });
@@ -508,7 +563,7 @@ function initAutoUpdate(manual) {
 
 /* ---------- boot sequence ---------- */
 async function run() {
-  createSplash();
+  ensureSplash();
   boot({ pct: 12, message: "Starting AEGIS backend…" });
   try {
     await startBackend();
@@ -529,18 +584,32 @@ async function run() {
     setTimeout(() => initAutoUpdate(false), 4000);   // quiet check shortly after launch
   } catch (e) {
     log(`boot failed: ${e.message}`);
-    const bin = aegisCommand({ env: backendEnvironment(process.env) });
+    const backendOptions = {
+      cwd: process.env.TERMINAL_CWD || process.cwd(),
+      packaged: app.isPackaged,
+      resourcesPath: process.resourcesPath || "",
+      appPath: typeof app.getAppPath === "function" ? app.getAppPath() : "",
+    };
+    const bin = aegisCommand({ ...backendOptions, env: backendEnvironment(process.env, backendOptions) });
     boot({ error: `${e.message}\n\nTried: ${bin} dashboard\nMake sure AEGIS is installed (or set AEGIS_BIN).` });
   }
 }
 
 async function restartFromScratch() {
+  if (restartingBackend) return;
+  restartingBackend = true;
   crashRestarts = 0;
-  try { if (backend) backend.kill(); } catch { /* ignore */ }
+  const previousBackend = backend;
   backend = null;
+  backendStartedAt = 0;
+  try { if (previousBackend) previousBackend.kill(); } catch { /* ignore */ }
   if (win && !win.isDestroyed()) { win.destroy(); win = null; }
-  if (!splash || splash.isDestroyed()) createSplash();
-  await run();
+  ensureSplash();
+  try {
+    await run();
+  } finally {
+    restartingBackend = false;
+  }
 }
 
 /* ---------- menu ---------- */
@@ -611,11 +680,9 @@ ipcMain.handle("win:isMaximized", (e) => !!(senderWindow(e) && senderWindow(e).i
 ipcMain.on("win:openExternal", (_e, url) => { openExternalUrl(url); });
 ipcMain.on("win:restartBackend", () => restartFromScratch());
 ipcMain.handle("aegis:connection", () => connectionDescriptor());
+ipcMain.handle("aegis:diagnostics", () => runtimeDiagnostics());
 ipcMain.handle("aegis:api", (_e, request) => apiRequest(request));
-ipcMain.handle("aegis:logs:recent", () => {
-  try { return fs.readFileSync(logPath(), "utf8").splitlines?.() || fs.readFileSync(logPath(), "utf8").split(/\r?\n/).slice(-200); }
-  catch { return []; }
-});
+ipcMain.handle("aegis:logs:recent", (_e, options = {}) => readRecentLogLines(options && options.limit));
 ipcMain.handle("aegis:logs:reveal", () => shell.openPath(logPath()));
 
 /* ---------- deep links (aegis://) ---------- */

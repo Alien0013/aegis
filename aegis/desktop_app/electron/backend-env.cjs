@@ -19,6 +19,11 @@ function _pathDelimiter(platform) {
   return platform === "win32" ? ";" : ":";
 }
 
+function _commandNames(platform) {
+  if (platform === "win32") return ["aegis.exe", "aegis.cmd", "aegis.bat"];
+  return ["aegis"];
+}
+
 function sanePathEntries(platform) {
   if (platform === "darwin") {
     return ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"];
@@ -137,6 +142,55 @@ function resolveAegisHome(options = {}) {
   return pathMod.join(homedir, ".aegis");
 }
 
+function _packagedResourceRoots(options = {}) {
+  const pathMod = _pathFor(options.platform || process.platform);
+  const roots = [];
+  const remember = (value) => {
+    const text = String(value || "").trim();
+    if (text && !roots.includes(text)) roots.push(text);
+  };
+  const resourcesPath = options.resourcesPath || "";
+  const appPath = options.appPath || "";
+  remember(resourcesPath);
+  if (resourcesPath) remember(pathMod.join(resourcesPath, "app.asar.unpacked"));
+  if (appPath) {
+    remember(appPath);
+    remember(pathMod.dirname(appPath));
+    if (pathMod.basename(appPath) === "app.asar") {
+      remember(`${appPath}.unpacked`);
+    }
+  }
+  return roots;
+}
+
+function candidatePackagedAegisCommands(options = {}) {
+  const platform = options.platform || process.platform;
+  const pathMod = _pathFor(platform);
+  const roots = _packagedResourceRoots(options);
+  const layouts = [
+    [],
+    ["bin"],
+    ["Scripts"],
+    ["aegis"],
+    ["aegis", "bin"],
+    ["aegis", "Scripts"],
+    ["backend"],
+    ["backend", "bin"],
+    ["backend", "Scripts"],
+    ["venv", "bin"],
+    ["venv", "Scripts"],
+  ];
+  const candidates = [];
+  for (const root of roots) {
+    for (const layout of layouts) {
+      for (const name of _commandNames(platform)) {
+        candidates.push(pathMod.join(root, ...layout, name));
+      }
+    }
+  }
+  return Array.from(new Set(candidates.filter(Boolean)));
+}
+
 function candidateAegisCommands(options = {}) {
   const platform = options.platform || process.platform;
   const env = options.env || process.env;
@@ -146,6 +200,9 @@ function candidateAegisCommands(options = {}) {
   const candidates = [];
   const explicit = _envValue("AEGIS_BIN", { ...options, env, platform });
   if (explicit) candidates.push(explicit);
+  if (options.packaged || options.resourcesPath || options.appPath) {
+    candidates.push(...candidatePackagedAegisCommands({ ...options, platform }));
+  }
   if (platform === "win32") {
     candidates.push(
       pathMod.join(home, "venv", "Scripts", "aegis.exe"),
@@ -193,6 +250,7 @@ module.exports = {
   aegisCommand,
   backendEnvironment,
   candidateAegisCommands,
+  candidatePackagedAegisCommands,
   hiddenWindowsChildOptions,
   normalizePathEnv,
   resolveAegisHome,
