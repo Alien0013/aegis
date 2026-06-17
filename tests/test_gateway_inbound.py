@@ -534,6 +534,19 @@ def test_gateway_mattermost_channel_normalizes_event_body_and_alias(monkeypatch)
     assert ev.thread_id == "root-1"
     assert ev.message_id == "post-1"
     assert ev.metadata["team_id"] == "team-1"
+    assert ev.metadata["root_id"] == "root-1"
+
+    root_post = adapter._event_from_body({
+        "channel_id": "channel-1",
+        "text": "hello",
+        "user_id": "user-1",
+        "post_id": "post-2",
+        "root_id": "",
+    })
+    assert root_post.thread_id is None
+    assert root_post.message_id == "post-2"
+    assert root_post.metadata["post_id"] == "post-2"
+    assert root_post.metadata["root_id"] == ""
 
 
 def test_gateway_mattermost_webhook_secret_accepts_headers_and_body(monkeypatch):
@@ -582,9 +595,13 @@ def test_gateway_mattermost_send_uses_clean_root_id(monkeypatch):
     adapter = MattermostAdapter()
     adapter.send("channel-1", "first", metadata={"thread_id": "channel-1"})
     adapter.send("channel-1", "reply", metadata={"thread_id": "root-1"})
+    adapter.send("channel-1", "root post", metadata={"post_id": "post-1"})
+    adapter.send("channel-1", "null root", metadata={"root_id": "undefined"})
 
     assert sent[0][2] == {"channel_id": "channel-1", "message": "first"}
     assert sent[1][2] == {"channel_id": "channel-1", "message": "reply", "root_id": "root-1"}
+    assert sent[2][2] == {"channel_id": "channel-1", "message": "root post"}
+    assert sent[3][2] == {"channel_id": "channel-1", "message": "null root"}
 
 
 def test_shared_inbound_records_delivery_runs(monkeypatch, tmp_path):

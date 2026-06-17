@@ -17,6 +17,8 @@ import httpx
 from ..platforms import chunk_text_by_units, normalize_inbound_command
 from .base import BasePlatformAdapter, Dispatch, MessageEvent
 
+_NULL_THREAD_IDS = {"", "none", "null", "undefined"}
+
 
 def _env_int(name: str, default: int) -> int:
     try:
@@ -61,9 +63,9 @@ class MattermostAdapter(BasePlatformAdapter):
 
     def _root_id(self, chat_id: str, metadata: dict | None = None) -> str:
         source = metadata or {}
-        raw = source.get("root_id") or source.get("thread_id") or source.get("post_id")
+        raw = source.get("root_id") or source.get("thread_id")
         root_id = str(raw or "").strip()
-        if not root_id or root_id.lower() in {"none", "null", "undefined"}:
+        if root_id.lower() in _NULL_THREAD_IDS:
             return ""
         if root_id == str(chat_id or "").strip():
             return ""
@@ -74,14 +76,16 @@ class MattermostAdapter(BasePlatformAdapter):
         text = normalize_inbound_command(raw_text, platform="mattermost")
         channel_id = str(body.get("channel_id") or body.get("channel") or "")
         post_id = str(body.get("post_id") or body.get("id") or body.get("message_id") or "")
-        root_id = str(body.get("root_id") or body.get("thread_id") or "") or post_id or None
+        root_id = str(body.get("root_id") or body.get("thread_id") or "").strip()
+        if root_id.lower() in _NULL_THREAD_IDS:
+            root_id = ""
         return MessageEvent(
             platform="mattermost",
             chat_id=channel_id,
             text=text,
             user_id=str(body.get("user_id") or "") or None,
             user_name=str(body.get("user_name") or body.get("username") or "") or None,
-            thread_id=root_id,
+            thread_id=root_id or None,
             message_id=post_id or None,
             timestamp=body.get("create_at") or body.get("timestamp"),
             metadata={
