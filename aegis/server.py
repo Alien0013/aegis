@@ -32,7 +32,7 @@ from .util import now_iso
 _MAX_BODY_BYTES = 10 * 1024 * 1024
 _DEFAULT_MAX_STORED_RESPONSES = 100
 _MAX_STORED_RUN_EVENTS = 500
-_TERMINAL_RUN_STATUSES = {"completed", "error", "cancelled"}
+_TERMINAL_RUN_STATUSES = {"completed", "error", "cancelled", "interrupted"}
 _MAX_SESSION_KEY_CHARS = 256
 
 
@@ -920,6 +920,67 @@ def _persist_api_run_record(record: dict[str, Any], *, title: str = "", prompt: 
     store.write(row)
 
 
+def _append_stored_run_event(
+    data: dict[str, Any],
+    run_id: str,
+    event_type: str,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    events = data.get("events")
+    if not isinstance(events, list):
+        events = []
+        data["events"] = events
+    sequence = int(data.get("event_sequence") or len(events))
+    event = {
+        "id": new_id("evt"),
+        "object": "hermes.run.event",
+        "type": event_type,
+        "event": event_type,
+        "run_id": run_id,
+        "sequence_number": sequence,
+        "created_at": int(time.time()),
+    }
+    if payload:
+        event.update(payload)
+    events.append(event)
+    if len(events) > _MAX_STORED_RUN_EVENTS:
+        del events[:-_MAX_STORED_RUN_EVENTS]
+    data["event_sequence"] = sequence + 1
+    data["last_event"] = event_type
+    return event
+
+
+def _close_pending_stored_approvals(data: dict[str, Any], run_id: str, reason: str) -> int:
+    events = data.get("events") if isinstance(data.get("events"), list) else []
+    requests: dict[str, dict[str, Any]] = {}
+    responded: set[str] = set()
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        event_type = str(event.get("type") or event.get("event") or "")
+        approval_id = str(event.get("approval_id") or "")
+        if not approval_id:
+            continue
+        if event_type == "approval.request":
+            requests[approval_id] = event
+        elif event_type == "approval.responded":
+            responded.add(approval_id)
+    closed = 0
+    for approval_id, request in requests.items():
+        if approval_id in responded:
+            continue
+        _append_stored_run_event(data, run_id, "approval.responded", {
+            "approval_id": approval_id,
+            "approved": False,
+            "choice": "deny",
+            "cancelled": True,
+            "reason": reason,
+            "prompt": str(request.get("prompt") or ""),
+        })
+        closed += 1
+    return closed
+
+
 def _recover_stale_api_runs() -> int:
     try:
         from .runs import RunStore
@@ -931,20 +992,34 @@ def _recover_stale_api_runs() -> int:
     except Exception:  # noqa: BLE001
         return 0
     recovered = 0
+    reason = "AEGIS API server restarted before this run completed."
     for row in stale:
         data = row.get("data") if isinstance(row.get("data"), dict) else {}
         if data.get("api") != "runs" and data.get("server_run_id") != row.get("id"):
             continue
+        run_id = str(row["id"])
         data = dict(data)
+        _close_pending_stored_approvals(data, run_id, reason)
+        events = data.get("events") if isinstance(data.get("events"), list) else []
+        if not any(
+            isinstance(event, dict)
+            and str(event.get("type") or event.get("event") or "") == "run.interrupted"
+            for event in events
+        ):
+            _append_stored_run_event(data, run_id, "run.interrupted", {
+                "status": "interrupted",
+                "reason": reason,
+                "session_id": row.get("session_id", ""),
+            })
         data.update({
             "interrupted_by_server_start": True,
             "last_event": "run.interrupted",
         })
         try:
             store.finish(
-                str(row["id"]),
+                run_id,
                 status="interrupted",
-                error="AEGIS API server restarted before this run completed.",
+                error=reason,
                 data=data,
             )
         except Exception:  # noqa: BLE001
@@ -1742,7 +1817,7 @@ def make_handler(config: Config):
                             self._request_stop_run_locked(run_id, "SSE client disconnected")
                         return
                 sent = len(events)
-                if status in {"completed", "error", "cancelled"} or active is None:
+                if status in _TERMINAL_RUN_STATUSES or active is None:
                     self._write_sse(detail, event="done")
                     self.wfile.write(b"data: [DONE]\n\n")
                     return

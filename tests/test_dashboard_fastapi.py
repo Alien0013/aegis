@@ -1446,6 +1446,38 @@ def test_fastapi_dashboard_chat_stream_persists_session_and_run_across_app_recre
     ]
 
 
+def test_fastapi_session_checks_reports_cross_session_integrity(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    from aegis.runs import RunStore
+    from aegis.session import Session, SessionStore
+    from aegis.types import Message
+
+    session = Session(id="dash-check-session", title="dashboard check")
+    session.messages = [Message.user("check"), Message.assistant("ok")]
+    run = RunStore().start(surface="dashboard", kind="chat", session_id=session.id, prompt="check")
+    RunStore().finish(run["id"], status="ok", result="ok")
+    session.meta["last_run_id"] = run["id"]
+    SessionStore().save(session)
+
+    res = asyncio.run(_request(
+        app,
+        "GET",
+        "/api/session-checks?session_limit=20&run_limit=20",
+        headers=headers,
+    ))
+    alias = asyncio.run(_request(app, "GET", "/api/harness/cross-session", headers=headers))
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is True
+    assert body["counts"]["sessions_with_last_run"] == 1
+    assert any(check["id"] == "session_run_links" for check in body["checks"])
+    assert alias.status_code == 200
+    assert alias.json()["ok"] is True
+
+
 def test_fastapi_config_preferences_memory_provider_and_plugins(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
     headers = {"X-Aegis-Token": "t"}

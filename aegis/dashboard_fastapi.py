@@ -3238,6 +3238,26 @@ def _ws_rpc_error(request_id: Any, code: int, message: str, *, is_jsonrpc: bool)
 def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
     if path == "/api/status":
         return dash._dashboard_status(config)
+    if path in {"/api/session-checks", "/api/cross-session/checks", "/api/harness/cross-session"}:
+        from .session_checks import cross_session_integrity_report
+
+        try:
+            session_limit = int((query.get("session_limit") or query.get("sessions") or ["500"])[0] or 500)
+        except (TypeError, ValueError):
+            session_limit = 500
+        try:
+            run_limit = int((query.get("run_limit") or query.get("runs") or ["500"])[0] or 500)
+        except (TypeError, ValueError):
+            run_limit = 500
+        try:
+            stale_seconds = float((query.get("stale_running_seconds") or ["21600"])[0] or 21600)
+        except (TypeError, ValueError):
+            stale_seconds = 21600.0
+        return cross_session_integrity_report(
+            session_limit=session_limit,
+            run_limit=run_limit,
+            stale_running_seconds=stale_seconds,
+        )
     if path == "/api/auth/providers":
         return _auth_providers_payload(config)
     if path == "/api/cockpit":

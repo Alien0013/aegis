@@ -2281,6 +2281,93 @@ def test_server_startup_marks_stale_api_runs_interrupted(monkeypatch, tmp_path):
     assert body["run"]["last_event"] == "run.interrupted"
 
 
+def test_server_restart_closes_pending_run_approval_events(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import time
+    import aegis.server as server
+    from aegis.config import Config
+
+    _ApprovalBlockingRunRunner.reset()
+    monkeypatch.setattr(server, "SurfaceRunner", _ApprovalBlockingRunRunner)
+    cfg = Config.load()
+    cfg.data.setdefault("server", {})["approval_timeout_seconds"] = 3600
+    srv, port = _serve(server.make_handler(cfg))
+    try:
+        create_status, create_data = _request(port, "POST", "/v1/runs", {
+            "input": "needs restart approval recovery",
+            "session_id": "serve:approval-restart-run",
+        })
+        run_id = json.loads(create_data)["run_id"]
+
+        pending = {}
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            pending_status, pending_data = _request(port, "GET", f"/v1/runs/{run_id}/approval")
+            pending = json.loads(pending_data)
+            if pending.get("pending"):
+                break
+            time.sleep(0.05)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        detail_status, detail_data = _request(port, "GET", f"/v1/runs/{run_id}")
+        approval_status, approval_data = _request(port, "GET", f"/v1/runs/{run_id}/approval")
+        events_status, events_data = _request(port, "GET", f"/v1/runs/{run_id}/events")
+        sse_status, sse_headers, sse_data = _request_with_headers(
+            port,
+            "GET",
+            f"/v1/runs/{run_id}/events",
+            headers={"Accept": "text/event-stream"},
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    detail = json.loads(detail_data)
+    approval = json.loads(approval_data)
+    events = json.loads(events_data)["events"]
+    event_types = [event.get("type") for event in events]
+    responded = next(event for event in events if event.get("type") == "approval.responded")
+    interrupted = next(event for event in events if event.get("type") == "run.interrupted")
+    sse_events = _sse_events(sse_data)
+    sse_event_types = [
+        payload.get("type")
+        for name, payload in sse_events
+        if name == "event" and isinstance(payload, dict)
+    ]
+
+    assert create_status == 202
+    assert pending_status == 200
+    assert pending["pending"] and pending["pending"][0]["prompt"] == "Allow shell command?"
+    assert detail_status == 200
+    assert detail["status"] == "interrupted"
+    assert detail["run"]["status"] == "interrupted"
+    assert detail["run"]["last_event"] == "run.interrupted"
+    assert approval_status == 200
+    assert approval["pending"] == []
+    assert events_status == 200
+    assert event_types[:3] == ["run.queued", "run.running", "approval.request"]
+    assert "approval.responded" in event_types
+    assert "run.interrupted" in event_types
+    assert responded["approval_id"] == pending["pending"][0]["id"]
+    assert responded["approved"] is False
+    assert responded["cancelled"] is True
+    assert responded["choice"] == "deny"
+    assert "restarted" in responded["reason"]
+    assert interrupted["status"] == "interrupted"
+    assert "restarted" in interrupted["reason"]
+    assert sse_status == 200
+    assert "text/event-stream" in sse_headers["Content-Type"]
+    assert "approval.responded" in sse_event_types
+    assert "run.interrupted" in sse_event_types
+    assert sse_events[-2][0] == "done"
+    assert sse_events[-2][1]["status"] == "interrupted"
+    assert sse_events[-1] == ("done", "[DONE]")
+
+
 def test_server_run_approval_choice_unblocks_pending_run(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import time
