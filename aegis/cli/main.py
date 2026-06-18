@@ -935,6 +935,77 @@ def cmd_memory(args, config: Config) -> int:
     return 0
 
 
+def _config_default_values() -> dict[str, object]:
+    from ..config import DEFAULT_CONFIG
+
+    def flat(data: dict, prefix: str = "") -> dict[str, object]:
+        out: dict[str, object] = {}
+        for key, value in data.items():
+            path = f"{prefix}{key}"
+            out[path] = value
+            if isinstance(value, dict):
+                out.update(flat(value, path + "."))
+        return out
+
+    return flat(DEFAULT_CONFIG)
+
+
+def _parse_config_set_value(key: str, raw_parts: object) -> tuple[object, str]:
+    from ..config import _coerce
+
+    if raw_parts is None:
+        return None, "usage: aegis config set <key> <value>"
+    if isinstance(raw_parts, list):
+        if not raw_parts:
+            return None, "usage: aegis config set <key> <value>"
+        raw = " ".join(str(part) for part in raw_parts)
+    else:
+        raw = str(raw_parts)
+
+    defaults = _config_default_values()
+    expected = defaults.get(key)
+    stripped = raw.strip()
+
+    if isinstance(expected, list):
+        if not stripped:
+            return [], ""
+        if stripped.startswith("["):
+            try:
+                value = json.loads(stripped)
+            except json.JSONDecodeError:
+                return None, "value must be a JSON array or comma-separated list"
+            return (value, "") if isinstance(value, list) else (None, "value must be a list")
+        return ([part.strip() for part in raw.split(",") if part.strip()], "")
+
+    if isinstance(expected, dict):
+        if not stripped:
+            return {}, ""
+        if not stripped.startswith("{"):
+            return None, "value must be a JSON object"
+        try:
+            value = json.loads(stripped)
+        except json.JSONDecodeError:
+            return None, "value must be a JSON object"
+        return (value, "") if isinstance(value, dict) else (None, "value must be an object")
+
+    value = _coerce(raw)
+    if expected is None or key not in defaults:
+        return value, ""
+    if isinstance(expected, bool) and not isinstance(value, bool):
+        return None, "value must be a boolean"
+    if isinstance(expected, int) and not isinstance(expected, bool) and (
+        not isinstance(value, int) or isinstance(value, bool)
+    ):
+        return None, "value must be an integer"
+    if isinstance(expected, float) and (
+        not isinstance(value, (int, float)) or isinstance(value, bool)
+    ):
+        return None, "value must be a number"
+    if isinstance(expected, str) and not isinstance(value, str):
+        return None, "value must be a string"
+    return value, ""
+
+
 def cmd_config(args, config: Config) -> int:
     def configured_env(*names: str) -> str:
         return "configured" if any(os.environ.get(name, "").strip() for name in names) else "not set"
@@ -1091,11 +1162,12 @@ def cmd_config(args, config: Config) -> int:
         _print(str(config.get(args.key)))
         return 0
     if args.action == "set":
-        if not args.key or args.value is None:
+        value, value_error = _parse_config_set_value(args.key or "", getattr(args, "value", None))
+        if not args.key or value_error:
             print_config_usage()
-            return 1
+            return _die(value_error) if value_error and args.key else 1
         try:
-            where = config.set(args.key, args.value)
+            where = config.set(args.key, value)
         except ValueError as exc:
             return _die(str(exc))
         _print(f"set {args.key} -> {where}")
@@ -2080,7 +2152,7 @@ def build_parser() -> argparse.ArgumentParser:
                     ],
                     default="summary")
     cf.add_argument("key", nargs="?")
-    cf.add_argument("value", nargs="?")
+    cf.add_argument("value", nargs="*")
     cf.add_argument("--secrets", action="store_true", help="edit the local secrets .env file")
     _add_setup_args(cf)
     cf.set_defaults(func=cmd_config)

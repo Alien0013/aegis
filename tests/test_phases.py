@@ -239,6 +239,38 @@ def test_cli_config_summary_dump_and_edit(monkeypatch, capsys):
     assert capsys.readouterr().out == "\n"
 
 
+def test_cli_config_set_accepts_multiword_and_list_values(capsys):
+    from aegis.cli.main import main
+    from aegis.config import Config
+
+    assert main(["config", "set", "model.default", "my", "local", "model"]) == 0
+    capsys.readouterr()
+    assert Config.load().get("model.default") == "my local model"
+
+    assert main(["config", "set", "gateway.channels", "telegram,discord"]) == 0
+    capsys.readouterr()
+    assert Config.load().get("gateway.channels") == ["telegram", "discord"]
+
+    assert main(["config", "set", "tools.toolsets", '["core", "web"]']) == 0
+    capsys.readouterr()
+    assert Config.load().get("tools.toolsets") == ["core", "web"]
+
+
+def test_cli_config_set_rejects_wrong_type_for_known_field(capsys):
+    from aegis.cli.main import main
+    from aegis.config import Config
+
+    assert main(["config", "set", "agent.max_iterations", "not-number"]) == 1
+    out = capsys.readouterr()
+    assert "value must be an integer" in out.err
+    assert Config.load().get("agent.max_iterations") == 50
+
+    assert main(["config", "set", "memory", "enabled"]) == 1
+    out = capsys.readouterr()
+    assert "value must be a JSON object" in out.err
+    assert isinstance(Config.load().get("memory"), dict)
+
+
 def test_cli_config_setup_alias_dispatches_setup(monkeypatch):
     from argparse import Namespace
 
