@@ -1268,6 +1268,8 @@ def test_server_health_capabilities_and_body_limit(monkeypatch, tmp_path):
     assert routes["responses"]["path"] == "/v1/responses"
     assert routes["responses"]["streaming"] is True
     assert routes["responses.input_items"]["path"] == "/v1/responses/{response_id}/input_items"
+    assert routes["responses.input_tokens"]["path"] == "/v1/responses/input_tokens"
+    assert routes["responses.compact"]["path"] == "/v1/responses/compact"
     assert caps["features"]["response_input_items"] is True
     assert routes["runs.approval"]["methods"] == ["GET", "POST"]
     assert caps["features"]["responses_persistence"] is True
@@ -2166,6 +2168,106 @@ def test_responses_input_items_default_newest_first_limit_20(monkeypatch, tmp_pa
         "item-23",
         "item-22",
     ]
+
+
+def test_responses_input_tokens_counts_previous_response_context(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        simple_status, simple_data = _request(port, "POST", "/v1/responses/input_tokens", {
+            "model": "served-model",
+            "input": "short",
+        })
+        first_status, first_data = _request(port, "POST", "/v1/responses", {
+            "input": "first request",
+            "instructions": "be direct",
+        })
+        response_id = json.loads(first_data)["id"]
+        chained_status, chained_data = _request(port, "POST", "/v1/responses/input_tokens", {
+            "model": "served-model",
+            "input": "second request with tool config",
+            "previous_response_id": response_id,
+            "tools": [{"type": "function", "function": {"name": "lookup"}}],
+        })
+        missing_status, missing_data = _request(port, "POST", "/v1/responses/input_tokens", {
+            "input": "missing",
+            "previous_response_id": "resp_missing",
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert simple_status == 200
+    assert first_status == 200
+    assert chained_status == 200
+    assert json.loads(simple_data)["object"] == "response.input_tokens"
+    assert json.loads(simple_data)["input_tokens"] > 0
+    assert json.loads(chained_data)["input_tokens"] > json.loads(simple_data)["input_tokens"]
+    assert missing_status == 404
+    assert "Previous response not found" in json.loads(missing_data)["error"]
+
+
+def test_responses_compact_returns_chainable_compaction(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        compact_status, compact_data = _request(port, "POST", "/v1/responses/compact", {
+            "model": "served-model",
+            "conversation": "compact-thread",
+            "instructions": "keep the project context",
+            "input": [
+                {"role": "user", "content": "build the dashboard"},
+                {"role": "assistant", "content": "I built the dashboard"},
+                {"role": "user", "content": "continue the audit"},
+            ],
+        })
+        compact = json.loads(compact_data)
+        compact_id = compact["id"]
+        get_status, get_data = _request(port, "GET", f"/v1/responses/{compact_id}")
+        chained_status, chained_data = _request(port, "POST", "/v1/responses", {
+            "input": "what remains?",
+            "previous_response_id": compact_id,
+        })
+        chained_id = json.loads(chained_data)["id"]
+        items_status, items_data = _request(
+            port,
+            "GET",
+            f"/v1/responses/{chained_id}/input_items?order=asc",
+        )
+        conversation_status, conversation_data = _request(port, "POST", "/v1/responses", {
+            "input": "conversation follow-up",
+            "conversation": "compact-thread",
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert compact_status == 200
+    assert compact["object"] == "response.compaction"
+    assert compact["conversation"] == "compact-thread"
+    assert compact["usage"]["total_tokens"] >= compact["usage"]["input_tokens"] > 0
+    assert [item["type"] for item in compact["output"]][-1] == "compaction"
+    assert compact["output"][-1]["encrypted_content"].startswith("aegis-local-compaction:")
+    assert get_status == 200
+    assert json.loads(get_data)["id"] == compact_id
+    assert chained_status == 200
+    assert json.loads(chained_data)["previous_response_id"] == compact_id
+    assert items_status == 200
+    items = json.loads(items_data)["data"]
+    assert any(item["type"] == "compaction" for item in items)
+    assert items[-1]["content"][0]["text"] == "what remains?"
+    assert conversation_status == 200
+    assert json.loads(conversation_data)["previous_response_id"] == compact_id
 
 
 def test_responses_preserves_message_input_item_identity(monkeypatch, tmp_path):

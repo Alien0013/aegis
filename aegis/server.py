@@ -27,7 +27,7 @@ from . import config as cfg_paths
 from .config import Config
 from .surface import SurfaceRunner, normalize_service_tier, runtime_controls_meta
 from .types import Message, ToolCall, new_id
-from .util import now_iso
+from .util import estimate_tokens, now_iso
 
 _MAX_BODY_BYTES = 10 * 1024 * 1024
 _DEFAULT_MAX_STORED_RESPONSES = 100
@@ -1559,6 +1559,125 @@ def _state_input_items(state: dict[str, Any], response_id: str) -> list[dict[str
     return out
 
 
+def _token_count_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, list):
+        return "\n".join(_token_count_text(item) for item in value)
+    if isinstance(value, dict):
+        parts: list[str] = []
+        for key in (
+            "role",
+            "type",
+            "name",
+            "text",
+            "input_text",
+            "output_text",
+            "refusal",
+            "arguments",
+            "output",
+            "summary",
+            "encrypted_content",
+            "content",
+            "tool_call_id",
+            "call_id",
+            "file_id",
+            "file_url",
+            "image_url",
+            "audio",
+        ):
+            if key in value:
+                parts.append(_token_count_text(value.get(key)))
+        if parts:
+            return "\n".join(part for part in parts if part)
+    try:
+        return json.dumps(value, sort_keys=True, default=str)
+    except TypeError:
+        return str(value)
+
+
+def _estimate_response_input_tokens(
+    input_items: list[dict[str, Any]],
+    *,
+    body: dict[str, Any] | None = None,
+) -> int:
+    text = _token_count_text(input_items)
+    body = body or {}
+    for key in ("tools", "tool_choice", "response_format", "text", "reasoning"):
+        if key in body:
+            text = f"{text}\n{_token_count_text(body.get(key))}"
+    return estimate_tokens(text)
+
+
+def _response_compaction_summary(input_items: list[dict[str, Any]], input_tokens: int) -> str:
+    roles: dict[str, int] = {}
+    last_user = ""
+    for item in input_items:
+        if not isinstance(item, dict) or str(item.get("type") or "") != "message":
+            continue
+        role = str(item.get("role") or "user")
+        roles[role] = roles.get(role, 0) + 1
+        if role == "user":
+            text = _token_count_text(item.get("content"))
+            if text.strip():
+                last_user = text.strip()
+    role_text = ", ".join(f"{role}:{count}" for role, count in sorted(roles.items())) or "none"
+    parts = [
+        f"Compacted {len(input_items)} response input item(s).",
+        f"Estimated input tokens before compaction: {input_tokens}.",
+        f"Message roles: {role_text}.",
+    ]
+    if last_user:
+        parts.append(f"Most recent user input: {last_user[:1000]}")
+    return "\n".join(parts)
+
+
+def _response_compaction_encrypted_content(summary: str) -> str:
+    digest = hashlib.sha256(summary.encode("utf-8")).hexdigest()
+    return f"aegis-local-compaction:{digest}"
+
+
+def _with_response_message_defaults(item: dict[str, Any]) -> dict[str, Any]:
+    row = dict(item)
+    row.setdefault("id", new_id("msg"))
+    row.setdefault("status", "completed")
+    return row
+
+
+def _response_compaction_output_items(input_items: list[dict[str, Any]], summary: str) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    first_message: dict[str, Any] | None = None
+    for item in input_items:
+        if not isinstance(item, dict) or str(item.get("type") or "") != "message":
+            continue
+        role = str(item.get("role") or "user")
+        if role in {"system", "developer"}:
+            output.append(_with_response_message_defaults(item))
+            continue
+        if first_message is None:
+            first_message = item
+    if first_message is not None:
+        output.append(_with_response_message_defaults(first_message))
+    output.append({
+        "id": new_id("cmp"),
+        "type": "compaction",
+        "encrypted_content": _response_compaction_encrypted_content(summary),
+    })
+    return output
+
+
+def _history_from_compaction_output(output_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    messages: list[Message] = []
+    for item in output_items:
+        if isinstance(item, dict) and str(item.get("type") or "") == "message":
+            messages.append(_response_input_item_to_message(item))
+    return _history_payload(messages)
+
+
 def _response_input_items_payload(
     state: dict[str, Any],
     response_id: str,
@@ -1633,7 +1752,9 @@ def _capabilities(config: Config) -> dict[str, Any]:
          "stateful": True},
         {"name": "responses.retrieve", "path": "/v1/responses/{response_id}", "methods": ["GET", "DELETE"]},
         {"name": "responses.input_items", "path": "/v1/responses/{response_id}/input_items", "methods": ["GET"]},
+        {"name": "responses.input_tokens", "path": "/v1/responses/input_tokens", "methods": ["POST"]},
         {"name": "responses.cancel", "path": "/v1/responses/{response_id}/cancel", "methods": ["POST"]},
+        {"name": "responses.compact", "path": "/v1/responses/compact", "methods": ["POST"]},
         {"name": "models", "path": "/v1/models", "methods": ["GET"]},
         {"name": "health", "path": "/v1/health", "methods": ["GET"]},
         {"name": "health.detailed", "path": "/v1/health/detailed", "methods": ["GET"]},
@@ -3241,6 +3362,10 @@ def make_handler(config: Config):
                 return self._json(413 if error == "request body too large" else 400, {"error": error})
             if path == "/v1/chat/completions":
                 return self._post_chat_completion(body)
+            if path == "/v1/responses/input_tokens":
+                return self._post_response_input_tokens(body)
+            if path == "/v1/responses/compact":
+                return self._post_response_compact(body)
             if path == "/v1/responses":
                 return self._post_response(body)
             if path.startswith("/v1/responses/") and path.endswith("/cancel"):
@@ -3702,6 +3827,112 @@ def make_handler(config: Config):
             write_sse_payload(final)
             write_sse_done()
 
+        def _response_request_context(self, body: dict[str, Any]) -> tuple[dict[str, Any] | None, tuple[int, Any] | None]:
+            instructions = str(body.get("instructions") or "").strip() or None
+            previous_id = str(body.get("previous_response_id") or "").strip()
+            conversation = _conversation_id(body.get("conversation"))
+            if previous_id and conversation:
+                return None, (400, {"error": "Cannot use both 'conversation' and 'previous_response_id'"})
+            if conversation and not previous_id:
+                previous_id = response_store.get_conversation(conversation) or ""
+
+            explicit_history, history_error = _parse_response_history(body.get("conversation_history"))
+            if history_error:
+                return None, (400, {"error": history_error})
+            previous_state = None
+            if previous_id:
+                previous_state = response_store.get_state(previous_id)
+                if previous_state is None:
+                    return None, (404, {"error": f"Previous response not found: {previous_id}"})
+                if not explicit_history:
+                    explicit_history = _history_from_state(previous_state)
+
+            input_history, last_user = _responses_messages(body)
+            state_history = list(explicit_history) + list(input_history)
+            state_history = _maybe_truncate_response_history(state_history, body, config)
+            return {
+                "instructions": instructions,
+                "previous_id": previous_id,
+                "conversation": conversation,
+                "previous_state": previous_state,
+                "state_history": state_history,
+                "last_user": last_user,
+                "messages": state_history + [last_user],
+            }, None
+
+        def _post_response_input_tokens(self, body: dict[str, Any]) -> None:
+            validation_error = _responses_input_validation_error(body)
+            if validation_error is not None:
+                return self._json(400, validation_error)
+            context, error = self._response_request_context(body)
+            if error is not None:
+                code, payload = error
+                return self._json(code, payload)
+            assert context is not None
+            input_items = _stored_response_input_items(
+                context["messages"],
+                context["instructions"],
+                previous_state=context["previous_state"],
+            )
+            return self._json(200, {
+                "object": "response.input_tokens",
+                "input_tokens": _estimate_response_input_tokens(input_items, body=body),
+            })
+
+        def _post_response_compact(self, body: dict[str, Any]) -> None:
+            validation_error = _responses_input_validation_error(body)
+            if validation_error is not None:
+                return self._json(400, validation_error)
+            context, error = self._response_request_context(body)
+            if error is not None:
+                code, payload = error
+                return self._json(code, payload)
+            assert context is not None
+
+            input_items = _stored_response_input_items(
+                context["messages"],
+                context["instructions"],
+                previous_state=context["previous_state"],
+            )
+            input_tokens = _estimate_response_input_tokens(input_items, body=body)
+            summary = _response_compaction_summary(input_items, input_tokens)
+            output = _response_compaction_output_items(input_items, summary)
+            output_tokens = estimate_tokens(summary)
+            response_id = new_id("resp")
+            response = {
+                "id": response_id,
+                "object": "response.compaction",
+                "created_at": int(time.time()),
+                "metadata": {},
+                "output": output,
+                "usage": {
+                    "input_tokens": input_tokens,
+                    "input_tokens_details": {"cached_tokens": 0},
+                    "output_tokens": output_tokens,
+                    "output_tokens_details": {"reasoning_tokens": 0},
+                    "total_tokens": input_tokens + output_tokens,
+                },
+            }
+            if body.get("model") is not None:
+                response["model"] = str(body.get("model") or "")
+            previous_id = context.get("previous_id") or None
+            conversation = context.get("conversation") or None
+            if previous_id:
+                response["previous_response_id"] = previous_id
+            if conversation:
+                response["conversation"] = conversation
+            store_response = _coerce_request_bool(body.get("store"), True)
+            if store_response:
+                response_store.put(response, {
+                    "conversation_history": _history_from_compaction_output(output),
+                    "input_items": output,
+                    "instructions": context["instructions"],
+                    "conversation": conversation,
+                })
+                if conversation:
+                    response_store.set_conversation(conversation, response_id)
+            return self._json(200, response)
+
         def _post_response(self, body: dict[str, Any]) -> None:
             session_key, session_key_error = self._session_key()
             if session_key_error is not None:
@@ -3748,7 +3979,8 @@ def make_handler(config: Config):
 
             if previous_state is not None:
                 previous_response = previous_state.get("response") if isinstance(previous_state, dict) else {}
-                prev_meta = previous_response.get("metadata") if isinstance(previous_response, dict) else {}
+                prev_meta_raw = previous_response.get("metadata") if isinstance(previous_response, dict) else {}
+                prev_meta = prev_meta_raw if isinstance(prev_meta_raw, dict) else {}
                 if not metadata.get("session_id") and not body.get("session_id"):
                     inherited_session = previous_state.get("session_id") or prev_meta.get("session_id")
                     if inherited_session:
