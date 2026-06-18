@@ -2699,6 +2699,138 @@ def test_responses_stream_sse_has_openai_event_shape(monkeypatch, tmp_path):
     assert _FakeRunner.calls[0]["stream"] is True
 
 
+def test_responses_stream_idempotency_key_replays_completed_request(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    class CountingStreamRunner:
+        calls = 0
+
+        def __init__(self, config, include_mcp=True):
+            pass
+
+        def run_prompt(self, prompt, **kwargs):
+            type(self).calls += 1
+            if kwargs.get("on_event"):
+                kwargs["on_event"]({"type": "assistant_delta", "text": f"stream-{type(self).calls}"})
+            session_id = kwargs.get("session_id") or "serve:stream-idem"
+            return SimpleNamespace(
+                text=f"stream-{type(self).calls}",
+                session=SimpleNamespace(id=session_id),
+                trace_id=f"trace_stream_idem_{type(self).calls}",
+                turn_id=f"turn_stream_idem_{type(self).calls}",
+                run_id=f"run_stream_idem_{type(self).calls}",
+                agent=SimpleNamespace(
+                    provider=SimpleNamespace(model="served-model"),
+                    budget=SimpleNamespace(usage=_Usage()),
+                ),
+            )
+
+    monkeypatch.setattr(server, "SurfaceRunner", CountingStreamRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        headers = {"Idempotency-Key": "idem-response-stream"}
+        body = {
+            "stream": True,
+            "input": "same",
+            "metadata": {"session_id": "serve:stream-idem"},
+        }
+        first_status, first_data = _request(port, "POST", "/v1/responses", body, headers=headers)
+        second_status, second_data = _request(port, "POST", "/v1/responses", body, headers=headers)
+        third_status, third_data = _request(port, "POST", "/v1/responses", {
+            **body,
+            "input": "different",
+        }, headers=headers)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    first_completed = next(payload for name, payload in _sse_events(first_data) if name == "response.completed")
+    second_events = _sse_events(second_data)
+    second_completed = next(payload for name, payload in second_events if name == "response.completed")
+    third_completed = next(payload for name, payload in _sse_events(third_data) if name == "response.completed")
+    assert first_status == second_status == third_status == 200
+    assert second_completed["response"]["id"] == first_completed["response"]["id"]
+    assert second_completed["response"]["output_text"] == "stream-1"
+    assert third_completed["response"]["id"] != first_completed["response"]["id"]
+    assert third_completed["response"]["output_text"] == "stream-2"
+    assert [name for name, _payload in second_events][-2:] == ["response.completed", "done"]
+    assert CountingStreamRunner.calls == 2
+
+
+def test_responses_stream_idempotency_key_single_flights_concurrent_requests(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    class SlowStreamRunner:
+        calls = 0
+        entered = threading.Event()
+        release = threading.Event()
+
+        def __init__(self, config, include_mcp=True):
+            pass
+
+        def run_prompt(self, prompt, **kwargs):
+            type(self).calls += 1
+            if kwargs.get("on_event"):
+                kwargs["on_event"]({"type": "assistant_delta", "text": "slow-stream"})
+            type(self).entered.set()
+            assert type(self).release.wait(5)
+            session_id = kwargs.get("session_id") or "serve:stream-singleflight"
+            return SimpleNamespace(
+                text="slow-stream",
+                session=SimpleNamespace(id=session_id),
+                trace_id="trace_stream_singleflight",
+                turn_id="turn_stream_singleflight",
+                run_id="run_stream_singleflight",
+                agent=SimpleNamespace(
+                    provider=SimpleNamespace(model="served-model"),
+                    budget=SimpleNamespace(usage=_Usage()),
+                ),
+            )
+
+    monkeypatch.setattr(server, "SurfaceRunner", SlowStreamRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    results: list[tuple[int, str]] = []
+    try:
+        headers = {"Idempotency-Key": "idem-response-stream-flight"}
+        body = {
+            "stream": True,
+            "input": "same",
+            "metadata": {"session_id": "serve:stream-singleflight"},
+        }
+        threads = [
+            threading.Thread(target=lambda: results.append(
+                _request(port, "POST", "/v1/responses", body, headers=headers)
+            ))
+            for _ in range(2)
+        ]
+        threads[0].start()
+        assert SlowStreamRunner.entered.wait(5)
+        threads[1].start()
+        time.sleep(0.2)
+        assert SlowStreamRunner.calls == 1
+    finally:
+        SlowStreamRunner.release.set()
+        for thread in locals().get("threads", []):
+            thread.join(timeout=5)
+        srv.shutdown()
+        srv.server_close()
+
+    assert len(results) == 2
+    assert all(status == 200 for status, _data in results)
+    completed = [
+        next(payload for name, payload in _sse_events(data) if name == "response.completed")
+        for _status, data in results
+    ]
+    assert completed[0]["response"]["id"] == completed[1]["response"]["id"]
+    assert completed[0]["response"]["output_text"] == "slow-stream"
+    assert completed[1]["response"]["output_text"] == "slow-stream"
+    assert SlowStreamRunner.calls == 1
+
+
 def test_responses_stream_cancel_signals_live_agent_and_preserves_cancelled(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
@@ -2748,6 +2880,59 @@ def test_responses_stream_cancel_signals_live_agent_and_preserves_cancelled(monk
     stored = json.loads(get_data)
     assert stored["status"] == "cancelled"
     assert stored.get("output_text", "") != "late"
+
+
+def test_responses_stream_store_false_cancel_does_not_persist(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _BlockingResponsesRunner.reset()
+    monkeypatch.setattr(server, "SurfaceRunner", _BlockingResponsesRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    try:
+        conn.request(
+            "POST",
+            "/v1/responses",
+            body=json.dumps({
+                "stream": True,
+                "store": False,
+                "input": "wait for cancel",
+                "conversation": "volatile-thread",
+            }).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        resp = conn.getresponse()
+        assert resp.status == 200
+        event, payload = _read_sse_event(resp)
+        assert event == "response.created"
+        response_id = payload["response"]["id"]
+        assert payload["response"]["store"] is False
+        assert _BlockingResponsesRunner.started.wait(1)
+
+        cancel_status, cancel_data = _request(port, "POST", f"/v1/responses/{response_id}/cancel", {})
+        _BlockingResponsesRunner.release.set()
+        tail = resp.read().decode()
+        get_status, _get_data = _request(port, "GET", f"/v1/responses/{response_id}")
+        next_status, next_data = _request(port, "POST", "/v1/responses", {
+            "input": "next",
+            "conversation": "volatile-thread",
+        })
+    finally:
+        _BlockingResponsesRunner.release.set()
+        conn.close()
+        srv.shutdown()
+        srv.server_close()
+
+    assert cancel_status == 200
+    assert json.loads(cancel_data)["status"] == "cancelled"
+    assert _BlockingResponsesRunner.agents
+    assert _BlockingResponsesRunner.agents[0].cancel_event.is_set()
+    assert "response.cancelled" in [name for name, _payload in _sse_events(tail)]
+    assert get_status == 404
+    assert next_status == 200
+    assert json.loads(next_data)["previous_response_id"] is None
 
 
 def test_responses_aiohttp_stream_disconnect_cancels_live_agent(monkeypatch, tmp_path):

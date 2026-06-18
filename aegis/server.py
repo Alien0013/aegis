@@ -2030,44 +2030,71 @@ class IdempotencyCache:
             self._items.move_to_end(key)
             self._purge_locked()
 
-    def get_or_compute(self, key: str, fingerprint: str, compute) -> dict[str, Any]:
+    def begin(self, key: str, fingerprint: str) -> tuple[str, dict[str, Any] | None, dict[str, Any] | None]:
+        """Return (state, cached_response, flight).
+
+        ``state`` is one of: disabled, cached, owner, waiter.
+        """
         if not key:
-            return compute()
+            return "disabled", None, None
         cached = self.get(key, fingerprint)
         if cached is not None:
-            return cached
+            return "cached", cached, None
         flight_key = (key, fingerprint)
         with self._lock:
             cached = self.get(key, fingerprint)
             if cached is not None:
-                return cached
+                return "cached", cached, None
             flight = self._inflight.get(flight_key)
             if flight is None:
                 flight = {"event": threading.Event(), "response": None, "error": None}
                 self._inflight[flight_key] = flight
-                owner = True
-            else:
-                owner = False
-        if not owner:
-            flight["event"].wait()
-            error = flight.get("error")
-            if error is not None:
-                raise error
-            response = flight.get("response")
-            return dict(response) if isinstance(response, dict) else {}
-        try:
-            response = compute()
-            self.put(key, fingerprint, response)
-        except Exception as exc:  # noqa: BLE001
-            with self._lock:
-                flight["error"] = exc
-                flight["event"].set()
-                self._inflight.pop(flight_key, None)
-            raise
+                return "owner", None, flight
+            return "waiter", None, flight
+
+    def wait(self, flight: dict[str, Any] | None) -> dict[str, Any]:
+        if flight is None:
+            return {}
+        flight["event"].wait()
+        error = flight.get("error")
+        if error is not None:
+            raise error
+        response = flight.get("response")
+        return dict(response) if isinstance(response, dict) else {}
+
+    def finish(self, key: str, fingerprint: str, flight: dict[str, Any] | None, response: dict[str, Any]) -> None:
+        if not key or flight is None:
+            return
+        self.put(key, fingerprint, response)
+        flight_key = (key, fingerprint)
         with self._lock:
             flight["response"] = dict(response)
             flight["event"].set()
             self._inflight.pop(flight_key, None)
+
+    def fail(self, key: str, fingerprint: str, flight: dict[str, Any] | None, error: BaseException) -> None:
+        if not key or flight is None:
+            return
+        flight_key = (key, fingerprint)
+        with self._lock:
+            flight["error"] = error
+            flight["event"].set()
+            self._inflight.pop(flight_key, None)
+
+    def get_or_compute(self, key: str, fingerprint: str, compute) -> dict[str, Any]:
+        state, cached, flight = self.begin(key, fingerprint)
+        if state == "disabled":
+            return compute()
+        if state == "cached" and cached is not None:
+            return cached
+        if state == "waiter":
+            return self.wait(flight)
+        try:
+            response = compute()
+        except Exception as exc:  # noqa: BLE001
+            self.fail(key, fingerprint, flight, exc)
+            raise
+        self.finish(key, fingerprint, flight, response)
         return dict(response)
 
 
@@ -3485,6 +3512,15 @@ def make_handler(config: Config):
                 metadata["service_tier"] = service_tier
             parallel_tool_calls = _coerce_request_bool(body.get("parallel_tool_calls"), True)
             response_title = last_user.content[:80] or response_id
+            idempotency_key = str(self.headers.get("Idempotency-Key", "") or "")
+            idempotency_body = {
+                **body,
+                "_session_id_header": self.headers.get("X-Aegis-Session") or self.headers.get("X-Hermes-Session-Id"),
+                "_provider_header": self.headers.get("X-Aegis-Provider"),
+                "_cwd_header": self.headers.get("X-Aegis-Cwd"),
+                "_session_key_header": session_key,
+            }
+            idempotency_fp = _request_fingerprint(idempotency_body, _RESPONSES_IDEMPOTENCY_FINGERPRINT_KEYS)
             if stream:
                 sequence = 0
                 message_item_id = new_id("msg")
@@ -3503,6 +3539,88 @@ def make_handler(config: Config):
                     payload.setdefault("sequence_number", sequence)
                     sequence += 1
                     return self._write_sse(payload, event=event_name)
+
+                def stream_cached_response(response: dict[str, Any]) -> None:
+                    response_metadata = response.get("metadata") if isinstance(response.get("metadata"), dict) else {}
+                    cached_session_id = response_metadata.get("session_id") or session_id
+                    cached_response_id = str(response.get("id") or response_id)
+                    self._send_sse_headers(self._session_headers(
+                        session_id=str(cached_session_id or ""),
+                        session_key=session_key,
+                    ))
+                    created = dict(response)
+                    created["status"] = "in_progress"
+                    created["output"] = []
+                    send_event("response.created", {"response": created})
+                    for output_index, raw_item in enumerate(response.get("output") or []):
+                        if not isinstance(raw_item, dict):
+                            continue
+                        item = dict(raw_item)
+                        send_event("response.output_item.added", {
+                            "output_index": output_index,
+                            "item": item,
+                        })
+                        if item.get("type") == "message":
+                            item_id = str(item.get("id") or new_id("msg"))
+                            for content_index, part in enumerate(item.get("content") or []):
+                                if not isinstance(part, dict):
+                                    continue
+                                if str(part.get("type") or "") != "output_text":
+                                    continue
+                                text = str(part.get("text") or "")
+                                if text:
+                                    send_event("response.output_text.delta", {
+                                        "response_id": cached_response_id,
+                                        "item_id": item_id,
+                                        "output_index": output_index,
+                                        "content_index": content_index,
+                                        "delta": text,
+                                        "logprobs": [],
+                                    })
+                                send_event("response.output_text.done", {
+                                    "response_id": cached_response_id,
+                                    "item_id": item_id,
+                                    "output_index": output_index,
+                                    "content_index": content_index,
+                                    "text": text,
+                                    "logprobs": [],
+                                })
+                        send_event("response.output_item.done", {
+                            "output_index": output_index,
+                            "item": item,
+                        })
+                    status = str(response.get("status") or "completed")
+                    if status == "cancelled":
+                        send_event("response.cancelled", {"response": response})
+                    elif status == "failed":
+                        send_event("response.failed", {
+                            "response": response,
+                            "error": response.get("error"),
+                        })
+                    else:
+                        send_event("response.completed", {"response": response})
+                    try:
+                        self.wfile.write(b"data: [DONE]\n\n")
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+
+                stream_idempotency_state, stream_idempotency_cached, stream_idempotency_flight = (
+                    idempotency_cache.begin(idempotency_key, idempotency_fp)
+                )
+                stream_idempotency_owner = stream_idempotency_state in {"owner"}
+                if stream_idempotency_state == "waiter":
+                    stream_idempotency_cached = idempotency_cache.wait(stream_idempotency_flight)
+                if stream_idempotency_state in {"cached", "waiter"} and stream_idempotency_cached is not None:
+                    return stream_cached_response(stream_idempotency_cached)
+
+                def finish_stream_idempotency(response: dict[str, Any]) -> None:
+                    if stream_idempotency_owner:
+                        idempotency_cache.finish(
+                            idempotency_key,
+                            idempotency_fp,
+                            stream_idempotency_flight,
+                            response,
+                        )
 
                 def open_message_item() -> bool:
                     nonlocal message_opened, message_output_index, next_output_index
@@ -3809,6 +3927,7 @@ def make_handler(config: Config):
                             })
                             if conversation:
                                 response_store.set_conversation(conversation, response_id)
+                        finish_stream_idempotency(cancelled)
                         self._finish_response(response_id, cancelled)
                         return
                 except Exception as exc:  # noqa: BLE001
@@ -3854,6 +3973,7 @@ def make_handler(config: Config):
                         })
                         if conversation:
                             response_store.set_conversation(conversation, response_id)
+                    finish_stream_idempotency(failed)
                     if cancelled:
                         send_event("response.cancelled", {"response": failed})
                     else:
@@ -3914,21 +4034,13 @@ def make_handler(config: Config):
                     send_event("response.completed", {
                         "response": response,
                     })
+                finish_stream_idempotency(response)
                 self._finish_response(response_id, response)
                 try:
                     self.wfile.write(b"data: [DONE]\n\n")
                 except (BrokenPipeError, ConnectionResetError):
                     pass
                 return
-            idempotency_key = str(self.headers.get("Idempotency-Key", "") or "")
-            idempotency_body = {
-                **body,
-                "_session_id_header": self.headers.get("X-Aegis-Session") or self.headers.get("X-Hermes-Session-Id"),
-                "_provider_header": self.headers.get("X-Aegis-Provider"),
-                "_cwd_header": self.headers.get("X-Aegis-Cwd"),
-                "_session_key_header": session_key,
-            }
-            idempotency_fp = _request_fingerprint(idempotency_body, _RESPONSES_IDEMPOTENCY_FINGERPRINT_KEYS)
             def compute_response() -> dict[str, Any]:
                 response: dict[str, Any] | None = None
                 disconnect_cancelled = False
