@@ -502,6 +502,51 @@ def _entrypoint_groups() -> list[Any]:
     return groups
 
 
+def _entrypoint_module_root(entry_ref: str) -> Path | None:
+    module_ref = entry_ref.split(":", 1)[0].strip()
+    if not module_ref:
+        return None
+    try:
+        spec = importlib.util.find_spec(module_ref)
+    except (ImportError, AttributeError, ValueError):  # noqa: PERF203
+        return None
+    if spec is None:
+        return None
+    locations = getattr(spec, "submodule_search_locations", None)
+    if locations:
+        first = next(iter(locations), None)
+        return Path(first).resolve() if first else None
+    origin = getattr(spec, "origin", None)
+    if not origin or origin in {"built-in", "frozen"}:
+        return None
+    return Path(origin).resolve().parent
+
+
+def _entrypoint_manifest_path(entry_ref: str) -> Path | None:
+    root = _entrypoint_module_root(entry_ref)
+    if root is None:
+        return None
+    for name in MANIFEST_NAMES:
+        candidate = root / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _entrypoint_enabled_for_aliases(aliases: set[str], config=None) -> bool:
+    aliases = {alias for alias in aliases if alias}
+    if not aliases:
+        return False
+    disabled = set((config.get("plugins.disabled", []) if config else []) or [])
+    enabled = set((config.get("plugins.enabled", []) if config else []) or [])
+    allowlist = set((config.get("plugins.allowlist", []) if config else []) or [])
+    if aliases & disabled:
+        return False
+    if allowlist:
+        return bool(aliases & allowlist)
+    return bool(aliases & enabled)
+
+
 def _entrypoint_manifests(config=None) -> list[PluginManifest]:
     manifests: list[PluginManifest] = []
     seen: set[str] = set()
@@ -511,6 +556,15 @@ def _entrypoint_manifests(config=None) -> list[PluginManifest]:
         if not name or not value or name in seen:
             continue
         seen.add(name)
+        manifest_path = _entrypoint_manifest_path(value)
+        manifest = _read_manifest(manifest_path, config, source="entrypoint") if manifest_path else None
+        if manifest is not None:
+            aliases = {name, manifest.name, manifest.key or manifest.name}
+            manifest.entry_ref = value
+            manifest.source = "entrypoint"
+            manifest.enabled = _entrypoint_enabled_for_aliases(aliases, config)
+            manifests.append(manifest)
+            continue
         manifests.append(PluginManifest(
             name=name,
             key=name,

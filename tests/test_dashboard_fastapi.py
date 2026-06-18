@@ -2489,6 +2489,82 @@ def test_fastapi_dashboard_plugin_embedded_yaml_dashboard_manifest(tmp_path, mon
     assert route.json() == {"brief": True}
 
 
+def test_fastapi_entrypoint_plugin_package_dashboard_manifest_mounts(tmp_path, monkeypatch):
+    package_base = tmp_path / "site-packages"
+    package = package_base / "entrydash"
+    (package / "dashboard" / "dist").mkdir(parents=True)
+    (package / "__init__.py").write_text("def register(api):\n    pass\n", encoding="utf-8")
+    (package / "plugin.yaml").write_text(
+        "name: entry-dash\n"
+        "version: 1.0.0\n"
+        "description: Entrypoint dashboard package\n"
+        "kind: dashboard\n",
+        encoding="utf-8",
+    )
+    (package / "dashboard" / "manifest.json").write_text(
+        json.dumps({
+            "name": "entry-panel",
+            "label": "Entry Panel",
+            "entry": "dist/index.js",
+            "api": "plugin_api.py",
+        }),
+        encoding="utf-8",
+    )
+    (package / "dashboard" / "dist" / "index.js").write_text("window.entryPanel = true;", encoding="utf-8")
+    (package / "dashboard" / "plugin_api.py").write_text(
+        "from fastapi import APIRouter\n"
+        "router = APIRouter()\n"
+        "@router.get('/ping')\n"
+        "def ping():\n"
+        "    return {'entrypoint': True}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(package_base))
+
+    import aegis.plugins as plugin_runtime
+    from aegis.config import Config
+    from aegis.dashboard_fastapi import create_app
+
+    ep = types.SimpleNamespace(name="entry-dash", value="entrydash:register", group="hermes_agent.plugins")
+
+    class FakeEntryPoints(list):
+        def select(self, *, group):
+            return [item for item in self if item.group == group]
+
+    monkeypatch.setattr(plugin_runtime.importlib_metadata, "entry_points", lambda: FakeEntryPoints([ep]))
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    monkeypatch.setenv("AEGIS_DASHBOARD_TOKEN", "t")
+    cfg = Config.load()
+    cfg.data.setdefault("plugins", {})["enabled"] = ["entry-dash"]
+    app = create_app(cfg)
+    headers = {"X-Aegis-Token": "t"}
+
+    plugins = asyncio.run(_request(app, "GET", "/api/plugins", headers=headers))
+    manifest = asyncio.run(_request(app, "GET", "/api/dashboard/plugins", headers=headers))
+    asset = asyncio.run(_request(app, "GET", "/dashboard-plugins/entry-panel/dist/index.js"))
+    route = asyncio.run(_request(app, "GET", "/api/plugins/entry-panel/ping", headers=headers))
+    hub = asyncio.run(_request(app, "GET", "/api/dashboard/plugins/hub", headers=headers))
+
+    assert plugins.status_code == 200
+    status = next(row for row in plugins.json()["plugin_status"] if row["name"] == "entry-dash")
+    assert status["source"] == "entrypoint"
+    assert status["status"] == "loaded"
+    assert manifest.status_code == 200
+    row = next(item for item in manifest.json() if item["name"] == "entry-panel")
+    assert row["plugin"] == "entry-dash"
+    assert row["source"] == "entrypoint"
+    assert row["has_api"] is True
+    assert row["api_mount"]["status"] == "mounted"
+    assert asset.status_code == 200
+    assert "window.entryPanel" in asset.text
+    assert route.status_code == 200
+    assert route.json() == {"entrypoint": True}
+    assert hub.status_code == 200
+    hub_row = next(item for item in hub.json()["plugins"] if item["name"] == "entry-dash")
+    assert hub_row["has_dashboard_manifest"] is True
+    assert hub_row["dashboard_manifest"]["name"] == "entry-panel"
+
+
 def test_fastapi_dashboard_plugin_install_mounts_api_without_restart(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
     headers = {"X-Aegis-Token": "t"}
