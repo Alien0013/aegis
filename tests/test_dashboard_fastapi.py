@@ -2021,6 +2021,7 @@ def test_fastapi_dashboard_plugins_manifest_assets_and_api(tmp_path, monkeypatch
     asset = asyncio.run(_request(app, "GET", "/dashboard-plugins/demo-panel/index.js", headers=headers))
     assert asset.status_code == 200
     assert "window.demoPlugin" in asset.text
+    assert asset.headers["Cache-Control"] == "private, max-age=300"
     root = asyncio.run(_request(app, "GET", "/"))
     cookie_asset = asyncio.run(_request(
         app,

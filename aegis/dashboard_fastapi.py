@@ -2706,7 +2706,7 @@ def _dashboard_plugin_static(config: Config, name: str, file_path: str) -> Respo
     if not media_type:
         raise HTTPException(status_code=404, detail="asset not found")
     data = target.read_bytes()
-    return Response(data, media_type=media_type)
+    return Response(data, media_type=media_type, headers={"Cache-Control": "private, max-age=300"})
 
 
 def _dashboard_plugin_api_insert_at(app: FastAPI) -> int:
