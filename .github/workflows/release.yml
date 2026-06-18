@@ -55,3 +55,40 @@ jobs:
       - name: Publish to PyPI (trusted publishing)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  desktop-linux:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Install Linux packaging dependencies
+        run: sudo apt-get update && sudo apt-get install -y rpm
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+      - name: Build Linux desktop artifacts
+        working-directory: desktop
+        env:
+          AEGIS_RELEASE: "1"
+          AEGIS_DESKTOP_TARGETS: linux
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run dist:linux
+      - name: Upload desktop workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-desktop-linux
+          path: desktop/release/*
+      - name: Upload desktop artifacts to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: desktop/release/*

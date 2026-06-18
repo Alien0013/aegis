@@ -101,6 +101,21 @@ test("release guard allows explicit unsigned Windows override", () => {
   assert.deepEqual(failures, []);
 });
 
+test("release guard allows stamped Linux GitHub release builds", () => {
+  const failures = releaseBuildFailures({
+    env: {
+      AEGIS_RELEASE: "1",
+      GITHUB_SHA: "d".repeat(40),
+      GITHUB_TOKEN: "token",
+      npm_lifecycle_event: "dist:linux",
+    },
+    packageJson: packageJson(),
+    stamp: { source: "ci", dirty: false },
+    targetPlatforms: ["linux"],
+  });
+  assert.deepEqual(failures, []);
+});
+
 test("writeBuildStamp fails unsafe release builds before writing", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "aegis-stamp-"));
   assert.throws(

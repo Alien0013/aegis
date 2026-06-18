@@ -246,3 +246,18 @@ def test_desktop_builder_config_matches_release_parity():
     assert "msi" in package["scripts"]["dist:win"]
     assert "build:stamp" in package["scripts"]["dist:linux"]
     assert "rpm" in package["scripts"]["dist:linux"]
+
+
+def test_release_workflow_builds_linux_desktop_artifacts():
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+    assert "desktop-linux:" in workflow
+    assert "cache-dependency-path: desktop/package-lock.json" in workflow
+    assert "working-directory: desktop" in workflow
+    assert "run: npm ci" in workflow
+    assert "run: npm run dist:linux" in workflow
+    assert 'AEGIS_RELEASE: "1"' in workflow
+    assert "GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in workflow
+    assert "desktop/release/*" in workflow
+    assert "softprops/action-gh-release@v2" in workflow
