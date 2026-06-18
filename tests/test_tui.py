@@ -40,9 +40,43 @@ def test_tui_renders_dashboard_sections(monkeypatch, tmp_path):
     assert "Runs" in output
     assert "Cron" in output
     assert "Kanban" in output
+    assert "Integrity" in output
     assert "e config" in output
     assert "s secrets" in output
     assert snapshot["dashboard_url"].startswith("http://")
+    assert snapshot["cross_session"]["object"] == "hermes.cross_session_integrity_report"
+
+
+def test_tui_surfaces_cross_session_integrity_issues(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from datetime import datetime, timedelta, timezone
+
+    from aegis import config as cfg
+    from aegis.config import Config
+    from aegis.runs import RunStore
+    from aegis.session import Session, SessionStore
+    from aegis.cli.tui import render_dashboard
+
+    cfg.set_profile(None)
+    config = Config.load()
+    config.data.setdefault("server", {})["stale_run_health_seconds"] = 0
+    store = SessionStore()
+    runs = RunStore()
+    session = Session(id="tui-cross-session", title="tui cross session")
+    store.save(session)
+    run = runs.start(surface="tui", kind="chat", session_id=session.id, prompt="stale")
+    run["started_at"] = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    runs.write(run)
+    buffer = io.StringIO()
+    console = Console(file=buffer, force_terminal=False, width=120, no_color=True)
+
+    snapshot = render_dashboard(config, console=console)
+    output = buffer.getvalue()
+
+    assert snapshot["cross_session"]["ok"] is False
+    assert "Integrity" in output
+    assert "degraded" in output
+    assert "stale_running_run" in output
 
 
 def test_tui_redacts_dashboard_token_in_terminal_output(monkeypatch, tmp_path):

@@ -84,6 +84,22 @@ def collect_snapshot(config: Config) -> dict[str, Any]:
         tasks = store.list()
         return {"stats": store.stats(), "tasks": tasks[:8]}
 
+    def cross_session() -> dict[str, Any]:
+        from ..session_checks import cross_session_integrity_report
+
+        def threshold(key: str, default: float) -> float:
+            raw = config.get(key, default)
+            return default if raw is None else float(raw)
+
+        stale_running = threshold("server.stale_run_health_seconds", 6 * 60 * 60)
+        stale_resume = threshold("server.stale_resume_pending_health_seconds", 24 * 60 * 60)
+        return cross_session_integrity_report(
+            session_limit=100,
+            run_limit=500,
+            stale_running_seconds=stale_running,
+            stale_resume_pending_seconds=stale_resume,
+        )
+
     def services() -> dict[str, str]:
         from ..daemon import status
 
@@ -98,6 +114,7 @@ def collect_snapshot(config: Config) -> dict[str, Any]:
         "runs": _safe("runs", errors, runs, []),
         "cron": _safe("cron", errors, cron_jobs, []),
         "kanban": _safe("kanban", errors, kanban, {"stats": {}, "tasks": []}),
+        "cross_session": _safe("cross-session", errors, cross_session, {}),
         "services": _safe("services", errors, services, {}),
         "mcp_servers": dict(config.get("mcp.servers", {}) or {}),
         "channels": list(config.get("gateway.channels", []) or []),
@@ -197,6 +214,39 @@ def _kanban_panel(snapshot: dict[str, Any]) -> Panel:
     return Panel(body, title="Kanban", border_style="bright_blue")
 
 
+def _integrity_panel(snapshot: dict[str, Any]) -> Panel:
+    report = snapshot.get("cross_session") or {}
+    ok = bool(report.get("ok", False)) if report else False
+    status = str(report.get("status") or ("ok" if ok else "unknown"))
+    counts = report.get("counts") or {}
+    issues = report.get("issues") or []
+    border = "green" if ok else "red" if report else "yellow"
+    body = Text()
+    body.append(status, style="bold green" if ok else "bold red")
+    body.append(
+        f"\nerrors {int(report.get('error_count') or 0)}"
+        f" / warnings {int(report.get('warning_count') or 0)}"
+    )
+    body.append(
+        f"\nsessions {int(counts.get('sessions') or 0)}"
+        f" / runs {int(counts.get('runs') or 0)}"
+        f" / running {int(counts.get('running_runs') or 0)}"
+    )
+    resume_pending = int(counts.get("resume_pending_sessions") or 0)
+    if resume_pending:
+        body.append(f"\nresume pending {resume_pending}")
+    if issues:
+        for issue in issues[:3]:
+            target = issue.get("session_id") or issue.get("run_id") or ""
+            suffix = f" {target}" if target else ""
+            body.append(f"\n- {issue.get('severity')} {issue.get('code')}{suffix}")
+        if len(issues) > 3:
+            body.append(f"\n... {len(issues) - 3} more")
+    else:
+        body.append("\nNo integrity issues")
+    return Panel(body, title="Integrity", border_style=border)
+
+
 def _services_panel(snapshot: dict[str, Any]) -> Panel:
     services = snapshot.get("services") or {}
     rows = [(name, state) for name, state in sorted(services.items())]
@@ -209,7 +259,12 @@ def _services_panel(snapshot: dict[str, Any]) -> Panel:
 def build_renderable(snapshot: dict[str, Any]) -> Group:
     top = Columns([_model_panel(snapshot), _surface_panel(snapshot)], equal=True, expand=True)
     middle = Columns([_sessions_panel(snapshot), _runs_panel(snapshot)], equal=True, expand=True)
-    lower = Columns([_cron_panel(snapshot), _kanban_panel(snapshot), _services_panel(snapshot)], expand=True)
+    lower = Columns([
+        _cron_panel(snapshot),
+        _kanban_panel(snapshot),
+        _integrity_panel(snapshot),
+        _services_panel(snapshot),
+    ], expand=True)
     footer_items = ["r refresh", "c chat", "d dashboard", "e config", "s secrets", "q quit"]
     if snapshot.get("errors"):
         footer_items.append(f"{len(snapshot['errors'])} warning(s)")
