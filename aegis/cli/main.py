@@ -1007,34 +1007,6 @@ def _parse_config_set_value(key: str, raw_parts: object) -> tuple[object, str]:
     return value, ""
 
 
-def _config_type_errors(defaults: dict[str, object], current: dict[str, object]) -> list[str]:
-    errors: list[str] = []
-    for key, expected in defaults.items():
-        if key not in current:
-            continue
-        value = current[key]
-        if isinstance(expected, bool):
-            ok = isinstance(value, bool)
-            want = "boolean"
-        elif isinstance(expected, int) and not isinstance(expected, bool):
-            ok = isinstance(value, int) and not isinstance(value, bool)
-            want = "integer"
-        elif isinstance(expected, float):
-            ok = isinstance(value, (int, float)) and not isinstance(value, bool)
-            want = "number"
-        elif isinstance(expected, str):
-            ok = isinstance(value, str)
-            want = "string"
-        elif isinstance(expected, list):
-            ok = isinstance(value, list)
-            want = "list"
-        else:
-            continue
-        if not ok:
-            errors.append(f"{key}: expected {want}, got {type(value).__name__}")
-    return errors
-
-
 def cmd_config(args, config: Config) -> int:
     def configured_env(*names: str) -> str:
         for name in names:
@@ -1077,7 +1049,10 @@ def cmd_config(args, config: Config) -> int:
         return candidate
 
     def validate_yaml_config_edit(target: Path) -> str:
-        return "; ".join(cfg.validate_config_file(target))
+        parsed, errors = cfg.parse_config_file(target)
+        if not errors:
+            errors.extend(cfg.config_type_errors(parsed))
+        return "; ".join(errors)
 
     def show_summary() -> int:
         compression = config.get("agent.compression", {}) or {}
@@ -1173,6 +1148,7 @@ def cmd_config(args, config: Config) -> int:
         _print(f"  WhatsApp:   {whatsapp}")
         _print()
         _print("◆ Commands")
+        _print("  aegis config paths                # Show config/secrets/home/install paths")
         _print("  aegis config edit                 # Edit config file")
         _print("  aegis config edit --secrets       # Edit local .env secrets")
         _print("  aegis config get <key>            # Print a config value")
@@ -1190,6 +1166,9 @@ def cmd_config(args, config: Config) -> int:
     if args.action == "paths":
         _print(f"Config:  {cfg.config_path()}")
         _print(f"Secrets: {cfg.env_path()}")
+        _print(f"Home:    {cfg.get_home()}")
+        _print(f"Profile: {cfg.current_profile() or 'default'}")
+        _print(f"Install: {Path(__file__).resolve().parents[2]}")
         return 0
     if args.action in ("summary", "show"):
         return show_summary()
@@ -1238,7 +1217,13 @@ def cmd_config(args, config: Config) -> int:
     if args.action == "get":
         if not args.key:
             return _die("usage: aegis config get <key>")
-        value = redact_secret_values({args.key: config.get(args.key)}).get(args.key)
+        low = args.key.lower()
+        if "." not in args.key and (args.key.isupper() or any(low.endswith(s) for s in cfg.SECRET_SUFFIXES)):
+            env_name = args.key if args.key.isupper() else args.key.upper()
+            value = os.environ.get(env_name, config.get(args.key))
+        else:
+            value = config.get(args.key)
+        value = redact_secret_values({args.key: value}).get(args.key)
         _print(str(value))
         return 0
     if args.action == "set":
@@ -1271,7 +1256,7 @@ def cmd_config(args, config: Config) -> int:
         missing = [k for k in defaults if k not in current]
         unknown = [k for k in current if k not in defaults and k.split(".")[0] not in
                    ("custom_providers", "fallback_providers", "hooks", "mcp", "routing")]
-        type_errors = _config_type_errors(defaults, current)
+        type_errors = cfg.config_type_errors(config.data)
         if args.action == "check":
             _print(f"config file: {'invalid' if file_errors or type_errors else 'ok'}")
             for error in file_errors:

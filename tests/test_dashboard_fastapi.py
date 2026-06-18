@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
 import json
 from pathlib import Path
 import types
@@ -399,6 +400,15 @@ def test_fastapi_websocket_jsonrpc_helper(tmp_path, monkeypatch):
     assert analytics["id"] == "a"
     assert "series" in analytics["result"]
     assert "balance" in analytics["result"]
+
+    plugins = _dashboard_ws_rpc_response(
+        '{"jsonrpc":"2.0","id":"p","method":"dashboard.get","params":{"path":"/api/plugins"}}',
+        cfg,
+    )
+    assert plugins["id"] == "p"
+    assert "dashboard_plugins" in plugins["result"]
+    assert "dashboard_api_mounts" in plugins["result"]
+    assert "manifests" in plugins["result"]
 
     blocked = _dashboard_ws_rpc_response(
         '{"jsonrpc":"2.0","id":"bad","method":"dashboard.get","params":{"path":"/etc/passwd"}}',
@@ -996,6 +1006,18 @@ def test_fastapi_typed_config_profile_gateway_and_plugin_routes(tmp_path, monkey
     raw_config = asyncio.run(_request(app, "GET", "/api/config/raw", headers=headers)).json()["config"]
     assert raw_config["agent"]["compression"]["max_tool_tokens"] == 12000
     assert raw_config["agent"]["service_tier"] == "priority"
+
+    bad_raw = copy.deepcopy(raw_config)
+    bad_raw["agent"]["max_iterations"] = "not-number"
+    rejected_raw = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/config/raw",
+        json={"config": bad_raw},
+        headers=headers,
+    ))
+    assert rejected_raw.status_code == 400
+    assert "agent.max_iterations" in rejected_raw.json()["errors"][0]
 
     bad = asyncio.run(_request(
         app,

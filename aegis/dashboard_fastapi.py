@@ -25,7 +25,7 @@ from typing import Annotated, Any
 from urllib.parse import parse_qs, urlsplit
 
 from . import __version__
-from .config import Config
+from .config import Config, DEFAULT_CONFIG, _deep_merge, config_type_errors
 
 try:
     from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket
@@ -685,6 +685,19 @@ def _config_fields_patch(config: Config, body: dict) -> dict:
         "changed": {str(result["path"]): result.get("value") for result in results},
         "config": dash._redacted_config(config),
     }
+
+
+def _replace_config_mapping(config: Config, raw: dict[str, Any]) -> tuple[dict[str, Any], int]:
+    errors = config_type_errors(raw)
+    if errors:
+        return {
+            "ok": False,
+            "error": "config type validation failed",
+            "errors": errors,
+        }, 400
+    config.data = _deep_merge(DEFAULT_CONFIG, copy.deepcopy(raw))
+    config.save()
+    return {"ok": True, "config": copy.deepcopy(config.data)}, 200
 
 
 def _redacted_value(value: str) -> dict:
@@ -3977,16 +3990,7 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
 
         return apply_transitions(dry_run=True)
     if path == "/api/plugins":
-        from .plugins import list_manifests, load_plugins
-
-        api = load_plugins(quiet=True, config=config)
-        return {"loaded": [p.name for p in api.files],
-                "errors": [{"file": f.name, "error": e} for f, e in api.errors],
-                "tools": len(api.tools),
-                "tool_names": sorted(getattr(t, "name", str(t)) for t in api.tools),
-                "channels": sorted(api.channels),
-                "providers": sorted(api.providers),
-                "manifests": [m.to_dict() for m in list_manifests(config)]}
+        return _plugins_payload(config)
     if path == "/api/profiles":
         return _profiles_payload(config)
     if path == "/api/system":
@@ -4713,9 +4717,8 @@ def create_app(config: Config) -> FastAPI:
         raw = body.get("config", body) if isinstance(body, dict) else None
         if not isinstance(raw, dict):
             return JSONResponse({"ok": False, "error": "config object required"}, status_code=400)
-        config.data = copy.deepcopy(raw)
-        config.save()
-        return JSONResponse({"ok": True, "config": copy.deepcopy(config.data)})
+        payload, status = _replace_config_mapping(config, raw)
+        return JSONResponse(payload, status_code=status)
 
     @app.post("/api/config/import")
     async def api_config_import(request: Request) -> JSONResponse:
@@ -4724,9 +4727,10 @@ def create_app(config: Config) -> FastAPI:
         raw = body.get("config", body) if isinstance(body, dict) else None
         if not isinstance(raw, dict):
             return JSONResponse({"ok": False, "error": "config object required"}, status_code=400)
-        config.data = copy.deepcopy(raw)
-        config.save()
-        return JSONResponse({"ok": True, "config": dash._redacted_config(config)})
+        payload, status = _replace_config_mapping(config, raw)
+        if status == 200:
+            payload = {"ok": True, "config": dash._redacted_config(config)}
+        return JSONResponse(payload, status_code=status)
 
     @app.get("/api/env")
     async def api_env_list(request: Request) -> JSONResponse:

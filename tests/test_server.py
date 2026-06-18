@@ -260,6 +260,8 @@ def test_openai_server_auth_protects_models_and_rejects_bad_json(monkeypatch, tm
     srv, port = _serve(make_handler(cfg))
     try:
         status, _data = _request(port, "GET", "/v1/models")
+        health_status, health_data = _request(port, "GET", "/v1/health")
+        detailed_health_status, _detailed_health_data = _request(port, "GET", "/v1/health/detailed")
         authed_status, authed_data = _request(
             port,
             "GET",
@@ -281,6 +283,9 @@ def test_openai_server_auth_protects_models_and_rejects_bad_json(monkeypatch, tm
         srv.server_close()
 
     assert status == 401
+    assert health_status == 200
+    assert json.loads(health_data)["ok"] is True
+    assert detailed_health_status == 401
     assert authed_status == 200
     assert json.loads(authed_data)["object"] == "list"
     assert bad_status == 400
@@ -903,6 +908,11 @@ def test_server_health_skills_toolsets_and_cors_options(monkeypatch, tmp_path):
             "/v1/chat/completions",
             headers={"Origin": "http://client.local"},
         )
+        plain_options_status, plain_options_headers, _plain_options_data = _request_with_headers(
+            port,
+            "OPTIONS",
+            "/v1/chat/completions",
+        )
         blocked_status, _blocked_headers, blocked_data = _request_with_headers(
             port,
             "GET",
@@ -935,6 +945,9 @@ def test_server_health_skills_toolsets_and_cors_options(monkeypatch, tmp_path):
     assert options_status == 204
     assert options_headers["Access-Control-Allow-Origin"] == "http://client.local"
     assert options_headers["Access-Control-Max-Age"] == "600"
+    assert plain_options_status == 204
+    assert plain_options_headers["X-Content-Type-Options"] == "nosniff"
+    assert "Access-Control-Allow-Origin" not in plain_options_headers
     assert blocked_status == 403
     assert json.loads(blocked_data)["error"] == "cors origin not allowed"
 
@@ -2095,6 +2108,29 @@ def test_responses_missing_previous_id_404s_without_running(monkeypatch, tmp_pat
         status, data = _request(port, "POST", "/v1/responses", {
             "input": "second",
             "previous_response_id": "resp_missing",
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 404
+    assert "Previous response not found" in json.loads(data)["error"]
+    assert _FakeRunner.calls == []
+
+
+def test_responses_missing_previous_id_with_explicit_history_404s(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": "second",
+            "previous_response_id": "resp_missing",
+            "conversation_history": [{"role": "user", "content": "first"}],
         })
     finally:
         srv.shutdown()
@@ -3861,6 +3897,12 @@ def test_server_run_approval_choice_unblocks_pending_run(monkeypatch, tmp_path):
             f"/v1/runs/{run_id}/approval",
             {"choice": "approve", "resolve_all": True},
         )
+        duplicate_status, duplicate_data = _request(
+            port,
+            "POST",
+            f"/v1/runs/{run_id}/approval",
+            {"approval_id": pending["pending"][0]["id"], "choice": "deny"},
+        )
 
         final = {}
         deadline = time.time() + 2
@@ -3897,12 +3939,16 @@ def test_server_run_approval_choice_unblocks_pending_run(monkeypatch, tmp_path):
     assert approval["approved"] is True
     assert approval["resolved"] == 1
     assert approval["approval_ids"] == [pending["pending"][0]["id"]]
+    duplicate = json.loads(duplicate_data)
+    assert duplicate_status == 409
+    assert duplicate["error"]["code"] == "approval_not_pending"
     assert _ApprovalBlockingRunRunner.approval_returned.wait(0.1)
     assert _ApprovalBlockingRunRunner.calls[0]["approved"] is True
     assert final["run"]["status"] == "completed"
     assert final["output"] == "approved=True"
     assert events_status == 200
     assert "approval.request" in event_types
+    assert event_types.count("approval.responded") == 1
     responded = next(event for event in events if event.get("type") == "approval.responded")
     assert responded["approval_id"] == pending["pending"][0]["id"]
     assert responded["approved"] is True

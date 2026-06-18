@@ -2692,7 +2692,7 @@ def make_handler(config: Config):
 
         def do_OPTIONS(self):  # noqa: N802
             cors = _cors_headers(config, self._origin())
-            if not cors:
+            if cors is None:
                 self.send_response(403)
                 for name, value in _security_headers().items():
                     self.send_header(name, value)
@@ -2700,7 +2700,8 @@ def make_handler(config: Config):
                 return
             self.send_response(204)
             headers = _security_headers()
-            headers.update(cors)
+            if cors:
+                headers.update(cors)
             for name, value in headers.items():
                 self.send_header(name, value)
             self.end_headers()
@@ -2745,11 +2746,11 @@ def make_handler(config: Config):
         def do_GET(self):  # noqa: N802
             if self._forbid_disallowed_origin():
                 return
-            if not self._authed():
-                return self._json(401, {"error": "unauthorized"})
             path, query = self._route()
             if path in {"/health", "/v1/health"}:
                 return self._json(200, self._health())
+            if not self._authed():
+                return self._json(401, {"error": "unauthorized"})
             if path in {"/health/detailed", "/v1/health/detailed"}:
                 return self._json(200, self._health(detailed=True))
             if path == "/v1/models":
@@ -3333,11 +3334,12 @@ def make_handler(config: Config):
             if history_error:
                 return self._json(400, {"error": history_error})
             previous_state = None
-            if previous_id and not explicit_history:
+            if previous_id:
                 previous_state = response_store.get_state(previous_id)
                 if previous_state is None:
                     return self._json(404, {"error": f"Previous response not found: {previous_id}"})
-                explicit_history = _history_from_state(previous_state)
+                if not explicit_history:
+                    explicit_history = _history_from_state(previous_state)
                 if instructions is None:
                     stored_instructions = previous_state.get("instructions")
                     instructions = str(stored_instructions or "").strip() or None
@@ -4293,7 +4295,13 @@ def make_handler(config: Config):
                     ]
                 elif approval_id:
                     pending = approvals.get(approval_id)
-                    pending_items = [pending] if pending is not None and pending.get("run_id") == run_id else []
+                    pending_items = [
+                        pending
+                    ] if (
+                        pending is not None
+                        and pending.get("run_id") == run_id
+                        and not pending.get("answered")
+                    ) else []
                 else:
                     pending = next((v for v in approvals.values()
                                     if v.get("run_id") == run_id and not v.get("answered")), None)
@@ -4398,10 +4406,11 @@ def make_app(config: Config) -> web.Application:
         origin = str(request.headers.get("Origin", "") or "")
         if request.method.upper() == "OPTIONS":
             cors = _cors_headers(config, origin)
-            if not cors:
+            if cors is None:
                 return web.Response(status=403, headers=_security_headers())
             headers = _security_headers()
-            headers.update(cors)
+            if cors:
+                headers.update(cors)
             return web.Response(status=204, headers=headers)
         if not _origin_allowed(config, origin):
             return web.json_response(

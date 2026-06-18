@@ -193,6 +193,7 @@ def test_cli_config_summary_dump_and_edit(monkeypatch, capsys):
     assert "Timezone" in out
     assert "Model:          (auto)" in out
     assert "WhatsApp:" in out
+    assert "aegis config paths" in out
     assert "aegis config edit" in out
 
     assert main(["config", "show"]) == 0
@@ -206,6 +207,14 @@ def test_cli_config_summary_dump_and_edit(monkeypatch, capsys):
     assert main(["config", "env-path"]) == 0
     out = capsys.readouterr().out
     assert out.strip() == str(cfg.env_path())
+
+    assert main(["config", "paths"]) == 0
+    out = capsys.readouterr().out
+    assert f"Config:  {cfg.config_path()}" in out
+    assert f"Secrets: {cfg.env_path()}" in out
+    assert f"Home:    {cfg.get_home()}" in out
+    assert "Profile: default" in out
+    assert "Install:" in out
 
     assert main(["config", "dump"]) == 0
     out = capsys.readouterr().out
@@ -222,6 +231,14 @@ def test_cli_config_summary_dump_and_edit(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "dashboard_token: '[REDACTED]'" in out
     assert "plain-dashboard-secret" not in out
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert main(["config", "set", "OPENAI_API_KEY", "sk-env-secret"]) == 0
+    capsys.readouterr()
+    assert main(["config", "get", "OPENAI_API_KEY"]) == 0
+    out = capsys.readouterr().out
+    assert "[REDACTED]" in out
+    assert "sk-env-secret" not in out
 
     calls = []
 
@@ -308,6 +325,30 @@ def test_cli_config_edit_restores_invalid_yaml(monkeypatch, capsys):
     assert "Restored previous config" in streams.out
     assert "config edit failed validation" in streams.err
     assert list(cfg.config_path().parent.glob("config.yaml.bak-*"))
+
+
+def test_cli_config_edit_restores_bad_value_types(monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    from aegis import config as cfg
+    from aegis.cli.main import main
+
+    cfg.config_path().parent.mkdir(parents=True, exist_ok=True)
+    original = "agent:\n  max_iterations: 44\n"
+    cfg.config_path().write_text(original, encoding="utf-8")
+
+    def fake_run(command):
+        cfg.config_path().write_text("agent:\n  max_iterations: not-number\n", encoding="utf-8")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setenv("EDITOR", "test-editor")
+    monkeypatch.setattr("aegis.cli.main.subprocess.run", fake_run)
+
+    assert main(["config", "edit"]) == 1
+    streams = capsys.readouterr()
+    assert cfg.config_path().read_text(encoding="utf-8") == original
+    assert "Restored previous config" in streams.out
+    assert "agent.max_iterations" in streams.err
 
 
 def test_cli_config_check_reports_invalid_config_root(capsys):

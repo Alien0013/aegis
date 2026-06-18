@@ -621,6 +621,54 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return out
 
 
+def _flat_config_values(data: dict[str, Any], prefix: str = "") -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, value in (data or {}).items():
+        path = f"{prefix}{key}"
+        out[path] = value
+        if isinstance(value, dict):
+            out.update(_flat_config_values(value, path + "."))
+    return out
+
+
+def config_type_errors(data: dict[str, Any]) -> list[str]:
+    """Return type mismatches for known config keys.
+
+    Unknown keys are ignored so plugin/custom-provider config can remain
+    forward-compatible. The input may be a partial override file or a fully
+    merged runtime config.
+    """
+    if not isinstance(data, dict):
+        return ["config root must be a YAML mapping"]
+    defaults = _flat_config_values(DEFAULT_CONFIG)
+    current = _flat_config_values(_deep_merge(DEFAULT_CONFIG, data))
+    errors: list[str] = []
+    for key, expected in defaults.items():
+        if key not in current:
+            continue
+        value = current[key]
+        if isinstance(expected, bool):
+            ok = isinstance(value, bool)
+            want = "boolean"
+        elif isinstance(expected, int) and not isinstance(expected, bool):
+            ok = isinstance(value, int) and not isinstance(value, bool)
+            want = "integer"
+        elif isinstance(expected, float):
+            ok = isinstance(value, (int, float)) and not isinstance(value, bool)
+            want = "number"
+        elif isinstance(expected, str):
+            ok = isinstance(value, str)
+            want = "string"
+        elif isinstance(expected, list):
+            ok = isinstance(value, list)
+            want = "list"
+        else:
+            continue
+        if not ok:
+            errors.append(f"{key}: expected {want}, got {type(value).__name__}")
+    return errors
+
+
 # Keys that are secrets — set() routes these to .env instead of config.yaml.
 SECRET_SUFFIXES = ("_api_key", "_token", "_secret", "_key")
 

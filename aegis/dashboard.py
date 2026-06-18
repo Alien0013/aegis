@@ -662,16 +662,18 @@ def _config_write_raw(text: str, config: Config) -> dict:
     import yaml
 
     from . import config as cfg
-    from .util import atomic_write
     try:
         parsed = yaml.safe_load(text) if text.strip() else {}
     except yaml.YAMLError as exc:
         return {"ok": False, "error": f"invalid YAML: {exc}"}
     if not isinstance(parsed, dict):
         return {"ok": False, "error": "top-level YAML must be a mapping"}
+    type_errors = cfg.config_type_errors(parsed)
+    if type_errors:
+        return {"ok": False, "error": "config type validation failed: " + "; ".join(type_errors)}
     backup = _config_backup_now().get("backup", "")
-    atomic_write(cfg.config_path(), yaml.safe_dump(parsed, sort_keys=False))
-    config.data = parsed
+    config.data = cfg._deep_merge(cfg.DEFAULT_CONFIG, parsed)
+    config.save()
     return {"ok": True, "backup": backup}
 
 

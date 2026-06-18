@@ -70,7 +70,7 @@ def redact_secrets(text: str) -> str:
     return _SECRET_RE.sub("[REDACTED]", value)
 
 
-_SECRET_KEY_RE = re.compile(r"(^api[_-]?key$|token|secret|password|credential|auth|bearer|value)", re.IGNORECASE)
+_SECRET_KEY_RE = re.compile(r"(api[_-]?key|token|secret|password|credential|auth|bearer|value)", re.IGNORECASE)
 
 
 def redact_secret_values(value: Any) -> Any:
