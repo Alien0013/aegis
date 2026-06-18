@@ -537,6 +537,20 @@ export function GraphicalChat({
     }
   };
 
+  const stopStream = () => {
+    if (!busy) return;
+    streamRef.current.token += 1;
+    streamRef.current.controller?.abort();
+    streamRef.current.controller = null;
+    setBusy(false);
+    patchLast((turn) => (
+      turn.role === "assistant" && !turn.text
+        ? { ...turn, text: "Stopped." }
+        : turn
+    ));
+    taRef.current?.focus();
+  };
+
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -652,14 +666,25 @@ export function GraphicalChat({
               placeholder="Message AEGIS…  (Enter to send, Shift+Enter for newline)"
               className="scroll-thin max-h-40 min-h-[44px] flex-1 resize-none rounded-[var(--radius)] border border-border bg-surface px-3 py-2.5 text-sm text-text outline-none placeholder:text-faint focus:border-border-2"
             />
-            <button
-              onClick={send}
-              disabled={busy || !input.trim()}
-              className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-[var(--radius)] bg-primary text-primary-fg transition enabled:hover:opacity-90 disabled:opacity-40"
-              title="Send"
-            >
-              <Icon name={busy ? "refresh" : "send"} size={18} className={busy ? "animate-spin" : ""} />
-            </button>
+            {busy ? (
+              <button
+                onClick={stopStream}
+                className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-[var(--radius)] border border-danger/45 text-danger transition hover:bg-danger/10"
+                title="Stop"
+                aria-label="Stop response"
+              >
+                <Icon name="x" size={18} />
+              </button>
+            ) : (
+              <button
+                onClick={send}
+                disabled={!input.trim()}
+                className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-[var(--radius)] bg-primary text-primary-fg transition enabled:hover:opacity-90 disabled:opacity-40"
+                title="Send"
+              >
+                <Icon name="send" size={18} />
+              </button>
+            )}
           </div>
         </div>
       </div>
