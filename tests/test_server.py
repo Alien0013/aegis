@@ -3433,6 +3433,7 @@ def test_server_created_run_persists_across_handler_restart(monkeypatch, tmp_pat
         get_status, get_data = _request(port, "GET", f"/v1/runs/{run_id}")
         list_status, list_data = _request(port, "GET", "/v1/runs")
         events_status, events_data = _request(port, "GET", f"/v1/runs/{run_id}/events")
+        stop_status, stop_data = _request(port, "POST", f"/v1/runs/{run_id}/stop", {})
         sse_status, sse_headers, sse_data = _request_with_headers(
             port,
             "GET",
@@ -3446,6 +3447,7 @@ def test_server_created_run_persists_across_handler_restart(monkeypatch, tmp_pat
     run = json.loads(get_data)["run"]
     listed = json.loads(list_data)["data"]
     events = json.loads(events_data)
+    stop_body = json.loads(stop_data)
     assert get_status == 200
     assert run["id"] == run_id
     assert run["run_id"] == run_id
@@ -3453,6 +3455,10 @@ def test_server_created_run_persists_across_handler_restart(monkeypatch, tmp_pat
     assert run["status"] == "completed"
     assert run["session_id"] == "serve:persist-run"
     assert run["result"] == "finished"
+    assert stop_status == 409
+    assert stop_body["error"]["code"] == "run_not_active"
+    assert stop_body["run"]["id"] == run_id
+    assert stop_body["run"]["status"] == "completed"
     assert run["output"] == "finished"
     assert run["trace_id"] == "trace_blocking"
     assert run["surface_run_id"] == "surface_blocking"

@@ -2278,6 +2278,8 @@ def make_handler(config: Config):
             rec = active_runs.get(run_id)
             if rec is None:
                 return None
+            if str(rec.get("status") or "") in _TERMINAL_RUN_STATUSES:
+                return None
             rec["cancel_requested"] = True
             rec["cancel_reason"] = reason
             self._release_run_approvals_locked(run_id, reason)
@@ -4148,14 +4150,26 @@ def make_handler(config: Config):
             with state_lock:
                 self._sweep_runs_locked()
                 rec = self._request_stop_run_locked(run_id, "API stop requested")
-                if rec is None:
-                    return self._json(404, {
-                        "ok": False,
-                        "error": "active run not found",
-                        "id": run_id,
-                        "run_id": run_id,
-                    })
-                run_snapshot = dict(rec)
+                run_snapshot = dict(rec) if rec is not None else None
+            if run_snapshot is None:
+                from .runs import RunStore
+
+                stored = RunStore().get(run_id)
+                if stored is None:
+                    return self._json(404, self._run_not_found_payload(run_id))
+                public = _public_stored_run_record(stored)
+                status = str(public.get("status") or "unknown")
+                return self._json(409, {
+                    "ok": False,
+                    "error": {
+                        "message": f"Run is not active: {run_id}",
+                        "code": "run_not_active",
+                    },
+                    "id": run_id,
+                    "run_id": run_id,
+                    "status": status,
+                    "run": public,
+                })
             _persist_api_run_record(run_snapshot)
             public = _public_run_record(run_snapshot)
             public["status"] = "stopping"
