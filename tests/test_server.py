@@ -1429,6 +1429,16 @@ def test_responses_input_items_persist_paginate_and_replay(monkeypatch, tmp_path
             "GET",
             f"/v1/responses/{response_id}/input_items?after={first_body['last_id']}",
         )
+        before_status, before_page = _request(
+            port,
+            "GET",
+            f"/v1/responses/{response_id}/input_items?before={first_body['last_id']}",
+        )
+        desc_status, desc_page = _request(
+            port,
+            "GET",
+            f"/v1/responses/{response_id}/input_items?order=desc&limit=2",
+        )
         missing_status, missing_data = _request(port, "GET", "/v1/responses/resp_missing/input_items")
     finally:
         srv.shutdown()
@@ -1444,6 +1454,8 @@ def test_responses_input_items_persist_paginate_and_replay(monkeypatch, tmp_path
     assert status == 200
     assert first_status == 200
     assert second_status == 200
+    assert before_status == 200
+    assert desc_status == 200
     assert missing_status == 404
     assert "response not found" in json.loads(missing_data)["error"]
     assert first_body["object"] == "list"
@@ -1455,6 +1467,12 @@ def test_responses_input_items_persist_paginate_and_replay(monkeypatch, tmp_path
     second_body = json.loads(second_page)
     assert second_body["has_more"] is False
     assert [row["content"][0]["text"] for row in second_body["data"]] == ["second"]
+    before_body = json.loads(before_page)
+    assert before_body["has_more"] is False
+    assert [row["content"][0]["text"] for row in before_body["data"]] == ["be direct"]
+    desc_body = json.loads(desc_page)
+    assert desc_body["has_more"] is True
+    assert [row["content"][0]["text"] for row in desc_body["data"]] == ["second", "first"]
     assert replay_status == 200
     replay_body = json.loads(replay_data)
     assert [row["content"][0]["text"] for row in replay_body["data"]] == [
@@ -1656,6 +1674,74 @@ def test_responses_accepts_function_call_output_input_item(monkeypatch, tmp_path
     ]
     assert items[1]["call_id"] == "call_fetch"
     assert items[1]["output"] == "tool says hi"
+
+
+def test_responses_developer_after_user_is_not_active_prompt(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, _data = _request(port, "POST", "/v1/responses", {
+            "input": [
+                {"role": "user", "content": "draft the note"},
+                {"role": "developer", "content": "keep it terse"},
+            ],
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    call = _FakeRunner.calls[0]
+    assert call["prompt"].content == "draft the note"
+    assert [m.content for m in call["history"]] == [
+        "<developer_instructions>\nkeep it terse\n</developer_instructions>",
+    ]
+
+
+def test_responses_user_then_function_output_preserves_chronology(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    function_output = {
+        "type": "function_call_output",
+        "call_id": "call_fetch",
+        "output": "tool says hi",
+    }
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": [
+                {"role": "user", "content": "start"},
+                function_output,
+            ],
+        })
+        response_id = json.loads(data)["id"]
+        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    call = _FakeRunner.calls[0]
+    assert call["prompt"].content == ""
+    assert call["prompt"].meta["_responses_synthetic_prompt"] is True
+    assert [(m.role, m.content) for m in call["history"]] == [
+        ("user", "start"),
+        ("tool", "tool says hi"),
+    ]
+    assert items_status == 200
+    items = json.loads(items_data)["data"]
+    assert [item["type"] for item in items] == ["message", "function_call_output"]
+    assert items[0]["content"][0]["text"] == "start"
+    assert items[1]["call_id"] == "call_fetch"
 
 
 def test_responses_accepts_function_call_input_item(monkeypatch, tmp_path):

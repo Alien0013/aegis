@@ -808,7 +808,9 @@ def _convert_message(m: dict[str, Any]) -> Message:
     role = str(m.get("role") or "user")
     text, images = _content(m.get("content", ""))
     if role in ("system", "developer"):
-        return Message.user(f"<{role}_instructions>\n{text}\n</{role}_instructions>") if text else Message.user("")
+        message = Message.user(f"<{role}_instructions>\n{text}\n</{role}_instructions>")
+        message.meta["_instruction_role"] = role
+        return message
     if role == "assistant":
         return Message.assistant(text, tool_calls=_tool_calls_from_payload(m))
     if role == "tool":
@@ -1092,10 +1094,15 @@ def _responses_messages(body: dict[str, Any]) -> tuple[list[Message], Message]:
         internal = [Message.user(str(raw or ""))]
 
     last_user: Message | None = None
+    trailing_non_instruction = False
     for i in range(len(internal) - 1, -1, -1):
-        if internal[i].role == "user":
-            last_user = internal.pop(i)
+        message = internal[i]
+        if message.role == "user" and not _is_instruction_wrapper(message):
+            if not trailing_non_instruction:
+                last_user = internal.pop(i)
             break
+        if not _is_instruction_wrapper(message):
+            trailing_non_instruction = True
     if last_user is None:
         last_user = Message.user("")
         last_user.meta["_responses_synthetic_prompt"] = True
@@ -1123,6 +1130,9 @@ def _instruction_message(instructions: str | None) -> Message | None:
 
 
 def _is_instruction_wrapper(message: Message) -> bool:
+    meta_role = str((getattr(message, "meta", {}) or {}).get("_instruction_role") or "")
+    if message.role == "user" and meta_role in {"system", "developer"}:
+        return True
     text = (message.content or "").lstrip()
     return message.role == "user" and (
         text.startswith("<system_instructions>")
@@ -1265,16 +1275,24 @@ def _response_input_items_payload(
         limit = 100
     limit = max(1, min(limit, 100))
     after = str((query.get("after") or [""])[0] or "")
+    before = str((query.get("before") or [""])[0] or "")
+    order = str((query.get("order") or ["asc"])[0] or "asc").strip().lower()
     items = _state_input_items(state, response_id)
+    if order == "desc":
+        items = list(reversed(items))
     start = 0
+    end = len(items)
+    ids = [str(item.get("id") or "") for item in items]
     if after:
-        ids = [str(item.get("id") or "") for item in items]
         start = ids.index(after) + 1 if after in ids else len(items)
-    data = items[start:start + limit]
+    if before:
+        end = ids.index(before) if before in ids else 0
+    window = items[start:end]
+    data = window[:limit]
     return {
         "object": "list",
         "data": data,
-        "has_more": start + limit < len(items),
+        "has_more": limit < len(window),
         "first_id": data[0]["id"] if data else None,
         "last_id": data[-1]["id"] if data else None,
     }
