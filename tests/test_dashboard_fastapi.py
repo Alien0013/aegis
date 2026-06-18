@@ -1639,6 +1639,81 @@ def test_fastapi_dashboard_chat_stream_disconnect_cancels_live_agent():
     assert runner.finished.wait(1)
 
 
+def test_fastapi_dashboard_chat_stream_disconnect_reapplies_cancel_after_agent_entry_clear():
+    import threading
+
+    from aegis.dashboard_fastapi import _dashboard_chat_streaming_response
+    from aegis.session import Session
+
+    class Runner:
+        def __init__(self):
+            self.started = threading.Event()
+            self.finished = threading.Event()
+            self.agents = []
+            self.saw_cancel_before_clear = False
+
+        def load_or_create_session(self, session_id=None, **_kwargs):
+            return Session(id=session_id or "dash:disconnect-race", title="disconnect race")
+
+        def make_agent(self, **_kwargs):
+            agent = types.SimpleNamespace(cancel_event=threading.Event())
+
+            def cancel():
+                agent.cancel_event.set()
+
+            agent.cancel = cancel
+            self.agents.append(agent)
+            return agent
+
+        def run_prompt(self, prompt, **kwargs):  # noqa: ANN001
+            self.started.set()
+            agent = kwargs["agent"]
+            deadline = time.monotonic() + 1
+            while not agent.cancel_event.is_set() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.saw_cancel_before_clear = agent.cancel_event.is_set()
+            agent.cancel_event.clear()  # mirrors Agent.run() clearing the event at entry
+            deadline = time.monotonic() + 1
+            while not agent.cancel_event.is_set() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.finished.set()
+            return types.SimpleNamespace(
+                text=f"late:{prompt}",
+                session=kwargs["session"],
+                trace_id="",
+                turn_id="",
+                run_id="",
+            )
+
+    class DisconnectAfterRunStarts:
+        def __init__(self, runner: Runner):
+            self.runner = runner
+            self.calls = 0
+
+        async def is_disconnected(self):
+            self.calls += 1
+            if self.calls < 2:
+                return False
+            return self.runner.started.wait(2)
+
+    async def consume(response):
+        return [chunk async for chunk in response.body_iterator]
+
+    runner = Runner()
+    response = _dashboard_chat_streaming_response(
+        {"message": "slow", "session_id": "dash:disconnect-race"},
+        runner,
+        DisconnectAfterRunStarts(runner),
+    )
+
+    chunks = asyncio.run(asyncio.wait_for(consume(response), timeout=3))
+
+    assert chunks
+    assert runner.finished.wait(1)
+    assert runner.saw_cancel_before_clear is True
+    assert runner.agents and runner.agents[0].cancel_event.is_set()
+
+
 def test_fastapi_session_checks_reports_cross_session_integrity(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
     headers = {"X-Aegis-Token": "t"}

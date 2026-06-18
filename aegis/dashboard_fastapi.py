@@ -3654,17 +3654,37 @@ def _dashboard_chat_streaming_response(body: dict, chat_runner, request: Request
     sentinel = object()
     cancelled = threading.Event()
     active: dict[str, Any] = {}
+    active_lock = threading.Lock()
+
+    def start_cancel_watchdog() -> None:
+        with active_lock:
+            if active.get("cancel_watchdog_started"):
+                return
+            active["cancel_watchdog_started"] = True
+
+        def reapply_cancel() -> None:
+            deadline = time.monotonic() + 1.5
+            while cancelled.is_set() and time.monotonic() < deadline:
+                _cancel_dashboard_stream_agent(active.get("agent"))
+                worker_thread = active.get("worker")
+                if worker_thread is not None and not worker_thread.is_alive():
+                    break
+                time.sleep(0.025)
+
+        threading.Thread(target=reapply_cancel, daemon=True, name="aegis-dashboard-stream-cancel").start()
 
     def on_agent(agent: Any) -> None:
         active["agent"] = agent
         if cancelled.is_set():
             _cancel_dashboard_stream_agent(agent)
+            start_cancel_watchdog()
 
     def cancel_active_agent() -> None:
         if cancelled.is_set():
             return
         cancelled.set()
         _cancel_dashboard_stream_agent(active.get("agent"))
+        start_cancel_watchdog()
 
     def worker() -> None:
         try:
@@ -3678,7 +3698,9 @@ def _dashboard_chat_streaming_response(body: dict, chat_runner, request: Request
         finally:
             events_q.put(sentinel)
 
-    threading.Thread(target=worker, daemon=True).start()
+    thread = threading.Thread(target=worker, daemon=True)
+    active["worker"] = thread
+    thread.start()
 
     async def stream():
         saw_sentinel = False
