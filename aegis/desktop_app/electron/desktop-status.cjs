@@ -137,6 +137,7 @@ function desktopDiagnostics({
   resourcesPath = process.resourcesPath || "",
   exists = fs.existsSync,
   probeCommand = null,
+  updaterStatus = null,
 } = {}) {
   const packaged = Boolean(app && app.isPackaged);
   const stamp = readInstallStamp({ desktopRoot, resourcesPath });
@@ -192,6 +193,20 @@ function desktopDiagnostics({
         }`
     );
   const remoteDisplayReason = detectRemoteDisplay({ env, platform });
+  const updater = updaterStatus && typeof updaterStatus === "object" ? updaterStatus : {};
+  const updateStage = String(updater.stage || "");
+  const updateChecking = Boolean(updater.checking);
+  const updateInstallable = Boolean(updater.installable);
+  const updateInstallReason = updateEligibility.ok
+    ? (
+      updateInstallable
+        ? ""
+        : (updateStage ? `no downloaded update is ready (stage: ${updateStage})` : "no downloaded update is ready")
+    )
+    : updateEligibility.reason;
+  const updateCheckReason = updateEligibility.ok
+    ? (updateChecking ? "an update check is already running" : "")
+    : updateEligibility.reason;
   const checks = [
     {
       id: "install_stamp",
@@ -232,6 +247,13 @@ function desktopDiagnostics({
     installStamp: stamp.payload,
     backendManifest: backendManifest.payload,
     updateEligibility,
+    updater: {
+      stage: updateStage,
+      checking: updateChecking,
+      installable: updateInstallable,
+      installing: Boolean(updater.installing),
+      version: String(updater.version || ""),
+    },
     renderer: {
       remoteDisplayReason,
       gpuFallbackRecommended: Boolean(remoteDisplayReason),
@@ -266,15 +288,15 @@ function desktopDiagnostics({
           id: "check_updates",
           label: "Check for updates",
           description: "Ask the packaged app to check GitHub Releases for an AEGIS update.",
-          disabled: !updateEligibility.ok,
-          reason: updateEligibility.ok ? "" : updateEligibility.reason,
+          disabled: !updateEligibility.ok || updateChecking,
+          reason: updateCheckReason,
         },
         {
           id: "install_update",
           label: "Install downloaded update",
           description: "Restart AEGIS and install the already-downloaded update.",
-          disabled: !updateEligibility.ok,
-          reason: updateEligibility.ok ? "" : updateEligibility.reason,
+          disabled: !updateEligibility.ok || !updateInstallable,
+          reason: updateInstallReason,
         },
       ],
     },

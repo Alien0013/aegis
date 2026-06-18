@@ -94,6 +94,7 @@ test("desktop diagnostics exposes runtime, stamp, checks, and repair actions", (
     platform: "linux",
     arch: "x64",
     probeCommand: () => true,
+    updaterStatus: { stage: "idle", checking: false, installable: false, version: "" },
   });
 
   assert.equal(report.packaged, true);
@@ -104,6 +105,8 @@ test("desktop diagnostics exposes runtime, stamp, checks, and repair actions", (
   assert.equal(report.backendDiscovery.configured, true);
   assert.equal(report.backendDiscovery.bundled, false);
   assert.equal(report.backendManifest, null);
+  assert.equal(report.updater.stage, "idle");
+  assert.equal(report.updater.installable, false);
   assert.equal(report.paths.backendManifest, "");
   assert.equal(report.checks.find((row) => row.id === "install_stamp").ok, true);
   assert.equal(report.checks.find((row) => row.id === "release_update_eligibility").ok, true);
@@ -113,8 +116,54 @@ test("desktop diagnostics exposes runtime, stamp, checks, and repair actions", (
   const installUpdate = report.repair.actions.find((row) => row.id === "install_update");
   assert.equal(checkUpdates.disabled, false);
   assert.equal(checkUpdates.reason, "");
-  assert.equal(installUpdate.disabled, false);
-  assert.equal(installUpdate.reason, "");
+  assert.equal(installUpdate.disabled, true);
+  assert.match(installUpdate.reason, /no downloaded update is ready/);
+});
+
+test("desktop diagnostics gates update repair actions on live updater state", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "aegis-desktop-status-"));
+  fs.mkdirSync(path.join(root, "build"), { recursive: true });
+  fs.writeFileSync(
+    path.join(root, "build", "install-stamp.json"),
+    JSON.stringify({
+      schemaVersion: 2,
+      release: true,
+      trustedRelease: true,
+      dirty: false,
+      appVersion: "1.2.3",
+      targetPlatforms: ["linux"],
+    }),
+  );
+
+  const checking = desktopDiagnostics({
+    app: fakeApp({ packaged: true, version: "1.2.3" }),
+    desktopRoot: root,
+    env: { AEGIS_BIN: "/bin/aegis" },
+    platform: "linux",
+    probeCommand: () => true,
+    updaterStatus: { stage: "checking", checking: true, installable: false },
+  });
+  const checkingAction = checking.repair.actions.find((row) => row.id === "check_updates");
+  const checkingInstall = checking.repair.actions.find((row) => row.id === "install_update");
+  assert.equal(checking.updater.stage, "checking");
+  assert.equal(checkingAction.disabled, true);
+  assert.match(checkingAction.reason, /already running/);
+  assert.equal(checkingInstall.disabled, true);
+  assert.match(checkingInstall.reason, /stage: checking/);
+
+  const ready = desktopDiagnostics({
+    app: fakeApp({ packaged: true, version: "1.2.3" }),
+    desktopRoot: root,
+    env: { AEGIS_BIN: "/bin/aegis" },
+    platform: "linux",
+    probeCommand: () => true,
+    updaterStatus: { stage: "ready", checking: false, installable: true, version: "1.2.4" },
+  });
+  const readyCheck = ready.repair.actions.find((row) => row.id === "check_updates");
+  const readyInstall = ready.repair.actions.find((row) => row.id === "install_update");
+  assert.equal(ready.updater.version, "1.2.4");
+  assert.equal(readyCheck.disabled, false);
+  assert.equal(readyInstall.disabled, false);
 });
 
 test("desktop diagnostics treats a packaged resource backend as configured", () => {

@@ -352,6 +352,7 @@ function connectionDescriptor() {
       },
       resourcesPath: process.resourcesPath || "",
       desktopRoot: path.join(__dirname, ".."),
+      updaterStatus,
     }),
   };
   descriptor.desktop.updater = { ...updaterStatus };
