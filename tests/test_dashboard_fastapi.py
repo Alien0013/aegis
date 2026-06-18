@@ -2033,10 +2033,16 @@ def test_fastapi_dashboard_plugins_manifest_assets_and_api(tmp_path, monkeypatch
 
     observed = asyncio.run(_request(app, "GET", "/api/dashboard/plugins", headers=headers))
     observed_row = next(item for item in observed.json() if item["name"] == "demo-panel")
-    assert observed_row["api_mount"]["request_count"] == 1
-    assert observed_row["api_mount"]["last_request_path"] == "/api/plugins/demo-panel/ping"
-    assert observed_row["api_mount"]["last_request_method"] == "GET"
-    assert observed_row["api_mount"]["last_request_at"]
+    mount = observed_row["api_mount"]
+    assert mount["request_count"] == 1
+    assert mount["last_request_path"] == "/api/plugins/demo-panel/ping"
+    assert mount["last_request_method"] == "GET"
+    assert mount["last_request_at"]
+    assert mount["mount_count"] == 1
+    assert mount["mount_error_count"] == 0
+    assert mount["mounted_at"]
+    assert mount["mount_duration_ms"] >= 0
+    assert mount["fingerprint"]
 
 
 def test_fastapi_dashboard_plugin_duplicate_names_report_conflict_and_do_not_mount_api(tmp_path, monkeypatch):
@@ -2326,6 +2332,11 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
     pulse_mount = observed_body["dashboard_api_mounts"]["pulse-panel"]
     assert pulse_mount["mounted"] is True
     assert "/api/plugins/pulse-panel/pulse" in pulse_mount["routes"]
+    assert pulse_mount["mount_count"] == 1
+    assert pulse_mount["mount_error_count"] == 0
+    assert pulse_mount["mounted_at"]
+    assert pulse_mount["mount_duration_ms"] >= 0
+    assert pulse_mount["fingerprint"]
     assert pulse_mount["request_count"] >= 1
     assert pulse_mount["last_request_path"] == "/api/plugins/pulse-panel/pulse"
     assert pulse_mount["last_request_method"] == "GET"

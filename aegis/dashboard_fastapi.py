@@ -2241,22 +2241,64 @@ def _dashboard_plugin_api_observability(info: dict[str, Any]) -> dict[str, Any]:
         "last_request_at": str(info.get("last_request_at") or ""),
         "last_request_path": str(info.get("last_request_path") or ""),
         "last_request_method": str(info.get("last_request_method") or ""),
+        "mount_count": int(info.get("mount_count") or 0),
+        "mount_error_count": int(info.get("mount_error_count") or 0),
+        "mounted_at": str(info.get("mounted_at") or ""),
+        "mount_error_at": str(info.get("mount_error_at") or ""),
+        "mount_duration_ms": float(info.get("mount_duration_ms") or 0),
+        "fingerprint": str(info.get("fingerprint") or ""),
     }
 
 
 def _set_dashboard_plugin_api_mount_status(name: str, status: dict[str, Any]) -> None:
     with _DASHBOARD_PLUGIN_API_MOUNT_LOCK:
         previous = _DASHBOARD_PLUGIN_API_MOUNT_STATUS.get(name) or {}
-        status.update({
-            key: previous.get(key, status.get(key, "" if key != "request_count" else 0))
-            for key in (
-                "request_count",
-                "last_request_at",
-                "last_request_path",
-                "last_request_method",
-            )
-        })
+        for key, default in (
+            ("request_count", 0),
+            ("last_request_at", ""),
+            ("last_request_path", ""),
+            ("last_request_method", ""),
+            ("mount_count", 0),
+            ("mount_error_count", 0),
+            ("mounted_at", ""),
+            ("mount_error_at", ""),
+            ("mount_duration_ms", 0),
+            ("fingerprint", ""),
+        ):
+            if key not in status:
+                status[key] = previous.get(key, default)
         _DASHBOARD_PLUGIN_API_MOUNT_STATUS[name] = status
+
+
+def _dashboard_plugin_api_mount_attempt(
+    name: str,
+    started: float,
+    *,
+    ok: bool,
+    fingerprint: str = "",
+) -> dict[str, Any]:
+    with _DASHBOARD_PLUGIN_API_MOUNT_LOCK:
+        previous = dict(_DASHBOARD_PLUGIN_API_MOUNT_STATUS.get(name) or {})
+    now = datetime.now(timezone.utc).isoformat()
+    payload = {
+        "mount_duration_ms": round((time.perf_counter() - started) * 1000, 3),
+        "fingerprint": fingerprint or str(previous.get("fingerprint") or ""),
+    }
+    if ok:
+        payload.update({
+            "mount_count": int(previous.get("mount_count") or 0) + 1,
+            "mount_error_count": int(previous.get("mount_error_count") or 0),
+            "mounted_at": now,
+            "mount_error_at": str(previous.get("mount_error_at") or ""),
+        })
+    else:
+        payload.update({
+            "mount_count": int(previous.get("mount_count") or 0),
+            "mount_error_count": int(previous.get("mount_error_count") or 0) + 1,
+            "mounted_at": str(previous.get("mounted_at") or ""),
+            "mount_error_at": now,
+        })
+    return payload
 
 
 def _record_dashboard_plugin_api_request(name: str, request: Request) -> None:
@@ -2732,11 +2774,13 @@ def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
                 "api_path": str(api_path),
                 "api": Path(str(api_path)).name,
                 "routes": list(mounted[record_name].get("route_paths") or []),
+                "fingerprint": fingerprint,
                 "error": "",
             })
             continue
         path = Path(api_path)
         module_name = "aegis_dashboard_plugin_" + hashlib.sha256(str(path).encode()).hexdigest()[:16]
+        started = time.perf_counter()
         try:
             importlib.invalidate_caches()
             _clear_dashboard_plugin_api_bytecode(path)
@@ -2750,6 +2794,7 @@ def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
                     "api": path.name,
                     "routes": [],
                     "error": "could not load api module",
+                    **_dashboard_plugin_api_mount_attempt(record_name, started, ok=False, fingerprint=fingerprint),
                 })
                 continue
             module = importlib.util.module_from_spec(spec)
@@ -2773,6 +2818,7 @@ def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
                     "api": path.name,
                     "routes": [],
                     "error": "api module has no router",
+                    **_dashboard_plugin_api_mount_attempt(record_name, started, ok=False, fingerprint=fingerprint),
                 })
                 continue
             declared_route_paths = []
@@ -2812,6 +2858,7 @@ def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
                 "api": path.name,
                 "routes": route_paths,
                 "error": "",
+                **_dashboard_plugin_api_mount_attempt(record_name, started, ok=True, fingerprint=fingerprint),
             })
         except Exception as exc:  # noqa: BLE001
             _set_dashboard_plugin_api_mount_status(record_name, {
@@ -2821,6 +2868,7 @@ def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
                 "api": path.name,
                 "routes": [],
                 "error": str(exc),
+                **_dashboard_plugin_api_mount_attempt(record_name, started, ok=False, fingerprint=fingerprint),
             })
             continue
 
