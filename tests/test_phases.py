@@ -295,6 +295,19 @@ def test_cli_config_set_accepts_multiword_and_list_values(capsys):
     assert Config.load().get("tools.toolsets") == ["core", "web"]
 
 
+def test_cli_config_set_model_shorthand_updates_default(capsys):
+    from aegis.cli.main import main
+    from aegis.config import Config
+
+    assert main(["config", "set", "model", "gpt-5.5"]) == 0
+    out = capsys.readouterr().out
+    reloaded = Config.load()
+
+    assert "model.default" in out
+    assert reloaded.get("model.default") == "gpt-5.5"
+    assert isinstance(reloaded.get("model"), dict)
+
+
 def test_cli_config_set_timezone_is_shown(capsys):
     from aegis.cli.main import main
     from aegis.config import Config

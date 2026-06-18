@@ -1020,6 +1020,7 @@ def cmd_config(args, config: Config) -> int:
         _print()
         _print("Examples:")
         _print("  aegis config set model.provider openai")
+        _print("  aegis config set model gpt-5.5")
         _print("  aegis config set model.base_url http://localhost:8080/v1")
         _print("  aegis config set OPENAI_API_KEY sk-...")
 
@@ -1266,15 +1267,21 @@ def cmd_config(args, config: Config) -> int:
         _print(str(value))
         return 0
     if args.action == "set":
-        value, value_error = _parse_config_set_value(args.key or "", getattr(args, "value", None))
-        if not args.key or value_error:
+        key = args.key or ""
+        raw_value = getattr(args, "value", None)
+        if key == "model":
+            raw_text = " ".join(str(part) for part in raw_value or []).strip()
+            if raw_text and not raw_text.startswith("{"):
+                key = "model.default"
+        value, value_error = _parse_config_set_value(key, raw_value)
+        if not key or value_error:
             print_config_usage()
             return _die(value_error) if value_error and args.key else 1
         try:
-            where = config.set(args.key, value)
+            where = config.set(key, value)
         except ValueError as exc:
             return _die(str(exc))
-        _print(f"set {args.key} -> {where}")
+        _print(f"set {key} -> {where}")
         return 0
     if args.action in ("check", "migrate"):
         from ..config import DEFAULT_CONFIG, _deep_merge
