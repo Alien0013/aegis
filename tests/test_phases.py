@@ -385,6 +385,20 @@ def test_cli_config_edit_restores_bad_value_types(monkeypatch, capsys):
     assert "agent.max_iterations" in streams.err
 
 
+def test_cli_config_check_reports_active_provider_credentials(monkeypatch, capsys):
+    from aegis.cli.main import main
+
+    assert main(["config", "check"]) == 0
+    out = capsys.readouterr().out
+    assert "provider credentials: anthropic: missing one of ANTHROPIC_API_KEY" in out
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-secret")
+    assert main(["config", "check"]) == 0
+    out = capsys.readouterr().out
+    assert "provider credentials: anthropic: configured via ANTHROPIC_API_KEY" in out
+    assert "sk-ant-test-secret" not in out
+
+
 def test_cli_config_check_reports_invalid_config_root(capsys):
     from aegis import config as cfg
     from aegis.cli.main import main

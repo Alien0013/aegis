@@ -1015,6 +1015,26 @@ def cmd_config(args, config: Config) -> int:
                 return f"(set, {len(value)} chars)"
         return "(not set)"
 
+    def active_provider_credentials_status() -> str:
+        provider = str(config.get("model.provider") or "").strip()
+        if not provider:
+            return "(no active provider)"
+        try:
+            from ..providers import registry
+
+            spec = registry.get_spec(provider, config)
+        except Exception:  # noqa: BLE001
+            spec = None
+        if spec is None:
+            return f"{provider}: unknown provider"
+        env_vars = [str(name) for name in (getattr(spec, "env_vars", None) or []) if str(name)]
+        if not env_vars:
+            return f"{provider}: not required"
+        configured = [name for name in env_vars if os.environ.get(name, "").strip()]
+        if configured:
+            return f"{provider}: configured via {', '.join(configured)}"
+        return f"{provider}: missing one of {', '.join(env_vars)}"
+
     def print_config_usage() -> None:
         _print("Usage: aegis config set <key> <value>")
         _print()
@@ -1310,6 +1330,7 @@ def cmd_config(args, config: Config) -> int:
             _print(f"missing default keys: {', '.join(missing) or '(none)'}")
             _print(f"unknown keys: {', '.join(unknown) or '(none)'}")
             _print(f"type mismatches: {', '.join(type_errors) or '(none)'}")
+            _print(f"provider credentials: {active_provider_credentials_status()}")
             return 1 if file_errors or type_errors else 0
         if file_errors:
             return _die("config file failed validation: " + "; ".join(file_errors))
