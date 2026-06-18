@@ -95,6 +95,7 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
             "SLACK_IGNORED_CHANNELS",
             "SLACK_ALLOWED_TEAMS",
             "SLACK_BOT_USER_ID",
+            "SLACK_TRIGGER_MODE",
         ],
         "max_message_length": 39000,
         "message_length_units": "codepoints",

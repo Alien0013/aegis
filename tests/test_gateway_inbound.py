@@ -314,6 +314,7 @@ def test_platform_helper_command_caps_and_utf16_chunks():
         "EMAIL_PASSWORD",
     ]
     assert platform_metadata("ntfy.sh")["optional_env"] == ["NTFY_SERVER", "NTFY_TOKEN"]
+    assert "SLACK_TRIGGER_MODE" in platform_metadata("sl")["optional_env"]
     assert platform_metadata("mattermost-webhook")["security"]["auth_type"] == "bearer"
     webhook_meta = platform_metadata("webhooks")
     assert webhook_meta["supports_threads"] is True
@@ -362,6 +363,8 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert len(DiscordAdapter("token").command_menu(max_commands=500)) <= 100
     assert SlackAdapter().metadata["typed_command_prefix"] == "!"
     assert "SLACK_ALLOWED_CHANNELS" in SlackAdapter().metadata["optional_env"]
+    assert "SLACK_TRIGGER_MODE" in SlackAdapter().metadata["optional_env"]
+    assert SlackAdapter().metadata["security"]["trigger_mode"] == "all"
     mattermost = MattermostAdapter().metadata
     assert mattermost["transport"] == "http_webhook"
     assert mattermost["supports_threads"] is True
@@ -689,7 +692,65 @@ def test_slack_adapter_enforces_workspace_filters_and_strips_mentions(monkeypatc
     assert adapter._strip_own_mentions("<@UBOT> !status") == "!status"
     assert adapter._strip_own_mentions("<@UBOT|aegis> hello") == "hello"
 
+    monkeypatch.setenv("SLACK_TRIGGER_MODE", "addressed")
+    addressed_adapter = SlackAdapter()
+    assert addressed_adapter._event_allowed({
+        "user": "U1",
+        "channel": "C1",
+        "team": "T1",
+        "channel_type": "channel",
+        "text": "plain",
+    }) is False
+    assert addressed_adapter._event_allowed({
+        "user": "U1",
+        "channel": "C1",
+        "team": "T1",
+        "channel_type": "channel",
+        "text": "!status",
+    }) is True
+    assert addressed_adapter._event_allowed({
+        "user": "U1",
+        "channel": "C1",
+        "team": "T1",
+        "channel_type": "channel",
+        "text": "<@UBOT> hello",
+    }) is True
+    assert addressed_adapter._event_allowed({
+        "user": "U1",
+        "channel": "C1",
+        "team": "T1",
+        "channel_type": "channel",
+        "thread_ts": "171.1",
+        "parent_user_id": "UBOT",
+        "text": "thread reply",
+    }) is True
+    assert addressed_adapter._event_allowed({
+        "user": "U1",
+        "channel": "C1",
+        "team": "T1",
+        "channel_type": "im",
+        "text": "dm",
+    }) is True
+
+    monkeypatch.setenv("SLACK_TRIGGER_MODE", "command")
+    command_adapter = SlackAdapter()
+    assert command_adapter._event_allowed({
+        "user": "U1",
+        "channel": "C1",
+        "team": "T1",
+        "channel_type": "channel",
+        "text": "<@UBOT> hello",
+    }) is False
+    assert command_adapter._event_allowed({
+        "user": "U1",
+        "channel": "C1",
+        "team": "T1",
+        "channel_type": "channel",
+        "text": "/status",
+    }) is True
+
     monkeypatch.setenv("SLACK_ALLOW_BOTS", "1")
+    monkeypatch.setenv("SLACK_TRIGGER_MODE", "all")
     bot_adapter = SlackAdapter()
     assert bot_adapter._event_allowed({
         "bot_id": "B1",

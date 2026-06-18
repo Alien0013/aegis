@@ -41,6 +41,7 @@ class SlackAdapter(BasePlatformAdapter):
         self.ignored_channels = _csv_set(os.environ.get("SLACK_IGNORED_CHANNELS", ""))
         self.allowed_teams = _csv_set(os.environ.get("SLACK_ALLOWED_TEAMS", ""))
         self.bot_user_id = os.environ.get("SLACK_BOT_USER_ID", "").strip()
+        self.trigger_mode = os.environ.get("SLACK_TRIGGER_MODE", "all").strip().lower() or "all"
 
     @property
     def metadata(self) -> dict:
@@ -52,6 +53,7 @@ class SlackAdapter(BasePlatformAdapter):
             "ignored_channels_configured": bool(self.ignored_channels),
             "allowed_teams_configured": bool(self.allowed_teams),
             "bot_user_id_configured": bool(self.bot_user_id),
+            "trigger_mode": self.trigger_mode,
         }
         return data
 
@@ -68,9 +70,9 @@ class SlackAdapter(BasePlatformAdapter):
 
         @app.event("message")
         def handle_message(event, say):  # noqa: ANN001
-            if not self._event_allowed(event):
-                return
             raw_text = event.get("text", "")
+            if not self._event_allowed(event, raw_text):
+                return
             text = normalize_inbound_command(self._strip_own_mentions(raw_text), platform="slack")
             thread_id = event.get("thread_ts") or event.get("ts")
             ev = MessageEvent(
@@ -88,7 +90,7 @@ class SlackAdapter(BasePlatformAdapter):
 
         SocketModeHandler(app, self.app_token).start()
 
-    def _event_allowed(self, event: dict) -> bool:
+    def _event_allowed(self, event: dict, raw_text: str | None = None) -> bool:
         subtype = str(event.get("subtype") or "")
         is_bot = bool(event.get("bot_id"))
         if subtype and subtype != "bot_message":
@@ -108,6 +110,8 @@ class SlackAdapter(BasePlatformAdapter):
             return False
         if self.allowed_channels and "*" not in self.allowed_channels and channel not in self.allowed_channels:
             return False
+        if not self._trigger_allowed(event, raw_text):
+            return False
         return True
 
     def _strip_own_mentions(self, text: str) -> str:
@@ -115,6 +119,30 @@ class SlackAdapter(BasePlatformAdapter):
             return str(text or "")
         pattern = re.compile(rf"<@{re.escape(self.bot_user_id)}(?:\|[^>]+)?>")
         return pattern.sub("", str(text or "")).strip()
+
+    def _trigger_allowed(self, event: dict, raw_text: str | None = None) -> bool:
+        channel_type = str(event.get("channel_type") or "").lower()
+        if channel_type in {"im", "mpim", "dm"}:
+            return True
+        mode = self.trigger_mode
+        if mode in {"", "all", "always", "true", "1", "yes"}:
+            return True
+        raw = event.get("text") if raw_text is None else raw_text
+        text = str(raw or "")
+        stripped = text.lstrip()
+        is_command = stripped.startswith(("/", "!"))
+        if mode in {"command", "commands"}:
+            return is_command
+        if mode in {"addressed", "mention", "mentions", "reply", "replies"}:
+            if is_command:
+                return True
+            if self.bot_user_id:
+                mention = re.compile(rf"<@{re.escape(self.bot_user_id)}(?:\|[^>]+)?>")
+                if mention.search(text):
+                    return True
+                if str(event.get("parent_user_id") or "") == self.bot_user_id:
+                    return True
+        return False
 
     def send(self, chat_id: str, text: str, *, metadata: dict | None = None) -> None:
         try:

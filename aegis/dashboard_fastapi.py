@@ -1051,6 +1051,7 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
             "SLACK_IGNORED_CHANNELS",
             "SLACK_ALLOWED_TEAMS",
             "SLACK_BOT_USER_ID",
+            "SLACK_TRIGGER_MODE",
         ],
         "setup": "Use Socket Mode with a bot token and app-level token.",
         "pairing": True,
