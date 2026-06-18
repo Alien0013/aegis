@@ -3739,6 +3739,7 @@ def make_handler(config: Config):
                     created["status"] = "in_progress"
                     created["output"] = []
                     send_event("response.created", {"response": created})
+                    send_event("response.in_progress", {"response": dict(created)})
                     for output_index, raw_item in enumerate(response.get("output") or []):
                         if not isinstance(raw_item, dict):
                             continue
@@ -3976,6 +3977,11 @@ def make_handler(config: Config):
                 }
                 _attach_response_include(created_response, include_values)
                 send_event("response.created", {
+                    "response": {
+                        **created_response,
+                    },
+                })
+                send_event("response.in_progress", {
                     "response": {
                         **created_response,
                     },

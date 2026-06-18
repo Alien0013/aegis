@@ -2964,8 +2964,9 @@ def test_responses_stream_sse_has_openai_event_shape(monkeypatch, tmp_path):
     assert status == 200
     events = _sse_events(data)
     names = [name for name, _payload in events]
-    assert names[:4] == [
+    assert names[:5] == [
         "response.created",
+        "response.in_progress",
         "aegis.event",
         "response.output_item.added",
         "response.output_text.delta",
@@ -2983,8 +2984,11 @@ def test_responses_stream_sse_has_openai_event_shape(monkeypatch, tmp_path):
     assert done["text"] == "hello"
     assert done["item_id"] == delta["item_id"]
     created = next(payload for name, payload in events if name == "response.created")
+    in_progress = next(payload for name, payload in events if name == "response.in_progress")
     completed = next(payload for name, payload in events if name == "response.completed")
     assert created["response"]["parallel_tool_calls"] is False
+    assert in_progress["response"]["id"] == created["response"]["id"]
+    assert in_progress["response"]["status"] == "in_progress"
     assert created["response"]["include"] == ["output[*].content"]
     assert completed["response"]["parallel_tool_calls"] is False
     assert completed["response"]["include"] == ["output[*].content"]
