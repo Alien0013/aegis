@@ -83,6 +83,10 @@ test("auto-updater setup is idempotent and bounded", () => {
 test("renderer diagnostics and logs bridge is bounded", () => {
   const preload = fs.readFileSync(path.join(__dirname, "preload-app.js"), "utf8");
 
+  requireSnippet('require("./api-proxy.cjs")');
+  requireSnippet("normalizeApiProxyPath(requestPath)");
+  requireSnippet("normalizeApiProxyMethod(method)");
+  requireSnippet("serializeApiProxyBody(body)");
   requireSnippet("function readRecentLogLines");
   requireSnippet('ipcMain.handle("aegis:diagnostics"');
   requireSnippet('ipcMain.handle("aegis:repair"');

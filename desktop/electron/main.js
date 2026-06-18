@@ -34,6 +34,11 @@ const {
   releaseUpdateEligibility,
 } = require("./desktop-status.cjs");
 const {
+  normalizeApiProxyMethod,
+  normalizeApiProxyPath,
+  serializeApiProxyBody,
+} = require("./api-proxy.cjs");
+const {
   initialUpdaterStatus,
   transitionUpdaterStatus,
 } = require("./updater-status.cjs");
@@ -457,12 +462,21 @@ function runtimeDiagnostics() {
 
 function apiRequest({ method = "GET", path: requestPath = "", body = null } = {}) {
   return new Promise((resolve, reject) => {
-    if (!port || !token) { reject(new Error("backend is not connected")); return; }
-    const cleanPath = String(requestPath || "").replace(/^\/+/, "").replace(/^api\/?/, "");
+    let cleanPath;
+    let methodName;
+    let payload;
+    try {
+      if (!port || !token) throw new Error("backend is not connected");
+      cleanPath = normalizeApiProxyPath(requestPath);
+      methodName = normalizeApiProxyMethod(method);
+      payload = serializeApiProxyBody(body);
+    } catch (error) {
+      reject(error);
+      return;
+    }
     const url = new URL(`/api/${cleanPath}`, backendBaseUrl());
-    const payload = body == null ? null : Buffer.from(JSON.stringify(body));
     const req = http.request(url, {
-      method: String(method || "GET").toUpperCase(),
+      method: methodName,
       headers: {
         "X-Aegis-Token": token,
         ...(payload ? { "Content-Type": "application/json", "Content-Length": String(payload.length) } : {}),
