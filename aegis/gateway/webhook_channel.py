@@ -132,7 +132,7 @@ class WebhookChannel(BasePlatformAdapter):
             "security": {
                 "secret_configured": bool(self.secret),
                 "loopback_unsigned_allowed": True,
-                "insecure_env_override": _channel_env_truthy(self.env_prefix, "INSECURE_NO_AUTH"),
+                "insecure_env_override": self._insecure_no_auth(),
                 "env_prefix": self.env_prefix,
                 "max_body_bytes": self.max_body_bytes,
                 "outbound_configured": bool(self.outbound_url),
@@ -163,6 +163,12 @@ class WebhookChannel(BasePlatformAdapter):
             "rate_limiter": self._rate_limiter.stats(),
         })
         return data
+
+    def _insecure_no_auth(self) -> bool:
+        return (
+            _channel_env_truthy(self.env_prefix, "INSECURE_NO_AUTH")
+            or _env_truthy("WEBHOOK_CHANNEL_INSECURE_NO_AUTH")
+        )
 
     def _delivery_id(self, headers, body: dict) -> str:
         for name in ("X-GitHub-Delivery", "svix-id", "X-Request-ID", "X-Request-Id", "Idempotency-Key"):
@@ -380,7 +386,7 @@ class WebhookChannel(BasePlatformAdapter):
                     self.send_response(429)
                     self.end_headers()
                     return
-                insecure = _env_truthy("WEBHOOK_CHANNEL_INSECURE_NO_AUTH")
+                insecure = adapter._insecure_no_auth()
                 if not secret and not (insecure or _is_loopback_host(client_host)):
                     self.send_response(401)
                     self.end_headers()

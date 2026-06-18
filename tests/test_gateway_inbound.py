@@ -794,6 +794,16 @@ def test_gateway_webhook_channel_accepts_whatsapp_bridge_aliases():
     assert WebhookChannel()._delivery_id({}, {"key": {"id": "BAE599999"}}) == "body:key.id:BAE599999"
 
 
+def test_gateway_webhook_channel_prefix_insecure_auth_override(monkeypatch):
+    from aegis.gateway.webhook_channel import WebhookChannel
+
+    monkeypatch.setenv("WHATSAPP_CHANNEL_INSECURE_NO_AUTH", "1")
+    adapter = WebhookChannel(name="whatsapp", default_platform="whatsapp", env_prefix="WHATSAPP_CHANNEL")
+
+    assert adapter._insecure_no_auth() is True
+    assert adapter.metadata["security"]["insecure_env_override"] is True
+
+
 def test_gateway_webhook_channel_outbound_bridge_send(monkeypatch):
     from aegis.gateway import webhook_channel
     from aegis.gateway.webhook_channel import WebhookChannel
