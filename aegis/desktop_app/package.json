@@ -9,12 +9,14 @@
     "start:sandbox": "node launch.js --sandbox",
     "test:desktop": "node --test electron/*.test.cjs scripts/*.test.cjs",
     "build:stamp": "node scripts/write-build-stamp.cjs",
+    "build:backend": "node scripts/stage-backend.cjs",
+    "build:prepare": "npm run build:stamp && npm run build:backend",
     "builder": "electron-builder",
-    "pack": "npm run build:stamp && npm run builder -- --dir",
-    "dist": "npm run build:stamp && npm run builder",
-    "dist:linux": "npm run build:stamp && npm run builder -- --linux AppImage deb rpm",
-    "dist:win": "npm run build:stamp && npm run builder -- --win nsis msi",
-    "dist:mac": "npm run build:stamp && npm run builder -- --mac dmg"
+    "pack": "npm run build:prepare && npm run builder -- --dir",
+    "dist": "npm run build:prepare && npm run builder",
+    "dist:linux": "npm run build:prepare && npm run builder -- --linux AppImage deb rpm",
+    "dist:win": "npm run build:prepare && npm run builder -- --win nsis msi",
+    "dist:mac": "npm run build:prepare && npm run builder -- --mac dmg"
   },
   "dependencies": {
     "electron-updater": "6.8.9"
@@ -45,6 +47,8 @@
     "asarUnpack": ["**/*.node", "**/prebuilds/**"],
     "extraResources": [
       { "from": "build/install-stamp.json", "to": "install-stamp.json" },
+      { "from": "build/backend-manifest.json", "to": "backend-manifest.json" },
+      { "from": "build/backend", "to": "backend" },
       { "from": "build/icon.png", "to": "icon.png" }
     ],
     "mac": {

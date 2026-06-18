@@ -4,9 +4,11 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const {
+  candidateBackendManifestPaths,
   candidateInstallStampPaths,
   desktopDiagnostics,
   detectRemoteDisplay,
+  readBackendManifest,
   readInstallStamp,
   releaseUpdateEligibility,
 } = require("./desktop-status.cjs");
@@ -43,6 +45,29 @@ test("discovers install stamp from packaged resources before dev build dir", () 
   assert.equal(stamp.payload.commit, "packaged");
 });
 
+test("discovers backend manifest from packaged resources before dev build dir", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "aegis-desktop-status-"));
+  const resources = path.join(root, "resources");
+  fs.mkdirSync(resources, { recursive: true });
+  fs.mkdirSync(path.join(root, "build"), { recursive: true });
+  fs.writeFileSync(
+    path.join(root, "build", "backend-manifest.json"),
+    JSON.stringify({ staged: false, source: "dev" }),
+  );
+  fs.writeFileSync(
+    path.join(resources, "backend-manifest.json"),
+    JSON.stringify({ staged: true, source: "packaged" }),
+  );
+
+  assert.deepEqual(candidateBackendManifestPaths({ desktopRoot: root, resourcesPath: resources }), [
+    path.join(resources, "backend-manifest.json"),
+    path.join(root, "build", "backend-manifest.json"),
+  ]);
+  const manifest = readBackendManifest({ desktopRoot: root, resourcesPath: resources });
+  assert.equal(manifest.found, true);
+  assert.equal(manifest.payload.source, "packaged");
+});
+
 test("desktop diagnostics exposes runtime, stamp, checks, and repair actions", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "aegis-desktop-status-"));
   fs.mkdirSync(path.join(root, "build"), { recursive: true });
@@ -77,6 +102,8 @@ test("desktop diagnostics exposes runtime, stamp, checks, and repair actions", (
   assert.equal(report.renderer.gpuFallbackRecommended, false);
   assert.equal(report.backendDiscovery.configured, true);
   assert.equal(report.backendDiscovery.bundled, false);
+  assert.equal(report.backendManifest, null);
+  assert.equal(report.paths.backendManifest, "");
   assert.equal(report.checks.find((row) => row.id === "install_stamp").ok, true);
   assert.equal(report.checks.find((row) => row.id === "release_update_eligibility").ok, true);
   assert.equal(report.checks.find((row) => row.id === "backend_environment").ok, true);

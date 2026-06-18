@@ -24,7 +24,8 @@ DESKTOP_FILES = (
     "electron/preload.js", "electron/preload-app.js", "electron/boot.html",
     "scripts/before-pack.cjs", "scripts/before-pack.test.cjs",
     "scripts/before-build.cjs", "scripts/write-build-stamp.cjs",
-    "scripts/write-build-stamp.test.cjs",
+    "scripts/write-build-stamp.test.cjs", "scripts/stage-backend.cjs",
+    "scripts/stage-backend.test.cjs",
     "build/icon.png", "build/icon.ico",
 )
 DESKTOP_MANIFEST = ".aegis-desktop-files.json"

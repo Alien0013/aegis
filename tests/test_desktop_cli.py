@@ -233,18 +233,22 @@ def test_desktop_builder_config_matches_release_parity():
     assert build["protocols"] == [{"name": "AEGIS Protocol", "schemes": ["aegis"]}]
     assert build["beforeBuild"] == "scripts/before-build.cjs"
     assert "scripts/write-build-stamp.cjs" in desktop.DESKTOP_FILES
+    assert "scripts/stage-backend.cjs" in desktop.DESKTOP_FILES
     assert "electron/desktop-status.cjs" in desktop.DESKTOP_FILES
     assert "electron/updater-status.cjs" in desktop.DESKTOP_FILES
     assert "build/icon.ico" in desktop.DESKTOP_FILES
     resources = {entry["to"]: entry["from"] for entry in build["extraResources"]}
     assert resources["install-stamp.json"] == "build/install-stamp.json"
+    assert resources["backend-manifest.json"] == "build/backend-manifest.json"
+    assert resources["backend"] == "build/backend"
     assert "msi" in build["win"]["target"]
     assert build["win"]["signAndEditExecutable"] is False
     assert build["nsis"]["warningsAsErrors"] is False
     assert "rpm" in build["linux"]["target"]
-    assert "build:stamp" in package["scripts"]["dist:win"]
+    assert package["scripts"]["build:prepare"] == "npm run build:stamp && npm run build:backend"
+    assert "build:prepare" in package["scripts"]["dist:win"]
     assert "msi" in package["scripts"]["dist:win"]
-    assert "build:stamp" in package["scripts"]["dist:linux"]
+    assert "build:prepare" in package["scripts"]["dist:linux"]
     assert "rpm" in package["scripts"]["dist:linux"]
 
 

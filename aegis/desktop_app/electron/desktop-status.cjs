@@ -30,6 +30,16 @@ function candidateInstallStampPaths({
   return Array.from(new Set(candidates.filter(Boolean)));
 }
 
+function candidateBackendManifestPaths({
+  desktopRoot = path.resolve(__dirname, ".."),
+  resourcesPath = process.resourcesPath || "",
+} = {}) {
+  const candidates = [];
+  if (resourcesPath) candidates.push(path.join(resourcesPath, "backend-manifest.json"));
+  if (desktopRoot) candidates.push(path.join(desktopRoot, "build", "backend-manifest.json"));
+  return Array.from(new Set(candidates.filter(Boolean)));
+}
+
 function readInstallStamp(options = {}) {
   const exists = options.exists || fs.existsSync;
   const readFile = options.readFile || fs.readFileSync;
@@ -43,6 +53,21 @@ function readInstallStamp(options = {}) {
     }
   }
   return { found: false, path: "", payload: null, error: "install stamp not found" };
+}
+
+function readBackendManifest(options = {}) {
+  const exists = options.exists || fs.existsSync;
+  const readFile = options.readFile || fs.readFileSync;
+  for (const candidate of candidateBackendManifestPaths(options)) {
+    if (!exists(candidate)) continue;
+    try {
+      const payload = JSON.parse(readFile(candidate, "utf8"));
+      return { found: true, path: candidate, payload, error: "" };
+    } catch (err) {
+      return { found: false, path: candidate, payload: null, error: err.message };
+    }
+  }
+  return { found: false, path: "", payload: null, error: "backend manifest not found" };
 }
 
 function releaseUpdateEligibility({
@@ -108,6 +133,7 @@ function desktopDiagnostics({
 } = {}) {
   const packaged = Boolean(app && app.isPackaged);
   const stamp = readInstallStamp({ desktopRoot, resourcesPath });
+  const backendManifest = readBackendManifest({ desktopRoot, resourcesPath });
   const updateEligibility = releaseUpdateEligibility({ packaged, stamp, platform });
   const userDataPath = app && typeof app.getPath === "function" ? _safeAppCall(app, "getPath", "") : "";
   const appPath = app && typeof app.getAppPath === "function" ? _safeAppCall(app, "getAppPath", "") : "";
@@ -151,7 +177,11 @@ function desktopDiagnostics({
     : (
       bundledBackend
         ? `packaged backend candidate exists but did not pass version probe: ${commandResolution.reason}`
-        : `packaged desktop cannot find a usable AEGIS backend: ${commandResolution.reason}`
+        : `packaged desktop cannot find a usable AEGIS backend: ${commandResolution.reason}${
+          backendManifest.found && backendManifest.payload && backendManifest.payload.reason
+            ? ` (${backendManifest.payload.reason})`
+            : ""
+        }`
     );
   const remoteDisplayReason = detectRemoteDisplay({ env, platform });
   const checks = [
@@ -189,8 +219,10 @@ function desktopDiagnostics({
       resourcesPath,
       userDataPath,
       installStamp: stamp.path,
+      backendManifest: backendManifest.path,
     },
     installStamp: stamp.payload,
+    backendManifest: backendManifest.payload,
     updateEligibility,
     renderer: {
       remoteDisplayReason,
@@ -228,9 +260,11 @@ function desktopDiagnostics({
 }
 
 module.exports = {
+  candidateBackendManifestPaths,
   candidateInstallStampPaths,
   desktopDiagnostics,
   detectRemoteDisplay,
+  readBackendManifest,
   readInstallStamp,
   releaseUpdateEligibility,
 };
