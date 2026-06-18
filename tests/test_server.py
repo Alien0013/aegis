@@ -1593,6 +1593,45 @@ def test_responses_accepts_input_file_parts_as_document_references(monkeypatch, 
     ]
 
 
+def test_responses_groups_top_level_typed_content_parts(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    image_url = "data:image/png;base64,XYZ"
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": [
+                {"type": "input_text", "text": "review this"},
+                {"type": "input_image", "image_url": image_url},
+                {"type": "input_file", "file_id": "file_123", "filename": "brief.pdf"},
+            ],
+        })
+        response_id = json.loads(data)["id"]
+        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items?order=asc")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    call = _FakeRunner.calls[0]
+    assert call["prompt"].content == "review this\n[file: file_123]"
+    assert call["prompt"].images == [image_url]
+    assert call["history"] == []
+    assert items_status == 200
+    items = json.loads(items_data)["data"]
+    assert len(items) == 1
+    assert items[0]["role"] == "user"
+    assert items[0]["content"] == [
+        {"type": "input_text", "text": "review this"},
+        {"type": "input_image", "image_url": image_url},
+        {"type": "input_file", "file_id": "file_123", "filename": "brief.pdf"},
+    ]
+
+
 def test_responses_rejects_malformed_input_file_parts(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
@@ -1740,6 +1779,43 @@ def test_responses_persist_store_false_and_previous_id(monkeypatch, tmp_path):
     chained_items = json.loads(chained_items_data)["data"]
     assert [row["role"] for row in chained_items] == ["user", "assistant", "user"]
     assert all(row["role"] != "system" for row in chained_items)
+
+
+def test_responses_conversation_store_false_stays_stateless(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        first_status, first_data = _request(port, "POST", "/v1/responses", {
+            "input": "first",
+            "conversation": "thread-a",
+            "store": False,
+        })
+        first_id = json.loads(first_data)["id"]
+        second_status, second_data = _request(port, "POST", "/v1/responses", {
+            "input": "second",
+            "conversation": "thread-a",
+            "store": False,
+        })
+        second_id = json.loads(second_data)["id"]
+        first_get_status, _first_get_data = _request(port, "GET", f"/v1/responses/{first_id}")
+        second_get_status, _second_get_data = _request(port, "GET", f"/v1/responses/{second_id}")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert first_status == 200
+    assert second_status == 200
+    assert first_get_status == 404
+    assert second_get_status == 404
+    assert json.loads(first_data)["previous_response_id"] is None
+    assert json.loads(second_data)["previous_response_id"] is None
+    assert _FakeRunner.calls[0]["history"] == []
+    assert _FakeRunner.calls[1]["history"] == []
 
 
 def test_responses_input_items_persist_paginate_and_replay(monkeypatch, tmp_path):

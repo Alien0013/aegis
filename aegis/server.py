@@ -472,6 +472,21 @@ def _is_opaque_response_input_item(item: Any) -> bool:
     )
 
 
+def _is_response_content_part_item(item: Any) -> bool:
+    return (
+        isinstance(item, dict)
+        and "role" not in item
+        and "content" not in item
+        and _response_item_type(item)
+        in (
+            _TEXT_CONTENT_PART_TYPES
+            | _IMAGE_CONTENT_PART_TYPES
+            | _FILE_CONTENT_PART_TYPES
+            | _REFUSAL_CONTENT_PART_TYPES
+        )
+    )
+
+
 def _function_output_validation_error(value: Any, *, param: str) -> dict[str, Any] | None:
     if isinstance(value, list):
         return _content_part_validation_error(value, param=param, allow_files=True)
@@ -1087,7 +1102,27 @@ def _responses_messages(body: dict[str, Any]) -> tuple[list[Message], Message]:
     if isinstance(raw, str):
         internal = [Message.user(raw)]
     elif isinstance(raw, list):
-        internal = [_response_input_item_to_message(item) for item in raw]
+        internal = []
+        pending_content_parts: list[dict[str, Any]] = []
+
+        def flush_content_parts() -> None:
+            nonlocal pending_content_parts
+            if not pending_content_parts:
+                return
+            internal.append(_response_input_item_to_message({
+                "type": "message",
+                "role": "user",
+                "content": pending_content_parts,
+            }))
+            pending_content_parts = []
+
+        for item in raw:
+            if _is_response_content_part_item(item):
+                pending_content_parts.append(dict(item))
+                continue
+            flush_content_parts()
+            internal.append(_response_input_item_to_message(item))
+        flush_content_parts()
     elif isinstance(raw, dict):
         internal = [_response_input_item_to_message(raw)]
     else:
