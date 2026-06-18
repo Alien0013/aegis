@@ -254,6 +254,20 @@ function desktopDiagnostics({
           label: "Set AEGIS_HOME or AEGIS_BIN",
           description: "Point the desktop shell at a known backend install.",
         },
+        {
+          id: "check_updates",
+          label: "Check for updates",
+          description: "Ask the packaged app to check GitHub Releases for an AEGIS update.",
+          disabled: !updateEligibility.ok,
+          reason: updateEligibility.ok ? "" : updateEligibility.reason,
+        },
+        {
+          id: "install_update",
+          label: "Install downloaded update",
+          description: "Restart AEGIS and install the already-downloaded update.",
+          disabled: !updateEligibility.ok,
+          reason: updateEligibility.ok ? "" : updateEligibility.reason,
+        },
       ],
     },
   };

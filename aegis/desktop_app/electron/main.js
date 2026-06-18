@@ -430,6 +430,12 @@ async function runDesktopRepairAction(action) {
       restarting: true,
     };
   }
+  if (id === "check_updates") {
+    return { ok: true, action: id, status: initAutoUpdate(true) };
+  }
+  if (id === "install_update") {
+    return { action: id, ...installDownloadedUpdate() };
+  }
   return { ok: false, action: id, error: `unknown repair action: ${id || "<missing>"}` };
 }
 

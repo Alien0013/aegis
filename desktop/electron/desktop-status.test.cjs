@@ -108,6 +108,12 @@ test("desktop diagnostics exposes runtime, stamp, checks, and repair actions", (
   assert.equal(report.checks.find((row) => row.id === "release_update_eligibility").ok, true);
   assert.equal(report.checks.find((row) => row.id === "backend_environment").ok, true);
   assert(report.repair.actions.some((row) => row.id === "restart_backend"));
+  const checkUpdates = report.repair.actions.find((row) => row.id === "check_updates");
+  const installUpdate = report.repair.actions.find((row) => row.id === "install_update");
+  assert.equal(checkUpdates.disabled, false);
+  assert.equal(checkUpdates.reason, "");
+  assert.equal(installUpdate.disabled, false);
+  assert.equal(installUpdate.reason, "");
 });
 
 test("desktop diagnostics treats a packaged resource backend as configured", () => {
@@ -278,4 +284,10 @@ test("desktop diagnostics errors when packaged build has no backend env or stamp
   assert.equal(report.checks.find((row) => row.id === "install_stamp").severity, "warning");
   assert.equal(report.checks.find((row) => row.id === "release_update_eligibility").severity, "warning");
   assert.equal(report.checks.find((row) => row.id === "backend_environment").severity, "error");
+  const checkUpdates = report.repair.actions.find((row) => row.id === "check_updates");
+  const installUpdate = report.repair.actions.find((row) => row.id === "install_update");
+  assert.equal(checkUpdates.disabled, true);
+  assert.match(checkUpdates.reason, /install stamp/);
+  assert.equal(installUpdate.disabled, true);
+  assert.match(installUpdate.reason, /install stamp/);
 });
