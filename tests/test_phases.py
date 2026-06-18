@@ -202,9 +202,15 @@ def test_cli_config_summary_dump_and_edit(monkeypatch, capsys):
     assert "Config YAML:  ok" in out
     assert "Value types:  ok" in out
     assert "aegis config paths" in out
+    assert "aegis config status" in out
     assert "aegis config edit" in out
+    assert "aegis config doctor" in out
 
     assert main(["config", "show"]) == 0
+    out = capsys.readouterr().out
+    assert "AEGIS Configuration" in out
+
+    assert main(["config", "status"]) == 0
     out = capsys.readouterr().out
     assert "AEGIS Configuration" in out
 
@@ -390,6 +396,11 @@ def test_cli_config_check_reports_active_provider_credentials(monkeypatch, capsy
 
     assert main(["config", "check"]) == 0
     out = capsys.readouterr().out
+    assert "provider credentials: anthropic: missing one of ANTHROPIC_API_KEY" in out
+
+    assert main(["config", "doctor"]) == 0
+    out = capsys.readouterr().out
+    assert "config file: ok" in out
     assert "provider credentials: anthropic: missing one of ANTHROPIC_API_KEY" in out
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-secret")

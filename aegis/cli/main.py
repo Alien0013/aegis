@@ -1208,11 +1208,13 @@ def cmd_config(args, config: Config) -> int:
         _print(f"  Secrets file: {'present' if cfg.env_path().exists() else 'not present'}")
         _print()
         _print("◆ Commands")
+        _print("  aegis config status               # Show this configuration screen")
         _print("  aegis config paths                # Show config/secrets/home/install paths")
         _print("  aegis config edit                 # Edit config file")
         _print("  aegis config edit --secrets       # Edit local .env secrets")
         _print("  aegis config get <key>            # Print a config value")
         _print("  aegis config set <key> <value>    # Update a config value")
+        _print("  aegis config doctor               # Validate config and provider credentials")
         _print("  aegis config setup                # Run setup wizard from config")
         _print("  aegis setup                       # Run setup wizard")
         return 0
@@ -1230,7 +1232,7 @@ def cmd_config(args, config: Config) -> int:
         _print(f"Profile: {cfg.current_profile() or 'default'}")
         _print(f"Install: {Path(__file__).resolve().parents[2]}")
         return 0
-    if args.action in ("summary", "show"):
+    if args.action in ("summary", "show", "status"):
         return show_summary()
     if args.action == "setup":
         return cmd_setup(args, config)
@@ -1303,7 +1305,7 @@ def cmd_config(args, config: Config) -> int:
             return _die(str(exc))
         _print(f"set {key} -> {where}")
         return 0
-    if args.action in ("check", "migrate"):
+    if args.action in ("check", "doctor", "migrate"):
         from ..config import DEFAULT_CONFIG, _deep_merge
 
         file_errors = cfg.validate_config_file()
@@ -1323,7 +1325,7 @@ def cmd_config(args, config: Config) -> int:
         unknown = [k for k in current if k not in defaults and k.split(".")[0] not in
                    ("custom_providers", "fallback_providers", "hooks", "mcp", "routing")]
         type_errors = cfg.config_type_errors(config.data)
-        if args.action == "check":
+        if args.action in ("check", "doctor"):
             _print(f"config file: {'invalid' if file_errors or type_errors else 'ok'}")
             for error in file_errors:
                 _print(f"  - {error}")
@@ -2296,8 +2298,8 @@ def build_parser() -> argparse.ArgumentParser:
     cf = sub.add_parser("config", help="view, edit, get, or set configuration")
     cf.add_argument("action", nargs="?",
                     choices=[
-                        "summary", "show", "edit", "get", "set", "path", "env-path", "paths",
-                        "dump", "check", "migrate", "setup",
+                        "summary", "show", "status", "edit", "get", "set", "path", "env-path", "paths",
+                        "dump", "check", "doctor", "migrate", "setup",
                     ],
                     default="summary")
     cf.add_argument("key", nargs="?")

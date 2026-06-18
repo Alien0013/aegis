@@ -77,8 +77,10 @@ def test_config_summary_prints_hermes_style_terminal_surface(monkeypatch, capsys
     assert "Messaging Platforms" in out and "Telegram:   configured" in out
     assert "WhatsApp:" in out
     assert "◆ Validation" in out and "Config YAML:  ok" in out and "Value types:  ok" in out
+    assert "aegis config status" in out
     assert "aegis config edit --secrets" in out
     assert "aegis config get <key>" in out
+    assert "aegis config doctor" in out
     assert "aegis config setup" in out
 
 
