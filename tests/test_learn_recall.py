@@ -89,6 +89,22 @@ def test_session_search_tool_browse_discover_read_and_scroll():
 
     store = SessionStore()
     previous = Session.create(title="parser launch notes")
+    previous.meta.update({
+        "surface": "gateway",
+        "platform": "telegram",
+        "chat_id": "chat-42",
+        "thread_id": "thread-7",
+        "user_id": "user-9",
+        "runtime": {"reasoning_display": "live"},
+        "runtime_controls": {"model": "gpt-5.5", "reasoning_effort": "high"},
+        "last_trace_id": "trace_recall",
+        "last_run_id": "run_recall",
+        "last_turn_id": "turn_recall",
+        "response_state": {"previous_response_id": "resp_recall", "store": True},
+        "resume_pending": True,
+        "resume_reason": "restart_interrupted",
+        "last_resume_marked_at": "2026-06-18T00:00:00Z",
+    })
     previous.messages = [
         Message.user("what did we decide about the parser bug?"),
         Message.assistant("We fixed the parser bug, shipped v2, and kept the fallback parser."),
@@ -114,11 +130,25 @@ def test_session_search_tool_browse_discover_read_and_scroll():
     assert read["mode"] == "read"
     assert read["session_id"] == previous.id
     assert read["messages"][1]["content"].startswith("We fixed the parser bug")
+    assert read["session_meta"]["surface"] == "gateway"
+    assert read["session_meta"]["platform"] == "telegram"
+    assert read["session_meta"]["chat_id"] == "chat-42"
+    assert read["session_meta"]["runtime_controls"] == {"model": "gpt-5.5", "reasoning_effort": "high"}
+    assert read["session_meta"]["runtime"] == {"reasoning_display": "live"}
+    assert read["session_meta"]["last_trace_id"] == "trace_recall"
+    assert read["session_meta"]["last_run_id"] == "run_recall"
+    assert read["session_meta"]["last_turn_id"] == "turn_recall"
+    assert read["session_meta"]["response_state"]["previous_response_id"] == "resp_recall"
+    assert read["session_meta"]["resume_pending"] is True
+    assert read["session_meta"]["resume_reason"] == "restart_interrupted"
 
     scroll = json.loads(tool.run({"session_id": previous.id, "around_message_id": 1, "window": 1}, ctx).content)
     assert scroll["mode"] == "scroll"
     assert [m["id"] for m in scroll["messages"]] == [0, 1, 2]
     assert scroll["messages"][1]["anchor"] is True
+    assert scroll["session_meta"]["platform"] == "telegram"
+    assert scroll["session_meta"]["runtime_controls"]["model"] == "gpt-5.5"
+    assert scroll["session_meta"]["response_state"]["store"] is True
 
     row_id_scroll = json.loads(tool.run({
         "session_id": previous.id,

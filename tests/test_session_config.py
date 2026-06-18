@@ -52,6 +52,45 @@ def test_session_resume_pending_helpers():
     assert st.clear_resume_pending(s.id) is False
 
 
+def test_session_read_and_scroll_include_runtime_metadata():
+    from aegis.session import Session, SessionStore
+    from aegis.types import Message
+
+    st = SessionStore()
+    s = Session(id="telegram:c1:u1", title="gateway chat")
+    s.meta.update({
+        "surface": "gateway",
+        "platform": "telegram",
+        "chat_id": "c1",
+        "runtime_controls": {"provider": "openrouter", "model": "gpt-5.5"},
+        "runtime": {"busy_mode": "steer"},
+        "last_trace_id": "trace_session",
+        "last_run_id": "run_session",
+        "last_turn_id": "turn_session",
+        "response_state": {"previous_response_id": "resp_session"},
+        "resume_pending": True,
+        "resume_reason": "planned_stop",
+    })
+    s.messages = [Message.user("hello"), Message.assistant("hi")]
+    st.save(s)
+
+    read_meta = st.read_session(s.id)["session_meta"]
+    scroll_meta = st.messages_around(s.id, 1)["session_meta"]
+
+    assert read_meta["platform"] == "telegram"
+    assert read_meta["chat_id"] == "c1"
+    assert read_meta["runtime_controls"] == {"provider": "openrouter", "model": "gpt-5.5"}
+    assert read_meta["runtime"] == {"busy_mode": "steer"}
+    assert read_meta["last_trace_id"] == "trace_session"
+    assert read_meta["last_run_id"] == "run_session"
+    assert read_meta["last_turn_id"] == "turn_session"
+    assert read_meta["response_state"]["previous_response_id"] == "resp_session"
+    assert read_meta["resume_pending"] is True
+    assert read_meta["resume_reason"] == "planned_stop"
+    assert scroll_meta["runtime_controls"]["model"] == "gpt-5.5"
+    assert scroll_meta["response_state"]["previous_response_id"] == "resp_session"
+
+
 def test_session_search_messages_recall():
     from aegis.session import Session, SessionStore
     from aegis.types import Message

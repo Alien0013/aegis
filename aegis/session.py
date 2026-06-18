@@ -51,6 +51,47 @@ def _row_gateway_generation(row: sqlite3.Row | None) -> int | None:
     return _gateway_generation(data.get("meta", {}))
 
 
+def _jsonable_meta_value(value: Any) -> Any:
+    try:
+        json.dumps(value)
+        return value
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _session_meta_view(sess: "Session") -> dict[str, Any]:
+    meta = sess.meta if isinstance(sess.meta, dict) else {}
+    out: dict[str, Any] = {
+        "title": sess.title,
+        "created_at": sess.created_at,
+        "updated_at": sess.updated_at,
+        "parent_id": sess.parent_id,
+        "profile": sess.profile,
+    }
+    for key in (
+        "surface",
+        "platform",
+        "chat_id",
+        "thread_id",
+        "user_id",
+        "user_name",
+        "message_id",
+        "runtime",
+        "runtime_controls",
+        "trace_id",
+        "last_trace_id",
+        "last_run_id",
+        "last_turn_id",
+        "response_state",
+        "resume_pending",
+        "resume_reason",
+        "last_resume_marked_at",
+    ):
+        if key in meta:
+            out[key] = _jsonable_meta_value(meta[key])
+    return out
+
+
 @dataclass
 class Session:
     id: str
@@ -893,13 +934,7 @@ class SessionStore:
             "success": True,
             "mode": "read",
             "session_id": sess.id,
-            "session_meta": {
-                "title": sess.title,
-                "created_at": sess.created_at,
-                "updated_at": sess.updated_at,
-                "parent_id": sess.parent_id,
-                "profile": sess.profile,
-            },
+            "session_meta": _session_meta_view(sess),
             "message_count": total,
             "truncated": truncated,
             "messages": messages,
@@ -987,13 +1022,7 @@ class SessionStore:
             "mode": "scroll",
             "session_id": sess.id,
             "around_message_id": anchor,
-            "session_meta": {
-                "title": sess.title,
-                "created_at": sess.created_at,
-                "updated_at": sess.updated_at,
-                "parent_id": sess.parent_id,
-                "profile": sess.profile,
-            },
+            "session_meta": _session_meta_view(sess),
             "window": window,
             "messages": messages,
             "messages_before": start,
