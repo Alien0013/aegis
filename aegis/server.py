@@ -45,10 +45,14 @@ _OPAQUE_RESPONSE_INPUT_ITEM_TYPES = {
     "code_interpreter_call",
     "computer_call",
     "computer_call_output",
+    "apply_patch_call",
+    "apply_patch_call_output",
+    "compaction",
     "custom_tool_call",
     "custom_tool_call_output",
     "file_search_call",
     "image_generation_call",
+    "item_reference",
     "local_shell_call",
     "local_shell_call_output",
     "mcp_approval_request",
@@ -56,6 +60,8 @@ _OPAQUE_RESPONSE_INPUT_ITEM_TYPES = {
     "mcp_call",
     "mcp_list_tools",
     "reasoning",
+    "shell_call",
+    "shell_call_output",
     "web_search_call",
 }
 _CHAT_IDEMPOTENCY_FINGERPRINT_KEYS = [

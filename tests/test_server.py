@@ -2296,6 +2296,73 @@ def test_responses_preserves_opaque_assistant_toolish_input_items(monkeypatch, t
     assert all(item["response_id"] == second_id for item in second_items)
 
 
+def test_responses_preserves_modern_opaque_input_items(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    opaque_items = [
+        {"id": "sh_1", "type": "shell_call", "status": "completed", "action": {"command": "pwd"}},
+        {"id": "sho_1", "type": "shell_call_output", "call_id": "sh_1", "output": "ok"},
+        {"id": "ap_1", "type": "apply_patch_call", "status": "completed", "input": "*** Begin Patch"},
+        {"id": "apo_1", "type": "apply_patch_call_output", "call_id": "ap_1", "output": "patched"},
+        {"id": "cmp_1", "type": "compaction", "summary": [{"type": "summary_text", "text": "kept state"}]},
+        {"id": "ref_1", "type": "item_reference", "item_id": "msg_prior"},
+    ]
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": [
+                *opaque_items,
+                {"role": "user", "content": "continue"},
+            ],
+        })
+        response_id = json.loads(data)["id"]
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    srv2, port2 = _serve(server.make_handler(Config.load()))
+    try:
+        items_status, items_data = _request(port2, "GET", f"/v1/responses/{response_id}/input_items?order=asc")
+        second_status, second_data = _request(port2, "POST", "/v1/responses", {
+            "previous_response_id": response_id,
+            "input": "follow up",
+        })
+        second_id = json.loads(second_data)["id"]
+        second_items_status, second_items_data = _request(
+            port2,
+            "GET",
+            f"/v1/responses/{second_id}/input_items?order=asc",
+        )
+    finally:
+        srv2.shutdown()
+        srv2.server_close()
+
+    assert status == 200
+    assert _FakeRunner.calls[0]["prompt"].content == "continue"
+    assert _FakeRunner.calls[0]["history"] == []
+    assert items_status == 200
+    items = json.loads(items_data)["data"]
+    assert [item["type"] for item in items[:6]] == [item["type"] for item in opaque_items]
+    assert items[0]["action"] == {"command": "pwd"}
+    assert items[4]["summary"] == [{"type": "summary_text", "text": "kept state"}]
+    assert items[5]["item_id"] == "msg_prior"
+    assert all(item["response_id"] == response_id for item in items)
+    assert second_status == 200
+    assert second_items_status == 200
+    assert _FakeRunner.calls[1]["prompt"].content == "follow up"
+    assert [m.content for m in _FakeRunner.calls[1]["history"]] == ["continue", "hello"]
+    second_items = json.loads(second_items_data)["data"]
+    assert [item["type"] for item in second_items[:6]] == [item["type"] for item in opaque_items]
+    assert second_items[0]["action"] == {"command": "pwd"}
+    assert second_items[4]["summary"] == [{"type": "summary_text", "text": "kept state"}]
+    assert second_items[5]["item_id"] == "msg_prior"
+    assert all(item["response_id"] == second_id for item in second_items)
+
+
 def test_responses_still_rejects_malformed_message_content_with_opaque_types(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
