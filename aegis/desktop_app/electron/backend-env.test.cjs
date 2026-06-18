@@ -11,6 +11,7 @@ const {
   normalizePathEnv,
   packagedBackendPathEntries,
   resolveAegisHome,
+  resolveAegisCommand,
 } = require("./backend-env.cjs");
 
 test("prefers explicit AEGIS_BIN when it exists", () => {
@@ -179,6 +180,37 @@ test("skips stale executable candidates when version probe fails", () => {
     }),
     good,
   );
+});
+
+test("reports unusable fallback when no backend candidate passes probe", () => {
+  const resolution = resolveAegisCommand({
+    platform: "linux",
+    env: { AEGIS_HOME: "/missing/aegis" },
+    homedir: "/home/alien",
+    exists: () => false,
+    probeCommand: () => false,
+  });
+
+  assert.equal(resolution.command, "aegis");
+  assert.equal(resolution.usable, false);
+  assert.equal(resolution.source, "fallback");
+  assert.match(resolution.reason, /no configured, installed, packaged, or PATH AEGIS backend/);
+  assert(resolution.candidates.includes("/missing/aegis/venv/bin/aegis"));
+});
+
+test("reports PATH fallback when bare aegis probe succeeds", () => {
+  const resolution = resolveAegisCommand({
+    platform: "linux",
+    env: {},
+    homedir: "/home/alien",
+    exists: () => false,
+    probeCommand: (command) => command === "aegis",
+  });
+
+  assert.equal(resolution.command, "aegis");
+  assert.equal(resolution.usable, true);
+  assert.equal(resolution.source, "path");
+  assert.match(resolution.reason, /PATH/);
 });
 
 test("normalizes PATH for GUI-launched POSIX desktop processes", () => {

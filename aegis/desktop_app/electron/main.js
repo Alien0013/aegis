@@ -15,7 +15,13 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const { aegisCommand, backendEnvironment, desktopLogPath, resolveAegisHome } = require("./backend-env.cjs");
+const {
+  aegisCommand,
+  backendEnvironment,
+  desktopLogPath,
+  resolveAegisCommand,
+  resolveAegisHome,
+} = require("./backend-env.cjs");
 const {
   desktopProjectCwd,
   readDesktopSettings,
@@ -672,8 +678,14 @@ async function run() {
       resourcesPath: process.resourcesPath || "",
       appPath: typeof app.getAppPath === "function" ? app.getAppPath() : "",
     };
-    const bin = aegisCommand({ ...backendOptions, env: backendEnvironment(process.env, backendOptions) });
-    boot({ error: `${e.message}\n\nTried: ${bin} dashboard\nMake sure AEGIS is installed (or set AEGIS_BIN).` });
+    const resolvedEnv = backendEnvironment(process.env, backendOptions);
+    const resolution = resolveAegisCommand({ ...backendOptions, env: resolvedEnv });
+    const checked = Array.isArray(resolution.candidates) && resolution.candidates.length
+      ? `Checked ${resolution.candidates.length} backend candidate(s).`
+      : "No backend candidates were found.";
+    boot({
+      error: `${e.message}\n\nTried: ${resolution.command} dashboard\nBackend discovery: ${resolution.reason}\n${checked}\n\nRepair: install or repair the AEGIS CLI, set AEGIS_BIN to a working executable, or reinstall the desktop package with its bundled backend.`,
+    });
   }
 }
 

@@ -262,12 +262,44 @@ function candidateAegisCommands(options = {}) {
 }
 
 function aegisCommand(options = {}) {
+  return resolveAegisCommand(options).command;
+}
+
+function resolveAegisCommand(options = {}) {
+  const platform = options.platform || process.platform;
   const exists = options.exists || fs.existsSync;
   const env = normalizePathEnv(options.env || process.env, options);
-  const resolvedOptions = { ...options, env };
-  const direct = _firstUsable(candidateAegisCommands(resolvedOptions), exists, resolvedOptions);
-  if (direct) return direct;
-  return "aegis";
+  const resolvedOptions = { ...options, env, platform };
+  const candidates = candidateAegisCommands(resolvedOptions);
+  const direct = _firstUsable(candidates, exists, resolvedOptions);
+  if (direct) {
+    return {
+      command: direct,
+      usable: true,
+      source: "candidate",
+      reason: "resolved configured or packaged AEGIS backend",
+      candidates,
+    };
+  }
+  const fallback = "aegis";
+  if (_probeCommand(fallback, resolvedOptions)) {
+    return {
+      command: fallback,
+      usable: true,
+      source: "path",
+      reason: "resolved AEGIS backend from PATH",
+      candidates,
+    };
+  }
+  return {
+    command: fallback,
+    usable: false,
+    source: "fallback",
+    reason: candidates.length
+      ? "no configured, installed, packaged, or PATH AEGIS backend passed the version probe"
+      : "no AEGIS backend candidates were found",
+    candidates,
+  };
 }
 
 function backendEnvironment(baseEnv = process.env, options = {}) {
@@ -304,5 +336,6 @@ module.exports = {
   normalizePathEnv,
   packagedBackendPathEntries,
   resolveAegisHome,
+  resolveAegisCommand,
   sanePathEntries,
 };

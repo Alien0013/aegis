@@ -105,6 +105,31 @@ test("desktop diagnostics treats a packaged resource backend as configured", () 
   assert.equal(report.checks.find((row) => row.id === "backend_environment").severity, "ok");
 });
 
+test("desktop diagnostics reports packaged backend bootstrap failure as error", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "aegis-desktop-status-"));
+  const resources = path.join(root, "resources");
+
+  const report = desktopDiagnostics({
+    app: fakeApp({ packaged: true, appPath: path.join(resources, "app.asar") }),
+    desktopRoot: root,
+    resourcesPath: resources,
+    env: {},
+    platform: "linux",
+    versions: {},
+    exists: () => false,
+    probeCommand: () => false,
+  });
+
+  const check = report.checks.find((row) => row.id === "backend_environment");
+  assert.equal(report.backendDiscovery.configured, false);
+  assert.equal(report.backendDiscovery.bundled, false);
+  assert.equal(report.backendDiscovery.command.command, "aegis");
+  assert.equal(report.backendDiscovery.command.usable, false);
+  assert.equal(check.ok, false);
+  assert.equal(check.severity, "error");
+  assert.match(check.detail, /cannot find a usable AEGIS backend/);
+});
+
 test("releaseUpdateEligibility rejects dev, dirty, stale, and mismatched install stamps", () => {
   assert.equal(releaseUpdateEligibility({ packaged: false }).ok, false);
   assert.match(
@@ -180,7 +205,7 @@ test("detects remote renderer sessions and honors override", () => {
   );
 });
 
-test("desktop diagnostics warns when packaged build has no backend env or stamp", () => {
+test("desktop diagnostics errors when packaged build has no backend env or stamp", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "aegis-desktop-status-"));
   const report = desktopDiagnostics({
     app: fakeApp({ packaged: true }),
@@ -188,10 +213,12 @@ test("desktop diagnostics warns when packaged build has no backend env or stamp"
     resourcesPath: "",
     env: {},
     versions: {},
+    exists: () => false,
+    probeCommand: () => false,
   });
 
   assert.equal(report.installStamp, null);
   assert.equal(report.checks.find((row) => row.id === "install_stamp").severity, "warning");
   assert.equal(report.checks.find((row) => row.id === "release_update_eligibility").severity, "warning");
-  assert.equal(report.checks.find((row) => row.id === "backend_environment").severity, "warning");
+  assert.equal(report.checks.find((row) => row.id === "backend_environment").severity, "error");
 });

@@ -5,6 +5,7 @@ const path = require("node:path");
 const {
   candidatePackagedAegisCommands,
   packagedBackendPathEntries,
+  resolveAegisCommand,
 } = require("./backend-env.cjs");
 
 const GPU_OVERRIDE_ON = new Set(["1", "true", "yes", "on"]);
@@ -103,6 +104,7 @@ function desktopDiagnostics({
   desktopRoot = path.resolve(__dirname, ".."),
   resourcesPath = process.resourcesPath || "",
   exists = fs.existsSync,
+  probeCommand = null,
 } = {}) {
   const packaged = Boolean(app && app.isPackaged);
   const stamp = readInstallStamp({ desktopRoot, resourcesPath });
@@ -118,7 +120,28 @@ function desktopDiagnostics({
   const bundledBackend = packagedBackendCandidates.some((candidate) => {
     try { return exists(candidate); } catch { return false; }
   });
-  const backendConfigured = Boolean(env.AEGIS_HOME || env.AEGIS_BIN || bundledBackend);
+  const configuredBackend = Boolean(env.AEGIS_HOME || env.AEGIS_BIN);
+  const commandResolution = (!configuredBackend && !bundledBackend)
+    ? resolveAegisCommand({
+      platform,
+      env,
+      packaged,
+      resourcesPath,
+      appPath,
+      exists,
+      ...(probeCommand ? { probeCommand } : {}),
+    })
+    : {
+      command: env.AEGIS_BIN || "",
+      usable: true,
+      source: configuredBackend ? "configured" : "packaged",
+      reason: configuredBackend
+        ? "AEGIS_HOME or AEGIS_BIN is configured"
+        : "packaged backend candidate is bundled",
+      candidates: packagedBackendCandidates,
+    };
+  const pathBackend = !configuredBackend && !bundledBackend && Boolean(commandResolution.usable);
+  const backendConfigured = Boolean(configuredBackend || bundledBackend || pathBackend);
   const remoteDisplayReason = detectRemoteDisplay({ env, platform });
   const checks = [
     {
@@ -136,10 +159,14 @@ function desktopDiagnostics({
     {
       id: "backend_environment",
       ok: backendConfigured || !packaged,
-      severity: backendConfigured || !packaged ? "ok" : "warning",
+      severity: backendConfigured || !packaged ? "ok" : "error",
       detail: backendConfigured
-        ? (bundledBackend ? "packaged backend candidate is bundled" : "AEGIS_HOME or AEGIS_BIN is configured")
-        : "packaged desktop will use default backend discovery",
+        ? (
+          bundledBackend
+            ? "packaged backend candidate is bundled"
+            : (pathBackend ? "AEGIS backend resolved from PATH" : "AEGIS_HOME or AEGIS_BIN is configured")
+        )
+        : `packaged desktop cannot find a usable AEGIS backend: ${commandResolution.reason}`,
     },
   ];
   return {
@@ -167,6 +194,7 @@ function desktopDiagnostics({
     backendDiscovery: {
       configured: backendConfigured,
       bundled: bundledBackend,
+      command: commandResolution,
       packagedCandidates: packagedBackendCandidates,
       packagedPathEntries,
     },

@@ -18,6 +18,7 @@ DESKTOP_FILES = (
     "electron/main.js", "electron/main-behavior.test.cjs",
     "electron/backend-env.cjs", "electron/backend-env.test.cjs",
     "electron/windows-user-env.cjs", "electron/windows-user-env.test.cjs",
+    "electron/desktop-settings.cjs", "electron/desktop-settings.test.cjs",
     "electron/desktop-status.cjs", "electron/desktop-status.test.cjs",
     "electron/updater-status.cjs",
     "electron/preload.js", "electron/preload-app.js", "electron/boot.html",
