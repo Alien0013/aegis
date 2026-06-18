@@ -1719,15 +1719,13 @@ def _response_input_items_payload(
     response_id: str,
     query: dict[str, list[str]],
 ) -> dict[str, Any]:
-    try:
-        limit = int((query.get("limit") or ["20"])[0] or 20)
-    except (TypeError, ValueError):
-        limit = 20
-    limit = max(1, min(limit, 100))
+    limit, order, _error = _response_input_items_params(query)
+    if _error:
+        limit, order = 20, "desc"
     after = str((query.get("after") or [""])[0] or "")
     before = str((query.get("before") or [""])[0] or "")
-    order = str((query.get("order") or ["desc"])[0] or "desc").strip().lower()
     items = _state_input_items(state, response_id)
+    total_count = len(items)
     if order == "desc":
         items = list(reversed(items))
     start = 0
@@ -1742,10 +1740,40 @@ def _response_input_items_payload(
     return {
         "object": "list",
         "data": data,
+        "response_id": response_id,
+        "limit": limit,
+        "order": order,
+        "total_count": total_count,
         "has_more": limit < len(window),
         "first_id": data[0]["id"] if data else None,
         "last_id": data[-1]["id"] if data else None,
     }
+
+
+def _response_input_items_params(query: dict[str, list[str]]) -> tuple[int, str, dict[str, Any] | None]:
+    raw_limit = (query.get("limit") or ["20"])[0] or 20
+    try:
+        limit = int(raw_limit)
+    except (TypeError, ValueError):
+        return 20, "desc", _openai_error(
+            "'limit' must be an integer between 1 and 100",
+            code="invalid_limit",
+            param="limit",
+        )
+    if limit < 1 or limit > 100:
+        return 20, "desc", _openai_error(
+            "'limit' must be between 1 and 100",
+            code="invalid_limit",
+            param="limit",
+        )
+    order = str((query.get("order") or ["desc"])[0] or "desc").strip().lower()
+    if order not in {"asc", "desc"}:
+        return 20, "desc", _openai_error(
+            "'order' must be either 'asc' or 'desc'",
+            code="invalid_order",
+            param="order",
+        )
+    return limit, order, None
 
 
 def _response_truncation_mode(value: Any) -> str:
@@ -3344,6 +3372,9 @@ def make_handler(config: Config):
                 state = response_store.get_state(rid)
                 if state is None:
                     return self._json(404, {"error": "response not found", "id": rid})
+                _limit, _order, param_error = _response_input_items_params(query)
+                if param_error is not None:
+                    return self._json(400, param_error)
                 return self._json(200, _response_input_items_payload(state, rid, query))
             if path.startswith("/v1/responses/"):
                 rid = path.rsplit("/", 1)[-1]

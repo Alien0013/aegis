@@ -2211,6 +2211,16 @@ def test_responses_input_items_persist_paginate_and_replay(monkeypatch, tmp_path
             "GET",
             f"/v1/responses/{response_id}/input_items?order=desc&limit=2",
         )
+        invalid_limit_status, invalid_limit_data = _request(
+            port,
+            "GET",
+            f"/v1/responses/{response_id}/input_items?limit=abc",
+        )
+        invalid_order_status, invalid_order_data = _request(
+            port,
+            "GET",
+            f"/v1/responses/{response_id}/input_items?order=sideways",
+        )
         missing_status, missing_data = _request(port, "GET", "/v1/responses/resp_missing/input_items")
     finally:
         srv.shutdown()
@@ -2231,6 +2241,10 @@ def test_responses_input_items_persist_paginate_and_replay(monkeypatch, tmp_path
     assert missing_status == 404
     assert "response not found" in json.loads(missing_data)["error"]
     assert first_body["object"] == "list"
+    assert first_body["response_id"] == response_id
+    assert first_body["limit"] == 2
+    assert first_body["order"] == "asc"
+    assert first_body["total_count"] == 3
     assert first_body["has_more"] is True
     assert [row["role"] for row in first_body["data"]] == ["system", "user"]
     assert first_body["data"][0]["object"] == "response.input_item"
@@ -2245,6 +2259,12 @@ def test_responses_input_items_persist_paginate_and_replay(monkeypatch, tmp_path
     desc_body = json.loads(desc_page)
     assert desc_body["has_more"] is True
     assert [row["content"][0]["text"] for row in desc_body["data"]] == ["second", "first"]
+    assert invalid_limit_status == 400
+    assert json.loads(invalid_limit_data)["error"]["code"] == "invalid_limit"
+    assert json.loads(invalid_limit_data)["error"]["param"] == "limit"
+    assert invalid_order_status == 400
+    assert json.loads(invalid_order_data)["error"]["code"] == "invalid_order"
+    assert json.loads(invalid_order_data)["error"]["param"] == "order"
     assert replay_status == 200
     replay_body = json.loads(replay_data)
     assert [row["content"][0]["text"] for row in replay_body["data"]] == [
