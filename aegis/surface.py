@@ -207,6 +207,14 @@ class SurfaceRunner:
                 changed = True
             if meta:
                 for key, value in meta.items():
+                    if (
+                        key in {"runtime_controls", "runtime"}
+                        and isinstance(session.meta.get(key), dict)
+                        and isinstance(value, dict)
+                    ):
+                        merged = dict(session.meta.get(key) or {})
+                        merged.update(value)
+                        value = merged
                     if session.meta.get(key) != value:
                         session.meta[key] = value
                         changed = True

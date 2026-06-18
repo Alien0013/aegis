@@ -35,6 +35,7 @@ _DEFAULT_RESPONSE_AUTO_TRUNCATION_MESSAGES = 100
 _MAX_STORED_RUN_EVENTS = 500
 _TERMINAL_RUN_STATUSES = {"completed", "error", "cancelled", "interrupted"}
 _MAX_SESSION_KEY_CHARS = 256
+_REASONING_EFFORTS = {"off", "minimal", "low", "medium", "high", "xhigh"}
 _TEXT_CONTENT_PART_TYPES = {"text", "input_text", "output_text"}
 _IMAGE_CONTENT_PART_TYPES = {"image_url", "input_image"}
 _FILE_CONTENT_PART_TYPES = {"file", "input_file"}
@@ -70,6 +71,8 @@ _CHAT_IDEMPOTENCY_FINGERPRINT_KEYS = [
     "top_p",
     "max_tokens",
     "max_completion_tokens",
+    "reasoning",
+    "reasoning_effort",
     "response_format",
     "seed",
     "stop",
@@ -188,6 +191,38 @@ def _request_max_tokens(body: dict[str, Any], *keys: str) -> tuple[int | None, d
             )
         return value, None
     return None, None
+
+
+def _request_reasoning_effort(
+    body: dict[str, Any],
+    metadata: dict[str, Any] | None = None,
+) -> tuple[str, dict[str, Any] | None]:
+    metadata = metadata or {}
+    param = "reasoning"
+    raw = metadata.get("reasoning_effort")
+    if raw in (None, ""):
+        raw = body.get("reasoning_effort")
+        param = "reasoning_effort"
+    if raw in (None, "") and "reasoning" in body:
+        reasoning = body.get("reasoning")
+        if isinstance(reasoning, dict):
+            raw = reasoning.get("effort")
+            param = "reasoning.effort"
+        else:
+            raw = reasoning
+            param = "reasoning"
+    if raw in (None, ""):
+        return "", None
+    value = str(raw or "").strip().lower()
+    if value == "max":
+        value = "xhigh"
+    if value not in _REASONING_EFFORTS:
+        return "", _openai_error(
+            "'reasoning' effort must be one of off, minimal, low, medium, high, or xhigh",
+            code="invalid_reasoning_effort",
+            param=param,
+        )
+    return value, None
 
 
 def _parse_cors_origins(value: Any) -> tuple[str, ...]:
@@ -2548,6 +2583,29 @@ def make_handler(config: Config):
                     surface=surface,
                     meta=meta,
                 )
+            elif session is not None and meta:
+                current_meta = getattr(session, "meta", None)
+                if isinstance(current_meta, dict):
+                    changed = False
+                    for key, value in meta.items():
+                        if (
+                            key in {"runtime_controls", "runtime"}
+                            and isinstance(current_meta.get(key), dict)
+                            and isinstance(value, dict)
+                        ):
+                            merged = dict(current_meta.get(key) or {})
+                            merged.update(value)
+                            value = merged
+                        if current_meta.get(key) != value:
+                            current_meta[key] = value
+                            changed = True
+                    if changed:
+                        save = getattr(getattr(runner, "store", None), "save", None)
+                        if callable(save):
+                            try:
+                                save(session)
+                            except Exception:  # noqa: BLE001
+                                pass
             make_agent = getattr(runner, "make_agent", None)
             if session is not None and callable(make_agent):
                 return session, make_agent(
@@ -2639,6 +2697,7 @@ def make_handler(config: Config):
             cwd: Any,
             session_key: str | None,
             service_tier: str = "",
+            runtime_controls: dict[str, Any] | None = None,
         ) -> tuple[Any, Any]:
             load_session = getattr(runner, "load_or_create_session", None)
             make_agent = getattr(runner, "make_agent", None)
@@ -2649,8 +2708,11 @@ def make_handler(config: Config):
                 "api": "responses",
                 **({"gateway_session_key": session_key} if session_key else {}),
             }
-            if service_tier:
-                meta.update(runtime_controls_meta({"service_tier": service_tier}))
+            controls = dict(runtime_controls or {})
+            if service_tier and "service_tier" not in controls:
+                controls["service_tier"] = service_tier
+            if controls:
+                meta.update(runtime_controls_meta(controls))
             session = load_session(
                 session_id,
                 title=title,
@@ -3121,6 +3183,14 @@ def make_handler(config: Config):
                 service_tier = _request_service_tier(body, body.get("metadata") if isinstance(body.get("metadata"), dict) else None)
                 if service_tier:
                     runtime_controls["service_tier"] = service_tier
+                reasoning_effort, reasoning_error = _request_reasoning_effort(
+                    body,
+                    body.get("metadata") if isinstance(body.get("metadata"), dict) else None,
+                )
+                if reasoning_error is not None:
+                    return self._json(400, reasoning_error)
+                if reasoning_effort:
+                    runtime_controls["reasoning_effort"] = reasoning_effort
                 if runtime_controls:
                     session.meta.update(runtime_controls_meta(runtime_controls))
                 system_prompt = body.get("system_prompt")
@@ -3188,6 +3258,11 @@ def make_handler(config: Config):
                 service_tier = _request_service_tier(body)
                 if service_tier:
                     runtime_controls["service_tier"] = service_tier
+                reasoning_effort, reasoning_error = _request_reasoning_effort(body)
+                if reasoning_error is not None:
+                    return self._json(400, reasoning_error)
+                if reasoning_effort:
+                    runtime_controls["reasoning_effort"] = reasoning_effort
                 if runtime_controls:
                     child.meta.update(runtime_controls_meta(runtime_controls))
                 if body.get("title"):
@@ -3259,6 +3334,9 @@ def make_handler(config: Config):
                 or None
             )
             service_tier = _request_service_tier(body, metadata)
+            reasoning_effort, reasoning_error = _request_reasoning_effort(body, metadata)
+            if reasoning_error is not None:
+                return self._json(400, reasoning_error)
             max_tokens, max_tokens_error = _request_max_tokens(
                 body,
                 "max_completion_tokens",
@@ -3266,6 +3344,11 @@ def make_handler(config: Config):
             )
             if max_tokens_error is not None:
                 return self._json(400, max_tokens_error)
+            runtime_controls: dict[str, Any] = {}
+            if service_tier:
+                runtime_controls["service_tier"] = service_tier
+            if reasoning_effort:
+                runtime_controls["reasoning_effort"] = reasoning_effort
 
             cid = new_id("chatcmpl")
 
@@ -3284,8 +3367,8 @@ def make_handler(config: Config):
                         "request_id": cid,
                         **({"gateway_session_key": session_key} if session_key else {}),
                     }
-                    if service_tier:
-                        run_meta.update(runtime_controls_meta({"service_tier": service_tier}))
+                    if runtime_controls:
+                        run_meta.update(runtime_controls_meta(runtime_controls))
                     response_session, response_agent = self._prepare_stream_agent(
                         runner,
                         session_id=str(session_id) if session_id else None,
@@ -3375,8 +3458,8 @@ def make_handler(config: Config):
                 "request_id": cid,
                 **({"gateway_session_key": session_key} if session_key else {}),
             }
-            if service_tier:
-                run_meta.update(runtime_controls_meta({"service_tier": service_tier}))
+            if runtime_controls:
+                run_meta.update(runtime_controls_meta(runtime_controls))
             stream_session, stream_agent = self._prepare_stream_agent(
                 runner,
                 session_id=str(session_id) if session_id else None,
@@ -3584,6 +3667,11 @@ def make_handler(config: Config):
             service_tier = _request_service_tier(body, metadata)
             if service_tier:
                 metadata["service_tier"] = service_tier
+            reasoning_effort, reasoning_error = _request_reasoning_effort(body, metadata)
+            if reasoning_error is not None:
+                return self._json(400, reasoning_error)
+            if reasoning_effort:
+                metadata["reasoning_effort"] = reasoning_effort
             max_tokens, max_tokens_error = _request_max_tokens(
                 body,
                 "max_output_tokens",
@@ -3591,6 +3679,11 @@ def make_handler(config: Config):
             )
             if max_tokens_error is not None:
                 return self._json(400, max_tokens_error)
+            runtime_controls: dict[str, Any] = {}
+            if service_tier:
+                runtime_controls["service_tier"] = service_tier
+            if reasoning_effort:
+                runtime_controls["reasoning_effort"] = reasoning_effort
             parallel_tool_calls = _coerce_request_bool(body.get("parallel_tool_calls"), True)
             response_title = last_user.content[:80] or response_id
             idempotency_key = str(self.headers.get("Idempotency-Key", "") or "")
@@ -3934,6 +4027,7 @@ def make_handler(config: Config):
                         cwd=cwd,
                         session_key=session_key,
                         service_tier=service_tier,
+                        runtime_controls=runtime_controls,
                     )
                     with state_lock:
                         self._register_response_locked(
@@ -3957,8 +4051,8 @@ def make_handler(config: Config):
                     }
                     if max_tokens is not None:
                         run_kwargs["max_tokens"] = max_tokens
-                    if service_tier:
-                        run_kwargs["meta"].update(runtime_controls_meta({"service_tier": service_tier}))
+                    if runtime_controls:
+                        run_kwargs["meta"].update(runtime_controls_meta(runtime_controls))
                     if response_agent is not None:
                         run_kwargs.update({
                             "session": response_session,
@@ -4172,6 +4266,7 @@ def make_handler(config: Config):
                         cwd=cwd,
                         session_key=session_key,
                         service_tier=service_tier,
+                        runtime_controls=runtime_controls,
                     )
                     with state_lock:
                         self._register_response_locked(
@@ -4194,8 +4289,8 @@ def make_handler(config: Config):
                     }
                     if max_tokens is not None:
                         run_kwargs["max_tokens"] = max_tokens
-                    if service_tier:
-                        run_kwargs["meta"].update(runtime_controls_meta({"service_tier": service_tier}))
+                    if runtime_controls:
+                        run_kwargs["meta"].update(runtime_controls_meta(runtime_controls))
                     if response_agent is not None:
                         run_kwargs.update({
                             "session": response_session,
@@ -4268,6 +4363,9 @@ def make_handler(config: Config):
                 return self._json(404, {"ok": False, "error": "session not found", "id": session_id})
             prompt = body.get("prompt", body.get("input", body.get("message", "")))
             service_tier = _request_service_tier(body)
+            reasoning_effort, reasoning_error = _request_reasoning_effort(body)
+            if reasoning_error is not None:
+                return self._json(400, reasoning_error)
             max_tokens, max_tokens_error = _request_max_tokens(
                 body,
                 "max_completion_tokens",
@@ -4276,6 +4374,11 @@ def make_handler(config: Config):
             )
             if max_tokens_error is not None:
                 return self._json(400, max_tokens_error)
+            runtime_controls: dict[str, Any] = {}
+            if service_tier:
+                runtime_controls["service_tier"] = service_tier
+            if reasoning_effort:
+                runtime_controls["reasoning_effort"] = reasoning_effort
             if stream:
                 stream_run_id = new_id("run")
                 message_id = new_id("msg")
@@ -4287,8 +4390,8 @@ def make_handler(config: Config):
                     "api": "session_chat_stream",
                     **({"gateway_session_key": session_key} if session_key else {}),
                 }
-                if service_tier:
-                    run_meta.update(runtime_controls_meta({"service_tier": service_tier}))
+                if runtime_controls:
+                    run_meta.update(runtime_controls_meta(runtime_controls))
                 stream_session, stream_agent = self._prepare_stream_agent(
                     runner,
                     session=session,
@@ -4418,8 +4521,8 @@ def make_handler(config: Config):
             run_meta = {
                 **({"gateway_session_key": session_key} if session_key else {}),
             }
-            if service_tier:
-                run_meta.update(runtime_controls_meta({"service_tier": service_tier}))
+            if runtime_controls:
+                run_meta.update(runtime_controls_meta(runtime_controls))
             response_session, response_agent = self._prepare_stream_agent(
                 runner,
                 session=session,

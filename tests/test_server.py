@@ -511,6 +511,7 @@ def test_openai_chat_completions_http_nonstream_records_run_metadata(monkeypatch
             "model": "served-model",
             "service_tier": "priority",
             "max_completion_tokens": 123,
+            "reasoning_effort": "high",
             "metadata": {
                 "session_id": "serve:http",
                 "provider": "served-provider",
@@ -543,6 +544,7 @@ def test_openai_chat_completions_http_nonstream_records_run_metadata(monkeypatch
     assert call["provider_name"] == "served-provider"
     assert call["cwd"] == str(tmp_path / "project")
     assert call["meta"]["runtime_controls"]["service_tier"] == "priority"
+    assert call["meta"]["runtime_controls"]["reasoning_effort"] == "high"
     assert call["max_tokens"] == 123
 
 
@@ -1353,6 +1355,7 @@ def test_responses_create_retrieve_cancel_delete(monkeypatch, tmp_path):
             "instructions": "be brief",
             "input": "hello",
             "max_output_tokens": 77,
+            "reasoning": {"effort": "low"},
             "include": ["output[*].content", "reasoning.encrypted_content"],
             "metadata": {"session_id": "serve:responses"},
         })
@@ -1375,6 +1378,7 @@ def test_responses_create_retrieve_cancel_delete(monkeypatch, tmp_path):
     assert body["include"] == ["output[*].content", "reasoning.encrypted_content"]
     assert body["previous_response_id"] is None
     assert body["metadata"]["session_id"] == "serve:responses"
+    assert body["metadata"]["reasoning_effort"] == "low"
     assert get_status == 200
     retrieved = json.loads(get_data)
     assert retrieved["id"] == response_id
@@ -1386,6 +1390,7 @@ def test_responses_create_retrieve_cancel_delete(monkeypatch, tmp_path):
     assert delete_status == 200
     assert json.loads(delete_data)["ok"] is True
     assert _FakeRunner.calls[0]["session_id"] == "serve:responses"
+    assert _FakeRunner.calls[0]["meta"]["runtime_controls"]["reasoning_effort"] == "low"
     assert _FakeRunner.calls[0]["max_tokens"] == 77
 
 
@@ -1413,6 +1418,30 @@ def test_responses_preserves_parallel_tool_calls_false(monkeypatch, tmp_path):
     assert body["parallel_tool_calls"] is False
     assert get_status == 200
     assert json.loads(get_data)["parallel_tool_calls"] is False
+
+
+def test_responses_rejects_invalid_reasoning_effort(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": "hello",
+            "reasoning": {"effort": "loud"},
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 400
+    err = json.loads(data)["error"]
+    assert err["code"] == "invalid_reasoning_effort"
+    assert err["param"] == "reasoning.effort"
+    assert _FakeRunner.calls == []
 
 
 def test_responses_rejects_missing_or_empty_user_input(monkeypatch, tmp_path):
@@ -2772,6 +2801,7 @@ def test_responses_stream_sse_has_openai_event_shape(monkeypatch, tmp_path):
             "input": "hello",
             "include": "output[*].content",
             "max_completion_tokens": 66,
+            "reasoning": "max",
             "parallel_tool_calls": False,
             "metadata": {"session_id": "serve:responses-stream"},
         })
@@ -2806,7 +2836,9 @@ def test_responses_stream_sse_has_openai_event_shape(monkeypatch, tmp_path):
     assert created["response"]["include"] == ["output[*].content"]
     assert completed["response"]["parallel_tool_calls"] is False
     assert completed["response"]["include"] == ["output[*].content"]
+    assert completed["response"]["metadata"]["reasoning_effort"] == "xhigh"
     assert _FakeRunner.calls[0]["stream"] is True
+    assert _FakeRunner.calls[0]["meta"]["runtime_controls"]["reasoning_effort"] == "xhigh"
     assert _FakeRunner.calls[0]["max_tokens"] == 66
 
 
@@ -3805,7 +3837,7 @@ def test_server_session_crud_fork_and_chat(monkeypatch, tmp_path):
             port,
             "POST",
             f"/api/sessions/{session_id}/chat",
-            {"prompt": "reply", "max_tokens": 44},
+            {"prompt": "reply", "max_tokens": 44, "reasoning_effort": "minimal"},
         )
         fork_status, fork_data = _request(
             port,
@@ -3824,6 +3856,7 @@ def test_server_session_crud_fork_and_chat(monkeypatch, tmp_path):
     assert json.loads(add_data)["message"]["content"] == "saved"
     assert chat_status == 200
     assert json.loads(chat_data)["text"] == "hello"
+    assert _FakeRunner.calls[0]["meta"]["runtime_controls"]["reasoning_effort"] == "minimal"
     assert _FakeRunner.calls[0]["max_tokens"] == 44
     assert fork_status == 201
     assert json.loads(fork_data)["session"]["parent_id"] == session_id
@@ -3853,6 +3886,7 @@ def test_server_session_create_and_fork_honor_hermes_fields(monkeypatch, tmp_pat
                 "id": "api-explicit",
                 "title": "Explicit Session",
                 "model": "gpt-test",
+                "reasoning_effort": "high",
                 "system_prompt": "You are testing.",
                 "metadata": {"client": "hermes-compatible"},
             },
@@ -3873,7 +3907,7 @@ def test_server_session_create_and_fork_honor_hermes_fields(monkeypatch, tmp_pat
             port,
             "POST",
             "/api/sessions/api-explicit/fork",
-            {"id": "api-child", "title": "Explicit Fork"},
+            {"id": "api-child", "title": "Explicit Fork", "reasoning": {"effort": "low"}},
         )
         messages_status, messages_data = _request(port, "GET", "/api/sessions/api-child/messages?limit=2&offset=0")
     finally:
@@ -3886,6 +3920,7 @@ def test_server_session_create_and_fork_honor_hermes_fields(monkeypatch, tmp_pat
     assert created["title"] == "Explicit Session"
     assert created["meta"]["model"] == "gpt-test"
     assert created["meta"]["runtime_controls"]["model"] == "gpt-test"
+    assert created["meta"]["runtime_controls"]["reasoning_effort"] == "high"
     assert created["meta"]["system_prompt"] == "You are testing."
     assert created["meta"]["client"] == "hermes-compatible"
     assert created["messages"][0]["role"] == "system"
@@ -3897,6 +3932,7 @@ def test_server_session_create_and_fork_honor_hermes_fields(monkeypatch, tmp_pat
     assert forked["id"] == "api-child"
     assert forked["parent_id"] == "api-explicit"
     assert forked["title"] == "Explicit Fork"
+    assert forked["meta"]["runtime_controls"]["reasoning_effort"] == "low"
     assert messages_status == 200
     message_payload = json.loads(messages_data)
     assert message_payload["object"] == "list"
@@ -3907,6 +3943,71 @@ def test_server_session_create_and_fork_honor_hermes_fields(monkeypatch, tmp_pat
     messages = message_payload["data"]
     assert [message["role"] for message in messages] == ["system", "user"]
     assert messages[1]["content"] == "saved"
+
+
+def test_session_chat_runtime_controls_reach_precreated_agent(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+    from aegis.session import Session, SessionStore
+    from aegis.types import Message
+
+    class RuntimeCaptureRunner:
+        seen_controls = []
+
+        def __init__(self, config, include_mcp=True):
+            self.config = config
+            self.include_mcp = include_mcp
+
+        def make_agent(self, session, **_kwargs):
+            type(self).seen_controls.append(dict(session.meta.get("runtime_controls") or {}))
+            return SimpleNamespace(cancel_event=threading.Event(), tool_context=SimpleNamespace())
+
+        def run_prompt(self, prompt, **kwargs):
+            session = kwargs["session"]
+            return SimpleNamespace(
+                text="ok",
+                message=Message.assistant("ok"),
+                session=session,
+                trace_id="trace_runtime",
+                turn_id="turn_runtime",
+                run_id="run_runtime",
+                agent=SimpleNamespace(
+                    provider=SimpleNamespace(model="served-model"),
+                    budget=SimpleNamespace(usage=_Usage()),
+                ),
+            )
+
+    RuntimeCaptureRunner.seen_controls = []
+    monkeypatch.setattr(server, "SurfaceRunner", RuntimeCaptureRunner)
+    session_id = "serve:runtime-controls"
+    stored = Session(id=session_id, title="runtime session")
+    stored.meta["runtime_controls"] = {"model": "sticky-model"}
+    SessionStore().save(stored)
+
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(
+            port,
+            "POST",
+            f"/api/sessions/{session_id}/chat",
+            {
+                "prompt": "reply",
+                "service_tier": "priority",
+                "reasoning": {"effort": "xhigh"},
+            },
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert json.loads(data)["text"] == "ok"
+    assert RuntimeCaptureRunner.seen_controls == [{
+        "model": "sticky-model",
+        "service_tier": "priority",
+        "reasoning_effort": "xhigh",
+    }]
 
 
 def test_server_session_chat_stream_uses_sse_cors_headers(monkeypatch, tmp_path):
@@ -3926,7 +4027,7 @@ def test_server_session_chat_stream_uses_sse_cors_headers(monkeypatch, tmp_path)
             port,
             "POST",
             f"/api/sessions/{session_id}/chat/stream",
-            {"prompt": "reply", "max_completion_tokens": 55},
+            {"prompt": "reply", "max_completion_tokens": 55, "reasoning": {"effort": "high"}},
             headers={"Origin": "http://client.local"},
         )
     finally:
@@ -3952,6 +4053,7 @@ def test_server_session_chat_stream_uses_sse_cors_headers(monkeypatch, tmp_path)
     assert started["user_message"]["content"] == "reply"
     assert completed["content"] == "hello"
     assert completed["trace_id"] == "trace_http"
+    assert _FakeRunner.calls[0]["meta"]["runtime_controls"]["reasoning_effort"] == "high"
     assert _FakeRunner.calls[0]["max_tokens"] == 55
 
 
