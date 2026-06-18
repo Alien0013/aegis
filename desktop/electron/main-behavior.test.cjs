@@ -45,6 +45,18 @@ test("packaged backend launch uses Electron resource paths", () => {
   requireSnippet("Repair: install or repair the AEGIS CLI");
 });
 
+test("remote dashboard mode skips local backend spawn", () => {
+  requireSnippet("desktopRemoteConnection");
+  requireSnippet("function remoteConnection()");
+  requireSnippet("remote.enabled");
+  requireSnippet("remote-dashboard");
+  requireSnippet("dashboardUrlForBase(remote.url, token)");
+  requireSnippet('mode: isRemote ? "remote" : "local"');
+  requireSnippet("websocketUrlForBase(baseUrl, token)");
+  requireSnippet("requestTransport(target).get");
+  requireSnippet("requestTransport(url).request");
+});
+
 test("restart and splash lifecycle is single-flight", () => {
   requireSnippet("restartingBackend");
   requireSnippet("lastBootPhase");

@@ -4,7 +4,9 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const {
+  desktopRemoteConnection,
   desktopProjectCwd,
+  normalizeRemoteUrl,
   readDesktopSettings,
   settingsPath,
   writeDesktopSettings,
@@ -19,14 +21,17 @@ test("desktop settings persist a default project directory", () => {
   assert.deepEqual(readDesktopSettings({ userData }), {
     defaultProjectDir: "",
     backendEnv: { AEGIS_HOME: "", AEGIS_BIN: "" },
+    remoteBackend: { url: "", token: "" },
   });
   assert.deepEqual(writeDesktopSettings({ defaultProjectDir: ` ${project} ` }, { userData }), {
     defaultProjectDir: project,
     backendEnv: { AEGIS_HOME: "", AEGIS_BIN: "" },
+    remoteBackend: { url: "", token: "" },
   });
   assert.deepEqual(readDesktopSettings({ userData }), {
     defaultProjectDir: project,
     backendEnv: { AEGIS_HOME: "", AEGIS_BIN: "" },
+    remoteBackend: { url: "", token: "" },
   });
 
   assert.deepEqual(
@@ -34,6 +39,7 @@ test("desktop settings persist a default project directory", () => {
     {
       defaultProjectDir: project,
       backendEnv: { AEGIS_HOME: userData, AEGIS_BIN: "/bin/aegis" },
+      remoteBackend: { url: "", token: "" },
     },
   );
 });
@@ -49,7 +55,11 @@ test("desktop project cwd prefers explicit launch env, then persisted setting", 
     {
       cwd: "/explicit",
       source: "env",
-      settings: { defaultProjectDir: project, backendEnv: { AEGIS_HOME: "", AEGIS_BIN: "" } },
+      settings: {
+        defaultProjectDir: project,
+        backendEnv: { AEGIS_HOME: "", AEGIS_BIN: "" },
+        remoteBackend: { url: "", token: "" },
+      },
       explicitLaunchCwd: true,
     },
   );
@@ -58,7 +68,11 @@ test("desktop project cwd prefers explicit launch env, then persisted setting", 
     {
       cwd: project,
       source: "desktop-settings",
-      settings: { defaultProjectDir: project, backendEnv: { AEGIS_HOME: "", AEGIS_BIN: "" } },
+      settings: {
+        defaultProjectDir: project,
+        backendEnv: { AEGIS_HOME: "", AEGIS_BIN: "" },
+        remoteBackend: { url: "", token: "" },
+      },
       explicitLaunchCwd: false,
     },
   );
@@ -67,8 +81,66 @@ test("desktop project cwd prefers explicit launch env, then persisted setting", 
     {
       cwd: "/fallback",
       source: "process",
-      settings: { defaultProjectDir: project, backendEnv: { AEGIS_HOME: "", AEGIS_BIN: "" } },
+      settings: {
+        defaultProjectDir: project,
+        backendEnv: { AEGIS_HOME: "", AEGIS_BIN: "" },
+        remoteBackend: { url: "", token: "" },
+      },
       explicitLaunchCwd: false,
+    },
+  );
+});
+
+test("desktop remote connection is normalized from settings and env", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "aegis-desktop-settings-"));
+
+  assert.equal(normalizeRemoteUrl("file:///tmp/aegis"), "");
+  assert.equal(normalizeRemoteUrl(" https://agent.example.test:8443/ "), "https://agent.example.test:8443");
+
+  assert.deepEqual(
+    writeDesktopSettings({
+      remoteBackend: {
+        url: " https://agent.example.test/ ",
+        token: " remote-token ",
+      },
+    }, { userData }),
+    {
+      defaultProjectDir: "",
+      backendEnv: { AEGIS_HOME: "", AEGIS_BIN: "" },
+      remoteBackend: { url: "https://agent.example.test", token: "remote-token" },
+    },
+  );
+  assert.deepEqual(desktopRemoteConnection({ env: {}, userData }), {
+    enabled: true,
+    url: "https://agent.example.test",
+    token: "remote-token",
+    tokenConfigured: true,
+    source: "desktop-settings",
+    settings: {
+      defaultProjectDir: "",
+      backendEnv: { AEGIS_HOME: "", AEGIS_BIN: "" },
+      remoteBackend: { url: "https://agent.example.test", token: "remote-token" },
+    },
+  });
+  assert.deepEqual(
+    desktopRemoteConnection({
+      env: {
+        AEGIS_DESKTOP_REMOTE_URL: "http://127.0.0.1:8810/",
+        AEGIS_DESKTOP_REMOTE_TOKEN: "env-token",
+      },
+      userData,
+    }),
+    {
+      enabled: true,
+      url: "http://127.0.0.1:8810",
+      token: "env-token",
+      tokenConfigured: true,
+      source: "env",
+      settings: {
+        defaultProjectDir: "",
+        backendEnv: { AEGIS_HOME: "", AEGIS_BIN: "" },
+        remoteBackend: { url: "https://agent.example.test", token: "remote-token" },
+      },
     },
   );
 });

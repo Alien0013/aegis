@@ -12,6 +12,7 @@ const {
 const { spawn } = require("child_process");
 const net = require("net");
 const http = require("http");
+const https = require("https");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
@@ -23,6 +24,7 @@ const {
   resolveAegisHome,
 } = require("./backend-env.cjs");
 const {
+  desktopRemoteConnection,
   desktopProjectCwd,
   readDesktopSettings,
   writeDesktopSettings,
@@ -101,7 +103,36 @@ const stateFile = () => path.join(app.getPath("userData"), "window-state.json");
 const route = (p) => dashboardUrl + "#" + (p && p.startsWith("/") ? p : "/" + (p || ""));
 // The desktop app opens into the focused chat-first surface, not the admin grid.
 const DEFAULT_ROUTE = "/app";
-const backendBaseUrl = () => port ? `http://127.0.0.1:${port}` : "";
+const localBackendBaseUrl = () => port ? `http://127.0.0.1:${port}` : "";
+
+function remoteConnection() {
+  return desktopRemoteConnection({ env: process.env, userData: app.getPath("userData") });
+}
+
+function backendBaseUrl() {
+  const remote = remoteConnection();
+  if (remote.enabled) return remote.url;
+  return localBackendBaseUrl();
+}
+
+function dashboardUrlForBase(baseUrl, authToken = "") {
+  if (!baseUrl) return "";
+  const url = new URL(baseUrl);
+  if (authToken) url.searchParams.set("token", authToken);
+  return url.toString();
+}
+
+function websocketUrlForBase(baseUrl, authToken = "") {
+  if (!baseUrl) return "";
+  const url = new URL("/api/ws", baseUrl);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  if (authToken) url.searchParams.set("token", authToken);
+  return url.toString();
+}
+
+function requestTransport(url) {
+  return url.protocol === "https:" ? https : http;
+}
 
 function log(line) {
   try {
@@ -223,9 +254,28 @@ function boot(phase) {
 /* ---------- backend lifecycle ---------- */
 function startBackend() {
   return new Promise(async (resolve, reject) => {
+    const remote = remoteConnection();
+    if (remote.enabled) {
+      port = 0;
+      token = remote.token || "";
+      dashboardUrl = dashboardUrlForBase(remote.url, token);
+      backend = null;
+      backendCommand = "remote-dashboard";
+      backendArgs = [];
+      backendStartedAt = Date.now();
+      backendCwdSource = remote.source || "remote";
+      backendEnvSummary = {
+        remote: true,
+        AEGIS_DESKTOP_REMOTE_URL: remote.url,
+        AEGIS_DESKTOP_REMOTE_TOKEN: remote.tokenConfigured ? "[configured]" : "",
+      };
+      log(`using remote dashboard: ${remote.url} (${backendCwdSource})`);
+      resolve();
+      return;
+    }
     port = await freePort();
     token = crypto.randomBytes(18).toString("hex");
-    dashboardUrl = `${backendBaseUrl()}/?token=${token}`;
+    dashboardUrl = dashboardUrlForBase(localBackendBaseUrl(), token);
     const desktopSettings = readDesktopSettings({ userData: app.getPath("userData") });
     const settingsBackendEnv = desktopSettings.backendEnv || {};
     const launchEnv = {
@@ -289,7 +339,10 @@ function probe(url, tries, onTick) {
   return new Promise((resolve, reject) => {
     const attempt = (n) => {
       onTick && onTick(tries - n, tries);
-      http.get(url, { headers: { "X-Aegis-Token": token } }, (r) => {
+      const target = new URL(url);
+      requestTransport(target).get(target, {
+        headers: token ? { "X-Aegis-Token": token } : {},
+      }, (r) => {
         let body = "";
         r.setEncoding("utf8");
         r.on("data", (chunk) => { body += chunk; });
@@ -314,15 +367,17 @@ function probe(url, tries, onTick) {
 
 function connectionDescriptor() {
   const baseUrl = backendBaseUrl();
-  const running = !!(backend && !backend.killed);
+  const remote = remoteConnection();
+  const isRemote = remote.enabled;
+  const running = !isRemote && !!(backend && !backend.killed);
   const settings = readDesktopSettings({ userData: app.getPath("userData") });
   const descriptor = {
     baseUrl,
-    mode: "local",
-    source: "local",
-    authMode: "token",
+    mode: isRemote ? "remote" : "local",
+    source: isRemote ? (remote.source || "remote") : "local",
+    authMode: token ? "token" : "none",
     token,
-    wsUrl: baseUrl ? `ws://127.0.0.1:${port}/api/ws?token=${encodeURIComponent(token)}` : "",
+    wsUrl: websocketUrlForBase(baseUrl, token),
     backend: {
       running,
       pid: running ? backend.pid : null,
@@ -337,6 +392,13 @@ function connectionDescriptor() {
       userDataPath: app.getPath("userData"),
       cwdSource: backendCwdSource,
       env: backendEnvSummary,
+      remote: isRemote
+        ? {
+            url: remote.url,
+            source: remote.source || "remote",
+            tokenConfigured: remote.tokenConfigured,
+          }
+        : null,
     },
     settings: {
       ...settings,
@@ -466,8 +528,10 @@ function apiRequest({ method = "GET", path: requestPath = "", body = null } = {}
     let cleanPath;
     let methodName;
     let payload;
+    let baseUrl;
     try {
-      if (!port || !token) throw new Error("backend is not connected");
+      baseUrl = backendBaseUrl();
+      if (!baseUrl) throw new Error("backend is not connected");
       cleanPath = normalizeApiProxyPath(requestPath);
       methodName = normalizeApiProxyMethod(method);
       payload = serializeApiProxyBody(body);
@@ -475,11 +539,11 @@ function apiRequest({ method = "GET", path: requestPath = "", body = null } = {}
       reject(error);
       return;
     }
-    const url = new URL(`/api/${cleanPath}`, backendBaseUrl());
-    const req = http.request(url, {
+    const url = new URL(`/api/${cleanPath}`, baseUrl);
+    const req = requestTransport(url).request(url, {
       method: methodName,
       headers: {
-        "X-Aegis-Token": token,
+        ...(token ? { "X-Aegis-Token": token } : {}),
         ...(payload ? { "Content-Type": "application/json", "Content-Length": String(payload.length) } : {}),
       },
     }, (res) => {

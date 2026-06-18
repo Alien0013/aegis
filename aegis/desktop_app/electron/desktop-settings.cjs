@@ -18,6 +18,27 @@ function normalizeBackendEnv(value) {
   };
 }
 
+function normalizeRemoteUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    if (!["http:", "https:"].includes(parsed.protocol)) return "";
+    parsed.hash = "";
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return "";
+  }
+}
+
+function normalizeRemoteBackend(value) {
+  const raw = value && typeof value === "object" ? value : {};
+  return {
+    url: normalizeRemoteUrl(raw.url || raw.baseUrl || raw.base_url),
+    token: String(raw.token || raw.dashboardToken || raw.dashboard_token || "").trim(),
+  };
+}
+
 function readDesktopSettings(options = {}) {
   const readFile = options.readFile || fs.readFileSync;
   try {
@@ -25,9 +46,14 @@ function readDesktopSettings(options = {}) {
     return {
       defaultProjectDir: normalizeProjectDir(raw.defaultProjectDir),
       backendEnv: normalizeBackendEnv(raw.backendEnv),
+      remoteBackend: normalizeRemoteBackend(raw.remoteBackend),
     };
   } catch {
-    return { defaultProjectDir: "", backendEnv: normalizeBackendEnv() };
+    return {
+      defaultProjectDir: "",
+      backendEnv: normalizeBackendEnv(),
+      remoteBackend: normalizeRemoteBackend(),
+    };
   }
 }
 
@@ -41,10 +67,34 @@ function writeDesktopSettings(settings = {}, options = {}) {
     backendEnv: Object.prototype.hasOwnProperty.call(settings, "backendEnv")
       ? normalizeBackendEnv(settings.backendEnv)
       : current.backendEnv,
+    remoteBackend: Object.prototype.hasOwnProperty.call(settings, "remoteBackend")
+      ? normalizeRemoteBackend(settings.remoteBackend)
+      : current.remoteBackend,
   };
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   return payload;
+}
+
+function desktopRemoteConnection(options = {}) {
+  const env = options.env || process.env;
+  const settings = readDesktopSettings(options);
+  const envUrl = normalizeRemoteUrl(env.AEGIS_DESKTOP_REMOTE_URL);
+  const settingsUrl = normalizeRemoteUrl(settings.remoteBackend && settings.remoteBackend.url);
+  const url = envUrl || settingsUrl;
+  const token = String(
+    env.AEGIS_DESKTOP_REMOTE_TOKEN
+    || (settings.remoteBackend && settings.remoteBackend.token)
+    || "",
+  ).trim();
+  return {
+    enabled: Boolean(url),
+    url,
+    token,
+    tokenConfigured: Boolean(token),
+    source: envUrl ? "env" : settingsUrl ? "desktop-settings" : "",
+    settings,
+  };
 }
 
 function desktopProjectCwd(options = {}) {
@@ -73,9 +123,12 @@ function desktopProjectCwd(options = {}) {
 }
 
 module.exports = {
+  desktopRemoteConnection,
   desktopProjectCwd,
   normalizeBackendEnv,
   normalizeProjectDir,
+  normalizeRemoteBackend,
+  normalizeRemoteUrl,
   readDesktopSettings,
   settingsPath,
   writeDesktopSettings,
