@@ -3805,7 +3805,7 @@ def test_server_session_crud_fork_and_chat(monkeypatch, tmp_path):
             port,
             "POST",
             f"/api/sessions/{session_id}/chat",
-            {"prompt": "reply"},
+            {"prompt": "reply", "max_tokens": 44},
         )
         fork_status, fork_data = _request(
             port,
@@ -3824,6 +3824,7 @@ def test_server_session_crud_fork_and_chat(monkeypatch, tmp_path):
     assert json.loads(add_data)["message"]["content"] == "saved"
     assert chat_status == 200
     assert json.loads(chat_data)["text"] == "hello"
+    assert _FakeRunner.calls[0]["max_tokens"] == 44
     assert fork_status == 201
     assert json.loads(fork_data)["session"]["parent_id"] == session_id
     assert list_status == 200
@@ -3925,7 +3926,7 @@ def test_server_session_chat_stream_uses_sse_cors_headers(monkeypatch, tmp_path)
             port,
             "POST",
             f"/api/sessions/{session_id}/chat/stream",
-            {"prompt": "reply"},
+            {"prompt": "reply", "max_completion_tokens": 55},
             headers={"Origin": "http://client.local"},
         )
     finally:
@@ -3951,6 +3952,7 @@ def test_server_session_chat_stream_uses_sse_cors_headers(monkeypatch, tmp_path)
     assert started["user_message"]["content"] == "reply"
     assert completed["content"] == "hello"
     assert completed["trace_id"] == "trace_http"
+    assert _FakeRunner.calls[0]["max_tokens"] == 55
 
 
 def test_session_chat_aiohttp_stream_disconnect_cancels_live_agent(monkeypatch, tmp_path):

@@ -4268,6 +4268,14 @@ def make_handler(config: Config):
                 return self._json(404, {"ok": False, "error": "session not found", "id": session_id})
             prompt = body.get("prompt", body.get("input", body.get("message", "")))
             service_tier = _request_service_tier(body)
+            max_tokens, max_tokens_error = _request_max_tokens(
+                body,
+                "max_completion_tokens",
+                "max_output_tokens",
+                "max_tokens",
+            )
+            if max_tokens_error is not None:
+                return self._json(400, max_tokens_error)
             if stream:
                 stream_run_id = new_id("run")
                 message_id = new_id("msg")
@@ -4364,6 +4372,8 @@ def make_handler(config: Config):
                     "meta": run_meta,
                     "on_event": emit,
                 }
+                if max_tokens is not None:
+                    run_kwargs["max_tokens"] = max_tokens
                 if stream_agent is not None:
                     run_kwargs.update({"agent": stream_agent, "reuse_agent": False})
                 try:
@@ -4448,6 +4458,8 @@ def make_handler(config: Config):
                 "stream": False,
                 "meta": run_meta,
             }
+            if max_tokens is not None:
+                run_kwargs["max_tokens"] = max_tokens
             if response_agent is not None:
                 run_kwargs.update({"agent": response_agent, "reuse_agent": False})
             try:
