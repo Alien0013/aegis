@@ -942,6 +942,10 @@ def _observability_contract_payload(config: Config) -> dict[str, Any]:
         int(mount.get("mount_error_count") or 0)
         for mount in dashboard_api_mounts.values()
     )
+    dashboard_plugin_api_request_error_count = sum(
+        int(mount.get("error_count") or 0)
+        for mount in dashboard_api_mounts.values()
+    )
     return {
         "ok": True,
         "version": __version__,
@@ -956,6 +960,8 @@ def _observability_contract_payload(config: Config) -> dict[str, Any]:
             "api_route_count": dashboard_plugin_api_route_count,
             "api_request_count": dashboard_plugin_api_request_count,
             "api_mount_error_count": dashboard_plugin_api_error_count,
+            "api_request_error_count": dashboard_plugin_api_request_error_count,
+            "api_error_count": dashboard_plugin_api_error_count + dashboard_plugin_api_request_error_count,
         },
         "dashboard_plugin_api_mounts": dashboard_api_mounts,
         "routes": {
@@ -2049,11 +2055,20 @@ def _dashboard_plugin_hub(config: Config) -> dict[str, Any]:
         has_dashboard_manifest = bool(
             dashboard_manifest or (manifest_dir and (manifest_dir / "dashboard" / "manifest.json").exists())
         )
+        dashboard_aliases = set(aliases)
+        if not dashboard_manifest and manifest_dir:
+            data, _manifest_error = _read_dashboard_manifest_with_error(manifest_dir / "dashboard" / "manifest.json")
+            if isinstance(data, dict):
+                for alias in (data.get("name"), data.get("plugin"), data.get("key")):
+                    if alias:
+                        dashboard_aliases.add(str(alias))
+        dashboard_disabled = _dashboard_plugin_disabled_by_config(config, dashboard_aliases)
         enriched = dict(row)
         enriched.update({
             "runtime_status": _plugin_runtime_status(row),
             "has_dashboard_manifest": has_dashboard_manifest,
             "dashboard_manifest": dashboard_manifest,
+            "dashboard_enabled": not dashboard_disabled,
             "dashboard_route": dashboard_manifest.get("route") if dashboard_manifest else None,
             "api_mount": dashboard_manifest.get("api_mount") if dashboard_manifest else None,
             "can_remove": can_remove,
@@ -2079,6 +2094,7 @@ def _dashboard_plugin_hub(config: Config) -> dict[str, Any]:
             str(record.get("name") or ""),
         }
         runtime_status = str(record.get("status") or "dashboard")
+        dashboard_disabled = _dashboard_plugin_disabled_by_config(config, aliases)
         rows.append({
             "name": record.get("plugin") or record.get("name") or "",
             "key": record.get("key") or record.get("plugin") or record.get("name") or "",
@@ -2090,6 +2106,7 @@ def _dashboard_plugin_hub(config: Config) -> dict[str, Any]:
             "status": runtime_status,
             "enabled": True,
             "runtime_status": runtime_status,
+            "dashboard_enabled": not dashboard_disabled,
             "error": record.get("error") or "",
             "errors": record.get("errors") or [],
             "has_dashboard_manifest": True,
@@ -2241,11 +2258,29 @@ def _dashboard_plugin_key(plugin_root: Path, base: Path, fallback: str) -> tuple
     return fallback, ""
 
 
-def _dashboard_plugin_enabled(config: Config, name: str, key: str) -> bool:
+def _dashboard_plugin_enabled(config: Config, name: str, key: str, dashboard_name: str = "") -> bool:
     disabled = set((config.get("plugins.disabled", []) or []))
     allowlist = set((config.get("plugins.allowlist", []) or []))
-    aliases = {name, key or name}
-    return not (aliases & disabled) and (not allowlist or bool(aliases & allowlist))
+    aliases = {name, key or name, dashboard_name}
+    aliases.discard("")
+    return (
+        not _dashboard_plugin_disabled_by_config(config, aliases)
+        and not (aliases & disabled)
+        and (not allowlist or bool(aliases & allowlist))
+    )
+
+
+def _dashboard_plugin_disabled_by_config(config: Config, aliases: set[str]) -> bool:
+    dashboard_plugins = config.get("dashboard.plugins", {}) or {}
+    if not isinstance(dashboard_plugins, dict):
+        return False
+    for alias in aliases:
+        entry = dashboard_plugins.get(alias)
+        if isinstance(entry, dict) and entry.get("enabled") is False:
+            return True
+        if entry is False:
+            return True
+    return False
 
 
 def _dashboard_plugin_hidden(config: Config, row: dict[str, Any]) -> bool:
@@ -2528,11 +2563,11 @@ def _dashboard_plugin_row(
     description: str = "",
     version: str = "",
 ) -> dict[str, Any] | None:
-    if not _dashboard_plugin_enabled(config, plugin_name, key):
-        return None
     try:
         name = _safe_resource_name(str(data.get("name") or plugin_name), "plugin")
     except ValueError:
+        return None
+    if not _dashboard_plugin_enabled(config, plugin_name, key, name):
         return None
     asset_root = dash_root.resolve()
     entry = _safe_plugin_relpath(str(data.get("entry") or "dist/index.js"))

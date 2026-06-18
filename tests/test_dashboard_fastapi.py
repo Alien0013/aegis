@@ -2179,6 +2179,9 @@ def test_fastapi_dashboard_only_plugins_are_discovered_and_mounted(tmp_path, mon
     assert hub_row["dashboard_manifest"]["name"] == "status-panel"
     assert any(item["name"] == "status-panel" for item in hub.json()["orphan_dashboard_plugins"])
 
+    unauth_asset = asyncio.run(_request(app, "GET", "/dashboard-plugins/status-panel/dist/index.js"))
+    assert unauth_asset.status_code == 401
+
     asset = asyncio.run(_request(app, "GET", "/dashboard-plugins/status-panel/dist/index.js", headers=headers))
     assert asset.status_code == 200
     assert "window.statusPanel" in asset.text
@@ -2387,6 +2390,8 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
     assert observed_mount["last_error"] == "plugin unavailable"
     assert observability.json()["dashboard_plugins"]["api_mounted_count"] >= 1
     assert observability.json()["dashboard_plugins"]["api_route_count"] >= 1
+    assert observability.json()["dashboard_plugins"]["api_request_error_count"] >= 1
+    assert observability.json()["dashboard_plugins"]["api_error_count"] >= 1
     assert observability.json()["routes"]["dashboard_plugin_hub"] == "/api/dashboard/plugins/hub"
 
     disabled = asyncio.run(_request(app, "POST", "/api/plugins/analytics/pulse/disable", headers=headers))
@@ -2462,6 +2467,64 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
     assert updated.status_code == 200
     assert updated.json()["ok"] is True
     assert updated.json()["unchanged"] is True
+
+
+def test_fastapi_dashboard_plugin_config_enabled_flag_disables_dashboard_mount(tmp_path, monkeypatch):
+    plug = tmp_path / "plugins" / "analytics" / "pulse"
+    (plug / "dashboard" / "dist").mkdir(parents=True)
+    (plug / "plugin.yaml").write_text(
+        "name: pulse\n"
+        "version: 2.1.0\n"
+        "description: Pulse dashboard plugin\n"
+        "kind: backend\n",
+        encoding="utf-8",
+    )
+    (plug / "__init__.py").write_text("def register(api):\n    pass\n", encoding="utf-8")
+    (plug / "dashboard" / "manifest.json").write_text(
+        json.dumps({
+            "name": "pulse-panel",
+            "label": "Pulse",
+            "entry": "dist/index.js",
+            "api": "plugin_api.py",
+        }),
+        encoding="utf-8",
+    )
+    (plug / "dashboard" / "dist" / "index.js").write_text("window.pulse = true;", encoding="utf-8")
+    (plug / "dashboard" / "plugin_api.py").write_text(
+        "from fastapi import APIRouter\n"
+        "router = APIRouter()\n"
+        "@router.get('/pulse')\n"
+        "def pulse():\n"
+        "    return {'pulse': True}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "config.yaml").write_text(
+        "dashboard:\n"
+        "  plugins:\n"
+        "    pulse-panel:\n"
+        "      enabled: false\n",
+        encoding="utf-8",
+    )
+
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    manifest = asyncio.run(_request(app, "GET", "/api/dashboard/plugins", headers=headers))
+    assert manifest.status_code == 200
+    assert all(item["name"] != "pulse-panel" for item in manifest.json())
+
+    hub = asyncio.run(_request(app, "GET", "/api/dashboard/plugins/hub", headers=headers))
+    assert hub.status_code == 200
+    hub_row = next(row for row in hub.json()["plugins"] if row["key"] == "analytics/pulse")
+    assert hub_row["has_dashboard_manifest"] is True
+    assert hub_row["dashboard_enabled"] is False
+    assert hub_row["dashboard_manifest"] is None
+    assert hub_row["api_mount"] is None
+
+    asset = asyncio.run(_request(app, "GET", "/dashboard-plugins/pulse-panel/dist/index.js", headers=headers))
+    assert asset.status_code == 404
+    route = asyncio.run(_request(app, "GET", "/api/plugins/pulse-panel/pulse", headers=headers))
+    assert route.status_code == 404
 
 
 def test_fastapi_dashboard_plugin_embedded_yaml_dashboard_manifest(tmp_path, monkeypatch):
