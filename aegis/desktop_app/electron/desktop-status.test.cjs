@@ -80,6 +80,7 @@ test("desktop diagnostics exposes runtime, stamp, checks, and repair actions", (
       release: true,
       trustedRelease: true,
       dirty: false,
+      appVersion: "1.2.3",
       targetPlatforms: ["linux"],
     }),
   );
@@ -226,6 +227,24 @@ test("releaseUpdateEligibility rejects dev, dirty, stale, and mismatched install
   assert.match(
     releaseUpdateEligibility({
       packaged: true,
+      appVersion: "1.2.3",
+      stamp: {
+        found: true,
+        payload: {
+          schemaVersion: 2,
+          release: true,
+          trustedRelease: true,
+          dirty: false,
+          appVersion: "9.9.9",
+          targetPlatforms: ["linux"],
+        },
+      },
+    }).reason,
+    /does not match running app 1\.2\.3/,
+  );
+  assert.match(
+    releaseUpdateEligibility({
+      packaged: true,
       platform: "linux",
       stamp: {
         found: true,
@@ -238,9 +257,17 @@ test("releaseUpdateEligibility rejects dev, dirty, stale, and mismatched install
     releaseUpdateEligibility({
       packaged: true,
       platform: "linux",
+      appVersion: "1.2.3",
       stamp: {
         found: true,
-        payload: { schemaVersion: 2, release: true, trustedRelease: true, dirty: false, targetPlatforms: ["linux"] },
+        payload: {
+          schemaVersion: 2,
+          release: true,
+          trustedRelease: true,
+          dirty: false,
+          appVersion: "1.2.3",
+          targetPlatforms: ["linux"],
+        },
       },
     }).ok,
     true,

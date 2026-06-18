@@ -74,6 +74,7 @@ function releaseUpdateEligibility({
   packaged = false,
   stamp = null,
   platform = process.platform,
+  appVersion = "",
 } = {}) {
   if (!packaged) {
     return { ok: false, reason: "auto-update runs in the installed app only" };
@@ -90,6 +91,12 @@ function releaseUpdateEligibility({
   }
   if (payload.dirty) {
     return { ok: false, reason: "installed package was built from a dirty worktree" };
+  }
+  if (payload.appVersion && appVersion && String(payload.appVersion) !== String(appVersion)) {
+    return {
+      ok: false,
+      reason: `install stamp app version ${payload.appVersion} does not match running app ${appVersion}`,
+    };
   }
   const targets = Array.isArray(payload.targetPlatforms) ? payload.targetPlatforms : [];
   if (targets.length && !targets.includes(platform)) {
@@ -134,7 +141,8 @@ function desktopDiagnostics({
   const packaged = Boolean(app && app.isPackaged);
   const stamp = readInstallStamp({ desktopRoot, resourcesPath });
   const backendManifest = readBackendManifest({ desktopRoot, resourcesPath });
-  const updateEligibility = releaseUpdateEligibility({ packaged, stamp, platform });
+  const appVersion = _safeAppCall(app, "getVersion", "");
+  const updateEligibility = releaseUpdateEligibility({ packaged, stamp, platform, appVersion });
   const userDataPath = app && typeof app.getPath === "function" ? _safeAppCall(app, "getPath", "") : "";
   const appPath = app && typeof app.getAppPath === "function" ? _safeAppCall(app, "getAppPath", "") : "";
   const packagedBackendCandidates = packaged
@@ -206,7 +214,7 @@ function desktopDiagnostics({
   ];
   return {
     packaged,
-    appVersion: _safeAppCall(app, "getVersion", ""),
+    appVersion,
     platform,
     arch,
     versions: {

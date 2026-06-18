@@ -666,6 +666,7 @@ function initAutoUpdate(manual) {
     packaged: app.isPackaged,
     stamp: readInstallStamp(),
     platform: process.platform,
+    appVersion: app.getVersion(),
   });
   if (!updateEligibility.ok) {
     log(`auto-update disabled: ${updateEligibility.reason}`);

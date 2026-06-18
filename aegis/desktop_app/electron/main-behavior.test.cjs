@@ -61,6 +61,7 @@ test("auto-updater setup is idempotent and bounded", () => {
   requireSnippet("function installDownloadedUpdate");
   requireSnippet("descriptor.desktop.updater = { ...updaterStatus };");
   requireSnippet("releaseUpdateEligibility");
+  requireSnippet("appVersion: app.getVersion()");
   requireSnippet("auto-update disabled");
   requireSnippet('setUpdaterStatus("disabled", { reason: updateEligibility.reason });');
   requireSnippet('setUpdaterStatus("checking");');
