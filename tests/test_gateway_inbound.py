@@ -738,6 +738,7 @@ def test_gateway_webhook_channel_accepts_whatsapp_bridge_aliases():
     })
     assert defaulted.platform == "whatsapp"
     assert defaulted.chat_id == "12025550123@s.whatsapp.net"
+    assert defaulted.metadata["remote_jid"] == "12025550123@s.whatsapp.net"
 
     ev = WebhookChannel()._event_from_body({
         "platform": "baileys",
@@ -783,6 +784,13 @@ def test_gateway_webhook_channel_accepts_whatsapp_bridge_aliases():
     assert nested.message_id == "BAE599999"
     assert nested.reply_to_message_id == "QUOTE123"
     assert nested.reply_to_text == "the previous message"
+    assert nested.metadata["bridge_platform"] == "baileys"
+    assert nested.metadata["normalized_platform"] == "whatsapp"
+    assert nested.metadata["remote_jid"] == "12025550123-111@g.us"
+    assert nested.metadata["group_jid"] == "12025550123-111@g.us"
+    assert nested.metadata["is_group"] is True
+    assert nested.metadata["participant"] == "15551234567@s.whatsapp.net"
+    assert nested.metadata["message_key_id"] == "BAE599999"
     assert WebhookChannel()._delivery_id({}, {"key": {"id": "BAE599999"}}) == "body:key.id:BAE599999"
 
 

@@ -172,8 +172,9 @@ class WebhookChannel(BasePlatformAdapter):
         return ""
 
     def _event_from_body(self, body: dict) -> MessageEvent:
+        raw_platform = _string_value(body.get("platform", self.default_platform)) or self.default_platform
         platform = normalize_platform_name(
-            body.get("platform", self.default_platform),
+            raw_platform,
             default=self.default_platform,
         )
         metadata = dict(body.get("metadata")) if isinstance(body.get("metadata"), dict) else {}
@@ -274,6 +275,15 @@ class WebhookChannel(BasePlatformAdapter):
             ("contextInfo", "quotedMessage", "conversation"),
             ("contextInfo", "quotedMessage", "extendedTextMessage", "text"),
         ))
+        if not metadata:
+            metadata = self._salvage_bridge_metadata(
+                body,
+                platform=platform,
+                raw_platform=raw_platform,
+                chat_id=chat_id,
+                user_id=user_id,
+                message_id=message_id,
+            )
         return MessageEvent(
             platform=platform,
             chat_id=chat_id,
@@ -288,6 +298,53 @@ class WebhookChannel(BasePlatformAdapter):
             attachments=attachments,
             metadata=metadata,
         )
+
+    def _salvage_bridge_metadata(
+        self,
+        body: dict,
+        *,
+        platform: str,
+        raw_platform: str,
+        chat_id: str,
+        user_id: str,
+        message_id: str,
+    ) -> dict:
+        metadata: dict[str, object] = {}
+        if raw_platform and raw_platform != platform:
+            metadata["bridge_platform"] = raw_platform
+            metadata["normalized_platform"] = platform
+        if platform != "whatsapp":
+            return metadata
+        remote_jid = _first_string(body, (
+            ("remote_jid",),
+            ("remoteJid",),
+            ("key", "remoteJid"),
+            ("key", "remote_jid"),
+            ("message", "key", "remoteJid"),
+            ("data", "key", "remoteJid"),
+            ("jid",),
+        )) or chat_id
+        participant = _first_string(body, (
+            ("participant",),
+            ("key", "participant"),
+            ("message", "key", "participant"),
+            ("data", "key", "participant"),
+        )) or user_id
+        key_id = _first_string(body, (
+            ("key", "id"),
+            ("message", "key", "id"),
+            ("data", "key", "id"),
+        )) or message_id
+        if remote_jid:
+            metadata["remote_jid"] = remote_jid
+            if remote_jid.endswith("@g.us") or remote_jid.endswith("-g.us"):
+                metadata["group_jid"] = remote_jid
+                metadata["is_group"] = True
+        if participant:
+            metadata["participant"] = participant
+        if key_id:
+            metadata["message_key_id"] = key_id
+        return metadata
 
     def start(self, dispatch: Dispatch) -> None:
         secret = self.secret
