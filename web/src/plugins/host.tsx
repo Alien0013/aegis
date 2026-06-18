@@ -88,6 +88,17 @@ function subscribe(listener: () => void) {
   };
 }
 
+function pruneRegistrations(manifests: DashboardPluginManifest[]): boolean {
+  const active = new Set(manifests.map((manifest) => manifest.name));
+  let changed = false;
+  for (const name of registrations.keys()) {
+    if (active.has(name)) continue;
+    registrations.delete(name);
+    changed = true;
+  }
+  return changed;
+}
+
 const noopReload = () => {};
 
 function ensureGlobalHost(reload: () => void = noopReload) {
@@ -173,23 +184,25 @@ function buildState(manifests: DashboardPluginManifest[], loading: boolean, erro
     }
   }
 
-  for (const [name, registered] of registrations) {
-    if (byName.has(name)) continue;
-    for (const route of registered.routes || []) {
-      if (route.hidden) continue;
-      routes.push({
-        ...route,
-        plugin: name,
-        path: normalizePath(route.path, `/plugins/${name}`),
-        icon: route.icon || "plugins",
-        position: route.position || "end",
-      });
-    }
-    for (const [slotName, renderers] of Object.entries(registered.slots || {})) {
-      const list = Array.isArray(renderers) ? renderers : [renderers];
-      const bucket = slots.get(slotName) || [];
-      for (const render of list) bucket.push({ name, render });
-      slots.set(slotName, bucket);
+  if (loading || error) {
+    for (const [name, registered] of registrations) {
+      if (byName.has(name)) continue;
+      for (const route of registered.routes || []) {
+        if (route.hidden) continue;
+        routes.push({
+          ...route,
+          plugin: name,
+          path: normalizePath(route.path, `/plugins/${name}`),
+          icon: route.icon || "plugins",
+          position: route.position || "end",
+        });
+      }
+      for (const [slotName, renderers] of Object.entries(registered.slots || {})) {
+        const list = Array.isArray(renderers) ? renderers : [renderers];
+        const bucket = slots.get(slotName) || [];
+        for (const render of list) bucket.push({ name, render });
+        slots.set(slotName, bucket);
+      }
     }
   }
 
@@ -224,9 +237,12 @@ export function DashboardPluginProvider({ children }: { children: ReactNode }) {
     api<DashboardPluginManifest[]>("dashboard/plugins")
       .then((rows) => {
         if (cancelled) return;
-        setManifests(rows || []);
+        const nextManifests = rows || [];
+        const pruned = pruneRegistrations(nextManifests);
+        setManifests(nextManifests);
         setError("");
-        for (const manifest of rows || []) injectManifestAssets(manifest);
+        for (const manifest of nextManifests) injectManifestAssets(manifest);
+        if (pruned) notify();
       })
       .catch((err) => {
         if (!cancelled) setError(String(err));
