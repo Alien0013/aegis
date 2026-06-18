@@ -3728,6 +3728,84 @@ def _dashboard_chat_streaming_response(body: dict, chat_runner, request: Request
     return StreamingResponse(stream(), media_type="text/event-stream")
 
 
+async def _dashboard_chat_json_response(body: dict, chat_runner, request: Request) -> JSONResponse:
+    result: dict[str, Any] = {}
+    done = threading.Event()
+    cancelled = threading.Event()
+    active: dict[str, Any] = {}
+    active_lock = threading.Lock()
+
+    def start_cancel_watchdog() -> None:
+        with active_lock:
+            if active.get("cancel_watchdog_started"):
+                return
+            active["cancel_watchdog_started"] = True
+
+        def reapply_cancel() -> None:
+            deadline = time.monotonic() + 1.5
+            while cancelled.is_set() and time.monotonic() < deadline:
+                _cancel_dashboard_stream_agent(active.get("agent"))
+                worker_thread = active.get("worker")
+                if worker_thread is not None and not worker_thread.is_alive():
+                    break
+                time.sleep(0.025)
+
+        threading.Thread(target=reapply_cancel, daemon=True, name="aegis-dashboard-chat-cancel").start()
+
+    def on_agent(agent: Any) -> None:
+        active["agent"] = agent
+        if cancelled.is_set():
+            _cancel_dashboard_stream_agent(agent)
+            start_cancel_watchdog()
+
+    def cancel_active_agent() -> None:
+        if cancelled.is_set():
+            return
+        cancelled.set()
+        _cancel_dashboard_stream_agent(active.get("agent"))
+        start_cancel_watchdog()
+
+    def worker() -> None:
+        try:
+            payload = dash._dashboard_chat_stream(
+                body,
+                chat_runner,
+                lambda _item: None,
+                on_agent=on_agent,
+                cancel_event=cancelled,
+                meta_route="/api/chat",
+            )
+            result.update(payload if isinstance(payload, dict) else {})
+        except Exception as exc:  # noqa: BLE001
+            result.update({
+                "reply": f"error: {exc}",
+                "session_id": body.get("session_id") or "",
+                "trace_id": "",
+                "turn_id": "",
+                "run_id": "",
+                "cwd": dash._dashboard_chat_cwd(body),
+                "events": [],
+            })
+        finally:
+            done.set()
+
+    thread = threading.Thread(target=worker, daemon=True)
+    active["worker"] = thread
+    thread.start()
+    try:
+        while not done.is_set():
+            if await request.is_disconnected():
+                cancel_active_agent()
+                return JSONResponse({"error": "client disconnected", "cancelled": True}, status_code=499)
+            await asyncio.sleep(0.05)
+    except asyncio.CancelledError:
+        cancel_active_agent()
+        raise
+    payload = dict(result)
+    payload.pop("type", None)
+    return JSONResponse(payload)
+
+
 def _dashboard_ws_rpc_response(text: str | None, config: Config) -> dict[str, Any] | None:
     if text is None:
         return None
@@ -6197,6 +6275,8 @@ def create_app(config: Config) -> FastAPI:
             body = {}
         if not isinstance(body, dict):
             body = {}
+        if f"/api/{path}" == "/api/chat":
+            return await _dashboard_chat_json_response(body, chat_runner, request)
         return JSONResponse(_api_post(f"/api/{path}", body, config, chat_runner))
 
     @app.websocket("/api/pty")

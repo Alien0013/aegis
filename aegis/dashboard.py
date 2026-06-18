@@ -1334,6 +1334,7 @@ def _dashboard_chat_stream(
     *,
     on_agent=None,
     cancel_event=None,
+    meta_route: str = "/api/chat/stream",
 ) -> dict:
     events: list[dict] = []
     result = None
@@ -1349,7 +1350,7 @@ def _dashboard_chat_stream(
 
     try:
         runtime = _dashboard_chat_runtime(body)
-        meta = _dashboard_chat_meta(body, "/api/chat/stream")
+        meta = _dashboard_chat_meta(body, meta_route)
         run_kwargs = {
             "cwd": cwd or None,
             **runtime,

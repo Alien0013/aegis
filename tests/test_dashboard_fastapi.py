@@ -1714,6 +1714,75 @@ def test_fastapi_dashboard_chat_stream_disconnect_reapplies_cancel_after_agent_e
     assert runner.agents and runner.agents[0].cancel_event.is_set()
 
 
+def test_fastapi_dashboard_chat_json_disconnect_reapplies_cancel_after_agent_entry_clear():
+    import threading
+
+    from aegis.dashboard_fastapi import _dashboard_chat_json_response
+    from aegis.session import Session
+
+    class Runner:
+        def __init__(self):
+            self.started = threading.Event()
+            self.finished = threading.Event()
+            self.agents = []
+            self.saw_cancel_before_clear = False
+
+        def load_or_create_session(self, session_id=None, **_kwargs):
+            return Session(id=session_id or "dash:json-disconnect", title="json disconnect")
+
+        def make_agent(self, **_kwargs):
+            agent = types.SimpleNamespace(cancel_event=threading.Event())
+
+            def cancel():
+                agent.cancel_event.set()
+
+            agent.cancel = cancel
+            self.agents.append(agent)
+            return agent
+
+        def run_prompt(self, prompt, **kwargs):  # noqa: ANN001
+            self.started.set()
+            agent = kwargs["agent"]
+            assert kwargs["reuse_agent"] is False
+            assert kwargs["surface"] == "dashboard"
+            deadline = time.monotonic() + 1
+            while not agent.cancel_event.is_set() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.saw_cancel_before_clear = agent.cancel_event.is_set()
+            agent.cancel_event.clear()  # mirrors Agent.run() clearing the event at entry
+            deadline = time.monotonic() + 1
+            while not agent.cancel_event.is_set() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.finished.set()
+            return types.SimpleNamespace(
+                text=f"late:{prompt}",
+                session=kwargs["session"],
+                trace_id="",
+                turn_id="",
+                run_id="",
+            )
+
+    class DisconnectAfterRunStarts:
+        def __init__(self, runner: Runner):
+            self.runner = runner
+
+        async def is_disconnected(self):
+            return self.runner.started.wait(2)
+
+    runner = Runner()
+    response = asyncio.run(_dashboard_chat_json_response(
+        {"message": "slow", "session_id": "dash:json-disconnect"},
+        runner,
+        DisconnectAfterRunStarts(runner),
+    ))
+
+    assert response.status_code == 499
+    assert json.loads(response.body)["cancelled"] is True
+    assert runner.finished.wait(1)
+    assert runner.saw_cancel_before_clear is True
+    assert runner.agents and runner.agents[0].cancel_event.is_set()
+
+
 def test_fastapi_session_checks_reports_cross_session_integrity(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
     headers = {"X-Aegis-Token": "t"}
