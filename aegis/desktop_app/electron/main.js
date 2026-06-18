@@ -15,7 +15,7 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const { aegisCommand, backendEnvironment, resolveAegisHome } = require("./backend-env.cjs");
+const { aegisCommand, backendEnvironment, desktopLogPath, resolveAegisHome } = require("./backend-env.cjs");
 const {
   desktopDiagnostics,
   detectRemoteDisplay,
@@ -76,7 +76,7 @@ const DEEP_LINK_SCHEME = "aegis";      // aegis://chat , aegis://config , ...
 let pendingDeepLink = "";              // a deep link that arrived before the window existed
 
 /* ---------- paths & logging ---------- */
-const logPath = () => path.join(app.getPath("userData"), "desktop.log");
+const logPath = () => desktopLogPath({ env: process.env, userData: app.getPath("userData") });
 const stateFile = () => path.join(app.getPath("userData"), "window-state.json");
 
 // The dashboard is a HashRouter SPA: deep-links must be `#/path` (leading slash).
@@ -88,7 +88,11 @@ const backendBaseUrl = () => port ? `http://127.0.0.1:${port}` : "";
 
 function log(line) {
   try {
-    if (logFd === null) logFd = fs.openSync(logPath(), "a");
+    if (logFd === null) {
+      const target = logPath();
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      logFd = fs.openSync(target, "a");
+    }
     fs.writeSync(logFd, `[${new Date().toISOString()}] ${line}\n`);
   } catch { /* ignore */ }
 }

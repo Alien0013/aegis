@@ -366,6 +366,18 @@ def test_cli_sessions_check_reports_and_repairs_stale_runs(capsys):
     assert store.load(session.id).meta["resume_pending"] is True
 
 
+def test_cli_logs_accepts_desktop_log_name(capsys):
+    from aegis import config as cfg
+    from aegis.cli.main import main
+
+    cfg.logs_dir().mkdir(parents=True, exist_ok=True)
+    (cfg.logs_dir() / "desktop.log").write_text("old line\nfresh desktop line\n", encoding="utf-8")
+
+    assert main(["logs", "desktop", "-n", "1"]) == 0
+    out = capsys.readouterr().out
+    assert out.strip() == "fresh desktop line"
+
+
 def test_cli_bare_first_run_guard(capsys):
     from aegis.cli.main import main
 

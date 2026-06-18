@@ -1596,6 +1596,7 @@ def cmd_logs(args, config: Config) -> int:  # noqa: ARG001
 
     names = {
         "agent": "agent.log",
+        "desktop": "desktop.log",
         "errors": "errors.log",
         "gateway": "gateway.log",
         "gui": "gui.log",
@@ -1803,8 +1804,13 @@ def build_parser() -> argparse.ArgumentParser:
     st = sub.add_parser("status", help="show install/auth/tools/skills/plugins/service status")
     st.set_defaults(func=cmd_status)
 
-    lg = sub.add_parser("logs", help="tail agent/errors/gateway/gui logs")
-    lg.add_argument("name", nargs="?", choices=["agent", "errors", "gateway", "gui", "legacy"], default="agent")
+    lg = sub.add_parser("logs", help="tail agent/desktop/errors/gateway/gui logs")
+    lg.add_argument(
+        "name",
+        nargs="?",
+        choices=["agent", "desktop", "errors", "gateway", "gui", "legacy"],
+        default="agent",
+    )
     lg.add_argument("-n", "--lines", type=int, default=80)
     lg.add_argument("-f", "--follow", action="store_true")
     lg.set_defaults(func=cmd_logs)

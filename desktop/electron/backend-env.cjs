@@ -150,6 +150,14 @@ function resolveAegisHome(options = {}) {
   return pathMod.join(homedir, ".aegis");
 }
 
+function desktopLogPath(options = {}) {
+  const platform = options.platform || process.platform;
+  const pathMod = _pathFor(platform);
+  const home = resolveAegisHome(options);
+  if (home) return pathMod.join(home, "logs", "desktop.log");
+  return pathMod.join(options.userData || os.homedir(), "desktop.log");
+}
+
 function _packagedResourceRoots(options = {}) {
   const pathMod = _pathFor(options.platform || process.platform);
   const roots = [];
@@ -291,6 +299,7 @@ module.exports = {
   backendEnvironment,
   candidateAegisCommands,
   candidatePackagedAegisCommands,
+  desktopLogPath,
   hiddenWindowsChildOptions,
   normalizePathEnv,
   packagedBackendPathEntries,

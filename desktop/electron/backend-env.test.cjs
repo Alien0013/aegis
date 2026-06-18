@@ -6,6 +6,7 @@ const {
   backendEnvironment,
   candidateAegisCommands,
   candidatePackagedAegisCommands,
+  desktopLogPath,
   hiddenWindowsChildOptions,
   normalizePathEnv,
   packagedBackendPathEntries,
@@ -142,6 +143,27 @@ test("falls back to LocalAppData Windows venv candidates", () => {
       probeCommand: (p) => p === expected,
     }),
     expected,
+  );
+});
+
+test("desktop log path uses the AEGIS logs directory", () => {
+  assert.equal(
+    desktopLogPath({
+      platform: "linux",
+      env: { AEGIS_HOME: "/srv/aegis" },
+      homedir: "/home/alien",
+      userData: "/tmp/electron-user-data",
+    }),
+    path.posix.join("/srv/aegis", "logs", "desktop.log"),
+  );
+  assert.equal(
+    desktopLogPath({
+      platform: "win32",
+      env: { LOCALAPPDATA: "C:\\Users\\Alien\\AppData\\Local" },
+      homedir: "C:\\Users\\Alien",
+      userData: "C:\\Users\\Alien\\AppData\\Roaming\\AEGIS",
+    }),
+    path.win32.join("C:\\Users\\Alien\\AppData\\Local\\aegis", "logs", "desktop.log"),
   );
 });
 
