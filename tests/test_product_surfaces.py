@@ -69,11 +69,14 @@ def test_config_summary_prints_hermes_style_terminal_surface(monkeypatch, capsys
     out = capsys.readouterr().out
     assert "AEGIS Configuration" in out
     assert "◆ Paths" in out and "Config:" in out and "Secrets:" in out
+    assert "◆ Services" in out and "API adapter:" in out and "Dashboard:" in out
+    assert "Desktop:" in out
     assert "◆ API Keys" in out and "OpenAI" in out and "(set," in out
     assert "sk-test" not in out
-    assert "Model" in out and "Provider: openai" in out and "Model:    gpt-5.5" in out
+    assert "Model" in out and "Active:" in out and "Provider: openai" in out and "Model:    gpt-5.5" in out
     assert "Messaging Platforms" in out and "Telegram:   configured" in out
     assert "WhatsApp:" in out
+    assert "◆ Validation" in out and "Config YAML:  ok" in out and "Value types:  ok" in out
     assert "aegis config edit --secrets" in out
     assert "aegis config get <key>" in out
     assert "aegis config setup" in out

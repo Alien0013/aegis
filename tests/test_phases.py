@@ -182,17 +182,25 @@ def test_cli_config_summary_dump_and_edit(monkeypatch, capsys):
     assert f"Config:       {cfg.config_path()}" in out
     assert "Profile:      default" in out
     assert "Install:" in out
+    assert "◆ Services" in out
+    assert "API adapter:  http://127.0.0.1:8790" in out
+    assert "Dashboard:    http://127.0.0.1:9119" in out
+    assert "Desktop:" in out
     assert "◆ API Keys" in out
     assert "OpenAI (STT/TTS)" in out
     assert "(not set)" in out
     assert "Google" in out
     assert "DeepSeek" in out
     assert "Browser Use" in out
+    assert "Active:" in out
     assert "Model effort:" in out
     assert "User preview:" in out
     assert "Timezone" in out
     assert "Model:          (auto)" in out
     assert "WhatsApp:" in out
+    assert "◆ Validation" in out
+    assert "Config YAML:  ok" in out
+    assert "Value types:  ok" in out
     assert "aegis config paths" in out
     assert "aegis config edit" in out
 

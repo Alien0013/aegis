@@ -1057,6 +1057,8 @@ def cmd_config(args, config: Config) -> int:
     def show_summary() -> int:
         compression = config.get("agent.compression", {}) or {}
         platforms = config.get("display.platforms", {}) or {}
+        file_errors = cfg.validate_config_file()
+        type_errors = cfg.config_type_errors(config.data)
         gateway_channels = set(str(x) for x in (config.get("gateway.channels", []) or []))
         telegram = "configured" if os.environ.get("TELEGRAM_BOT_TOKEN") or "telegram" in gateway_channels else "not configured"
         discord = "configured" if os.environ.get("DISCORD_BOT_TOKEN") or "discord" in gateway_channels else "not configured"
@@ -1065,6 +1067,29 @@ def cmd_config(args, config: Config) -> int:
         webhook = "configured" if os.environ.get("WEBHOOK_CHANNEL_SECRET") or "webhook" in gateway_channels else "not configured"
         whatsapp = "configured" if os.environ.get("WHATSAPP_CHANNEL_SECRET") or "whatsapp" in gateway_channels else "not configured"
         active_profile = cfg.current_profile() or "default"
+        model_view = {
+            key: config.get(f"model.{key}")
+            for key in ("provider", "default", "base_url", "api_mode", "context_length")
+            if config.get(f"model.{key}") not in (None, "")
+        }
+        server_host = config.get("server.host") or "127.0.0.1"
+        server_port = config.get("server.port") or 8790
+        dashboard_host = config.get("server.dashboard_host") or server_host
+        dashboard_port = config.get("server.dashboard_port") or 9119
+        desktop_dir = Path(os.environ.get("AEGIS_DESKTOP_DIR") or cfg.get_home() / "desktop").expanduser()
+        desktop_state = "not installed"
+        if (desktop_dir / "package.json").exists():
+            desktop_state = "source ready"
+        if any(
+            path.exists()
+            for path in (
+                desktop_dir / "release" / "linux-unpacked" / "AEGIS",
+                desktop_dir / "release" / "win-unpacked" / "AEGIS.exe",
+                desktop_dir / "release" / "mac" / "AEGIS.app" / "Contents" / "MacOS" / "AEGIS",
+                desktop_dir / "release" / "mac-arm64" / "AEGIS.app" / "Contents" / "MacOS" / "AEGIS",
+            )
+        ):
+            desktop_state = "packaged"
         title = "✦ AEGIS Configuration"
         width = 64
         _print("╭" + "─" * (width - 2) + "╮")
@@ -1077,6 +1102,14 @@ def cmd_config(args, config: Config) -> int:
         _print(f"  Home:         {cfg.get_home()}")
         _print(f"  Profile:      {active_profile}")
         _print(f"  Install:      {Path(__file__).resolve().parents[2]}")
+        _print()
+        _print("◆ Services")
+        _print(f"  API adapter:  http://{server_host}:{server_port}")
+        _print(f"  Dashboard:    http://{dashboard_host}:{dashboard_port}")
+        _print(f"  Frontend:     {config.get('dashboard.frontend')}")
+        _print(f"  API auth:     {'configured' if config.get('server.api_key') else 'not configured'}")
+        _print(f"  Dashboard auth: {'configured' if config.get('server.dashboard_token') else 'not configured'}")
+        _print(f"  Desktop:      {desktop_state} ({desktop_dir})")
         _print()
         _print("◆ API Keys")
         for label, names in (
@@ -1101,6 +1134,7 @@ def cmd_config(args, config: Config) -> int:
             _print(f"  {label:<17} {configured_env(*names)}")
         _print()
         _print("◆ Model")
+        _print(f"  Active:  {model_view}")
         _print(f"  Provider: {config.get('model.provider')}")
         _print(f"  Model:    {config.get('model.default')}")
         if config.get("model.base_url"):
@@ -1146,6 +1180,11 @@ def cmd_config(args, config: Config) -> int:
         _print(f"  Mattermost: {mattermost}")
         _print(f"  Webhook:    {webhook}")
         _print(f"  WhatsApp:   {whatsapp}")
+        _print()
+        _print("◆ Validation")
+        _print(f"  Config YAML:  {'ok' if not file_errors else str(len(file_errors)) + ' error(s)'}")
+        _print(f"  Value types:  {'ok' if not type_errors else str(len(type_errors)) + ' error(s)'}")
+        _print(f"  Secrets file: {'present' if cfg.env_path().exists() else 'not present'}")
         _print()
         _print("◆ Commands")
         _print("  aegis config paths                # Show config/secrets/home/install paths")
