@@ -162,6 +162,34 @@ def _request_service_tier(body: dict[str, Any], metadata: dict[str, Any] | None 
     return normalize_service_tier(raw)
 
 
+def _request_max_tokens(body: dict[str, Any], *keys: str) -> tuple[int | None, dict[str, Any] | None]:
+    for key in keys:
+        if key not in body:
+            continue
+        raw = body.get(key)
+        if raw in (None, ""):
+            continue
+        if isinstance(raw, bool):
+            return None, _openai_error(
+                f"'{key}' must be a positive integer",
+                code="invalid_max_tokens",
+                param=key,
+            )
+        value: int | None = None
+        if isinstance(raw, int):
+            value = raw
+        elif isinstance(raw, str) and raw.strip().isdigit():
+            value = int(raw.strip())
+        if value is None or value <= 0:
+            return None, _openai_error(
+                f"'{key}' must be a positive integer",
+                code="invalid_max_tokens",
+                param=key,
+            )
+        return value, None
+    return None, None
+
+
 def _parse_cors_origins(value: Any) -> tuple[str, ...]:
     if not value:
         return ()
@@ -3231,6 +3259,13 @@ def make_handler(config: Config):
                 or None
             )
             service_tier = _request_service_tier(body, metadata)
+            max_tokens, max_tokens_error = _request_max_tokens(
+                body,
+                "max_completion_tokens",
+                "max_tokens",
+            )
+            if max_tokens_error is not None:
+                return self._json(400, max_tokens_error)
 
             cid = new_id("chatcmpl")
 
@@ -3289,6 +3324,8 @@ def make_handler(config: Config):
                         "surface": "serve",
                         "meta": run_meta,
                     }
+                    if max_tokens is not None:
+                        run_kwargs["max_tokens"] = max_tokens
                     if response_agent is not None:
                         run_kwargs.update({
                             "session": response_session,
@@ -3448,6 +3485,8 @@ def make_handler(config: Config):
                 "meta": run_meta,
                 "on_event": emit,
             }
+            if max_tokens is not None:
+                run_kwargs["max_tokens"] = max_tokens
             if stream_session is not None and stream_agent is not None:
                 run_kwargs.update({"session": stream_session, "agent": stream_agent, "reuse_agent": False})
             else:
@@ -3545,6 +3584,13 @@ def make_handler(config: Config):
             service_tier = _request_service_tier(body, metadata)
             if service_tier:
                 metadata["service_tier"] = service_tier
+            max_tokens, max_tokens_error = _request_max_tokens(
+                body,
+                "max_output_tokens",
+                "max_completion_tokens",
+            )
+            if max_tokens_error is not None:
+                return self._json(400, max_tokens_error)
             parallel_tool_calls = _coerce_request_bool(body.get("parallel_tool_calls"), True)
             response_title = last_user.content[:80] or response_id
             idempotency_key = str(self.headers.get("Idempotency-Key", "") or "")
@@ -3909,6 +3955,8 @@ def make_handler(config: Config):
                         },
                         "on_event": emit,
                     }
+                    if max_tokens is not None:
+                        run_kwargs["max_tokens"] = max_tokens
                     if service_tier:
                         run_kwargs["meta"].update(runtime_controls_meta({"service_tier": service_tier}))
                     if response_agent is not None:
@@ -4144,6 +4192,8 @@ def make_handler(config: Config):
                             **({"gateway_session_key": session_key} if session_key else {}),
                         },
                     }
+                    if max_tokens is not None:
+                        run_kwargs["max_tokens"] = max_tokens
                     if service_tier:
                         run_kwargs["meta"].update(runtime_controls_meta({"service_tier": service_tier}))
                     if response_agent is not None:

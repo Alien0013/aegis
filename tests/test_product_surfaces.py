@@ -2064,6 +2064,48 @@ def test_surface_runner_provider_metadata_includes_run_id(tmp_path):
     assert provider.metadata["run_id"] == result.run_id
 
 
+def test_surface_runner_run_max_tokens_reaches_provider(tmp_path):
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.session import Session, SessionStore
+    from aegis.surface import SurfaceRunner
+    from aegis.types import LLMResponse
+
+    class CapturingProvider:
+        name = "fake"
+        model = "fake-model"
+        api_mode = "responses"
+        context_length = 200_000
+
+        def __init__(self):
+            self.max_tokens = None
+
+        def describe(self):
+            return "fake"
+
+        def complete(self, messages, tools=None, stream=False, on_delta=None, max_tokens=None):
+            self.max_tokens = max_tokens
+            return LLMResponse(text="ok")
+
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = False
+    store = SessionStore()
+    session = Session.create("token run")
+    provider = CapturingProvider()
+    agent = Agent(config=cfg, provider=provider, session=session, cwd=tmp_path, store=store)
+
+    SurfaceRunner(cfg, store=store, include_mcp=False).run_prompt(
+        "hello",
+        session=session,
+        agent=agent,
+        surface="cli",
+        max_tokens=321,
+    )
+
+    assert provider.max_tokens == 321
+    assert not hasattr(agent, "_request_max_tokens")
+
+
 def test_surface_runner_run_metadata_uses_session_runtime_controls(monkeypatch, tmp_path):
     from types import SimpleNamespace
 

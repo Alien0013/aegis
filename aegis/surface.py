@@ -180,6 +180,7 @@ class SurfaceRunner:
         model: str | None = None,
         provider_name: str | None = None,
         service_tier: str | None = None,
+        max_tokens: int | None = None,
         cwd: str | Path | None = None,
         approver: Approver | None = None,
         asker: Asker | None = None,
@@ -321,7 +322,8 @@ class SurfaceRunner:
                     )
                     result = self._run(agent, effective_prompt, session=session, platform=platform,
                                        chat_id=chat_id, stream=stream, on_event=on_event,
-                                       run_id=run_id, include_wakeups=include_wakeups)
+                                       run_id=run_id, include_wakeups=include_wakeups,
+                                       max_tokens=max_tokens)
             else:
                 agent = agent or self.make_agent(
                     session=session,
@@ -337,7 +339,8 @@ class SurfaceRunner:
                 )
                 result = self._run(agent, effective_prompt, session=session, platform=platform,
                                    chat_id=chat_id, stream=stream, on_event=on_event,
-                                   run_id=run_id, include_wakeups=include_wakeups)
+                                   run_id=run_id, include_wakeups=include_wakeups,
+                                   max_tokens=max_tokens)
         except Exception as exc:
             if run_store is not None and run_id:
                 try:
@@ -401,6 +404,7 @@ class SurfaceRunner:
         on_event: OnEvent | None,
         run_id: str = "",
         include_wakeups: bool = True,
+        max_tokens: int | None = None,
     ) -> SurfaceRun:
         _retarget_agent(agent, session=session)
         agent.platform = platform
@@ -428,8 +432,14 @@ class SurfaceRunner:
             except Exception:  # noqa: BLE001
                 pass
         try:
+            if max_tokens is not None:
+                agent._request_max_tokens = int(max_tokens)
+            elif hasattr(agent, "_request_max_tokens"):
+                delattr(agent, "_request_max_tokens")
             message = _agent_run(agent, prompt, emit)
         finally:
+            if hasattr(agent, "_request_max_tokens"):
+                delattr(agent, "_request_max_tokens")
             if not include_wakeups:
                 try:
                     if getattr(agent, "_skip_wakeups_once", False):

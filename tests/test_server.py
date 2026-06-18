@@ -510,6 +510,7 @@ def test_openai_chat_completions_http_nonstream_records_run_metadata(monkeypatch
         status, data = _request(port, "POST", "/v1/chat/completions", {
             "model": "served-model",
             "service_tier": "priority",
+            "max_completion_tokens": 123,
             "metadata": {
                 "session_id": "serve:http",
                 "provider": "served-provider",
@@ -542,6 +543,7 @@ def test_openai_chat_completions_http_nonstream_records_run_metadata(monkeypatch
     assert call["provider_name"] == "served-provider"
     assert call["cwd"] == str(tmp_path / "project")
     assert call["meta"]["runtime_controls"]["service_tier"] == "priority"
+    assert call["max_tokens"] == 123
 
 
 def test_hermes_session_key_chat_echoes_and_stays_separate_from_session_id(monkeypatch, tmp_path):
@@ -713,6 +715,30 @@ def test_openai_chat_completions_rejects_missing_or_empty_user_input(monkeypatch
     assert "messages" in json.loads(missing_data)["error"]["message"]
     assert json.loads(system_data)["error"]["message"] == "No user message found in messages"
     assert json.loads(empty_data)["error"]["message"] == "No user message found in messages"
+    assert _FakeRunner.calls == []
+
+
+def test_openai_chat_completions_rejects_invalid_max_tokens(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/chat/completions", {
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 0,
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 400
+    err = json.loads(data)["error"]
+    assert err["code"] == "invalid_max_tokens"
+    assert err["param"] == "max_tokens"
     assert _FakeRunner.calls == []
 
 
@@ -953,6 +979,7 @@ def test_openai_chat_completions_stream_sse_contract(monkeypatch, tmp_path):
             "provider": "stream-provider",
             "cwd": str(tmp_path / "stream-project"),
             "stream": True,
+            "max_tokens": 88,
             "session_id": "serve:stream",
             "messages": [{"role": "user", "content": "hi"}],
         })
@@ -986,6 +1013,7 @@ def test_openai_chat_completions_stream_sse_contract(monkeypatch, tmp_path):
     assert _FakeRunner.calls[0]["stream"] is True
     assert _FakeRunner.calls[0]["provider_name"] == "stream-provider"
     assert _FakeRunner.calls[0]["cwd"] == str(tmp_path / "stream-project")
+    assert _FakeRunner.calls[0]["max_tokens"] == 88
 
 
 def test_chat_completions_aiohttp_stream_disconnect_cancels_live_agent(monkeypatch, tmp_path):
@@ -1324,6 +1352,7 @@ def test_responses_create_retrieve_cancel_delete(monkeypatch, tmp_path):
             "model": "served-model",
             "instructions": "be brief",
             "input": "hello",
+            "max_output_tokens": 77,
             "include": ["output[*].content", "reasoning.encrypted_content"],
             "metadata": {"session_id": "serve:responses"},
         })
@@ -1357,6 +1386,7 @@ def test_responses_create_retrieve_cancel_delete(monkeypatch, tmp_path):
     assert delete_status == 200
     assert json.loads(delete_data)["ok"] is True
     assert _FakeRunner.calls[0]["session_id"] == "serve:responses"
+    assert _FakeRunner.calls[0]["max_tokens"] == 77
 
 
 def test_responses_preserves_parallel_tool_calls_false(monkeypatch, tmp_path):
@@ -2741,6 +2771,7 @@ def test_responses_stream_sse_has_openai_event_shape(monkeypatch, tmp_path):
             "stream": True,
             "input": "hello",
             "include": "output[*].content",
+            "max_completion_tokens": 66,
             "parallel_tool_calls": False,
             "metadata": {"session_id": "serve:responses-stream"},
         })
@@ -2776,6 +2807,7 @@ def test_responses_stream_sse_has_openai_event_shape(monkeypatch, tmp_path):
     assert completed["response"]["parallel_tool_calls"] is False
     assert completed["response"]["include"] == ["output[*].content"]
     assert _FakeRunner.calls[0]["stream"] is True
+    assert _FakeRunner.calls[0]["max_tokens"] == 66
 
 
 def test_responses_stream_idempotency_key_replays_completed_request(monkeypatch, tmp_path):

@@ -142,6 +142,14 @@ def _trace_scalar(value) -> str:
     return str(raw)
 
 
+def _agent_request_max_tokens(agent) -> int:
+    try:
+        value = int(getattr(agent, "_request_max_tokens", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+    return value if value > 0 else 0
+
+
 def _inherit_child_session_meta(parent, child) -> None:
     meta = getattr(parent, "meta", {}) or {}
     child_meta = getattr(child, "meta", None)
@@ -168,6 +176,7 @@ def _provider_trace_data(agent, wire_messages, schemas, response_state: dict, pr
         "tool_schema_names": [name for name in tool_names if name],
         "stream": bool(getattr(agent, "stream", False)),
         "reasoning": getattr(agent, "reasoning", "off"),
+        "max_tokens": _agent_request_max_tokens(agent),
         "responses_state": {
             "enabled": bool(response_state.get("enabled")),
             "store": bool(response_state.get("store")),
@@ -1545,6 +1554,9 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                 "on_provider_attempt": _observe_provider_attempt,
                 "on_response_id": lambda rid: setattr(agent, "_active_response_id", str(rid or "")),
             }
+            request_max_tokens = _agent_request_max_tokens(agent)
+            if request_max_tokens > 0:
+                provider_kwargs["max_tokens"] = request_max_tokens
             from ..plugins import fire_middleware
 
             middleware_payload = fire_middleware(
