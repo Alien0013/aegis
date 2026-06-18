@@ -183,6 +183,167 @@ class _BlockingResponsesRunner:
         )
 
 
+class _LateAccessResult:
+    accessed = threading.Event()
+
+    @classmethod
+    def reset(cls):
+        cls.accessed = threading.Event()
+
+    @property
+    def text(self):
+        self.accessed.set()
+        return "late"
+
+    @property
+    def session(self):
+        self.accessed.set()
+        return SimpleNamespace(id="serve:late-result")
+
+    @property
+    def trace_id(self):
+        self.accessed.set()
+        return "trace_late_result"
+
+    @property
+    def turn_id(self):
+        self.accessed.set()
+        return "turn_late_result"
+
+    @property
+    def run_id(self):
+        self.accessed.set()
+        return "run_late_result"
+
+    @property
+    def agent(self):
+        self.accessed.set()
+        return SimpleNamespace(
+            provider=SimpleNamespace(model="served-model"),
+            budget=SimpleNamespace(usage=_Usage()),
+        )
+
+    @property
+    def usage(self):
+        self.accessed.set()
+        return _Usage()
+
+
+class _LateAccessStreamingRunner:
+    started = threading.Event()
+    release = threading.Event()
+    agents = []
+    calls = []
+
+    def __init__(self, config, include_mcp=True):
+        self.config = config
+        self.include_mcp = include_mcp
+
+    @classmethod
+    def reset(cls):
+        cls.started = threading.Event()
+        cls.release = threading.Event()
+        cls.agents = []
+        cls.calls = []
+        _LateAccessResult.reset()
+
+    def load_or_create_session(self, session_id=None, title=None, history=None, surface="", meta=None):
+        return SimpleNamespace(
+            id=session_id or "serve:late-stream",
+            title=title or "",
+            messages=list(history or []),
+            meta=dict(meta or {}),
+        )
+
+    def make_agent(self, **kwargs):
+        agent = SimpleNamespace(
+            cancel_event=threading.Event(),
+            provider=SimpleNamespace(model=kwargs.get("model") or "served-model"),
+            budget=SimpleNamespace(usage=_Usage()),
+        )
+
+        def cancel():
+            agent.cancel_event.set()
+
+        agent.cancel = cancel
+        self.agents.append(agent)
+        return agent
+
+    def run_prompt(self, prompt, **kwargs):
+        self.calls.append({"prompt": prompt, **kwargs})
+        self.started.set()
+        self.release.wait(5)
+        return _LateAccessResult()
+
+
+class _ClearingCancelRunner:
+    started = threading.Event()
+    cleared = threading.Event()
+    release = threading.Event()
+    agents = []
+    cancel_seen_before_clear = False
+
+    def __init__(self, config, include_mcp=True):
+        self.config = config
+        self.include_mcp = include_mcp
+
+    @classmethod
+    def reset(cls):
+        cls.started = threading.Event()
+        cls.cleared = threading.Event()
+        cls.release = threading.Event()
+        cls.agents = []
+        cls.cancel_seen_before_clear = False
+
+    def load_or_create_session(self, session_id=None, title=None, history=None, surface="", meta=None):
+        return SimpleNamespace(
+            id=session_id or "serve:clear-cancel",
+            title=title or "",
+            messages=list(history or []),
+            meta=dict(meta or {}),
+        )
+
+    def make_agent(self, **kwargs):
+        agent = SimpleNamespace(
+            cancel_event=threading.Event(),
+            provider=SimpleNamespace(model=kwargs.get("model") or "served-model"),
+            budget=SimpleNamespace(usage=_Usage()),
+        )
+
+        def cancel():
+            agent.cancel_event.set()
+
+        agent.cancel = cancel
+        self.agents.append(agent)
+        return agent
+
+    def run_prompt(self, prompt, **kwargs):
+        self.started.set()
+        agent = kwargs.get("agent") or (self.agents[-1] if self.agents else None)
+        deadline = time.monotonic() + 1
+        while agent is not None and time.monotonic() < deadline:
+            if agent.cancel_event.is_set():
+                self.__class__.cancel_seen_before_clear = True
+                break
+            time.sleep(0.01)
+        if agent is not None:
+            agent.cancel_event.clear()
+        self.cleared.set()
+        self.release.wait(5)
+        session = kwargs.get("session") or SimpleNamespace(id="serve:clear-cancel")
+        return SimpleNamespace(
+            text="late",
+            session=session,
+            trace_id="trace_clear_cancel",
+            turn_id="turn_clear_cancel",
+            run_id="run_clear_cancel",
+            agent=agent or SimpleNamespace(
+                provider=SimpleNamespace(model="served-model"),
+                budget=SimpleNamespace(usage=_Usage()),
+            ),
+        )
+
+
 def test_openai_models_lists_model_ids_not_only_provider_names(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     from aegis import config as cfg_paths
@@ -834,6 +995,113 @@ def test_chat_completions_aiohttp_stream_disconnect_cancels_live_agent(monkeypat
                     return False
         finally:
             _BlockingResponsesRunner.release.set()
+            await runner.cleanup()
+
+    assert asyncio.run(exercise()) is True
+
+
+def test_chat_completions_disconnect_drops_late_stream_result(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _LateAccessStreamingRunner.reset()
+    monkeypatch.setattr(server, "SurfaceRunner", _LateAccessStreamingRunner)
+
+    async def exercise() -> bool:
+        from aiohttp import ClientSession, web
+
+        app = server.make_app(Config.load())
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        try:
+            assert site._server is not None
+            port = site._server.sockets[0].getsockname()[1]
+            async with ClientSession() as session:
+                async with session.post(
+                    f"http://127.0.0.1:{port}/v1/chat/completions",
+                    json={
+                        "stream": True,
+                        "messages": [{"role": "user", "content": "disconnect me"}],
+                        "session_id": "serve:chat-late-drop",
+                    },
+                ) as resp:
+                    assert resp.status == 200
+                    data_line = await asyncio.wait_for(resp.content.readline(), timeout=1)
+                    blank_line = await asyncio.wait_for(resp.content.readline(), timeout=1)
+                    assert data_line.startswith(b"data: ")
+                    assert blank_line == b"\n"
+                    assert _LateAccessStreamingRunner.started.wait(1)
+                    resp.close()
+                    deadline = time.monotonic() + 2
+                    while time.monotonic() < deadline:
+                        if (
+                            _LateAccessStreamingRunner.agents
+                            and _LateAccessStreamingRunner.agents[0].cancel_event.is_set()
+                        ):
+                            break
+                        await asyncio.sleep(0.05)
+                    _LateAccessStreamingRunner.release.set()
+                    return True
+        finally:
+            _LateAccessStreamingRunner.release.set()
+            await runner.cleanup()
+
+    assert asyncio.run(exercise()) is True
+    assert not _LateAccessResult.accessed.is_set()
+
+
+def test_chat_completions_disconnect_reapplies_cancel_after_run_start_clear(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _ClearingCancelRunner.reset()
+    monkeypatch.setattr(server, "SurfaceRunner", _ClearingCancelRunner)
+
+    async def exercise() -> bool:
+        from aiohttp import ClientSession, web
+
+        app = server.make_app(Config.load())
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        try:
+            assert site._server is not None
+            port = site._server.sockets[0].getsockname()[1]
+            async with ClientSession() as session:
+                async with session.post(
+                    f"http://127.0.0.1:{port}/v1/chat/completions",
+                    json={
+                        "stream": True,
+                        "messages": [{"role": "user", "content": "race cancel"}],
+                        "session_id": "serve:chat-cancel-reapply",
+                    },
+                ) as resp:
+                    assert resp.status == 200
+                    data_line = await asyncio.wait_for(resp.content.readline(), timeout=1)
+                    blank_line = await asyncio.wait_for(resp.content.readline(), timeout=1)
+                    assert data_line.startswith(b"data: ")
+                    assert blank_line == b"\n"
+                    assert await asyncio.to_thread(_ClearingCancelRunner.started.wait, 1)
+                    resp.close()
+                    assert await asyncio.to_thread(_ClearingCancelRunner.cleared.wait, 2)
+                    if not _ClearingCancelRunner.cancel_seen_before_clear:
+                        return False
+                    deadline = time.monotonic() + 2
+                    while time.monotonic() < deadline:
+                        if (
+                            _ClearingCancelRunner.agents
+                            and _ClearingCancelRunner.agents[0].cancel_event.is_set()
+                        ):
+                            return True
+                        await asyncio.sleep(0.05)
+                    return False
+        finally:
+            _ClearingCancelRunner.release.set()
             await runner.cleanup()
 
     assert asyncio.run(exercise()) is True
@@ -2364,6 +2632,59 @@ def test_responses_aiohttp_stream_disconnect_cancels_live_agent(monkeypatch, tmp
     assert asyncio.run(exercise()) is True
 
 
+def test_responses_disconnect_drops_late_stream_result(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _LateAccessStreamingRunner.reset()
+    monkeypatch.setattr(server, "SurfaceRunner", _LateAccessStreamingRunner)
+
+    async def exercise() -> bool:
+        from aiohttp import ClientSession, web
+
+        app = server.make_app(Config.load())
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        try:
+            assert site._server is not None
+            port = site._server.sockets[0].getsockname()[1]
+            async with ClientSession() as session:
+                async with session.post(
+                    f"http://127.0.0.1:{port}/v1/responses",
+                    json={
+                        "stream": True,
+                        "input": "disconnect me",
+                        "metadata": {"session_id": "serve:response-late-drop"},
+                    },
+                ) as resp:
+                    assert resp.status == 200
+                    event_line = await asyncio.wait_for(resp.content.readline(), timeout=1)
+                    data_line = await asyncio.wait_for(resp.content.readline(), timeout=1)
+                    assert event_line == b"event: response.created\n"
+                    assert data_line.startswith(b"data: ")
+                    assert _LateAccessStreamingRunner.started.wait(1)
+                    resp.close()
+                    deadline = time.monotonic() + 2
+                    while time.monotonic() < deadline:
+                        if (
+                            _LateAccessStreamingRunner.agents
+                            and _LateAccessStreamingRunner.agents[0].cancel_event.is_set()
+                        ):
+                            break
+                        await asyncio.sleep(0.05)
+                    _LateAccessStreamingRunner.release.set()
+                    return True
+        finally:
+            _LateAccessStreamingRunner.release.set()
+            await runner.cleanup()
+
+    assert asyncio.run(exercise()) is True
+    assert not _LateAccessResult.accessed.is_set()
+
+
 def test_responses_stream_failure_persists_failed_snapshot(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
@@ -3163,6 +3484,58 @@ def test_session_chat_aiohttp_stream_disconnect_cancels_live_agent(monkeypatch, 
             await runner.cleanup()
 
     assert asyncio.run(exercise()) is True
+
+
+def test_session_chat_disconnect_drops_late_stream_result(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+    from aegis.session import Session, SessionStore
+
+    _LateAccessStreamingRunner.reset()
+    monkeypatch.setattr(server, "SurfaceRunner", _LateAccessStreamingRunner)
+    session_id = "serve:session-late-drop"
+    SessionStore().save(Session(id=session_id, title="late drop session"))
+
+    async def exercise() -> bool:
+        from aiohttp import ClientSession, web
+
+        app = server.make_app(Config.load())
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        try:
+            assert site._server is not None
+            port = site._server.sockets[0].getsockname()[1]
+            async with ClientSession() as client:
+                async with client.post(
+                    f"http://127.0.0.1:{port}/api/sessions/{session_id}/chat/stream",
+                    json={"prompt": "disconnect me"},
+                ) as resp:
+                    assert resp.status == 200
+                    event_line = await asyncio.wait_for(resp.content.readline(), timeout=1)
+                    data_line = await asyncio.wait_for(resp.content.readline(), timeout=1)
+                    assert event_line == b"event: run.started\n"
+                    assert data_line.startswith(b"data: ")
+                    assert _LateAccessStreamingRunner.started.wait(1)
+                    resp.close()
+                    deadline = time.monotonic() + 2
+                    while time.monotonic() < deadline:
+                        if (
+                            _LateAccessStreamingRunner.agents
+                            and _LateAccessStreamingRunner.agents[0].cancel_event.is_set()
+                        ):
+                            break
+                        await asyncio.sleep(0.05)
+                    _LateAccessStreamingRunner.release.set()
+                    return True
+        finally:
+            _LateAccessStreamingRunner.release.set()
+            await runner.cleanup()
+
+    assert asyncio.run(exercise()) is True
+    assert not _LateAccessResult.accessed.is_set()
 
 
 def test_server_run_read_endpoints(monkeypatch, tmp_path):

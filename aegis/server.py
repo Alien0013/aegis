@@ -2382,6 +2382,25 @@ def make_handler(config: Config):
             if cancel_event is not None:
                 cancel_event.set()
 
+        def _start_cancel_watchdog(
+            self,
+            agent_getter,
+            should_continue,
+            *,
+            worker_getter=None,
+            name: str = "aegis-api-stream-cancel",
+        ) -> None:
+            def reapply_cancel() -> None:
+                deadline = time.monotonic() + 1.5
+                while should_continue() and time.monotonic() < deadline:
+                    self._cancel_agent(agent_getter())
+                    worker = worker_getter() if callable(worker_getter) else None
+                    if worker is not None and not worker.is_alive():
+                        break
+                    time.sleep(0.025)
+
+            threading.Thread(target=reapply_cancel, daemon=True, name=name).start()
+
         def _prepare_stream_agent(
             self,
             runner: Any,
@@ -3194,13 +3213,20 @@ def make_handler(config: Config):
             )
             stream_closed = False
             disconnect_cancelled = False
+            cancel_watchdog_started = False
 
             def cancel_stream_agent() -> None:
-                nonlocal disconnect_cancelled
+                nonlocal cancel_watchdog_started, disconnect_cancelled
                 if disconnect_cancelled:
                     return
                 disconnect_cancelled = True
                 self._cancel_agent(stream_agent)
+                if not cancel_watchdog_started:
+                    cancel_watchdog_started = True
+                    self._start_cancel_watchdog(
+                        lambda: stream_agent,
+                        lambda: disconnect_cancelled and not stream_closed,
+                    )
 
             if stream_agent is not None:
                 self._aegis_on_disconnect = cancel_stream_agent
@@ -3291,6 +3317,8 @@ def make_handler(config: Config):
                 result = runner.run_prompt(last_user, **run_kwargs)
             finally:
                 self._aegis_on_disconnect = None
+            if disconnect_cancelled or stream_closed:
+                return
             final_metadata = {
                 "session_id": result.session.id,
                 "trace_id": result.trace_id,
@@ -3389,6 +3417,8 @@ def make_handler(config: Config):
                 text_parts: list[str] = []
                 pending_tool_calls: dict[str, dict[str, Any]] = {}
                 streamed_output_items: list[dict[str, Any]] = []
+                disconnect_cancelled = False
+                cancel_watchdog_started = False
 
                 def send_event(event_name: str, payload: dict[str, Any]) -> bool:
                     nonlocal sequence
@@ -3524,9 +3554,28 @@ def make_handler(config: Config):
 
                 self._send_sse_headers(self._session_headers(session_id=session_id, session_key=session_key))
 
+                def response_stream_agent():
+                    with state_lock:
+                        rec = active_responses.get(response_id)
+                        return rec.get("agent") if rec is not None else None
+
+                def start_response_cancel_watchdog() -> None:
+                    nonlocal cancel_watchdog_started
+                    if cancel_watchdog_started:
+                        return
+                    cancel_watchdog_started = True
+                    self._start_cancel_watchdog(
+                        response_stream_agent,
+                        lambda: disconnect_cancelled and response_id in active_responses,
+                        name="aegis-api-response-cancel",
+                    )
+
                 def cancel_on_disconnect() -> None:
+                    nonlocal disconnect_cancelled
+                    disconnect_cancelled = True
                     with state_lock:
                         self._request_cancel_response_locked(response_id, "SSE client disconnected")
+                    start_response_cancel_watchdog()
 
                 self._aegis_on_disconnect = cancel_on_disconnect
                 created_response = {
@@ -3643,6 +3692,48 @@ def make_handler(config: Config):
                             "history": history,
                         })
                     result = runner.run_prompt(last_user, **run_kwargs)
+                    if disconnect_cancelled or getattr(self.wfile, "closed", False):
+                        text = "".join(text_parts)
+                        cancelled_metadata = dict(metadata)
+                        if response_session is not None and not cancelled_metadata.get("session_id"):
+                            cancelled_metadata["session_id"] = getattr(response_session, "id", "")
+                        cancelled = _response_object(
+                            response_id,
+                            None,
+                            status="cancelled",
+                            metadata_extra=cancelled_metadata,
+                            parallel_tool_calls=parallel_tool_calls,
+                        )
+                        cancelled.update({
+                            "model": model or config.get("model.default", ""),
+                            "output": list(streamed_output_items) + (_response_output(text) if text else []),
+                            "output_text": text,
+                            "instructions": instructions,
+                            "previous_response_id": previous_id or None,
+                            "conversation": conversation or None,
+                            "store": store_response,
+                        })
+                        cancelled = self._mark_response_cancelled(cancelled, "SSE client disconnected")
+                        if store_response:
+                            history_snapshot = list(state_history)
+                            history_snapshot.append(last_user)
+                            if text:
+                                history_snapshot.append(Message.assistant(text))
+                            response_store.put(cancelled, {
+                                "conversation_history": _history_payload(history_snapshot),
+                                "input_items": _stored_response_input_items(
+                                    state_history + [last_user],
+                                    instructions,
+                                    previous_state=previous_state,
+                                ),
+                                "instructions": instructions,
+                                "session_id": cancelled.get("metadata", {}).get("session_id") or session_id,
+                                "conversation": conversation,
+                            })
+                            if conversation:
+                                response_store.set_conversation(conversation, response_id)
+                        self._finish_response(response_id, cancelled)
+                        return
                 except Exception as exc:  # noqa: BLE001
                     text = "".join(text_parts)
                     cancelled, cancel_reason = self._response_cancel_requested(response_id)
@@ -3870,6 +3961,7 @@ def make_handler(config: Config):
                 message_id = new_id("msg")
                 sequence = 0
                 stream_closed = False
+                cancel_watchdog_started = False
                 run_meta = {
                     "request_id": stream_run_id,
                     "api": "session_chat_stream",
@@ -3890,11 +3982,18 @@ def make_handler(config: Config):
                 disconnect_cancelled = False
 
                 def cancel_stream_agent() -> None:
-                    nonlocal disconnect_cancelled
+                    nonlocal cancel_watchdog_started, disconnect_cancelled
                     if disconnect_cancelled:
                         return
                     disconnect_cancelled = True
                     self._cancel_agent(stream_agent)
+                    if not cancel_watchdog_started:
+                        cancel_watchdog_started = True
+                        self._start_cancel_watchdog(
+                            lambda: stream_agent,
+                            lambda: disconnect_cancelled and not stream_closed,
+                            name="aegis-api-session-stream-cancel",
+                        )
 
                 if stream_agent is not None:
                     self._aegis_on_disconnect = cancel_stream_agent
@@ -3959,6 +4058,8 @@ def make_handler(config: Config):
                     result = runner.run_prompt(str(prompt), **run_kwargs)
                 finally:
                     self._aegis_on_disconnect = None
+                if disconnect_cancelled or stream_closed:
+                    return
                 final_session_id = getattr(getattr(result, "session", None), "id", session.id)
                 completed_common = {
                     "session_id": final_session_id,
