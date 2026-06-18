@@ -36,10 +36,12 @@ def _clip(value: Any, limit: int = 72) -> str:
     return text if len(text) <= limit else text[: max(0, limit - 3)].rstrip() + "..."
 
 
-def _dashboard_url(config: Config) -> str:
+def _dashboard_url(config: Config, *, redact: bool = False) -> str:
     host = config.get("server.dashboard_host", "127.0.0.1")
     port = int(config.get("server.dashboard_port", 9119))
     token = config.get("server.dashboard_token", "")
+    if token and redact:
+        token = "[REDACTED]"
     return f"http://{host}:{port}/" + (f"?token={token}" if token else "")
 
 
@@ -99,7 +101,7 @@ def collect_snapshot(config: Config) -> dict[str, Any]:
         "services": _safe("services", errors, services, {}),
         "mcp_servers": dict(config.get("mcp.servers", {}) or {}),
         "channels": list(config.get("gateway.channels", []) or []),
-        "dashboard_url": _dashboard_url(config),
+        "dashboard_url": _dashboard_url(config, redact=True),
         "errors": errors,
     }
 

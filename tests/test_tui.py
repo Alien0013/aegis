@@ -41,3 +41,24 @@ def test_tui_renders_dashboard_sections(monkeypatch, tmp_path):
     assert "Cron" in output
     assert "Kanban" in output
     assert snapshot["dashboard_url"].startswith("http://")
+
+
+def test_tui_redacts_dashboard_token_in_terminal_output(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis import config as cfg
+    from aegis.config import Config
+    from aegis.cli.tui import render_dashboard
+
+    cfg.set_profile(None)
+    config = Config.load()
+    config.data.setdefault("server", {})["dashboard_token"] = "plain-tui-token"
+    buffer = io.StringIO()
+    console = Console(file=buffer, force_terminal=False, width=120, no_color=True)
+
+    snapshot = render_dashboard(config, console=console)
+    output = buffer.getvalue()
+
+    assert "?token=[REDACTED]" in output
+    assert snapshot["dashboard_url"].endswith("?token=[REDACTED]")
+    assert "plain-tui-token" not in output
+    assert "plain-tui-token" not in snapshot["dashboard_url"]
