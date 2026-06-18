@@ -842,6 +842,45 @@ def test_openai_chat_completions_aiohttp_sse_flushes_live(monkeypatch, tmp_path)
     assert elapsed < 0.8
 
 
+def test_openai_aiohttp_body_limit_uses_json_security_headers(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    monkeypatch.setattr(server, "_MAX_BODY_BYTES", 8)
+    cfg = Config.load()
+    cfg.data.setdefault("server", {})["cors_origins"] = ["http://client.local"]
+
+    async def exercise() -> tuple[int, dict, str]:
+        from aiohttp import ClientSession, web
+
+        app = server.make_app(cfg)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        try:
+            assert site._server is not None
+            port = site._server.sockets[0].getsockname()[1]
+            async with ClientSession() as session:
+                async with session.post(
+                    f"http://127.0.0.1:{port}/v1/chat/completions",
+                    data=b'{"messages":[]}',
+                    headers={"Content-Type": "application/json", "Origin": "http://client.local"},
+                ) as resp:
+                    return resp.status, dict(resp.headers), await resp.text()
+        finally:
+            await runner.cleanup()
+
+    status, headers, data = asyncio.run(exercise())
+
+    assert status == 413
+    assert json.loads(data)["error"] == "request body too large"
+    assert headers["Content-Security-Policy"] == "default-src 'none'; frame-ancestors 'none'"
+    assert headers["X-Content-Type-Options"] == "nosniff"
+    assert headers["Access-Control-Allow-Origin"] == "http://client.local"
+
+
 def test_openai_chat_completions_usage_is_per_response(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server

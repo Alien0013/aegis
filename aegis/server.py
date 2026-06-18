@@ -4778,7 +4778,14 @@ def make_app(config: Config) -> web.Application:
                 status=403,
                 headers=_security_headers(),
             )
-        body = await request.read()
+        try:
+            body = await request.read()
+        except web.HTTPRequestEntityTooLarge:
+            return web.json_response(
+                {"error": "request body too large"},
+                status=413,
+                headers=_response_headers(config, origin),
+            )
         loop = asyncio.get_running_loop()
         chunks: asyncio.Queue[tuple[bytes, concurrent.futures.Future[int] | None]] = asyncio.Queue()
         headers_ready = asyncio.Event()
