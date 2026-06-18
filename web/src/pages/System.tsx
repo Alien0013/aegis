@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useApi } from "../lib/useApi";
 import { ago } from "../lib/format";
-import { Button, Card, Empty, Loading, PageHeader, Stat } from "../components/ui";
+import { Button, Card, Empty, Input, Loading, PageHeader, Stat, toast } from "../components/ui";
 import { desktop, isDesktop } from "../lib/desktop";
 import type { DesktopConnection, DesktopUpdaterStatus } from "../lib/desktop";
 
@@ -15,6 +15,8 @@ export function System() {
   const { data, loading, error } = useApi<SysInfo>("system");
   const stats = useApi<Record<string, unknown>>("system/stats");
   const [desktopConnection, setDesktopConnection] = useState<DesktopConnection | null>(null);
+  const [projectDir, setProjectDir] = useState("");
+  const [savingProjectDir, setSavingProjectDir] = useState(false);
   const [checkingUpdates, setCheckingUpdates] = useState(false);
 
   function applyDesktopSnapshot(connection?: DesktopConnection | null, updater?: DesktopUpdaterStatus | null) {
@@ -37,7 +39,12 @@ export function System() {
     let cancelled = false;
     if (!isDesktop || !desktop?.getConnection) return;
     desktop.getConnection()
-      .then((connection) => { if (!cancelled) applyDesktopSnapshot(connection); })
+      .then((connection) => {
+        if (!cancelled) {
+          applyDesktopSnapshot(connection);
+          setProjectDir(connection.settings?.defaultProjectDir || "");
+        }
+      })
       .catch(() => { if (!cancelled) setDesktopConnection(null); });
     return () => { cancelled = true; };
   }, []);
@@ -71,6 +78,45 @@ export function System() {
       applyDesktopSnapshot(connection, updater);
     } finally {
       setCheckingUpdates(false);
+    }
+  }
+
+  async function refreshDesktopConnection() {
+    const connection = await desktop?.getConnection?.();
+    applyDesktopSnapshot(connection);
+    setProjectDir(connection?.settings?.defaultProjectDir || "");
+    return connection;
+  }
+
+  async function saveProjectDir(next = projectDir) {
+    if (!desktop?.setDefaultProjectDir) return;
+    setSavingProjectDir(true);
+    try {
+      const res = await desktop.setDefaultProjectDir(next);
+      const connection = await refreshDesktopConnection();
+      setProjectDir(res.settings?.defaultProjectDir || connection?.settings?.defaultProjectDir || "");
+      toast(next.trim() ? "Desktop project directory saved" : "Desktop project directory cleared");
+    } catch (e) {
+      toast(String(e), "err");
+    } finally {
+      setSavingProjectDir(false);
+    }
+  }
+
+  async function chooseProjectDir() {
+    if (!desktop?.chooseProjectDir) return;
+    setSavingProjectDir(true);
+    try {
+      const res = await desktop.chooseProjectDir();
+      const connection = await refreshDesktopConnection();
+      if (!res.cancelled) {
+        setProjectDir(res.settings?.defaultProjectDir || connection?.settings?.defaultProjectDir || "");
+        toast("Desktop project directory saved");
+      }
+    } catch (e) {
+      toast(String(e), "err");
+    } finally {
+      setSavingProjectDir(false);
     }
   }
 
@@ -122,8 +168,34 @@ export function System() {
                 <Row k="Command" v={desktopConnection?.backend?.command} mono />
                 <Row k="AEGIS home" v={desktopConnection?.backend?.env?.AEGIS_HOME} mono />
                 <Row k="Terminal cwd" v={desktopConnection?.backend?.env?.TERMINAL_CWD} mono />
+                <Row k="Cwd source" v={desktopConnection?.backend?.cwdSource} />
                 <Row k="Logs" v={desktopConnection?.backend?.logPath} mono />
+                <Row k="Settings" v={desktopConnection?.settings?.settingsPath} mono />
               </dl>
+              <div className="mt-4 border-t border-border pt-4">
+                <div className="mb-2">
+                  <div className="font-mono text-xs font-semibold uppercase tracking-wide text-dim">Default project directory</div>
+                  <p className="mt-1 text-xs text-faint">
+                    Used for desktop backend launches when no TERMINAL_CWD override is present. Restart backend to apply changes.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Input
+                    className="min-w-72 flex-1"
+                    value={projectDir}
+                    placeholder={desktopConnection?.backend?.env?.TERMINAL_CWD || "/workspace/project"}
+                    onChange={(event) => setProjectDir(event.target.value)}
+                    onKeyDown={(event) => event.key === "Enter" && saveProjectDir()}
+                  />
+                  {desktop?.chooseProjectDir && <Button icon="files" disabled={savingProjectDir} onClick={chooseProjectDir}>Choose</Button>}
+                  <Button variant="primary" icon="check" disabled={savingProjectDir} onClick={() => saveProjectDir()}>Save</Button>
+                  <Button variant="ghost" icon="trash" disabled={savingProjectDir || !projectDir} onClick={() => saveProjectDir("")}>Clear</Button>
+                  <Button icon="refresh" onClick={() => desktop?.restartBackend()}>Restart</Button>
+                </div>
+                {desktopConnection?.settings?.explicitLaunchCwd && (
+                  <p className="mt-2 text-xs text-warning">TERMINAL_CWD was set when the desktop app launched, so it overrides this preference for this run.</p>
+                )}
+              </div>
             </Card>
           )}
           {!!(data.checkpoints || []).length && (

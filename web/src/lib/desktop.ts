@@ -24,8 +24,10 @@ export interface DesktopConnection {
     maxCrashRestarts?: number;
     logPath?: string;
     userDataPath?: string;
+    cwdSource?: string;
     env?: Record<string, string>;
   };
+  settings?: DesktopSettings;
 }
 
 export interface DesktopUpdaterStatus {
@@ -49,9 +51,18 @@ export interface DesktopBridge {
   openExternal(url: string): void;
   restartBackend(): void;
   getConnection?(): Promise<DesktopConnection>;
+  getSettings?(): Promise<DesktopSettings>;
+  setDefaultProjectDir?(path: string): Promise<{ ok?: boolean; settings?: DesktopSettings }>;
+  chooseProjectDir?(): Promise<{ ok?: boolean; cancelled?: boolean; settings?: DesktopSettings }>;
   checkForUpdates?(): Promise<DesktopUpdaterStatus>;
   getUpdateStatus?(): Promise<DesktopUpdaterStatus>;
   api?<T = unknown>(request: { method?: string; path: string; body?: unknown }): Promise<T>;
+}
+
+export interface DesktopSettings {
+  defaultProjectDir?: string;
+  explicitLaunchCwd?: boolean;
+  settingsPath?: string;
 }
 
 export const desktop: DesktopBridge | undefined = (

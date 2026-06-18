@@ -17,6 +17,11 @@ const path = require("path");
 const crypto = require("crypto");
 const { aegisCommand, backendEnvironment, desktopLogPath, resolveAegisHome } = require("./backend-env.cjs");
 const {
+  desktopProjectCwd,
+  readDesktopSettings,
+  writeDesktopSettings,
+} = require("./desktop-settings.cjs");
+const {
   desktopDiagnostics,
   detectRemoteDisplay,
   readInstallStamp,
@@ -63,6 +68,7 @@ let backendStartedAt = 0;
 let backendCommand = "";
 let backendArgs = [];
 let backendEnvSummary = {};
+let backendCwdSource = "";
 let restartingBackend = false;
 let lastBootPhase = null;
 let autoUpdater = null;
@@ -209,8 +215,13 @@ function startBackend() {
     port = await freePort();
     token = crypto.randomBytes(18).toString("hex");
     dashboardUrl = `${backendBaseUrl()}/?token=${token}`;
+    const cwdChoice = desktopProjectCwd({
+      env: process.env,
+      userData: app.getPath("userData"),
+      cwd: process.cwd(),
+    });
     const backendOptions = {
-      cwd: process.env.TERMINAL_CWD || process.cwd(),
+      cwd: cwdChoice.cwd,
       packaged: app.isPackaged,
       resourcesPath: process.resourcesPath || "",
       appPath: typeof app.getAppPath === "function" ? app.getAppPath() : "",
@@ -221,10 +232,11 @@ function startBackend() {
     backendCommand = bin;
     backendArgs = ["dashboard", "--host", "127.0.0.1", "--port", String(port), "--no-open"];
     backendStartedAt = Date.now();
+    backendCwdSource = cwdChoice.source;
     backendEnvSummary = {
       AEGIS_HOME: resolvedEnv.AEGIS_HOME || resolveAegisHome({ env: resolvedEnv }),
       AEGIS_BIN: resolvedBin,
-      TERMINAL_CWD: resolvedEnv.TERMINAL_CWD || process.cwd(),
+      TERMINAL_CWD: resolvedEnv.TERMINAL_CWD || cwdChoice.cwd,
       packaged: app.isPackaged,
       resourcesPath: backendOptions.resourcesPath,
     };
@@ -235,7 +247,7 @@ function startBackend() {
         ...(resolvedBin ? { AEGIS_BIN: resolvedBin } : {}),
         AEGIS_DASHBOARD_TOKEN: token,
         AEGIS_DESKTOP: "1",
-        TERMINAL_CWD: resolvedEnv.TERMINAL_CWD || process.cwd(),
+        TERMINAL_CWD: resolvedEnv.TERMINAL_CWD || cwdChoice.cwd,
       },
       stdio: ["ignore", "pipe", "pipe"],
     }));
@@ -285,6 +297,7 @@ function probe(url, tries, onTick) {
 function connectionDescriptor() {
   const baseUrl = backendBaseUrl();
   const running = !!(backend && !backend.killed);
+  const settings = readDesktopSettings({ userData: app.getPath("userData") });
   const descriptor = {
     baseUrl,
     mode: "local",
@@ -304,7 +317,13 @@ function connectionDescriptor() {
       maxCrashRestarts: MAX_CRASH_RESTARTS,
       logPath: logPath(),
       userDataPath: app.getPath("userData"),
+      cwdSource: backendCwdSource,
       env: backendEnvSummary,
+    },
+    settings: {
+      ...settings,
+      explicitLaunchCwd: Boolean(process.env.TERMINAL_CWD),
+      settingsPath: path.join(app.getPath("userData"), "desktop-settings.json"),
     },
     desktop: desktopDiagnostics({
       app,
@@ -319,6 +338,28 @@ function connectionDescriptor() {
   };
   descriptor.desktop.updater = { ...updaterStatus };
   return descriptor;
+}
+
+function persistDesktopProjectDir(value) {
+  const settings = writeDesktopSettings(
+    { defaultProjectDir: value },
+    { userData: app.getPath("userData") },
+  );
+  log(`desktop settings: defaultProjectDir=${settings.defaultProjectDir || "(cleared)"}`);
+  return { ok: true, settings: connectionDescriptor().settings };
+}
+
+async function chooseDesktopProjectDir() {
+  const current = readDesktopSettings({ userData: app.getPath("userData") }).defaultProjectDir;
+  const result = await dialog.showOpenDialog(win && !win.isDestroyed() ? win : undefined, {
+    title: "Choose default project directory",
+    defaultPath: current || backendEnvSummary.TERMINAL_CWD || process.cwd(),
+    properties: ["openDirectory", "createDirectory"],
+  });
+  if (result.canceled || !result.filePaths.length) {
+    return { ok: false, cancelled: true, settings: connectionDescriptor().settings };
+  }
+  return persistDesktopProjectDir(result.filePaths[0]);
 }
 
 function runtimeDiagnostics() {
@@ -626,7 +667,7 @@ async function run() {
   } catch (e) {
     log(`boot failed: ${e.message}`);
     const backendOptions = {
-      cwd: process.env.TERMINAL_CWD || process.cwd(),
+      cwd: desktopProjectCwd({ env: process.env, userData: app.getPath("userData"), cwd: process.cwd() }).cwd,
       packaged: app.isPackaged,
       resourcesPath: process.resourcesPath || "",
       appPath: typeof app.getAppPath === "function" ? app.getAppPath() : "",
@@ -727,6 +768,9 @@ ipcMain.handle("aegis:logs:recent", (_e, options = {}) => readRecentLogLines(opt
 ipcMain.handle("aegis:logs:reveal", () => shell.openPath(logPath()));
 ipcMain.handle("aegis:update:check", () => initAutoUpdate(true));
 ipcMain.handle("aegis:update:status", () => ({ ...updaterStatus }));
+ipcMain.handle("aegis:settings:get", () => connectionDescriptor().settings);
+ipcMain.handle("aegis:settings:setDefaultProjectDir", (_e, value) => persistDesktopProjectDir(value));
+ipcMain.handle("aegis:settings:chooseProjectDir", () => chooseDesktopProjectDir());
 
 /* ---------- deep links (aegis://) ---------- */
 function pickDeepLink(argv) {
