@@ -1613,16 +1613,42 @@ def _estimate_response_input_tokens(
     return estimate_tokens(text)
 
 
+def _response_compaction_message_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, dict):
+                for key in ("text", "input_text", "output_text", "refusal"):
+                    if part.get(key) is not None:
+                        parts.append(str(part.get(key) or ""))
+                        break
+                else:
+                    parts.append(_token_count_text(part))
+            elif part is not None:
+                parts.append(str(part))
+        return "\n".join(part for part in parts if part)
+    if isinstance(content, dict):
+        for key in ("text", "input_text", "output_text", "refusal"):
+            if content.get(key) is not None:
+                return str(content.get(key) or "")
+    return _token_count_text(content)
+
+
 def _response_compaction_summary(input_items: list[dict[str, Any]], input_tokens: int) -> str:
     roles: dict[str, int] = {}
     last_user = ""
+    message_previews: list[str] = []
     for item in input_items:
         if not isinstance(item, dict) or str(item.get("type") or "") != "message":
             continue
         role = str(item.get("role") or "user")
         roles[role] = roles.get(role, 0) + 1
+        text = " ".join(_response_compaction_message_text(item.get("content")).split())
+        if text:
+            message_previews.append(f"{role}: {text[:240]}")
         if role == "user":
-            text = _token_count_text(item.get("content"))
             if text.strip():
                 last_user = text.strip()
     role_text = ", ".join(f"{role}:{count}" for role, count in sorted(roles.items())) or "none"
@@ -1631,6 +1657,8 @@ def _response_compaction_summary(input_items: list[dict[str, Any]], input_tokens
         f"Estimated input tokens before compaction: {input_tokens}.",
         f"Message roles: {role_text}.",
     ]
+    if message_previews:
+        parts.append("Recent turns:\n" + "\n".join(f"- {line}" for line in message_previews[-8:]))
     if last_user:
         parts.append(f"Most recent user input: {last_user[:1000]}")
     return "\n".join(parts)
@@ -1670,11 +1698,19 @@ def _response_compaction_output_items(input_items: list[dict[str, Any]], summary
     return output
 
 
-def _history_from_compaction_output(output_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _history_from_compaction_output(output_items: list[dict[str, Any]], summary: str | None = None) -> list[dict[str, Any]]:
     messages: list[Message] = []
     for item in output_items:
         if isinstance(item, dict) and str(item.get("type") or "") == "message":
-            messages.append(_response_input_item_to_message(item))
+            role = str(item.get("role") or "user")
+            if role not in {"system", "developer"}:
+                messages.append(_response_input_item_to_message(item))
+    if summary:
+        messages.append(Message(
+            role="assistant",
+            content="Compaction summary:\n" + summary,
+            meta={"_responses_compaction_summary": True},
+        ))
     return _history_payload(messages)
 
 
@@ -3924,7 +3960,7 @@ def make_handler(config: Config):
             store_response = _coerce_request_bool(body.get("store"), True)
             if store_response:
                 response_store.put(response, {
-                    "conversation_history": _history_from_compaction_output(output),
+                    "conversation_history": _history_from_compaction_output(output, summary),
                     "input_items": output,
                     "instructions": context["instructions"],
                     "conversation": conversation,

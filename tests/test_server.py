@@ -2262,9 +2262,19 @@ def test_responses_compact_returns_chainable_compaction(monkeypatch, tmp_path):
     assert json.loads(get_data)["id"] == compact_id
     assert chained_status == 200
     assert json.loads(chained_data)["previous_response_id"] == compact_id
+    chained_history = _FakeRunner.calls[0]["history"]
+    assert any("Compaction summary:" in message.content for message in chained_history)
+    summary_text = next(message.content for message in chained_history if "Compaction summary:" in message.content)
+    assert "assistant: I built the dashboard" in summary_text
+    assert "user: continue the audit" in summary_text
     assert items_status == 200
     items = json.loads(items_data)["data"]
     assert any(item["type"] == "compaction" for item in items)
+    assert any(
+        item.get("role") == "assistant"
+        and "Compaction summary:" in item.get("content", [{}])[0].get("text", "")
+        for item in items
+    )
     assert items[-1]["content"][0]["text"] == "what remains?"
     assert conversation_status == 200
     assert json.loads(conversation_data)["previous_response_id"] == compact_id
