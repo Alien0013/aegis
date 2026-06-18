@@ -283,8 +283,80 @@ class ResponsesTransport(ProviderTransport):
         text_parts: list[str] = []
         done_text_parts: list[str] = []
         output_items: list[dict[str, Any]] = []
+        output_items_by_id: dict[str, dict[str, Any]] = {}
+        output_items_by_index: dict[int, dict[str, Any]] = {}
+        argument_buffers: dict[str, str] = {}
         completed: dict[str, Any] | None = None
         seen_response_ids: set[str] = set()
+
+        def remember_output_item(item: Any, output_index: Any = None) -> dict[str, Any] | None:
+            if not isinstance(item, dict):
+                return None
+            item_id = str(item.get("id") or "")
+            existing = output_items_by_id.get(item_id) if item_id else None
+            if existing is None and output_index is not None:
+                try:
+                    existing = output_items_by_index.get(int(output_index))
+                except (TypeError, ValueError):
+                    existing = None
+            if existing is None:
+                existing = dict(item)
+                output_items.append(existing)
+            else:
+                existing.update(item)
+            if item_id:
+                output_items_by_id[item_id] = existing
+            if output_index is not None:
+                try:
+                    output_items_by_index[int(output_index)] = existing
+                except (TypeError, ValueError):
+                    pass
+            return existing
+
+        def stream_item_for(event: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
+            item_id = str(event.get("item_id") or "")
+            if item_id and item_id in output_items_by_id:
+                return output_items_by_id[item_id], item_id
+            output_index = event.get("output_index")
+            try:
+                index = int(output_index)
+            except (TypeError, ValueError):
+                index = -1
+            if index >= 0 and index in output_items_by_index:
+                return output_items_by_index[index], f"index:{index}"
+            return None, item_id or (f"index:{index}" if index >= 0 else "")
+
+        def merge_stream_items(response: dict[str, Any]) -> dict[str, Any]:
+            if not output_items:
+                return response
+            current = response.get("output")
+            if not isinstance(current, list) or not current:
+                merged = dict(response)
+                merged["output"] = output_items
+                return merged
+            seen = {
+                (
+                    str(item.get("id") or ""),
+                    str(item.get("call_id") or ""),
+                    str(item.get("type") or ""),
+                )
+                for item in current
+                if isinstance(item, dict)
+            }
+            extras = [
+                item for item in output_items
+                if (
+                    str(item.get("id") or ""),
+                    str(item.get("call_id") or ""),
+                    str(item.get("type") or ""),
+                ) not in seen
+            ]
+            if not extras:
+                return response
+            merged = dict(response)
+            merged["output"] = [*current, *extras]
+            return merged
+
         stream_timeout = httpx.Timeout(connect=15.0, read=90.0, write=30.0, pool=15.0)
         with httpx.Client(timeout=stream_timeout) as client:
             with client.stream("POST", url, headers=headers, json=payload) as r:
@@ -312,10 +384,24 @@ class ResponsesTransport(ProviderTransport):
                         text = event.get("text") or ""
                         if text:
                             done_text_parts.append(text)
+                    elif etype == "response.output_item.added":
+                        remember_output_item(event.get("item"), event.get("output_index"))
                     elif etype == "response.output_item.done":
-                        item = event.get("item")
-                        if isinstance(item, dict):
-                            output_items.append(item)
+                        remember_output_item(event.get("item"), event.get("output_index"))
+                    elif etype == "response.function_call_arguments.delta":
+                        delta = event.get("delta") or ""
+                        item, key = stream_item_for(event)
+                        if key and delta:
+                            argument_buffers[key] = argument_buffers.get(key, "") + str(delta)
+                            if item is not None:
+                                item["arguments"] = argument_buffers[key]
+                    elif etype == "response.function_call_arguments.done":
+                        item, key = stream_item_for(event)
+                        arguments = str(event.get("arguments") or (argument_buffers.get(key, "") if key else ""))
+                        if key:
+                            argument_buffers[key] = arguments
+                        if item is not None:
+                            item["arguments"] = arguments
                     elif etype.startswith("response.reasoning") and etype.endswith(".delta"):
                         # response.reasoning_summary_text.delta (and raw
                         # reasoning_text.delta) carry the model's live thinking.
@@ -326,9 +412,7 @@ class ResponsesTransport(ProviderTransport):
                         completed = event.get("response") or {}
                         self._notify_response_id(completed, on_response_id, seen_response_ids)
         if completed:
-            if output_items and not completed.get("output"):
-                completed = dict(completed)
-                completed["output"] = output_items
+            completed = merge_stream_items(completed)
             parsed = self._parse_response(completed)
             if parsed.text:
                 return parsed

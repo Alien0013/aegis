@@ -1170,6 +1170,71 @@ def test_responses_stream_uses_done_output_item_when_completed_output_is_empty(m
     assert resp.raw["output"][0]["type"] == "message"
 
 
+def test_responses_stream_accumulates_function_call_argument_deltas(monkeypatch):
+    from aegis.providers.responses import ResponsesTransport
+    from aegis.types import Message
+
+    class FakeAuth:
+        def headers(self):
+            return {}
+
+    class FakeStream:
+        status_code = 200
+        headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def iter_lines(self):
+            return iter([
+                'data: {"type":"response.created","response":{"id":"resp_tools"}}',
+                'data: {"type":"response.output_item.added","output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"write_file","arguments":""}}',
+                'data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"{\\"path\\":"}',
+                'data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"\\"a.txt\\"}"}',
+                'data: {"type":"response.function_call_arguments.done","item_id":"fc_1","output_index":0,"arguments":"{\\"path\\":\\"a.txt\\"}"}',
+                'data: {"type":"response.completed","response":{"id":"resp_tools","status":"completed","output":[]}}',
+                "data: [DONE]",
+            ])
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def stream(self, method, url, headers, json):
+            return FakeStream()
+
+    monkeypatch.setattr("aegis.providers.responses.httpx.Client", FakeClient)
+
+    resp = ResponsesTransport().complete(
+        base_url="https://api.openai.com/v1",
+        auth=FakeAuth(),
+        model="gpt-5.5",
+        messages=[Message.user("write")],
+        tools=[{
+            "name": "write_file",
+            "description": "write",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+        }],
+        stream=True,
+    )
+
+    assert resp.text == ""
+    assert len(resp.tool_calls) == 1
+    assert resp.tool_calls[0].id == "call_1"
+    assert resp.tool_calls[0].name == "write_file"
+    assert resp.tool_calls[0].arguments == {"path": "a.txt"}
+    assert resp.raw["output"][0]["arguments"] == '{"path":"a.txt"}'
+
+
 def test_codex_responses_forces_stream(monkeypatch):
     from aegis.providers.responses import ResponsesTransport
     from aegis.types import LLMResponse, Message
