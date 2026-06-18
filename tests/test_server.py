@@ -2118,6 +2118,91 @@ def test_responses_preserves_message_input_item_identity(monkeypatch, tmp_path):
     ]
 
 
+def test_responses_preserves_assistant_message_phase_across_previous_response(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    assistant_item = {
+        "id": "msg_assistant_commentary",
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "phase": "commentary",
+        "content": [{"type": "output_text", "text": "working note"}],
+    }
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        first_status, first_data = _request(port, "POST", "/v1/responses", {
+            "input": [
+                assistant_item,
+                {"role": "user", "content": "continue from note"},
+            ],
+        })
+        first_id = json.loads(first_data)["id"]
+        first_items_status, first_items_data = _request(
+            port,
+            "GET",
+            f"/v1/responses/{first_id}/input_items?order=asc",
+        )
+        second_status, second_data = _request(port, "POST", "/v1/responses", {
+            "previous_response_id": first_id,
+            "input": "now finish",
+        })
+        second_id = json.loads(second_data)["id"]
+        second_items_status, second_items_data = _request(
+            port,
+            "GET",
+            f"/v1/responses/{second_id}/input_items?order=asc",
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert first_status == second_status == 200
+    assert first_items_status == second_items_status == 200
+    first_items = json.loads(first_items_data)["data"]
+    first_assistant = next(item for item in first_items if item.get("id") == "msg_assistant_commentary")
+    assert first_assistant["phase"] == "commentary"
+    assert first_assistant["content"] == [{"type": "output_text", "text": "working note"}]
+    second_items = json.loads(second_items_data)["data"]
+    second_assistant = next(item for item in second_items if item.get("id") == "msg_assistant_commentary")
+    assert second_assistant["phase"] == "commentary"
+    assert second_assistant["content"] == [{"type": "output_text", "text": "working note"}]
+
+
+def test_responses_rejects_invalid_message_phase(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": [
+                {
+                    "role": "assistant",
+                    "phase": "draft",
+                    "content": [{"type": "output_text", "text": "bad phase"}],
+                },
+                {"role": "user", "content": "continue"},
+            ],
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 400
+    error = json.loads(data)["error"]
+    assert error["code"] == "invalid_message_phase"
+    assert error["param"] == "input[0].phase"
+    assert _FakeRunner.calls == []
+
+
 def test_responses_preserves_opaque_assistant_toolish_input_items(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server

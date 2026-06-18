@@ -40,6 +40,7 @@ _TEXT_CONTENT_PART_TYPES = {"text", "input_text", "output_text"}
 _IMAGE_CONTENT_PART_TYPES = {"image_url", "input_image"}
 _FILE_CONTENT_PART_TYPES = {"file", "input_file"}
 _REFUSAL_CONTENT_PART_TYPES = {"refusal"}
+_MESSAGE_PHASES = {"commentary", "final_answer"}
 _OPAQUE_RESPONSE_INPUT_ITEM_TYPES = {
     "code_interpreter_call",
     "computer_call",
@@ -493,6 +494,12 @@ def _response_content_validation_error(value: Any, *, param: str) -> dict[str, A
         if _is_opaque_response_input_item(value):
             return None
         if "content" in value:
+            if value.get("phase") is not None and str(value.get("phase") or "") not in _MESSAGE_PHASES:
+                return _openai_error(
+                    "Message phase must be 'commentary' or 'final_answer'",
+                    code="invalid_message_phase",
+                    param=f"{param}.phase",
+                )
             return _content_part_validation_error(
                 value.get("content"),
                 param=f"{param}.content",
@@ -814,7 +821,7 @@ def _canonical_response_message_item(item: dict[str, Any]) -> dict[str, Any]:
         "role": role,
         "content": _canonical_response_message_content(item.get("content", ""), role=role),
     }
-    for key in ("id", "status", "name"):
+    for key in ("id", "status", "name", "phase"):
         if item.get(key) is not None:
             out[key] = item[key]
     return out
