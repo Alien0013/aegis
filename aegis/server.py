@@ -1330,13 +1330,13 @@ def _response_input_items_payload(
     query: dict[str, list[str]],
 ) -> dict[str, Any]:
     try:
-        limit = int((query.get("limit") or ["100"])[0] or 100)
+        limit = int((query.get("limit") or ["20"])[0] or 20)
     except (TypeError, ValueError):
-        limit = 100
+        limit = 20
     limit = max(1, min(limit, 100))
     after = str((query.get("after") or [""])[0] or "")
     before = str((query.get("before") or [""])[0] or "")
-    order = str((query.get("order") or ["asc"])[0] or "asc").strip().lower()
+    order = str((query.get("order") or ["desc"])[0] or "desc").strip().lower()
     items = _state_input_items(state, response_id)
     if order == "desc":
         items = list(reversed(items))
@@ -3413,9 +3413,6 @@ def make_handler(config: Config):
                     return self._json(404, {"error": f"Previous response not found: {previous_id}"})
                 if not explicit_history:
                     explicit_history = _history_from_state(previous_state)
-                if instructions is None:
-                    stored_instructions = previous_state.get("instructions")
-                    instructions = str(stored_instructions or "").strip() or None
 
             input_history, last_user = _responses_messages(body)
             state_history = list(explicit_history) + list(input_history)

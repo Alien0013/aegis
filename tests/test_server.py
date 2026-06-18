@@ -1447,7 +1447,7 @@ def test_responses_preserves_text_part_annotations_in_input_items(monkeypatch, t
             }],
         })
         response_id = json.loads(data)["id"]
-        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items")
+        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items?order=asc")
     finally:
         srv.shutdown()
         srv.server_close()
@@ -1482,7 +1482,7 @@ def test_responses_accepts_refusal_content_part_as_assistant_history(monkeypatch
             }],
         })
         response_id = json.loads(data)["id"]
-        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items")
+        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items?order=asc")
     finally:
         srv.shutdown()
         srv.server_close()
@@ -1517,7 +1517,7 @@ def test_responses_preserves_assistant_output_text_input_item(monkeypatch, tmp_p
             ],
         })
         response_id = json.loads(data)["id"]
-        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items")
+        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items?order=asc")
     finally:
         srv.shutdown()
         srv.server_close()
@@ -1578,7 +1578,7 @@ def test_responses_accepts_input_file_parts_as_document_references(monkeypatch, 
             }],
         })
         response_id = json.loads(data)["id"]
-        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items")
+        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items?order=asc")
     finally:
         srv.shutdown()
         srv.server_close()
@@ -1711,6 +1711,12 @@ def test_responses_persist_store_false_and_previous_id(monkeypatch, tmp_path):
             "input": "second",
             "previous_response_id": response_id,
         })
+        chained_id = json.loads(chained_data)["id"]
+        chained_items_status, chained_items_data = _request(
+            port2,
+            "GET",
+            f"/v1/responses/{chained_id}/input_items?order=asc",
+        )
     finally:
         srv2.shutdown()
         srv2.server_close()
@@ -1725,12 +1731,15 @@ def test_responses_persist_store_false_and_previous_id(monkeypatch, tmp_path):
     assert chained["metadata"]["previous_response_id"] == response_id
     assert chained["metadata"]["session_id"] == "serve:persist"
     second_call = _FakeRunner.calls[-1]
-    assert [m.content for m in second_call["history"][:3]] == [
-        "<system_instructions>\nkeep it concise\n</system_instructions>",
+    assert [m.content for m in second_call["history"][:2]] == [
         "first",
         "hello",
     ]
     assert second_call["prompt"].content == "second"
+    assert chained_items_status == 200
+    chained_items = json.loads(chained_items_data)["data"]
+    assert [row["role"] for row in chained_items] == ["user", "assistant", "user"]
+    assert all(row["role"] != "system" for row in chained_items)
 
 
 def test_responses_input_items_persist_paginate_and_replay(monkeypatch, tmp_path):
@@ -1754,18 +1763,18 @@ def test_responses_input_items_persist_paginate_and_replay(monkeypatch, tmp_path
         first_status, first_page = _request(
             port,
             "GET",
-            f"/v1/responses/{response_id}/input_items?limit=2",
+            f"/v1/responses/{response_id}/input_items?order=asc&limit=2",
         )
         first_body = json.loads(first_page)
         second_status, second_page = _request(
             port,
             "GET",
-            f"/v1/responses/{response_id}/input_items?after={first_body['last_id']}",
+            f"/v1/responses/{response_id}/input_items?order=asc&after={first_body['last_id']}",
         )
         before_status, before_page = _request(
             port,
             "GET",
-            f"/v1/responses/{response_id}/input_items?before={first_body['last_id']}",
+            f"/v1/responses/{response_id}/input_items?order=asc&before={first_body['last_id']}",
         )
         desc_status, desc_page = _request(
             port,
@@ -1779,7 +1788,7 @@ def test_responses_input_items_persist_paginate_and_replay(monkeypatch, tmp_path
 
     srv2, port2 = _serve(server.make_handler(Config.load()))
     try:
-        replay_status, replay_data = _request(port2, "GET", f"/v1/responses/{response_id}/input_items")
+        replay_status, replay_data = _request(port2, "GET", f"/v1/responses/{response_id}/input_items?order=asc")
     finally:
         srv2.shutdown()
         srv2.server_close()
@@ -1815,6 +1824,38 @@ def test_responses_input_items_persist_paginate_and_replay(monkeypatch, tmp_path
     ]
 
 
+def test_responses_input_items_default_newest_first_limit_20(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    input_items = [
+        {"role": "user", "content": f"item-{index:02d}"}
+        for index in range(25)
+    ]
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {"input": input_items})
+        response_id = json.loads(data)["id"]
+        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert items_status == 200
+    body = json.loads(items_data)
+    assert body["has_more"] is True
+    assert len(body["data"]) == 20
+    assert [row["content"][0]["text"] for row in body["data"][:3]] == [
+        "item-24",
+        "item-23",
+        "item-22",
+    ]
+
+
 def test_responses_preserves_message_input_item_identity(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
@@ -1843,7 +1884,7 @@ def test_responses_preserves_message_input_item_identity(monkeypatch, tmp_path):
 
     srv2, port2 = _serve(server.make_handler(Config.load()))
     try:
-        items_status, items_data = _request(port2, "GET", f"/v1/responses/{response_id}/input_items")
+        items_status, items_data = _request(port2, "GET", f"/v1/responses/{response_id}/input_items?order=asc")
     finally:
         srv2.shutdown()
         srv2.server_close()
@@ -1911,7 +1952,7 @@ def test_responses_preserves_opaque_assistant_toolish_input_items(monkeypatch, t
 
     srv2, port2 = _serve(server.make_handler(Config.load()))
     try:
-        items_status, items_data = _request(port2, "GET", f"/v1/responses/{response_id}/input_items")
+        items_status, items_data = _request(port2, "GET", f"/v1/responses/{response_id}/input_items?order=asc")
         second_status, second_data = _request(port2, "POST", "/v1/responses", {
             "previous_response_id": response_id,
             "input": "follow up",
@@ -1920,7 +1961,7 @@ def test_responses_preserves_opaque_assistant_toolish_input_items(monkeypatch, t
         second_items_status, second_items_data = _request(
             port2,
             "GET",
-            f"/v1/responses/{second_id}/input_items",
+            f"/v1/responses/{second_id}/input_items?order=asc",
         )
     finally:
         srv2.shutdown()
@@ -2010,7 +2051,7 @@ def test_responses_accepts_function_call_output_input_item(monkeypatch, tmp_path
             ],
         })
         response_id = json.loads(data)["id"]
-        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items")
+        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items?order=asc")
     finally:
         srv.shutdown()
         srv.server_close()
@@ -2082,7 +2123,7 @@ def test_responses_user_then_function_output_preserves_chronology(monkeypatch, t
             ],
         })
         response_id = json.loads(data)["id"]
-        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items")
+        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items?order=asc")
     finally:
         srv.shutdown()
         srv.server_close()
@@ -2130,7 +2171,7 @@ def test_responses_accepts_function_call_input_item(monkeypatch, tmp_path):
             ],
         })
         response_id = json.loads(data)["id"]
-        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items")
+        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items?order=asc")
     finally:
         srv.shutdown()
         srv.server_close()
@@ -2209,7 +2250,7 @@ def test_responses_function_call_output_preserves_multimodal_output_parts(monkey
             ],
         })
         response_id = json.loads(data)["id"]
-        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items")
+        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items?order=asc")
     finally:
         srv.shutdown()
         srv.server_close()
@@ -2286,7 +2327,7 @@ def test_responses_function_call_output_continues_previous_response(monkeypatch,
             }],
         })
         second_id = json.loads(second_data)["id"]
-        items_status, items_data = _request(port, "GET", f"/v1/responses/{second_id}/input_items")
+        items_status, items_data = _request(port, "GET", f"/v1/responses/{second_id}/input_items?order=asc")
     finally:
         srv.shutdown()
         srv.server_close()
@@ -2377,7 +2418,7 @@ def test_responses_previous_response_replays_transcript_tool_calls_as_input_item
             "input": "continue",
         })
         second_id = json.loads(second_data)["id"]
-        items_status, items_data = _request(port, "GET", f"/v1/responses/{second_id}/input_items")
+        items_status, items_data = _request(port, "GET", f"/v1/responses/{second_id}/input_items?order=asc")
     finally:
         srv.shutdown()
         srv.server_close()
