@@ -39,7 +39,7 @@ test("packaged backend launch uses Electron resource paths", () => {
   requireSnippet("packaged: app.isPackaged");
   requireSnippet("resourcesPath: process.resourcesPath");
   requireSnippet("app.getAppPath()");
-  requireSnippet("resolvedBin");
+  requireSnippet('const resolvedBin = bin !== "aegis" ? bin : (resolvedEnv.AEGIS_BIN || "");');
 });
 
 test("restart and splash lifecycle is single-flight", () => {

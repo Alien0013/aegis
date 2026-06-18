@@ -213,7 +213,7 @@ function startBackend() {
     };
     const resolvedEnv = backendEnvironment(process.env, backendOptions);
     const bin = aegisCommand({ ...backendOptions, env: resolvedEnv });
-    const resolvedBin = resolvedEnv.AEGIS_BIN || (bin !== "aegis" ? bin : "");
+    const resolvedBin = bin !== "aegis" ? bin : (resolvedEnv.AEGIS_BIN || "");
     backendCommand = bin;
     backendArgs = ["dashboard", "--host", "127.0.0.1", "--port", String(port), "--no-open"];
     backendStartedAt = Date.now();

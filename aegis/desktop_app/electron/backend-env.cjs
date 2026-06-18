@@ -117,6 +117,13 @@ function _envValue(name, options) {
   return read(name, options) || "";
 }
 
+function _userEnvValue(name, options) {
+  const platform = options.platform || process.platform;
+  if (platform !== "win32") return "";
+  const read = options.readUserEnvVar || readWindowsUserEnvVar;
+  return read(name, options) || "";
+}
+
 function _withWindowsUserPath(baseEnv, options = {}) {
   const platform = options.platform || process.platform;
   if (platform !== "win32") return { ...baseEnv };
@@ -215,18 +222,31 @@ function candidateAegisCommands(options = {}) {
   const candidates = [];
   const explicit = _envValue("AEGIS_BIN", { ...options, env, platform });
   if (explicit) candidates.push(explicit);
+  const userEnvBin = _userEnvValue("AEGIS_BIN", { ...options, env, platform });
+  if (userEnvBin && userEnvBin !== explicit) candidates.push(userEnvBin);
   if (options.packaged || options.resourcesPath || options.appPath) {
     candidates.push(...candidatePackagedAegisCommands({ ...options, platform }));
   }
+  const homes = [home];
+  const userEnvHome = _userEnvValue("AEGIS_HOME", { ...options, env, platform });
+  if (userEnvHome && !homes.some((item) => item.toLowerCase() === userEnvHome.toLowerCase())) {
+    homes.push(userEnvHome);
+  }
   if (platform === "win32") {
+    for (const candidateHome of homes) {
+      candidates.push(
+        pathMod.join(candidateHome, "venv", "Scripts", "aegis.exe"),
+        pathMod.join(candidateHome, "venv", "Scripts", "aegis.cmd"),
+      );
+    }
     candidates.push(
-      pathMod.join(home, "venv", "Scripts", "aegis.exe"),
-      pathMod.join(home, "venv", "Scripts", "aegis.cmd"),
       pathMod.join(homedir, ".aegis", "venv", "Scripts", "aegis.exe"),
       pathMod.join(homedir, ".aegis", "venv", "Scripts", "aegis.cmd"),
     );
   }
-  candidates.push(pathMod.join(home, "venv", "bin", "aegis"));
+  for (const candidateHome of homes) {
+    candidates.push(pathMod.join(candidateHome, "venv", "bin", "aegis"));
+  }
   if (platform !== "win32") {
     candidates.push(pathMod.join(homedir, ".aegis", "venv", "bin", "aegis"));
   }

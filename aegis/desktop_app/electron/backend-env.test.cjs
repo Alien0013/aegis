@@ -93,6 +93,40 @@ test("reads Windows user env for stale Explorer-launched process env", () => {
   );
 });
 
+test("uses live Windows user env candidates when process env is stale", () => {
+  const registry = {
+    AEGIS_HOME: "D:\\AegisHome",
+    AEGIS_BIN: "D:\\Tools\\aegis.exe",
+  };
+  const staleEnv = {
+    AEGIS_HOME: "C:\\OldHome",
+    AEGIS_BIN: "C:\\OldTools\\aegis.exe",
+  };
+  const readUserEnvVar = (name) => registry[name] || null;
+  const registryHomeBin = path.win32.join(registry.AEGIS_HOME, "venv", "Scripts", "aegis.exe");
+  const candidates = candidateAegisCommands({
+    platform: "win32",
+    env: staleEnv,
+    homedir: "C:\\Users\\Alien",
+    readUserEnvVar,
+  });
+
+  assert(candidates.includes(staleEnv.AEGIS_BIN));
+  assert(candidates.includes(registry.AEGIS_BIN));
+  assert(candidates.includes(registryHomeBin));
+  assert.equal(
+    aegisCommand({
+      platform: "win32",
+      env: staleEnv,
+      homedir: "C:\\Users\\Alien",
+      readUserEnvVar,
+      exists: (p) => p === staleEnv.AEGIS_BIN || p === registry.AEGIS_BIN || p === registryHomeBin,
+      probeCommand: (p) => p === registry.AEGIS_BIN,
+    }),
+    registry.AEGIS_BIN,
+  );
+});
+
 test("falls back to LocalAppData Windows venv candidates", () => {
   const env = { LOCALAPPDATA: "C:\\Users\\Alien\\AppData\\Local" };
   const home = resolveAegisHome({ platform: "win32", env, homedir: "C:\\Users\\Alien" });
