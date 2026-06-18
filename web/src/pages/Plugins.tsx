@@ -56,6 +56,12 @@ function loadLabel(row: DashboardPluginHubRow): string {
   return ms < 1000 ? `${ms.toFixed(ms < 10 ? 1 : 0)}ms` : `${(ms / 1000).toFixed(2)}s`;
 }
 
+function durationLabel(ms: unknown): string {
+  const value = Number(ms || 0);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  return value < 1000 ? `${value.toFixed(value < 10 ? 1 : 0)}ms` : `${(value / 1000).toFixed(2)}s`;
+}
+
 function driftCount(row: DashboardPluginHubRow): number {
   return Object.values(row.contribution_drift || {}).reduce((count, item) => (
     count + (item.missing || []).length + (item.extra || []).length
@@ -316,6 +322,13 @@ function PluginRow({
   const title = row.key && row.key !== row.name ? row.key : row.name;
   const load = loadLabel(row);
   const drift = driftCount(row);
+  const apiRequests = Number(mount?.request_count || 0);
+  const apiErrors = Number(mount?.error_count || 0);
+  const apiMountErrors = Number(mount?.mount_error_count || 0);
+  const apiMountDuration = durationLabel(mount?.mount_duration_ms);
+  const lastApiErrorPath = mount?.last_error_path || "";
+  const lastApiErrorType = mount?.last_error_type || "";
+  const lastApiError = mount?.last_error || "";
 
   function toggleRuntime() {
     void run(
@@ -379,8 +392,19 @@ function PluginRow({
             <Badge tone={mount.mounted ? "success" : mount.status === "error" ? "danger" : "warning"}>
               api {mount.status || "unknown"}
             </Badge>
+            {apiMountDuration && <Badge tone="neutral">mount {apiMountDuration}</Badge>}
+            {apiRequests > 0 && <Badge tone="info">req {apiRequests}</Badge>}
+            {apiErrors > 0 && <Badge tone="danger">err {apiErrors}</Badge>}
+            {apiMountErrors > 0 && <Badge tone="danger">mount err {apiMountErrors}</Badge>}
             {!!mount.routes?.length && <span className="truncate font-mono">{mount.routes.join(", ")}</span>}
             {mount.error && <span className="text-danger">{mount.error}</span>}
+            {(lastApiErrorPath || lastApiError) && (
+              <span className="min-w-0 truncate text-danger">
+                {lastApiErrorType && <span className="font-mono">{lastApiErrorType}</span>}
+                {lastApiErrorPath && <span className="font-mono"> {lastApiErrorPath}</span>}
+                {lastApiError && <span> {lastApiError}</span>}
+              </span>
+            )}
           </div>
         )}
 

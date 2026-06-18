@@ -67,6 +67,32 @@ export function del<T = unknown>(path: string): Promise<T> {
     .then((r) => parse<T>(r, path));
 }
 
+export interface DashboardPluginApiMount {
+  status?: string;
+  mounted?: boolean;
+  api?: string;
+  routes?: string[];
+  error?: string;
+  request_count?: number;
+  success_count?: number;
+  error_count?: number;
+  last_request_at?: string;
+  last_request_path?: string;
+  last_request_method?: string;
+  last_success_at?: string;
+  last_error_at?: string;
+  last_error_path?: string;
+  last_error_method?: string;
+  last_error_type?: string;
+  last_error?: string;
+  mount_count?: number;
+  mount_error_count?: number;
+  mounted_at?: string;
+  mount_error_at?: string;
+  mount_duration_ms?: number;
+  fingerprint?: string;
+}
+
 export interface DashboardPluginManifest {
   name: string;
   plugin?: string;
@@ -85,13 +111,7 @@ export interface DashboardPluginManifest {
   has_api?: boolean;
   api_mounted?: boolean;
   api_routes?: string[];
-  api_mount?: {
-    status?: string;
-    mounted?: boolean;
-    api?: string;
-    routes?: string[];
-    error?: string;
-  };
+  api_mount?: DashboardPluginApiMount;
   route?: {
     path?: string;
     label?: string;

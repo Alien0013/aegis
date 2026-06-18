@@ -2380,6 +2380,17 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
     assert pulse_mount["last_error_method"] == "GET"
     assert pulse_mount["last_error_type"] == "HTTPException"
     assert pulse_mount["last_error"] == "plugin unavailable"
+    observed_hub = asyncio.run(_request(app, "GET", "/api/dashboard/plugins/hub", headers=headers))
+    assert observed_hub.status_code == 200
+    observed_hub_row = next(row for row in observed_hub.json()["plugins"] if row["key"] == "analytics/pulse")
+    hub_mount = observed_hub_row["api_mount"]
+    assert hub_mount["mounted"] is True
+    assert hub_mount["request_count"] >= 2
+    assert hub_mount["success_count"] >= 1
+    assert hub_mount["error_count"] == 1
+    assert hub_mount["last_error_path"] == "/api/plugins/pulse-panel/fail"
+    assert hub_mount["last_error_type"] == "HTTPException"
+    assert hub_mount["last_error"] == "plugin unavailable"
     observability = asyncio.run(_request(app, "GET", "/api/observability/contract", headers=headers))
     assert observability.status_code == 200
     observed_mount = observability.json()["dashboard_plugin_api_mounts"]["pulse-panel"]
