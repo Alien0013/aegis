@@ -1248,6 +1248,51 @@ def _response_input_items(messages: list[Message], instructions: str | None = No
     return items
 
 
+def _clean_stored_input_item(item: dict[str, Any]) -> dict[str, Any]:
+    row = dict(item)
+    row.pop("object", None)
+    row.pop("response_id", None)
+    return row
+
+
+def _prior_opaque_response_input_items(state: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(state, dict):
+        return []
+    raw = state.get("input_items")
+    if not isinstance(raw, list):
+        return []
+    return [
+        _clean_stored_input_item(item)
+        for item in raw
+        if isinstance(item, dict) and _is_opaque_response_input_item(item)
+    ]
+
+
+def _stored_response_input_items(
+    messages: list[Message],
+    instructions: str | None = None,
+    *,
+    previous_state: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    items = _response_input_items(messages, instructions)
+    prior_opaque = _prior_opaque_response_input_items(previous_state)
+    if not prior_opaque:
+        return items
+    existing = {
+        (str(item.get("type") or ""), str(item.get("id") or ""))
+        for item in items
+        if isinstance(item, dict) and item.get("id") is not None
+    }
+    prepend = [
+        item for item in prior_opaque
+        if (str(item.get("type") or ""), str(item.get("id") or "")) not in existing
+    ]
+    if not prepend:
+        return items
+    insertion = 1 if items and items[0].get("role") == "system" else 0
+    return items[:insertion] + prepend + items[insertion:]
+
+
 def _state_input_items(state: dict[str, Any], response_id: str) -> list[dict[str, Any]]:
     raw = state.get("input_items")
     if isinstance(raw, list) and raw:
@@ -3448,7 +3493,11 @@ def make_handler(config: Config):
                     full_history = _response_conversation_history(state_history, last_user, result)
                     response_store.put(response, {
                         "conversation_history": full_history,
-                        "input_items": _response_input_items(state_history + [last_user], instructions),
+                        "input_items": _stored_response_input_items(
+                            state_history + [last_user],
+                            instructions,
+                            previous_state=previous_state,
+                        ),
                         "instructions": instructions,
                         "session_id": response.get("metadata", {}).get("session_id") or session_id,
                         "conversation": conversation,
@@ -3485,7 +3534,11 @@ def make_handler(config: Config):
                 if store_response:
                     response_store.put(created_response, {
                         "conversation_history": _history_payload(state_history + [last_user]),
-                        "input_items": _response_input_items(state_history + [last_user], instructions),
+                        "input_items": _stored_response_input_items(
+                            state_history + [last_user],
+                            instructions,
+                            previous_state=previous_state,
+                        ),
                         "instructions": instructions,
                         "session_id": session_id,
                         "conversation": conversation,
@@ -3605,7 +3658,11 @@ def make_handler(config: Config):
                             history_snapshot.append(Message.assistant(text))
                         response_store.put(failed, {
                             "conversation_history": _history_payload(history_snapshot),
-                            "input_items": _response_input_items(state_history + [last_user], instructions),
+                            "input_items": _stored_response_input_items(
+                                state_history + [last_user],
+                                instructions,
+                                previous_state=previous_state,
+                            ),
                             "instructions": instructions,
                             "session_id": session_id,
                             "conversation": conversation,
@@ -3754,7 +3811,11 @@ def make_handler(config: Config):
                         full_history = _response_conversation_history(state_history, last_user, result)
                         response_store.put(response, {
                             "conversation_history": full_history,
-                            "input_items": _response_input_items(state_history + [last_user], instructions),
+                            "input_items": _stored_response_input_items(
+                                state_history + [last_user],
+                                instructions,
+                                previous_state=previous_state,
+                            ),
                             "instructions": instructions,
                             "session_id": response.get("metadata", {}).get("session_id") or session_id,
                             "conversation": conversation,

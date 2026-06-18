@@ -1579,6 +1579,16 @@ def test_responses_preserves_opaque_assistant_toolish_input_items(monkeypatch, t
     srv2, port2 = _serve(server.make_handler(Config.load()))
     try:
         items_status, items_data = _request(port2, "GET", f"/v1/responses/{response_id}/input_items")
+        second_status, second_data = _request(port2, "POST", "/v1/responses", {
+            "previous_response_id": response_id,
+            "input": "follow up",
+        })
+        second_id = json.loads(second_data)["id"]
+        second_items_status, second_items_data = _request(
+            port2,
+            "GET",
+            f"/v1/responses/{second_id}/input_items",
+        )
     finally:
         srv2.shutdown()
         srv2.server_close()
@@ -1599,6 +1609,21 @@ def test_responses_preserves_opaque_assistant_toolish_input_items(monkeypatch, t
     assert items[1]["action"] == web_search_item["action"]
     assert items[2]["output"] == mcp_item["output"]
     assert all(item["response_id"] == response_id for item in items)
+    assert second_status == 200
+    assert second_items_status == 200
+    second_call = _FakeRunner.calls[1]
+    assert second_call["prompt"].content == "follow up"
+    assert [m.content for m in second_call["history"]] == ["continue", "hello"]
+    second_items = json.loads(second_items_data)["data"]
+    assert [item["type"] for item in second_items[:3]] == [
+        "reasoning",
+        "web_search_call",
+        "mcp_call",
+    ]
+    assert second_items[0]["summary"] == reasoning_item["summary"]
+    assert second_items[1]["action"] == web_search_item["action"]
+    assert second_items[2]["output"] == mcp_item["output"]
+    assert all(item["response_id"] == second_id for item in second_items)
 
 
 def test_responses_still_rejects_malformed_message_content_with_opaque_types(monkeypatch, tmp_path):
