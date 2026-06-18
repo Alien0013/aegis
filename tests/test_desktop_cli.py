@@ -277,6 +277,7 @@ def test_desktop_builder_config_matches_release_parity():
     assert "electron/desktop-status.cjs" in desktop.DESKTOP_FILES
     assert "electron/updater-status.cjs" in desktop.DESKTOP_FILES
     assert "electron/updater-status.test.cjs" in desktop.DESKTOP_FILES
+    assert "scripts/desktop-copy-drift.test.cjs" in desktop.DESKTOP_FILES
     assert "build/icon.ico" in desktop.DESKTOP_FILES
     resources = {entry["to"]: entry["from"] for entry in build["extraResources"]}
     assert resources["install-stamp.json"] == "build/install-stamp.json"

@@ -24,6 +24,7 @@ DESKTOP_FILES = (
     "electron/updater-status.cjs", "electron/updater-status.test.cjs",
     "electron/preload.js", "electron/preload-app.js", "electron/boot.html",
     "scripts/before-pack.cjs", "scripts/before-pack.test.cjs",
+    "scripts/desktop-copy-drift.test.cjs",
     "scripts/before-build.cjs", "scripts/write-build-stamp.cjs",
     "scripts/write-build-stamp.test.cjs", "scripts/stage-backend.cjs",
     "scripts/stage-backend.test.cjs",
