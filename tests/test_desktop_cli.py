@@ -232,10 +232,13 @@ def test_desktop_builder_config_matches_release_parity():
     assert package["devDependencies"]["electron"] == build["electronVersion"]
     assert build["protocols"] == [{"name": "AEGIS Protocol", "schemes": ["aegis"]}]
     assert build["beforeBuild"] == "scripts/before-build.cjs"
+    assert "electron/api-proxy.cjs" in desktop.DESKTOP_FILES
+    assert "electron/api-proxy.test.cjs" in desktop.DESKTOP_FILES
     assert "scripts/write-build-stamp.cjs" in desktop.DESKTOP_FILES
     assert "scripts/stage-backend.cjs" in desktop.DESKTOP_FILES
     assert "electron/desktop-status.cjs" in desktop.DESKTOP_FILES
     assert "electron/updater-status.cjs" in desktop.DESKTOP_FILES
+    assert "electron/updater-status.test.cjs" in desktop.DESKTOP_FILES
     assert "build/icon.ico" in desktop.DESKTOP_FILES
     resources = {entry["to"]: entry["from"] for entry in build["extraResources"]}
     assert resources["install-stamp.json"] == "build/install-stamp.json"
