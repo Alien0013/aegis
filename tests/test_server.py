@@ -1107,6 +1107,58 @@ def test_chat_completions_disconnect_reapplies_cancel_after_run_start_clear(monk
     assert asyncio.run(exercise()) is True
 
 
+def test_chat_completions_nonstream_disconnect_cancels_agent(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _LateAccessStreamingRunner.reset()
+    monkeypatch.setattr(server, "SurfaceRunner", _LateAccessStreamingRunner)
+
+    async def exercise() -> bool:
+        from aiohttp import ClientSession, web
+
+        app = server.make_app(Config.load())
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        try:
+            assert site._server is not None
+            port = site._server.sockets[0].getsockname()[1]
+            async with ClientSession() as session:
+                request_task = asyncio.ensure_future(session.post(
+                    f"http://127.0.0.1:{port}/v1/chat/completions",
+                    json={
+                        "messages": [{"role": "user", "content": "disconnect me"}],
+                        "session_id": "serve:chat-nonstream-disconnect",
+                    },
+                ))
+                assert await asyncio.to_thread(_LateAccessStreamingRunner.started.wait, 1)
+                request_task.cancel()
+                try:
+                    response = await request_task
+                except (asyncio.CancelledError, Exception):
+                    response = None
+                if response is not None:
+                    response.close()
+                deadline = time.monotonic() + 2
+                while time.monotonic() < deadline:
+                    if (
+                        _LateAccessStreamingRunner.agents
+                        and _LateAccessStreamingRunner.agents[0].cancel_event.is_set()
+                    ):
+                        return True
+                    await asyncio.sleep(0.05)
+                return False
+        finally:
+            _LateAccessStreamingRunner.release.set()
+            await runner.cleanup()
+
+    assert asyncio.run(exercise()) is True
+    assert not _LateAccessResult.accessed.is_set()
+
+
 def test_server_health_capabilities_and_body_limit(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
@@ -2685,6 +2737,58 @@ def test_responses_disconnect_drops_late_stream_result(monkeypatch, tmp_path):
     assert not _LateAccessResult.accessed.is_set()
 
 
+def test_responses_nonstream_disconnect_cancels_agent(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _LateAccessStreamingRunner.reset()
+    monkeypatch.setattr(server, "SurfaceRunner", _LateAccessStreamingRunner)
+
+    async def exercise() -> bool:
+        from aiohttp import ClientSession, web
+
+        app = server.make_app(Config.load())
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        try:
+            assert site._server is not None
+            port = site._server.sockets[0].getsockname()[1]
+            async with ClientSession() as session:
+                request_task = asyncio.ensure_future(session.post(
+                    f"http://127.0.0.1:{port}/v1/responses",
+                    json={
+                        "input": "disconnect me",
+                        "metadata": {"session_id": "serve:response-nonstream-disconnect"},
+                    },
+                ))
+                assert await asyncio.to_thread(_LateAccessStreamingRunner.started.wait, 1)
+                request_task.cancel()
+                try:
+                    response = await request_task
+                except (asyncio.CancelledError, Exception):
+                    response = None
+                if response is not None:
+                    response.close()
+                deadline = time.monotonic() + 2
+                while time.monotonic() < deadline:
+                    if (
+                        _LateAccessStreamingRunner.agents
+                        and _LateAccessStreamingRunner.agents[0].cancel_event.is_set()
+                    ):
+                        return True
+                    await asyncio.sleep(0.05)
+                return False
+        finally:
+            _LateAccessStreamingRunner.release.set()
+            await runner.cleanup()
+
+    assert asyncio.run(exercise()) is True
+    assert not _LateAccessResult.accessed.is_set()
+
+
 def test_responses_stream_failure_persists_failed_snapshot(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
@@ -3530,6 +3634,58 @@ def test_session_chat_disconnect_drops_late_stream_result(monkeypatch, tmp_path)
                         await asyncio.sleep(0.05)
                     _LateAccessStreamingRunner.release.set()
                     return True
+        finally:
+            _LateAccessStreamingRunner.release.set()
+            await runner.cleanup()
+
+    assert asyncio.run(exercise()) is True
+    assert not _LateAccessResult.accessed.is_set()
+
+
+def test_session_chat_nonstream_disconnect_cancels_agent(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+    from aegis.session import Session, SessionStore
+
+    _LateAccessStreamingRunner.reset()
+    monkeypatch.setattr(server, "SurfaceRunner", _LateAccessStreamingRunner)
+    session_id = "serve:session-nonstream-disconnect"
+    SessionStore().save(Session(id=session_id, title="nonstream disconnect session"))
+
+    async def exercise() -> bool:
+        from aiohttp import ClientSession, web
+
+        app = server.make_app(Config.load())
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        try:
+            assert site._server is not None
+            port = site._server.sockets[0].getsockname()[1]
+            async with ClientSession() as client:
+                request_task = asyncio.ensure_future(client.post(
+                    f"http://127.0.0.1:{port}/api/sessions/{session_id}/chat",
+                    json={"prompt": "disconnect me"},
+                ))
+                assert await asyncio.to_thread(_LateAccessStreamingRunner.started.wait, 1)
+                request_task.cancel()
+                try:
+                    response = await request_task
+                except (asyncio.CancelledError, Exception):
+                    response = None
+                if response is not None:
+                    response.close()
+                deadline = time.monotonic() + 2
+                while time.monotonic() < deadline:
+                    if (
+                        _LateAccessStreamingRunner.agents
+                        and _LateAccessStreamingRunner.agents[0].cancel_event.is_set()
+                    ):
+                        return True
+                    await asyncio.sleep(0.05)
+                return False
         finally:
             _LateAccessStreamingRunner.release.set()
             await runner.cleanup()

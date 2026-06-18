@@ -3157,17 +3157,62 @@ def make_handler(config: Config):
                     }
                     if service_tier:
                         run_meta.update(runtime_controls_meta({"service_tier": service_tier}))
-                    result = runner.run_prompt(
-                        last_user,
-                        session_id=session_id,
+                    response_session, response_agent = self._prepare_stream_agent(
+                        runner,
+                        session_id=str(session_id) if session_id else None,
+                        title=last_user[:80] if isinstance(last_user, str) else None,
                         history=history,
                         model=model,
                         provider_name=provider_name,
                         cwd=cwd,
-                        stream=False,
                         surface="serve",
                         meta=run_meta,
                     )
+                    disconnect_cancelled = False
+                    cancel_watchdog_started = False
+
+                    def cancel_response_agent() -> None:
+                        nonlocal disconnect_cancelled, cancel_watchdog_started
+                        if disconnect_cancelled:
+                            return
+                        disconnect_cancelled = True
+                        self._cancel_agent(response_agent)
+                        if not cancel_watchdog_started:
+                            cancel_watchdog_started = True
+                            self._start_cancel_watchdog(
+                                lambda: response_agent,
+                                lambda: disconnect_cancelled,
+                                name="aegis-api-chat-cancel",
+                            )
+
+                    if response_agent is not None:
+                        self._aegis_on_disconnect = cancel_response_agent
+                    run_kwargs: dict[str, Any] = {
+                        "model": model,
+                        "provider_name": provider_name,
+                        "cwd": cwd,
+                        "stream": False,
+                        "surface": "serve",
+                        "meta": run_meta,
+                    }
+                    if response_agent is not None:
+                        run_kwargs.update({
+                            "session": response_session,
+                            "agent": response_agent,
+                            "reuse_agent": False,
+                        })
+                    else:
+                        run_kwargs.update({
+                            "session_id": session_id,
+                            "history": history,
+                        })
+                    try:
+                        result = runner.run_prompt(last_user, **run_kwargs)
+                    finally:
+                        if getattr(self, "_aegis_on_disconnect", None) is cancel_response_agent:
+                            self._aegis_on_disconnect = None
+                    if disconnect_cancelled:
+                        raise BrokenPipeError("HTTP client disconnected")
                     response_metadata = {
                         "session_id": result.session.id,
                         "trace_id": result.trace_id,
@@ -3854,8 +3899,37 @@ def make_handler(config: Config):
             idempotency_fp = _request_fingerprint(idempotency_body, _RESPONSES_IDEMPOTENCY_FINGERPRINT_KEYS)
             def compute_response() -> dict[str, Any]:
                 response: dict[str, Any] | None = None
+                disconnect_cancelled = False
+                cancel_watchdog_started = False
+
+                def current_response_agent():
+                    with state_lock:
+                        rec = active_responses.get(response_id)
+                        return rec.get("agent") if rec is not None else None
+
+                def start_response_cancel_watchdog() -> None:
+                    nonlocal cancel_watchdog_started
+                    if cancel_watchdog_started:
+                        return
+                    cancel_watchdog_started = True
+                    self._start_cancel_watchdog(
+                        current_response_agent,
+                        lambda: disconnect_cancelled and response_id in active_responses,
+                        name="aegis-api-response-nonstream-cancel",
+                    )
+
+                def cancel_on_disconnect() -> None:
+                    nonlocal disconnect_cancelled
+                    if disconnect_cancelled:
+                        return
+                    disconnect_cancelled = True
+                    with state_lock:
+                        self._request_cancel_response_locked(response_id, "HTTP client disconnected")
+                    start_response_cancel_watchdog()
+
                 with state_lock:
                     self._register_response_locked(response_id, store_response=store_response)
+                self._aegis_on_disconnect = cancel_on_disconnect
                 try:
                     response_session, response_agent = self._prepare_response_agent(
                         response_id,
@@ -3901,6 +3975,8 @@ def make_handler(config: Config):
                             "history": history,
                         })
                     result = runner.run_prompt(last_user, **run_kwargs)
+                    if disconnect_cancelled:
+                        raise BrokenPipeError("HTTP client disconnected")
                     cancelled, cancel_reason = self._response_cancel_requested(response_id)
                     response = _response_object(
                         response_id,
@@ -3932,6 +4008,8 @@ def make_handler(config: Config):
                             response_store.set_conversation(conversation, response_id)
                     return response
                 finally:
+                    if getattr(self, "_aegis_on_disconnect", None) is cancel_on_disconnect:
+                        self._aegis_on_disconnect = None
                     self._finish_response(response_id, response)
 
             response = idempotency_cache.get_or_compute(idempotency_key, idempotency_fp, compute_response)
@@ -4098,16 +4176,53 @@ def make_handler(config: Config):
             }
             if service_tier:
                 run_meta.update(runtime_controls_meta({"service_tier": service_tier}))
-            result = runner.run_prompt(
-                str(prompt),
+            response_session, response_agent = self._prepare_stream_agent(
+                runner,
                 session=session,
                 model=body.get("model"),
                 provider_name=body.get("provider"),
                 cwd=body.get("cwd"),
                 surface="serve",
-                stream=False,
                 meta=run_meta,
             )
+            session = response_session or session
+            disconnect_cancelled = False
+            cancel_watchdog_started = False
+
+            def cancel_response_agent() -> None:
+                nonlocal disconnect_cancelled, cancel_watchdog_started
+                if disconnect_cancelled:
+                    return
+                disconnect_cancelled = True
+                self._cancel_agent(response_agent)
+                if not cancel_watchdog_started:
+                    cancel_watchdog_started = True
+                    self._start_cancel_watchdog(
+                        lambda: response_agent,
+                        lambda: disconnect_cancelled,
+                        name="aegis-api-session-cancel",
+                    )
+
+            if response_agent is not None:
+                self._aegis_on_disconnect = cancel_response_agent
+            run_kwargs: dict[str, Any] = {
+                "session": session,
+                "model": body.get("model"),
+                "provider_name": body.get("provider"),
+                "cwd": body.get("cwd"),
+                "surface": "serve",
+                "stream": False,
+                "meta": run_meta,
+            }
+            if response_agent is not None:
+                run_kwargs.update({"agent": response_agent, "reuse_agent": False})
+            try:
+                result = runner.run_prompt(str(prompt), **run_kwargs)
+            finally:
+                if getattr(self, "_aegis_on_disconnect", None) is cancel_response_agent:
+                    self._aegis_on_disconnect = None
+            if disconnect_cancelled:
+                raise BrokenPipeError("HTTP client disconnected")
             return self._json(200, {
                 "ok": True,
                 "id": result.session.id,
@@ -4577,25 +4692,74 @@ def make_app(config: Config) -> web.Application:
 
         task = asyncio.create_task(asyncio.to_thread(func))
         header_wait = asyncio.create_task(headers_ready.wait())
-        done, _pending = await asyncio.wait({task, header_wait}, return_when=asyncio.FIRST_COMPLETED)
-        if task in done and task.exception() is not None:
+
+        def consume_task_exception(done_task: asyncio.Task) -> None:
+            try:
+                done_task.exception()
+            except BaseException:  # noqa: BLE001
+                pass
+
+        def task_exception() -> BaseException | None:
+            try:
+                return task.exception()
+            except asyncio.CancelledError as exc:
+                return exc
+
+        def disconnected_response() -> web.Response:
+            header_wait.cancel()
+            task.add_done_callback(consume_task_exception)
+            return web.Response(status=499, headers=_response_headers(config, origin))
+
+        async def wait_for_task_or_headers() -> str:
+            while True:
+                if client_disconnected():
+                    notify_disconnect()
+                    return "disconnect"
+                done, _pending = await asyncio.wait(
+                    {task, header_wait},
+                    timeout=0.1,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if task in done:
+                    return "task"
+                if header_wait in done:
+                    return "headers"
+
+        async def wait_for_task_or_disconnect() -> bool:
+            while not task.done():
+                if client_disconnected():
+                    notify_disconnect()
+                    return False
+                done, _pending = await asyncio.wait({task}, timeout=0.1)
+                if task in done:
+                    return True
+            return True
+
+        first_done = await wait_for_task_or_headers()
+        if first_done == "disconnect":
+            return disconnected_response()
+        error = task_exception() if task.done() else None
+        if error is not None:
             header_wait.cancel()
             return web.json_response(
-                {"error": f"{type(task.exception()).__name__}: {task.exception()}"},
+                {"error": f"{type(error).__name__}: {error}"},
                 status=500,
                 headers=_response_headers(config, origin),
             )
         if not adapter._aegis_headers_sent:
-            await task
+            if not await wait_for_task_or_disconnect():
+                return disconnected_response()
             header_wait.cancel()
         headers = {name: value for name, value in adapter._aegis_headers}
         content_type = headers.get("Content-Type", headers.get("content-type", ""))
         if "text/event-stream" not in content_type.lower():
-            await task
+            if not await wait_for_task_or_disconnect():
+                return disconnected_response()
             header_wait.cancel()
-            if task.exception() is not None:
+            error = task_exception()
+            if error is not None:
                 return web.json_response(
-                    {"error": f"{type(task.exception()).__name__}: {task.exception()}"},
+                    {"error": f"{type(error).__name__}: {error}"},
                     status=500,
                     headers=_response_headers(config, origin),
                 )
