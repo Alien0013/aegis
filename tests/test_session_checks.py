@@ -69,6 +69,7 @@ def test_cross_session_integrity_report_detects_replay_and_lineage_gaps(tmp_path
     codes = {issue["code"] for issue in report["issues"]}
 
     assert report["ok"] is False
+    assert report["status"] == "error"
     assert report["counts"]["sessions"] >= 5
     assert "missing_parent_session" in codes
     assert "missing_last_run" in codes
@@ -115,10 +116,36 @@ def test_cross_session_integrity_report_is_clean_for_consistent_state(tmp_path, 
     report = cross_session_integrity_report(stale_running_seconds=60, stale_resume_pending_seconds=3600)
 
     assert report["ok"] is True
+    assert report["status"] == "ok"
     assert report["issue_count"] == 0
     assert report["counts"]["sessions_with_last_run"] == 1
     assert report["counts"]["resume_pending_sessions"] == 1
     assert any(check["id"] == "resume_pending" and check["ok"] is True for check in report["checks"])
+
+
+def test_cross_session_integrity_report_degrades_on_warning_only_state(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+
+    from aegis.runs import RunStore
+    from aegis.session import Session, SessionStore
+    from aegis.session_checks import cross_session_integrity_report
+
+    store = SessionStore()
+    runs = RunStore()
+    session = Session(id="sess-warning-only", title="warning only")
+    store.save(session)
+    run = runs.start(surface="serve", kind="serve", session_id=session.id, prompt="stale")
+    run["started_at"] = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    runs.write(run)
+
+    report = cross_session_integrity_report(stale_running_seconds=60, stale_resume_pending_seconds=3600)
+
+    assert report["ok"] is False
+    assert report["status"] == "degraded"
+    assert report["error_count"] == 0
+    assert report["warning_count"] == 1
+    assert {issue["code"] for issue in report["issues"]} == {"stale_running_run"}
+    assert any(check["id"] == "stale_running_runs" and check["ok"] is False for check in report["checks"])
 
 
 def test_repair_cross_session_integrity_interrupts_stale_running_runs(tmp_path, monkeypatch):

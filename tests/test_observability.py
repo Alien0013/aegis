@@ -585,6 +585,20 @@ def test_status_shows_state_section(capsys):
         assert label in out
 
 
+def test_status_redacts_dashboard_token(capsys):
+    from aegis.cli.main import cmd_status
+    from aegis.config import Config
+
+    cfg = Config.load()
+    cfg.data.setdefault("server", {})["dashboard_token"] = "plain-dashboard-token"
+
+    cmd_status(object(), cfg)
+    out = capsys.readouterr().out
+
+    assert "?token=[REDACTED]" in out
+    assert "plain-dashboard-token" not in out
+
+
 def test_trajectory_auto_capture_wired(tmp_path):
     """trajectory.enabled must actually write a line per turn (was dead config)."""
     import os

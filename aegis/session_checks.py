@@ -248,6 +248,7 @@ def cross_session_integrity_report(
 
     error_count = sum(1 for issue in issues if issue.get("severity") == "error")
     warning_count = sum(1 for issue in issues if issue.get("severity") == "warning")
+    status = "error" if error_count else ("degraded" if warning_count else "ok")
     checks.extend([
         {
             "id": "session_store",
@@ -292,7 +293,8 @@ def cross_session_integrity_report(
         },
     ])
     return {
-        "ok": error_count == 0,
+        "ok": status == "ok",
+        "status": status,
         "error_count": error_count,
         "warning_count": warning_count,
         "issue_count": len(issues),

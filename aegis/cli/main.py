@@ -15,6 +15,7 @@ from pathlib import Path
 from .. import __version__
 from .. import config as cfg
 from ..config import Config
+from ..redact import redact_secret_values
 
 
 def _print(s: str = "") -> None:
@@ -890,7 +891,7 @@ def cmd_status(args, config: Config) -> int:
     host = config.get("server.dashboard_host", "127.0.0.1")
     port = int(config.get("server.dashboard_port", 9119))
     token = config.get("server.dashboard_token")
-    url = f"http://{host}:{port}/" + (f"?token={token}" if token else "")
+    url = f"http://{host}:{port}/" + ("?token=[REDACTED]" if token else "")
     _print("")
     _print("Dashboard")
     _print(f"  {url}")
@@ -1172,6 +1173,11 @@ def cmd_config(args, config: Config) -> int:
         target = cfg.env_path() if getattr(args, "secrets", False) else cfg.config_path()
         target.parent.mkdir(parents=True, exist_ok=True)
         target.touch(exist_ok=True)
+        if getattr(args, "secrets", False):
+            try:
+                os.chmod(target, 0o600)
+            except OSError:
+                pass
         command = editor_command(target)
         if not command:
             _print("No editor found. Config file is at:")
@@ -1195,12 +1201,17 @@ def cmd_config(args, config: Config) -> int:
                 return _die(f"config edit failed validation: {validation_error}")
             _print(f"Config OK. Backup: {backup}")
         else:
+            try:
+                os.chmod(target, 0o600)
+            except OSError:
+                pass
             _print(f"Secrets saved. Backup: {backup}")
         return 0
     if args.action == "get":
         if not args.key:
             return _die("usage: aegis config get <key>")
-        _print(str(config.get(args.key)))
+        value = redact_secret_values({args.key: config.get(args.key)}).get(args.key)
+        _print(str(value))
         return 0
     if args.action == "set":
         value, value_error = _parse_config_set_value(args.key or "", getattr(args, "value", None))
@@ -1247,7 +1258,7 @@ def cmd_config(args, config: Config) -> int:
         return 0
     # dump
     import yaml
-    _print(yaml.safe_dump(config.data, sort_keys=False))
+    _print(yaml.safe_dump(redact_secret_values(config.data), sort_keys=False))
     return 0
 
 

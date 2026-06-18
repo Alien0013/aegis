@@ -136,7 +136,8 @@ class RunStore:
                    ON CONFLICT(id) DO UPDATE SET
                     surface=excluded.surface, kind=excluded.kind, status=excluded.status,
                     title=excluded.title, session_id=excluded.session_id,
-                    trace_id=excluded.trace_id, ended_at=excluded.ended_at,
+                    trace_id=excluded.trace_id, started_at=excluded.started_at,
+                    ended_at=excluded.ended_at,
                     prompt_preview=excluded.prompt_preview,
                     result_preview=excluded.result_preview, error=excluded.error,
                     data=excluded.data""",

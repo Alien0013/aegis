@@ -212,6 +212,17 @@ def test_cli_config_summary_dump_and_edit(monkeypatch, capsys):
     assert "model:" in out
     assert "agent:" in out
 
+    assert main(["config", "set", "server.dashboard_token", "plain-dashboard-secret"]) == 0
+    capsys.readouterr()
+    assert main(["config", "get", "server.dashboard_token"]) == 0
+    out = capsys.readouterr().out
+    assert "[REDACTED]" in out
+    assert "plain-dashboard-secret" not in out
+    assert main(["config", "dump"]) == 0
+    out = capsys.readouterr().out
+    assert "dashboard_token: '[REDACTED]'" in out
+    assert "plain-dashboard-secret" not in out
+
     calls = []
 
     def fake_run(command):
@@ -230,6 +241,7 @@ def test_cli_config_summary_dump_and_edit(monkeypatch, capsys):
     assert main(["config", "edit", "--secrets"]) == 0
     assert calls[-1] == ["test-editor", "--wait", str(cfg.env_path())]
     assert cfg.env_path().exists()
+    assert (cfg.env_path().stat().st_mode & 0o777) == 0o600
 
     assert main(["config", "set"]) == 1
     out = capsys.readouterr().out

@@ -131,6 +131,27 @@ def test_model_metadata_is_provider_aware_for_codex_routes():
     assert context_window("openai/gpt-5.5", base_url="https://chatgpt.com/backend-api/codex") == 272_000
 
 
+def test_model_metadata_cache_prefers_provider_key_over_bare_model():
+    import json
+
+    from aegis import config as cfg
+    from aegis import model_meta
+
+    model_meta._cache = None
+    cfg.sub("models_cache.json").write_text(
+        json.dumps({
+            "proxy-a/shared-model": {"context": 111_000},
+            "proxy-b:shared-model": {"context": 222_000},
+            "shared-model": {"context": 333_000},
+        }),
+        encoding="utf-8",
+    )
+
+    assert model_meta.context_window("shared-model", provider="proxy-a") == 111_000
+    assert model_meta.context_window("shared-model", provider="proxy-b") == 222_000
+    assert model_meta.context_window("shared-model", provider="proxy-c") == 333_000
+
+
 def test_provider_uses_model_metadata_for_context():
     from aegis.config import Config
     from aegis.providers import build_provider
