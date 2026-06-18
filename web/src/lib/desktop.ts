@@ -11,6 +11,7 @@ export interface DesktopConnection {
   desktop?: {
     updater?: DesktopUpdaterStatus;
     updateEligibility?: { ok?: boolean; reason?: string };
+    repair?: DesktopRepairPanel;
   };
   backend?: {
     running?: boolean;
@@ -27,6 +28,29 @@ export interface DesktopConnection {
     cwdSource?: string;
     env?: Record<string, string>;
   };
+  settings?: DesktopSettings;
+}
+
+export interface DesktopRepairAction {
+  id: string;
+  label?: string;
+  description?: string;
+}
+
+export interface DesktopRepairPanel {
+  available?: boolean;
+  actions?: DesktopRepairAction[];
+}
+
+export interface DesktopRepairResult {
+  ok?: boolean;
+  action?: string;
+  cancelled?: boolean;
+  restarting?: boolean;
+  path?: string;
+  key?: string;
+  value?: string;
+  error?: string;
   settings?: DesktopSettings;
 }
 
@@ -50,6 +74,7 @@ export interface DesktopBridge {
   onMaximizeChange(cb: (maximized: boolean) => void): () => void;
   openExternal(url: string): void;
   restartBackend(): void;
+  runRepairAction?(action: string | DesktopRepairAction): Promise<DesktopRepairResult>;
   getConnection?(): Promise<DesktopConnection>;
   getSettings?(): Promise<DesktopSettings>;
   setDefaultProjectDir?(path: string): Promise<{ ok?: boolean; settings?: DesktopSettings }>;
@@ -61,6 +86,10 @@ export interface DesktopBridge {
 
 export interface DesktopSettings {
   defaultProjectDir?: string;
+  backendEnv?: {
+    AEGIS_HOME?: string;
+    AEGIS_BIN?: string;
+  };
   explicitLaunchCwd?: boolean;
   settingsPath?: string;
 }

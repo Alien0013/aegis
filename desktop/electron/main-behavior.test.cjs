@@ -78,12 +78,14 @@ test("renderer diagnostics and logs bridge is bounded", () => {
 
   requireSnippet("function readRecentLogLines");
   requireSnippet('ipcMain.handle("aegis:diagnostics"');
+  requireSnippet('ipcMain.handle("aegis:repair"');
   requireSnippet('ipcMain.handle("aegis:logs:recent"');
   requireSnippet('ipcMain.handle("aegis:settings:get"');
   requireSnippet('ipcMain.handle("aegis:settings:setDefaultProjectDir"');
   requireSnippet('ipcMain.handle("aegis:settings:chooseProjectDir"');
   requireSnippet("desktopProjectCwd({");
   assert.notEqual(preload.indexOf("getDiagnostics"), -1);
+  assert.notEqual(preload.indexOf("runRepairAction"), -1);
   assert.notEqual(preload.indexOf("getRecentLogs: (limit)"), -1);
   assert.notEqual(preload.indexOf("getSettings"), -1);
   assert.notEqual(preload.indexOf("setDefaultProjectDir"), -1);

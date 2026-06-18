@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld("aegisDesktop", {
   restartBackend: () => ipcRenderer.send("win:restartBackend"),
   getConnection: () => ipcRenderer.invoke("aegis:connection"),
   getDiagnostics: () => ipcRenderer.invoke("aegis:diagnostics"),
+  runRepairAction: (action) => ipcRenderer.invoke("aegis:repair", action),
   api: (request) => ipcRenderer.invoke("aegis:api", request),
   getRecentLogs: (limit) => ipcRenderer.invoke("aegis:logs:recent", { limit }),
   revealLogs: () => ipcRenderer.invoke("aegis:logs:reveal"),

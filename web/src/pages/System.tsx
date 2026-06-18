@@ -3,7 +3,7 @@ import { useApi } from "../lib/useApi";
 import { ago } from "../lib/format";
 import { Button, Card, Empty, Input, Loading, PageHeader, Stat, toast } from "../components/ui";
 import { desktop, isDesktop } from "../lib/desktop";
-import type { DesktopConnection, DesktopUpdaterStatus } from "../lib/desktop";
+import type { DesktopConnection, DesktopRepairAction, DesktopUpdaterStatus } from "../lib/desktop";
 
 interface SysInfo {
   version?: string; python?: string; platform?: string; aegis_home?: string;
@@ -18,6 +18,7 @@ export function System() {
   const [projectDir, setProjectDir] = useState("");
   const [savingProjectDir, setSavingProjectDir] = useState(false);
   const [checkingUpdates, setCheckingUpdates] = useState(false);
+  const [repairBusy, setRepairBusy] = useState("");
 
   function applyDesktopSnapshot(connection?: DesktopConnection | null, updater?: DesktopUpdaterStatus | null) {
     setDesktopConnection((current) => {
@@ -50,6 +51,7 @@ export function System() {
   }, []);
 
   const updater = desktopConnection?.desktop?.updater;
+  const repairActions = desktopConnection?.desktop?.repair?.actions || [];
 
   useEffect(() => {
     const active = updater?.checking || ["checking", "available", "downloading"].includes(updater?.stage || "");
@@ -117,6 +119,27 @@ export function System() {
       toast(String(e), "err");
     } finally {
       setSavingProjectDir(false);
+    }
+  }
+
+  async function runRepairAction(action: DesktopRepairAction) {
+    if (!desktop?.runRepairAction) return;
+    const id = action.id;
+    setRepairBusy(id);
+    try {
+      const result = await desktop.runRepairAction(action);
+      if (result.cancelled) return;
+      if (!result.ok) {
+        toast(result.error || "Desktop repair action failed", "err");
+        return;
+      }
+      if (result.settings?.defaultProjectDir != null) setProjectDir(result.settings.defaultProjectDir || "");
+      if (!result.restarting) await refreshDesktopConnection();
+      toast(result.restarting ? `${action.label || id} started` : `${action.label || id} done`);
+    } catch (e) {
+      toast(String(e), "err");
+    } finally {
+      setRepairBusy("");
     }
   }
 
@@ -196,6 +219,26 @@ export function System() {
                   <p className="mt-2 text-xs text-warning">TERMINAL_CWD was set when the desktop app launched, so it overrides this preference for this run.</p>
                 )}
               </div>
+              {!!repairActions.length && desktop?.runRepairAction && (
+                <div className="mt-4 border-t border-border pt-4">
+                  <div className="mb-2 font-mono text-xs font-semibold uppercase tracking-wide text-dim">Repair actions</div>
+                  <div className="flex flex-wrap gap-2">
+                    {repairActions.map((action) => (
+                      <Button
+                        key={action.id}
+                        sm
+                        icon={repairIcon(action.id)}
+                        disabled={!!repairBusy}
+                        variant={action.id === "restart_backend" ? "primary" : "ghost"}
+                        onClick={() => runRepairAction(action)}
+                        title={action.description}
+                      >
+                        {action.label || action.id}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </Card>
           )}
           {!!(data.checkpoints || []).length && (
@@ -224,6 +267,13 @@ function formatDuration(ms: number) {
   const hours = Math.floor(minutes / 60);
   const mins = minutes % 60;
   return mins ? `${hours}h ${mins}m` : `${hours}h`;
+}
+
+function repairIcon(id: string) {
+  if (id === "open_logs") return "logs";
+  if (id === "restart_backend") return "refresh";
+  if (id === "set_backend_env") return "settings";
+  return "system";
 }
 
 function Row({ k, v, mono }: { k: string; v?: string; mono?: boolean }) {

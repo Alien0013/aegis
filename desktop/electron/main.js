@@ -221,8 +221,15 @@ function startBackend() {
     port = await freePort();
     token = crypto.randomBytes(18).toString("hex");
     dashboardUrl = `${backendBaseUrl()}/?token=${token}`;
+    const desktopSettings = readDesktopSettings({ userData: app.getPath("userData") });
+    const settingsBackendEnv = desktopSettings.backendEnv || {};
+    const launchEnv = {
+      ...process.env,
+      ...(settingsBackendEnv.AEGIS_HOME ? { AEGIS_HOME: settingsBackendEnv.AEGIS_HOME } : {}),
+      ...(settingsBackendEnv.AEGIS_BIN ? { AEGIS_BIN: settingsBackendEnv.AEGIS_BIN } : {}),
+    };
     const cwdChoice = desktopProjectCwd({
-      env: process.env,
+      env: launchEnv,
       userData: app.getPath("userData"),
       cwd: process.cwd(),
     });
@@ -232,7 +239,7 @@ function startBackend() {
       resourcesPath: process.resourcesPath || "",
       appPath: typeof app.getAppPath === "function" ? app.getAppPath() : "",
     };
-    const resolvedEnv = backendEnvironment(process.env, backendOptions);
+    const resolvedEnv = backendEnvironment(launchEnv, backendOptions);
     const bin = aegisCommand({ ...backendOptions, env: resolvedEnv });
     const resolvedBin = bin !== "aegis" ? bin : (resolvedEnv.AEGIS_BIN || "");
     backendCommand = bin;
@@ -366,6 +373,64 @@ async function chooseDesktopProjectDir() {
     return { ok: false, cancelled: true, settings: connectionDescriptor().settings };
   }
   return persistDesktopProjectDir(result.filePaths[0]);
+}
+
+function persistDesktopBackendEnv(values = {}) {
+  const current = readDesktopSettings({ userData: app.getPath("userData") });
+  const settings = writeDesktopSettings(
+    { backendEnv: { ...(current.backendEnv || {}), ...values } },
+    { userData: app.getPath("userData") },
+  );
+  const changed = Object.keys(values).filter((key) => values[key]);
+  log(`desktop settings: backendEnv=${changed.length ? changed.join(",") : "(cleared)"}`);
+  return { ok: true, settings: connectionDescriptor().settings };
+}
+
+async function chooseBackendEnvTarget() {
+  const parent = win && !win.isDestroyed() ? win : undefined;
+  const choice = await dialog.showMessageBox(parent, {
+    type: "question",
+    buttons: ["AEGIS_HOME", "AEGIS_BIN", "Cancel"],
+    defaultId: 0,
+    cancelId: 2,
+    message: "Choose backend pointer",
+    detail: "AEGIS_HOME points to an install directory. AEGIS_BIN points to a specific aegis executable.",
+  });
+  if (choice.response === 2) return { cancelled: true };
+  const key = choice.response === 1 ? "AEGIS_BIN" : "AEGIS_HOME";
+  const result = await dialog.showOpenDialog(parent, {
+    title: key === "AEGIS_BIN" ? "Choose AEGIS executable" : "Choose AEGIS home",
+    properties: key === "AEGIS_BIN" ? ["openFile"] : ["openDirectory", "createDirectory"],
+  });
+  if (result.canceled || !result.filePaths.length) return { cancelled: true, key };
+  return { key, value: result.filePaths[0] };
+}
+
+async function runDesktopRepairAction(action) {
+  const id = typeof action === "string" ? action : String((action && action.id) || "");
+  if (id === "open_logs") {
+    const error = await shell.openPath(logPath());
+    return { ok: !error, action: id, path: logPath(), ...(error ? { error } : {}) };
+  }
+  if (id === "restart_backend") {
+    setTimeout(() => restartFromScratch(), 0);
+    return { ok: true, action: id, restarting: true };
+  }
+  if (id === "set_backend_env") {
+    const selected = await chooseBackendEnvTarget();
+    if (selected.cancelled) return { ok: false, action: id, cancelled: true };
+    const result = persistDesktopBackendEnv({ [selected.key]: selected.value });
+    setTimeout(() => restartFromScratch(), 0);
+    return {
+      ok: true,
+      action: id,
+      key: selected.key,
+      value: selected.value,
+      settings: result.settings,
+      restarting: true,
+    };
+  }
+  return { ok: false, action: id, error: `unknown repair action: ${id || "<missing>"}` };
 }
 
 function runtimeDiagnostics() {
@@ -672,13 +737,20 @@ async function run() {
     setTimeout(() => initAutoUpdate(false), 4000);   // quiet check shortly after launch
   } catch (e) {
     log(`boot failed: ${e.message}`);
+    const desktopSettings = readDesktopSettings({ userData: app.getPath("userData") });
+    const settingsBackendEnv = desktopSettings.backendEnv || {};
+    const launchEnv = {
+      ...process.env,
+      ...(settingsBackendEnv.AEGIS_HOME ? { AEGIS_HOME: settingsBackendEnv.AEGIS_HOME } : {}),
+      ...(settingsBackendEnv.AEGIS_BIN ? { AEGIS_BIN: settingsBackendEnv.AEGIS_BIN } : {}),
+    };
     const backendOptions = {
-      cwd: desktopProjectCwd({ env: process.env, userData: app.getPath("userData"), cwd: process.cwd() }).cwd,
+      cwd: desktopProjectCwd({ env: launchEnv, userData: app.getPath("userData"), cwd: process.cwd() }).cwd,
       packaged: app.isPackaged,
       resourcesPath: process.resourcesPath || "",
       appPath: typeof app.getAppPath === "function" ? app.getAppPath() : "",
     };
-    const resolvedEnv = backendEnvironment(process.env, backendOptions);
+    const resolvedEnv = backendEnvironment(launchEnv, backendOptions);
     const resolution = resolveAegisCommand({ ...backendOptions, env: resolvedEnv });
     const checked = Array.isArray(resolution.candidates) && resolution.candidates.length
       ? `Checked ${resolution.candidates.length} backend candidate(s).`
@@ -775,6 +847,7 @@ ipcMain.on("win:openExternal", (_e, url) => { openExternalUrl(url); });
 ipcMain.on("win:restartBackend", () => restartFromScratch());
 ipcMain.handle("aegis:connection", () => connectionDescriptor());
 ipcMain.handle("aegis:diagnostics", () => runtimeDiagnostics());
+ipcMain.handle("aegis:repair", (_e, action) => runDesktopRepairAction(action));
 ipcMain.handle("aegis:api", (_e, request) => apiRequest(request));
 ipcMain.handle("aegis:logs:recent", (_e, options = {}) => readRecentLogLines(options && options.limit));
 ipcMain.handle("aegis:logs:reveal", () => shell.openPath(logPath()));

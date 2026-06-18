@@ -16,11 +16,26 @@ test("desktop settings persist a default project directory", () => {
   fs.mkdirSync(project);
 
   assert.equal(settingsPath({ userData }), path.join(userData, "desktop-settings.json"));
-  assert.deepEqual(readDesktopSettings({ userData }), { defaultProjectDir: "" });
+  assert.deepEqual(readDesktopSettings({ userData }), {
+    defaultProjectDir: "",
+    backendEnv: { AEGIS_HOME: "", AEGIS_BIN: "" },
+  });
   assert.deepEqual(writeDesktopSettings({ defaultProjectDir: ` ${project} ` }, { userData }), {
     defaultProjectDir: project,
+    backendEnv: { AEGIS_HOME: "", AEGIS_BIN: "" },
   });
-  assert.deepEqual(readDesktopSettings({ userData }), { defaultProjectDir: project });
+  assert.deepEqual(readDesktopSettings({ userData }), {
+    defaultProjectDir: project,
+    backendEnv: { AEGIS_HOME: "", AEGIS_BIN: "" },
+  });
+
+  assert.deepEqual(
+    writeDesktopSettings({ backendEnv: { AEGIS_HOME: ` ${userData} `, AEGIS_BIN: "/bin/aegis" } }, { userData }),
+    {
+      defaultProjectDir: project,
+      backendEnv: { AEGIS_HOME: userData, AEGIS_BIN: "/bin/aegis" },
+    },
+  );
 });
 
 test("desktop project cwd prefers explicit launch env, then persisted setting", () => {
@@ -34,7 +49,7 @@ test("desktop project cwd prefers explicit launch env, then persisted setting", 
     {
       cwd: "/explicit",
       source: "env",
-      settings: { defaultProjectDir: project },
+      settings: { defaultProjectDir: project, backendEnv: { AEGIS_HOME: "", AEGIS_BIN: "" } },
       explicitLaunchCwd: true,
     },
   );
@@ -43,7 +58,7 @@ test("desktop project cwd prefers explicit launch env, then persisted setting", 
     {
       cwd: project,
       source: "desktop-settings",
-      settings: { defaultProjectDir: project },
+      settings: { defaultProjectDir: project, backendEnv: { AEGIS_HOME: "", AEGIS_BIN: "" } },
       explicitLaunchCwd: false,
     },
   );
@@ -52,7 +67,7 @@ test("desktop project cwd prefers explicit launch env, then persisted setting", 
     {
       cwd: "/fallback",
       source: "process",
-      settings: { defaultProjectDir: project },
+      settings: { defaultProjectDir: project, backendEnv: { AEGIS_HOME: "", AEGIS_BIN: "" } },
       explicitLaunchCwd: false,
     },
   );
