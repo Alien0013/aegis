@@ -293,13 +293,22 @@ class DeliveryIdCache:
         self._seen: dict[str, float] = {}
         self._order: deque[tuple[float, str]] = deque()
         self._lock = threading.RLock()
+        self._accepted_count = 0
+        self._duplicate_count = 0
+        self._pruned_expired = 0
+        self._pruned_capacity = 0
 
     def _prune_locked(self, now: float) -> None:
         cutoff = now - self.ttl_seconds
         while self._order and (self._order[0][0] < cutoff or len(self._seen) > self.max_items):
+            expired = self._order[0][0] < cutoff
             seen_at, key = self._order.popleft()
             if self._seen.get(key) == seen_at:
                 self._seen.pop(key, None)
+                if expired:
+                    self._pruned_expired += 1
+                else:
+                    self._pruned_capacity += 1
 
     def record(self, key: str, *, now: float | None = None) -> bool:
         """Return True when this delivery id has not been processed recently."""
@@ -311,12 +320,14 @@ class DeliveryIdCache:
             self._prune_locked(timestamp)
             seen_at = self._seen.get(key)
             if seen_at is not None and timestamp - seen_at < self.ttl_seconds:
+                self._duplicate_count += 1
                 return False
             if seen_at is not None:
                 self._seen.pop(key, None)
             self._seen[key] = timestamp
             self._order.append((timestamp, key))
             self._prune_locked(timestamp)
+            self._accepted_count += 1
             return True
 
     def stats(self, *, now: float | None = None) -> dict[str, float | int]:
@@ -329,6 +340,10 @@ class DeliveryIdCache:
                 "max_items": self.max_items,
                 "ttl_seconds": self.ttl_seconds,
                 "oldest_age_seconds": max(0.0, oldest),
+                "accepted_count": self._accepted_count,
+                "duplicate_count": self._duplicate_count,
+                "pruned_expired": self._pruned_expired,
+                "pruned_capacity": self._pruned_capacity,
             }
 
 
@@ -338,15 +353,21 @@ class FixedWindowRateLimiter:
         self.window_seconds = max(1.0, float(window_seconds or 60))
         self._hits: dict[str, tuple[float, int]] = {}
         self._lock = threading.RLock()
+        self._allowed_count = 0
+        self._limited_count = 0
+        self._pruned_windows = 0
 
     def _prune_locked(self, now: float) -> None:
         cutoff = now - self.window_seconds
         for key, (window_start, _count) in list(self._hits.items()):
             if window_start < cutoff:
                 self._hits.pop(key, None)
+                self._pruned_windows += 1
 
     def allow(self, key: str, *, now: float | None = None) -> bool:
         if self.limit <= 0:
+            with self._lock:
+                self._allowed_count += 1
             return True
         timestamp = time.time() if now is None else float(now)
         window_start = timestamp - (timestamp % self.window_seconds)
@@ -357,8 +378,10 @@ class FixedWindowRateLimiter:
                 old_start, count = window_start, 0
             if count >= self.limit:
                 self._hits[key] = (old_start, count)
+                self._limited_count += 1
                 return False
             self._hits[key] = (old_start, count + 1)
+            self._allowed_count += 1
             return True
 
     def stats(self, *, now: float | None = None) -> dict[str, float | int]:
@@ -370,6 +393,9 @@ class FixedWindowRateLimiter:
                 "active_hits": sum(count for _start, count in self._hits.values()),
                 "limit": self.limit,
                 "window_seconds": self.window_seconds,
+                "allowed_count": self._allowed_count,
+                "limited_count": self._limited_count,
+                "pruned_windows": self._pruned_windows,
             }
 
 
@@ -404,12 +430,19 @@ def _configured_runtime_status(config) -> dict[str, dict[str, float | int]]:
             "max_items": int(config.get("webhook.idempotency_cache_max", 10000) or 10000),
             "ttl_seconds": float(ttl or 3600),
             "oldest_age_seconds": 0.0,
+            "accepted_count": 0,
+            "duplicate_count": 0,
+            "pruned_expired": 0,
+            "pruned_capacity": 0,
         },
         "rate_limiter": {
             "entries": 0,
             "active_hits": 0,
             "limit": int(config.get("webhook.rate_limit_per_minute", 60) or 0),
             "window_seconds": 60.0,
+            "allowed_count": 0,
+            "limited_count": 0,
+            "pruned_windows": 0,
         },
     }
 

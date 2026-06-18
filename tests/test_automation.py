@@ -261,6 +261,8 @@ def test_webhook_rate_limits_per_hook_client(monkeypatch, tmp_path):
     try:
         first_status, first_body = _post(port, "/hook/ci", b"{}")
         second_status, second_body = _post(port, "/hook/ci", b"{}")
+        from aegis.webhook import webhook_runtime_status
+        runtime = webhook_runtime_status(cfg)
     finally:
         srv.shutdown()
 
@@ -269,6 +271,8 @@ def test_webhook_rate_limits_per_hook_client(monkeypatch, tmp_path):
     assert second_status == 429
     assert second_body["error"] == "rate limit exceeded"
     assert seen["calls"] == 1
+    assert runtime["rate_limiter"]["allowed_count"] == 1
+    assert runtime["rate_limiter"]["limited_count"] == 1
 
 
 def test_webhook_dedupes_provider_delivery_retries(monkeypatch, tmp_path):
@@ -280,6 +284,8 @@ def test_webhook_dedupes_provider_delivery_retries(monkeypatch, tmp_path):
     try:
         first_status, first_body = _post(port, "/hook/ci", b'{"action":"opened"}', headers)
         second_status, second_body = _post(port, "/hook/ci", b'{"action":"opened"}', headers)
+        from aegis.webhook import webhook_runtime_status
+        runtime = webhook_runtime_status(cfg)
     finally:
         srv.shutdown()
 
@@ -287,6 +293,8 @@ def test_webhook_dedupes_provider_delivery_retries(monkeypatch, tmp_path):
     assert first_body["ok"] is True
     assert second_body == {"ok": True, "duplicate": True}
     assert seen["calls"] == 1
+    assert runtime["delivery_cache"]["accepted_count"] == 1
+    assert runtime["delivery_cache"]["duplicate_count"] == 1
 
 
 def test_webhook_accepts_generic_hmac_signature(monkeypatch, tmp_path):
@@ -342,6 +350,9 @@ def test_webhook_delivery_cache_prunes_incrementally():
     assert stats["entries"] == 2
     assert stats["max_items"] == 3
     assert stats["ttl_seconds"] == 60.0
+    assert stats["accepted_count"] == 4
+    assert stats["duplicate_count"] == 1
+    assert stats["pruned_expired"] == 2
 
 
 def test_webhook_delivery_cache_caps_entries_and_reports_stats():
@@ -355,6 +366,7 @@ def test_webhook_delivery_cache_caps_entries_and_reports_stats():
     stats = cache.stats(now=4.0)
     assert stats["entries"] == 2
     assert stats["max_items"] == 2
+    assert stats["pruned_capacity"] == 1
     assert "one" not in cache._seen
 
 
@@ -364,6 +376,8 @@ def test_webhook_rate_limiter_prunes_stale_windows_and_reports_stats():
     limiter = FixedWindowRateLimiter(limit=2, window_seconds=60)
     assert limiter.allow("client-a", now=0.0) is True
     assert limiter.allow("client-b", now=1.0) is True
+    assert limiter.allow("client-a", now=2.0) is True
+    assert limiter.allow("client-a", now=3.0) is False
     assert limiter.stats(now=30.0)["entries"] == 2
 
     stats = limiter.stats(now=121.0)
@@ -371,6 +385,9 @@ def test_webhook_rate_limiter_prunes_stale_windows_and_reports_stats():
     assert stats["active_hits"] == 0
     assert stats["limit"] == 2
     assert stats["window_seconds"] == 60.0
+    assert stats["allowed_count"] == 3
+    assert stats["limited_count"] == 1
+    assert stats["pruned_windows"] == 2
 
 
 # --- TASK 2: cron script / skills / multi-deliver / [SILENT] ----------------

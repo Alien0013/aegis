@@ -1964,7 +1964,14 @@ def test_fastapi_webhooks_status_redacts_security_posture(tmp_path, monkeypatch)
     assert body["runtime"]["active"] in {True, False}
     assert body["runtime"]["delivery_cache"]["max_items"] >= 1
     assert body["runtime"]["delivery_cache"]["entries"] >= 0
+    assert body["runtime"]["delivery_cache"]["accepted_count"] >= 0
+    assert body["runtime"]["delivery_cache"]["duplicate_count"] >= 0
+    assert body["runtime"]["delivery_cache"]["pruned_expired"] >= 0
+    assert body["runtime"]["delivery_cache"]["pruned_capacity"] >= 0
     assert body["runtime"]["rate_limiter"]["limit"] >= 0
+    assert body["runtime"]["rate_limiter"]["allowed_count"] >= 0
+    assert body["runtime"]["rate_limiter"]["limited_count"] >= 0
+    assert body["runtime"]["rate_limiter"]["pruned_windows"] >= 0
 
 
 def test_fastapi_config_preferences_memory_provider_and_plugins(tmp_path, monkeypatch):
