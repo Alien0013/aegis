@@ -920,6 +920,28 @@ def _observability_contract_payload(config: Config) -> dict[str, Any]:
         for event in hooks.EVENTS
     ]
     event_rows = [{"type": event_type, "known": True} for event_type in sorted(agent_events.ALL)]
+    dashboard_plugins = _dashboard_plugins_payload(config, include_hidden=True)
+    dashboard_api_mounts = {
+        str(row.get("name") or ""): row.get("api_mount") or {}
+        for row in dashboard_plugins
+        if row.get("name")
+    }
+    mounted_plugin_api_count = sum(
+        1 for mount in dashboard_api_mounts.values() if mount.get("mounted")
+    )
+    dashboard_plugin_api_route_count = sum(
+        len(mount.get("routes") or [])
+        for mount in dashboard_api_mounts.values()
+        if mount.get("mounted")
+    )
+    dashboard_plugin_api_request_count = sum(
+        int(mount.get("request_count") or 0)
+        for mount in dashboard_api_mounts.values()
+    )
+    dashboard_plugin_api_error_count = sum(
+        int(mount.get("mount_error_count") or 0)
+        for mount in dashboard_api_mounts.values()
+    )
     return {
         "ok": True,
         "version": __version__,
@@ -927,6 +949,15 @@ def _observability_contract_payload(config: Config) -> dict[str, Any]:
         "agent_event_types": [row["type"] for row in event_rows],
         "hooks": hook_rows,
         "configured_hooks": configured,
+        "dashboard_plugins": {
+            "count": len(dashboard_plugins),
+            "api_mounts": dashboard_api_mounts,
+            "api_mounted_count": mounted_plugin_api_count,
+            "api_route_count": dashboard_plugin_api_route_count,
+            "api_request_count": dashboard_plugin_api_request_count,
+            "api_mount_error_count": dashboard_plugin_api_error_count,
+        },
+        "dashboard_plugin_api_mounts": dashboard_api_mounts,
         "routes": {
             "traces": "/api/traces",
             "trace": "/api/trace",
@@ -935,6 +966,9 @@ def _observability_contract_payload(config: Config) -> dict[str, Any]:
             "events_sse": "/api/events",
             "events_ws": "/api/ws",
             "publish": "/api/pub",
+            "plugins": "/api/plugins",
+            "dashboard_plugins": "/api/dashboard/plugins",
+            "dashboard_plugin_hub": "/api/dashboard/plugins/hub",
         },
         "semantics": {
             "hook_failure_policy": "best_effort",
