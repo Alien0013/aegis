@@ -58,6 +58,7 @@ test("auto-updater setup is idempotent and bounded", () => {
   requireSnippet("updateCheckInFlight");
   requireSnippet("let updaterStatus = initialUpdaterStatus();");
   requireSnippet("function setUpdaterStatus");
+  requireSnippet("function installDownloadedUpdate");
   requireSnippet("descriptor.desktop.updater = { ...updaterStatus };");
   requireSnippet("releaseUpdateEligibility");
   requireSnippet("auto-update disabled");
@@ -65,12 +66,14 @@ test("auto-updater setup is idempotent and bounded", () => {
   requireSnippet('setUpdaterStatus("checking");');
   requireSnippet('setUpdaterStatus("available", { info });');
   requireSnippet('setUpdaterStatus("ready", { info });');
+  requireSnippet('setUpdaterStatus("installing", { version: updaterStatus.version });');
   requireSnippet('setUpdaterStatus("error", { error: message });');
   requireSnippet("autoUpdater.allowPrerelease = false");
   requireSnippet("autoUpdater.allowDowngrade = false");
   requireSnippet('if (updateCheckManual) notify("AEGIS update failed", message);');
   requireSnippet('ipcMain.handle("aegis:update:check"');
   requireSnippet('ipcMain.handle("aegis:update:status"');
+  requireSnippet('ipcMain.handle("aegis:update:install"');
 });
 
 test("renderer diagnostics and logs bridge is bounded", () => {
@@ -92,4 +95,5 @@ test("renderer diagnostics and logs bridge is bounded", () => {
   assert.notEqual(preload.indexOf("chooseProjectDir"), -1);
   assert.notEqual(preload.indexOf("checkForUpdates"), -1);
   assert.notEqual(preload.indexOf("getUpdateStatus"), -1);
+  assert.notEqual(preload.indexOf("installUpdate"), -1);
 });

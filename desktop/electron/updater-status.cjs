@@ -43,6 +43,8 @@ function initialUpdaterStatus(now) {
     error: "",
     version: "",
     checking: false,
+    installable: false,
+    installing: false,
     lastCheckedAt: "",
     downloadProgress: {
       percent: 0,
@@ -70,6 +72,8 @@ function transitionUpdaterStatus(current = {}, event = "idle", details = {}, now
       message: _text(details.message) || "Checking for AEGIS updates...",
       error: "",
       checking: true,
+      installable: false,
+      installing: false,
       downloadProgress: initialUpdaterStatus(() => at).downloadProgress,
     };
   }
@@ -80,6 +84,8 @@ function transitionUpdaterStatus(current = {}, event = "idle", details = {}, now
       message: _text(details.message || details.reason) || "Auto-update is disabled.",
       error: "",
       checking: false,
+      installable: false,
+      installing: false,
       downloadProgress: initialUpdaterStatus(() => at).downloadProgress,
     };
   }
@@ -93,6 +99,8 @@ function transitionUpdaterStatus(current = {}, event = "idle", details = {}, now
       error: "",
       version,
       checking: false,
+      installable: false,
+      installing: false,
       downloadProgress: initialUpdaterStatus(() => at).downloadProgress,
     };
   }
@@ -108,6 +116,8 @@ function transitionUpdaterStatus(current = {}, event = "idle", details = {}, now
       error: "",
       version,
       checking: false,
+      installable: false,
+      installing: false,
       downloadProgress: progress,
     };
   }
@@ -118,6 +128,8 @@ function transitionUpdaterStatus(current = {}, event = "idle", details = {}, now
       message: _text(details.message) || "You're on the latest version.",
       error: "",
       checking: false,
+      installable: false,
+      installing: false,
       lastCheckedAt: at,
       downloadProgress: initialUpdaterStatus(() => at).downloadProgress,
     };
@@ -132,11 +144,26 @@ function transitionUpdaterStatus(current = {}, event = "idle", details = {}, now
       error: "",
       version,
       checking: false,
+      installable: true,
+      installing: false,
       lastCheckedAt: at,
       downloadProgress: {
         ...progress,
         percent: progress.total || progress.transferred ? 100 : progress.percent,
       },
+    };
+  }
+
+  if (stage === "installing") {
+    const version = _version(details) || base.version;
+    return {
+      ...next,
+      message: version ? `Installing AEGIS ${version}...` : "Installing update...",
+      error: "",
+      version,
+      checking: false,
+      installable: false,
+      installing: true,
     };
   }
 
@@ -147,6 +174,8 @@ function transitionUpdaterStatus(current = {}, event = "idle", details = {}, now
       message,
       error: message,
       checking: false,
+      installable: false,
+      installing: false,
       lastCheckedAt: at,
     };
   }
@@ -156,6 +185,8 @@ function transitionUpdaterStatus(current = {}, event = "idle", details = {}, now
     message: _text(details.message) || base.message,
     error: _text(details.error) || base.error,
     checking: Boolean(details.checking),
+    installable: false,
+    installing: false,
   };
 }
 

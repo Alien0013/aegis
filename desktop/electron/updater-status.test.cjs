@@ -14,6 +14,8 @@ test("updater status starts idle with bounded public fields", () => {
     error: "",
     version: "",
     checking: false,
+    installable: false,
+    installing: false,
     lastCheckedAt: "",
     downloadProgress: {
       percent: 0,
@@ -38,6 +40,7 @@ test("updater status records checking and current outcomes", () => {
 
   assert.equal(status.stage, "current");
   assert.equal(status.checking, false);
+  assert.equal(status.installable, false);
   assert.equal(status.message, "You're on the latest version.");
   assert.equal(status.lastCheckedAt, "2026-06-17T10:00:02.000Z");
 });
@@ -83,8 +86,18 @@ test("updater status preserves available version when update is ready", () => {
   assert.equal(status.stage, "ready");
   assert.equal(status.version, "1.2.3");
   assert.equal(status.message, "AEGIS 1.2.3 is ready to install.");
+  assert.equal(status.installable, true);
+  assert.equal(status.installing, false);
   assert.equal(status.lastCheckedAt, "2026-06-17T10:00:02.000Z");
   assert.equal(status.downloadProgress.percent, 100);
+
+  status = transitionUpdaterStatus(status, "installing", {}, at("2026-06-17T10:00:03.000Z"));
+
+  assert.equal(status.stage, "installing");
+  assert.equal(status.version, "1.2.3");
+  assert.equal(status.message, "Installing AEGIS 1.2.3...");
+  assert.equal(status.installable, false);
+  assert.equal(status.installing, true);
 });
 
 test("updater status surfaces errors and disabled reasons", () => {
@@ -99,6 +112,7 @@ test("updater status surfaces errors and disabled reasons", () => {
   assert.equal(status.stage, "error");
   assert.equal(status.error, "network unavailable");
   assert.equal(status.checking, false);
+  assert.equal(status.installable, false);
   assert.equal(status.lastCheckedAt, "2026-06-17T10:00:01.000Z");
 
   status = transitionUpdaterStatus(

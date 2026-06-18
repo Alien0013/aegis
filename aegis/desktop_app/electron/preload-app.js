@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld("aegisDesktop", {
   revealLogs: () => ipcRenderer.invoke("aegis:logs:reveal"),
   checkForUpdates: () => ipcRenderer.invoke("aegis:update:check"),
   getUpdateStatus: () => ipcRenderer.invoke("aegis:update:status"),
+  installUpdate: () => ipcRenderer.invoke("aegis:update:install"),
   getSettings: () => ipcRenderer.invoke("aegis:settings:get"),
   setDefaultProjectDir: (path) => ipcRenderer.invoke("aegis:settings:setDefaultProjectDir", path),
   chooseProjectDir: () => ipcRenderer.invoke("aegis:settings:chooseProjectDir"),

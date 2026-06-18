@@ -697,7 +697,7 @@ function initAutoUpdate(manual) {
         title: "Update ready", message: `AEGIS ${info.version} is ready to install.`,
         detail: "Restart AEGIS to apply the update.",
       });
-      if (choice === 0) { quitting = true; autoUpdater.quitAndInstall(); }
+      if (choice === 0) installDownloadedUpdate();
     });
     autoUpdaterConfigured = true;
   }
@@ -712,6 +712,17 @@ function initAutoUpdate(manual) {
     })
     .finally(() => { updateCheckInFlight = false; });
   return status;
+}
+
+function installDownloadedUpdate() {
+  if (!autoUpdater || updaterStatus.stage !== "ready" || !updaterStatus.installable) {
+    const message = "No downloaded update is ready to install.";
+    return { ok: false, error: message, status: { ...updaterStatus } };
+  }
+  setUpdaterStatus("installing", { version: updaterStatus.version });
+  quitting = true;
+  autoUpdater.quitAndInstall();
+  return { ok: true, status: { ...updaterStatus } };
 }
 
 /* ---------- boot sequence ---------- */
@@ -853,6 +864,7 @@ ipcMain.handle("aegis:logs:recent", (_e, options = {}) => readRecentLogLines(opt
 ipcMain.handle("aegis:logs:reveal", () => shell.openPath(logPath()));
 ipcMain.handle("aegis:update:check", () => initAutoUpdate(true));
 ipcMain.handle("aegis:update:status", () => ({ ...updaterStatus }));
+ipcMain.handle("aegis:update:install", () => installDownloadedUpdate());
 ipcMain.handle("aegis:settings:get", () => connectionDescriptor().settings);
 ipcMain.handle("aegis:settings:setDefaultProjectDir", (_e, value) => persistDesktopProjectDir(value));
 ipcMain.handle("aegis:settings:chooseProjectDir", () => chooseDesktopProjectDir());
