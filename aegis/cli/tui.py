@@ -210,7 +210,7 @@ def build_renderable(snapshot: dict[str, Any]) -> Group:
     top = Columns([_model_panel(snapshot), _surface_panel(snapshot)], equal=True, expand=True)
     middle = Columns([_sessions_panel(snapshot), _runs_panel(snapshot)], equal=True, expand=True)
     lower = Columns([_cron_panel(snapshot), _kanban_panel(snapshot), _services_panel(snapshot)], expand=True)
-    footer_items = ["r refresh", "c chat", "d dashboard", "q quit"]
+    footer_items = ["r refresh", "c chat", "d dashboard", "e config", "s secrets", "q quit"]
     if snapshot.get("errors"):
         footer_items.append(f"{len(snapshot['errors'])} warning(s)")
     footer = Panel("  ".join(footer_items), title="Actions", border_style="dim")
@@ -246,6 +246,38 @@ def _open_chat(config: Config) -> int:
     return 0
 
 
+def _edit_config(config: Config, *, secrets: bool = False) -> int:
+    from .main import cmd_config
+
+    return cmd_config(Namespace(action="edit", key=None, value=None, secrets=secrets), config)
+
+
+def _handle_choice(choice: str, config: Config, console: Console) -> int | None:
+    choice = choice.strip().lower()
+    if choice in {"q", "quit", "exit"}:
+        return 0
+    if choice in {"", "r", "refresh"}:
+        return None
+    if choice in {"d", "dashboard", "ui"}:
+        _open_dashboard(config)
+        return None
+    if choice in {"c", "chat"}:
+        return _open_chat(config)
+    if choice in {"e", "edit", "config"}:
+        code = _edit_config(config, secrets=False)
+        if code:
+            console.print(f"Config editor exited with status {code}.", style="yellow")
+        return None
+    if choice in {"s", "secret", "secrets", "env"}:
+        code = _edit_config(config, secrets=True)
+        if code:
+            console.print(f"Secrets editor exited with status {code}.", style="yellow")
+        return None
+    console.print("Unknown action. Use r, c, d, e, s, or q.", style="yellow")
+    time.sleep(1.0)
+    return None
+
+
 def _prompt_choice() -> str:
     try:
         from prompt_toolkit import prompt
@@ -274,15 +306,6 @@ def cmd_tui(args: Namespace, config: Config) -> int:
     while True:
         console.clear()
         render_dashboard(config, console=console)
-        choice = _prompt_choice().strip().lower()
-        if choice in {"q", "quit", "exit"}:
-            return 0
-        if choice in {"", "r", "refresh"}:
-            continue
-        if choice in {"d", "dashboard", "ui"}:
-            _open_dashboard(config)
-            continue
-        if choice in {"c", "chat"}:
-            return _open_chat(config)
-        console.print("Unknown action. Use r, c, d, or q.", style="yellow")
-        time.sleep(1.0)
+        result = _handle_choice(_prompt_choice(), config, console)
+        if result is not None:
+            return result
