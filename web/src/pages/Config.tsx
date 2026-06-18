@@ -1,19 +1,28 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { patch, post } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { titleCase } from "../lib/format";
 import { cn } from "../lib/cn";
-import { Button, Card, Empty, Loading, PageHeader, toast } from "../components/ui";
+import { Badge, Button, Card, Empty, Loading, PageHeader, toast } from "../components/ui";
 import { AutoField, type FieldSchema } from "../components/AutoField";
 
 interface Schema { sections: Record<string, { fields: FieldSchema[] }> }
+interface KeyRow { key: string; set: boolean; source?: string; length?: number }
+interface EnvPayload { env_path?: string; keys?: KeyRow[] }
+interface ConfigExport {
+  paths?: { home?: string; config?: string; env?: string };
+  env?: EnvPayload;
+}
 
 export function Config() {
   const schemaQ = useApi<Schema>("config/schema");
   const valuesQ = useApi<Record<string, unknown>>("config");
+  const exportQ = useApi<ConfigExport>("config/export");
+  const envQ = useApi<EnvPayload>("env");
   const [active, setActive] = useState("");
   const [edits, setEdits] = useState<Record<string, unknown>>({});
-  const [mode, setMode] = useState<"settings" | "yaml">("settings");
+  const [mode, setMode] = useState<"summary" | "settings" | "yaml">("summary");
   const [busy, setBusy] = useState(false);
 
   const sections = useMemo(() => Object.entries(schemaQ.data?.sections || {})
@@ -48,10 +57,10 @@ export function Config() {
       <PageHeader title="Config" sub="~/.aegis/config.yaml — grouped settings"
         actions={<>
           <div className="flex rounded-[var(--radius)] border border-border p-0.5 text-xs">
-            {(["settings", "yaml"] as const).map((m) => (
+            {(["summary", "settings", "yaml"] as const).map((m) => (
               <button key={m} onClick={() => setMode(m)}
                 className={cn("rounded-[calc(var(--radius)-2px)] px-2.5 py-1", mode === m ? "bg-primary text-primary-fg" : "text-dim")}>
-                {m === "settings" ? "Settings" : "YAML"}</button>
+                {m === "summary" ? "Summary" : m === "settings" ? "Settings" : "YAML"}</button>
             ))}
           </div>
           {mode === "settings" && (
@@ -61,8 +70,12 @@ export function Config() {
           )}
         </>} />
 
-      {(schemaQ.error || valuesQ.error) && <Card><Empty icon="alert">Couldn't load — {schemaQ.error || valuesQ.error}</Empty></Card>}
-      {(schemaQ.loading || valuesQ.loading) && <Loading />}
+      {(schemaQ.error || valuesQ.error || exportQ.error || envQ.error) && (
+        <Card><Empty icon="alert">Couldn't load — {schemaQ.error || valuesQ.error || exportQ.error || envQ.error}</Empty></Card>
+      )}
+      {(schemaQ.loading || valuesQ.loading || exportQ.loading || envQ.loading) && <Loading />}
+
+      {mode === "summary" && valuesQ.data && <ConfigSummary values={valuesQ.data} paths={exportQ.data?.paths} env={envQ.data || exportQ.data?.env} />}
 
       {mode === "yaml" && schemaQ.data && <YamlEditor />}
 
@@ -94,6 +107,126 @@ export function Config() {
       )}
     </>
   );
+}
+
+function ConfigSummary({
+  values,
+  paths,
+  env,
+}: {
+  values: Record<string, unknown>;
+  paths?: ConfigExport["paths"];
+  env?: EnvPayload;
+}) {
+  const keys = env?.keys || [];
+  const provider = text(values["model.provider"], "not set");
+  const model = text(values["model.default"], "not set");
+  const maxTurns = text(values["agent.max_iterations"], "not set");
+  const execMode = text(values["tools.exec_mode"], "not set");
+  const terminal = text(values["tools.terminal_backend"], "not set");
+  const reasoning = text(values["display.reasoning"], "off");
+  const effort = text(values["agent.reasoning_effort"], "off");
+  const serviceTier = text(values["agent.service_tier"], "normal") || "normal";
+  const compression = Number(values["agent.compression.threshold"] ?? 0.5);
+  const tailFraction = Number(values["agent.compression.tail_fraction"] ?? 0.25);
+  const configuredKeys = keys.filter((key) => key.set);
+  const platformKeys = ["TELEGRAM_BOT_TOKEN", "DISCORD_BOT_TOKEN", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"];
+  const modelKeys = keys.filter((key) => /(OPENAI|ANTHROPIC|GOOGLE|GEMINI|OPENROUTER|GROQ|DEEPSEEK|XAI|MISTRAL)_/.test(key.key));
+
+  return (
+    <div className="space-y-[var(--gap)]">
+      <div className="grid gap-[var(--gap)] lg:grid-cols-3">
+        <SummaryBlock title="Paths" rows={[
+          ["Config", paths?.config || "~/.aegis/config.yaml"],
+          ["Secrets", env?.env_path || paths?.env || "~/.aegis/.env"],
+          ["Home", paths?.home || "~/.aegis"],
+        ]} />
+        <SummaryBlock title="Model" rows={[
+          ["Provider", provider],
+          ["Model", model],
+          ["Max turns", maxTurns],
+          ["Fast mode", serviceTier],
+        ]} />
+        <SummaryBlock title="Runtime" rows={[
+          ["Terminal", terminal],
+          ["Exec mode", execMode],
+          ["Reasoning", reasoning],
+          ["Model effort", effort],
+        ]} />
+      </div>
+
+      <div className="grid gap-[var(--gap)] lg:grid-cols-[1.1fr_0.9fr]">
+        <Card title="API Keys" sub={`${configuredKeys.length}/${keys.length || 0} known keys set`}
+          actions={<Link to="/env" className="font-mono text-xs text-primary hover:underline">Env</Link>}>
+          <div className="grid gap-2 md:grid-cols-2">
+            {modelKeys.slice(0, 10).map((key) => <KeyStatus key={key.key} row={key} />)}
+            {!modelKeys.length && <div className="text-sm text-faint">No provider keys discovered.</div>}
+          </div>
+        </Card>
+
+        <Card title="Messaging Platforms">
+          <div className="space-y-2">
+            {platformKeys.map((name) => {
+              const row = keys.find((key) => key.key === name);
+              return <KeyStatus key={name} row={row || { key: name, set: false }} />;
+            })}
+          </div>
+        </Card>
+      </div>
+
+      <Card title="Context Compression" sub="Current compaction thresholds">
+        <div className="grid gap-3 md:grid-cols-4">
+          <Metric label="Enabled" value="yes" tone="success" />
+          <Metric label="Threshold" value={percent(compression, "50%")} />
+          <Metric label="Target ratio" value={percent(tailFraction, "25%")} />
+          <Metric label="Protect last" value={text(values["agent.compression.preserve_last"], "20")} />
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function SummaryBlock({ title, rows }: { title: string; rows: Array<[string, string]> }) {
+  return (
+    <Card title={title}>
+      <div className="space-y-2">
+        {rows.map(([label, value]) => (
+          <div key={label} className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-2 text-sm">
+            <span className="text-faint">{label}</span>
+            <span className="min-w-0 truncate font-mono text-text" title={value}>{value}</span>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function KeyStatus({ row }: { row: KeyRow }) {
+  return (
+    <div className="flex min-w-0 items-center gap-2 border-b border-border/70 pb-2 last:border-0 last:pb-0">
+      <span className="min-w-0 flex-1 truncate font-mono text-xs text-text" title={row.key}>{row.key}</span>
+      <Badge tone={row.set ? "success" : "neutral"}>{row.set ? "set" : "missing"}</Badge>
+      {row.source && <Badge tone="neutral">{row.source}</Badge>}
+    </div>
+  );
+}
+
+function Metric({ label, value, tone = "neutral" }: { label: string; value: string; tone?: "neutral" | "success" }) {
+  return (
+    <div className="border border-border bg-surface-2/60 p-3">
+      <div className="font-mono text-[10px] uppercase tracking-wide text-faint">{label}</div>
+      <div className={cn("mt-1 font-mono text-lg font-semibold", tone === "success" ? "text-success" : "text-text")}>{value}</div>
+    </div>
+  );
+}
+
+function text(value: unknown, fallback = ""): string {
+  if (value === undefined || value === null || value === "") return fallback;
+  return String(value);
+}
+
+function percent(value: number, fallback: string): string {
+  return Number.isFinite(value) ? `${Math.round(value * 100)}%` : fallback;
 }
 
 // Raw YAML escape hatch (advanced).
