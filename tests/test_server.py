@@ -3280,6 +3280,34 @@ def test_server_run_events_normalize_agent_emitted_events(monkeypatch, tmp_path)
     assert delta_event["text"] == "hel"
 
 
+def test_server_run_approval_unknown_run_returns_404(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        get_status, get_data = _request(port, "GET", "/v1/runs/run_missing/approval")
+        post_status, post_data = _request(
+            port,
+            "POST",
+            "/v1/runs/run_missing/approval",
+            {"choice": "once"},
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    get_body = json.loads(get_data)
+    post_body = json.loads(post_data)
+    assert get_status == 404
+    assert post_status == 404
+    assert get_body["run_id"] == "run_missing"
+    assert post_body["run_id"] == "run_missing"
+    assert get_body["error"]["code"] == "run_not_found"
+    assert post_body["error"]["code"] == "run_not_found"
+
+
 def test_server_run_approval_without_pending_returns_409(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server

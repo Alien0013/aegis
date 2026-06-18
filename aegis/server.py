@@ -2640,6 +2640,28 @@ def make_handler(config: Config):
             public = _public_stored_run_record(run)
             return 200, {"ok": True, **public, "run": public}
 
+        def _run_exists(self, run_id: str) -> bool:
+            if not run_id:
+                return False
+            with state_lock:
+                self._sweep_runs_locked()
+                if run_id in active_runs:
+                    return True
+            from .runs import RunStore
+
+            return RunStore().get(run_id) is not None
+
+        def _run_not_found_payload(self, run_id: str) -> dict[str, Any]:
+            return {
+                "ok": False,
+                "error": {
+                    "message": f"Run not found: {run_id}",
+                    "code": "run_not_found",
+                },
+                "run_id": run_id,
+                "id": run_id,
+            }
+
         def do_GET(self):  # noqa: N802
             if self._forbid_disallowed_origin():
                 return
@@ -2701,6 +2723,8 @@ def make_handler(config: Config):
                 with state_lock:
                     pending = [dict(v, event=None) for v in approvals.values()
                                if v.get("run_id") == run_id and not v.get("answered")]
+                if not pending and not self._run_exists(run_id):
+                    return self._json(404, self._run_not_found_payload(run_id))
                 return self._json(200, {"ok": True, "run_id": run_id, "pending": pending})
             if path.startswith("/v1/runs/"):
                 code, payload = self._run_detail(path.rsplit("/", 1)[-1])
@@ -4146,28 +4170,34 @@ def make_handler(config: Config):
                     pending = next((v for v in approvals.values()
                                     if v.get("run_id") == run_id and not v.get("answered")), None)
                     pending_items = [pending] if pending is not None else []
-                if not pending_items:
-                    return self._json(409, {
-                        "ok": False,
-                        "error": {
-                            "message": f"Run has no pending approval: {run_id}",
-                            "code": "approval_not_pending",
-                        },
-                        "run_id": run_id,
-                    })
-                for pending in pending_items:
-                    pending["approved"] = approved
-                    pending["choice"] = choice
-                    pending["answered"] = True
-                    self._append_run_event_locked(run_id, "approval.responded", {
-                        "approval_id": pending["id"],
-                        "approved": approved,
-                        "choice": choice,
-                        "prompt": pending.get("prompt", ""),
-                    })
-                rec = active_runs.get(run_id)
-                run_snapshot = dict(rec) if rec is not None else None
-                waiter_events = [pending.get("event") for pending in pending_items]
+                if pending_items:
+                    for pending in pending_items:
+                        pending["approved"] = approved
+                        pending["choice"] = choice
+                        pending["answered"] = True
+                        self._append_run_event_locked(run_id, "approval.responded", {
+                            "approval_id": pending["id"],
+                            "approved": approved,
+                            "choice": choice,
+                            "prompt": pending.get("prompt", ""),
+                        })
+                    rec = active_runs.get(run_id)
+                    run_snapshot = dict(rec) if rec is not None else None
+                    waiter_events = [pending.get("event") for pending in pending_items]
+                else:
+                    run_snapshot = None
+                    waiter_events = []
+            if not pending_items:
+                if not self._run_exists(run_id):
+                    return self._json(404, self._run_not_found_payload(run_id))
+                return self._json(409, {
+                    "ok": False,
+                    "error": {
+                        "message": f"Run has no pending approval: {run_id}",
+                        "code": "approval_not_pending",
+                    },
+                    "run_id": run_id,
+                })
             if run_snapshot is not None:
                 _persist_api_run_record(run_snapshot)
             for event in waiter_events:
