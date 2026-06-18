@@ -271,6 +271,31 @@ def test_cli_config_set_rejects_wrong_type_for_known_field(capsys):
     assert isinstance(Config.load().get("memory"), dict)
 
 
+def test_cli_config_edit_restores_invalid_yaml(monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    from aegis import config as cfg
+    from aegis.cli.main import main
+
+    cfg.config_path().parent.mkdir(parents=True, exist_ok=True)
+    original = "model:\n  provider: openai\n"
+    cfg.config_path().write_text(original, encoding="utf-8")
+
+    def fake_run(command):
+        cfg.config_path().write_text("model: [", encoding="utf-8")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setenv("EDITOR", "test-editor")
+    monkeypatch.setattr("aegis.cli.main.subprocess.run", fake_run)
+
+    assert main(["config", "edit"]) == 1
+    streams = capsys.readouterr()
+    assert cfg.config_path().read_text(encoding="utf-8") == original
+    assert "Restored previous config" in streams.out
+    assert "config edit failed validation" in streams.err
+    assert list(cfg.config_path().parent.glob("config.yaml.bak-*"))
+
+
 def test_cli_config_setup_alias_dispatches_setup(monkeypatch):
     from argparse import Namespace
 

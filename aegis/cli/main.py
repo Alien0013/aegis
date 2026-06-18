@@ -1034,6 +1034,27 @@ def cmd_config(args, config: Config) -> int:
                 return [candidate, str(target)]
         return None
 
+    def edit_backup_path(target: Path) -> Path:
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        candidate = target.with_name(f"{target.name}.bak-{stamp}")
+        index = 1
+        while candidate.exists():
+            candidate = target.with_name(f"{target.name}.bak-{stamp}-{index}")
+            index += 1
+        return candidate
+
+    def validate_yaml_config_edit(target: Path) -> str:
+        import yaml
+
+        try:
+            raw = target.read_text(encoding="utf-8")
+            data = yaml.safe_load(raw) if raw.strip() else {}
+        except Exception as exc:  # noqa: BLE001
+            return str(exc)
+        if data is not None and not isinstance(data, dict):
+            return "config root must be a YAML mapping"
+        return ""
+
     def show_summary() -> int:
         compression = config.get("agent.compression", {}) or {}
         platforms = config.get("display.platforms", {}) or {}
@@ -1143,6 +1164,8 @@ def cmd_config(args, config: Config) -> int:
     if args.action == "setup":
         return cmd_setup(args, config)
     if args.action == "edit":
+        import shutil
+
         target = cfg.env_path() if getattr(args, "secrets", False) else cfg.config_path()
         target.parent.mkdir(parents=True, exist_ok=True)
         target.touch(exist_ok=True)
@@ -1151,11 +1174,26 @@ def cmd_config(args, config: Config) -> int:
             _print("No editor found. Config file is at:")
             _print(f"  {target}")
             return 1
+        backup = edit_backup_path(target)
+        shutil.copy2(target, backup)
         _print(f"Opening {target} in {' '.join(command[:-1])}...")
         try:
-            return subprocess.run(command).returncode
+            code = subprocess.run(command).returncode
         except FileNotFoundError:
             return _die(f"editor not found: {command[0]}")
+        if code != 0:
+            _print(f"Editor exited with status {code}; backup kept at {backup}")
+            return code
+        if not getattr(args, "secrets", False):
+            validation_error = validate_yaml_config_edit(target)
+            if validation_error:
+                shutil.copy2(backup, target)
+                _print(f"Restored previous config from {backup}")
+                return _die(f"config edit failed validation: {validation_error}")
+            _print(f"Config OK. Backup: {backup}")
+        else:
+            _print(f"Secrets saved. Backup: {backup}")
+        return 0
     if args.action == "get":
         if not args.key:
             return _die("usage: aegis config get <key>")
