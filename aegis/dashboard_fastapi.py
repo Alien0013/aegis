@@ -2278,9 +2278,17 @@ def _dashboard_plugin_route_metadata(row: dict[str, Any]) -> dict[str, Any]:
 def _dashboard_plugin_api_observability(info: dict[str, Any]) -> dict[str, Any]:
     return {
         "request_count": int(info.get("request_count") or 0),
+        "success_count": int(info.get("success_count") or 0),
+        "error_count": int(info.get("error_count") or 0),
         "last_request_at": str(info.get("last_request_at") or ""),
         "last_request_path": str(info.get("last_request_path") or ""),
         "last_request_method": str(info.get("last_request_method") or ""),
+        "last_success_at": str(info.get("last_success_at") or ""),
+        "last_error_at": str(info.get("last_error_at") or ""),
+        "last_error_path": str(info.get("last_error_path") or ""),
+        "last_error_method": str(info.get("last_error_method") or ""),
+        "last_error_type": str(info.get("last_error_type") or ""),
+        "last_error": str(info.get("last_error") or ""),
         "mount_count": int(info.get("mount_count") or 0),
         "mount_error_count": int(info.get("mount_error_count") or 0),
         "mounted_at": str(info.get("mounted_at") or ""),
@@ -2295,9 +2303,17 @@ def _set_dashboard_plugin_api_mount_status(name: str, status: dict[str, Any]) ->
         previous = _DASHBOARD_PLUGIN_API_MOUNT_STATUS.get(name) or {}
         for key, default in (
             ("request_count", 0),
+            ("success_count", 0),
+            ("error_count", 0),
             ("last_request_at", ""),
             ("last_request_path", ""),
             ("last_request_method", ""),
+            ("last_success_at", ""),
+            ("last_error_at", ""),
+            ("last_error_path", ""),
+            ("last_error_method", ""),
+            ("last_error_type", ""),
+            ("last_error", ""),
             ("mount_count", 0),
             ("mount_error_count", 0),
             ("mounted_at", ""),
@@ -2348,6 +2364,36 @@ def _record_dashboard_plugin_api_request(name: str, request: Request) -> None:
         info["last_request_at"] = datetime.now(timezone.utc).isoformat()
         info["last_request_path"] = request.url.path
         info["last_request_method"] = request.method
+
+
+def _record_dashboard_plugin_api_success(name: str) -> None:
+    with _DASHBOARD_PLUGIN_API_MOUNT_LOCK:
+        info = _DASHBOARD_PLUGIN_API_MOUNT_STATUS.setdefault(name, {})
+        info["success_count"] = int(info.get("success_count") or 0) + 1
+        info["last_success_at"] = datetime.now(timezone.utc).isoformat()
+
+
+def _dashboard_plugin_error_message(exc: Exception) -> str:
+    if isinstance(exc, HTTPException):
+        detail = exc.detail
+        if isinstance(detail, str):
+            return detail
+        try:
+            return json.dumps(detail, sort_keys=True)
+        except TypeError:
+            return str(detail)
+    return str(exc)
+
+
+def _record_dashboard_plugin_api_error(name: str, request: Request, exc: Exception) -> None:
+    with _DASHBOARD_PLUGIN_API_MOUNT_LOCK:
+        info = _DASHBOARD_PLUGIN_API_MOUNT_STATUS.setdefault(name, {})
+        info["error_count"] = int(info.get("error_count") or 0) + 1
+        info["last_error_at"] = datetime.now(timezone.utc).isoformat()
+        info["last_error_path"] = request.url.path
+        info["last_error_method"] = request.method
+        info["last_error_type"] = type(exc).__name__
+        info["last_error"] = _dashboard_plugin_error_message(exc)[:500]
 
 
 def _dashboard_plugin_mount_info(row: dict[str, Any]) -> dict[str, Any]:
@@ -2743,12 +2789,19 @@ def _clear_dashboard_plugin_api_bytecode(path: Path) -> None:
 
 def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
     def dashboard_plugin_auth(record_name: str, expected_api: str):
-        def auth(request: Request) -> None:
+        def auth(request: Request):
             _require_request(request, config)
             live = _dashboard_plugin_record(config, record_name)
             if not live or str(live.get("_api") or "") != expected_api:
                 raise HTTPException(status_code=404, detail="dashboard plugin API not mounted")
             _record_dashboard_plugin_api_request(record_name, request)
+            try:
+                yield
+            except Exception as exc:
+                _record_dashboard_plugin_api_error(record_name, request, exc)
+                raise
+            else:
+                _record_dashboard_plugin_api_success(record_name)
 
         return auth
 

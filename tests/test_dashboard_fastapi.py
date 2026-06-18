@@ -2245,11 +2245,14 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
     (plug / "dashboard" / "dist" / "index.js").write_text("window.pulse = true;", encoding="utf-8")
     (plug / "dashboard" / "dist" / "style.css").write_text(".pulse{}", encoding="utf-8")
     (plug / "dashboard" / "plugin_api.py").write_text(
-        "from fastapi import APIRouter\n"
+        "from fastapi import APIRouter, HTTPException\n"
         "router = APIRouter()\n"
         "@router.get('/pulse')\n"
         "def pulse():\n"
-        "    return {'pulse': True}\n",
+        "    return {'pulse': True}\n"
+        "@router.get('/fail')\n"
+        "def fail():\n"
+        "    raise HTTPException(status_code=503, detail='plugin unavailable')\n",
         encoding="utf-8",
     )
 
@@ -2334,6 +2337,9 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
     route = asyncio.run(_request(app, "GET", "/api/plugins/pulse-panel/pulse", headers=headers))
     assert route.status_code == 200
     assert route.json() == {"pulse": True}
+    failed_route = asyncio.run(_request(app, "GET", "/api/plugins/pulse-panel/fail", headers=headers))
+    assert failed_route.status_code == 503
+    assert failed_route.json()["detail"] == "plugin unavailable"
     observed = asyncio.run(_request(app, "GET", "/api/plugins", headers=headers))
     assert observed.status_code == 200
     observed_body = observed.json()
@@ -2348,15 +2354,25 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
     assert pulse_mount["mounted_at"]
     assert pulse_mount["mount_duration_ms"] >= 0
     assert pulse_mount["fingerprint"]
-    assert pulse_mount["request_count"] >= 1
-    assert pulse_mount["last_request_path"] == "/api/plugins/pulse-panel/pulse"
+    assert pulse_mount["request_count"] >= 2
+    assert pulse_mount["success_count"] >= 1
+    assert pulse_mount["error_count"] == 1
+    assert pulse_mount["last_request_path"] == "/api/plugins/pulse-panel/fail"
     assert pulse_mount["last_request_method"] == "GET"
+    assert pulse_mount["last_success_at"]
+    assert pulse_mount["last_error_at"]
+    assert pulse_mount["last_error_path"] == "/api/plugins/pulse-panel/fail"
+    assert pulse_mount["last_error_method"] == "GET"
+    assert pulse_mount["last_error_type"] == "HTTPException"
+    assert pulse_mount["last_error"] == "plugin unavailable"
     observability = asyncio.run(_request(app, "GET", "/api/observability/contract", headers=headers))
     assert observability.status_code == 200
     observed_mount = observability.json()["dashboard_plugin_api_mounts"]["pulse-panel"]
     assert observed_mount["mounted"] is True
-    assert observed_mount["request_count"] >= 1
-    assert observed_mount["last_request_path"] == "/api/plugins/pulse-panel/pulse"
+    assert observed_mount["request_count"] >= 2
+    assert observed_mount["error_count"] == 1
+    assert observed_mount["last_request_path"] == "/api/plugins/pulse-panel/fail"
+    assert observed_mount["last_error"] == "plugin unavailable"
     assert observability.json()["dashboard_plugins"]["api_mounted_count"] >= 1
     assert observability.json()["dashboard_plugins"]["api_route_count"] >= 1
     assert observability.json()["routes"]["dashboard_plugin_hub"] == "/api/dashboard/plugins/hub"
