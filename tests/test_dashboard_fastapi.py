@@ -1906,6 +1906,35 @@ def test_fastapi_dashboard_plugin_duplicate_names_report_conflict_and_do_not_mou
     assert all(row["name_conflict"] is True for row in orphan_rows)
 
 
+def test_fastapi_dashboard_plugin_invalid_manifest_reports_error(tmp_path, monkeypatch):
+    plug = tmp_path / "plugins" / "broken"
+    (plug / "dashboard").mkdir(parents=True)
+    (plug / "dashboard" / "manifest.json").write_text("{bad", encoding="utf-8")
+
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    manifest = asyncio.run(_request(app, "GET", "/api/dashboard/plugins", headers=headers))
+    assert manifest.status_code == 200
+    row = next(item for item in manifest.json() if item["name"] == "broken")
+    assert row["status"] == "error"
+    assert row["manifest_error"] is True
+    assert "manifest.json" in row["errors"][0]
+    assert row["api_mount"]["status"] == "error"
+    assert row["api_mount"]["mounted"] is False
+    assert "manifest.json" in row["api_mount"]["error"]
+
+    plugins = asyncio.run(_request(app, "GET", "/api/plugins", headers=headers))
+    assert plugins.status_code == 200
+    assert plugins.json()["dashboard_api_mounts"]["broken"]["status"] == "error"
+
+    hub = asyncio.run(_request(app, "GET", "/api/dashboard/plugins/hub", headers=headers))
+    assert hub.status_code == 200
+    hub_row = next(item for item in hub.json()["plugins"] if item["key"] == "broken")
+    assert hub_row["runtime_status"] == "error"
+    assert hub_row["dashboard_manifest"]["manifest_error"] is True
+
+
 def test_fastapi_dashboard_only_plugins_are_discovered_and_mounted(tmp_path, monkeypatch):
     plug = tmp_path / "plugins" / "status"
     (plug / "dashboard" / "dist").mkdir(parents=True)

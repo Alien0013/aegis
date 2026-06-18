@@ -1976,6 +1976,7 @@ def _dashboard_plugin_hub(config: Config) -> dict[str, Any]:
             str(record.get("key") or ""),
             str(record.get("name") or ""),
         }
+        runtime_status = str(record.get("status") or "dashboard")
         rows.append({
             "name": record.get("plugin") or record.get("name") or "",
             "key": record.get("key") or record.get("plugin") or record.get("name") or "",
@@ -1984,9 +1985,11 @@ def _dashboard_plugin_hub(config: Config) -> dict[str, Any]:
             "source": record.get("source") or "user",
             "version": record.get("version") or "",
             "description": record.get("description") or "",
-            "status": "dashboard",
+            "status": runtime_status,
             "enabled": True,
-            "runtime_status": "dashboard",
+            "runtime_status": runtime_status,
+            "error": record.get("error") or "",
+            "errors": record.get("errors") or [],
             "has_dashboard_manifest": True,
             "dashboard_manifest": record,
             "dashboard_route": record.get("route"),
@@ -2207,6 +2210,15 @@ def _record_dashboard_plugin_api_request(name: str, request: Request) -> None:
 def _dashboard_plugin_mount_info(row: dict[str, Any]) -> dict[str, Any]:
     name = str(row.get("name") or "")
     api_path = str(row.get("_api") or "")
+    if row.get("_manifest_error"):
+        return {
+            "status": "error",
+            "mounted": False,
+            "api": "",
+            "routes": [],
+            "error": str(row.get("error") or "invalid dashboard manifest"),
+            **_dashboard_plugin_api_observability({}),
+        }
     if row.get("_duplicate_name_conflict"):
         return {
             "status": "error",
@@ -2247,11 +2259,69 @@ def _dashboard_plugin_mount_info(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _read_dashboard_manifest(manifest_path: Path) -> dict[str, Any] | None:
+    loaded, _error = _read_dashboard_manifest_with_error(manifest_path)
+    return loaded
+
+
+def _read_dashboard_manifest_with_error(manifest_path: Path) -> tuple[dict[str, Any] | None, str]:
     try:
         loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        loaded = None
-    return loaded if isinstance(loaded, dict) else None
+    except Exception as exc:  # noqa: BLE001
+        return None, f"{manifest_path.name}: {exc}"
+    if not isinstance(loaded, dict):
+        return None, f"{manifest_path.name}: expected a JSON object"
+    return loaded, ""
+
+
+def _dashboard_plugin_error_row(
+    *,
+    config: Config,
+    plugin_root: Path,
+    dash_root: Path,
+    plugin_name: str,
+    key: str,
+    kind: str,
+    category: str,
+    source: str,
+    error: str,
+    description: str = "",
+    version: str = "",
+) -> dict[str, Any] | None:
+    if not _dashboard_plugin_enabled(config, plugin_name, key):
+        return None
+    try:
+        name = _safe_resource_name(plugin_name, "plugin")
+    except ValueError:
+        name = "plugin"
+    return {
+        "name": name,
+        "plugin": plugin_name,
+        "key": key or plugin_name,
+        "kind": kind,
+        "category": category,
+        "source": source,
+        "label": plugin_name,
+        "icon": "TriangleAlert",
+        "title": plugin_name,
+        "description": description,
+        "version": version,
+        "status": "error",
+        "error": error,
+        "errors": [error],
+        "manifest_error": True,
+        "tab": {"path": f"/{name}", "position": "end", "hidden": True},
+        "slots": [],
+        "entry": "",
+        "css": [],
+        "base_path": f"/dashboard-plugins/{name}",
+        "has_api": False,
+        "api_compat_root": False,
+        "_manifest_error": True,
+        "_root": str(plugin_root.resolve()),
+        "_asset_root": str(dash_root.resolve()),
+        "_dist": str((dash_root / "dist").resolve()),
+        "_api": "",
+    }
 
 
 def _dashboard_plugin_row(
@@ -2343,11 +2413,45 @@ def _dashboard_plugin_records(config: Config) -> list[dict[str, Any]]:
         manifest_path = dash_root / "manifest.json"
         data: dict[str, Any] | None = None
         if manifest_path.exists():
-            data = _read_dashboard_manifest(manifest_path)
+            data, manifest_error = _read_dashboard_manifest_with_error(manifest_path)
+            if manifest_error:
+                row = _dashboard_plugin_error_row(
+                    config=config,
+                    plugin_root=plugin_root,
+                    dash_root=dash_root,
+                    plugin_name=manifest.name,
+                    key=manifest.key or manifest.name,
+                    kind=manifest.kind,
+                    category=manifest.category,
+                    source=manifest.source,
+                    description=manifest.description,
+                    version=manifest.version,
+                    error=manifest_error,
+                )
+                if row:
+                    rows.append(row)
+                continue
         if data is None and isinstance(getattr(manifest, "raw", None), dict):
             raw_dashboard = manifest.raw.get("dashboard") or manifest.raw.get("dashboard_manifest")
             if isinstance(raw_dashboard, dict):
                 data = raw_dashboard
+            elif raw_dashboard is not None:
+                row = _dashboard_plugin_error_row(
+                    config=config,
+                    plugin_root=plugin_root,
+                    dash_root=dash_root,
+                    plugin_name=manifest.name,
+                    key=manifest.key or manifest.name,
+                    kind=manifest.kind,
+                    category=manifest.category,
+                    source=manifest.source,
+                    description=manifest.description,
+                    version=manifest.version,
+                    error="embedded dashboard manifest must be an object",
+                )
+                if row:
+                    rows.append(row)
+                continue
         if data is None:
             continue
         if not isinstance(data, dict):
@@ -2371,11 +2475,26 @@ def _dashboard_plugin_records(config: Config) -> list[dict[str, Any]]:
         plugin_root = manifest_path.parent.parent
         if plugin_root.resolve() in manifest_roots:
             continue
-        data = _read_dashboard_manifest(manifest_path)
-        if not data:
-            continue
+        data, manifest_error = _read_dashboard_manifest_with_error(manifest_path)
         plugin_name = plugin_root.name
         key, category = _dashboard_plugin_key(plugin_root, base, plugin_name)
+        if manifest_error:
+            row = _dashboard_plugin_error_row(
+                config=config,
+                plugin_root=plugin_root,
+                dash_root=manifest_path.parent,
+                plugin_name=plugin_name,
+                key=key,
+                kind="dashboard",
+                category=category,
+                source="user",
+                error=manifest_error,
+            )
+            if row:
+                rows.append(row)
+            continue
+        if not data:
+            continue
         row = _dashboard_plugin_row(
             config=config,
             plugin_root=plugin_root,
