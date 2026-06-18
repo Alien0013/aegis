@@ -1868,19 +1868,31 @@ def _skills_payload(config: Config) -> dict[str, Any]:
     rows = []
     for skill in sorted(SkillsLoader(config).available(), key=lambda s: s.name):
         rows.append({
+            "id": skill.name,
+            "object": "skill",
             "name": skill.name,
             "description": skill.description,
             "path": str(skill.path),
+            "directory": str(skill.dir),
             "source": getattr(skill, "source", ""),
             "toolsets": list(getattr(skill, "toolsets", []) or []),
         })
-    return {"object": "list", "data": rows}
+    return {"object": "list", "data": rows, "count": len(rows)}
 
 
 def _toolsets_payload(config: Config) -> dict[str, Any]:
     from .dashboard import _dashboard_toolsets
 
-    return {"object": "list", "data": _dashboard_toolsets(config)}
+    rows = []
+    for row in _dashboard_toolsets(config):
+        name = str(row.get("name") or "")
+        rows.append({"id": name, "object": "toolset", **row})
+    return {
+        "object": "list",
+        "data": rows,
+        "count": len(rows),
+        "active": [row["name"] for row in rows if bool(row.get("enabled"))],
+    }
 
 
 def _job_payload(job) -> dict[str, Any]:

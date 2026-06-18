@@ -1271,6 +1271,15 @@ def test_server_health_capabilities_and_body_limit(monkeypatch, tmp_path):
     assert routes["responses.input_items"]["path"] == "/v1/responses/{response_id}/input_items"
     assert routes["responses.input_tokens"]["path"] == "/v1/responses/input_tokens"
     assert routes["responses.compact"]["path"] == "/v1/responses/compact"
+    assert routes["health"]["path"] == "/v1/health"
+    assert routes["health.detailed"]["path"] == "/v1/health/detailed"
+    assert routes["skills"]["path"] == "/v1/skills"
+    assert routes["toolsets"]["path"] == "/v1/toolsets"
+    assert routes["jobs"]["path"] == "/api/jobs"
+    assert routes["jobs.detail"]["methods"] == ["GET", "PATCH", "DELETE"]
+    assert routes["jobs.control"]["methods"] == ["POST"]
+    assert routes["session_checks"]["path"] == "/api/session-checks"
+    assert routes["session_checks.repair"]["path"] == "/api/session-checks/repair"
     assert caps["features"]["response_input_items"] is True
     assert routes["runs.approval"]["methods"] == ["GET", "POST"]
     assert caps["features"]["responses_persistence"] is True
@@ -1331,9 +1340,19 @@ def test_server_health_skills_toolsets_and_cors_options(monkeypatch, tmp_path):
     assert health_headers["X-Content-Type-Options"] == "nosniff"
     assert "Access-Control-Allow-Origin" not in health_headers
     assert skills_status == 200
-    assert json.loads(skills_data)["object"] == "list"
+    skills = json.loads(skills_data)
+    assert skills["object"] == "list"
+    assert skills["count"] == len(skills["data"])
+    assert skills["data"]
+    assert all(row["object"] == "skill" and row["id"] == row["name"] for row in skills["data"])
+    assert all("directory" in row and "toolsets" in row for row in skills["data"])
     assert toolsets_status == 200
-    assert json.loads(toolsets_data)["object"] == "list"
+    toolsets = json.loads(toolsets_data)
+    assert toolsets["object"] == "list"
+    assert toolsets["count"] == len(toolsets["data"])
+    assert toolsets["active"]
+    assert all(row["object"] == "toolset" and row["id"] == row["name"] for row in toolsets["data"])
+    assert all("tool_count" in row and "enabled_count" in row for row in toolsets["data"])
     assert options_status == 204
     assert options_headers["Access-Control-Allow-Origin"] == "http://client.local"
     assert options_headers["Access-Control-Max-Age"] == "600"
