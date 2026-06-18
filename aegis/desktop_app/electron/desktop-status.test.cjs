@@ -67,6 +67,7 @@ test("desktop diagnostics exposes runtime, stamp, checks, and repair actions", (
     versions: { electron: "33.0.0", chrome: "123", node: "22" },
     platform: "linux",
     arch: "x64",
+    probeCommand: () => true,
   });
 
   assert.equal(report.packaged, true);
@@ -96,6 +97,7 @@ test("desktop diagnostics treats a packaged resource backend as configured", () 
     env: {},
     platform: "linux",
     versions: {},
+    probeCommand: (command) => command === bundled,
   });
 
   assert.equal(report.backendDiscovery.configured, true);
@@ -103,6 +105,34 @@ test("desktop diagnostics treats a packaged resource backend as configured", () 
   assert(report.backendDiscovery.packagedCandidates.includes(bundled));
   assert(report.backendDiscovery.packagedPathEntries.includes(path.dirname(bundled)));
   assert.equal(report.checks.find((row) => row.id === "backend_environment").severity, "ok");
+  assert.equal(report.backendDiscovery.command.command, bundled);
+  assert.equal(report.backendDiscovery.command.usable, true);
+});
+
+test("desktop diagnostics rejects an unprobeable packaged resource backend", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "aegis-desktop-status-"));
+  const resources = path.join(root, "resources");
+  const bundled = path.join(resources, "aegis", "bin", "aegis");
+  fs.mkdirSync(path.dirname(bundled), { recursive: true });
+  fs.writeFileSync(bundled, "not a valid backend\n");
+
+  const report = desktopDiagnostics({
+    app: fakeApp({ packaged: true, appPath: path.join(resources, "app.asar") }),
+    desktopRoot: root,
+    resourcesPath: resources,
+    env: {},
+    platform: "linux",
+    versions: {},
+    probeCommand: () => false,
+  });
+
+  const check = report.checks.find((row) => row.id === "backend_environment");
+  assert.equal(report.backendDiscovery.bundled, true);
+  assert.equal(report.backendDiscovery.configured, false);
+  assert.equal(report.backendDiscovery.command.usable, false);
+  assert.equal(check.ok, false);
+  assert.equal(check.severity, "error");
+  assert.match(check.detail, /candidate exists but did not pass version probe/);
 });
 
 test("desktop diagnostics reports packaged backend bootstrap failure as error", () => {

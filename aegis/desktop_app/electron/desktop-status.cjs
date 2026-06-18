@@ -121,27 +121,38 @@ function desktopDiagnostics({
     try { return exists(candidate); } catch { return false; }
   });
   const configuredBackend = Boolean(env.AEGIS_HOME || env.AEGIS_BIN);
-  const commandResolution = (!configuredBackend && !bundledBackend)
-    ? resolveAegisCommand({
-      platform,
-      env,
-      packaged,
-      resourcesPath,
-      appPath,
-      exists,
-      ...(probeCommand ? { probeCommand } : {}),
-    })
-    : {
-      command: env.AEGIS_BIN || "",
-      usable: true,
-      source: configuredBackend ? "configured" : "packaged",
-      reason: configuredBackend
-        ? "AEGIS_HOME or AEGIS_BIN is configured"
-        : "packaged backend candidate is bundled",
-      candidates: packagedBackendCandidates,
-    };
-  const pathBackend = !configuredBackend && !bundledBackend && Boolean(commandResolution.usable);
-  const backendConfigured = Boolean(configuredBackend || bundledBackend || pathBackend);
+  const commandResolution = resolveAegisCommand({
+    platform,
+    env,
+    packaged,
+    resourcesPath,
+    appPath,
+    exists,
+    ...(probeCommand ? { probeCommand } : {}),
+  });
+  const pathBackend = commandResolution.usable && commandResolution.source === "path";
+  const packagedBackend = commandResolution.usable
+    && packagedBackendCandidates.includes(commandResolution.command);
+  const backendConfigured = Boolean(commandResolution.usable);
+  const backendDetail = backendConfigured
+    ? (
+      packagedBackend
+        ? "packaged backend candidate passed version probe"
+        : (
+          pathBackend
+            ? "AEGIS backend resolved from PATH"
+            : (
+              configuredBackend
+                ? "configured AEGIS backend passed version probe"
+                : "AEGIS backend resolved from installed candidate"
+            )
+        )
+    )
+    : (
+      bundledBackend
+        ? `packaged backend candidate exists but did not pass version probe: ${commandResolution.reason}`
+        : `packaged desktop cannot find a usable AEGIS backend: ${commandResolution.reason}`
+    );
   const remoteDisplayReason = detectRemoteDisplay({ env, platform });
   const checks = [
     {
@@ -160,13 +171,7 @@ function desktopDiagnostics({
       id: "backend_environment",
       ok: backendConfigured || !packaged,
       severity: backendConfigured || !packaged ? "ok" : "error",
-      detail: backendConfigured
-        ? (
-          bundledBackend
-            ? "packaged backend candidate is bundled"
-            : (pathBackend ? "AEGIS backend resolved from PATH" : "AEGIS_HOME or AEGIS_BIN is configured")
-        )
-        : `packaged desktop cannot find a usable AEGIS backend: ${commandResolution.reason}`,
+      detail: backendDetail,
     },
   ];
   return {
