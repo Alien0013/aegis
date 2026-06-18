@@ -2016,12 +2016,22 @@ def test_fastapi_dashboard_plugins_manifest_assets_and_api(tmp_path, monkeypatch
     assert rows[0]["css"] == ["style.css"]
     assert rows[0]["has_api"] is True
 
-    asset = asyncio.run(_request(app, "GET", "/dashboard-plugins/demo-panel/index.js"))
+    denied_asset = asyncio.run(_request(app, "GET", "/dashboard-plugins/demo-panel/index.js"))
+    assert denied_asset.status_code == 401
+    asset = asyncio.run(_request(app, "GET", "/dashboard-plugins/demo-panel/index.js", headers=headers))
     assert asset.status_code == 200
     assert "window.demoPlugin" in asset.text
+    root = asyncio.run(_request(app, "GET", "/"))
+    cookie_asset = asyncio.run(_request(
+        app,
+        "GET",
+        "/dashboard-plugins/demo-panel/index.js",
+        cookies={"aegis_dashboard_token": root.cookies["aegis_dashboard_token"]},
+    ))
+    assert cookie_asset.status_code == 200
 
-    source = asyncio.run(_request(app, "GET", "/dashboard-plugins/demo-panel/secret.py"))
-    traversal = asyncio.run(_request(app, "GET", "/dashboard-plugins/demo-panel/../api.py"))
+    source = asyncio.run(_request(app, "GET", "/dashboard-plugins/demo-panel/secret.py", headers=headers))
+    traversal = asyncio.run(_request(app, "GET", "/dashboard-plugins/demo-panel/../api.py", headers=headers))
     assert source.status_code == 404
     assert traversal.status_code == 404
 
@@ -2163,7 +2173,7 @@ def test_fastapi_dashboard_only_plugins_are_discovered_and_mounted(tmp_path, mon
     assert hub_row["dashboard_manifest"]["name"] == "status-panel"
     assert any(item["name"] == "status-panel" for item in hub.json()["orphan_dashboard_plugins"])
 
-    asset = asyncio.run(_request(app, "GET", "/dashboard-plugins/status-panel/dist/index.js"))
+    asset = asyncio.run(_request(app, "GET", "/dashboard-plugins/status-panel/dist/index.js", headers=headers))
     assert asset.status_code == 200
     assert "window.statusPanel" in asset.text
 
@@ -2316,7 +2326,7 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
     assert "/api/plugins/pulse-panel/pulse" in row["api_routes"]
     assert row["api_compat_root"] is False
 
-    asset = asyncio.run(_request(app, "GET", "/dashboard-plugins/pulse-panel/dist/index.js"))
+    asset = asyncio.run(_request(app, "GET", "/dashboard-plugins/pulse-panel/dist/index.js", headers=headers))
     assert asset.status_code == 200
     assert "window.pulse" in asset.text
 
@@ -2481,7 +2491,7 @@ def test_fastapi_dashboard_plugin_embedded_yaml_dashboard_manifest(tmp_path, mon
     assert hub_row["dashboard_manifest"]["name"] == "brief-panel"
     assert hub_row["api_mount"]["status"] == "mounted"
 
-    asset = asyncio.run(_request(app, "GET", "/dashboard-plugins/brief-panel/dist/index.js"))
+    asset = asyncio.run(_request(app, "GET", "/dashboard-plugins/brief-panel/dist/index.js", headers=headers))
     assert asset.status_code == 200
     assert "window.brief" in asset.text
     route = asyncio.run(_request(app, "GET", "/api/plugins/brief-panel/brief", headers=headers))
@@ -2541,7 +2551,7 @@ def test_fastapi_entrypoint_plugin_package_dashboard_manifest_mounts(tmp_path, m
 
     plugins = asyncio.run(_request(app, "GET", "/api/plugins", headers=headers))
     manifest = asyncio.run(_request(app, "GET", "/api/dashboard/plugins", headers=headers))
-    asset = asyncio.run(_request(app, "GET", "/dashboard-plugins/entry-panel/dist/index.js"))
+    asset = asyncio.run(_request(app, "GET", "/dashboard-plugins/entry-panel/dist/index.js", headers=headers))
     route = asyncio.run(_request(app, "GET", "/api/plugins/entry-panel/ping", headers=headers))
     hub = asyncio.run(_request(app, "GET", "/api/dashboard/plugins/hub", headers=headers))
 

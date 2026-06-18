@@ -5278,7 +5278,8 @@ def create_app(config: Config) -> FastAPI:
         return JSONResponse({"ok": True, "count": len(hub.get("plugins", [])), **hub})
 
     @app.get("/dashboard-plugins/{plugin_name}/{file_path:path}")
-    async def dashboard_plugin_asset(plugin_name: str, file_path: str) -> Response:
+    async def dashboard_plugin_asset(plugin_name: str, file_path: str, request: Request) -> Response:
+        _require_request(request, config)
         return _dashboard_plugin_static(config, plugin_name, file_path)
 
     @app.get("/dashboard-plugins/{bad_path:path}")
