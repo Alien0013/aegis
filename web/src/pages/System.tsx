@@ -16,7 +16,10 @@ export function System() {
   const stats = useApi<Record<string, unknown>>("system/stats");
   const [desktopConnection, setDesktopConnection] = useState<DesktopConnection | null>(null);
   const [projectDir, setProjectDir] = useState("");
+  const [remoteUrl, setRemoteUrl] = useState("");
+  const [remoteToken, setRemoteToken] = useState("");
   const [savingProjectDir, setSavingProjectDir] = useState(false);
+  const [savingRemote, setSavingRemote] = useState(false);
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [repairBusy, setRepairBusy] = useState("");
 
@@ -44,6 +47,8 @@ export function System() {
         if (!cancelled) {
           applyDesktopSnapshot(connection);
           setProjectDir(connection.settings?.defaultProjectDir || "");
+          setRemoteUrl(connection.settings?.remoteBackend?.url || "");
+          setRemoteToken(connection.settings?.remoteBackend?.token || "");
         }
       })
       .catch(() => { if (!cancelled) setDesktopConnection(null); });
@@ -87,6 +92,8 @@ export function System() {
     const connection = await desktop?.getConnection?.();
     applyDesktopSnapshot(connection);
     setProjectDir(connection?.settings?.defaultProjectDir || "");
+    setRemoteUrl(connection?.settings?.remoteBackend?.url || "");
+    setRemoteToken(connection?.settings?.remoteBackend?.token || "");
     return connection;
   }
 
@@ -119,6 +126,25 @@ export function System() {
       toast(String(e), "err");
     } finally {
       setSavingProjectDir(false);
+    }
+  }
+
+  async function saveRemoteBackend(nextUrl = remoteUrl, nextToken = remoteToken) {
+    if (!desktop?.setRemoteBackend) return;
+    setSavingRemote(true);
+    try {
+      const res = await desktop.setRemoteBackend({
+        url: nextUrl.trim(),
+        token: nextToken.trim(),
+      });
+      const settings = res.settings;
+      setRemoteUrl(settings?.remoteBackend?.url || nextUrl.trim());
+      setRemoteToken(settings?.remoteBackend?.token || nextToken.trim());
+      toast(nextUrl.trim() ? "Remote dashboard saved; desktop is reconnecting" : "Remote dashboard cleared; desktop is reconnecting");
+    } catch (e) {
+      toast(String(e), "err");
+    } finally {
+      setSavingRemote(false);
     }
   }
 
@@ -179,6 +205,7 @@ export function System() {
               <dl className="grid gap-y-2 text-sm sm:grid-cols-2">
                 <Row k="Mode" v={desktopConnection?.mode || "local"} />
                 <Row k="Backend" v={desktopConnection?.backend?.running ? "running" : "offline"} />
+                <Row k="Remote source" v={desktopConnection?.backend?.remote?.source} />
                 <Row k="Updater" v={updater?.stage} />
                 <Row k="Update note" v={updater?.message || updater?.error} />
                 <Row k="Update version" v={updater?.version} />
@@ -188,6 +215,7 @@ export function System() {
                 <Row k="Uptime" v={formatDuration(desktopConnection?.backend?.uptimeMs || 0)} />
                 <Row k="Restarts" v={`${desktopConnection?.backend?.crashRestarts ?? 0}/${desktopConnection?.backend?.maxCrashRestarts ?? 0}`} />
                 <Row k="Base URL" v={desktopConnection?.baseUrl} mono />
+                <Row k="Remote token" v={desktopConnection?.backend?.remote?.tokenConfigured ? "configured" : ""} />
                 <Row k="Command" v={desktopConnection?.backend?.command} mono />
                 <Row k="AEGIS home" v={desktopConnection?.backend?.env?.AEGIS_HOME} mono />
                 <Row k="Terminal cwd" v={desktopConnection?.backend?.env?.TERMINAL_CWD} mono />
@@ -219,6 +247,36 @@ export function System() {
                   <p className="mt-2 text-xs text-warning">TERMINAL_CWD was set when the desktop app launched, so it overrides this preference for this run.</p>
                 )}
               </div>
+              {desktop?.setRemoteBackend && (
+                <div className="mt-4 border-t border-border pt-4">
+                  <div className="mb-2">
+                    <div className="font-mono text-xs font-semibold uppercase tracking-wide text-dim">Remote dashboard</div>
+                    <p className="mt-1 text-xs text-faint">
+                      Leave URL empty to launch the local desktop backend. Saving reconnects the desktop shell.
+                    </p>
+                  </div>
+                  <div className="grid gap-2 lg:grid-cols-[minmax(0,1.3fr)_minmax(220px,.7fr)_auto_auto]">
+                    <Input
+                      value={remoteUrl}
+                      placeholder="https://host:port"
+                      onChange={(event) => setRemoteUrl(event.target.value)}
+                      onKeyDown={(event) => event.key === "Enter" && saveRemoteBackend()}
+                    />
+                    <Input
+                      type="password"
+                      value={remoteToken}
+                      placeholder="dashboard token"
+                      onChange={(event) => setRemoteToken(event.target.value)}
+                      onKeyDown={(event) => event.key === "Enter" && saveRemoteBackend()}
+                    />
+                    <Button variant="primary" icon="check" disabled={savingRemote} onClick={() => saveRemoteBackend()}>Save</Button>
+                    <Button variant="ghost" icon="trash" disabled={savingRemote || (!remoteUrl && !remoteToken)} onClick={() => saveRemoteBackend("", "")}>Clear</Button>
+                  </div>
+                  {desktopConnection?.mode === "remote" && (
+                    <p className="mt-2 text-xs text-success">Connected in remote mode from {desktopConnection.source || "settings"}.</p>
+                  )}
+                </div>
+              )}
               {!!repairActions.length && desktop?.runRepairAction && (
                 <div className="mt-4 border-t border-border pt-4">
                   <div className="mb-2 font-mono text-xs font-semibold uppercase tracking-wide text-dim">Repair actions</div>

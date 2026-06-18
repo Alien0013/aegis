@@ -369,7 +369,7 @@ function connectionDescriptor() {
   const baseUrl = backendBaseUrl();
   const remote = remoteConnection();
   const isRemote = remote.enabled;
-  const running = !isRemote && !!(backend && !backend.killed);
+  const running = isRemote || !!(backend && !backend.killed);
   const settings = readDesktopSettings({ userData: app.getPath("userData") });
   const descriptor = {
     baseUrl,
@@ -452,6 +452,17 @@ function persistDesktopBackendEnv(values = {}) {
   const changed = Object.keys(values).filter((key) => values[key]);
   log(`desktop settings: backendEnv=${changed.length ? changed.join(",") : "(cleared)"}`);
   return { ok: true, settings: connectionDescriptor().settings };
+}
+
+function persistDesktopRemoteBackend(values = {}) {
+  const current = readDesktopSettings({ userData: app.getPath("userData") });
+  const settings = writeDesktopSettings(
+    { remoteBackend: { ...(current.remoteBackend || {}), ...values } },
+    { userData: app.getPath("userData") },
+  );
+  log(`desktop settings: remoteBackend=${settings.remoteBackend.url || "(cleared)"}`);
+  setTimeout(() => restartFromScratch(), 0);
+  return { ok: true, settings: connectionDescriptor().settings, restarting: true };
 }
 
 async function chooseBackendEnvTarget() {
@@ -953,6 +964,7 @@ ipcMain.handle("aegis:update:status", () => ({ ...updaterStatus }));
 ipcMain.handle("aegis:update:install", () => installDownloadedUpdate());
 ipcMain.handle("aegis:settings:get", () => connectionDescriptor().settings);
 ipcMain.handle("aegis:settings:setDefaultProjectDir", (_e, value) => persistDesktopProjectDir(value));
+ipcMain.handle("aegis:settings:setRemoteBackend", (_e, value) => persistDesktopRemoteBackend(value || {}));
 ipcMain.handle("aegis:settings:chooseProjectDir", () => chooseDesktopProjectDir());
 
 /* ---------- deep links (aegis://) ---------- */

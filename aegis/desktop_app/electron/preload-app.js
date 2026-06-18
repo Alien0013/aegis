@@ -31,5 +31,6 @@ contextBridge.exposeInMainWorld("aegisDesktop", {
   installUpdate: () => ipcRenderer.invoke("aegis:update:install"),
   getSettings: () => ipcRenderer.invoke("aegis:settings:get"),
   setDefaultProjectDir: (path) => ipcRenderer.invoke("aegis:settings:setDefaultProjectDir", path),
+  setRemoteBackend: (settings) => ipcRenderer.invoke("aegis:settings:setRemoteBackend", settings),
   chooseProjectDir: () => ipcRenderer.invoke("aegis:settings:chooseProjectDir"),
 });

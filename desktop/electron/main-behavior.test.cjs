@@ -55,6 +55,8 @@ test("remote dashboard mode skips local backend spawn", () => {
   requireSnippet("websocketUrlForBase(baseUrl, token)");
   requireSnippet("requestTransport(target).get");
   requireSnippet("requestTransport(url).request");
+  requireSnippet("function persistDesktopRemoteBackend");
+  requireSnippet('ipcMain.handle("aegis:settings:setRemoteBackend"');
 });
 
 test("restart and splash lifecycle is single-flight", () => {
@@ -106,6 +108,7 @@ test("renderer diagnostics and logs bridge is bounded", () => {
   requireSnippet('ipcMain.handle("aegis:logs:recent"');
   requireSnippet('ipcMain.handle("aegis:settings:get"');
   requireSnippet('ipcMain.handle("aegis:settings:setDefaultProjectDir"');
+  requireSnippet('ipcMain.handle("aegis:settings:setRemoteBackend"');
   requireSnippet('ipcMain.handle("aegis:settings:chooseProjectDir"');
   requireSnippet("desktopProjectCwd({");
   assert.notEqual(preload.indexOf("getDiagnostics"), -1);
@@ -113,6 +116,7 @@ test("renderer diagnostics and logs bridge is bounded", () => {
   assert.notEqual(preload.indexOf("getRecentLogs: (limit)"), -1);
   assert.notEqual(preload.indexOf("getSettings"), -1);
   assert.notEqual(preload.indexOf("setDefaultProjectDir"), -1);
+  assert.notEqual(preload.indexOf("setRemoteBackend"), -1);
   assert.notEqual(preload.indexOf("chooseProjectDir"), -1);
   assert.notEqual(preload.indexOf("checkForUpdates"), -1);
   assert.notEqual(preload.indexOf("getUpdateStatus"), -1);

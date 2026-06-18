@@ -27,6 +27,11 @@ export interface DesktopConnection {
     userDataPath?: string;
     cwdSource?: string;
     env?: Record<string, string>;
+    remote?: {
+      url?: string;
+      source?: string;
+      tokenConfigured?: boolean;
+    } | null;
   };
   settings?: DesktopSettings;
 }
@@ -78,6 +83,11 @@ export interface DesktopBridge {
   getConnection?(): Promise<DesktopConnection>;
   getSettings?(): Promise<DesktopSettings>;
   setDefaultProjectDir?(path: string): Promise<{ ok?: boolean; settings?: DesktopSettings }>;
+  setRemoteBackend?(settings: DesktopRemoteBackend): Promise<{
+    ok?: boolean;
+    restarting?: boolean;
+    settings?: DesktopSettings;
+  }>;
   chooseProjectDir?(): Promise<{ ok?: boolean; cancelled?: boolean; settings?: DesktopSettings }>;
   checkForUpdates?(): Promise<DesktopUpdaterStatus>;
   getUpdateStatus?(): Promise<DesktopUpdaterStatus>;
@@ -90,8 +100,14 @@ export interface DesktopSettings {
     AEGIS_HOME?: string;
     AEGIS_BIN?: string;
   };
+  remoteBackend?: DesktopRemoteBackend;
   explicitLaunchCwd?: boolean;
   settingsPath?: string;
+}
+
+export interface DesktopRemoteBackend {
+  url?: string;
+  token?: string;
 }
 
 export const desktop: DesktopBridge | undefined = (
