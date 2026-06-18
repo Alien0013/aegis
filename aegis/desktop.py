@@ -271,6 +271,7 @@ def cmd_desktop(args, config) -> int:  # noqa: ARG001
 
     env = os.environ.copy()
     env.setdefault("AEGIS_BIN", _aegis_bin())
+    env.setdefault("AEGIS_HOME", str(cfg.get_home()))
     env["TERMINAL_CWD"] = terminal_cwd
 
     package = getattr(args, "package", None)

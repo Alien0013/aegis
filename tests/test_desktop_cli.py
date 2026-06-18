@@ -72,6 +72,8 @@ def test_desktop_npm_install_command_uses_lockfile(tmp_path):
 
 
 def test_desktop_launch_skips_install_when_dependencies_exist(monkeypatch, tmp_path):
+    from aegis import config as cfg
+
     source = _write_desktop_template(tmp_path / "source")
     target = tmp_path / "runtime"
     project = tmp_path / "project"
@@ -109,10 +111,13 @@ def test_desktop_launch_skips_install_when_dependencies_exist(monkeypatch, tmp_p
     assert calls[0]["cwd"] == target
     assert calls[1]["cwd"] == target
     assert calls[1]["env"]["AEGIS_BIN"] == "/usr/local/bin/aegis"
+    assert calls[1]["env"]["AEGIS_HOME"] == str(cfg.get_home())
     assert calls[1]["env"]["TERMINAL_CWD"] == str(project)
 
 
 def test_desktop_source_launch_accepts_explicit_cwd(monkeypatch, tmp_path):
+    from aegis import config as cfg
+
     source = _write_desktop_template(tmp_path / "source")
     target = tmp_path / "runtime"
     project = tmp_path / "project"
@@ -134,7 +139,40 @@ def test_desktop_source_launch_accepts_explicit_cwd(monkeypatch, tmp_path):
     assert desktop.cmd_desktop(args, object()) == 0
 
     assert calls[0]["cmd"] == ["/usr/bin/npm", "start"]
+    assert calls[0]["env"]["AEGIS_HOME"] == str(cfg.get_home())
     assert calls[0]["env"]["TERMINAL_CWD"] == str(project)
+
+
+def test_desktop_launch_preserves_explicit_aegis_home(monkeypatch, tmp_path):
+    source = _write_desktop_template(tmp_path / "source")
+    target = tmp_path / "runtime"
+    project = tmp_path / "project"
+    explicit_home = tmp_path / "explicit-home"
+    project.mkdir()
+    desktop._sync_desktop_app(source, target)
+    (target / "node_modules" / "electron").mkdir(parents=True)
+    calls: list[dict] = []
+
+    def fake_run(cmd, cwd, env=None):
+        calls.append({"cmd": cmd, "cwd": cwd, "env": env})
+        if cmd == ["/usr/bin/npm", "run", "pack"]:
+            exe = desktop._unpacked_executable(target)
+            exe.parent.mkdir(parents=True, exist_ok=True)
+            exe.write_text("#!/bin/sh\n", encoding="utf-8")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setenv("AEGIS_DESKTOP_DIR", str(target))
+    monkeypatch.setenv("AEGIS_HOME", str(explicit_home))
+    monkeypatch.setattr(desktop, "_desktop_source", lambda: source)
+    monkeypatch.setattr(desktop.shutil, "which", lambda name: "/usr/bin/npm" if name == "npm" else "/usr/local/bin/aegis")
+    monkeypatch.setattr(desktop.subprocess, "run", fake_run)
+    monkeypatch.chdir(project)
+
+    args = Namespace(install_only=False, reinstall=False, sandbox=False, source=False, cwd=None)
+    assert desktop.cmd_desktop(args, object()) == 0
+
+    assert calls[-1]["env"]["AEGIS_HOME"] == str(explicit_home)
+    assert calls[-1]["env"]["TERMINAL_CWD"] == str(project)
 
 
 def test_desktop_launch_rejects_invalid_cwd(monkeypatch, tmp_path, capsys):
