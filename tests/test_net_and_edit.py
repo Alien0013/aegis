@@ -264,6 +264,8 @@ def test_redact_secrets_covers_headers_json_env_urls_and_private_keys():
         "OPENAI_API_KEY=sk-proj-ABCDEFGHIJ1234567890",
         "Authorization: Bearer github_pat_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456",
         '{"access_token": "eyJabcdefghijklmnopqrstuv.abcdefghij.klmnopqrst"}',
+        "server:\n  dashboard_token: plain-dashboard-secret # local dashboard",
+        "- api_key: 'plain-list-secret'",
         "postgres://user:dbpassword@example.com/app",
         "https://user:token-secret@example.com/path?client_secret=abc123&ok=1",
         "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----",
@@ -275,12 +277,16 @@ def test_redact_secrets_covers_headers_json_env_urls_and_private_keys():
         "sk-proj-ABCDEFGHIJ1234567890",
         "github_pat_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456",
         "eyJabcdefghijklmnopqrstuv.abcdefghij.klmnopqrst",
+        "plain-dashboard-secret",
+        "plain-list-secret",
         "dbpassword",
         "token-secret",
         "abc123",
         "BEGIN PRIVATE KEY",
     ):
         assert secret not in out
+    assert "dashboard_token: [REDACTED] # local dashboard" in out
+    assert "- api_key: '[REDACTED]'" in out
     assert out.count("[REDACTED]") >= 6
 
 

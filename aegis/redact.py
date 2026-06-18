@@ -34,6 +34,12 @@ _JSON_FIELD_RE = re.compile(
     r'private_key|secret_value|raw_secret|secret_input|key_material)")\s*:\s*"([^"]+)"',
     re.IGNORECASE,
 )
+_YAML_SECRET_FIELD_RE = re.compile(
+    r"(?im)^(\s*[-]?\s*[A-Za-z0-9_.-]{0,80}"
+    r"(?:api[_-]?key|token|secret|password|access[_-]?token|refresh[_-]?token|auth[_-]?token|"
+    r"bearer|private[_-]?key|secret[_-]?value|raw[_-]?secret|secret[_-]?input|key[_-]?material)"
+    r"[A-Za-z0-9_.-]{0,80}\s*:\s*)(['\"]?)([^#\n]+?)(\2)(\s*(?:#.*)?)$",
+)
 _AUTH_HEADER_RE = re.compile(r"(Authorization:\s*(?:Bearer|Basic|Bot)\s+)(\S+)", re.IGNORECASE)
 _PRIVATE_KEY_RE = re.compile(
     r"-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----"
@@ -57,6 +63,7 @@ def redact_secrets(text: str) -> str:
     value = _AUTH_HEADER_RE.sub(r"\1[REDACTED]", value)
     value = _ENV_ASSIGN_RE.sub(r"\1=\2[REDACTED]\2", value)
     value = _JSON_FIELD_RE.sub(r'\1: "[REDACTED]"', value)
+    value = _YAML_SECRET_FIELD_RE.sub(r"\1\2[REDACTED]\4\5", value)
     value = _DB_CONNSTR_RE.sub(r"\1[REDACTED]\3", value)
     value = _URL_USERINFO_RE.sub(r"\1[REDACTED]\3", value)
     value = _SENSITIVE_QUERY_RE.sub(r"\1[REDACTED]", value)
