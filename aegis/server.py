@@ -960,9 +960,27 @@ def _session_payload(session) -> dict[str, Any]:
     }
 
 
+def _tool_result_text(event: dict[str, Any]) -> str:
+    for key in ("preview", "summary"):
+        value = event.get(key)
+        if value is not None and str(value):
+            return str(value)
+    if "data" not in event:
+        return ""
+    value = event.get("data")
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, sort_keys=True, default=str)
+    except TypeError:
+        return str(value)
+
+
 def _response_output(text: str) -> list[dict[str, Any]]:
     return [{
+        "id": new_id("msg"),
         "type": "message",
+        "status": "completed",
         "role": "assistant",
         "content": [{"type": "output_text", "text": text or ""}],
     }]
@@ -971,7 +989,7 @@ def _response_output(text: str) -> list[dict[str, Any]]:
 def _response_output_items(result, text: str | None = None) -> list[dict[str, Any]]:
     final_text = text if text is not None else (getattr(result, "text", "") if result is not None else "")
     items: list[dict[str, Any]] = []
-    pending_calls: set[str] = set()
+    pending_calls: dict[str, int] = {}
     for event in getattr(result, "events", []) or []:
         if not isinstance(event, dict):
             continue
@@ -979,9 +997,11 @@ def _response_output_items(result, text: str | None = None) -> list[dict[str, An
             call_id = str(event.get("id") or event.get("tool_call_id") or new_id("call"))
             args = event.get("args", event.get("arguments", {}))
             arguments = args if isinstance(args, str) else json.dumps(args if args is not None else {}, default=str)
-            pending_calls.add(call_id)
+            pending_calls[call_id] = len(items)
             items.append({
+                "id": new_id("fc"),
                 "type": "function_call",
+                "status": "in_progress",
                 "name": str(event.get("name") or event.get("tool_name") or ""),
                 "arguments": arguments,
                 "call_id": call_id,
@@ -991,9 +1011,12 @@ def _response_output_items(result, text: str | None = None) -> list[dict[str, An
             call_id = str(event.get("id") or event.get("tool_call_id") or "")
             if not call_id or call_id not in pending_calls:
                 continue
-            result_text = str(event.get("preview") or event.get("summary") or event.get("data") or "")
+            items[pending_calls[call_id]]["status"] = "completed"
+            result_text = _tool_result_text(event)
             items.append({
+                "id": new_id("fco"),
                 "type": "function_call_output",
+                "status": "failed" if event.get("is_error") else "completed",
                 "call_id": call_id,
                 "output": [{"type": "input_text", "text": result_text}],
             })
@@ -3311,9 +3334,12 @@ def make_handler(config: Config):
                         "name": item["name"],
                         "arguments": arguments,
                         "call_id": call_id,
+                        "streamed_item_index": len(streamed_output_items),
                     }
                     streamed_output_items.append({
+                        "id": item_id,
                         "type": "function_call",
+                        "status": "in_progress",
                         "name": item["name"],
                         "arguments": arguments,
                         "call_id": call_id,
@@ -3341,19 +3367,25 @@ def make_handler(config: Config):
                         "output_index": pending["output_index"],
                         "item": done_item,
                     })
-                    result_text = str(e.get("preview") or e.get("summary") or e.get("data") or "")
+                    streamed_index = pending.get("streamed_item_index")
+                    if isinstance(streamed_index, int) and 0 <= streamed_index < len(streamed_output_items):
+                        streamed_output_items[streamed_index] = dict(done_item)
+                    result_text = _tool_result_text(e)
                     output_parts = [{"type": "input_text", "text": result_text}]
+                    output_status = "failed" if e.get("is_error") else "completed"
                     output_item = {
                         "id": new_id("fco"),
                         "type": "function_call_output",
                         "call_id": pending["call_id"],
                         "output": output_parts,
-                        "status": "completed" if not e.get("is_error") else "failed",
+                        "status": output_status,
                     }
                     output_index = next_output_index
                     next_output_index += 1
                     streamed_output_items.append({
+                        "id": output_item["id"],
                         "type": "function_call_output",
+                        "status": output_status,
                         "call_id": pending["call_id"],
                         "output": output_parts,
                     })

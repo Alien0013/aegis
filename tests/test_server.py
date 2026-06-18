@@ -2218,8 +2218,12 @@ def test_responses_stream_maps_tools_to_function_call_items(monkeypatch, tmp_pat
 
     assert function_call["name"] == "search"
     assert function_call["call_id"] == "call_search"
+    assert function_call["id"].startswith("fc_")
+    assert function_call["status"] == "in_progress"
     assert json.loads(function_call["arguments"]) == {"query": "aegis"}
     assert function_output["call_id"] == "call_search"
+    assert function_output["id"].startswith("fco_")
+    assert function_output["status"] == "completed"
     assert function_output["output"][0]["text"] == "found docs"
     assert any(item["type"] == "function_call" and item["status"] == "completed" for item in done)
     assert any(item["type"] == "function_call_output" for item in done)
@@ -2228,6 +2232,76 @@ def test_responses_stream_maps_tools_to_function_call_items(monkeypatch, tmp_pat
         "function_call_output",
         "message",
     ]
+    assert [item["status"] for item in completed["response"]["output"]] == [
+        "completed",
+        "completed",
+        "completed",
+    ]
+
+
+def test_responses_stream_tool_error_status_survives_completed_response(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    class ToolErrorStreamRunner:
+        def __init__(self, config, include_mcp=True):
+            pass
+
+        def run_prompt(self, prompt, **kwargs):
+            kwargs["on_event"]({
+                "type": "tool_start",
+                "id": "call_lookup",
+                "name": "lookup",
+                "args": {"id": 1},
+            })
+            kwargs["on_event"]({
+                "type": "tool_result",
+                "id": "call_lookup",
+                "name": "lookup",
+                "is_error": True,
+                "data": {"error": "not found"},
+            })
+            kwargs["on_event"]({"type": "assistant_delta", "text": "handled"})
+            session_id = kwargs.get("session_id") or "serve:tool-error-stream"
+            return SimpleNamespace(
+                text="handled",
+                session=SimpleNamespace(id=session_id),
+                trace_id="trace_tool_error_stream",
+                turn_id="turn_tool_error_stream",
+                run_id="run_tool_error_stream",
+                agent=SimpleNamespace(
+                    provider=SimpleNamespace(model="served-model"),
+                    budget=SimpleNamespace(usage=_Usage()),
+                ),
+            )
+
+    monkeypatch.setattr(server, "SurfaceRunner", ToolErrorStreamRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "stream": True,
+            "input": "lookup",
+            "metadata": {"session_id": "serve:tool-error-stream"},
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    events = _sse_events(data)
+    done_items = [payload["item"] for name, payload in events if name == "response.output_item.done"]
+    stream_output = next(item for item in done_items if item["type"] == "function_call_output")
+    completed = next(payload for name, payload in events if name == "response.completed")
+    final_output = completed["response"]["output"]
+
+    assert stream_output["status"] == "failed"
+    assert stream_output["output"][0]["text"] == '{"error": "not found"}'
+    assert final_output[0]["type"] == "function_call"
+    assert final_output[0]["status"] == "completed"
+    assert final_output[1]["type"] == "function_call_output"
+    assert final_output[1]["status"] == "failed"
+    assert final_output[1]["output"][0]["text"] == '{"error": "not found"}'
 
 
 def test_responses_nonstream_maps_tools_to_output_items(monkeypatch, tmp_path):
@@ -2287,9 +2361,15 @@ def test_responses_nonstream_maps_tools_to_output_items(monkeypatch, tmp_path):
         "message",
     ]
     assert response["output"][0]["name"] == "search"
+    assert response["output"][0]["id"].startswith("fc_")
+    assert response["output"][0]["status"] == "completed"
     assert json.loads(response["output"][0]["arguments"]) == {"query": "aegis"}
     assert response["output"][1]["call_id"] == "call_search"
+    assert response["output"][1]["id"].startswith("fco_")
+    assert response["output"][1]["status"] == "completed"
     assert response["output"][1]["output"][0]["text"] == "found docs"
+    assert response["output"][2]["id"].startswith("msg_")
+    assert response["output"][2]["status"] == "completed"
     assert response["output_text"] == "done"
     assert get_status == 200
     stored = json.loads(get_data)
@@ -2298,6 +2378,69 @@ def test_responses_nonstream_maps_tools_to_output_items(monkeypatch, tmp_path):
         "function_call_output",
         "message",
     ]
+
+
+def test_responses_nonstream_tool_error_output_preserves_failed_status_and_json_data(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    class ToolErrorBatchRunner:
+        def __init__(self, config, include_mcp=True):
+            pass
+
+        def run_prompt(self, prompt, **kwargs):
+            session_id = kwargs.get("session_id") or "serve:tool-error-batch"
+            return SimpleNamespace(
+                text="handled",
+                session=SimpleNamespace(id=session_id),
+                trace_id="trace_tool_error_batch",
+                turn_id="turn_tool_error_batch",
+                run_id="run_tool_error_batch",
+                events=[
+                    {
+                        "type": "tool_start",
+                        "id": "call_lookup",
+                        "name": "lookup",
+                        "args": {"id": 1},
+                    },
+                    {
+                        "type": "tool_result",
+                        "id": "call_lookup",
+                        "name": "lookup",
+                        "is_error": True,
+                        "data": {"error": "not found"},
+                    },
+                ],
+                agent=SimpleNamespace(
+                    provider=SimpleNamespace(model="served-model"),
+                    budget=SimpleNamespace(usage=_Usage()),
+                ),
+            )
+
+    monkeypatch.setattr(server, "SurfaceRunner", ToolErrorBatchRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": "lookup",
+            "metadata": {"session_id": "serve:tool-error-batch"},
+        })
+        response = json.loads(data)
+        get_status, get_data = _request(port, "GET", f"/v1/responses/{response['id']}")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert response["output"][0]["type"] == "function_call"
+    assert response["output"][0]["status"] == "completed"
+    assert response["output"][1]["type"] == "function_call_output"
+    assert response["output"][1]["status"] == "failed"
+    assert response["output"][1]["output"][0]["text"] == '{"error": "not found"}'
+    assert get_status == 200
+    stored = json.loads(get_data)
+    assert stored["output"][1]["status"] == "failed"
+    assert stored["output"][1]["output"][0]["text"] == '{"error": "not found"}'
 
 
 def test_responses_idempotency_key_replays_matching_request(monkeypatch, tmp_path):
