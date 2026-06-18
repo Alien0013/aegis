@@ -4288,6 +4288,59 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
 
 
 def _api_post(path: str, body: dict, config: Config, chat_runner: Any) -> dict:
+    if path in {
+        "/api/session-checks",
+        "/api/session-checks/repair",
+        "/api/cross-session/checks",
+        "/api/cross-session/checks/repair",
+        "/api/harness/cross-session",
+        "/api/harness/cross-session/repair",
+    }:
+        from .session_checks import cross_session_integrity_report, repair_cross_session_integrity
+
+        def as_int(name: str, default: int) -> int:
+            raw = body.get(name) if name in body else default
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                return default
+
+        def as_float(name: str, default: float) -> float:
+            raw = body.get(name) if name in body else default
+            try:
+                return float(raw)
+            except (TypeError, ValueError):
+                return default
+
+        limits = {
+            "session_limit": as_int("session_limit", as_int("sessions", 500)),
+            "run_limit": as_int("run_limit", as_int("runs", 500)),
+            "stale_running_seconds": as_float("stale_running_seconds", as_float("stale_seconds", 21600.0)),
+            "stale_resume_pending_seconds": as_float(
+                "stale_resume_pending_seconds",
+                as_float("stale_resume_seconds", 86400.0),
+            ),
+        }
+        wants_repair = (
+            path.endswith("/repair")
+            or str(body.get("action") or "").lower() == "repair"
+            or _coerce_dashboard_bool(body.get("repair"), False)
+        )
+        if not wants_repair:
+            return cross_session_integrity_report(**limits)
+        reason = str(body.get("resume_reason") or body.get("reason") or "dashboard_session_check_repair")
+        repair = repair_cross_session_integrity(
+            run_limit=limits["run_limit"],
+            stale_running_seconds=limits["stale_running_seconds"],
+            resume_reason=reason,
+        )
+        report = cross_session_integrity_report(**limits)
+        return {
+            "object": "hermes.cross_session_integrity_repair_result",
+            "ok": bool(repair.get("ok", False)) and str(report.get("status") or "") != "error",
+            "repair": repair,
+            "report": report,
+        }
     if path == "/api/kanban":
         from .kanban import STATUSES, KanbanStore
 

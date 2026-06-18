@@ -1806,6 +1806,8 @@ def _capabilities(config: Config) -> dict[str, Any]:
         {"name": "jobs.control", "path": "/api/jobs/{job_id}/{pause|resume|run|trigger}", "methods": ["POST"]},
         {"name": "sessions", "path": "/api/sessions", "methods": ["GET", "POST"]},
         {"name": "sessions.chat", "path": "/api/sessions/{session_id}/chat", "methods": ["POST"], "streaming": True},
+        {"name": "session_checks", "path": "/api/session-checks", "methods": ["GET", "POST"]},
+        {"name": "session_checks.repair", "path": "/api/session-checks/repair", "methods": ["POST"]},
     ]
     return {
         "object": "hermes.api_server.capabilities",
@@ -3208,6 +3210,82 @@ def make_handler(config: Config):
                 "id": run_id,
             }
 
+        def _session_check_param(
+            self,
+            query: dict[str, list[str]],
+            body: dict[str, Any] | None,
+            names: tuple[str, ...],
+            default: Any,
+        ) -> Any:
+            body = body or {}
+            for name in names:
+                if name in body:
+                    return body.get(name)
+                values = query.get(name)
+                if values:
+                    return values[0]
+            return default
+
+        def _session_check_limits(
+            self,
+            query: dict[str, list[str]],
+            body: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            def as_int(names: tuple[str, ...], default: int) -> int:
+                raw = self._session_check_param(query, body, names, default)
+                try:
+                    return int(raw)
+                except (TypeError, ValueError):
+                    return default
+
+            def as_float(names: tuple[str, ...], default: float) -> float:
+                raw = self._session_check_param(query, body, names, default)
+                try:
+                    return float(raw)
+                except (TypeError, ValueError):
+                    return default
+
+            return {
+                "session_limit": as_int(("session_limit", "sessions"), 500),
+                "run_limit": as_int(("run_limit", "runs"), 500),
+                "stale_running_seconds": as_float(("stale_running_seconds", "stale_seconds"), 21600.0),
+                "stale_resume_pending_seconds": as_float(
+                    ("stale_resume_pending_seconds", "stale_resume_seconds"),
+                    86400.0,
+                ),
+            }
+
+        def _session_checks_report(
+            self,
+            query: dict[str, list[str]],
+            body: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            from .session_checks import cross_session_integrity_report
+
+            return cross_session_integrity_report(**self._session_check_limits(query, body))
+
+        def _repair_session_checks(
+            self,
+            query: dict[str, list[str]],
+            body: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            from .session_checks import cross_session_integrity_report, repair_cross_session_integrity
+
+            limits = self._session_check_limits(query, body)
+            reason = str((body or {}).get("resume_reason") or (body or {}).get("reason") or "api_session_check_repair")
+            repair = repair_cross_session_integrity(
+                run_limit=limits["run_limit"],
+                stale_running_seconds=limits["stale_running_seconds"],
+                resume_reason=reason,
+            )
+            report = cross_session_integrity_report(**limits)
+            return {
+                "object": "hermes.cross_session_integrity_repair_result",
+                "ok": bool(repair.get("ok", False)) and str(report.get("status") or "") != "error",
+                "repair": repair,
+                "report": report,
+            }
+
         def do_GET(self):  # noqa: N802
             if self._forbid_disallowed_origin():
                 return
@@ -3226,6 +3304,8 @@ def make_handler(config: Config):
                 return self._json(200, _skills_payload(config))
             if path == "/v1/toolsets":
                 return self._json(200, _toolsets_payload(config))
+            if path in {"/api/session-checks", "/api/cross-session/checks", "/api/harness/cross-session"}:
+                return self._json(200, self._session_checks_report(query))
             if path.startswith("/v1/responses/") and path.endswith("/input_items"):
                 rid = path.split("/")[-2]
                 state = response_store.get_state(rid)
@@ -3414,6 +3494,16 @@ def make_handler(config: Config):
             if path.startswith("/v1/runs/") and path.endswith("/approval"):
                 run_id = path.split("/")[-2]
                 return self._post_approval(run_id, body)
+            if path in {
+                "/api/session-checks/repair",
+                "/api/cross-session/checks/repair",
+                "/api/harness/cross-session/repair",
+            }:
+                return self._json(200, self._repair_session_checks(_query, body))
+            if path in {"/api/session-checks", "/api/cross-session/checks", "/api/harness/cross-session"}:
+                if str(body.get("action") or "").lower() == "repair" or _coerce_request_bool(body.get("repair"), False):
+                    return self._json(200, self._repair_session_checks(_query, body))
+                return self._json(200, self._session_checks_report(_query, body))
             if path == "/api/sessions":
                 from .session import Session, SessionStore
 

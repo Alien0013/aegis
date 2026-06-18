@@ -293,6 +293,8 @@ def cross_session_integrity_report(
         },
     ])
     return {
+        "object": "hermes.cross_session_integrity_report",
+        "generated_at": now.isoformat(),
         "ok": status == "ok",
         "status": status,
         "error_count": error_count,
@@ -467,6 +469,8 @@ def repair_cross_session_integrity(
             })
 
     return {
+        "object": "hermes.cross_session_integrity_repair",
+        "repaired_at": now.isoformat(),
         "ok": skipped == 0,
         "repaired_running_runs": stale_interrupted,
         "repaired_duplicate_running_runs": duplicate_interrupted,

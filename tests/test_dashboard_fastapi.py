@@ -4,6 +4,7 @@ import asyncio
 import base64
 import copy
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import types
 import time
@@ -1838,6 +1839,92 @@ def test_fastapi_session_checks_reports_cross_session_integrity(tmp_path, monkey
     assert any(check["id"] == "resume_pending" for check in body["checks"])
     assert alias.status_code == 200
     assert alias.json()["ok"] is True
+
+
+def test_fastapi_session_checks_repair_marks_resume_pending(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    from aegis.runs import RunStore
+    from aegis.session import Session, SessionStore
+
+    store = SessionStore()
+    runs = RunStore()
+    session = Session(id="dash-repair-session", title="dashboard repair")
+    store.save(session)
+    run = runs.start(surface="dashboard", kind="chat", session_id=session.id, prompt="stale")
+    run["started_at"] = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+    runs.write(run)
+
+    repair = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/session-checks/repair",
+        json={
+            "session_limit": 20,
+            "run_limit": 20,
+            "stale_running_seconds": 0,
+            "reason": "dashboard_repair",
+        },
+        headers=headers,
+    ))
+    alias = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/harness/cross-session",
+        json={"action": "report", "session_limit": 20, "run_limit": 20},
+        headers=headers,
+    ))
+
+    body = repair.json()
+
+    assert repair.status_code == 200
+    assert body["object"] == "hermes.cross_session_integrity_repair_result"
+    assert body["repair"]["object"] == "hermes.cross_session_integrity_repair"
+    assert body["repair"]["repaired_running_runs"] == 1
+    assert body["repair"]["marked_resume_pending"] == 1
+    assert body["report"]["object"] == "hermes.cross_session_integrity_report"
+    assert runs.get(run["id"])["status"] == "interrupted"
+    assert store.load(session.id).meta["resume_reason"] == "dashboard_repair"
+    assert alias.status_code == 200
+    assert alias.json()["object"] == "hermes.cross_session_integrity_report"
+
+
+def test_fastapi_session_checks_repair_false_only_reports(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    from aegis.runs import RunStore
+    from aegis.session import Session, SessionStore
+
+    store = SessionStore()
+    runs = RunStore()
+    session = Session(id="dash-report-session", title="dashboard report")
+    store.save(session)
+    run = runs.start(surface="dashboard", kind="chat", session_id=session.id, prompt="stale")
+    run["started_at"] = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+    runs.write(run)
+
+    report = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/session-checks",
+        json={
+            "repair": "false",
+            "session_limit": 20,
+            "run_limit": 20,
+            "stale_running_seconds": 0,
+        },
+        headers=headers,
+    ))
+
+    body = report.json()
+
+    assert report.status_code == 200
+    assert body["object"] == "hermes.cross_session_integrity_report"
+    assert "stale_running_run" in {issue["code"] for issue in body["issues"]}
+    assert runs.get(run["id"])["status"] == "running"
+    assert store.load(session.id).meta.get("resume_pending") is None
 
 
 def test_fastapi_webhooks_status_redacts_security_posture(tmp_path, monkeypatch):

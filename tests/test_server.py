@@ -7,6 +7,7 @@ import http.client
 import json
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
 from types import SimpleNamespace
 
@@ -1341,6 +1342,70 @@ def test_server_health_skills_toolsets_and_cors_options(monkeypatch, tmp_path):
     assert "Access-Control-Allow-Origin" not in plain_options_headers
     assert blocked_status == 403
     assert json.loads(blocked_data)["error"] == "cors origin not allowed"
+
+
+def test_server_session_checks_report_and_repair_stale_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+    from aegis.runs import RunStore
+    from aegis.session import Session, SessionStore
+
+    store = SessionStore()
+    runs = RunStore()
+    session = Session(id="api-cross-session", title="api cross session")
+    store.save(session)
+    run = runs.start(surface="api", kind="chat", session_id=session.id, prompt="stale")
+    run["started_at"] = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    runs.write(run)
+
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(
+            port,
+            "GET",
+            "/api/session-checks?session_limit=10&run_limit=10&stale_running_seconds=0",
+        )
+        repair_status, repair_data = _request(
+            port,
+            "POST",
+            "/api/harness/cross-session/repair",
+            {
+                "session_limit": 10,
+                "run_limit": 10,
+                "stale_running_seconds": 0,
+                "resume_reason": "api_repair",
+            },
+        )
+        alias_status, alias_data = _request(
+            port,
+            "POST",
+            "/api/session-checks",
+            {"action": "report", "session_limit": 10, "run_limit": 10},
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    body = json.loads(data)
+    repair = json.loads(repair_data)
+    alias = json.loads(alias_data)
+
+    assert status == 200
+    assert body["object"] == "hermes.cross_session_integrity_report"
+    assert "generated_at" in body
+    assert "stale_running_run" in {issue["code"] for issue in body["issues"]}
+    assert repair_status == 200
+    assert repair["object"] == "hermes.cross_session_integrity_repair_result"
+    assert repair["repair"]["repaired_running_runs"] == 1
+    assert repair["repair"]["marked_resume_pending"] == 1
+    assert repair["repair"]["object"] == "hermes.cross_session_integrity_repair"
+    assert repair["report"]["object"] == "hermes.cross_session_integrity_report"
+    assert "stale_running_run" not in {issue["code"] for issue in repair["report"]["issues"]}
+    assert runs.get(run["id"])["status"] == "interrupted"
+    assert store.load(session.id).meta["resume_reason"] == "api_repair"
+    assert alias_status == 200
+    assert alias["object"] == "hermes.cross_session_integrity_report"
 
 
 def test_responses_create_retrieve_cancel_delete(monkeypatch, tmp_path):
