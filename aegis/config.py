@@ -286,6 +286,7 @@ def set_env_var(key: str, value: str) -> None:
 # --- config.yaml ------------------------------------------------------------
 DEFAULT_CONFIG: dict[str, Any] = {
     "context_file_max_chars": DEFAULT_CONTEXT_FILE_MAX_CHARS,
+    "timezone": "",
     "model": {
         "provider": "anthropic",
         "default": "claude-sonnet-4-6",

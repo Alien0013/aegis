@@ -295,6 +295,19 @@ def test_cli_config_set_accepts_multiword_and_list_values(capsys):
     assert Config.load().get("tools.toolsets") == ["core", "web"]
 
 
+def test_cli_config_set_timezone_is_shown(capsys):
+    from aegis.cli.main import main
+    from aegis.config import Config
+
+    assert main(["config", "set", "timezone", "America/Winnipeg"]) == 0
+    capsys.readouterr()
+    assert Config.load().get("timezone") == "America/Winnipeg"
+
+    assert main(["config", "show"]) == 0
+    out = capsys.readouterr().out
+    assert "Timezone:    America/Winnipeg" in out
+
+
 def test_cli_config_set_rejects_wrong_type_for_known_field(capsys):
     from aegis.cli.main import main
     from aegis.config import Config

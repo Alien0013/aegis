@@ -1163,7 +1163,7 @@ def cmd_config(args, config: Config) -> int:
         _print(f"  Timeout:     {config.get('tools.terminal_lifetime_seconds')}s")
         _print()
         _print("◆ Timezone")
-        _print(f"  Timezone:    {os.environ.get('TZ') or time.tzname[0] or '(server-local)'}")
+        _print(f"  Timezone:    {config.get('timezone') or os.environ.get('TZ') or time.tzname[0] or '(server-local)'}")
         _print()
         _print("◆ Context Compression")
         _print("  Enabled:        yes")
