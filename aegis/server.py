@@ -39,6 +39,7 @@ _REASONING_EFFORTS = {"off", "minimal", "low", "medium", "high", "xhigh"}
 _TEXT_CONTENT_PART_TYPES = {"text", "input_text", "output_text"}
 _IMAGE_CONTENT_PART_TYPES = {"image_url", "input_image"}
 _FILE_CONTENT_PART_TYPES = {"file", "input_file"}
+_AUDIO_CONTENT_PART_TYPES = {"audio", "input_audio"}
 _REFUSAL_CONTENT_PART_TYPES = {"refusal"}
 _MESSAGE_PHASES = {"commentary", "final_answer"}
 _OPAQUE_RESPONSE_INPUT_ITEM_TYPES = {
@@ -348,6 +349,10 @@ def _content(value: Any) -> tuple[str, list[str]]:
             label = _file_label_from_part(part)
             if label:
                 texts.append(f"[file: {label}]")
+        elif ptype in _AUDIO_CONTENT_PART_TYPES:
+            label = _audio_label_from_part(part)
+            if label:
+                texts.append(f"[audio: {label}]")
     return "\n".join(t for t in texts if t), images
 
 
@@ -365,6 +370,36 @@ def _file_label_from_part(part: dict[str, Any]) -> str:
             return value.strip()
     if part.get("file_data") is not None:
         return "inline file"
+    return ""
+
+
+def _audio_payload_from_part(part: dict[str, Any]) -> Any:
+    audio = part.get("input_audio")
+    if audio is None:
+        audio = part.get("audio")
+    return audio
+
+
+def _audio_label_from_part(part: dict[str, Any]) -> str:
+    audio = _audio_payload_from_part(part)
+    fmt = ""
+    if isinstance(audio, dict):
+        fmt = str(audio.get("format") or "").strip()
+        if isinstance(audio.get("data"), str) and audio.get("data", "").strip():
+            return f"inline audio ({fmt})" if fmt else "inline audio"
+        if isinstance(audio.get("url"), str) and audio.get("url", "").strip():
+            return audio["url"].strip()
+        if isinstance(audio.get("file_id"), str) and audio.get("file_id", "").strip():
+            return audio["file_id"].strip()
+    elif isinstance(audio, str) and audio.strip():
+        return "inline audio"
+    for key in ("file_id", "filename", "name", "url"):
+        value = part.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    if isinstance(part.get("data"), str) and part.get("data", "").strip():
+        fmt = str(part.get("format") or "").strip()
+        return f"inline audio ({fmt})" if fmt else "inline audio"
     return ""
 
 
@@ -439,6 +474,42 @@ def _content_part_validation_error(
                     "Refusal content parts require a string 'refusal' field",
                     code="invalid_refusal_content",
                     param=f"{part_param}.refusal",
+                )
+            continue
+        if ptype in _AUDIO_CONTENT_PART_TYPES:
+            if not _audio_label_from_part(part):
+                return _openai_error(
+                    "Audio content parts require 'input_audio', 'audio', 'data', 'url', or 'file_id'.",
+                    code="invalid_audio_content",
+                    param=f"{part_param}.input_audio",
+                )
+            audio = _audio_payload_from_part(part)
+            if audio is not None and not isinstance(audio, (str, dict)):
+                return _openai_error(
+                    "Audio content parts require string or object audio payloads.",
+                    code="invalid_audio_content",
+                    param=f"{part_param}.input_audio",
+                )
+            if isinstance(audio, dict):
+                data = audio.get("data")
+                if data is not None and not isinstance(data, str):
+                    return _openai_error(
+                        "Audio content parts require string 'data' when provided.",
+                        code="invalid_audio_content",
+                        param=f"{part_param}.input_audio.data",
+                    )
+                fmt = audio.get("format")
+                if fmt is not None and not isinstance(fmt, str):
+                    return _openai_error(
+                        "Audio content parts require string 'format' when provided.",
+                        code="invalid_audio_content",
+                        param=f"{part_param}.input_audio.format",
+                    )
+            if "data" in part and not isinstance(part.get("data"), str):
+                return _openai_error(
+                    "Audio content parts require string 'data' when provided.",
+                    code="invalid_audio_content",
+                    param=f"{part_param}.data",
                 )
             continue
         if ptype not in _TEXT_CONTENT_PART_TYPES | _IMAGE_CONTENT_PART_TYPES:
@@ -558,6 +629,7 @@ def _is_response_content_part_item(item: Any) -> bool:
             _TEXT_CONTENT_PART_TYPES
             | _IMAGE_CONTENT_PART_TYPES
             | _FILE_CONTENT_PART_TYPES
+            | _AUDIO_CONTENT_PART_TYPES
             | _REFUSAL_CONTENT_PART_TYPES
         )
     )
@@ -594,6 +666,8 @@ def _response_input_item_visible(item: Any) -> bool:
         return True
     if str(item.get("type") or "").strip().lower() in _FILE_CONTENT_PART_TYPES:
         return bool(_file_label_from_part(item))
+    if str(item.get("type") or "").strip().lower() in _AUDIO_CONTENT_PART_TYPES:
+        return bool(_audio_label_from_part(item))
     image = _image_url_from_part(item)
     return bool(image)
 
@@ -793,6 +867,24 @@ def _canonical_response_function_output_part(
         for key in ("file_id", "filename", "file_data", "mime_type"):
             if part.get(key) is not None:
                 out[key] = str(part[key])
+        return out
+    if ptype in _AUDIO_CONTENT_PART_TYPES:
+        if not _audio_label_from_part(part):
+            return None
+        out: dict[str, Any] = {"type": "input_audio"}
+        audio = _audio_payload_from_part(part)
+        if isinstance(audio, dict):
+            out["input_audio"] = dict(audio)
+        elif isinstance(audio, str):
+            out["input_audio"] = {"data": audio}
+        else:
+            payload = {
+                key: part[key]
+                for key in ("data", "format", "url", "file_id", "filename")
+                if part.get(key) is not None
+            }
+            if payload:
+                out["input_audio"] = payload
         return out
     return None
 

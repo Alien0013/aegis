@@ -1767,6 +1767,81 @@ def test_responses_groups_top_level_typed_content_parts(monkeypatch, tmp_path):
     ]
 
 
+def test_responses_accepts_input_audio_parts_as_audio_references(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    audio_part = {
+        "type": "input_audio",
+        "input_audio": {"data": "UklGRg==", "format": "wav"},
+    }
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": [{
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "listen to this"},
+                    audio_part,
+                ],
+            }],
+        })
+        response_id = json.loads(data)["id"]
+        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items?order=asc")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert _FakeRunner.calls[0]["prompt"].content == "listen to this\n[audio: inline audio (wav)]"
+    assert items_status == 200
+    items = json.loads(items_data)["data"]
+    assert items[0]["content"] == [
+        {"type": "input_text", "text": "listen to this"},
+        audio_part,
+    ]
+
+
+def test_responses_groups_top_level_audio_content_parts(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    audio_part = {
+        "type": "input_audio",
+        "data": "UklGRg==",
+        "format": "mp3",
+    }
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": [
+                {"type": "input_text", "text": "summarize this"},
+                audio_part,
+            ],
+        })
+        response_id = json.loads(data)["id"]
+        items_status, items_data = _request(port, "GET", f"/v1/responses/{response_id}/input_items?order=asc")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert _FakeRunner.calls[0]["prompt"].content == "summarize this\n[audio: inline audio (mp3)]"
+    assert items_status == 200
+    items = json.loads(items_data)["data"]
+    assert items[0]["role"] == "user"
+    assert items[0]["content"] == [
+        {"type": "input_text", "text": "summarize this"},
+        {"type": "input_audio", "input_audio": {"data": "UklGRg==", "format": "mp3"}},
+    ]
+
+
 def test_responses_rejects_malformed_input_file_parts(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
@@ -1790,6 +1865,32 @@ def test_responses_rejects_malformed_input_file_parts(monkeypatch, tmp_path):
     error = json.loads(data)["error"]
     assert error["code"] == "invalid_file_content"
     assert error["param"] == "input[0].content[0].file_id"
+    assert _FakeRunner.calls == []
+
+
+def test_responses_rejects_malformed_input_audio_parts(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": [{
+                "role": "user",
+                "content": [{"type": "input_audio"}],
+            }],
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 400
+    error = json.loads(data)["error"]
+    assert error["code"] == "invalid_audio_content"
+    assert error["param"] == "input[0].content[0].input_audio"
     assert _FakeRunner.calls == []
 
 
