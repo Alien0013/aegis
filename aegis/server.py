@@ -581,6 +581,38 @@ def _responses_input_validation_error(body: dict[str, Any]) -> dict[str, Any] | 
     return None
 
 
+def _response_include_values(value: Any) -> tuple[list[str], dict[str, Any] | None]:
+    if value in (None, ""):
+        return [], None
+    if isinstance(value, str):
+        text = value.strip()
+        return ([text] if text else []), None
+    if isinstance(value, list):
+        items: list[str] = []
+        for index, item in enumerate(value):
+            if not isinstance(item, str):
+                return [], _openai_error(
+                    "'include' items must be strings",
+                    code="invalid_include",
+                    param=f"include[{index}]",
+                )
+            text = item.strip()
+            if text:
+                items.append(text)
+        return items, None
+    return [], _openai_error(
+        "'include' must be a string or an array of strings",
+        code="invalid_include",
+        param="include",
+    )
+
+
+def _attach_response_include(response: dict[str, Any], include: list[str]) -> dict[str, Any]:
+    if include:
+        response["include"] = list(include)
+    return response
+
+
 def _tool_calls_from_payload(payload: dict[str, Any]) -> list[ToolCall]:
     calls: list[ToolCall] = []
     for raw in payload.get("tool_calls", []) or []:
@@ -3451,6 +3483,9 @@ def make_handler(config: Config):
             validation_error = _responses_input_validation_error(body)
             if validation_error is not None:
                 return self._json(400, validation_error)
+            include_values, include_error = _response_include_values(body.get("include"))
+            if include_error is not None:
+                return self._json(400, include_error)
             response_id = new_id("resp")
             model = body.get("model")
             metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
@@ -3787,6 +3822,7 @@ def make_handler(config: Config):
                     "store": store_response,
                     "parallel_tool_calls": parallel_tool_calls,
                 }
+                _attach_response_include(created_response, include_values)
                 send_event("response.created", {
                     "response": {
                         **created_response,
@@ -3908,6 +3944,7 @@ def make_handler(config: Config):
                             "conversation": conversation or None,
                             "store": store_response,
                         })
+                        _attach_response_include(cancelled, include_values)
                         cancelled = self._mark_response_cancelled(cancelled, "SSE client disconnected")
                         if store_response:
                             history_snapshot = list(state_history)
@@ -3953,6 +3990,7 @@ def make_handler(config: Config):
                         "conversation": conversation or None,
                         "store": store_response,
                     })
+                    _attach_response_include(failed, include_values)
                     if cancelled:
                         failed = self._mark_response_cancelled(failed, cancel_reason)
                     if store_response:
@@ -3997,6 +4035,7 @@ def make_handler(config: Config):
                 response["previous_response_id"] = previous_id or None
                 response["conversation"] = conversation or None
                 response["store"] = store_response
+                _attach_response_include(response, include_values)
                 final_text = response.get("output_text") or "".join(text_parts)
                 if streamed_output_items:
                     response["output"] = list(streamed_output_items) + _response_output(final_text)
@@ -4135,6 +4174,7 @@ def make_handler(config: Config):
                     response["previous_response_id"] = previous_id or None
                     response["conversation"] = conversation or None
                     response["store"] = store_response
+                    _attach_response_include(response, include_values)
                     if store_response:
                         full_history = _response_conversation_history(state_history, last_user, result)
                         response_store.put(response, {

@@ -1324,6 +1324,7 @@ def test_responses_create_retrieve_cancel_delete(monkeypatch, tmp_path):
             "model": "served-model",
             "instructions": "be brief",
             "input": "hello",
+            "include": ["output[*].content", "reasoning.encrypted_content"],
             "metadata": {"session_id": "serve:responses"},
         })
         body = json.loads(data)
@@ -1342,12 +1343,17 @@ def test_responses_create_retrieve_cancel_delete(monkeypatch, tmp_path):
     assert body["incomplete_details"] is None
     assert body["parallel_tool_calls"] is True
     assert body["instructions"] == "be brief"
+    assert body["include"] == ["output[*].content", "reasoning.encrypted_content"]
     assert body["previous_response_id"] is None
     assert body["metadata"]["session_id"] == "serve:responses"
     assert get_status == 200
-    assert json.loads(get_data)["id"] == response_id
+    retrieved = json.loads(get_data)
+    assert retrieved["id"] == response_id
+    assert retrieved["include"] == ["output[*].content", "reasoning.encrypted_content"]
     assert cancel_status == 200
-    assert json.loads(cancel_data)["status"] == "cancelled"
+    cancelled = json.loads(cancel_data)
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["include"] == ["output[*].content", "reasoning.encrypted_content"]
     assert delete_status == 200
     assert json.loads(delete_data)["ok"] is True
     assert _FakeRunner.calls[0]["session_id"] == "serve:responses"
@@ -1405,6 +1411,37 @@ def test_responses_rejects_missing_or_empty_user_input(monkeypatch, tmp_path):
     }
     assert json.loads(empty_data)["error"]["message"] == "No user message found in input"
     assert json.loads(assistant_data)["error"]["message"] == "No user message found in input"
+    assert _FakeRunner.calls == []
+
+
+def test_responses_rejects_invalid_include(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        object_status, object_data = _request(port, "POST", "/v1/responses", {
+            "input": "hello",
+            "include": {"path": "output[*].content"},
+        })
+        item_status, item_data = _request(port, "POST", "/v1/responses", {
+            "input": "hello",
+            "include": ["output[*].content", {"path": "bad"}],
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert object_status == item_status == 400
+    object_error = json.loads(object_data)["error"]
+    item_error = json.loads(item_data)["error"]
+    assert object_error["code"] == "invalid_include"
+    assert object_error["param"] == "include"
+    assert item_error["code"] == "invalid_include"
+    assert item_error["param"] == "include[1]"
     assert _FakeRunner.calls == []
 
 
@@ -2703,6 +2740,7 @@ def test_responses_stream_sse_has_openai_event_shape(monkeypatch, tmp_path):
         status, data = _request(port, "POST", "/v1/responses", {
             "stream": True,
             "input": "hello",
+            "include": "output[*].content",
             "parallel_tool_calls": False,
             "metadata": {"session_id": "serve:responses-stream"},
         })
@@ -2734,7 +2772,9 @@ def test_responses_stream_sse_has_openai_event_shape(monkeypatch, tmp_path):
     created = next(payload for name, payload in events if name == "response.created")
     completed = next(payload for name, payload in events if name == "response.completed")
     assert created["response"]["parallel_tool_calls"] is False
+    assert created["response"]["include"] == ["output[*].content"]
     assert completed["response"]["parallel_tool_calls"] is False
+    assert completed["response"]["include"] == ["output[*].content"]
     assert _FakeRunner.calls[0]["stream"] is True
 
 
