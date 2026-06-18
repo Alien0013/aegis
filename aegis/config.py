@@ -211,6 +211,38 @@ def env_path() -> Path:
     return sub(".env")
 
 
+def parse_config_file(path: Path | None = None) -> tuple[dict[str, Any], list[str]]:
+    """Read a YAML config file as user overrides plus validation errors.
+
+    Runtime config loading stays forgiving so recovery commands like
+    ``aegis config check`` can still start, but config-facing commands can use
+    the returned errors to surface a broken file instead of silently treating it
+    as empty.
+    """
+    target = path or config_path()
+    try:
+        raw = target.read_text(encoding="utf-8")
+    except (FileNotFoundError, IsADirectoryError):
+        return {}, []
+    except (OSError, UnicodeDecodeError) as exc:
+        return {}, [str(exc)]
+    try:
+        data = yaml.safe_load(raw) if raw.strip() else {}
+    except yaml.YAMLError as exc:
+        return {}, [str(exc)]
+    if data is None:
+        return {}, []
+    if not isinstance(data, dict):
+        return {}, ["config root must be a YAML mapping"]
+    return data, []
+
+
+def validate_config_file(path: Path | None = None) -> list[str]:
+    """Return user-facing validation errors for ``config.yaml``."""
+    _, errors = parse_config_file(path)
+    return errors
+
+
 # --- .env handling ----------------------------------------------------------
 def load_env() -> dict[str, str]:
     """Parse .env and inject into os.environ (without clobbering existing keys)."""
@@ -604,10 +636,7 @@ class Config:
         if profile is not None:
             set_profile(profile)
         load_env()
-        raw = read_text(config_path())
-        user = yaml.safe_load(raw) if raw.strip() else {}
-        if not isinstance(user, dict):
-            user = {}
+        user, _errors = parse_config_file()
         return cls(_deep_merge(DEFAULT_CONFIG, user))
 
     def save(self) -> None:

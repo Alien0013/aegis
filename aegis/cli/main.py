@@ -1044,16 +1044,7 @@ def cmd_config(args, config: Config) -> int:
         return candidate
 
     def validate_yaml_config_edit(target: Path) -> str:
-        import yaml
-
-        try:
-            raw = target.read_text(encoding="utf-8")
-            data = yaml.safe_load(raw) if raw.strip() else {}
-        except Exception as exc:  # noqa: BLE001
-            return str(exc)
-        if data is not None and not isinstance(data, dict):
-            return "config root must be a YAML mapping"
-        return ""
+        return "; ".join(cfg.validate_config_file(target))
 
     def show_summary() -> int:
         compression = config.get("agent.compression", {}) or {}
@@ -1213,6 +1204,8 @@ def cmd_config(args, config: Config) -> int:
     if args.action in ("check", "migrate"):
         from ..config import DEFAULT_CONFIG, _deep_merge
 
+        file_errors = cfg.validate_config_file()
+
         def flat(d, prefix=""):
             out = {}
             for k, v in d.items():
@@ -1228,9 +1221,14 @@ def cmd_config(args, config: Config) -> int:
         unknown = [k for k in current if k not in defaults and k.split(".")[0] not in
                    ("custom_providers", "fallback_providers", "hooks", "mcp", "routing")]
         if args.action == "check":
+            _print(f"config file: {'invalid' if file_errors else 'ok'}")
+            for error in file_errors:
+                _print(f"  - {error}")
             _print(f"missing default keys: {', '.join(missing) or '(none)'}")
             _print(f"unknown keys: {', '.join(unknown) or '(none)'}")
-            return 0
+            return 1 if file_errors else 0
+        if file_errors:
+            return _die("config file failed validation: " + "; ".join(file_errors))
         config.data = _deep_merge(DEFAULT_CONFIG, config.data)
         config.save()
         _print(f"migrated: added {len(missing)} missing default key(s).")

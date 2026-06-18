@@ -296,6 +296,33 @@ def test_cli_config_edit_restores_invalid_yaml(monkeypatch, capsys):
     assert list(cfg.config_path().parent.glob("config.yaml.bak-*"))
 
 
+def test_cli_config_check_reports_invalid_config_root(capsys):
+    from aegis import config as cfg
+    from aegis.cli.main import main
+
+    cfg.config_path().parent.mkdir(parents=True, exist_ok=True)
+    cfg.config_path().write_text("- not\n- a mapping\n", encoding="utf-8")
+
+    assert main(["config", "check"]) == 1
+    out = capsys.readouterr().out
+    assert "config file: invalid" in out
+    assert "config root must be a YAML mapping" in out
+
+
+def test_cli_config_migrate_refuses_invalid_yaml(capsys):
+    from aegis import config as cfg
+    from aegis.cli.main import main
+
+    cfg.config_path().parent.mkdir(parents=True, exist_ok=True)
+    original = "model: ["
+    cfg.config_path().write_text(original, encoding="utf-8")
+
+    assert main(["config", "migrate"]) == 1
+    streams = capsys.readouterr()
+    assert "config file failed validation" in streams.err
+    assert cfg.config_path().read_text(encoding="utf-8") == original
+
+
 def test_cli_config_setup_alias_dispatches_setup(monkeypatch):
     from argparse import Namespace
 
