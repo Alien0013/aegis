@@ -177,13 +177,14 @@ def test_cli_config_summary_dump_and_edit(monkeypatch, capsys):
     assert main(["config"]) == 0
     out = capsys.readouterr().out
     assert "AEGIS Configuration" in out
-    assert "+----------------------------------------------------------+" in out
-    assert "Paths" in out
+    assert "╭" in out and "╰" in out
+    assert "◆ Paths" in out
     assert f"Config:       {cfg.config_path()}" in out
     assert "Profile:      default" in out
     assert "Install:" in out
-    assert "API Keys" in out
+    assert "◆ API Keys" in out
     assert "OpenAI (STT/TTS)" in out
+    assert "(not set)" in out
     assert "Google" in out
     assert "DeepSeek" in out
     assert "Browser Use" in out
@@ -191,6 +192,7 @@ def test_cli_config_summary_dump_and_edit(monkeypatch, capsys):
     assert "User preview:" in out
     assert "Timezone" in out
     assert "Model:          (auto)" in out
+    assert "WhatsApp:" in out
     assert "aegis config edit" in out
 
     assert main(["config", "show"]) == 0

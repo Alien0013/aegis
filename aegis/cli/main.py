@@ -1008,7 +1008,11 @@ def _parse_config_set_value(key: str, raw_parts: object) -> tuple[object, str]:
 
 def cmd_config(args, config: Config) -> int:
     def configured_env(*names: str) -> str:
-        return "configured" if any(os.environ.get(name, "").strip() for name in names) else "not set"
+        for name in names:
+            value = os.environ.get(name, "").strip()
+            if value:
+                return f"(set, {len(value)} chars)"
+        return "(not set)"
 
     def print_config_usage() -> None:
         _print("Usage: aegis config set <key> <value>")
@@ -1052,21 +1056,25 @@ def cmd_config(args, config: Config) -> int:
         gateway_channels = set(str(x) for x in (config.get("gateway.channels", []) or []))
         telegram = "configured" if os.environ.get("TELEGRAM_BOT_TOKEN") or "telegram" in gateway_channels else "not configured"
         discord = "configured" if os.environ.get("DISCORD_BOT_TOKEN") or "discord" in gateway_channels else "not configured"
+        slack = "configured" if os.environ.get("SLACK_BOT_TOKEN") or "slack" in gateway_channels else "not configured"
+        mattermost = "configured" if os.environ.get("MATTERMOST_BOT_TOKEN") or "mattermost" in gateway_channels else "not configured"
+        webhook = "configured" if os.environ.get("WEBHOOK_CHANNEL_SECRET") or "webhook" in gateway_channels else "not configured"
+        whatsapp = "configured" if os.environ.get("WHATSAPP_CHANNEL_SECRET") or "whatsapp" in gateway_channels else "not configured"
         active_profile = cfg.current_profile() or "default"
-        title = " AEGIS Configuration "
-        rule = "+" + "-" * 58 + "+"
-        _print(rule)
-        _print("|" + title.center(58) + "|")
-        _print(rule)
+        title = "✦ AEGIS Configuration"
+        width = 64
+        _print("╭" + "─" * (width - 2) + "╮")
+        _print("│" + title.center(width - 2) + "│")
+        _print("╰" + "─" * (width - 2) + "╯")
         _print()
-        _print("Paths")
+        _print("◆ Paths")
         _print(f"  Config:       {cfg.config_path()}")
         _print(f"  Secrets:      {cfg.env_path()}")
         _print(f"  Home:         {cfg.get_home()}")
         _print(f"  Profile:      {active_profile}")
         _print(f"  Install:      {Path(__file__).resolve().parents[2]}")
         _print()
-        _print("API Keys")
+        _print("◆ API Keys")
         for label, names in (
             ("OpenRouter", ("OPENROUTER_API_KEY",)),
             ("OpenAI", ("OPENAI_API_KEY",)),
@@ -1088,14 +1096,14 @@ def cmd_config(args, config: Config) -> int:
         ):
             _print(f"  {label:<17} {configured_env(*names)}")
         _print()
-        _print("Model")
+        _print("◆ Model")
         _print(f"  Provider: {config.get('model.provider')}")
         _print(f"  Model:    {config.get('model.default')}")
         if config.get("model.base_url"):
             _print(f"  Base URL: {config.get('model.base_url')}")
         _print(f"  Max turns: {config.get('agent.max_iterations')}")
         _print()
-        _print("Display")
+        _print("◆ Display")
         _print(f"  Personality: {config.get('agent.personality', 'none') or 'none'}")
         _print(f"  Reasoning:   {config.get('display.reasoning', 'off') or 'off'}")
         _print(f"  Model effort: {config.get('agent.reasoning_effort', 'off') or 'off'}")
@@ -1111,15 +1119,15 @@ def cmd_config(args, config: Config) -> int:
         if platforms:
             _print(f"  Platforms:   {', '.join(sorted(platforms))}")
         _print()
-        _print("Terminal")
+        _print("◆ Terminal")
         _print(f"  Backend:     {config.get('tools.terminal_backend')}")
         _print(f"  Working dir: {Path.cwd()}")
         _print(f"  Timeout:     {config.get('tools.terminal_lifetime_seconds')}s")
         _print()
-        _print("Timezone")
+        _print("◆ Timezone")
         _print(f"  Timezone:    {os.environ.get('TZ') or time.tzname[0] or '(server-local)'}")
         _print()
-        _print("Context Compression")
+        _print("◆ Context Compression")
         _print("  Enabled:        yes")
         _print(f"  Threshold:      {int(float(compression.get('threshold', 0.5) or 0.5) * 100)}%")
         _print(f"  Target ratio:   {int(float(compression.get('tail_fraction', 0.25) or 0.25) * 100)}% preserved")
@@ -1127,11 +1135,15 @@ def cmd_config(args, config: Config) -> int:
         _print(f"  Protect first:  {compression.get('preserve_first', 3)} messages")
         _print(f"  Model:          {compression.get('model', '') or '(auto)'}")
         _print()
-        _print("Messaging Platforms")
-        _print(f"  Telegram: {telegram}")
-        _print(f"  Discord:  {discord}")
+        _print("◆ Messaging Platforms")
+        _print(f"  Telegram:   {telegram}")
+        _print(f"  Discord:    {discord}")
+        _print(f"  Slack:      {slack}")
+        _print(f"  Mattermost: {mattermost}")
+        _print(f"  Webhook:    {webhook}")
+        _print(f"  WhatsApp:   {whatsapp}")
         _print()
-        _print("Commands")
+        _print("◆ Commands")
         _print("  aegis config edit                 # Edit config file")
         _print("  aegis config edit --secrets       # Edit local .env secrets")
         _print("  aegis config get <key>            # Print a config value")
