@@ -60,11 +60,45 @@ def test_cron_delivery_sink_sends_via_configured_adapter(monkeypatch, tmp_path):
 
     cfg = Config.load()
     cfg.data.setdefault("gateway", {})["channels"] = ["telegram"]
-    monkeypatch.setattr(channels, "build_adapter", lambda _name, _config: FakeAdapter())
+    monkeypatch.setattr(channels, "build_adapter", lambda _name: FakeAdapter())
 
     build_delivery_sink(cfg, verbose=False)("telegram:42", "daily brief")
 
     assert sent == [("42", "daily brief")]
+
+
+def test_cron_delivery_sink_normalizes_platform_aliases(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.config import Config
+    from aegis.cron import build_delivery_sink
+    import aegis.gateway.channels as channels
+
+    sent = []
+
+    class FakeAdapter:
+        name = "whatsapp"
+        def send(self, chat_id, text):
+            sent.append((chat_id, text))
+
+    cfg = Config.load()
+    cfg.data.setdefault("gateway", {})["channels"] = ["whatsapp"]
+    monkeypatch.setattr(channels, "build_adapter", lambda _name: FakeAdapter())
+
+    build_delivery_sink(cfg, verbose=False)("wa:12025550123@s.whatsapp.net", "daily brief")
+
+    assert sent == [("12025550123@s.whatsapp.net", "daily brief")]
+
+
+def test_enqueue_delivery_normalizes_platform_aliases(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.automation import enqueue_delivery
+    from aegis.gateway.queue import DeliveryQueue
+
+    assert enqueue_delivery("baileys:12025550123@s.whatsapp.net", "hello") is True
+
+    row = DeliveryQueue().due()[0]
+    assert row["platform"] == "whatsapp"
+    assert row["chat_id"] == "12025550123@s.whatsapp.net"
 
 
 # --- TASK 1: webhooks deliver / filter / chain skills -----------------------

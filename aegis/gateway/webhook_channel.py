@@ -21,6 +21,23 @@ from ..webhook import DeliveryIdCache, FixedWindowRateLimiter, _env_truthy, _is_
 from .base import BasePlatformAdapter, Dispatch, MessageEvent
 
 
+def _channel_env(prefix: str, suffix: str, default: str = "") -> str:
+    key = f"{prefix}_{suffix}"
+    return os.environ.get(key, default) or default
+
+
+def _channel_env_int(prefix: str, suffix: str, default: int) -> int:
+    try:
+        value = int(_channel_env(prefix, suffix, str(default)) or default)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def _channel_env_truthy(prefix: str, suffix: str) -> bool:
+    return _env_truthy(f"{prefix}_{suffix}")
+
+
 def _max_channel_webhook_bytes() -> int:
     try:
         value = int(os.environ.get("WEBHOOK_CHANNEL_MAX_BYTES", "10000000") or "10000000")
@@ -74,15 +91,30 @@ class WebhookChannel(BasePlatformAdapter):
     supports_threads = True
     supports_media = False
 
-    def __init__(self):
-        self.port = int(os.environ.get("WEBHOOK_CHANNEL_PORT", "18790"))
-        self.secret = os.environ.get("WEBHOOK_CHANNEL_SECRET")
+    def __init__(
+        self,
+        *,
+        name: str | None = None,
+        default_platform: str | None = None,
+        env_prefix: str = "WEBHOOK_CHANNEL",
+        default_port: int = 18790,
+        transport: str | None = None,
+    ):
+        if name:
+            self.name = name
+        if transport:
+            self.transport = transport
+        self.default_platform = default_platform or self.name
+        self.env_prefix = env_prefix
+        self.port = _channel_env_int(env_prefix, "PORT", default_port)
+        self.secret = _channel_env(env_prefix, "SECRET")
+        self.max_body_bytes = _channel_env_int(env_prefix, "MAX_BYTES", MAX_CHANNEL_WEBHOOK_BYTES)
         self._delivery_cache = DeliveryIdCache(
-            ttl_seconds=float(os.environ.get("WEBHOOK_CHANNEL_IDEMPOTENCY_TTL_SECONDS", "3600") or "3600"),
-            max_items=int(os.environ.get("WEBHOOK_CHANNEL_IDEMPOTENCY_CACHE_MAX", "10000") or "10000"),
+            ttl_seconds=float(_channel_env(env_prefix, "IDEMPOTENCY_TTL_SECONDS", "3600") or "3600"),
+            max_items=_channel_env_int(env_prefix, "IDEMPOTENCY_CACHE_MAX", 10000),
         )
         self._rate_limiter = FixedWindowRateLimiter(
-            limit=int(os.environ.get("WEBHOOK_CHANNEL_RATE_LIMIT_PER_MINUTE", "60") or "60"),
+            limit=_channel_env_int(env_prefix, "RATE_LIMIT_PER_MINUTE", 60),
             window_seconds=60,
         )
 
@@ -94,8 +126,9 @@ class WebhookChannel(BasePlatformAdapter):
             "security": {
                 "secret_configured": bool(self.secret),
                 "loopback_unsigned_allowed": True,
-                "insecure_env_override": _env_truthy("WEBHOOK_CHANNEL_INSECURE_NO_AUTH"),
-                "max_body_bytes": MAX_CHANNEL_WEBHOOK_BYTES,
+                "insecure_env_override": _channel_env_truthy(self.env_prefix, "INSECURE_NO_AUTH"),
+                "env_prefix": self.env_prefix,
+                "max_body_bytes": self.max_body_bytes,
                 "signature_schemes": [
                     "X-Secret",
                     "X-Hub-Signature-256",
@@ -139,7 +172,10 @@ class WebhookChannel(BasePlatformAdapter):
         return ""
 
     def _event_from_body(self, body: dict) -> MessageEvent:
-        platform = normalize_platform_name(body.get("platform", "webhook"), default="webhook")
+        platform = normalize_platform_name(
+            body.get("platform", self.default_platform),
+            default=self.default_platform,
+        )
         metadata = dict(body.get("metadata")) if isinstance(body.get("metadata"), dict) else {}
         attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
         chat_id = _first_string(body, (
@@ -269,8 +305,8 @@ class WebhookChannel(BasePlatformAdapter):
                     self.send_response(400)
                     self.end_headers()
                     return
-                if n < 0 or n > MAX_CHANNEL_WEBHOOK_BYTES:
-                    self.send_response(413 if n > MAX_CHANNEL_WEBHOOK_BYTES else 400)
+                if n < 0 or n > adapter.max_body_bytes:
+                    self.send_response(413 if n > adapter.max_body_bytes else 400)
                     self.end_headers()
                     return
                 raw_body = self.rfile.read(n) if n else b"{}"
@@ -316,5 +352,5 @@ class WebhookChannel(BasePlatformAdapter):
         print(f"  ▸ webhook channel listening on :{self.port}/in")
         httpd.serve_forever()
 
-    def send(self, chat_id: str, text: str) -> None:  # replies are returned inline
+    def send(self, chat_id: str, text: str, *, metadata: dict | None = None) -> None:  # replies are returned inline
         pass

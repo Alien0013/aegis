@@ -539,6 +539,8 @@ def make_handler(config, store: WebhookStore):
             targets = delivery_targets(hook.deliver)
             first_target = targets[0] if targets else ""
             platform, _, chat_id = first_target.partition(":")
+            from .platforms import normalize_platform_name
+            platform = normalize_platform_name(platform, default=str(platform or "").strip().lower())
             try:
                 result = runner.run_prompt(
                     prompt,

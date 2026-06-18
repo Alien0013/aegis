@@ -828,6 +828,12 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     assert "idempotency" in webhook["capabilities"]
     assert "thread" in webhook["delivery_modes"]
     assert "X-Webhook-Signature" in webhook["metadata"]["security"]["signature_schemes"]
+    whatsapp = next(row for row in rows if row["id"] == "whatsapp")
+    assert whatsapp["transport"] == "http_bridge"
+    assert whatsapp["auth_type"] == "local_http_bridge"
+    assert "WHATSAPP_CHANNEL_SECRET" in whatsapp["optional_env_vars"]
+    assert "whatsapp_bridge_aliases" in whatsapp["capabilities"]
+    assert whatsapp["metadata"]["security"]["bridge"] == "webhook"
 
     registry = asyncio.run(_request(app, "GET", "/api/platforms/registry", headers=headers))
     assert registry.status_code == 200
@@ -836,6 +842,8 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     assert reg_telegram["metadata"]["auth_type"] == "bot_token"
     reg_mattermost = next(row for row in registry.json()["registry"] if row["id"] == "mattermost")
     assert reg_mattermost["metadata"]["adapter_class"].endswith("MattermostAdapter")
+    reg_whatsapp = next(row for row in registry.json()["registry"] if row["id"] == "whatsapp")
+    assert reg_whatsapp["metadata"]["transport"] == "http_bridge"
 
     detail = asyncio.run(_request(app, "GET", "/api/platforms/telegram", headers=headers))
     assert detail.status_code == 200
@@ -845,6 +853,11 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     assert mattermost_detail.status_code == 200
     assert mattermost_detail.json()["platform"]["state"] == "disabled"
     assert "MATTERMOST_URL" in mattermost_detail.json()["platform"]["missing_env_vars"]
+
+    whatsapp_detail = asyncio.run(_request(app, "GET", "/api/platforms/whatsapp", headers=headers))
+    assert whatsapp_detail.status_code == 200
+    assert whatsapp_detail.json()["platform"]["state"] == "disabled"
+    assert whatsapp_detail.json()["platform"]["missing_env_vars"] == []
 
     invalid = asyncio.run(_request(
         app,

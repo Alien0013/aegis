@@ -83,6 +83,8 @@ def enqueue_delivery(target: str, text: str) -> bool:
     platform, _, chat_id = (target or "").partition(":")
     if platform and chat_id:
         from .gateway.queue import DeliveryQueue
+        from .platforms import normalize_platform_name
+        platform = normalize_platform_name(platform, default=str(platform or "").strip().lower())
         DeliveryQueue().enqueue(platform, chat_id, text)
         return True
     return False

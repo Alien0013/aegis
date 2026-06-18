@@ -8,6 +8,7 @@ import time
 from typing import Any
 
 from .. import config as cfg
+from ..platforms import normalize_platform_name
 
 
 class DeliveryQueue:
@@ -39,6 +40,7 @@ class DeliveryQueue:
         thread_id: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> None:
+        platform = normalize_platform_name(platform, default=str(platform or "").strip().lower())
         metadata = dict(metadata or {})
         if thread_id:
             metadata.setdefault("thread_id", str(thread_id))

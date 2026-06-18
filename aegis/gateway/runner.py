@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 from ..agent.agent import Agent
 from ..config import Config
+from ..platforms import normalize_platform_name
 from ..session import Session, SessionStore
 from ..types import Message
 from .base import BasePlatformAdapter, MessageEvent
@@ -1431,6 +1432,7 @@ class GatewayRunner:
         text: str,
         metadata: dict | None = None,
     ) -> bool:
+        platform = normalize_platform_name(platform, default=str(platform or "").strip().lower())
         adapter = next((a for a in self.adapters if a.name == platform), None)
         if adapter is None:
             return False

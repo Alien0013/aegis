@@ -1067,6 +1067,7 @@ def build_delivery_sink(config, *, verbose: bool = True):
     user, so send directly when an adapter is configured and queue as a fallback.
     """
     from .automation import enqueue_delivery
+    from .platforms import normalize_platform_name
 
     channels = []
     if config is not None:
@@ -1075,7 +1076,7 @@ def build_delivery_sink(config, *, verbose: bool = True):
     for name in channels:
         try:
             from .gateway.channels import build_adapter
-            adapter = build_adapter(str(name), config)
+            adapter = build_adapter(str(name))
             adapters[adapter.name] = adapter
         except Exception as e:  # noqa: BLE001
             if verbose:
@@ -1083,6 +1084,7 @@ def build_delivery_sink(config, *, verbose: bool = True):
 
     def sink(target: str, text: str) -> None:
         platform, _, chat_id = (target or "").partition(":")
+        platform = normalize_platform_name(platform, default=str(platform or "").strip().lower())
         if not platform or not chat_id:
             if verbose:
                 print(f"  ! cron delivery target ignored: {target!r}")

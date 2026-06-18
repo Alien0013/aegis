@@ -461,6 +461,15 @@ def build_adapter(name: str) -> BasePlatformAdapter:
     if name == "webhook":
         from .webhook_channel import WebhookChannel
         return WebhookChannel()
+    if name == "whatsapp":
+        from .webhook_channel import WebhookChannel
+        return WebhookChannel(
+            name="whatsapp",
+            default_platform="whatsapp",
+            env_prefix="WHATSAPP_CHANNEL",
+            default_port=18792,
+            transport="http_bridge",
+        )
     if name == "ntfy":
         from .ntfy_channel import NtfyAdapter
         return NtfyAdapter()
@@ -479,4 +488,4 @@ def build_adapter(name: str) -> BasePlatformAdapter:
     except Exception as exc:  # noqa: BLE001
         raise ValueError(f"Plugin channel '{name}' failed to load: {exc}") from exc
     raise ValueError(f"Unknown channel '{name}'. Available: cli, telegram, discord, slack, "
-                     "signal, matrix, email, webhook, mattermost, ntfy, or a plugin channel.")
+                     "signal, matrix, email, webhook, whatsapp, mattermost, ntfy, or a plugin channel.")

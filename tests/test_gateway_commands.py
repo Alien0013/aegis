@@ -80,6 +80,27 @@ def test_gateway_send_via_adapter_passes_thread_metadata_with_fallback(tmp_path,
     assert legacy_adapter.sent == [("C2", "fallback")]
 
 
+def test_gateway_send_via_adapter_normalizes_platform_aliases(tmp_path, monkeypatch):
+    from aegis.gateway.base import BasePlatformAdapter
+
+    r = _runner(tmp_path, monkeypatch)
+
+    class WhatsAppAdapter(BasePlatformAdapter):
+        name = "whatsapp"
+
+        def __init__(self):
+            self.sent = []
+
+        def send(self, chat_id: str, text: str, *, metadata=None):  # noqa: ANN001
+            self.sent.append((chat_id, text, metadata))
+
+    adapter = WhatsAppAdapter()
+    r.add(adapter)
+
+    assert r._send_via_adapter("wa", "12025550123@s.whatsapp.net", "hello") is True
+    assert adapter.sent == [("12025550123@s.whatsapp.net", "hello", {})]
+
+
 def test_gateway_transcribes_discord_audio_url_with_cleanup(tmp_path, monkeypatch):
     from pathlib import Path
     from types import SimpleNamespace

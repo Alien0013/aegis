@@ -200,6 +200,41 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
             ],
         },
     },
+    "whatsapp": {
+        "display_name": "WhatsApp",
+        "transport": "http_bridge",
+        "required_env": [],
+        "optional_env": [
+            "WHATSAPP_CHANNEL_SECRET",
+            "WHATSAPP_CHANNEL_PORT",
+            "WHATSAPP_CHANNEL_MAX_BYTES",
+            "WHATSAPP_CHANNEL_RATE_LIMIT_PER_MINUTE",
+            "WHATSAPP_CHANNEL_IDEMPOTENCY_TTL_SECONDS",
+            "WHATSAPP_CHANNEL_IDEMPOTENCY_CACHE_MAX",
+            "WHATSAPP_CHANNEL_INSECURE_NO_AUTH",
+        ],
+        "max_message_length": None,
+        "message_length_units": "codepoints",
+        "supports_threads": True,
+        "supports_media": False,
+        "typed_command_prefix": "/",
+        "security": {
+            "secret_env": "WHATSAPP_CHANNEL_SECRET",
+            "bridge": "webhook",
+            "signature_schemes": [
+                "X-Secret",
+                "X-Hub-Signature-256",
+                "X-Webhook-Signature",
+                "svix-signature",
+                "X-Gitlab-Token",
+            ],
+            "rate_limit_env": "WHATSAPP_CHANNEL_RATE_LIMIT_PER_MINUTE",
+            "idempotency_env": [
+                "WHATSAPP_CHANNEL_IDEMPOTENCY_TTL_SECONDS",
+                "WHATSAPP_CHANNEL_IDEMPOTENCY_CACHE_MAX",
+            ],
+        },
+    },
 }
 
 

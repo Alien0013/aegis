@@ -305,6 +305,8 @@ def test_platform_helper_command_caps_and_utf16_chunks():
 
     assert platform_metadata("signal-cli")["id"] == "signal"
     assert platform_metadata("matrix")["transport"] == "matrix_sync"
+    assert platform_metadata("baileys")["id"] == "whatsapp"
+    assert platform_metadata("whatsapp-web.js")["security"]["bridge"] == "webhook"
     assert platform_metadata("mail")["required_env"] == [
         "EMAIL_IMAP_HOST",
         "EMAIL_SMTP_HOST",
@@ -371,6 +373,14 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert "X-Secret" in webhook["security"]["signature_schemes"]
     assert webhook["idempotency"]["delivery_cache"]["entries"] == 0
     assert webhook["rate_limiter"]["limit"] >= 1
+
+    from aegis.gateway.channels import build_adapter
+    whatsapp = build_adapter("wa")
+    assert whatsapp.name == "whatsapp"
+    assert whatsapp.metadata["id"] == "whatsapp"
+    assert whatsapp.metadata["transport"] == "http_bridge"
+    assert whatsapp.metadata["security"]["env_prefix"] == "WHATSAPP_CHANNEL"
+    assert whatsapp.port == 18792
 
 
 def test_discord_adapter_enforces_guild_filters_and_trigger_mode(monkeypatch):
@@ -720,6 +730,14 @@ def test_gateway_webhook_channel_normalizes_event_body():
 def test_gateway_webhook_channel_accepts_whatsapp_bridge_aliases():
     from aegis.gateway.webhook_channel import WebhookChannel
     from aegis.platforms import normalize_platform_name
+
+    channel = WebhookChannel(name="whatsapp", default_platform="whatsapp", env_prefix="WHATSAPP_CHANNEL")
+    defaulted = channel._event_from_body({
+        "remote_jid": "12025550123@s.whatsapp.net",
+        "text": "default platform",
+    })
+    assert defaulted.platform == "whatsapp"
+    assert defaulted.chat_id == "12025550123@s.whatsapp.net"
 
     ev = WebhookChannel()._event_from_body({
         "platform": "baileys",
