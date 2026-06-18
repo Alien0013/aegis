@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { api, TOKEN } from "../lib/api";
 import { Card, Empty, Loading } from "../components/ui";
@@ -57,6 +57,7 @@ type HostState = {
   slots: Map<string, Array<{ name: string; render: PluginRenderer }>>;
   loading: boolean;
   error: string;
+  reload: () => void;
 };
 
 type RegisteredPlugin = DashboardPluginRegistration;
@@ -87,11 +88,14 @@ function subscribe(listener: () => void) {
   };
 }
 
-function ensureGlobalHost() {
+const noopReload = () => {};
+
+function ensureGlobalHost(reload: () => void = noopReload) {
   const existing = window.__AEGIS_PLUGINS__;
   const host = {
     ...(existing || {}),
     register,
+    reload,
     api,
     token: TOKEN,
   };
@@ -139,7 +143,7 @@ function manifestRoute(manifest: DashboardPluginManifest): DashboardPluginRoute 
   };
 }
 
-function buildState(manifests: DashboardPluginManifest[], loading: boolean, error: string): HostState {
+function buildState(manifests: DashboardPluginManifest[], loading: boolean, error: string): Omit<HostState, "reload"> {
   const byName = new Map(manifests.map((manifest) => [manifest.name, manifest]));
   const routes: DashboardPluginRoute[] = [];
   const slots = new Map<string, Array<{ name: string; render: PluginRenderer }>>();
@@ -198,18 +202,21 @@ const PluginContext = createContext<HostState>({
   slots: new Map(),
   loading: true,
   error: "",
+  reload: noopReload,
 });
 
 export function DashboardPluginProvider({ children }: { children: ReactNode }) {
   const [manifests, setManifests] = useState<DashboardPluginManifest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [reloadKey, setReloadKey] = useState(0);
   const [, setVersion] = useState(0);
+  const reload = useCallback(() => setReloadKey((key) => key + 1), []);
 
   useEffect(() => {
-    ensureGlobalHost();
+    ensureGlobalHost(reload);
     return subscribe(() => setVersion((version) => version + 1));
-  }, []);
+  }, [reload]);
 
   useEffect(() => {
     let cancelled = false;
@@ -228,9 +235,9 @@ export function DashboardPluginProvider({ children }: { children: ReactNode }) {
         if (!cancelled) setLoading(false);
       });
     return () => { cancelled = true; };
-  }, []);
+  }, [reloadKey]);
 
-  const value = useMemo(() => buildState(manifests, loading, error), [manifests, loading, error]);
+  const value = useMemo(() => ({ ...buildState(manifests, loading, error), reload }), [manifests, loading, error, reload]);
   return <PluginContext.Provider value={value}>{children}</PluginContext.Provider>;
 }
 
@@ -295,6 +302,7 @@ export function PluginRoutePage({ route }: { route: DashboardPluginRoute }) {
 
 interface DashboardPluginGlobal {
   register?: (plugin: DashboardPluginRegistration) => void;
+  reload?: () => void;
   api?: typeof api;
   token?: string;
   [key: string]: unknown;

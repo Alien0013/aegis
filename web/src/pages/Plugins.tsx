@@ -22,7 +22,7 @@ import {
   toast,
 } from "../components/ui";
 import { Icon } from "../components/icons";
-import { PluginSlot } from "../plugins/host";
+import { PluginSlot, useDashboardPluginHost } from "../plugins/host";
 
 const BUILTIN_MEMORY = "__aegis_builtin_memory__";
 
@@ -86,6 +86,7 @@ function contributions(row: DashboardPluginHubRow): Array<{ key: string; tone: "
 
 export function Plugins() {
   const { data, loading, error, reload, setData } = useApi<DashboardPluginsHub>("dashboard/plugins/hub");
+  const pluginHost = useDashboardPluginHost();
   const [installId, setInstallId] = useState("");
   const [installForce, setInstallForce] = useState(false);
   const [installEnable, setInstallEnable] = useState(true);
@@ -120,6 +121,7 @@ export function Plugins() {
       const result = await action();
       if (result.plugins) setData(result);
       else reload();
+      pluginHost.reload();
       toast(message);
     } catch (e) {
       toast(String(e), "err");
