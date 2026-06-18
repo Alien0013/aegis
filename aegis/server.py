@@ -1233,6 +1233,21 @@ def _response_input_items(messages: list[Message], instructions: str | None = No
             continue
         if _is_instruction_wrapper(message):
             continue
+        if message.role == "assistant" and message.tool_calls:
+            if (message.content or "").strip():
+                items.append(_canonical_response_message_item({
+                    "type": "message",
+                    "role": "assistant",
+                    "content": message.content or "",
+                }))
+            for tool_call in message.tool_calls:
+                items.append(_canonical_function_call_item({
+                    "type": "function_call",
+                    "call_id": getattr(tool_call, "id", "") or "",
+                    "name": getattr(tool_call, "name", "") or "",
+                    "arguments": getattr(tool_call, "arguments", {}) or {},
+                }))
+            continue
         if message.role == "tool":
             items.append({
                 "type": "function_call_output",
@@ -1240,11 +1255,11 @@ def _response_input_items(messages: list[Message], instructions: str | None = No
                 "output": [{"type": "input_text", "text": str(message.content or "")}],
             })
             continue
-        items.append({
+        items.append(_canonical_response_message_item({
             "type": "message",
             "role": message.role or "user",
-            "content": [{"type": "input_text", "text": str(message.content or "")}],
-        })
+            "content": message.content or "",
+        }))
     return items
 
 

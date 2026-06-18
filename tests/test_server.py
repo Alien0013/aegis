@@ -1983,6 +1983,106 @@ def test_responses_function_call_output_continues_previous_response(monkeypatch,
     )
 
 
+def test_responses_previous_response_replays_transcript_tool_calls_as_input_items(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+    from aegis.types import Message, ToolCall
+
+    class ToolReplayRunner:
+        calls = []
+
+        def __init__(self, config, include_mcp=True):
+            self.config = config
+            self.include_mcp = include_mcp
+
+        def run_prompt(self, prompt, **kwargs):
+            self.calls.append({"prompt": prompt, **kwargs})
+            session_id = kwargs.get("session_id") or "serve:tool-replay"
+            if len(self.calls) == 1:
+                messages = [
+                    Message.user("search"),
+                    Message.assistant(
+                        "",
+                        tool_calls=[
+                            ToolCall(
+                                id="call_search",
+                                name="search",
+                                arguments={"query": "aegis"},
+                            ),
+                        ],
+                    ),
+                    Message.tool("call_search", "search", "found docs"),
+                    Message.assistant("done"),
+                ]
+                text = "done"
+            else:
+                messages = []
+                text = "followed"
+            return SimpleNamespace(
+                text=text,
+                session=SimpleNamespace(id=session_id, messages=messages),
+                trace_id="trace_tool_replay",
+                turn_id="turn_tool_replay",
+                run_id="run_tool_replay",
+                agent=SimpleNamespace(
+                    provider=SimpleNamespace(model=kwargs.get("model") or "served-model"),
+                    budget=SimpleNamespace(usage=_Usage()),
+                ),
+            )
+
+    ToolReplayRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", ToolReplayRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        first_status, first_data = _request(port, "POST", "/v1/responses", {
+            "input": "search",
+        })
+        first_id = json.loads(first_data)["id"]
+        second_status, second_data = _request(port, "POST", "/v1/responses", {
+            "previous_response_id": first_id,
+            "input": "continue",
+        })
+        second_id = json.loads(second_data)["id"]
+        items_status, items_data = _request(port, "GET", f"/v1/responses/{second_id}/input_items")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert first_status == 200
+    assert second_status == 200
+    assert len(ToolReplayRunner.calls) == 2
+    assert items_status == 200
+    items = json.loads(items_data)["data"]
+    assert [item["type"] for item in items] == [
+        "message",
+        "function_call",
+        "function_call_output",
+        "message",
+        "message",
+    ]
+    function_call = next(item for item in items if item["type"] == "function_call")
+    assert function_call["name"] == "search"
+    assert function_call["call_id"] == "call_search"
+    assert json.loads(function_call["arguments"]) == {"query": "aegis"}
+    assert items[3]["role"] == "assistant"
+    assert items[3]["content"] == [{"type": "output_text", "text": "done"}]
+    assert items[4]["role"] == "user"
+    assert items[4]["content"] == [{"type": "input_text", "text": "continue"}]
+    assert any(
+        item["type"] == "function_call_output"
+        and item["call_id"] == "call_search"
+        and item["output"] == [{"type": "input_text", "text": "found docs"}]
+        for item in items
+    )
+    assert not any(
+        item["type"] == "message"
+        and item.get("role") == "assistant"
+        and item.get("content") == [{"type": "output_text", "text": ""}]
+        for item in items
+    )
+
+
 def test_responses_missing_previous_id_404s_without_running(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
