@@ -3976,7 +3976,23 @@ def make_handler(config: Config):
                 })
             _persist_api_run_record(record, title=title, prompt=prompt)
 
-            def approver(question: str) -> bool:
+            approval_grants: dict[str, str] = {}
+
+            def approver(question: str) -> bool | str:
+                remembered_choice = approval_grants.get(question)
+                if remembered_choice in {"session", "always"}:
+                    run_snapshot = None
+                    with state_lock:
+                        self._append_run_event_locked(run_id, "approval.reused", {
+                            "approved": True,
+                            "choice": remembered_choice,
+                            "prompt": question,
+                        })
+                        rec = active_runs.get(run_id)
+                        run_snapshot = dict(rec) if rec is not None else None
+                    if run_snapshot is not None:
+                        _persist_api_run_record(run_snapshot, title=title, prompt=prompt)
+                    return "always"
                 approval_id = new_id("approval")
                 event = threading.Event()
                 pending = {
@@ -4022,8 +4038,12 @@ def make_handler(config: Config):
                     else:
                         run_snapshot = None
                     approved = bool(pending_state.get("approved"))
+                    choice = str(pending_state.get("choice") or ("once" if approved else "deny"))
                 if run_snapshot is not None:
                     _persist_api_run_record(run_snapshot, title=title, prompt=prompt)
+                if approved and choice in {"session", "always"}:
+                    approval_grants[question] = choice
+                    return "always"
                 return approved
 
             def worker() -> None:

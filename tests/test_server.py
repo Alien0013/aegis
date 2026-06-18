@@ -3087,6 +3087,51 @@ class _ApprovalBlockingRunRunner:
         )
 
 
+class _RepeatedApprovalRunRunner:
+    completed = threading.Event()
+    calls = []
+
+    def __init__(self, config, include_mcp=True):
+        self.config = config
+        self.include_mcp = include_mcp
+
+    @classmethod
+    def reset(cls):
+        cls.completed = threading.Event()
+        cls.calls = []
+
+    def load_or_create_session(self, session_id=None, title=None, surface="", meta=None):
+        return SimpleNamespace(id=session_id or "serve:approval-reuse-run", title=title or "", meta=meta or {})
+
+    def make_agent(self, **kwargs):
+        agent = SimpleNamespace(cancel_event=threading.Event(), approver=kwargs.get("approver"))
+
+        def cancel():
+            agent.cancel_event.set()
+
+        agent.cancel = cancel
+        return agent
+
+    def run_prompt(self, prompt, **kwargs):
+        agent = kwargs["agent"]
+        first = agent.approver("Allow shell command?")
+        second = agent.approver("Allow shell command?")
+        self.calls.append({"prompt": prompt, "first": first, "second": second, **kwargs})
+        self.completed.set()
+        session = kwargs.get("session") or SimpleNamespace(id="serve:approval-reuse-run")
+        return SimpleNamespace(
+            text=f"first={first} second={second}",
+            session=session,
+            trace_id="trace_approval_reuse",
+            turn_id="turn_approval_reuse",
+            run_id="surface_approval_reuse",
+            agent=SimpleNamespace(
+                provider=SimpleNamespace(model="served-model"),
+                budget=SimpleNamespace(usage=_Usage()),
+            ),
+        )
+
+
 def test_server_run_echoes_hermes_session_key(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
@@ -3651,6 +3696,74 @@ def test_server_run_approval_choice_unblocks_pending_run(monkeypatch, tmp_path):
     assert restart_responded["approval_id"] == pending["pending"][0]["id"]
     assert restart_responded["approved"] is True
     assert restart_responded["choice"] == "once"
+
+
+def test_server_run_approval_session_choice_reuses_prompt(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import time
+    import aegis.server as server
+    from aegis.config import Config
+
+    _RepeatedApprovalRunRunner.reset()
+    monkeypatch.setattr(server, "SurfaceRunner", _RepeatedApprovalRunRunner)
+    cfg = Config.load()
+    cfg.data.setdefault("server", {})["approval_timeout_seconds"] = 60
+    srv, port = _serve(server.make_handler(cfg))
+    try:
+        create_status, create_data = _request(port, "POST", "/v1/runs", {
+            "input": "needs repeated approval",
+            "session_id": "serve:approval-reuse-run",
+        })
+        run_id = json.loads(create_data)["run_id"]
+
+        pending = {}
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            pending_status, pending_data = _request(port, "GET", f"/v1/runs/{run_id}/approval")
+            pending = json.loads(pending_data)
+            if pending.get("pending"):
+                break
+            time.sleep(0.05)
+        approval_status, approval_data = _request(
+            port,
+            "POST",
+            f"/v1/runs/{run_id}/approval",
+            {"choice": "session", "resolve_all": True},
+        )
+        assert _RepeatedApprovalRunRunner.completed.wait(2)
+
+        final = {}
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            get_status, get_data = _request(port, "GET", f"/v1/runs/{run_id}")
+            final = json.loads(get_data)
+            if final.get("run", {}).get("status") == "completed":
+                break
+            time.sleep(0.05)
+        pending_after_status, pending_after_data = _request(port, "GET", f"/v1/runs/{run_id}/approval")
+        events_status, events_data = _request(port, "GET", f"/v1/runs/{run_id}/events")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    approval = json.loads(approval_data)
+    pending_after = json.loads(pending_after_data)
+    events = json.loads(events_data)["events"]
+    event_types = [event.get("type") for event in events]
+    assert create_status == 202
+    assert pending_status == 200
+    assert pending["pending"]
+    assert approval_status == 200
+    assert approval["choice"] == "session"
+    assert _RepeatedApprovalRunRunner.calls[0]["first"] == "always"
+    assert _RepeatedApprovalRunRunner.calls[0]["second"] == "always"
+    assert final["run"]["status"] == "completed"
+    assert final["output"] == "first=always second=always"
+    assert pending_after_status == 200
+    assert pending_after["pending"] == []
+    assert events_status == 200
+    assert event_types.count("approval.request") == 1
+    assert "approval.reused" in event_types
 
 
 def test_server_stop_releases_pending_approval_waiter(monkeypatch, tmp_path):
