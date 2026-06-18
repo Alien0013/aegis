@@ -41,14 +41,18 @@ function _knownCommandsIn(root) {
     .map((candidate) => path.relative(root, candidate).replace(/\\/g, "/"));
 }
 
-function _copyExecutable(source, target) {
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.copyFileSync(source, target);
+function _markExecutable(target) {
   try {
-    fs.chmodSync(target, 0o755);
+    if (fs.statSync(target).isFile()) fs.chmodSync(target, 0o755);
   } catch {
     // Some packaging filesystems, especially on Windows, do not expose POSIX modes.
   }
+}
+
+function _copyExecutable(source, target) {
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.copyFileSync(source, target);
+  _markExecutable(target);
 }
 
 function _cleanBackendDir(backendDir) {
@@ -109,6 +113,7 @@ function stageBackend({
       );
     }
     fs.cpSync(sourcePath, paths.backendDir, { recursive: true });
+    for (const command of commands) _markExecutable(path.join(paths.backendDir, command));
     manifest.staged = true;
     manifest.mode = "directory";
     manifest.targets = commands;

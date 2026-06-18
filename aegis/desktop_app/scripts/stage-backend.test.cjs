@@ -90,6 +90,7 @@ test("stages a ready backend directory unchanged", () => {
   const command = path.join(source, "bin", "aegis");
   fs.mkdirSync(path.dirname(command), { recursive: true });
   fs.writeFileSync(command, "#!/bin/sh\necho aegis\n", "utf8");
+  fs.chmodSync(command, 0o644);
   fs.writeFileSync(path.join(source, "support.txt"), "kept", "utf8");
 
   const result = stageBackend({
@@ -100,7 +101,9 @@ test("stages a ready backend directory unchanged", () => {
 
   assert.deepEqual(result.manifest.targets, ["bin/aegis"]);
   assert.equal(fs.readFileSync(path.join(result.backendDir, "support.txt"), "utf8"), "kept");
-  assert.equal(fs.existsSync(path.join(result.backendDir, "bin", "aegis")), true);
+  const target = path.join(result.backendDir, "bin", "aegis");
+  assert.equal(fs.existsSync(target), true);
+  assert.notEqual(fs.statSync(target).mode & 0o111, 0);
 });
 
 test("backendStagePaths uses the desktop build directory", () => {
