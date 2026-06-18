@@ -1322,12 +1322,10 @@ def load_plugins(*, quiet: bool = False, config=None) -> PluginAPI:
         else:
             api.errors.append((manifest.path, f"entrypoint not found: {manifest.entrypoint}"))
     if base.exists():
-        for f in sorted(base.rglob("*.py")):
-            if f.name.startswith("_") or f in handled:
+        for f in sorted(base.glob("*.py")):
+            if f.name.startswith(("_", ".")) or f in handled:
                 continue
             if any(f.is_relative_to(d) for d in manifest_dirs):
-                continue
-            if any(part.startswith(".") for part in f.relative_to(base).parts):
                 continue
             _load_plugin_file(api, f, quiet=quiet)
     return api

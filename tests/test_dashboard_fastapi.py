@@ -2151,7 +2151,11 @@ def test_fastapi_dashboard_only_plugins_are_discovered_and_mounted(tmp_path, mon
         "router = APIRouter()\n"
         "@router.get('/status')\n"
         "def status():\n"
-        "    return {'dashboard_only': True}\n",
+        "    return {'dashboard_only': True}\n"
+        "def register(api):\n"
+        "    class T:\n"
+        "        name = 'dashboard_only_agent_tool'\n"
+        "    api.register_tool(T())\n",
         encoding="utf-8",
     )
 
@@ -2182,6 +2186,13 @@ def test_fastapi_dashboard_only_plugins_are_discovered_and_mounted(tmp_path, mon
     route = asyncio.run(_request(app, "GET", "/api/plugins/status-panel/status", headers=headers))
     assert route.status_code == 200
     assert route.json() == {"dashboard_only": True}
+
+    from aegis import plugins as plugin_runtime
+    from aegis.config import Config
+
+    plugin_runtime.clear_runtime_cache()
+    api = plugin_runtime.load_plugins(config=Config.load())
+    assert "dashboard_only_agent_tool" not in {getattr(tool, "name", "") for tool in api.tools}
 
 
 def test_fastapi_dashboard_plugin_api_must_stay_under_dashboard_dir(tmp_path, monkeypatch):

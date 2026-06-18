@@ -2608,6 +2608,37 @@ def test_invalid_plugin_manifest_blocks_legacy_fallback_and_reports_error():
     assert any(path.name == "plugin.yaml" and "plugin.yaml:" in error for path, error in api.errors)
 
 
+def test_dashboard_plugin_api_is_not_loaded_by_legacy_plugin_fallback():
+    from aegis import config as cfg_paths
+    from aegis import plugins
+    from aegis.config import Config
+
+    cfg = Config.load()
+    dashboard = cfg_paths.sub("plugins") / "status" / "dashboard"
+    dashboard.mkdir(parents=True, exist_ok=True)
+    (dashboard / "plugin_api.py").write_text(
+        "def register(api):\n"
+        "    class T:\n"
+        "        name='dashboard_api_tool'\n"
+        "    api.register_tool(T())\n",
+        encoding="utf-8",
+    )
+    root_plugin = cfg_paths.sub("plugins") / "root_tool.py"
+    root_plugin.write_text(
+        "def register(api):\n"
+        "    class T:\n"
+        "        name='root_tool'\n"
+        "    api.register_tool(T())\n",
+        encoding="utf-8",
+    )
+
+    plugins.clear_runtime_cache()
+    names = {t.name for t in plugins.load_plugins(config=cfg).tools}
+
+    assert names == {"root_tool"}
+    assert "dashboard_api_tool" not in names
+
+
 def test_plugin_enable_does_not_allowlist_unrelated_plugins():
     from aegis import config as cfg_paths
     from aegis import plugins
