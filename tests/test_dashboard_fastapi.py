@@ -1860,6 +1860,52 @@ def test_fastapi_dashboard_plugins_manifest_assets_and_api(tmp_path, monkeypatch
     assert observed_row["api_mount"]["last_request_at"]
 
 
+def test_fastapi_dashboard_plugin_duplicate_names_report_conflict_and_do_not_mount_api(tmp_path, monkeypatch):
+    for slug in ("alpha", "beta"):
+        plug = tmp_path / "plugins" / slug
+        (plug / "dashboard" / "dist").mkdir(parents=True)
+        (plug / "dashboard" / "manifest.json").write_text(
+            json.dumps({
+                "name": "dup-panel",
+                "title": f"{slug.title()} Panel",
+                "entry": "dist/index.js",
+                "api": "plugin_api.py",
+            }),
+            encoding="utf-8",
+        )
+        (plug / "dashboard" / "dist" / "index.js").write_text(f"window.{slug}=true;", encoding="utf-8")
+        (plug / "dashboard" / "plugin_api.py").write_text(
+            "from fastapi import APIRouter\n"
+            "router = APIRouter()\n"
+            "@router.get('/ping')\n"
+            "def ping():\n"
+            f"    return {{'plugin': '{slug}'}}\n",
+            encoding="utf-8",
+        )
+
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    manifest = asyncio.run(_request(app, "GET", "/api/dashboard/plugins", headers=headers))
+    assert manifest.status_code == 200
+    rows = [row for row in manifest.json() if row["name"] == "dup-panel"]
+    assert len(rows) == 2
+    assert all(row["name_conflict"] is True for row in rows)
+    assert all("duplicate dashboard plugin name" in row["errors"][0] for row in rows)
+    assert all(row["api_mount"]["status"] == "error" for row in rows)
+    assert all(row["api_mount"]["mounted"] is False for row in rows)
+    assert all("duplicate dashboard plugin name" in row["api_mount"]["error"] for row in rows)
+
+    route = asyncio.run(_request(app, "GET", "/api/plugins/dup-panel/ping", headers=headers))
+    assert route.status_code == 404
+
+    hub = asyncio.run(_request(app, "GET", "/api/dashboard/plugins/hub", headers=headers))
+    assert hub.status_code == 200
+    orphan_rows = [row for row in hub.json()["orphan_dashboard_plugins"] if row["name"] == "dup-panel"]
+    assert len(orphan_rows) == 2
+    assert all(row["name_conflict"] is True for row in orphan_rows)
+
+
 def test_fastapi_dashboard_only_plugins_are_discovered_and_mounted(tmp_path, monkeypatch):
     plug = tmp_path / "plugins" / "status"
     (plug / "dashboard" / "dist").mkdir(parents=True)

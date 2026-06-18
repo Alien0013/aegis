@@ -2207,6 +2207,15 @@ def _record_dashboard_plugin_api_request(name: str, request: Request) -> None:
 def _dashboard_plugin_mount_info(row: dict[str, Any]) -> dict[str, Any]:
     name = str(row.get("name") or "")
     api_path = str(row.get("_api") or "")
+    if row.get("_duplicate_name_conflict"):
+        return {
+            "status": "error",
+            "mounted": False,
+            "api": Path(api_path).name if api_path else "",
+            "routes": [],
+            "error": f"duplicate dashboard plugin name: {name}",
+            **_dashboard_plugin_api_observability({}),
+        }
     if not api_path:
         return {
             "status": "skipped",
@@ -2380,6 +2389,17 @@ def _dashboard_plugin_records(config: Config) -> list[dict[str, Any]]:
         )
         if row:
             rows.append(row)
+    name_counts: dict[str, int] = {}
+    for row in rows:
+        name = str(row.get("name") or "")
+        if name:
+            name_counts[name] = name_counts.get(name, 0) + 1
+    for row in rows:
+        name = str(row.get("name") or "")
+        if name and name_counts.get(name, 0) > 1:
+            row["_duplicate_name_conflict"] = True
+            row["name_conflict"] = True
+            row["errors"] = [f"duplicate dashboard plugin name: {name}"]
     return rows
 
 
@@ -2401,7 +2421,8 @@ def _dashboard_plugins_payload(config: Config, *, include_hidden: bool = False) 
 
 def _dashboard_plugin_record(config: Config, name: str) -> dict[str, Any] | None:
     safe = _safe_resource_name(name, "plugin")
-    return next((row for row in _dashboard_plugin_records(config) if row.get("name") == safe), None)
+    rows = [row for row in _dashboard_plugin_records(config) if row.get("name") == safe]
+    return rows[0] if len(rows) == 1 and not rows[0].get("_duplicate_name_conflict") else None
 
 
 def _dashboard_plugin_static(config: Config, name: str, file_path: str) -> Response:
@@ -2471,10 +2492,11 @@ def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
 
     mounted: dict[str, dict[str, Any]] = getattr(app.state, "dashboard_plugin_api_routes", None) or {}
     app.state.dashboard_plugin_api_routes = mounted
+    all_records = _dashboard_plugin_records(config)
     records = {
         str(record["name"]): record
-        for record in _dashboard_plugin_records(config)
-        if record.get("_api")
+        for record in all_records
+        if record.get("_api") and not record.get("_duplicate_name_conflict")
     }
     for name, row in list(mounted.items()):
         live = records.get(name)
@@ -2495,9 +2517,19 @@ def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
         with _DASHBOARD_PLUGIN_API_MOUNT_LOCK:
             _DASHBOARD_PLUGIN_API_MOUNT_STATUS.pop(name, None)
 
-    for record in _dashboard_plugin_records(config):
+    for record in all_records:
         api_path = record.get("_api")
         record_name = str(record["name"])
+        if record.get("_duplicate_name_conflict"):
+            _set_dashboard_plugin_api_mount_status(record_name, {
+                "status": "error",
+                "mounted": False,
+                "api_path": str(api_path or ""),
+                "api": Path(str(api_path)).name if api_path else "",
+                "routes": [],
+                "error": f"duplicate dashboard plugin name: {record_name}",
+            })
+            continue
         if not api_path:
             _set_dashboard_plugin_api_mount_status(record_name, {
                 "status": "skipped",
