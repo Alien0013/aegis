@@ -14,6 +14,7 @@ from ..config import Config
 from ..platforms import normalize_platform_name
 from ..session import Session, SessionStore
 from ..types import Message
+from ..util import now_iso
 from .base import BasePlatformAdapter, MessageEvent
 
 _AUDIO_ATTACHMENT_EXTENSIONS = (".ogg", ".oga", ".opus", ".mp3", ".m4a", ".wav", ".aac")
@@ -37,6 +38,19 @@ def _message_timestamps_enabled(config: Config | None) -> bool:
     if isinstance(raw, dict):
         return bool(raw.get("enabled", False))
     return bool(raw)
+
+
+def _gateway_origin_from_event(ev: MessageEvent) -> dict[str, Any]:
+    origin: dict[str, Any] = {
+        "platform": normalize_platform_name(ev.platform),
+        "chat_id": str(ev.chat_id or ""),
+        "updated_at": now_iso(),
+    }
+    for key in ("thread_id", "user_id", "user_name", "message_id"):
+        value = getattr(ev, key, None)
+        if value not in (None, ""):
+            origin[key] = str(value)
+    return origin
 
 
 def _gateway_user_message(config: Config, ev: MessageEvent, text: str) -> Message:
@@ -323,6 +337,17 @@ class GatewayRunner:
 
     def _stamp_generation(self, key: str, session: Session, generation: int | None = None) -> Session:
         session.meta[_GATEWAY_GENERATION_META] = int(self._generation(key) if generation is None else generation)
+        return session
+
+    def _remember_gateway_context(self, session: Session, ev: MessageEvent) -> Session:
+        origin = _gateway_origin_from_event(ev)
+        session.meta["surface"] = "gateway"
+        session.meta["gateway"] = origin
+        for key in ("platform", "chat_id", "thread_id", "user_id", "user_name", "message_id"):
+            if key in origin:
+                session.meta[key] = origin[key]
+            else:
+                session.meta.pop(key, None)
         return session
 
     def _persist_generation_marker(self, key: str, generation: int | None = None) -> None:
@@ -708,6 +733,7 @@ class GatewayRunner:
                 **(data or {}),
             },
         )
+        self._remember_gateway_context(run.session, ev)
         self._stamp_generation(key, run.session)
         self._sessions[key] = run.session
         self.store.save(run.session)
@@ -1170,8 +1196,10 @@ class GatewayRunner:
                 if generation != self._generation(key):
                     return ""
                 session = getattr(run, "session", getattr(agent, "session", session))
+                self._remember_gateway_context(session, ev)
                 self._stamp_generation(key, session, generation)
                 self._sessions[key] = session
+                self.store.save(session)
                 final = run.message
                 final_text = final.content or ""
                 goal_notes: list[str] = []
@@ -1200,6 +1228,7 @@ class GatewayRunner:
                         if generation != self._generation(key):
                             return cont.message
                         cont_session = getattr(cont, "session", getattr(agent, "session", session))
+                        self._remember_gateway_context(cont_session, ev)
                         self._stamp_generation(key, cont_session, generation)
                         self._sessions[key] = cont_session
                         self.store.save(cont_session)
@@ -1210,6 +1239,7 @@ class GatewayRunner:
                     )
                     if goal_notes:
                         session = agent.session
+                        self._remember_gateway_context(agent.session, ev)
                         self._stamp_generation(key, agent.session, generation)
                         self._sessions[key] = agent.session
                         self.store.save(agent.session)

@@ -31,6 +31,17 @@ def test_whoami_and_help(tmp_path, monkeypatch):
     assert all(row["data"]["provider"] == r.config.get("model.provider") for row in runs)
     assert all(row["data"]["model"] == r.config.get("model.default") for row in runs)
     assert all(row["trace_id"].startswith("trace_") for row in runs)
+    meta = r._session(key).meta
+    assert meta["surface"] == "gateway"
+    assert meta["platform"] == "telegram"
+    assert meta["chat_id"] == "c1"
+    assert meta["user_id"] == "u1"
+    assert meta["user_name"] == "alien"
+    assert meta["gateway"]["platform"] == "telegram"
+    assert meta["gateway"]["chat_id"] == "c1"
+    assert meta["gateway"]["user_id"] == "u1"
+    assert meta["gateway"]["user_name"] == "alien"
+    assert "updated_at" in meta["gateway"]
 
 
 def test_gateway_session_keys_are_thread_aware(tmp_path, monkeypatch):
@@ -541,6 +552,8 @@ def test_gateway_reply_context_prefixes_prompt(tmp_path, monkeypatch):
         text="What's the best time to go?",
         user_id="u1",
         user_name="alien",
+        thread_id="travel",
+        message_id="msg-99",
         reply_to_message_id="42",
         reply_to_text="Japan is great for culture, food, and efficiency.",
     )
@@ -550,6 +563,14 @@ def test_gateway_reply_context_prefixes_prompt(tmp_path, monkeypatch):
         '[Replying to: "Japan is great for culture, food, and efficiency."]\n'
     )
     assert "What's the best time to go?" in captured["prompt"].content
+    meta = r._session(r._key(ev)).meta
+    assert meta["surface"] == "gateway"
+    assert meta["platform"] == "telegram"
+    assert meta["chat_id"] == "c1"
+    assert meta["thread_id"] == "travel"
+    assert meta["message_id"] == "msg-99"
+    assert meta["gateway"]["thread_id"] == "travel"
+    assert meta["gateway"]["message_id"] == "msg-99"
 
 
 def test_gateway_memory_notification_modes(tmp_path, monkeypatch):

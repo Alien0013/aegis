@@ -60,6 +60,7 @@ def test_session_read_and_scroll_include_runtime_metadata():
     s = Session(id="telegram:c1:u1", title="gateway chat")
     s.meta.update({
         "surface": "gateway",
+        "gateway": {"platform": "telegram", "chat_id": "c1", "user_id": "u1"},
         "platform": "telegram",
         "chat_id": "c1",
         "runtime_controls": {"provider": "openrouter", "model": "gpt-5.5"},
@@ -78,6 +79,7 @@ def test_session_read_and_scroll_include_runtime_metadata():
     scroll_meta = st.messages_around(s.id, 1)["session_meta"]
 
     assert read_meta["platform"] == "telegram"
+    assert read_meta["gateway"] == {"platform": "telegram", "chat_id": "c1", "user_id": "u1"}
     assert read_meta["chat_id"] == "c1"
     assert read_meta["runtime_controls"] == {"provider": "openrouter", "model": "gpt-5.5"}
     assert read_meta["runtime"] == {"busy_mode": "steer"}
@@ -88,6 +90,7 @@ def test_session_read_and_scroll_include_runtime_metadata():
     assert read_meta["resume_pending"] is True
     assert read_meta["resume_reason"] == "planned_stop"
     assert scroll_meta["runtime_controls"]["model"] == "gpt-5.5"
+    assert scroll_meta["gateway"]["user_id"] == "u1"
     assert scroll_meta["response_state"]["previous_response_id"] == "resp_session"
 
 

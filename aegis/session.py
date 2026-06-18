@@ -70,6 +70,7 @@ def _session_meta_view(sess: "Session") -> dict[str, Any]:
     }
     for key in (
         "surface",
+        "gateway",
         "platform",
         "chat_id",
         "thread_id",

@@ -91,6 +91,12 @@ def test_session_search_tool_browse_discover_read_and_scroll():
     previous = Session.create(title="parser launch notes")
     previous.meta.update({
         "surface": "gateway",
+        "gateway": {
+            "platform": "telegram",
+            "chat_id": "chat-42",
+            "thread_id": "thread-7",
+            "user_id": "user-9",
+        },
         "platform": "telegram",
         "chat_id": "chat-42",
         "thread_id": "thread-7",
@@ -131,6 +137,7 @@ def test_session_search_tool_browse_discover_read_and_scroll():
     assert read["session_id"] == previous.id
     assert read["messages"][1]["content"].startswith("We fixed the parser bug")
     assert read["session_meta"]["surface"] == "gateway"
+    assert read["session_meta"]["gateway"]["thread_id"] == "thread-7"
     assert read["session_meta"]["platform"] == "telegram"
     assert read["session_meta"]["chat_id"] == "chat-42"
     assert read["session_meta"]["runtime_controls"] == {"model": "gpt-5.5", "reasoning_effort": "high"}
@@ -147,6 +154,7 @@ def test_session_search_tool_browse_discover_read_and_scroll():
     assert [m["id"] for m in scroll["messages"]] == [0, 1, 2]
     assert scroll["messages"][1]["anchor"] is True
     assert scroll["session_meta"]["platform"] == "telegram"
+    assert scroll["session_meta"]["gateway"]["user_id"] == "user-9"
     assert scroll["session_meta"]["runtime_controls"]["model"] == "gpt-5.5"
     assert scroll["session_meta"]["response_state"]["store"] is True
 
