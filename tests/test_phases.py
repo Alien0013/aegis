@@ -337,6 +337,27 @@ def test_cli_config_migrate_refuses_invalid_yaml(capsys):
     assert cfg.config_path().read_text(encoding="utf-8") == original
 
 
+def test_cli_config_check_and_migrate_reject_bad_value_types(capsys):
+    from aegis import config as cfg
+    from aegis.cli.main import main
+
+    cfg.config_path().parent.mkdir(parents=True, exist_ok=True)
+    original = "agent:\n  max_iterations: not-number\nmemory:\n  enabled: maybe\n"
+    cfg.config_path().write_text(original, encoding="utf-8")
+
+    assert main(["config", "check"]) == 1
+    out = capsys.readouterr().out
+    assert "config file: invalid" in out
+    assert "type mismatches:" in out
+    assert "agent.max_iterations: expected integer, got str" in out
+    assert "memory.enabled: expected boolean, got str" in out
+
+    assert main(["config", "migrate"]) == 1
+    streams = capsys.readouterr()
+    assert "config file failed type validation" in streams.err
+    assert cfg.config_path().read_text(encoding="utf-8") == original
+
+
 def test_cli_config_setup_alias_dispatches_setup(monkeypatch):
     from argparse import Namespace
 

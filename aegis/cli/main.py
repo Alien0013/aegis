@@ -1007,6 +1007,34 @@ def _parse_config_set_value(key: str, raw_parts: object) -> tuple[object, str]:
     return value, ""
 
 
+def _config_type_errors(defaults: dict[str, object], current: dict[str, object]) -> list[str]:
+    errors: list[str] = []
+    for key, expected in defaults.items():
+        if key not in current:
+            continue
+        value = current[key]
+        if isinstance(expected, bool):
+            ok = isinstance(value, bool)
+            want = "boolean"
+        elif isinstance(expected, int) and not isinstance(expected, bool):
+            ok = isinstance(value, int) and not isinstance(value, bool)
+            want = "integer"
+        elif isinstance(expected, float):
+            ok = isinstance(value, (int, float)) and not isinstance(value, bool)
+            want = "number"
+        elif isinstance(expected, str):
+            ok = isinstance(value, str)
+            want = "string"
+        elif isinstance(expected, list):
+            ok = isinstance(value, list)
+            want = "list"
+        else:
+            continue
+        if not ok:
+            errors.append(f"{key}: expected {want}, got {type(value).__name__}")
+    return errors
+
+
 def cmd_config(args, config: Config) -> int:
     def configured_env(*names: str) -> str:
         for name in names:
@@ -1243,15 +1271,19 @@ def cmd_config(args, config: Config) -> int:
         missing = [k for k in defaults if k not in current]
         unknown = [k for k in current if k not in defaults and k.split(".")[0] not in
                    ("custom_providers", "fallback_providers", "hooks", "mcp", "routing")]
+        type_errors = _config_type_errors(defaults, current)
         if args.action == "check":
-            _print(f"config file: {'invalid' if file_errors else 'ok'}")
+            _print(f"config file: {'invalid' if file_errors or type_errors else 'ok'}")
             for error in file_errors:
                 _print(f"  - {error}")
             _print(f"missing default keys: {', '.join(missing) or '(none)'}")
             _print(f"unknown keys: {', '.join(unknown) or '(none)'}")
-            return 1 if file_errors else 0
+            _print(f"type mismatches: {', '.join(type_errors) or '(none)'}")
+            return 1 if file_errors or type_errors else 0
         if file_errors:
             return _die("config file failed validation: " + "; ".join(file_errors))
+        if type_errors:
+            return _die("config file failed type validation: " + "; ".join(type_errors))
         config.data = _deep_merge(DEFAULT_CONFIG, config.data)
         config.save()
         _print(f"migrated: added {len(missing)} missing default key(s).")
