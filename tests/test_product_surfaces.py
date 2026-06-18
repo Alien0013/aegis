@@ -2538,6 +2538,31 @@ def test_manifest_plugin_entrypoint_cannot_escape_package_dir():
     assert "escape_tool" not in {t.name for t in plugins.load_plugins(config=cfg).tools}
 
 
+def test_invalid_plugin_manifest_blocks_legacy_fallback_and_reports_error():
+    from aegis import config as cfg_paths
+    from aegis import plugins
+    from aegis.config import Config
+
+    cfg = Config.load()
+    pkg = cfg_paths.sub("plugins") / "broken_manifest"
+    pkg.mkdir(parents=True, exist_ok=True)
+    (pkg / "plugin.yaml").write_text("name: [unterminated\n", encoding="utf-8")
+    (pkg / "__init__.py").write_text(
+        "def register(api):\n"
+        "    class T:\n"
+        "        name='broken_manifest_tool'\n"
+        "    api.register_tool(T())\n",
+        encoding="utf-8",
+    )
+
+    plugins.clear_runtime_cache()
+    assert plugins.list_manifests(cfg) == []
+    api = plugins.load_plugins(config=cfg)
+
+    assert "broken_manifest_tool" not in {t.name for t in api.tools}
+    assert any(path.name == "plugin.yaml" and "plugin.yaml:" in error for path, error in api.errors)
+
+
 def test_plugin_enable_does_not_allowlist_unrelated_plugins():
     from aegis import config as cfg_paths
     from aegis import plugins

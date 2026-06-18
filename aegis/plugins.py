@@ -292,7 +292,7 @@ def _contained_path(root: Path, path: Path) -> bool:
         return False
 
 
-def _read_manifest_data(path: Path) -> dict[str, Any] | None:
+def _read_manifest_data_with_error(path: Path) -> tuple[dict[str, Any] | None, str]:
     try:
         if path.suffix.lower() in {".yaml", ".yml"}:
             import yaml
@@ -300,9 +300,35 @@ def _read_manifest_data(path: Path) -> dict[str, Any] | None:
             data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         else:
             data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        return None
-    return data if isinstance(data, dict) else None
+    except Exception as exc:  # noqa: BLE001
+        return None, f"{path.name}: {type(exc).__name__}: {exc}"
+    if not isinstance(data, dict):
+        return None, f"{path.name}: manifest root must be an object"
+    if not data:
+        return None, f"{path.name}: manifest is empty"
+    return data, ""
+
+
+def _read_manifest_data(path: Path) -> dict[str, Any] | None:
+    data, _error = _read_manifest_data_with_error(path)
+    return data
+
+
+def _invalid_manifest_records(base: Path) -> list[tuple[Path, str]]:
+    records: list[tuple[Path, str]] = []
+    seen_dirs: set[Path] = set()
+    if not base.exists():
+        return records
+    for name in MANIFEST_NAMES:
+        for path in sorted(base.rglob(name)):
+            manifest_dir = path.parent.resolve()
+            if manifest_dir in seen_dirs:
+                continue
+            seen_dirs.add(manifest_dir)
+            _data, error = _read_manifest_data_with_error(path)
+            if error:
+                records.append((path, error))
+    return records
 
 
 def _metadata_path(path: Path) -> Path:
@@ -604,6 +630,10 @@ def list_manifests(config=None) -> list[PluginManifest]:
         for path in sorted(base.rglob(name)):
             manifest_dir = path.parent.resolve()
             if manifest_dir in seen_manifest_dirs:
+                continue
+            _data, error = _read_manifest_data_with_error(path)
+            if error:
+                seen_manifest_dirs.add(manifest_dir)
                 continue
             manifest = _read_manifest(path, config, base=base, source="user")
             if manifest:
@@ -1213,6 +1243,11 @@ def load_plugins(*, quiet: bool = False, config=None) -> PluginAPI:
     manifest_entries = list_manifests(config)
     handled: set[Path] = set()
     manifest_dirs = {m.path.parent for m in manifest_entries if m.path.name in MANIFEST_NAMES}
+    invalid_manifests = _invalid_manifest_records(base)
+    invalid_manifest_dirs = {path.parent.resolve() for path, _error in invalid_manifests}
+    manifest_dirs.update(invalid_manifest_dirs)
+    for path, error in invalid_manifests:
+        api.errors.append((path, error))
     for manifest in manifest_entries:
         if manifest.entry_ref:
             identity = _manifest_identity(manifest)
