@@ -1910,6 +1910,31 @@ def _job_payload(job) -> dict[str, Any]:
     }
 
 
+def _jobs_summary(jobs: list[Any]) -> dict[str, Any]:
+    states: dict[str, int] = {}
+    next_runs = []
+    error_jobs = []
+    for job in jobs:
+        state = str(getattr(job, "state", "") or "idle")
+        states[state] = states.get(state, 0) + 1
+        next_run = float(getattr(job, "next_run", 0.0) or 0.0)
+        if next_run > 0:
+            next_runs.append(next_run)
+        if str(getattr(job, "last_error", "") or ""):
+            error_jobs.append(str(getattr(job, "id", "") or ""))
+    return {
+        "count": len(jobs),
+        "enabled": sum(1 for job in jobs if bool(getattr(job, "enabled", False))),
+        "paused": sum(1 for job in jobs if not bool(getattr(job, "enabled", False))),
+        "states": states,
+        "running": states.get("running", 0),
+        "errors": states.get("error", 0),
+        "last_error_count": len(error_jobs),
+        "error_job_ids": error_jobs[:20],
+        "next_run": min(next_runs) if next_runs else 0.0,
+    }
+
+
 def _epoch_from_run_time(value: Any) -> int:
     if isinstance(value, (int, float)):
         return int(value)
@@ -2610,11 +2635,7 @@ def make_handler(config: Config):
                     from .cron import CronStore
 
                     jobs = CronStore().list()
-                    stores["jobs"] = {
-                        "count": len(jobs),
-                        "enabled": sum(1 for job in jobs if bool(getattr(job, "enabled", False))),
-                        "paused": sum(1 for job in jobs if not bool(getattr(job, "enabled", False))),
-                    }
+                    stores["jobs"] = _jobs_summary(jobs)
                 except Exception as exc:  # noqa: BLE001
                     stores["jobs"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
                     payload["ok"] = False
@@ -3401,9 +3422,32 @@ def make_handler(config: Config):
             if path == "/api/jobs":
                 from .cron import CronStore
 
-                jobs = [_job_payload(job) for job in CronStore().list()]
-                return self._json(200, {"ok": True, "object": "list",
-                                        "jobs": jobs, "data": jobs})
+                raw_jobs = CronStore().list()
+                jobs = [_job_payload(job) for job in raw_jobs]
+                try:
+                    offset = max(0, int((query.get("offset") or ["0"])[0] or 0))
+                except (TypeError, ValueError):
+                    offset = 0
+                requested_limit = (query.get("limit") or [None])[0]
+                if requested_limit is None:
+                    limit = max(0, len(jobs) - offset)
+                else:
+                    try:
+                        limit = max(1, min(int(requested_limit or 1), 1000))
+                    except (TypeError, ValueError):
+                        limit = 100
+                page = jobs[offset:offset + limit] if limit else []
+                return self._json(200, {
+                    "ok": True,
+                    "object": "list",
+                    "jobs": page,
+                    "data": page,
+                    "count": len(jobs),
+                    "limit": limit,
+                    "offset": offset,
+                    "has_more": len(jobs) > offset + limit,
+                    "summary": _jobs_summary(raw_jobs),
+                })
             if path.startswith("/api/jobs/"):
                 code, payload = self._job_detail(path.rsplit("/", 1)[-1])
                 return self._json(code, payload)

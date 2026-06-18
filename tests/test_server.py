@@ -1344,6 +1344,38 @@ def test_server_health_skills_toolsets_and_cors_options(monkeypatch, tmp_path):
     assert json.loads(blocked_data)["error"] == "cors origin not allowed"
 
 
+def test_server_detailed_health_summarizes_cron_jobs(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+    from aegis.cron import CronStore
+
+    store = CronStore()
+    running = store.add("every 1h", "running job", name="running")
+    failing = store.add("every 2h", "failing job", name="failing")
+    store.mark_running(running.id)
+    store.record_run(failing.id, time.time() - 60, ok=False, error="boom")
+
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "GET", "/v1/health/detailed")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    jobs = json.loads(data)["stores"]["jobs"]
+
+    assert status == 200
+    assert jobs["count"] == 2
+    assert jobs["enabled"] == 2
+    assert jobs["states"]["running"] == 1
+    assert jobs["states"]["error"] == 1
+    assert jobs["running"] == 1
+    assert jobs["errors"] == 1
+    assert jobs["last_error_count"] == 1
+    assert jobs["error_job_ids"] == [failing.id]
+
+
 def test_server_session_checks_report_and_repair_stale_runs(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
@@ -5598,6 +5630,7 @@ def test_server_api_jobs_crud_pause_resume_and_run(monkeypatch, tmp_path):
         })
         job_id = json.loads(create_data)["id"]
         list_status, list_data = _request(port, "GET", "/api/jobs")
+        page_status, page_data = _request(port, "GET", "/api/jobs?limit=1&offset=0")
         pause_status, pause_data = _request(port, "POST", f"/api/jobs/{job_id}/pause", {})
         resume_status, resume_data = _request(port, "POST", f"/api/jobs/{job_id}/resume", {})
         patch_status, patch_data = _request(port, "PATCH", f"/api/jobs/{job_id}", {
@@ -5619,6 +5652,16 @@ def test_server_api_jobs_crud_pause_resume_and_run(monkeypatch, tmp_path):
     listed = json.loads(list_data)
     assert any(row["id"] == job_id for row in listed["data"])
     assert any(row["id"] == job_id for row in listed["jobs"])
+    assert listed["count"] == 1
+    assert listed["summary"]["count"] == 1
+    assert listed["summary"]["states"]["idle"] == 1
+    assert page_status == 200
+    page = json.loads(page_data)
+    assert page["count"] == 1
+    assert page["limit"] == 1
+    assert page["offset"] == 0
+    assert page["has_more"] is False
+    assert page["data"][0]["id"] == job_id
     assert pause_status == 200
     assert json.loads(pause_data)["job"]["enabled"] is False
     assert resume_status == 200
