@@ -62,7 +62,7 @@ def cmd_security_audit(args, config) -> int:
 
 def cmd_debug(args, config) -> int:
     """`aegis debug share` — bundle redacted logs + config + doctor output into a zip."""
-    from .redact import redact_secrets
+    from .redact import redact_secret_values, redact_secrets
 
     def env_keys(text: str) -> str:
         rows: list[str] = []
@@ -76,11 +76,22 @@ def cmd_debug(args, config) -> int:
                 rows.append(f"{key}=<redacted>")
         return "\n".join(rows)
 
+    def redacted_config_yaml(raw: str) -> str:
+        import yaml
+
+        try:
+            data = yaml.safe_load(raw) if raw.strip() else {}
+        except yaml.YAMLError:
+            return redact_secrets(raw)
+        if isinstance(data, dict):
+            return yaml.safe_dump(redact_secret_values(data), sort_keys=False)
+        return redact_secrets(raw)
+
     out = cfg.sub("debug-report.zip")
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         # redacted config
         raw = read_text(cfg.config_path())
-        redacted_config = redact_secrets(raw)
+        redacted_config = redacted_config_yaml(raw)
         z.writestr("config.yaml", redacted_config)
         z.writestr("config.redacted.yaml", redacted_config)
         # .env keys only (values redacted)

@@ -313,9 +313,14 @@ class TelegramAdapter(BasePlatformAdapter):
 
     def _before_dispatch(self, ev: MessageEvent):
         metadata = self._reply_metadata(ev)
-        self._typing(ev.chat_id, metadata=metadata)
+        self._call_with_metadata(self._typing, ev.chat_id, metadata=metadata)
         return {
-            "status_id": self._send_status(ev.chat_id, "🤔 working…", metadata=metadata),
+            "status_id": self._call_with_metadata(
+                self._send_status,
+                ev.chat_id,
+                "🤔 working…",
+                metadata=metadata,
+            ),
             "metadata": metadata,
         }
 
@@ -331,6 +336,17 @@ class TelegramAdapter(BasePlatformAdapter):
     def _thread_params(self, metadata: dict | None = None) -> dict[str, str]:
         thread_id = (metadata or {}).get("message_thread_id") or (metadata or {}).get("thread_id")
         return {"message_thread_id": str(thread_id)} if thread_id else {}
+
+    def _call_with_metadata(self, fn, *args, metadata: dict | None = None):
+        import inspect
+
+        try:
+            params = inspect.signature(fn).parameters
+        except (TypeError, ValueError):
+            params = {}
+        if "metadata" in params:
+            return fn(*args, metadata=metadata)
+        return fn(*args)
 
     def _typing(self, chat_id: str, *, metadata: dict | None = None) -> None:
         try:

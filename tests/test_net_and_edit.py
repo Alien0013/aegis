@@ -298,7 +298,12 @@ def test_debug_report_redacts_config_and_logs(monkeypatch, tmp_path):
     from aegis.config import Config
     import aegis.cli.main as cli_main
 
-    cfg.config_path().write_text("OPENAI_API_KEY: sk-proj-ABCDEFGHIJ1234567890\n", encoding="utf-8")
+    cfg.config_path().write_text(
+        "OPENAI_API_KEY: sk-proj-ABCDEFGHIJ1234567890\n"
+        "server:\n"
+        "  dashboard_token: plain-dashboard-secret\n",
+        encoding="utf-8",
+    )
     cfg.env_path().write_text("export OPENAI_API_KEY=sk-env-secret\n# ignored\n", encoding="utf-8")
     cfg.auth_path().write_text('{"access_token":"github_pat_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"}', encoding="utf-8")
     cfg.logs_dir().mkdir(parents=True, exist_ok=True)
@@ -318,6 +323,7 @@ def test_debug_report_redacts_config_and_logs(monkeypatch, tmp_path):
         log_text = z.read("logs/aegis.log").decode()
         doctor_text = z.read("doctor.txt").decode()
     assert "sk-proj-" not in config_text
+    assert "plain-dashboard-secret" not in config_text
     assert config_redacted_text == config_text
     assert "sk-env-secret" not in env_text
     assert "OPENAI_API_KEY=<redacted>" in env_text
