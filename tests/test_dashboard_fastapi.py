@@ -105,6 +105,11 @@ def test_fastapi_basic_login_session_and_logout(tmp_path, monkeypatch):
     assert login_page.status_code == 200
     assert "AEGIS" in login_page.text
 
+    deep_link = asyncio.run(_request(app, "GET", "/sessions"))
+    assert deep_link.status_code == 200
+    assert "<form method='post' action='/auth/login'>" in deep_link.text
+    assert "window.__AEGIS_SESSION_TOKEN__" not in deep_link.text
+
     bad = asyncio.run(_request(
         app,
         "POST",
@@ -129,6 +134,15 @@ def test_fastapi_basic_login_session_and_logout(tmp_path, monkeypatch):
         cookies={"aegis_dashboard_session": session_cookie},
     ))
     assert authed.status_code == 200
+    authed_deep_link = asyncio.run(_request(
+        app,
+        "GET",
+        "/sessions",
+        cookies={"aegis_dashboard_session": session_cookie},
+    ))
+    assert authed_deep_link.status_code == 200
+    assert "window.__AEGIS_SESSION_TOKEN__" in authed_deep_link.text
+    assert "<form method='post' action='/auth/login'>" not in authed_deep_link.text
 
     raw = base64.b64encode(b"admin:pw-secret").decode()
     basic = asyncio.run(_request(app, "GET", "/api/status", headers={"Authorization": f"Basic {raw}"}))

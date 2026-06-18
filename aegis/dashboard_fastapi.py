@@ -6576,10 +6576,10 @@ def create_app(config: Config) -> FastAPI:
             bridge.close()
 
     @app.get("/{full_path:path}", include_in_schema=False)
-    async def spa(full_path: str) -> Response:
+    async def spa(full_path: str, request: Request) -> Response:
         if full_path.startswith("api/"):
             return JSONResponse({"error": "not found"}, status_code=404)
-        return _html_response(config)
+        return _html_response(config, request)
 
     return app
 
