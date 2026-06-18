@@ -278,7 +278,19 @@ class BasePlatformAdapter:
 
     def _deliver_reply(self, ev: MessageEvent, reply: str, state=None) -> None:  # noqa: ANN001
         if reply:
-            self.deliver(ev.chat_id, reply)
+            metadata = dict(ev.metadata or {})
+            for key, value in (
+                ("platform", ev.platform),
+                ("thread_id", ev.thread_id),
+                ("message_id", ev.message_id),
+                ("reply_to_message_id", ev.reply_to_message_id),
+                ("user_id", ev.user_id),
+                ("user_name", ev.user_name),
+                ("session_key", ev.session_key),
+            ):
+                if value:
+                    metadata.setdefault(key, value)
+            self.deliver(ev.chat_id, reply, metadata=metadata)
 
     def _record_delivery_start(self, ev: MessageEvent) -> str:
         try:

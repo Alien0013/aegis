@@ -16,7 +16,9 @@ import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from ..platforms import normalize_platform_name
+import httpx
+
+from ..platforms import chunk_text_by_units, normalize_platform_name
 from ..webhook import DeliveryIdCache, FixedWindowRateLimiter, _env_truthy, _is_loopback_host, verify_signature
 from .base import BasePlatformAdapter, Dispatch, MessageEvent
 
@@ -90,6 +92,7 @@ class WebhookChannel(BasePlatformAdapter):
     transport = "http"
     supports_threads = True
     supports_media = False
+    max_message_length = 16000
 
     def __init__(
         self,
@@ -108,6 +111,9 @@ class WebhookChannel(BasePlatformAdapter):
         self.env_prefix = env_prefix
         self.port = _channel_env_int(env_prefix, "PORT", default_port)
         self.secret = _channel_env(env_prefix, "SECRET")
+        self.outbound_url = _channel_env(env_prefix, "OUTBOUND_URL")
+        self.outbound_secret = _channel_env(env_prefix, "OUTBOUND_SECRET", self.secret)
+        self.outbound_max_chars = _channel_env_int(env_prefix, "OUTBOUND_MAX_CHARS", self.max_message_length)
         self.max_body_bytes = _channel_env_int(env_prefix, "MAX_BYTES", MAX_CHANNEL_WEBHOOK_BYTES)
         self._delivery_cache = DeliveryIdCache(
             ttl_seconds=float(_channel_env(env_prefix, "IDEMPOTENCY_TTL_SECONDS", "3600") or "3600"),
@@ -129,6 +135,8 @@ class WebhookChannel(BasePlatformAdapter):
                 "insecure_env_override": _channel_env_truthy(self.env_prefix, "INSECURE_NO_AUTH"),
                 "env_prefix": self.env_prefix,
                 "max_body_bytes": self.max_body_bytes,
+                "outbound_configured": bool(self.outbound_url),
+                "outbound_secret_configured": bool(self.outbound_secret),
                 "signature_schemes": [
                     "X-Secret",
                     "X-Hub-Signature-256",
@@ -409,5 +417,49 @@ class WebhookChannel(BasePlatformAdapter):
         print(f"  ▸ webhook channel listening on :{self.port}/in")
         httpd.serve_forever()
 
-    def send(self, chat_id: str, text: str, *, metadata: dict | None = None) -> None:  # replies are returned inline
-        pass
+    def _outbound_payload(self, chat_id: str, text: str, metadata: dict) -> dict:
+        platform = normalize_platform_name(
+            metadata.get("platform") or metadata.get("normalized_platform") or self.default_platform,
+            default=self.default_platform,
+        )
+        payload = {
+            "platform": platform,
+            "chat_id": str(chat_id),
+            "text": text,
+            "metadata": metadata,
+        }
+        for source, target in (
+            ("thread_id", "thread_id"),
+            ("thread_ts", "thread_id"),
+            ("root_id", "thread_id"),
+            ("topic", "thread_id"),
+            ("remote_jid", "remote_jid"),
+            ("group_jid", "group_jid"),
+            ("participant", "participant"),
+            ("message_key_id", "reply_to_message_id"),
+            ("reply_to_message_id", "reply_to_message_id"),
+            ("message_id", "reply_to_message_id"),
+        ):
+            value = _string_value(metadata.get(source))
+            if value and target not in payload:
+                payload[target] = value
+        return payload
+
+    def send(self, chat_id: str, text: str, *, metadata: dict | None = None) -> None:
+        """Optionally deliver replies to an external bridge endpoint.
+
+        Inline webhook replies still use the HTTP response from ``start``. This outbound
+        path is for async gateway replies, cron delivery, and custom bridges that need a
+        separate send endpoint.
+        """
+        if not self.outbound_url:
+            return
+        metadata = dict(metadata or {})
+        headers = {"Content-Type": "application/json"}
+        if self.outbound_secret:
+            headers["X-Secret"] = self.outbound_secret
+        with httpx.Client(timeout=30) as client:
+            for chunk in chunk_text_by_units(text or "", limit=self.outbound_max_chars):
+                payload = self._outbound_payload(chat_id, chunk, metadata)
+                response = client.post(self.outbound_url, headers=headers, json=payload)
+                response.raise_for_status()

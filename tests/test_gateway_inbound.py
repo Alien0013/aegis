@@ -794,6 +794,111 @@ def test_gateway_webhook_channel_accepts_whatsapp_bridge_aliases():
     assert WebhookChannel()._delivery_id({}, {"key": {"id": "BAE599999"}}) == "body:key.id:BAE599999"
 
 
+def test_gateway_webhook_channel_outbound_bridge_send(monkeypatch):
+    from aegis.gateway import webhook_channel
+    from aegis.gateway.webhook_channel import WebhookChannel
+
+    monkeypatch.setenv("WHATSAPP_CHANNEL_OUTBOUND_URL", "https://bridge.test/send")
+    monkeypatch.setenv("WHATSAPP_CHANNEL_SECRET", "inbound-secret")
+    monkeypatch.setenv("WHATSAPP_CHANNEL_OUTBOUND_SECRET", "outbound-secret")
+    sent = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, url, *, headers, json):
+            sent.append((url, dict(headers), dict(json)))
+            return FakeResponse()
+
+    monkeypatch.setattr(webhook_channel.httpx, "Client", FakeClient)
+
+    adapter = WebhookChannel(name="whatsapp", default_platform="whatsapp", env_prefix="WHATSAPP_CHANNEL")
+    adapter.send(
+        "12025550123-111@g.us",
+        "hello",
+        metadata={
+            "bridge_platform": "baileys",
+            "remote_jid": "12025550123-111@g.us",
+            "participant": "15551234567@s.whatsapp.net",
+            "message_key_id": "BAE599999",
+            "thread_id": "thread-1",
+        },
+    )
+
+    assert sent == [(
+        "https://bridge.test/send",
+        {"Content-Type": "application/json", "X-Secret": "outbound-secret"},
+        {
+            "platform": "whatsapp",
+            "chat_id": "12025550123-111@g.us",
+            "text": "hello",
+            "metadata": {
+                "bridge_platform": "baileys",
+                "remote_jid": "12025550123-111@g.us",
+                "participant": "15551234567@s.whatsapp.net",
+                "message_key_id": "BAE599999",
+                "thread_id": "thread-1",
+            },
+            "thread_id": "thread-1",
+            "remote_jid": "12025550123-111@g.us",
+            "participant": "15551234567@s.whatsapp.net",
+            "reply_to_message_id": "BAE599999",
+        },
+    )]
+    metadata = adapter.metadata
+    assert metadata["security"]["outbound_configured"] is True
+    assert metadata["security"]["outbound_secret_configured"] is True
+
+
+def test_gateway_delivery_preserves_event_metadata_for_adapter_send():
+    from aegis.gateway.base import BasePlatformAdapter, MessageEvent
+
+    class MetadataAdapter(BasePlatformAdapter):
+        name = "metadata"
+
+        def __init__(self):
+            self.sent = []
+
+        def send(self, chat_id: str, text: str, *, metadata: dict | None = None) -> None:
+            self.sent.append((chat_id, text, dict(metadata or {})))
+
+    adapter = MetadataAdapter()
+    ev = MessageEvent(
+        platform="whatsapp",
+        chat_id="c1",
+        text="prompt",
+        user_id="u1",
+        thread_id="thread-1",
+        message_id="m1",
+        metadata={"remote_jid": "c1"},
+    )
+
+    adapter._deliver_reply(ev, "reply")
+
+    assert adapter.sent == [(
+        "c1",
+        "reply",
+        {
+            "remote_jid": "c1",
+            "platform": "whatsapp",
+            "thread_id": "thread-1",
+            "message_id": "m1",
+            "user_id": "u1",
+        },
+    )]
+
+
 def test_gateway_mattermost_channel_normalizes_event_body_and_alias(monkeypatch):
     from aegis.gateway.mattermost_channel import MattermostAdapter
     from aegis.platforms import normalize_platform_name
