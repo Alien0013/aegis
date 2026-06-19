@@ -148,6 +148,30 @@ def test_cross_session_integrity_report_degrades_on_warning_only_state(tmp_path,
     assert any(check["id"] == "stale_running_runs" and check["ok"] is False for check in report["checks"])
 
 
+def test_cross_session_integrity_report_distinguishes_stale_planned_stop_markers(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+
+    from aegis.session import Session, SessionStore
+    from aegis.session_checks import cross_session_integrity_report
+
+    store = SessionStore()
+    session = Session(id="sess-planned-stop", title="planned stop")
+    session.meta["resume_pending"] = True
+    session.meta["resume_reason"] = "planned_stop"
+    session.meta["last_resume_marked_at"] = (
+        datetime.now(timezone.utc) - timedelta(days=2)
+    ).isoformat()
+    store.save(session)
+
+    report = cross_session_integrity_report(stale_running_seconds=3600, stale_resume_pending_seconds=60)
+
+    assert report["ok"] is False
+    assert report["status"] == "degraded"
+    assert {issue["code"] for issue in report["issues"]} == {"stale_planned_stop_resume_pending"}
+    assert report["counts"]["planned_stop_resume_pending_sessions"] == 1
+    assert any(check["id"] == "planned_stop_recovery" and check["ok"] is False for check in report["checks"])
+
+
 def test_repair_cross_session_integrity_interrupts_stale_running_runs(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
 
@@ -207,3 +231,56 @@ def test_repair_cross_session_integrity_interrupts_duplicate_running_runs(tmp_pa
     assert runs.get(newer["id"])["status"] == "running"
     assert store.load(session.id).meta["resume_pending"] is True
     assert "duplicate_running_runs" not in {issue["code"] for issue in after["issues"]}
+
+
+def test_repair_cross_session_integrity_clears_stale_planned_stop_markers(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+
+    from aegis.runs import RunStore
+    from aegis.session import Session, SessionStore
+    from aegis.session_checks import cross_session_integrity_report, repair_cross_session_integrity
+
+    store = SessionStore()
+    runs = RunStore()
+    old = Session(id="sess-old-planned-stop", title="old planned stop")
+    old.meta["resume_pending"] = True
+    old.meta["resume_reason"] = "planned_stop"
+    old.meta["last_resume_marked_at"] = (
+        datetime.now(timezone.utc) - timedelta(days=2)
+    ).isoformat()
+    store.save(old)
+
+    fresh = Session(id="sess-fresh-planned-stop", title="fresh planned stop")
+    fresh.meta["resume_pending"] = True
+    fresh.meta["resume_reason"] = "planned_stop"
+    fresh.meta["last_resume_marked_at"] = datetime.now(timezone.utc).isoformat()
+    store.save(fresh)
+
+    active = Session(id="sess-active-planned-stop", title="active planned stop")
+    active.meta["resume_pending"] = True
+    active.meta["resume_reason"] = "planned_stop"
+    active.meta["last_resume_marked_at"] = (
+        datetime.now(timezone.utc) - timedelta(days=2)
+    ).isoformat()
+    store.save(active)
+    active_run = runs.start(surface="gateway", kind="chat", session_id=active.id, prompt="still running")
+    active_run["started_at"] = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    runs.write(active_run)
+
+    before = cross_session_integrity_report(stale_running_seconds=3600, stale_resume_pending_seconds=60)
+    repair = repair_cross_session_integrity(
+        stale_running_seconds=3600,
+        stale_resume_pending_seconds=60,
+        session_limit=10,
+        run_limit=10,
+    )
+    after = cross_session_integrity_report(stale_running_seconds=3600, stale_resume_pending_seconds=60)
+
+    assert "stale_planned_stop_resume_pending" in {issue["code"] for issue in before["issues"]}
+    assert repair["cleared_planned_stop_resume_pending"] == 1
+    assert repair["skipped"] == 0
+    assert store.load(old.id).meta.get("resume_pending") is None
+    assert store.load(fresh.id).meta["resume_pending"] is True
+    assert store.load(active.id).meta["resume_pending"] is True
+    assert runs.get(active_run["id"])["status"] == "running"
+    assert after["counts"]["planned_stop_resume_pending_sessions"] == 2

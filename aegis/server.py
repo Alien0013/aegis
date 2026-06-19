@@ -3427,8 +3427,10 @@ def make_handler(config: Config):
             limits = self._session_check_limits(query, body)
             reason = str((body or {}).get("resume_reason") or (body or {}).get("reason") or "api_session_check_repair")
             repair = repair_cross_session_integrity(
+                session_limit=limits["session_limit"],
                 run_limit=limits["run_limit"],
                 stale_running_seconds=limits["stale_running_seconds"],
+                stale_resume_pending_seconds=limits["stale_resume_pending_seconds"],
                 resume_reason=reason,
             )
             report = cross_session_integrity_report(**limits)

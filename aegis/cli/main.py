@@ -1392,8 +1392,10 @@ def cmd_sessions(args, config: Config) -> int:
         repair = None
         if getattr(args, "repair", False):
             repair = repair_cross_session_integrity(
+                session_limit=session_limit,
                 run_limit=run_limit,
                 stale_running_seconds=stale_running,
+                stale_resume_pending_seconds=stale_resume,
             )
         report = cross_session_integrity_report(
             session_limit=session_limit,
@@ -1431,6 +1433,7 @@ def cmd_sessions(args, config: Config) -> int:
             _print(
                 f"  interrupted stale runs: {repair.get('repaired_running_runs', 0)}; "
                 f"duplicate runs cleaned: {repair.get('repaired_duplicate_running_runs', 0)}; "
+                f"planned-stop markers cleared: {repair.get('cleared_planned_stop_resume_pending', 0)}; "
                 f"resume-pending sessions marked: {repair.get('marked_resume_pending', 0)}; "
                 f"skipped: {repair.get('skipped', 0)}"
             )

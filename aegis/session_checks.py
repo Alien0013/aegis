@@ -14,6 +14,7 @@ _GATEWAY_GENERATION_META = "_gateway_generation"
 _RESUME_PENDING_META = "resume_pending"
 _RESUME_REASON_META = "resume_reason"
 _RESUME_MARKED_AT_META = "last_resume_marked_at"
+_PLANNED_STOP_REASON = "planned_stop"
 
 
 def _parse_iso(value: str) -> datetime | None:
@@ -184,7 +185,20 @@ def cross_session_integrity_report(
                 )
             else:
                 age = max(0.0, (now - marked_at).total_seconds())
-                if age >= stale_resume_pending_seconds:
+                if age >= stale_resume_pending_seconds and reason == _PLANNED_STOP_REASON:
+                    _issue(
+                        issues,
+                        code="stale_planned_stop_resume_pending",
+                        severity="warning",
+                        session_id=sid,
+                        message="planned-stop resume marker is stale and can be cleared if no run is active",
+                        details={
+                            "age_seconds": int(age),
+                            "threshold_seconds": int(stale_resume_pending_seconds),
+                            "resume_reason": reason,
+                        },
+                    )
+                elif age >= stale_resume_pending_seconds:
                     _issue(
                         issues,
                         code="stale_resume_pending",
@@ -291,6 +305,11 @@ def cross_session_integrity_report(
             ),
             "detail": "resume-pending gateway sessions are fresh and well formed",
         },
+        {
+            "id": "planned_stop_recovery",
+            "ok": not any(issue["code"] == "stale_planned_stop_resume_pending" for issue in issues),
+            "detail": "planned-stop resume markers are fresh or already cleared",
+        },
     ])
     return {
         "object": "hermes.cross_session_integrity_report",
@@ -327,14 +346,24 @@ def cross_session_integrity_report(
                 1 for session in sessions.values()
                 if isinstance(session.meta, dict) and session.meta.get(_RESUME_PENDING_META)
             ),
+            "planned_stop_resume_pending_sessions": sum(
+                1 for session in sessions.values()
+                if (
+                    isinstance(session.meta, dict)
+                    and session.meta.get(_RESUME_PENDING_META)
+                    and str(session.meta.get(_RESUME_REASON_META) or "") == _PLANNED_STOP_REASON
+                )
+            ),
         },
     }
 
 
 def repair_cross_session_integrity(
     *,
+    session_limit: int = 500,
     run_limit: int = 500,
     stale_running_seconds: float = 6 * 60 * 60,
+    stale_resume_pending_seconds: float = 24 * 60 * 60,
     resume_reason: str = "cross_session_repair",
 ) -> dict[str, Any]:
     """Conservatively repair durable run/session state after a restart.
@@ -348,8 +377,10 @@ def repair_cross_session_integrity(
     from .runs import RunStore
     from .session import SessionStore
 
+    session_limit = max(1, int(session_limit or 1))
     run_limit = max(1, int(run_limit or 1))
     stale_running_seconds = max(0.0, float(stale_running_seconds or 0))
+    stale_resume_pending_seconds = max(0.0, float(stale_resume_pending_seconds or 0))
     reason = str(resume_reason or "cross_session_repair")
     runs = RunStore()
     store = SessionStore()
@@ -359,6 +390,7 @@ def repair_cross_session_integrity(
     skipped = 0
     stale_interrupted = 0
     duplicate_interrupted = 0
+    cleared_planned_stop = 0
     repaired_ids: set[str] = set()
 
     for run in runs.list(status="running", limit=run_limit):
@@ -468,12 +500,63 @@ def repair_cross_session_integrity(
                 "repair_kind": "duplicate_running",
             })
 
+    running_session_ids = {
+        str(run.get("session_id") or "")
+        for run in runs.list(status="running", limit=run_limit)
+        if run.get("session_id")
+    }
+    for row in store.list(session_limit, include_internal=True):
+        sid = str(row.get("id") or "")
+        if not sid or sid in running_session_ids:
+            continue
+        session = store.load(sid)
+        if session is None or not isinstance(session.meta, dict):
+            continue
+        meta = session.meta
+        if not meta.get(_RESUME_PENDING_META):
+            continue
+        if str(meta.get(_RESUME_REASON_META) or "") != _PLANNED_STOP_REASON:
+            continue
+        marked_at = _utc(_parse_iso(str(meta.get(_RESUME_MARKED_AT_META) or "")))
+        if marked_at is None:
+            continue
+        age = max(0.0, (now - marked_at).total_seconds())
+        if age < stale_resume_pending_seconds:
+            continue
+        try:
+            cleared = store.clear_resume_pending(sid)
+        except Exception as exc:  # noqa: BLE001
+            skipped += 1
+            repaired.append({
+                "session_id": sid,
+                "status": "error",
+                "error": f"{type(exc).__name__}: {exc}",
+                "repair_kind": "planned_stop_resume_pending",
+            })
+            continue
+        if not cleared:
+            skipped += 1
+            repaired.append({
+                "session_id": sid,
+                "status": "skipped",
+                "repair_kind": "planned_stop_resume_pending",
+            })
+            continue
+        cleared_planned_stop += 1
+        repaired.append({
+            "session_id": sid,
+            "status": "cleared",
+            "age_seconds": int(age),
+            "repair_kind": "planned_stop_resume_pending",
+        })
+
     return {
         "object": "hermes.cross_session_integrity_repair",
         "repaired_at": now.isoformat(),
         "ok": skipped == 0,
         "repaired_running_runs": stale_interrupted,
         "repaired_duplicate_running_runs": duplicate_interrupted,
+        "cleared_planned_stop_resume_pending": cleared_planned_stop,
         "marked_resume_pending": marked_resume,
         "skipped": skipped,
         "runs": repaired,

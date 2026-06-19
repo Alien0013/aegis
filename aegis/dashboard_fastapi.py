@@ -4663,8 +4663,10 @@ def _api_post(
             return cross_session_integrity_report(**limits)
         reason = str(body.get("resume_reason") or body.get("reason") or "dashboard_session_check_repair")
         repair = repair_cross_session_integrity(
+            session_limit=limits["session_limit"],
             run_limit=limits["run_limit"],
             stale_running_seconds=limits["stale_running_seconds"],
+            stale_resume_pending_seconds=limits["stale_resume_pending_seconds"],
             resume_reason=reason,
         )
         report = cross_session_integrity_report(**limits)
