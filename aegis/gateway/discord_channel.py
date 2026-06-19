@@ -531,14 +531,21 @@ class DiscordAdapter(BasePlatformAdapter):
         except Exception:  # noqa: BLE001
             return await channel.send(text)
 
-    def add_reaction(self, chat_id: str, message_id: str, reaction: str) -> None:
+    def add_reaction(
+        self,
+        chat_id: str,
+        message_id: str,
+        reaction: str,
+        *,
+        metadata: dict | None = None,
+    ) -> None:
         client = getattr(self, "_client", None)
         loop = getattr(self, "_loop", None)
         if client is None or loop is None or not message_id or not reaction:
             return
 
         async def react():
-            channel = await self._discord_target_channel(chat_id, None)
+            channel = await self._discord_target_channel(chat_id, metadata)
             message = await channel.fetch_message(int(message_id))
             await message.add_reaction(reaction)
 
@@ -547,14 +554,21 @@ class DiscordAdapter(BasePlatformAdapter):
         except Exception:  # noqa: BLE001
             pass
 
-    def remove_reaction(self, chat_id: str, message_id: str, reaction: str) -> None:
+    def remove_reaction(
+        self,
+        chat_id: str,
+        message_id: str,
+        reaction: str,
+        *,
+        metadata: dict | None = None,
+    ) -> None:
         client = getattr(self, "_client", None)
         loop = getattr(self, "_loop", None)
         if client is None or loop is None or not message_id or not reaction:
             return
 
         async def unreact():
-            channel = await self._discord_target_channel(chat_id, None)
+            channel = await self._discord_target_channel(chat_id, metadata)
             message = await channel.fetch_message(int(message_id))
             clear = getattr(message, "clear_reaction", None)
             if callable(clear):

@@ -667,6 +667,8 @@ def test_platform_adapters_send_native_reactions(monkeypatch):
     discord._loop = object()
     discord.add_reaction("99", "123", "🚀")
     discord.remove_reaction("99", "123", "🚀")
+    discord.add_reaction("99", "124", "✅", metadata={"thread_id": "100"})
+    discord.remove_reaction("99", "124", "✅", metadata={"thread_id": "100"})
 
     assert discord_calls == [
         ("channel", 99),
@@ -675,6 +677,12 @@ def test_platform_adapters_send_native_reactions(monkeypatch):
         ("channel", 99),
         ("fetch", 123),
         ("clear", "🚀"),
+        ("channel", 100),
+        ("fetch", 124),
+        ("add", "✅"),
+        ("channel", 100),
+        ("fetch", 124),
+        ("clear", "✅"),
     ]
 
 
