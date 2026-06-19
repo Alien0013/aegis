@@ -534,13 +534,20 @@ def test_platform_helper_command_caps_and_utf16_chunks():
     ]
     assert "SLACK_TRIGGER_MODE" in platform_metadata("sl")["optional_env"]
     assert "SLACK_REPLY_IN_THREAD" in platform_metadata("sl")["optional_env"]
+    assert "SLACK_BOT_ID" in platform_metadata("sl")["optional_env"]
+    assert "SLACK_IDEMPOTENCY_CACHE_MAX" in platform_metadata("sl")["optional_env"]
     assert platform_metadata("sl")["supports_slash_commands"] is True
     assert platform_metadata("sl")["supports_reactions"] is True
+    assert platform_metadata("sl")["security"]["idempotency_env"] == [
+        "SLACK_IDEMPOTENCY_TTL_SECONDS",
+        "SLACK_IDEMPOTENCY_CACHE_MAX",
+    ]
     assert platform_metadata("tg")["supports_interactive_prompts"] is True
     assert platform_metadata("dc")["supports_reactions"] is True
     assert platform_metadata("dc")["supports_interactive_prompts"] is True
     mattermost_meta = platform_metadata("mattermost-webhook")
     assert mattermost_meta["security"]["auth_type"] == "bearer"
+    assert mattermost_meta["supports_media"] is True
     assert mattermost_meta["supports_interactive_prompts"] is True
     assert "MATTERMOST_ACTION_URL" in mattermost_meta["optional_env"]
     assert mattermost_meta["security"]["action_url_env"] == "MATTERMOST_ACTION_URL"
@@ -614,11 +621,17 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert SlackAdapter().metadata["supports_media"] is True
     assert "SLACK_ALLOWED_CHANNELS" in SlackAdapter().metadata["optional_env"]
     assert "SLACK_TRIGGER_MODE" in SlackAdapter().metadata["optional_env"]
+    assert "SLACK_IDEMPOTENCY_CACHE_MAX" in SlackAdapter().metadata["optional_env"]
     assert SlackAdapter().metadata["security"]["trigger_mode"] == "all"
+    assert SlackAdapter().metadata["security"]["idempotency_env"] == [
+        "SLACK_IDEMPOTENCY_TTL_SECONDS",
+        "SLACK_IDEMPOTENCY_CACHE_MAX",
+    ]
     assert platform_metadata("slack")["supports_media"] is True
     mattermost = MattermostAdapter().metadata
     assert mattermost["transport"] == "http_webhook"
     assert mattermost["supports_threads"] is True
+    assert mattermost["supports_media"] is True
     assert mattermost["supports_reactions"] is True
     assert mattermost["supports_interactive_prompts"] is True
     assert mattermost["security"]["action_url_configured"] is False
@@ -3502,6 +3515,82 @@ def test_gateway_mattermost_send_uses_clean_root_id(monkeypatch):
     assert sent[3][2] == {"channel_id": "channel-1", "message": "null root"}
     assert sent[4][2] == {"channel_id": "channel-1", "message": "parent reply", "root_id": "root-2"}
     assert sent[5][2] == {"channel_id": "channel-1", "message": "self root"}
+
+
+def test_gateway_mattermost_send_media_uploads_native_file(monkeypatch, tmp_path):
+    from aegis.gateway import mattermost_channel
+    from aegis.gateway.mattermost_channel import MattermostAdapter
+
+    monkeypatch.setenv("MATTERMOST_URL", "https://mattermost.test")
+    monkeypatch.setenv("MATTERMOST_BOT_TOKEN", "mm-token")
+    path = tmp_path / "diagram.png"
+    path.write_bytes(b"png-bytes")
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, payload=None):
+            self._payload = payload or {}
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get(self, url, *, headers):
+            calls.append(("GET", url, headers, None))
+            return FakeResponse({"id": "root-1", "root_id": ""})
+
+        def post(self, url, *, headers, json=None, data=None, files=None):
+            if files:
+                filename, handle = files["files"]
+                calls.append(("UPLOAD", url, headers, dict(data or {}), filename, handle.read()))
+                return FakeResponse({"file_infos": [{"id": "file-1"}]})
+            calls.append(("POST", url, headers, dict(json or {})))
+            return FakeResponse()
+
+    monkeypatch.setattr(mattermost_channel.httpx, "Client", FakeClient)
+
+    adapter = MattermostAdapter()
+    adapter.send_media("channel-1", str(path), caption="see diagram", metadata={"root_id": "root-1"})
+
+    assert calls == [
+        (
+            "GET",
+            "https://mattermost.test/api/v4/posts/root-1",
+            {"Authorization": "Bearer mm-token"},
+            None,
+        ),
+        (
+            "UPLOAD",
+            "https://mattermost.test/api/v4/files",
+            {"Authorization": "Bearer mm-token"},
+            {"channel_id": "channel-1"},
+            "diagram.png",
+            b"png-bytes",
+        ),
+        (
+            "POST",
+            "https://mattermost.test/api/v4/posts",
+            {"Authorization": "Bearer mm-token"},
+            {
+                "channel_id": "channel-1",
+                "message": "see diagram",
+                "file_ids": ["file-1"],
+                "root_id": "root-1",
+            },
+        ),
+    ]
 
 
 def test_gateway_mattermost_interactive_prompts_use_action_buttons(monkeypatch):

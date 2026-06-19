@@ -77,7 +77,7 @@ class MattermostAdapter(BasePlatformAdapter):
     transport = "http_webhook"
     max_message_length = 16000
     supports_threads = True
-    supports_media = False
+    supports_media = True
     supports_reactions = True
     typed_command_prefix = "!"
 
@@ -460,6 +460,62 @@ class MattermostAdapter(BasePlatformAdapter):
             fallback = {"channel_id": chat_id, **payload}
             retry = client.post(f"{self.base_url}/api/v4/posts", headers=headers, json=fallback)
             retry.raise_for_status()
+
+    def _upload_file(self, client: httpx.Client, chat_id: str, path: str, headers: dict) -> str:
+        filename = os.path.basename(path) or "attachment"
+        with open(path, "rb") as fh:
+            response = client.post(
+                f"{self.base_url}/api/v4/files",
+                headers=headers,
+                data={"channel_id": chat_id},
+                files={"files": (filename, fh)},
+            )
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, dict):
+            file_infos = payload.get("file_infos")
+            if isinstance(file_infos, list) and file_infos:
+                file_id = _string_value(_dict_value(file_infos[0]).get("id"))
+                if file_id:
+                    return file_id
+            file_ids = payload.get("file_ids")
+            if isinstance(file_ids, list) and file_ids:
+                file_id = _string_value(file_ids[0])
+                if file_id:
+                    return file_id
+            file_id = _string_value(payload.get("file_id") or payload.get("id"))
+            if file_id:
+                return file_id
+        raise RuntimeError("Mattermost file upload did not return a file id")
+
+    def send_media(
+        self,
+        chat_id: str,
+        path: str,
+        caption: str = "",
+        *,
+        metadata: dict | None = None,
+        **_kwargs,
+    ) -> None:
+        if not os.path.exists(path):
+            return super().send_media(chat_id, path, caption, metadata=metadata)
+        headers = {"Authorization": f"Bearer {self.token}"}
+        try:
+            with httpx.Client(timeout=120) as client:
+                root_id = self._resolve_root_id(client, chat_id, metadata)
+                file_id = self._upload_file(client, chat_id, path, headers)
+                self._post_message(
+                    client,
+                    chat_id,
+                    {
+                        "message": str(caption or ""),
+                        "file_ids": [file_id],
+                    },
+                    root_id=root_id,
+                    headers=headers,
+                )
+        except Exception:  # noqa: BLE001
+            super().send_media(chat_id, path, caption, metadata=metadata)
 
     def _interactive_action(self, *, name: str, value: str, kind: str) -> dict:
         return {

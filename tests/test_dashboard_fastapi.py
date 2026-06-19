@@ -609,6 +609,11 @@ def test_fastapi_observability_contract_and_hook_test(tmp_path, monkeypatch):
     assert "assistant_delta" in body["agent_event_types"]
     assert body["configured_hooks"]["user_prompt"] == [command]
     assert body["routes"]["events_sse"] == "/api/events"
+    assert body["routes"]["gateway_status"] == "/api/gateway/status"
+    assert body["routes"]["gateway_channels"] == "/api/gateway/channels/catalog"
+    assert body["routes"]["messaging_platforms"] == "/api/messaging/platforms"
+    assert body["routes"]["platform_registry"] == "/api/platforms/registry"
+    assert "telegram" in body["platforms"]["ids"]
     user_prompt_hook = next(row for row in body["hooks"] if row["event"] == "user_prompt")
     assert user_prompt_hook["configured"] is True
 
@@ -1005,6 +1010,15 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
         "TELEGRAM_IDEMPOTENCY_CACHE_MAX",
     ]
     assert telegram["metadata"]["adapter_class"].endswith("TelegramAdapter")
+    slack = next(row for row in rows if row["id"] == "slack")
+    assert "SLACK_BOT_ID" in slack["optional_env_vars"]
+    assert "SLACK_IDEMPOTENCY_CACHE_MAX" in slack["optional_env_vars"]
+    assert "media" in slack["capabilities"]
+    assert "idempotency" in slack["capabilities"]
+    assert slack["security"]["idempotency_env"] == [
+        "SLACK_IDEMPOTENCY_TTL_SECONDS",
+        "SLACK_IDEMPOTENCY_CACHE_MAX",
+    ]
     signal = next(row for row in rows if row["id"] == "signal")
     assert signal["transport"] == "signal_cli"
     assert "SIGNAL_ALLOWED_USERS" in signal["optional_env_vars"]
@@ -1022,8 +1036,14 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     ntfy = next(row for row in rows if row["id"] == "ntfy")
     assert ntfy["required_env_vars"] == ["NTFY_TOPIC"]
     assert "NTFY_TOKEN" in ntfy["optional_env_vars"]
+    assert "NTFY_IDEMPOTENCY_CACHE_MAX" in ntfy["optional_env_vars"]
     assert ntfy["transport"] == "ntfy_stream"
     assert "title_tags_priority" in ntfy["capabilities"]
+    assert "idempotency" in ntfy["capabilities"]
+    assert ntfy["security"]["idempotency_env"] == [
+        "NTFY_IDEMPOTENCY_TTL_SECONDS",
+        "NTFY_IDEMPOTENCY_CACHE_MAX",
+    ]
     mattermost = next(row for row in rows if row["id"] == "mattermost")
     assert mattermost["transport"] == "http_webhook"
     assert mattermost["auth_type"] == "bearer_and_webhook_secret"
@@ -1031,6 +1051,7 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     assert "MATTERMOST_ACTION_URL" in mattermost["optional_env_vars"]
     assert "MATTERMOST_RATE_LIMIT_PER_MINUTE" in mattermost["optional_env_vars"]
     assert "MATTERMOST_ALLOW_UNSIGNED_LOOPBACK" in mattermost["optional_env_vars"]
+    assert "media" in mattermost["capabilities"]
     assert "threads" in mattermost["capabilities"]
     assert "interactive_prompts" in mattermost["capabilities"]
     assert "idempotency" in mattermost["capabilities"]
@@ -1069,6 +1090,22 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     assert reg_mattermost["metadata"]["adapter_class"].endswith("MattermostAdapter")
     reg_whatsapp = next(row for row in registry.json()["registry"] if row["id"] == "whatsapp")
     assert reg_whatsapp["metadata"]["transport"] == "http_bridge"
+    slack_detail = asyncio.run(_request(app, "GET", "/api/platforms/sl", headers=headers))
+    assert slack_detail.status_code == 200
+    assert slack_detail.json()["platform"]["id"] == "slack"
+    whatsapp_alias_detail = asyncio.run(_request(app, "GET", "/api/messaging/platforms/wa", headers=headers))
+    assert whatsapp_alias_detail.status_code == 200
+    assert whatsapp_alias_detail.json()["platform"]["id"] == "whatsapp"
+    slack_update = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/messaging/platforms/sl",
+        json={"env": {"SLACK_BOT_ID": "B123"}},
+        headers=headers,
+    ))
+    assert slack_update.status_code == 200
+    assert slack_update.json()["platform"]["id"] == "slack"
+    assert "SLACK_BOT_ID=B123" in (tmp_path / ".env").read_text(encoding="utf-8")
 
     detail = asyncio.run(_request(app, "GET", "/api/platforms/telegram", headers=headers))
     assert detail.status_code == 200

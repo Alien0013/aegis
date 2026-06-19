@@ -113,8 +113,11 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
             "SLACK_IGNORED_CHANNELS",
             "SLACK_ALLOWED_TEAMS",
             "SLACK_BOT_USER_ID",
+            "SLACK_BOT_ID",
             "SLACK_TRIGGER_MODE",
             "SLACK_REPLY_IN_THREAD",
+            "SLACK_IDEMPOTENCY_TTL_SECONDS",
+            "SLACK_IDEMPOTENCY_CACHE_MAX",
         ],
         "max_message_length": 39000,
         "message_length_units": "codepoints",
@@ -125,6 +128,12 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
         "supports_interactive_prompts": True,
         "typed_command_prefix": "!",
         "command_cap": MAX_TELEGRAM_COMMANDS,
+        "security": {
+            "idempotency_env": [
+                "SLACK_IDEMPOTENCY_TTL_SECONDS",
+                "SLACK_IDEMPOTENCY_CACHE_MAX",
+            ],
+        },
     },
     "mattermost": {
         "display_name": "Mattermost",
@@ -145,7 +154,7 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
         "max_message_length": 16000,
         "message_length_units": "codepoints",
         "supports_threads": True,
-        "supports_media": False,
+        "supports_media": True,
         "supports_reactions": True,
         "supports_interactive_prompts": True,
         "typed_command_prefix": "!",

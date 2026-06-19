@@ -76,6 +76,10 @@ class SlackAdapter(BasePlatformAdapter):
             "bot_id_configured": bool(self.bot_id),
             "trigger_mode": self.trigger_mode,
             "reply_in_thread": self.reply_in_thread,
+            "idempotency_env": [
+                "SLACK_IDEMPOTENCY_TTL_SECONDS",
+                "SLACK_IDEMPOTENCY_CACHE_MAX",
+            ],
         }
         data["idempotency"] = {
             "delivery_id_sources": [

@@ -27,6 +27,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from . import __version__
 from .config import Config, CONFIG_FIELD_ENUMS, DEFAULT_CONFIG, _deep_merge, config_type_errors
+from .platforms import normalize_platform_name
 
 try:
     from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket
@@ -1048,6 +1049,7 @@ def _observability_contract_payload(config: Config) -> dict[str, Any]:
         1 for status in dashboard_ui_assets.values()
         if str(status.get("status") or "") == "error"
     )
+    platform_rows = _messaging_platforms_payload(config).get("platforms", [])
     return {
         "ok": True,
         "version": __version__,
@@ -1069,6 +1071,12 @@ def _observability_contract_payload(config: Config) -> dict[str, Any]:
             "ui_asset_error_plugin_count": dashboard_plugin_ui_asset_error_plugin_count,
         },
         "dashboard_plugin_api_mounts": dashboard_api_mounts,
+        "platforms": {
+            "count": len(platform_rows),
+            "enabled": [row["id"] for row in platform_rows if row.get("enabled")],
+            "ready": [row["id"] for row in platform_rows if row.get("state") == "ready"],
+            "ids": [row["id"] for row in platform_rows],
+        },
         "routes": {
             "traces": "/api/traces",
             "trace": "/api/trace",
@@ -1077,6 +1085,11 @@ def _observability_contract_payload(config: Config) -> dict[str, Any]:
             "events_sse": "/api/events",
             "events_ws": "/api/ws",
             "publish": "/api/pub",
+            "gateway_status": "/api/gateway/status",
+            "gateway_channels": "/api/gateway/channels/catalog",
+            "messaging_platforms": "/api/messaging/platforms",
+            "platform_registry": "/api/platforms/registry",
+            "platform_detail": "/api/platforms/{platform_id}",
             "plugins": "/api/plugins",
             "dashboard_plugins": "/api/dashboard/plugins",
             "dashboard_plugin_hub": "/api/dashboard/plugins/hub",
@@ -1217,9 +1230,17 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
             "slash_commands",
             "interactive_prompts",
             "reactions",
+            "idempotency",
         ],
         "delivery_modes": ["direct", "channel", "thread"],
-        "security": {"pairing": True, "command_cap": 30},
+        "security": {
+            "pairing": True,
+            "command_cap": 30,
+            "idempotency_env": [
+                "SLACK_IDEMPOTENCY_TTL_SECONDS",
+                "SLACK_IDEMPOTENCY_CACHE_MAX",
+            ],
+        },
     },
     {
         "id": "signal",
@@ -1285,6 +1306,7 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
         "transport": "http_webhook",
         "capabilities": [
             "text",
+            "media",
             "threads",
             "webhook_events",
             "slash_commands",
@@ -1417,21 +1439,37 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
         "id": "ntfy",
         "label": "ntfy",
         "env": ["NTFY_TOPIC"],
-        "optional_env": ["NTFY_SERVER", "NTFY_TOKEN"],
+        "optional_env": [
+            "NTFY_SERVER",
+            "NTFY_TOKEN",
+            "NTFY_IDEMPOTENCY_TTL_SECONDS",
+            "NTFY_IDEMPOTENCY_CACHE_MAX",
+        ],
         "setup": "Use ntfy for lightweight push notifications and replies.",
         "pairing": False,
         "adapter_class": "aegis.gateway.ntfy_channel.NtfyAdapter",
         "auth_type": "topic_token",
         "transport": "ntfy_stream",
-        "capabilities": ["text", "push", "title_tags_priority", "attachments"],
+        "capabilities": ["text", "push", "title_tags_priority", "attachments", "idempotency"],
         "delivery_modes": ["topic"],
-        "security": {"optional_token": "NTFY_TOKEN"},
+        "security": {
+            "optional_token": "NTFY_TOKEN",
+            "idempotency_env": [
+                "NTFY_IDEMPOTENCY_TTL_SECONDS",
+                "NTFY_IDEMPOTENCY_CACHE_MAX",
+            ],
+        },
     },
 ]
 
 
 def _channel_catalog_map() -> dict[str, dict[str, Any]]:
     return {row["id"]: row for row in _CHANNEL_CATALOG}
+
+
+def _normalize_platform_id(platform_id: str) -> str:
+    safe = _safe_resource_name(platform_id, "platform").lower()
+    return normalize_platform_name(safe, default=safe)
 
 
 def _platform_required_env(item: dict[str, Any]) -> list[str]:
@@ -1584,7 +1622,7 @@ def _messaging_platform_row(config: Config, item: dict[str, Any]) -> dict[str, A
 def _messaging_platforms_payload(config: Config, platform_id: str = "") -> dict[str, Any]:
     catalog = _channel_catalog_map()
     if platform_id:
-        safe = _safe_resource_name(platform_id, "platform").lower()
+        safe = _normalize_platform_id(platform_id)
         item = catalog.get(safe)
         if not item:
             return {"ok": False, "error": "unknown messaging platform", "platform": safe}
@@ -1615,7 +1653,7 @@ def _platform_registry_payload(config: Config, platform_id: str = "") -> dict[st
 def _messaging_platform_update(config: Config, platform_id: str, body: dict[str, Any]) -> dict[str, Any]:
     from .config import set_env_var
 
-    safe = _safe_resource_name(platform_id, "platform").lower()
+    safe = _normalize_platform_id(platform_id)
     item = _channel_catalog_map().get(safe)
     if not item:
         return {"ok": False, "error": "unknown messaging platform", "platform": safe}
@@ -1653,7 +1691,7 @@ def _messaging_platform_update(config: Config, platform_id: str, body: dict[str,
 
 
 def _messaging_platform_test(config: Config, platform_id: str) -> dict[str, Any]:
-    safe = _safe_resource_name(platform_id, "platform").lower()
+    safe = _normalize_platform_id(platform_id)
     item = _channel_catalog_map().get(safe)
     if not item:
         return {"ok": False, "error": "unknown messaging platform", "platform": safe}
@@ -6579,9 +6617,10 @@ def create_app(config: Config) -> FastAPI:
         return JSONResponse(_platform_registry_payload(config))
 
     @app.get("/api/platforms/{platform_id}")
+    @app.get("/api/messaging/platforms/{platform_id}")
     async def api_platform_registry_detail(platform_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        safe = _safe_resource_name(platform_id, "platform").lower()
+        safe = _normalize_platform_id(platform_id)
         payload = _platform_registry_payload(config, safe)
         return JSONResponse(payload, status_code=200 if payload.get("ok") else 404)
 
