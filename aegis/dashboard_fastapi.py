@@ -3379,7 +3379,7 @@ def _cron_job_create_response(config: Config, body: dict[str, Any]) -> JSONRespo
             skills=list(skills),
             context_from=context_from,
             deliver=str(body.get("deliver") or ""),
-            no_agent=bool(body.get("no_agent", False)),
+            no_agent=_coerce_dashboard_bool(body.get("no_agent"), False),
             model=str(body.get("model") or ""),
             enabled_toolsets=_cron_context_refs(body.get("enabled_toolsets") or body.get("toolsets")),
             workdir=str(body.get("workdir") or ""),
@@ -4622,7 +4622,7 @@ def _api_post(
                     script=str(body.get("script") or ""),
                     skills=list(skills),
                     deliver=str(body.get("deliver") or ""),
-                    no_agent=bool(body.get("no_agent", False)),
+                    no_agent=_coerce_dashboard_bool(body.get("no_agent"), False),
                     context_from=context_from,
                     model=str(body.get("model") or ""),
                     enabled_toolsets=_cron_context_refs(body.get("enabled_toolsets")),
@@ -4635,7 +4635,7 @@ def _api_post(
         if act == "remove" and body.get("id"):
             return {"ok": cs.remove(body["id"])}
         if act == "toggle" and body.get("id"):
-            return {"ok": cs.set_enabled(body["id"], bool(body.get("enabled", True)))}
+            return {"ok": cs.set_enabled(body["id"], _coerce_dashboard_bool(body.get("enabled"), True))}
         if act in {"run", "run_now"} and body.get("id"):
             sink = build_delivery_sink(config, verbose=False)
             return run_job(config, str(body["id"]), sink=sink, store=cs, verbose=False)

@@ -689,7 +689,7 @@ class CronStore:
             workdir: str = "") -> CronJob:
         run_at = _parse_oneshot(schedule, time.time()) or 0.0
         normalized_script = str(script or "").strip()
-        normalized_no_agent = bool(no_agent)
+        normalized_no_agent = _coerce_bool(no_agent, False)
         _validate_job_execution_mode(no_agent=normalized_no_agent, script=normalized_script)
         job = CronJob(id=new_id("cron"), schedule=schedule, prompt=prompt, name=name, channel=channel,
                       run_at=run_at, script=normalized_script, skills=skills or [], deliver=deliver,
@@ -768,12 +768,14 @@ class CronStore:
                     value = _normalize_workdir(value)
                 if key == "script":
                     value = str(value or "").strip()
+                if key == "enabled":
+                    value = _coerce_bool(value, True)
                 if key == "no_agent":
-                    value = bool(value)
+                    value = _coerce_bool(value, False)
                 found[key] = value
             if "script" in updates or "no_agent" in updates:
                 _validate_job_execution_mode(
-                    no_agent=bool(found.get("no_agent", False)),
+                    no_agent=_coerce_bool(found.get("no_agent"), False),
                     script=str(found.get("script") or ""),
                 )
             if "schedule" in updates:

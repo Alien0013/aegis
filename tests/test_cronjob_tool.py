@@ -17,6 +17,23 @@ def _data(result):
     return json.loads(result.content)
 
 
+def test_cronstore_coerces_string_booleans_for_no_agent(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.cron import CronStore
+
+    store = CronStore()
+    job = store.add("30m", "check server status", no_agent="false")
+    assert job.no_agent is False
+
+    updated = store.update(job.id, no_agent="true", script="echo ok")
+    assert updated is not None
+    assert updated.no_agent is True
+
+    updated = store.update(job.id, no_agent="false", script="")
+    assert updated is not None
+    assert updated.no_agent is False
+
+
 def test_cronjob_create_list_update_delete(tmp_path):
     from aegis.cron import CronStore
     from aegis.tools.cronjob_tool import CronJobTool

@@ -3401,6 +3401,21 @@ def test_fastapi_cron_control_plane(tmp_path, monkeypatch):
     assert bad_no_agent.status_code == 400
     assert "no_agent jobs require a script" in bad_no_agent.json()["error"]
 
+    string_false_no_agent = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/cron/jobs",
+        json={
+            "schedule": "every 2h",
+            "prompt": "string false stays agentic",
+            "no_agent": "false",
+        },
+        headers=headers,
+    ))
+    assert string_false_no_agent.status_code == 200
+    string_false_job_id = string_false_no_agent.json()["id"]
+    assert string_false_no_agent.json()["job"]["no_agent"] is False
+
     alias_bad_workdir = asyncio.run(_request(
         app,
         "POST",
@@ -3430,6 +3445,21 @@ def test_fastapi_cron_control_plane(tmp_path, monkeypatch):
     assert legacy_bad_no_agent.status_code == 200
     assert legacy_bad_no_agent.json()["ok"] is False
     assert "no_agent jobs require a script" in legacy_bad_no_agent.json()["error"]
+
+    legacy_string_false = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/cron",
+        json={
+            "action": "add",
+            "schedule": "every 2h",
+            "prompt": "legacy string false stays agentic",
+            "no_agent": "false",
+        },
+        headers=headers,
+    ))
+    assert legacy_string_false.status_code == 200
+    legacy_string_false_id = legacy_string_false.json()["id"]
 
     jobs = asyncio.run(_request(app, "GET", "/api/cron/jobs", headers=headers))
     assert any(job["id"] == job_id and job["name"] == "Dashboard digest" for job in jobs.json()["jobs"])
@@ -3546,6 +3576,12 @@ def test_fastapi_cron_control_plane(tmp_path, monkeypatch):
     assert service.status_code == 200
     assert service.json() == {"ok": True, "message": "cron restart"}
 
+    string_false_delete = asyncio.run(_request(app, "DELETE", f"/api/cron/jobs/{string_false_job_id}", headers=headers))
+    assert string_false_delete.status_code == 200
+    legacy_string_false_delete = asyncio.run(
+        _request(app, "DELETE", f"/api/cron/jobs/{legacy_string_false_id}", headers=headers)
+    )
+    assert legacy_string_false_delete.status_code == 200
     delete = asyncio.run(_request(app, "DELETE", f"/api/cron/jobs/{job_id}", headers=headers))
     assert delete.status_code == 200
     assert delete.json()["ok"] is True
