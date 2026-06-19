@@ -335,18 +335,7 @@ class SlackAdapter(BasePlatformAdapter):
             client.chat_postMessage(text=chunk, **kwargs)
 
     def _deliver_reply(self, ev: MessageEvent, reply: str, state=None) -> None:  # noqa: ANN001
-        if not reply:
-            return
-        try:
-            from .base import tableify
-
-            for chunk in chunk_text_by_units(tableify(reply), limit=39000):
-                kwargs = {"channel": ev.chat_id, "text": chunk}
-                if ev.thread_id:
-                    kwargs["thread_ts"] = ev.thread_id
-                self._app.client.chat_postMessage(**kwargs)
-        except Exception:  # noqa: BLE001
-            pass
+        super()._deliver_reply(ev, reply, state)
 
     def _reaction_name(self, reaction: str) -> str:
         value = str(reaction or "").strip()

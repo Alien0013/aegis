@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import sys
-import json
 
 import httpx
 
@@ -124,6 +125,7 @@ class TelegramAdapter(BasePlatformAdapter):
             ttl_seconds=float(_env_int("TELEGRAM_IDEMPOTENCY_TTL_SECONDS", 3600)),
             max_items=_env_int("TELEGRAM_IDEMPOTENCY_CACHE_MAX", 10000),
         )
+        self._callback_payloads: dict[str, str] = {}
         self._base = f"https://api.telegram.org/bot{self.token}"
 
     @property
@@ -331,7 +333,7 @@ class TelegramAdapter(BasePlatformAdapter):
         query = update.get("callback_query")
         if not isinstance(query, dict):
             return False
-        data = str(query.get("data") or "").strip()
+        data = self._resolve_callback_data(str(query.get("data") or "").strip())
         if not data:
             self._answer_callback_query(str(query.get("id") or ""))
             return True
@@ -385,6 +387,20 @@ class TelegramAdapter(BasePlatformAdapter):
             self._api("answerCallbackQuery", **params)
         except Exception:  # noqa: BLE001
             pass
+
+    def _callback_data_for(self, value: str, *, prefix: str = "c") -> str:
+        text = str(value or "").strip()
+        if 0 < len(text.encode("utf-8")) <= 64:
+            return text
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:20]
+        key = f"aegis:{prefix}:{digest}"
+        self._callback_payloads[key] = text
+        while len(self._callback_payloads) > 1024:
+            self._callback_payloads.pop(next(iter(self._callback_payloads)))
+        return key
+
+    def _resolve_callback_data(self, data: str) -> str:
+        return self._callback_payloads.get(data, data)
 
     def _message_thread_id(self, msg: dict) -> str | None:
         thread_id = str(msg.get("message_thread_id") or "").strip()
@@ -712,6 +728,51 @@ class TelegramAdapter(BasePlatformAdapter):
         params = self._thread_params(metadata)
         for chunk in chunk_text_by_units(text, limit=4000, len_fn=utf16_units):
             self._api_with_thread_fallback("sendMessage", chat_id=chat_id, text=chunk, **params)
+
+    def send_clarify(
+        self,
+        chat_id: str,
+        question: str,
+        choices: list[str] | None = None,
+        *,
+        metadata: dict | None = None,
+    ) -> None:
+        rendered = str(question or "").strip()
+        rows = []
+        for i, choice in enumerate(choices or [], 1):
+            text = str(choice or "").strip()
+            if not text:
+                continue
+            rendered += f"\n  {i}. {text}"
+            rows.append([{"text": text, "callback_data": self._callback_data_for(text, prefix="clarify")}])
+        params = self._thread_params(metadata)
+        if rows:
+            params["reply_markup"] = json.dumps({"inline_keyboard": rows}, ensure_ascii=False)
+        try:
+            self._api_with_thread_fallback("sendMessage", chat_id=chat_id, text=rendered, **params)
+        except Exception:  # noqa: BLE001
+            BasePlatformAdapter.send_clarify(self, chat_id, question, choices or [], metadata=metadata)
+
+    def send_exec_approval(
+        self,
+        chat_id: str,
+        prompt: str,
+        *,
+        metadata: dict | None = None,
+    ) -> None:
+        rows = [[
+            {"text": "Approve", "callback_data": "approve"},
+            {"text": "Always", "callback_data": "always"},
+            {"text": "Deny", "callback_data": "deny"},
+        ]]
+        params = {
+            **self._thread_params(metadata),
+            "reply_markup": json.dumps({"inline_keyboard": rows}, ensure_ascii=False),
+        }
+        try:
+            self._api_with_thread_fallback("sendMessage", chat_id=chat_id, text=prompt, **params)
+        except Exception:  # noqa: BLE001
+            BasePlatformAdapter.send_exec_approval(self, chat_id, prompt, metadata=metadata)
 
     def add_reaction(self, chat_id: str, message_id: str, reaction: str) -> None:
         emoji = str(reaction or "").strip()

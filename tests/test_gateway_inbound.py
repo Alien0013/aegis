@@ -1431,6 +1431,81 @@ def test_telegram_callback_queries_dispatch_as_commands(monkeypatch):
     assert ev.metadata["command"] == "/status"
 
 
+def test_telegram_clarify_and_approval_prompts_use_inline_buttons(monkeypatch):
+    import json
+
+    from aegis.gateway.base import MessageEvent
+    from aegis.gateway.channels import TelegramAdapter
+
+    monkeypatch.setenv("TELEGRAM_ALLOWED_USERS", "7")
+    adapter = TelegramAdapter("token")
+    calls = []
+
+    def fake_api(method, **params):
+        calls.append((method, params))
+        if method == "sendMessage":
+            return {"result": {"message_id": 101}}
+        return {"ok": True}
+
+    adapter._api = fake_api
+    long_choice = "Approve release with the extended migration checklist " + ("x" * 80)
+    ev = MessageEvent(
+        platform="telegram",
+        chat_id="42",
+        text="question",
+        user_id="7",
+        thread_id="77",
+        metadata={"message_thread_id": "77"},
+    )
+    answer = {}
+
+    def ask():
+        answer["text"] = adapter.ask_user(ev, "Pick one", [long_choice], timeout=2)
+
+    thread = threading.Thread(target=ask)
+    thread.start()
+    _wait_for(lambda: any(method == "sendMessage" for method, _params in calls))
+
+    method, params = next(row for row in calls if row[0] == "sendMessage")
+    assert method == "sendMessage"
+    assert params["chat_id"] == "42"
+    assert params["message_thread_id"] == "77"
+    assert params["text"] == f"Pick one\n  1. {long_choice}"
+    markup = json.loads(params["reply_markup"])
+    callback_data = markup["inline_keyboard"][0][0]["callback_data"]
+    assert len(callback_data.encode("utf-8")) <= 64
+    assert adapter._resolve_callback_data(callback_data) == long_choice
+
+    assert adapter._handle_callback_update({
+        "callback_query": {
+            "id": "cb-choice",
+            "data": callback_data,
+            "from": {"id": 7, "username": "ada"},
+            "message": {
+                "message_id": 101,
+                "chat": {"id": 42, "type": "private"},
+                "message_thread_id": 77,
+                "is_topic_message": True,
+            },
+        },
+    }) is True
+    thread.join(2)
+
+    assert answer["text"] == long_choice
+    assert ("answerCallbackQuery", {"callback_query_id": "cb-choice"}) in calls
+
+    calls.clear()
+    adapter.send_exec_approval("42", "Allow bash(ls)?", metadata={"message_thread_id": "77"})
+    approval_params = calls[0][1]
+    approval_markup = json.loads(approval_params["reply_markup"])
+    assert approval_params["text"] == "Allow bash(ls)?"
+    assert approval_params["message_thread_id"] == "77"
+    assert [
+        button["callback_data"]
+        for button in approval_markup["inline_keyboard"][0]
+    ] == ["approve", "always", "deny"]
+
+
 def test_telegram_callback_rejects_unauthorized_users(monkeypatch):
     from aegis.gateway.channels import TelegramAdapter
 
@@ -1841,9 +1916,14 @@ def test_slack_adapter_enforces_workspace_filters_and_strips_mentions(monkeypatc
 
     adapter._deliver_reply(MessageEvent(platform="slack", chat_id="C1", text="", thread_id=None), "flat reply")
     adapter._deliver_reply(MessageEvent(platform="slack", chat_id="C1", text="", thread_id="171.1"), "thread reply")
+    adapter._deliver_reply(
+        MessageEvent(platform="slack", chat_id="C1", text="", metadata={"thread_ts": "171.2"}),
+        "metadata thread reply",
+    )
     assert posts == [
         {"channel": "C1", "text": "flat reply"},
         {"channel": "C1", "text": "thread reply", "thread_ts": "171.1"},
+        {"channel": "C1", "text": "metadata thread reply", "thread_ts": "171.2"},
     ]
 
 
