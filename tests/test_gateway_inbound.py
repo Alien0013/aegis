@@ -1870,6 +1870,112 @@ def test_email_adapter_preserves_attachments_and_reply_headers(monkeypatch):
     assert sent[0]["In-Reply-To"] == "<m1@example.com>"
     assert sent[0]["References"] == "<root@example.com> <m1@example.com>"
 
+    from aegis.gateway.base import MessageEvent
+
+    original = MessageEvent(
+        platform="email",
+        chat_id="ada@example.com",
+        text="Report\n\nNeed approval",
+        user_id="ada@example.com",
+        thread_id="Report",
+        message_id="<m1@example.com>",
+        metadata={
+            "subject": "Report",
+            "message_id": "<m1@example.com>",
+            "references": "<root@example.com>",
+        },
+    )
+    assert adapter._conversation_key(original) == "ada@example.com:thread:Report"
+    assert adapter._conversation_key(MessageEvent(
+        platform="email",
+        chat_id="ada@example.com",
+        text="reply",
+        thread_id="Re: Fwd: Report",
+    )) == "ada@example.com:thread:Report"
+
+    adapter.send_clarify(
+        "ada@example.com",
+        "Pick a deploy lane?",
+        ["stable", "canary"],
+        metadata=adapter._event_delivery_metadata(original),
+    )
+    adapter.send_exec_approval(
+        "ada@example.com",
+        "Run deploy?",
+        metadata=adapter._event_delivery_metadata(original),
+    )
+
+    assert sent[1]["Subject"] == "Re: Report"
+    assert "Reply with the number or exact choice." in sent[1].get_content()
+    assert sent[1]["In-Reply-To"] == "<m1@example.com>"
+    assert sent[2]["Subject"] == "Re: Report"
+    assert "Reply approve, always, or deny." in sent[2].get_content()
+
+
+def test_email_adapter_prompt_waiter_matches_re_subject(monkeypatch):
+    import threading
+
+    monkeypatch.setenv("EMAIL_ADDRESS", "bot@example.com")
+    monkeypatch.setenv("EMAIL_PASSWORD", "pw")
+    monkeypatch.setenv("EMAIL_IMAP_HOST", "imap.example.com")
+    monkeypatch.setenv("EMAIL_SMTP_HOST", "smtp.example.com")
+    from aegis.gateway.base import MessageEvent
+    from aegis.gateway.email_channel import EmailAdapter
+
+    sent = []
+
+    class FakeSMTP:
+        def __init__(self, *_args):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def login(self, *_args):
+            return None
+
+        def send_message(self, message):
+            sent.append(message)
+
+    import smtplib
+
+    monkeypatch.setattr(smtplib, "SMTP_SSL", FakeSMTP)
+    adapter = EmailAdapter()
+    ev = MessageEvent(
+        platform="email",
+        chat_id="ada@example.com",
+        text="Report\n\nNeed input",
+        user_id="ada@example.com",
+        thread_id="Report",
+        message_id="<m1@example.com>",
+        metadata={"subject": "Report", "message_id": "<m1@example.com>"},
+    )
+    answer = {}
+
+    def ask():
+        answer["text"] = adapter.ask_user(ev, "Pick one?", ["stable", "canary"], timeout=2)
+
+    thread = threading.Thread(target=ask)
+    thread.start()
+    _wait_for(lambda: sent)
+    adapter._submit_inbound(MessageEvent(
+        platform="email",
+        chat_id="ada@example.com",
+        text="Re: Report\n\ncanary\n\n> Pick one?",
+        user_id="ada@example.com",
+        thread_id="Re: Report",
+        message_id="<m2@example.com>",
+        reply_to_message_id="<m1@example.com>",
+        metadata={"subject": "Re: Report", "in_reply_to": "<m1@example.com>"},
+    ))
+    thread.join(2)
+
+    assert answer == {"text": "canary"}
+    assert sent[0]["Subject"] == "Re: Report"
+
 
 def test_ntfy_adapter_preserves_metadata_headers_and_attachments(monkeypatch):
     monkeypatch.setenv("NTFY_TOPIC", "aegis-alerts")

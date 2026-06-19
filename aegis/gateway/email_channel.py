@@ -9,12 +9,15 @@ from __future__ import annotations
 import email
 import imaplib
 import os
+import re
 import smtplib
 import time
 from email.message import EmailMessage
 from email.utils import parseaddr
 
 from .base import BasePlatformAdapter, Dispatch, MessageEvent
+
+_SUBJECT_PREFIX_RE = re.compile(r"^\s*(?:(?:re|fw|fwd)\s*:\s*)+", re.IGNORECASE)
 
 
 class EmailAdapter(BasePlatformAdapter):
@@ -33,6 +36,25 @@ class EmailAdapter(BasePlatformAdapter):
         self.poll = int(os.environ.get("EMAIL_POLL", "20"))
         allowed = os.environ.get("EMAIL_ALLOWED_SENDERS", "").strip()
         self.allowed_senders = {item.strip().lower() for item in allowed.split(",") if item.strip()} if allowed else None
+
+    def _normalized_subject(self, subject: str | None) -> str:
+        text = str(subject or "").strip()
+        while True:
+            updated = _SUBJECT_PREFIX_RE.sub("", text).strip()
+            if updated == text:
+                return updated
+            text = updated
+
+    def _conversation_key(self, ev: MessageEvent) -> str:
+        subject = self._normalized_subject(ev.thread_id)
+        return f"{ev.chat_id}:thread:{subject}" if subject else ev.chat_id
+
+    def _reply_subject(self, metadata: dict | None = None, *, default: str = "Message from AEGIS") -> str:
+        source = metadata or {}
+        subject = self._normalized_subject(
+            str(source.get("thread_id") or source.get("subject") or default)
+        ) or default
+        return f"Re: {subject}"
 
     def _body(self, msg) -> str:
         if msg.is_multipart():
@@ -76,6 +98,45 @@ class EmailAdapter(BasePlatformAdapter):
             name = str(attachment.get("filename") or attachment.get("id") or "attachment").strip()
             labels.append(f"[{kind} attached: {name}]")
         return "\n".join(labels)
+
+    def _clean_waiter_answer(self, ev: MessageEvent) -> str:
+        text = str(ev.text or "").strip()
+        if not text:
+            return ""
+        lines = text.splitlines()
+        subject = self._normalized_subject(ev.thread_id)
+        if lines and self._normalized_subject(lines[0]) == subject:
+            lines = lines[1:]
+        cleaned: list[str] = []
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                if cleaned:
+                    break
+                continue
+            if stripped.startswith(">"):
+                break
+            lowered = stripped.lower()
+            if lowered.startswith(("on ", "from:", "sent:", "subject:", "to:")):
+                break
+            cleaned.append(stripped)
+        return "\n".join(cleaned).strip() or text
+
+    def _resolve_clarify_waiter(self, ev: MessageEvent) -> bool:
+        self._ensure_inbound_queue()
+        if getattr(ev, "internal", False):
+            return False
+        key = self._conversation_key(ev)
+        with self._qlock:
+            waiters = self._clarify_waiters.get(key) or []
+            waiter = waiters.pop(0) if waiters else None
+            if not waiters:
+                self._clarify_waiters.pop(key, None)
+        if waiter is None:
+            return False
+        waiter["answer"] = self._clean_waiter_answer(ev)
+        waiter["event"].set()
+        return True
 
     def start(self, dispatch: Dispatch) -> None:
         self._init_inbound_queue(dispatch)
@@ -144,11 +205,49 @@ class EmailAdapter(BasePlatformAdapter):
         except Exception:  # noqa: BLE001
             pass
 
+    def send_clarify(
+        self,
+        chat_id: str,
+        question: str,
+        choices: list[str] | None = None,
+        *,
+        metadata: dict | None = None,
+    ) -> None:
+        rendered = str(question or "").strip()
+        for i, choice in enumerate(choices or [], 1):
+            rendered += f"\n  {i}. {choice}"
+        if choices:
+            rendered += "\n\nReply with the number or exact choice."
+        self.send(
+            chat_id,
+            rendered,
+            subject=self._reply_subject(metadata, default="AEGIS clarification"),
+            metadata=metadata,
+        )
+
+    def send_exec_approval(
+        self,
+        chat_id: str,
+        prompt: str,
+        *,
+        metadata: dict | None = None,
+    ) -> None:
+        rendered = str(prompt or "").strip()
+        if rendered:
+            rendered += "\n\n"
+        rendered += "Reply approve, always, or deny."
+        self.send(
+            chat_id,
+            rendered,
+            subject=self._reply_subject(metadata, default="AEGIS approval"),
+            metadata=metadata,
+        )
+
     def _deliver_reply(self, ev: MessageEvent, reply: str, state=None) -> None:  # noqa: ANN001
         if reply:
             self.send(
                 ev.chat_id,
                 reply,
-                subject=f"Re: {ev.thread_id or 'Message from AEGIS'}",
+                subject=self._reply_subject(ev.metadata, default=ev.thread_id or "Message from AEGIS"),
                 metadata=ev.metadata,
             )
