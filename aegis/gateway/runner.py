@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from ..agent.agent import Agent
 from ..config import Config
@@ -1394,7 +1394,10 @@ class GatewayRunner:
         return kind.startswith("audio") or path.endswith(_AUDIO_ATTACHMENT_EXTENSIONS)
 
     def _download_transcribable_attachment(self, ev: MessageEvent, attachment: dict) -> str:
-        if ev.platform != "discord":
+        platform = normalize_platform_name(ev.platform)
+        if platform == "telegram":
+            return self._download_telegram_attachment(attachment)
+        if platform != "discord":
             return ""
         url = str(attachment.get("url") or attachment.get("proxy_url") or "").strip()
         parsed = urlparse(url)
@@ -1424,6 +1427,79 @@ class GatewayRunner:
                         return ""
                     with tempfile.NamedTemporaryFile(
                         prefix="aegis-discord-audio-",
+                        suffix=suffix,
+                        delete=False,
+                    ) as fh:
+                        tmp_path = fh.name
+                        written = 0
+                        for chunk in response.iter_bytes():
+                            if not chunk:
+                                continue
+                            written += len(chunk)
+                            if written > _MAX_TRANSCRIBED_ATTACHMENT_BYTES:
+                                return ""
+                            fh.write(chunk)
+            keep_tmp = True
+            return tmp_path
+        except Exception:  # noqa: BLE001
+            return ""
+        finally:
+            if tmp_path and not keep_tmp:
+                try:
+                    Path(tmp_path).unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+    def _download_telegram_attachment(self, attachment: dict) -> str:
+        file_id = str(attachment.get("file_id") or attachment.get("id") or "").strip()
+        if not file_id:
+            return ""
+        try:
+            declared_size = int(attachment.get("size") or 0)
+        except (TypeError, ValueError):
+            declared_size = 0
+        if declared_size > _MAX_TRANSCRIBED_ATTACHMENT_BYTES:
+            return ""
+        adapter = next((a for a in self.adapters if getattr(a, "name", "") == "telegram"), None)
+        token = str(getattr(adapter, "token", "") or "").strip()
+        base = str(getattr(adapter, "_base", "") or "").strip()
+        if not token:
+            return ""
+        api_base = base or f"https://api.telegram.org/bot{token}"
+        suffix = Path(str(attachment.get("filename") or "")).suffix or ".audio"
+        tmp_path = ""
+        keep_tmp = False
+        try:
+            import httpx
+
+            with httpx.Client(timeout=30, follow_redirects=False) as client:
+                meta = client.get(f"{api_base}/getFile", params={"file_id": file_id})
+                meta.raise_for_status()
+                payload = meta.json()
+                result = payload.get("result") if isinstance(payload, dict) else {}
+                if not isinstance(result, dict):
+                    return ""
+                try:
+                    file_size = int(result.get("file_size") or declared_size or 0)
+                except (TypeError, ValueError):
+                    file_size = declared_size
+                if file_size > _MAX_TRANSCRIBED_ATTACHMENT_BYTES:
+                    return ""
+                file_path = str(result.get("file_path") or "").strip().lstrip("/")
+                if not file_path or ".." in Path(file_path).parts:
+                    return ""
+                suffix = Path(file_path).suffix or suffix
+                download_url = f"https://api.telegram.org/file/bot{token}/{quote(file_path, safe='/')}"
+                with client.stream("GET", download_url) as response:
+                    response.raise_for_status()
+                    try:
+                        content_length = int(response.headers.get("content-length") or 0)
+                    except (TypeError, ValueError):
+                        content_length = 0
+                    if content_length > _MAX_TRANSCRIBED_ATTACHMENT_BYTES:
+                        return ""
+                    with tempfile.NamedTemporaryFile(
+                        prefix="aegis-telegram-audio-",
                         suffix=suffix,
                         delete=False,
                     ) as fh:

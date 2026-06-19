@@ -204,6 +204,98 @@ def test_gateway_transcribes_discord_audio_url_with_cleanup(tmp_path, monkeypatc
     assert not Path(downloaded[0]).exists()
 
 
+def test_gateway_transcribes_telegram_file_id_with_cleanup(tmp_path, monkeypatch):
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    import httpx
+
+    from aegis.gateway.base import MessageEvent
+
+    r = _runner(tmp_path, monkeypatch)
+    r.adapters = [
+        SimpleNamespace(
+            name="telegram",
+            token="telegram-token",
+            _base="https://api.telegram.org/bottelegram-token",
+        )
+    ]
+    downloaded = []
+
+    class FakeMeta:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"result": {"file_path": "voice/file_1.oga", "file_size": 7}}
+
+    class FakeStream:
+        headers = {"content-length": "7"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def raise_for_status(self):
+            return None
+
+        def iter_bytes(self):
+            yield b"ogg"
+            yield b"data"
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get(self, url, params=None):
+            assert url == "https://api.telegram.org/bottelegram-token/getFile"
+            assert params == {"file_id": "voice-file"}
+            return FakeMeta()
+
+        def stream(self, method, url):
+            assert method == "GET"
+            assert url == "https://api.telegram.org/file/bottelegram-token/voice/file_1.oga"
+            return FakeStream()
+
+    def fake_transcribe(_self, args, _ctx):
+        path = Path(args["path"])
+        assert path.exists()
+        assert path.read_bytes() == b"oggdata"
+        downloaded.append(str(path))
+        return SimpleNamespace(is_error=False, content="hello from telegram audio")
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    monkeypatch.setattr("aegis.tools.voice.TranscribeTool.run", fake_transcribe)
+
+    ev = MessageEvent(
+        platform="telegram",
+        chat_id="42",
+        text="[voice attached: voice.ogg]",
+        attachments=[{
+            "source": "telegram",
+            "kind": "voice",
+            "type": "audio/ogg",
+            "filename": "voice.ogg",
+            "file_id": "voice-file",
+            "size": 7,
+        }],
+    )
+
+    text = r._maybe_transcribe(ev, ev.text)
+
+    assert text == "[voice attached: voice.ogg]\n\n[voice memo transcript]\nhello from telegram audio"
+    assert downloaded
+    assert not Path(downloaded[0]).exists()
+
+
 def test_handoff_is_adopted_before_control_commands(tmp_path, monkeypatch):
     from aegis import handoff
     from aegis.session import Session
