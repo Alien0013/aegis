@@ -2965,6 +2965,10 @@ def _dashboard_plugin_api_fingerprint(api_path: str | Path) -> str:
     return f"{int(stat.st_mtime_ns)}:{int(stat.st_size)}"
 
 
+def _dashboard_plugin_api_mount_allowed(record: dict[str, Any]) -> bool:
+    return str(record.get("source") or "user").strip().lower() != "project"
+
+
 def _clear_dashboard_plugin_api_bytecode(path: Path) -> None:
     try:
         cached = importlib.util.cache_from_source(str(path))
@@ -3005,7 +3009,11 @@ def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
     records = {
         str(record["name"]): record
         for record in all_records
-        if record.get("_api") and not record.get("_duplicate_name_conflict")
+        if (
+            record.get("_api")
+            and not record.get("_duplicate_name_conflict")
+            and _dashboard_plugin_api_mount_allowed(record)
+        )
     }
     for name, row in list(mounted.items()):
         live = records.get(name)
@@ -3047,6 +3055,16 @@ def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
                 "api": "",
                 "routes": [],
                 "error": "",
+            })
+            continue
+        if not _dashboard_plugin_api_mount_allowed(record):
+            _set_dashboard_plugin_api_mount_status(record_name, {
+                "status": "skipped",
+                "mounted": False,
+                "api_path": str(api_path),
+                "api": Path(str(api_path)).name,
+                "routes": [],
+                "error": "project dashboard plugin API routes are not auto-mounted",
             })
             continue
         fingerprint = _dashboard_plugin_api_fingerprint(str(api_path))

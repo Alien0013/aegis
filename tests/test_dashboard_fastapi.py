@@ -3112,6 +3112,65 @@ def test_fastapi_dashboard_plugin_embedded_yaml_dashboard_manifest(tmp_path, mon
     assert route.json() == {"brief": True}
 
 
+def test_fastapi_project_dashboard_plugin_ui_without_api_mount(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("AEGIS_ENABLE_PROJECT_PLUGINS", "1")
+    plug = tmp_path / ".aegis" / "plugins" / "projectdash"
+    (plug / "dashboard" / "dist").mkdir(parents=True)
+    (plug / "plugin.yaml").write_text(
+        "name: project-dash\n"
+        "entrypoint: __init__.py\n"
+        "kind: dashboard\n",
+        encoding="utf-8",
+    )
+    (plug / "__init__.py").write_text("def register(api):\n    pass\n", encoding="utf-8")
+    (plug / "dashboard" / "manifest.json").write_text(
+        json.dumps({
+            "name": "project-panel",
+            "label": "Project Panel",
+            "entry": "dist/index.js",
+            "api": "plugin_api.py",
+        }),
+        encoding="utf-8",
+    )
+    (plug / "dashboard" / "dist" / "index.js").write_text("window.projectPanel = true;", encoding="utf-8")
+    (plug / "dashboard" / "plugin_api.py").write_text(
+        "from fastapi import APIRouter\n"
+        "router = APIRouter()\n"
+        "@router.get('/ping')\n"
+        "def ping():\n"
+        "    return {'project': True}\n",
+        encoding="utf-8",
+    )
+
+    app = _app(tmp_path / "home", monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    manifest = asyncio.run(_request(app, "GET", "/api/dashboard/plugins", headers=headers))
+    assert manifest.status_code == 200
+    row = next(item for item in manifest.json() if item["name"] == "project-panel")
+    assert row["source"] == "project"
+    assert row["has_api"] is True
+    assert row["api_mounted"] is False
+    assert row["api_routes"] == []
+    assert row["api_mount"]["status"] == "skipped"
+    assert "project dashboard plugin API routes are not auto-mounted" in row["api_mount"]["error"]
+
+    asset = asyncio.run(_request(app, "GET", "/dashboard-plugins/project-panel/dist/index.js", headers=headers))
+    assert asset.status_code == 200
+    assert "window.projectPanel" in asset.text
+
+    route = asyncio.run(_request(app, "GET", "/api/plugins/project-panel/ping", headers=headers))
+    assert route.status_code == 404
+
+    hub = asyncio.run(_request(app, "GET", "/api/dashboard/plugins/hub", headers=headers))
+    assert hub.status_code == 200
+    hub_row = next(item for item in hub.json()["plugins"] if item["key"] == "project-dash")
+    assert hub_row["source"] == "project"
+    assert hub_row["api_mount"]["status"] == "skipped"
+    assert hub_row["dashboard_manifest"]["api_mounted"] is False
+
+
 def test_fastapi_entrypoint_plugin_package_dashboard_manifest_mounts(tmp_path, monkeypatch):
     package_base = tmp_path / "site-packages"
     package = package_base / "entrydash"
