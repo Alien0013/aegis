@@ -145,6 +145,77 @@ def test_shared_inbound_exec_approval_waiter_uses_exec_prompt():
     assert seen == []
 
 
+def test_shared_clarify_and_exec_prompts_preserve_delivery_metadata():
+    from aegis.gateway.base import BasePlatformAdapter, MessageEvent
+
+    class MetadataAdapter(BasePlatformAdapter):
+        name = "whatsapp"
+
+        def __init__(self):
+            self.sent = []
+
+        def send(self, chat_id: str, text: str, *, metadata: dict | None = None) -> None:
+            self.sent.append((chat_id, text, dict(metadata or {})))
+
+    adapter = MetadataAdapter()
+    adapter._init_inbound_queue(lambda ev: f"reply:{ev.text}")
+
+    ev = MessageEvent(
+        platform="whatsapp",
+        chat_id="12025550123-111@g.us",
+        text="ask",
+        user_id="15551234567@s.whatsapp.net",
+        user_name="Ada",
+        thread_id="thread-1",
+        message_id="BAE599999",
+        reply_to_message_id="QUOTE123",
+        metadata={
+            "remote_jid": "12025550123-111@g.us",
+            "participant": "15551234567@s.whatsapp.net",
+        },
+    )
+    answer = {}
+
+    def ask():
+        answer["text"] = adapter.ask_user(ev, "Pick one", ["A", "B"], timeout=2)
+
+    thread = threading.Thread(target=ask)
+    thread.start()
+    _wait_for(lambda: len(adapter.sent) == 1)
+    adapter._submit_inbound(MessageEvent(platform="whatsapp", chat_id=ev.chat_id, thread_id=ev.thread_id, text="A"))
+    thread.join(2)
+
+    assert answer["text"] == "A"
+    chat_id, text, metadata = adapter.sent[0]
+    assert chat_id == ev.chat_id
+    assert text == "Pick one\n  1. A\n  2. B"
+    assert metadata == {
+        "remote_jid": "12025550123-111@g.us",
+        "participant": "15551234567@s.whatsapp.net",
+        "platform": "whatsapp",
+        "thread_id": "thread-1",
+        "message_id": "BAE599999",
+        "reply_to_message_id": "QUOTE123",
+        "user_id": "15551234567@s.whatsapp.net",
+        "user_name": "Ada",
+    }
+
+    approval = {}
+
+    def approve():
+        approval["text"] = adapter.ask_exec_approval(ev, "Allow bash(ls)?", timeout=2)
+
+    thread = threading.Thread(target=approve)
+    thread.start()
+    _wait_for(lambda: len(adapter.sent) == 2)
+    adapter._submit_inbound(MessageEvent(platform="whatsapp", chat_id=ev.chat_id, thread_id=ev.thread_id, text="deny"))
+    thread.join(2)
+
+    assert approval["text"] == "deny"
+    assert adapter.sent[1][1] == "Allow bash(ls)?\nReply approve, always, or deny."
+    assert adapter.sent[1][2] == metadata
+
+
 def test_media_helpers_accept_metadata_kwargs(tmp_path):
     from aegis.gateway.base import BasePlatformAdapter
     from aegis.gateway.channels import TelegramAdapter

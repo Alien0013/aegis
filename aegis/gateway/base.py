@@ -276,21 +276,24 @@ class BasePlatformAdapter:
     def _before_dispatch(self, ev: MessageEvent):  # noqa: ANN001
         return None
 
+    def _event_delivery_metadata(self, ev: MessageEvent) -> dict:
+        metadata = dict(ev.metadata or {})
+        for key, value in (
+            ("platform", ev.platform),
+            ("thread_id", ev.thread_id),
+            ("message_id", ev.message_id),
+            ("reply_to_message_id", ev.reply_to_message_id),
+            ("user_id", ev.user_id),
+            ("user_name", ev.user_name),
+            ("session_key", ev.session_key),
+        ):
+            if value:
+                metadata.setdefault(key, value)
+        return metadata
+
     def _deliver_reply(self, ev: MessageEvent, reply: str, state=None) -> None:  # noqa: ANN001
         if reply:
-            metadata = dict(ev.metadata or {})
-            for key, value in (
-                ("platform", ev.platform),
-                ("thread_id", ev.thread_id),
-                ("message_id", ev.message_id),
-                ("reply_to_message_id", ev.reply_to_message_id),
-                ("user_id", ev.user_id),
-                ("user_name", ev.user_name),
-                ("session_key", ev.session_key),
-            ):
-                if value:
-                    metadata.setdefault(key, value)
-            self.deliver(ev.chat_id, reply, metadata=metadata)
+            self.deliver(ev.chat_id, reply, metadata=self._event_delivery_metadata(ev))
 
     def _record_delivery_start(self, ev: MessageEvent) -> str:
         try:
@@ -395,14 +398,33 @@ class BasePlatformAdapter:
     ) -> None:
         self.send_media(chat_id, path, caption, metadata=metadata, **kwargs)
 
-    def send_clarify(self, chat_id: str, question: str, choices: list[str] | None = None) -> None:
+    def send_clarify(
+        self,
+        chat_id: str,
+        question: str,
+        choices: list[str] | None = None,
+        *,
+        metadata: dict | None = None,
+    ) -> None:
         rendered = question.strip()
         for i, choice in enumerate(choices or [], 1):
             rendered += f"\n  {i}. {choice}"
-        self.send(chat_id, rendered)
+        try:
+            self.send(chat_id, rendered, metadata=metadata)
+        except TypeError:
+            self.send(chat_id, rendered)
 
-    def send_exec_approval(self, chat_id: str, prompt: str) -> None:
-        self.send(chat_id, prompt)
+    def send_exec_approval(
+        self,
+        chat_id: str,
+        prompt: str,
+        *,
+        metadata: dict | None = None,
+    ) -> None:
+        try:
+            self.send(chat_id, prompt, metadata=metadata)
+        except TypeError:
+            self.send(chat_id, prompt)
 
     def add_reaction(self, chat_id: str, message_id: str, reaction: str) -> None:  # noqa: ARG002
         return None
@@ -442,7 +464,12 @@ class BasePlatformAdapter:
         with self._qlock:
             self._clarify_waiters.setdefault(key, []).append(waiter)
         try:
-            self.send_clarify(ev.chat_id, question, choices or [])
+            self.send_clarify(
+                ev.chat_id,
+                question,
+                choices or [],
+                metadata=self._event_delivery_metadata(ev),
+            )
             done.wait(max(0.1, float(timeout or 0)))
             return str(waiter.get("answer") or "")
         finally:
@@ -473,7 +500,11 @@ class BasePlatformAdapter:
             if rendered:
                 rendered += "\n"
             rendered += "Reply approve, always, or deny."
-            self.send_exec_approval(ev.chat_id, rendered)
+            self.send_exec_approval(
+                ev.chat_id,
+                rendered,
+                metadata=self._event_delivery_metadata(ev),
+            )
             done.wait(max(0.1, float(timeout or 0)))
             return str(waiter.get("answer") or "")
         finally:
