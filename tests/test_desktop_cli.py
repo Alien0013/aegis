@@ -68,6 +68,15 @@ def test_desktop_status_reports_bootstrap_without_running_npm(monkeypatch, tmp_p
     assert body["needs_pack"] is True
     assert set(body["missing_target_files"]) == set(desktop.DESKTOP_FILES)
     assert body["changed_target_files"] == []
+    assert set(body["source_copy"]) == {
+        "available",
+        "bundled_root",
+        "changed_bundled_files",
+        "missing_bundled_files",
+        "missing_source_files",
+        "source_root",
+        "synced",
+    }
     assert body["install_command"] == ["/usr/bin/npm", "ci"]
     assert body["launch_commands"]["source"] == ["/usr/bin/npm", "start"]
     assert body["launch_commands"]["package"]["linux"] == ["/usr/bin/npm", "run", "dist:linux"]
@@ -295,6 +304,24 @@ def test_bundled_desktop_template_matches_source():
         assert (root / "aegis" / "desktop_app" / name).read_bytes() == (
             root / "desktop" / name
         ).read_bytes()
+
+
+def test_desktop_source_copy_drift_reports_missing_and_changed(tmp_path):
+    source = _write_desktop_template(tmp_path / "source")
+    bundled = _write_desktop_template(tmp_path / "bundled")
+    (source / "launch.js").unlink()
+    (bundled / "electron" / "main.js").unlink()
+    (bundled / "package.json").write_text("changed package\n", encoding="utf-8")
+
+    status = desktop._desktop_source_copy_drift(source, bundled)
+
+    assert status["available"] is True
+    assert status["synced"] is False
+    assert status["source_root"] == str(source)
+    assert status["bundled_root"] == str(bundled)
+    assert status["missing_source_files"] == ["launch.js"]
+    assert status["missing_bundled_files"] == ["electron/main.js"]
+    assert status["changed_bundled_files"] == ["package.json"]
 
 
 def test_desktop_sync_manifest_tracks_main_cjs_requires():

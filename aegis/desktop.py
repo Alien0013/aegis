@@ -45,9 +45,17 @@ def _die(message: str) -> int:
 
 def _desktop_source() -> Any:
     """Return the source template directory for the Electron app."""
-    repo_desktop = Path(__file__).resolve().parent.parent / "desktop"
+    repo_desktop = _desktop_repo_source()
     if all((repo_desktop / name).exists() for name in DESKTOP_FILES):
         return repo_desktop
+    return _desktop_bundled_source()
+
+
+def _desktop_repo_source() -> Path:
+    return Path(__file__).resolve().parent.parent / "desktop"
+
+
+def _desktop_bundled_source() -> Any:
     return resources.files("aegis").joinpath("desktop_app")
 
 
@@ -191,6 +199,61 @@ def _desktop_drift(source: Any, target: Path) -> dict[str, list[str]]:
     return {"missing": missing, "changed": changed}
 
 
+def _source_root_available(root: Any) -> bool:
+    try:
+        return bool(root.is_dir())
+    except (AttributeError, OSError):
+        return False
+
+
+def _source_root_label(root: Any) -> str:
+    return str(root)
+
+
+def _desktop_source_copy_drift(source: Any | None = None,
+                               bundled: Any | None = None) -> dict[str, Any]:
+    """Compare the repo Electron template with the bundled package copy."""
+    source = source or _desktop_repo_source()
+    bundled = bundled or _desktop_bundled_source()
+    source_available = _source_root_available(source)
+    bundled_available = _source_root_available(bundled)
+    missing_source: list[str] = []
+    missing_bundled: list[str] = []
+    changed_bundled: list[str] = []
+
+    if source_available and bundled_available:
+        for name in DESKTOP_FILES:
+            try:
+                expected = _read_source_file(source, name)
+            except RuntimeError:
+                missing_source.append(name)
+                continue
+            try:
+                current = _read_source_file(bundled, name)
+            except RuntimeError:
+                missing_bundled.append(name)
+                continue
+            if current != expected:
+                changed_bundled.append(name)
+
+    synced = (
+        source_available
+        and bundled_available
+        and not missing_source
+        and not missing_bundled
+        and not changed_bundled
+    )
+    return {
+        "available": source_available and bundled_available,
+        "synced": synced if source_available and bundled_available else None,
+        "source_root": _source_root_label(source),
+        "bundled_root": _source_root_label(bundled),
+        "missing_source_files": missing_source,
+        "missing_bundled_files": missing_bundled,
+        "changed_bundled_files": changed_bundled,
+    }
+
+
 def _packaged_launch_command(target: Path, *, sandbox: bool = False,
                              platform: str | None = None) -> list[str]:
     platform = platform or sys.platform
@@ -250,6 +313,7 @@ def _desktop_status(source: Any, target: Path, *, npm: str | None = None) -> dic
         "missing_template_files": missing,
         "missing_target_files": drift["missing"],
         "changed_target_files": drift["changed"],
+        "source_copy": _desktop_source_copy_drift(),
         "install_command": install_cmd,
         "launch_commands": {
             "source": [npm or "npm", "start"],
