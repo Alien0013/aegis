@@ -59,6 +59,52 @@ def test_desktop_mode_starts_dashboard_cron_ticker(tmp_path, monkeypatch):
     assert ticks
 
 
+def test_dashboard_ready_announcement_waits_for_health(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    monkeypatch.setenv("AEGIS_DASHBOARD_TOKEN", "ready-token")
+    from aegis.config import Config
+    from aegis.dashboard_fastapi import (
+        _announce_dashboard_ready_when_live,
+        _dashboard_ready_probe_url,
+    )
+
+    requests = []
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit=512):
+            return b'{"ok": true}'
+
+    def fake_urlopen(req, timeout):
+        requests.append((req, timeout))
+        return FakeResponse()
+
+    thread = _announce_dashboard_ready_when_live(
+        Config.load(),
+        "0.0.0.0",
+        9123,
+        attempts=1,
+        interval=0.01,
+        timeout=0.2,
+        urlopen=fake_urlopen,
+    )
+    thread.join(1)
+
+    assert not thread.is_alive()
+    assert _dashboard_ready_probe_url("::", 9124) == "http://[::1]:9124/api/health"
+    assert requests[0][0].full_url == "http://127.0.0.1:9123/api/health"
+    assert requests[0][0].get_header("X-aegis-token") == "ready-token"
+    assert requests[0][1] == 0.2
+    assert "AEGIS_DASHBOARD_READY port=9123" in capsys.readouterr().out
+
+
 async def _request(app, method: str, path: str, **kwargs) -> httpx.Response:
     transport = httpx.ASGITransport(app=app)
     # Cookies belong on the client instance (per-request cookies= is deprecated in httpx).

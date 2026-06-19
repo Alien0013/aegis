@@ -50,6 +50,7 @@ _BASIC_PASS_ENV = "AEGIS_DASHBOARD_BASIC_AUTH_PASSWORD"
 _BASIC_SECRET_ENV = "AEGIS_DASHBOARD_BASIC_AUTH_SECRET"
 _DESKTOP_CRON_STARTED = False
 _DESKTOP_CRON_LOCK = threading.Lock()
+_DASHBOARD_READY_SENTINEL = "AEGIS_DASHBOARD_READY"
 _DASHBOARD_PLUGIN_API_MOUNT_STATUS: dict[str, dict[str, Any]] = {}
 _DASHBOARD_PLUGIN_API_MOUNT_LOCK = threading.Lock()
 logger = logging.getLogger(__name__)
@@ -97,6 +98,63 @@ def _start_desktop_cron_ticker(config: Config) -> bool:
 
     threading.Thread(target=loop, daemon=True, name="aegis-desktop-cron").start()
     return True
+
+
+def _dashboard_ready_probe_host(host: str) -> str:
+    if host in {"", "0.0.0.0"}:
+        return "127.0.0.1"
+    if host == "::":
+        return "::1"
+    return host
+
+
+def _dashboard_ready_probe_url(host: str, port: int) -> str:
+    target = _dashboard_ready_probe_host(host)
+    if ":" in target and not target.startswith("["):
+        target = f"[{target}]"
+    return f"http://{target}:{int(port)}/api/health"
+
+
+def _announce_dashboard_ready_when_live(
+    config: Config,
+    host: str,
+    port: int,
+    *,
+    attempts: int = 160,
+    interval: float = 0.05,
+    timeout: float = 1.0,
+    urlopen: Any | None = None,
+) -> threading.Thread:
+    """Print an Electron-readable readiness line once /api/health really answers."""
+
+    def loop() -> None:
+        from urllib import request as urllib_request
+
+        opener = urlopen or urllib_request.urlopen
+        url = _dashboard_ready_probe_url(host, port)
+        token = dash._dashboard_token(config) or ""
+        headers = {"X-Aegis-Token": token} if token else {}
+        last_error = ""
+        for _ in range(max(1, int(attempts))):
+            try:
+                req = urllib_request.Request(url, headers=headers)
+                with opener(req, timeout=timeout) as response:
+                    status = int(getattr(response, "status", getattr(response, "code", 0)) or 0)
+                    raw = response.read(512)
+                if 200 <= status < 300:
+                    payload = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else str(raw or "{}"))
+                    if payload.get("ok") is True:
+                        print(f"{_DASHBOARD_READY_SENTINEL} port={int(port)}", flush=True)
+                        return
+            except Exception as exc:  # noqa: BLE001 - readiness is best-effort diagnostics
+                last_error = str(exc)
+            time.sleep(max(0.01, float(interval)))
+        if last_error:
+            logger.debug("dashboard readiness announcement skipped: %s", last_error)
+
+    thread = threading.Thread(target=loop, daemon=True, name="aegis-dashboard-ready")
+    thread.start()
+    return thread
 
 
 def _query_dict(request: Request) -> dict[str, list[str]]:
@@ -6821,4 +6879,5 @@ def run_dashboard(config: Config, host: str, port: int, *, open_browser: bool = 
         import webbrowser
 
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
+    _announce_dashboard_ready_when_live(config, host, port)
     uvicorn.run(create_app(config), host=host, port=port, log_level="warning")

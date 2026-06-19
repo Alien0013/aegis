@@ -23,6 +23,7 @@ const {
   resolveAegisCommand,
   resolveAegisHome,
 } = require("./backend-env.cjs");
+const { waitForDashboardPort } = require("./backend-ready.cjs");
 const {
   desktopRemoteConnection,
   desktopProjectCwd,
@@ -83,6 +84,7 @@ let backendCommand = "";
 let backendArgs = [];
 let backendEnvSummary = {};
 let backendCwdSource = "";
+let backendReadyPromise = null;
 let restartingBackend = false;
 let lastBootPhase = null;
 let autoUpdater = null;
@@ -255,6 +257,7 @@ function boot(phase) {
 /* ---------- backend lifecycle ---------- */
 function startBackend() {
   return new Promise(async (resolve, reject) => {
+    backendReadyPromise = null;
     const remote = remoteConnection();
     if (remote.enabled) {
       port = 0;
@@ -271,6 +274,7 @@ function startBackend() {
         AEGIS_DESKTOP_REMOTE_TOKEN: remote.tokenConfigured ? "[configured]" : "",
       };
       log(`using remote dashboard: ${remote.url} (${backendCwdSource})`);
+      backendReadyPromise = Promise.resolve(0);
       resolve();
       return;
     }
@@ -323,6 +327,22 @@ function startBackend() {
     const tail = (buf) => log(String(buf).trimEnd());
     backend.stdout.on("data", tail);
     backend.stderr.on("data", tail);
+    backendReadyPromise = waitForDashboardPort(backend, 15000)
+      .then((announcedPort) => {
+        if (!announcedPort) return 0;
+        if (port && announcedPort !== port) {
+          log(`backend announced alternate dashboard port ${announcedPort} (expected ${port})`);
+          port = announcedPort;
+          dashboardUrl = dashboardUrlForBase(localBackendBaseUrl(), token);
+        } else {
+          log(`backend announced ready on port ${announcedPort}`);
+        }
+        return announcedPort;
+      })
+      .catch((error) => {
+        log(`backend readiness announcement unavailable: ${error.message}`);
+        return 0;
+      });
     backend.on("error", (e) => { log(`spawn error: ${e.message}`); reject(e); });
     backend.on("exit", (code, sig) => {
       log(`backend exited code=${code} sig=${sig}`);
@@ -364,6 +384,14 @@ function probe(url, tries, onTick) {
     };
     attempt(tries);
   });
+}
+
+function waitForBackendReadyAnnouncement(timeoutMs = 2500) {
+  if (!backendReadyPromise) return Promise.resolve(0);
+  return Promise.race([
+    backendReadyPromise,
+    new Promise((resolve) => setTimeout(() => resolve(0), Math.max(1, Number(timeoutMs) || 2500))),
+  ]);
 }
 
 function connectionDescriptor() {
@@ -586,6 +614,7 @@ async function onBackendCrash() {
   log(`restarting backend (attempt ${crashRestarts}/${MAX_CRASH_RESTARTS})`);
   try {
     await startBackend();
+    await waitForBackendReadyAnnouncement(2500);
     await probe(`${backendBaseUrl()}/api/health`, 50);
     if (win && !win.isDestroyed()) win.loadURL(route(DEFAULT_ROUTE));
   } catch (e) { log(`restart failed: ${e.message}`); onBackendCrash(); }
@@ -831,7 +860,8 @@ async function run() {
   try {
     await startBackend();
     boot({ pct: 30, message: "Waiting for the agent to come online…" });
-    await probe(`${backendBaseUrl()}/api/health`, 70, (done, total) =>
+    const readyAnnouncement = await waitForBackendReadyAnnouncement(2500);
+    await probe(`${backendBaseUrl()}/api/health`, readyAnnouncement ? 20 : 70, (done, total) =>
       boot({ pct: 30 + Math.round((done / total) * 55), message: "Waiting for the agent to come online…" }));
     boot({ pct: 90, message: "Opening AEGIS…" });
     createWindow();
@@ -877,6 +907,7 @@ async function restartFromScratch() {
   crashRestarts = 0;
   const previousBackend = backend;
   backend = null;
+  backendReadyPromise = null;
   backendStartedAt = 0;
   try { if (previousBackend) previousBackend.kill(); } catch { /* ignore */ }
   if (win && !win.isDestroyed()) { win.destroy(); win = null; }
