@@ -76,7 +76,10 @@ class SlackAdapter(BasePlatformAdapter):
             raw_text = event.get("text", "")
             if not self._event_allowed(event, raw_text):
                 return
+            attachments = self._attachments_from_event(event)
             text = normalize_inbound_command(self._strip_own_mentions(raw_text), platform="slack")
+            if not text.strip() and attachments:
+                text = self._attachment_reference_text(attachments)
             thread_id = self._resolve_thread_ts(event)
             ev = MessageEvent(
                 platform="slack", chat_id=event["channel"],
@@ -84,6 +87,7 @@ class SlackAdapter(BasePlatformAdapter):
                 thread_id=thread_id,
                 message_id=str(event.get("ts") or "") or None,
                 timestamp=event.get("ts"),
+                attachments=attachments,
                 metadata={
                     "team": event.get("team"),
                     "channel_type": event.get("channel_type"),
@@ -106,7 +110,7 @@ class SlackAdapter(BasePlatformAdapter):
     def _event_allowed(self, event: dict, raw_text: str | None = None) -> bool:
         subtype = str(event.get("subtype") or "")
         is_bot = bool(event.get("bot_id"))
-        if subtype and subtype != "bot_message":
+        if subtype and subtype not in {"bot_message", "file_share"}:
             return False
         if subtype == "bot_message" and not is_bot:
             return False
@@ -156,6 +160,38 @@ class SlackAdapter(BasePlatformAdapter):
                 if str(event.get("parent_user_id") or "") == self.bot_user_id:
                     return True
         return False
+
+    def _attachments_from_event(self, event: dict) -> list[dict]:
+        rows: list[dict] = []
+        for item in event.get("files") or []:
+            if not isinstance(item, dict):
+                continue
+            mimetype = str(item.get("mimetype") or "").strip()
+            filename = str(item.get("name") or item.get("title") or "").strip()
+            media_type = mimetype.split("/", 1)[0] if "/" in mimetype else str(item.get("filetype") or "").strip()
+            row = {
+                "id": str(item.get("id") or "").strip(),
+                "type": mimetype or media_type or "file",
+                "media_type": mimetype,
+                "filename": filename or "file",
+                "url": str(item.get("url_private") or item.get("url_private_download") or "").strip(),
+                "size": int(item.get("size") or 0),
+                "source": "slack",
+            }
+            for source, target in (("filetype", "filetype"), ("pretty_type", "pretty_type"), ("title", "title")):
+                value = str(item.get(source) or "").strip()
+                if value:
+                    row[target] = value
+            rows.append(row)
+        return rows
+
+    def _attachment_reference_text(self, attachments: list[dict]) -> str:
+        labels = []
+        for attachment in attachments:
+            kind = str(attachment.get("type") or attachment.get("filetype") or "file").strip()
+            name = str(attachment.get("filename") or attachment.get("title") or attachment.get("id") or "file").strip()
+            labels.append(f"[{kind} attached: {name}]")
+        return "\n".join(labels)
 
     def send(self, chat_id: str, text: str, *, metadata: dict | None = None) -> None:
         try:

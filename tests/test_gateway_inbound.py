@@ -715,6 +715,7 @@ def test_discord_adapter_enforces_guild_filters_and_trigger_mode(monkeypatch):
         "size": 12345,
         "description": "voice memo",
     }]
+    assert adapter._attachment_reference_text(rows) == "[audio/ogg attached: voice.ogg]"
 
 
 def test_discord_adapter_native_media_upload_targets_threads(monkeypatch, tmp_path):
@@ -1122,8 +1123,40 @@ def test_slack_adapter_enforces_workspace_filters_and_strips_mentions(monkeypatc
     assert adapter._event_allowed({"user": "U1", "channel": "C1", "team": "T2"}) is False
     assert adapter._event_allowed({"user": "U1", "channel": "C1", "team": "T1", "bot_id": "B1"}) is False
     assert adapter._event_allowed({"user": "U1", "channel": "C1", "team": "T1", "subtype": "message_changed"}) is False
+    assert adapter._event_allowed({
+        "user": "U1",
+        "channel": "C1",
+        "team": "T1",
+        "subtype": "file_share",
+        "files": [{"id": "F1", "name": "brief.pdf"}],
+    }) is True
     assert adapter._strip_own_mentions("<@UBOT> !status") == "!status"
     assert adapter._strip_own_mentions("<@UBOT|aegis> hello") == "hello"
+    slack_attachments = adapter._attachments_from_event({
+        "files": [{
+            "id": "F1",
+            "name": "brief.pdf",
+            "mimetype": "application/pdf",
+            "url_private": "https://slack.test/files/F1",
+            "size": 4096,
+            "filetype": "pdf",
+            "pretty_type": "PDF",
+            "title": "Brief",
+        }],
+    })
+    assert slack_attachments == [{
+        "id": "F1",
+        "type": "application/pdf",
+        "media_type": "application/pdf",
+        "filename": "brief.pdf",
+        "url": "https://slack.test/files/F1",
+        "size": 4096,
+        "source": "slack",
+        "filetype": "pdf",
+        "pretty_type": "PDF",
+        "title": "Brief",
+    }]
+    assert adapter._attachment_reference_text(slack_attachments) == "[application/pdf attached: brief.pdf]"
 
     monkeypatch.setenv("SLACK_TRIGGER_MODE", "addressed")
     addressed_adapter = SlackAdapter()
@@ -1645,6 +1678,37 @@ def test_gateway_mattermost_channel_normalizes_event_body_and_alias(monkeypatch)
     })
     assert self_root.thread_id is None
     assert self_root.metadata["root_id"] == ""
+
+    file_only = adapter._event_from_body({
+        "channel_id": "channel-1",
+        "user_id": "user-1",
+        "post_id": "post-5",
+        "file_ids": ["file-1"],
+        "files": [{
+            "id": "file-2",
+            "name": "diagram.png",
+            "mime_type": "image/png",
+            "size": 2048,
+        }],
+    })
+    assert file_only.text == "[file attached: file-1]\n[image/png attached: diagram.png]"
+    assert file_only.attachments == [
+        {
+            "id": "file-1",
+            "type": "file",
+            "filename": "file-1",
+            "source": "mattermost",
+        },
+        {
+            "id": "file-2",
+            "type": "image/png",
+            "media_type": "image/png",
+            "filename": "diagram.png",
+            "url": "",
+            "source": "mattermost",
+            "size": 2048,
+        },
+    ]
 
 
 def test_gateway_mattermost_webhook_secret_accepts_headers_and_body(monkeypatch):

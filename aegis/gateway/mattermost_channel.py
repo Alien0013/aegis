@@ -136,6 +136,9 @@ class MattermostAdapter(BasePlatformAdapter):
     def _event_from_body(self, body: dict) -> MessageEvent:
         raw_text = str(body.get("text") or body.get("message") or "")
         text = normalize_inbound_command(raw_text, platform="mattermost")
+        attachments = self._attachments_from_body(body)
+        if not text.strip() and attachments:
+            text = self._attachment_reference_text(attachments)
         channel_id = str(body.get("channel_id") or body.get("channel") or "")
         post_id = str(body.get("post_id") or body.get("id") or body.get("message_id") or "")
         root_id = str(body.get("root_id") or body.get("thread_id") or body.get("parent_id") or "").strip()
@@ -152,6 +155,7 @@ class MattermostAdapter(BasePlatformAdapter):
             thread_id=root_id or None,
             message_id=post_id or None,
             timestamp=body.get("create_at") or body.get("timestamp"),
+            attachments=attachments,
             metadata={
                 "team_id": body.get("team_id"),
                 "channel_name": body.get("channel_name"),
@@ -159,6 +163,55 @@ class MattermostAdapter(BasePlatformAdapter):
                 "root_id": root_id or "",
             },
         )
+
+    def _attachments_from_body(self, body: dict) -> list[dict]:
+        rows: list[dict] = []
+        for file_id in body.get("file_ids") or body.get("fileIds") or []:
+            text = str(file_id or "").strip()
+            if text:
+                rows.append({
+                    "id": text,
+                    "type": "file",
+                    "filename": text,
+                    "source": "mattermost",
+                })
+        candidates = []
+        for key in ("files", "attachments"):
+            value = body.get(key)
+            if isinstance(value, list):
+                candidates.extend(value)
+        props = body.get("props")
+        if isinstance(props, dict) and isinstance(props.get("attachments"), list):
+            candidates.extend(props.get("attachments") or [])
+        for item in candidates:
+            if not isinstance(item, dict):
+                continue
+            file_id = str(item.get("id") or item.get("file_id") or item.get("fileId") or "").strip()
+            filename = str(item.get("name") or item.get("filename") or item.get("title") or "").strip()
+            mimetype = str(item.get("mime_type") or item.get("mimeType") or item.get("content_type") or "").strip()
+            media_type = mimetype.split("/", 1)[0] if "/" in mimetype else str(item.get("type") or "").strip()
+            row = {
+                "id": file_id,
+                "type": mimetype or media_type or "file",
+                "media_type": mimetype,
+                "filename": filename or file_id or "file",
+                "url": str(item.get("url") or item.get("link") or "").strip(),
+                "source": "mattermost",
+            }
+            try:
+                row["size"] = int(item.get("size") or 0)
+            except (TypeError, ValueError):
+                row["size"] = 0
+            rows.append(row)
+        return rows
+
+    def _attachment_reference_text(self, attachments: list[dict]) -> str:
+        labels = []
+        for attachment in attachments:
+            kind = str(attachment.get("type") or "file").strip()
+            name = str(attachment.get("filename") or attachment.get("id") or "file").strip()
+            labels.append(f"[{kind} attached: {name}]")
+        return "\n".join(labels)
 
     def _verify_webhook(self, headers, body: dict) -> bool:
         if not self.webhook_secret:

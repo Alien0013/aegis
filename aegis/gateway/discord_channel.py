@@ -89,6 +89,9 @@ class DiscordAdapter(BasePlatformAdapter):
             raw_content = message.content or ""
             content = self._strip_own_mentions(raw_content, client)
             content = normalize_inbound_command(content, platform="discord")
+            attachments = self._attachments_from_message(message)
+            if not content.strip() and attachments:
+                content = self._attachment_reference_text(attachments)
             chat_id, thread_id = self._chat_and_thread_ids(message)
             ev = MessageEvent(
                 platform="discord", chat_id=chat_id,
@@ -99,7 +102,7 @@ class DiscordAdapter(BasePlatformAdapter):
                 reply_to_text=getattr(replied, "content", None),
                 timestamp=getattr(message, "created_at", None),
                 thread_id=thread_id,
-                attachments=self._attachments_from_message(message),
+                attachments=attachments,
                 metadata={
                     "guild_id": str(getattr(getattr(message, "guild", None), "id", "") or ""),
                     "channel_id": str(getattr(message.channel, "id", "") or ""),
@@ -228,6 +231,14 @@ class DiscordAdapter(BasePlatformAdapter):
                 row["description"] = description
             rows.append(row)
         return rows
+
+    def _attachment_reference_text(self, attachments: list[dict]) -> str:
+        labels = []
+        for attachment in attachments:
+            kind = str(attachment.get("type") or "file").strip()
+            name = str(attachment.get("filename") or attachment.get("id") or "file").strip()
+            labels.append(f"[{kind} attached: {name}]")
+        return "\n".join(labels)
 
     def _chat_and_thread_ids(self, message) -> tuple[str, str | None]:  # noqa: ANN001
         channel = message.channel
