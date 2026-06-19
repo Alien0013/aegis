@@ -3438,6 +3438,78 @@ def test_responses_conversation_maps_to_latest_response(monkeypatch, tmp_path):
     assert "Cannot use both" in json.loads(conflict_data)["error"]
 
 
+def test_conversations_api_tracks_latest_response_and_items(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        create_status, create_data = _request(port, "POST", "/v1/conversations", {
+            "id": "thread-api",
+            "metadata": {"topic": "deploy"},
+        })
+        list_status, list_data = _request(port, "GET", "/v1/conversations")
+        empty_items_status, empty_items_data = _request(
+            port,
+            "GET",
+            "/v1/conversations/thread-api/items?order=asc",
+        )
+        first_status, first_data = _request(port, "POST", "/v1/responses", {
+            "input": "first",
+            "conversation": "thread-api",
+        })
+        first_id = json.loads(first_data)["id"]
+        get_status, get_data = _request(port, "GET", "/v1/conversations/thread-api")
+        items_status, items_data = _request(
+            port,
+            "GET",
+            "/v1/conversations/thread-api/items?order=asc",
+        )
+        second_status, second_data = _request(port, "POST", "/v1/responses", {
+            "input": "second",
+            "conversation": "thread-api",
+        })
+        delete_status, delete_data = _request(port, "DELETE", "/v1/conversations/thread-api")
+        missing_status, missing_data = _request(port, "GET", "/v1/conversations/thread-api")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    created = json.loads(create_data)
+    assert create_status == 201
+    assert created["id"] == "thread-api"
+    assert created["object"] == "conversation"
+    assert created["metadata"] == {"topic": "deploy"}
+    assert created["latest_response_id"] is None
+    assert list_status == 200
+    assert any(row["id"] == "thread-api" for row in json.loads(list_data)["data"])
+    assert empty_items_status == 200
+    assert json.loads(empty_items_data)["data"] == []
+
+    assert first_status == 200
+    retrieved = json.loads(get_data)
+    assert get_status == 200
+    assert retrieved["latest_response_id"] == first_id
+    assert items_status == 200
+    items = json.loads(items_data)["data"]
+    assert items[0]["content"] == [{"type": "input_text", "text": "first"}]
+    assert json.loads(items_data)["conversation_id"] == "thread-api"
+    assert json.loads(items_data)["response_id"] == first_id
+
+    assert second_status == 200
+    second = json.loads(second_data)
+    assert second["conversation"] == "thread-api"
+    assert second["previous_response_id"] == first_id
+    assert [m.content for m in _FakeRunner.calls[1]["history"][:2]] == ["first", "hello"]
+    assert delete_status == 200
+    assert json.loads(delete_data)["deleted"] is True
+    assert missing_status == 404
+    assert json.loads(missing_data)["id"] == "thread-api"
+
+
 def test_responses_truncation_auto_limits_previous_history(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server

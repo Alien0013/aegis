@@ -1954,6 +1954,9 @@ def _capabilities(config: Config) -> dict[str, Any]:
         {"name": "responses.input_tokens", "path": "/v1/responses/input_tokens", "methods": ["POST"]},
         {"name": "responses.cancel", "path": "/v1/responses/{response_id}/cancel", "methods": ["POST"]},
         {"name": "responses.compact", "path": "/v1/responses/compact", "methods": ["POST"]},
+        {"name": "conversations", "path": "/v1/conversations", "methods": ["GET", "POST"]},
+        {"name": "conversations.retrieve", "path": "/v1/conversations/{conversation_id}", "methods": ["GET", "DELETE"]},
+        {"name": "conversations.items", "path": "/v1/conversations/{conversation_id}/items", "methods": ["GET"]},
         {"name": "models", "path": "/v1/models", "methods": ["GET"]},
         {"name": "models.retrieve", "path": "/v1/models/{model_id}", "methods": ["GET"]},
         {"name": "health", "path": "/v1/health", "methods": ["GET"]},
@@ -2392,8 +2395,21 @@ class ResponseStore:
                 db.execute("ALTER TABLE responses ADD COLUMN accessed_at REAL NOT NULL DEFAULT 0")
             db.execute(
                 "CREATE TABLE IF NOT EXISTS conversations ("
-                "name TEXT PRIMARY KEY, response_id TEXT NOT NULL)"
+                "name TEXT PRIMARY KEY, response_id TEXT NOT NULL, "
+                "created_at INTEGER NOT NULL DEFAULT 0, "
+                "updated_at INTEGER NOT NULL DEFAULT 0, "
+                "metadata TEXT NOT NULL DEFAULT '{}')"
             )
+            conversation_columns = {
+                row[1] for row in db.execute("PRAGMA table_info(conversations)").fetchall()
+            }
+            for column, ddl in (
+                ("created_at", "ALTER TABLE conversations ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0"),
+                ("updated_at", "ALTER TABLE conversations ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0"),
+                ("metadata", "ALTER TABLE conversations ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'"),
+            ):
+                if column not in conversation_columns:
+                    db.execute(ddl)
         self._tighten_file_permissions()
 
     def _connect(self) -> sqlite3.Connection:
@@ -2521,13 +2537,78 @@ class ResponseStore:
             row = db.execute("SELECT response_id FROM conversations WHERE name = ?", (name,)).fetchone()
         return str(row[0]) if row else None
 
-    def set_conversation(self, name: str, response_id: str) -> None:
+    def _conversation_payload(self, row: sqlite3.Row | tuple[Any, ...]) -> dict[str, Any]:
+        name, response_id, created_at, updated_at, metadata = row
+        try:
+            parsed_metadata = json.loads(metadata or "{}")
+        except (TypeError, json.JSONDecodeError):
+            parsed_metadata = {}
+        if not isinstance(parsed_metadata, dict):
+            parsed_metadata = {}
+        return {
+            "id": str(name or ""),
+            "object": "conversation",
+            "created_at": int(created_at or 0),
+            "updated_at": int(updated_at or 0),
+            "metadata": parsed_metadata,
+            "latest_response_id": str(response_id or "") or None,
+        }
+
+    def get_conversation_record(self, name: str) -> dict[str, Any] | None:
+        with self._lock, self._connect() as db:
+            self._configure_db(db)
+            row = db.execute(
+                "SELECT name, response_id, created_at, updated_at, metadata "
+                "FROM conversations WHERE name = ?",
+                (name,),
+            ).fetchone()
+        return self._conversation_payload(row) if row else None
+
+    def list_conversations(self, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+        limit = max(1, min(int(limit or 100), 1000))
+        offset = max(0, int(offset or 0))
+        with self._lock, self._connect() as db:
+            self._configure_db(db)
+            rows = db.execute(
+                "SELECT name, response_id, created_at, updated_at, metadata "
+                "FROM conversations ORDER BY updated_at DESC, name ASC LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+        return [self._conversation_payload(row) for row in rows]
+
+    def create_conversation(self, name: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+        now = int(time.time())
+        metadata_blob = json.dumps(metadata or {}, sort_keys=True, default=str)
         with self._lock, self._connect() as db:
             self._configure_db(db)
             db.execute(
-                "INSERT OR REPLACE INTO conversations (name, response_id) VALUES (?, ?)",
-                (name, response_id),
+                "INSERT OR IGNORE INTO conversations "
+                "(name, response_id, created_at, updated_at, metadata) VALUES (?, ?, ?, ?, ?)",
+                (name, "", now, now, metadata_blob),
             )
+            row = db.execute(
+                "SELECT name, response_id, created_at, updated_at, metadata "
+                "FROM conversations WHERE name = ?",
+                (name,),
+            ).fetchone()
+        return self._conversation_payload(row)
+
+    def set_conversation(self, name: str, response_id: str) -> None:
+        now = int(time.time())
+        with self._lock, self._connect() as db:
+            self._configure_db(db)
+            db.execute(
+                "INSERT INTO conversations (name, response_id, created_at, updated_at, metadata) "
+                "VALUES (?, ?, ?, ?, '{}') "
+                "ON CONFLICT(name) DO UPDATE SET response_id = excluded.response_id, updated_at = excluded.updated_at",
+                (name, response_id, now, now),
+            )
+
+    def delete_conversation(self, name: str) -> bool:
+        with self._lock, self._connect() as db:
+            self._configure_db(db)
+            cur = db.execute("DELETE FROM conversations WHERE name = ?", (name,))
+            return cur.rowcount > 0
 
     def stats(self) -> dict[str, Any]:
         with self._lock, self._connect() as db:
@@ -3535,6 +3616,62 @@ def make_handler(config: Config):
                 return self._json(200, _toolsets_payload(config))
             if path in {"/api/session-checks", "/api/cross-session/checks", "/api/harness/cross-session"}:
                 return self._json(200, self._session_checks_report(query))
+            if path == "/v1/conversations":
+                try:
+                    limit = max(1, min(int((query.get("limit") or ["100"])[0] or 100), 1000))
+                except (TypeError, ValueError):
+                    limit = 100
+                try:
+                    offset = max(0, int((query.get("offset") or ["0"])[0] or 0))
+                except (TypeError, ValueError):
+                    offset = 0
+                rows = response_store.list_conversations(limit=limit + 1, offset=offset)
+                page = rows[:limit]
+                return self._json(200, {
+                    "object": "list",
+                    "data": page,
+                    "limit": limit,
+                    "offset": offset,
+                    "has_more": len(rows) > limit,
+                })
+            if path.startswith("/v1/conversations/") and path.endswith("/items"):
+                conversation_id = unquote(path.split("/")[-2])
+                conversation = response_store.get_conversation_record(conversation_id)
+                if conversation is None:
+                    return self._json(404, {"error": "conversation not found", "id": conversation_id})
+                response_id = conversation.get("latest_response_id")
+                limit, order, param_error = _response_input_items_params(query)
+                if param_error is not None:
+                    return self._json(400, param_error)
+                if not response_id:
+                    return self._json(200, {
+                        "object": "list",
+                        "data": [],
+                        "conversation_id": conversation_id,
+                        "response_id": None,
+                        "limit": limit,
+                        "order": order,
+                        "total_count": 0,
+                        "has_more": False,
+                        "first_id": None,
+                        "last_id": None,
+                    })
+                state = response_store.get_state(str(response_id))
+                if state is None:
+                    return self._json(404, {
+                        "error": "conversation latest response not found",
+                        "id": conversation_id,
+                        "response_id": response_id,
+                    })
+                payload = _response_input_items_payload(state, str(response_id), query)
+                payload["conversation_id"] = conversation_id
+                return self._json(200, payload)
+            if path.startswith("/v1/conversations/"):
+                conversation_id = unquote(path.rsplit("/", 1)[-1])
+                conversation = response_store.get_conversation_record(conversation_id)
+                if conversation is None:
+                    return self._json(404, {"error": "conversation not found", "id": conversation_id})
+                return self._json(200, conversation)
             if path.startswith("/v1/responses/") and path.endswith("/input_items"):
                 rid = path.split("/")[-2]
                 state = response_store.get_state(rid)
@@ -3670,6 +3807,18 @@ def make_handler(config: Config):
             if not self._authed():
                 return self._json(401, {"error": "unauthorized"})
             path, _query = self._route()
+            if path.startswith("/v1/conversations/"):
+                conversation_id = unquote(path.rsplit("/", 1)[-1])
+                existed = response_store.delete_conversation(conversation_id)
+                return self._json(
+                    200 if existed else 404,
+                    {
+                        "ok": existed,
+                        "id": conversation_id,
+                        "object": "conversation",
+                        "deleted": bool(existed),
+                    },
+                )
             if path.startswith("/v1/responses/"):
                 rid = path.rsplit("/", 1)[-1]
                 existed = response_store.delete(rid)
@@ -3751,6 +3900,13 @@ def make_handler(config: Config):
                 return self._post_response_compact(body)
             if path == "/v1/responses":
                 return self._post_response(body)
+            if path == "/v1/conversations":
+                conversation_id = _conversation_id(body.get("id") or body.get("conversation"))
+                if not conversation_id:
+                    conversation_id = new_id("conv")
+                metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
+                conversation = response_store.create_conversation(conversation_id, metadata)
+                return self._json(201, conversation)
             if path.startswith("/v1/responses/") and path.endswith("/cancel"):
                 return self._cancel_response(path.split("/")[-2])
             if path == "/v1/runs":
