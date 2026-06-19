@@ -60,6 +60,41 @@ test("prefers packaged resource backend before user install fallbacks", () => {
   );
 });
 
+test("packaged resource backend wins over inherited AEGIS_BIN", () => {
+  const resourcesPath = "/opt/AEGIS/resources";
+  const bundled = path.posix.join(resourcesPath, "backend", "bin", "aegis");
+  const inherited = "/tmp/dev/aegis";
+
+  assert.equal(
+    aegisCommand({
+      platform: "linux",
+      packaged: true,
+      resourcesPath,
+      env: { AEGIS_BIN: inherited },
+      exists: (p) => p === bundled || p === inherited,
+      probeCommand: (p) => p === bundled || p === inherited,
+    }),
+    bundled,
+  );
+});
+
+test("uses desktop launcher bin after packaged candidates", () => {
+  const resourcesPath = "/opt/AEGIS/resources";
+  const launcher = "/usr/local/bin/aegis";
+
+  assert.equal(
+    aegisCommand({
+      platform: "linux",
+      packaged: true,
+      resourcesPath,
+      env: { AEGIS_DESKTOP_LAUNCHER_BIN: launcher },
+      exists: (p) => p === launcher,
+      probeCommand: (p) => p === launcher,
+    }),
+    launcher,
+  );
+});
+
 test("enumerates common packaged backend executable layouts", () => {
   const resourcesPath = "C:\\Program Files\\AEGIS\\resources";
   const candidates = candidatePackagedAegisCommands({ platform: "win32", resourcesPath });

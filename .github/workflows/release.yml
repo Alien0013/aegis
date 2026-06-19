@@ -64,6 +64,9 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -74,11 +77,23 @@ jobs:
       - name: Install desktop dependencies
         working-directory: desktop
         run: npm ci
+      - name: Stage desktop backend venv
+        run: |
+          python -m venv desktop/build/ci-backend
+          desktop/build/ci-backend/bin/python -m pip install --upgrade pip
+          desktop/build/ci-backend/bin/python -m pip install .
+          cat > desktop/build/ci-backend/bin/aegis <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          exec "$DIR/python" -m aegis.cli.main "$@"
+          SH
+          chmod +x desktop/build/ci-backend/bin/aegis
       - name: Build Linux desktop artifacts
         working-directory: desktop
         env:
           AEGIS_RELEASE: "1"
-          AEGIS_ALLOW_EXTERNAL_DESKTOP_BACKEND: "1"
+          AEGIS_DESKTOP_BACKEND_SOURCE: build/ci-backend
           AEGIS_DESKTOP_TARGETS: linux
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

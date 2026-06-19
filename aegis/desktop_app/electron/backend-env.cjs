@@ -228,13 +228,17 @@ function candidateAegisCommands(options = {}) {
   const pathMod = _pathFor(platform);
   const home = resolveAegisHome({ ...options, platform, env, homedir });
   const candidates = [];
+  const packaged = Boolean(options.packaged || options.resourcesPath || options.appPath);
   const explicit = _envValue("AEGIS_BIN", { ...options, env, platform });
-  if (explicit) candidates.push(explicit);
-  const userEnvBin = _userEnvValue("AEGIS_BIN", { ...options, env, platform });
-  if (userEnvBin && userEnvBin !== explicit) candidates.push(userEnvBin);
-  if (options.packaged || options.resourcesPath || options.appPath) {
+  if (explicit && !packaged) candidates.push(explicit);
+  if (packaged) {
     candidates.push(...candidatePackagedAegisCommands({ ...options, platform }));
   }
+  if (explicit && packaged) candidates.push(explicit);
+  const launcherBin = String(env.AEGIS_DESKTOP_LAUNCHER_BIN || "").trim();
+  if (launcherBin && launcherBin !== explicit) candidates.push(launcherBin);
+  const userEnvBin = _userEnvValue("AEGIS_BIN", { ...options, env, platform });
+  if (userEnvBin && userEnvBin !== explicit) candidates.push(userEnvBin);
   const homes = [home];
   const userEnvHome = _userEnvValue("AEGIS_HOME", { ...options, env, platform });
   if (userEnvHome && !homes.some((item) => item.toLowerCase() === userEnvHome.toLowerCase())) {

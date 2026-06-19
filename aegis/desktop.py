@@ -499,7 +499,10 @@ def cmd_desktop(args, config) -> int:  # noqa: ARG001
         return _die(str(exc))
 
     env = os.environ.copy()
-    env["AEGIS_BIN"] = _aegis_bin()
+    bin_resolution = _aegis_bin_resolution()
+    if bin_resolution.get("ignored"):
+        env.pop("AEGIS_BIN", None)
+    env["AEGIS_DESKTOP_LAUNCHER_BIN"] = str(bin_resolution.get("resolved") or _aegis_bin())
     env.setdefault("AEGIS_HOME", str(cfg.get_home()))
     env["TERMINAL_CWD"] = terminal_cwd
 

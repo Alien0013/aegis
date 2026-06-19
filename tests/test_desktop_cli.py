@@ -224,7 +224,8 @@ def test_desktop_launch_skips_install_when_dependencies_exist(monkeypatch, tmp_p
     ]
     assert calls[0]["cwd"] == target
     assert calls[1]["cwd"] == target
-    assert calls[1]["env"]["AEGIS_BIN"] == "/usr/local/bin/aegis"
+    assert "AEGIS_BIN" not in calls[1]["env"]
+    assert calls[1]["env"]["AEGIS_DESKTOP_LAUNCHER_BIN"] == "/usr/local/bin/aegis"
     assert calls[1]["env"]["AEGIS_HOME"] == str(cfg.get_home())
     assert calls[1]["env"]["TERMINAL_CWD"] == str(project)
 
@@ -257,7 +258,8 @@ def test_desktop_launch_replaces_stale_aegis_bin_env(monkeypatch, tmp_path):
     assert desktop.cmd_desktop(args, object()) == 0
 
     assert calls[0]["cmd"] == ["/usr/bin/npm", "start"]
-    assert calls[0]["env"]["AEGIS_BIN"] == "/usr/local/bin/aegis"
+    assert "AEGIS_BIN" not in calls[0]["env"]
+    assert calls[0]["env"]["AEGIS_DESKTOP_LAUNCHER_BIN"] == "/usr/local/bin/aegis"
     assert calls[0]["env"]["TERMINAL_CWD"] == str(project)
 
 
@@ -472,10 +474,9 @@ def test_release_workflow_builds_linux_desktop_artifacts():
     assert "run: npm ci" in workflow
     assert "run: npm run dist:linux" in workflow
     assert 'AEGIS_RELEASE: "1"' in workflow
-    assert (
-        "AEGIS_DESKTOP_BACKEND_SOURCE:" in workflow
-        or 'AEGIS_ALLOW_EXTERNAL_DESKTOP_BACKEND: "1"' in workflow
-    )
+    assert "python -m venv desktop/build/ci-backend" in workflow
+    assert "AEGIS_DESKTOP_BACKEND_SOURCE: build/ci-backend" in workflow
+    assert "AEGIS_ALLOW_EXTERNAL_DESKTOP_BACKEND" not in workflow
     assert "GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in workflow
     assert "desktop/release/*" in workflow
     assert "softprops/action-gh-release@v2" in workflow
