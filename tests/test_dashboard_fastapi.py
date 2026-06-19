@@ -1049,6 +1049,8 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     assert whatsapp["auth_type"] == "local_http_bridge"
     assert "WHATSAPP_CHANNEL_SECRET" in whatsapp["optional_env_vars"]
     assert "whatsapp_bridge_aliases" in whatsapp["capabilities"]
+    assert "whatsapp_nested_media" in whatsapp["capabilities"]
+    assert "whatsapp_nested_media" in whatsapp["metadata"]["bridge_capabilities"]
     assert whatsapp["metadata"]["security"]["bridge"] == "webhook"
 
     registry = asyncio.run(_request(app, "GET", "/api/platforms/registry", headers=headers))

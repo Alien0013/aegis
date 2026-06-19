@@ -63,6 +63,20 @@ def _max_channel_webhook_bytes() -> int:
 MAX_CHANNEL_WEBHOOK_BYTES = _max_channel_webhook_bytes()
 _WHATSAPP_BROADCAST_CHATS = {"status@broadcast"}
 _WHATSAPP_BROADCAST_SUFFIXES = ("@broadcast", "@newsletter")
+_WHATSAPP_MEDIA_MESSAGE_KEYS = (
+    ("imageMessage", "image"),
+    ("videoMessage", "video"),
+    ("audioMessage", "audio"),
+    ("documentMessage", "document"),
+    ("stickerMessage", "sticker"),
+)
+_WHATSAPP_MESSAGE_WRAPPERS = (
+    "ephemeralMessage",
+    "viewOnceMessage",
+    "viewOnceMessageV2",
+    "documentWithCaptionMessage",
+    "editedMessage",
+)
 
 
 def _dig(source: dict, *path: Any):
@@ -96,6 +110,14 @@ def _truthy_value(value) -> bool:
     if isinstance(value, bool):
         return value
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _positive_int(value) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _first_string(source: dict, paths: tuple[tuple[Any, ...], ...]) -> str:
@@ -146,6 +168,106 @@ def _is_whatsapp_self_echo(body: dict) -> bool:
         if _truthy_value(_dig(body, *path)):
             return True
     return False
+
+
+def _iter_whatsapp_message_dicts(body: dict):
+    roots = (
+        body,
+        _dig(body, "message"),
+        _dig(body, "data", "message"),
+        _dig(body, "messages", 0, "message"),
+        _dig(body, "data", "messages", 0, "message"),
+        _dig(body, "event", "messages", 0, "message"),
+    )
+    stack = [(root, 0) for root in roots if isinstance(root, dict)]
+    seen: set[int] = set()
+    while stack:
+        message, depth = stack.pop(0)
+        marker = id(message)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        yield message
+        if depth >= 5:
+            continue
+        nested = message.get("message")
+        if isinstance(nested, dict):
+            stack.append((nested, depth + 1))
+        for wrapper_key in _WHATSAPP_MESSAGE_WRAPPERS:
+            wrapped = message.get(wrapper_key)
+            if not isinstance(wrapped, dict):
+                continue
+            if any(media_key in wrapped for media_key, _kind in _WHATSAPP_MEDIA_MESSAGE_KEYS):
+                stack.append((wrapped, depth + 1))
+            nested = wrapped.get("message")
+            if isinstance(nested, dict):
+                stack.append((nested, depth + 1))
+
+
+def _whatsapp_media_attachments_from_body(body: dict) -> list[dict]:
+    message_key_id = _first_string(body, (
+        ("key", "id"),
+        ("message", "key", "id"),
+        ("data", "key", "id"),
+        ("messages", 0, "key", "id"),
+        ("data", "messages", 0, "key", "id"),
+        ("event", "messages", 0, "key", "id"),
+        ("message_id",),
+        ("messageId",),
+        ("id",),
+    ))
+    rows: list[dict] = []
+    seen: set[tuple[str, str, str, str, str]] = set()
+    for message in _iter_whatsapp_message_dicts(body):
+        for message_key, kind in _WHATSAPP_MEDIA_MESSAGE_KEYS:
+            media = message.get(message_key)
+            if not isinstance(media, dict):
+                continue
+            mimetype = _string_value(
+                media.get("mimetype")
+                or media.get("mimeType")
+                or media.get("content_type")
+                or media.get("contentType")
+            )
+            filename = _string_value(
+                media.get("fileName")
+                or media.get("filename")
+                or media.get("name")
+                or media.get("title")
+            ) or kind
+            url = _string_value(media.get("url"))
+            direct_path = _string_value(media.get("directPath") or media.get("direct_path"))
+            row_id = _string_value(media.get("id")) or message_key_id
+            dedupe_key = (message_key, row_id, filename, mimetype, url or direct_path)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            row: dict[str, object] = {
+                "id": row_id,
+                "type": mimetype or kind,
+                "media_type": mimetype,
+                "filename": filename,
+                "source": "whatsapp",
+            }
+            caption = _string_value(media.get("caption") or message.get("caption"))
+            if caption:
+                row["caption"] = caption
+            if url:
+                row["url"] = url
+            if direct_path:
+                row["direct_path"] = direct_path
+            size = _positive_int(media.get("fileLength") or media.get("size"))
+            if size is not None:
+                row["size"] = size
+            seconds = _positive_int(media.get("seconds") or media.get("duration"))
+            if seconds is not None:
+                row["seconds"] = seconds
+            if "ptt" in media:
+                row["ptt"] = _truthy_value(media.get("ptt"))
+            if media.get("mediaKey") or media.get("media_key"):
+                row["media_key_present"] = True
+            rows.append(row)
+    return rows
 
 
 class WebhookChannel(BasePlatformAdapter):
@@ -269,7 +391,7 @@ class WebhookChannel(BasePlatformAdapter):
             default=self.default_platform,
         )
         metadata = dict(body.get("metadata")) if isinstance(body.get("metadata"), dict) else {}
-        attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
+        attachments = list(body.get("attachments")) if isinstance(body.get("attachments"), list) else []
         chat_id = _first_string(body, (
             ("chat_id",),
             ("chatId",),
@@ -459,6 +581,10 @@ class WebhookChannel(BasePlatformAdapter):
         )
         if salvaged_metadata and (not metadata or platform == "whatsapp"):
             metadata = {**salvaged_metadata, **metadata}
+        if platform == "whatsapp":
+            attachments.extend(_whatsapp_media_attachments_from_body(body))
+            if not text.strip() and attachments:
+                text = self._attachment_reference_text(attachments)
         return MessageEvent(
             platform=platform,
             chat_id=chat_id,

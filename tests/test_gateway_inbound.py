@@ -2189,6 +2189,98 @@ def test_gateway_webhook_channel_accepts_whatsapp_bridge_aliases():
     assert media_only.attachments == [{"type": "image/png", "filename": "photo.png"}]
     assert WebhookChannel()._delivery_id({}, {"key": {"id": "BAE599999"}}) == "body:key.id:BAE599999"
 
+    image = WebhookChannel()._event_from_body({
+        "platform": "baileys",
+        "key": {
+            "remoteJid": "12025550123@s.whatsapp.net",
+            "id": "BAEIMAGE1",
+        },
+        "message": {
+            "imageMessage": {
+                "caption": "look at this",
+                "mimetype": "image/jpeg",
+                "fileName": "photo.jpg",
+                "fileLength": "2048",
+                "url": "https://mmg.whatsapp.net/o1/v/example",
+                "mediaKey": "redacted-by-adapter",
+            },
+        },
+    })
+    assert image.text == "look at this"
+    assert image.attachments == [{
+        "id": "BAEIMAGE1",
+        "type": "image/jpeg",
+        "media_type": "image/jpeg",
+        "filename": "photo.jpg",
+        "source": "whatsapp",
+        "caption": "look at this",
+        "url": "https://mmg.whatsapp.net/o1/v/example",
+        "size": 2048,
+        "media_key_present": True,
+    }]
+
+    voice_only = WebhookChannel()._event_from_body({
+        "platform": "whatsapp-web.js",
+        "event": {
+            "messages": [{
+                "key": {
+                    "remoteJid": "12025550123@s.whatsapp.net",
+                    "id": "BAEVOICE1",
+                },
+                "message": {
+                    "viewOnceMessage": {
+                        "message": {
+                            "audioMessage": {
+                                "mimetype": "audio/ogg",
+                                "seconds": "9",
+                                "ptt": True,
+                                "directPath": "/v/t62.7117-24/voice.enc",
+                            },
+                        },
+                    },
+                },
+            }],
+        },
+    })
+    assert voice_only.text == "[audio/ogg attached: audio]"
+    assert voice_only.attachments == [{
+        "id": "BAEVOICE1",
+        "type": "audio/ogg",
+        "media_type": "audio/ogg",
+        "filename": "audio",
+        "source": "whatsapp",
+        "direct_path": "/v/t62.7117-24/voice.enc",
+        "seconds": 9,
+        "ptt": True,
+    }]
+
+    document = WebhookChannel()._event_from_body({
+        "platform": "whatsapp",
+        "chat_id": "12025550123@s.whatsapp.net",
+        "message": {
+            "documentWithCaptionMessage": {
+                "message": {
+                    "documentMessage": {
+                        "mimetype": "application/pdf",
+                        "fileName": "brief.pdf",
+                        "caption": "brief",
+                        "fileLength": 4096,
+                    },
+                },
+            },
+        },
+    })
+    assert document.text == "[application/pdf attached: brief.pdf]"
+    assert document.attachments == [{
+        "id": "",
+        "type": "application/pdf",
+        "media_type": "application/pdf",
+        "filename": "brief.pdf",
+        "source": "whatsapp",
+        "caption": "brief",
+        "size": 4096,
+    }]
+
     data_wrapped = WebhookChannel()._event_from_body({
         "platform": "whatsapp-web.js",
         "data": {

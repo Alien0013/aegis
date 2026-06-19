@@ -232,6 +232,7 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
         "supports_threads": True,
         "supports_media": False,
         "typed_command_prefix": "/",
+        "bridge_capabilities": ["whatsapp_bridge_aliases", "whatsapp_nested_media"],
         "security": {
             "secret_env": "WEBHOOK_CHANNEL_SECRET",
             "signature_schemes": [
