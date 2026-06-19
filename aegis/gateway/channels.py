@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import json
 
 import httpx
 
@@ -56,6 +57,7 @@ class TelegramAdapter(BasePlatformAdapter):
     max_message_length = 4096
     supports_threads = True
     supports_media = True
+    supports_reactions = True
 
     def __init__(self, token: str | None = None):
         self.token = token or os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -470,10 +472,25 @@ class TelegramAdapter(BasePlatformAdapter):
         # Telegram caps messages at 4096 UTF-16 code units; leave a small margin.
         params = self._thread_params(metadata)
         for chunk in chunk_text_by_units(text, limit=4000, len_fn=utf16_units):
-            try:
-                self._api_with_thread_fallback("sendMessage", chat_id=chat_id, text=chunk, **params)
-            except Exception:  # noqa: BLE001
-                pass
+            self._api_with_thread_fallback("sendMessage", chat_id=chat_id, text=chunk, **params)
+
+    def add_reaction(self, chat_id: str, message_id: str, reaction: str) -> None:
+        emoji = str(reaction or "").strip()
+        if not chat_id or not message_id or not emoji:
+            return
+        payload = json.dumps([{"type": "emoji", "emoji": emoji}], ensure_ascii=False)
+        try:
+            self._api("setMessageReaction", chat_id=chat_id, message_id=message_id, reaction=payload)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def remove_reaction(self, chat_id: str, message_id: str, reaction: str) -> None:  # noqa: ARG002
+        if not chat_id or not message_id:
+            return
+        try:
+            self._api("setMessageReaction", chat_id=chat_id, message_id=message_id, reaction="[]")
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _with_group_context(msg: dict) -> str:

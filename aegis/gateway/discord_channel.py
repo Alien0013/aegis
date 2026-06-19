@@ -26,6 +26,7 @@ class DiscordAdapter(BasePlatformAdapter):
     max_message_length = 2000
     supports_threads = True
     supports_media = True
+    supports_reactions = True
     typed_command_prefix = "!"
 
     def __init__(self, token: str | None = None):
@@ -338,7 +339,10 @@ class DiscordAdapter(BasePlatformAdapter):
                     await self._discord_send_text(channel, chunk)
             for path in media:
                 try:
-                    if os.path.exists(path):
+                    allowed, reason = self.filter_media_path(path)
+                    if not allowed:
+                        await self._discord_send_text(channel, f"📎 blocked media path: {reason}")
+                    elif os.path.exists(path):
                         await channel.send(file=discord.File(path))
                     else:
                         await channel.send(f"(file not found: {path})")
@@ -367,3 +371,39 @@ class DiscordAdapter(BasePlatformAdapter):
             return await channel.send(text, allowed_mentions=allowed_mentions)
         except Exception:  # noqa: BLE001
             return await channel.send(text)
+
+    def add_reaction(self, chat_id: str, message_id: str, reaction: str) -> None:
+        client = getattr(self, "_client", None)
+        loop = getattr(self, "_loop", None)
+        if client is None or loop is None or not message_id or not reaction:
+            return
+
+        async def react():
+            channel = await self._discord_target_channel(chat_id, None)
+            message = await channel.fetch_message(int(message_id))
+            await message.add_reaction(reaction)
+
+        try:
+            asyncio.run_coroutine_threadsafe(react(), loop).result(timeout=30)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def remove_reaction(self, chat_id: str, message_id: str, reaction: str) -> None:
+        client = getattr(self, "_client", None)
+        loop = getattr(self, "_loop", None)
+        if client is None or loop is None or not message_id or not reaction:
+            return
+
+        async def unreact():
+            channel = await self._discord_target_channel(chat_id, None)
+            message = await channel.fetch_message(int(message_id))
+            clear = getattr(message, "clear_reaction", None)
+            if callable(clear):
+                await clear(reaction)
+                return
+            await message.remove_reaction(reaction, client.user)
+
+        try:
+            asyncio.run_coroutine_threadsafe(unreact(), loop).result(timeout=30)
+        except Exception:  # noqa: BLE001
+            pass

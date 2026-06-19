@@ -45,6 +45,7 @@ class BasePlatformAdapter:
     max_message_length: int | None = None
     supports_threads: bool = False
     supports_media: bool = False
+    supports_reactions: bool = False
     typed_command_prefix: str = "/"
     transport: str = "custom"
 
@@ -65,6 +66,7 @@ class BasePlatformAdapter:
             "max_message_length": getattr(self, "max_message_length", data.get("max_message_length")),
             "supports_threads": bool(getattr(self, "supports_threads", data.get("supports_threads", False))),
             "supports_media": bool(getattr(self, "supports_media", data.get("supports_media", False))),
+            "supports_reactions": bool(getattr(self, "supports_reactions", data.get("supports_reactions", False))),
             "typed_command_prefix": getattr(
                 self,
                 "typed_command_prefix",

@@ -28,6 +28,7 @@ class SlackAdapter(BasePlatformAdapter):
     max_message_length = 39000
     supports_threads = True
     supports_media = False
+    supports_reactions = True
     typed_command_prefix = "!"
 
     def __init__(self):
@@ -178,5 +179,38 @@ class SlackAdapter(BasePlatformAdapter):
                 if ev.thread_id:
                     kwargs["thread_ts"] = ev.thread_id
                 self._app.client.chat_postMessage(**kwargs)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _reaction_name(self, reaction: str) -> str:
+        value = str(reaction or "").strip()
+        aliases = {
+            "👍": "+1",
+            "👎": "-1",
+            "✅": "white_check_mark",
+            "❌": "x",
+            "👀": "eyes",
+            "❤️": "heart",
+            "❤": "heart",
+            "🚀": "rocket",
+        }
+        value = aliases.get(value, value)
+        return value.strip(":").strip()
+
+    def add_reaction(self, chat_id: str, message_id: str, reaction: str) -> None:  # noqa: ARG002
+        name = self._reaction_name(reaction)
+        if not name or not message_id:
+            return
+        try:
+            self._app.client.reactions_add(channel=chat_id, timestamp=message_id, name=name)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def remove_reaction(self, chat_id: str, message_id: str, reaction: str) -> None:  # noqa: ARG002
+        name = self._reaction_name(reaction)
+        if not name or not message_id:
+            return
+        try:
+            self._app.client.reactions_remove(channel=chat_id, timestamp=message_id, name=name)
         except Exception:  # noqa: BLE001
             pass

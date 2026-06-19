@@ -101,6 +101,7 @@ class WebhookChannel(BasePlatformAdapter):
     transport = "http"
     supports_threads = True
     supports_media = False
+    supports_reactions = True
     max_message_length = 16000
 
     def __init__(
@@ -518,3 +519,40 @@ class WebhookChannel(BasePlatformAdapter):
                 payload = self._outbound_payload(chat_id, chunk, metadata)
                 response = client.post(self.outbound_url, headers=headers, json=payload)
                 response.raise_for_status()
+
+    def _post_outbound_event(self, payload: dict) -> None:
+        if not self.outbound_url:
+            return
+        headers = {"Content-Type": "application/json"}
+        if self.outbound_secret:
+            headers["X-Secret"] = self.outbound_secret
+        with httpx.Client(timeout=30) as client:
+            response = client.post(self.outbound_url, headers=headers, json=payload)
+            response.raise_for_status()
+
+    def _reaction_payload(self, action: str, chat_id: str, message_id: str, reaction: str) -> dict:
+        platform = normalize_platform_name(self.default_platform, default=self.default_platform)
+        return {
+            "platform": platform,
+            "chat_id": str(chat_id),
+            "type": "reaction",
+            "action": action,
+            "message_id": str(message_id),
+            "reaction": str(reaction),
+        }
+
+    def add_reaction(self, chat_id: str, message_id: str, reaction: str) -> None:
+        if not chat_id or not message_id or not reaction:
+            return
+        try:
+            self._post_outbound_event(self._reaction_payload("add", chat_id, message_id, reaction))
+        except Exception:  # noqa: BLE001
+            pass
+
+    def remove_reaction(self, chat_id: str, message_id: str, reaction: str) -> None:
+        if not chat_id or not message_id or not reaction:
+            return
+        try:
+            self._post_outbound_event(self._reaction_payload("remove", chat_id, message_id, reaction))
+        except Exception:  # noqa: BLE001
+            pass

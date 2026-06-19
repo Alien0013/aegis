@@ -35,6 +35,7 @@ class MattermostAdapter(BasePlatformAdapter):
     max_message_length = 16000
     supports_threads = True
     supports_media = False
+    supports_reactions = True
     typed_command_prefix = "!"
 
     def __init__(self):
@@ -48,6 +49,7 @@ class MattermostAdapter(BasePlatformAdapter):
             or os.environ.get("MATTERMOST_OUTGOING_TOKEN")
             or ""
         )
+        self.bot_user_id = os.environ.get("MATTERMOST_BOT_USER_ID", "").strip()
 
     @property
     def metadata(self) -> dict:
@@ -103,6 +105,33 @@ class MattermostAdapter(BasePlatformAdapter):
         if not lowered:
             return True
         return "root" in lowered or "thread" in lowered or "post" in lowered
+
+    def _emoji_name(self, reaction: str) -> str:
+        value = str(reaction or "").strip()
+        aliases = {
+            "👍": "+1",
+            "👎": "-1",
+            "✅": "white_check_mark",
+            "❌": "x",
+            "👀": "eyes",
+            "❤️": "heart",
+            "❤": "heart",
+            "🚀": "rocket",
+        }
+        return aliases.get(value, value).strip(":").strip()
+
+    def _resolve_bot_user_id(self, client: httpx.Client) -> str:
+        if self.bot_user_id:
+            return self.bot_user_id
+        try:
+            response = client.get(f"{self.base_url}/api/v4/users/me", headers={"Authorization": f"Bearer {self.token}"})
+            response.raise_for_status()
+            payload = response.json()
+            if isinstance(payload, dict):
+                self.bot_user_id = str(payload.get("id") or "").strip()
+        except Exception:  # noqa: BLE001
+            return ""
+        return self.bot_user_id
 
     def _event_from_body(self, body: dict) -> MessageEvent:
         raw_text = str(body.get("text") or body.get("message") or "")
@@ -204,3 +233,42 @@ class MattermostAdapter(BasePlatformAdapter):
                     fallback = {"channel_id": chat_id, "message": chunk}
                     retry = client.post(f"{self.base_url}/api/v4/posts", headers=headers, json=fallback)
                     retry.raise_for_status()
+
+    def add_reaction(self, chat_id: str, message_id: str, reaction: str) -> None:  # noqa: ARG002
+        post_id = str(message_id or "").strip()
+        emoji = self._emoji_name(reaction)
+        if not post_id or not emoji:
+            return
+        headers = {"Authorization": f"Bearer {self.token}"}
+        try:
+            with httpx.Client(timeout=30) as client:
+                user_id = self._resolve_bot_user_id(client)
+                if not user_id:
+                    return
+                response = client.post(
+                    f"{self.base_url}/api/v4/reactions",
+                    headers=headers,
+                    json={"user_id": user_id, "post_id": post_id, "emoji_name": emoji},
+                )
+                response.raise_for_status()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def remove_reaction(self, chat_id: str, message_id: str, reaction: str) -> None:  # noqa: ARG002
+        post_id = str(message_id or "").strip()
+        emoji = self._emoji_name(reaction)
+        if not post_id or not emoji:
+            return
+        headers = {"Authorization": f"Bearer {self.token}"}
+        try:
+            with httpx.Client(timeout=30) as client:
+                user_id = self._resolve_bot_user_id(client)
+                if not user_id:
+                    return
+                response = client.delete(
+                    f"{self.base_url}/api/v4/users/{user_id}/posts/{post_id}/reactions/{emoji}",
+                    headers=headers,
+                )
+                response.raise_for_status()
+        except Exception:  # noqa: BLE001
+            pass

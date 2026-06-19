@@ -525,22 +525,27 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert TelegramAdapter("token").metadata["transport"] == "long_poll"
     assert "TELEGRAM_ALLOWED_CHATS" in TelegramAdapter("token").metadata["optional_env"]
     assert TelegramAdapter("token").metadata["security"]["group_trigger_mode"] == "all"
+    assert TelegramAdapter("token").metadata["supports_reactions"] is True
     assert DiscordAdapter("token").metadata["supports_threads"] is True
+    assert DiscordAdapter("token").metadata["supports_reactions"] is True
     assert DiscordAdapter("token").metadata["command_cap"] == 100
     assert "DISCORD_ALLOWED_GUILDS" in DiscordAdapter("token").metadata["optional_env"]
     assert DiscordAdapter("token").metadata["security"]["trigger_mode"] == "all"
     assert len(DiscordAdapter("token").command_menu(max_commands=500)) <= 100
     assert SlackAdapter().metadata["typed_command_prefix"] == "!"
+    assert SlackAdapter().metadata["supports_reactions"] is True
     assert "SLACK_ALLOWED_CHANNELS" in SlackAdapter().metadata["optional_env"]
     assert "SLACK_TRIGGER_MODE" in SlackAdapter().metadata["optional_env"]
     assert SlackAdapter().metadata["security"]["trigger_mode"] == "all"
     mattermost = MattermostAdapter().metadata
     assert mattermost["transport"] == "http_webhook"
     assert mattermost["supports_threads"] is True
+    assert mattermost["supports_reactions"] is True
     assert mattermost["security"]["auth_type"] == "bearer"
     webhook = WebhookChannel().metadata
     assert webhook["transport"] == "http"
     assert webhook["supports_threads"] is True
+    assert webhook["supports_reactions"] is True
     assert webhook["security"]["secret_configured"] is False
     assert "X-Secret" in webhook["security"]["signature_schemes"]
     assert webhook["idempotency"]["delivery_cache"]["entries"] == 0
@@ -553,6 +558,103 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert whatsapp.metadata["transport"] == "http_bridge"
     assert whatsapp.metadata["security"]["env_prefix"] == "WHATSAPP_CHANNEL"
     assert whatsapp.port == 18792
+
+
+def test_platform_adapters_send_native_reactions(monkeypatch):
+    import asyncio
+    import json
+    from types import SimpleNamespace
+
+    from aegis.gateway import discord_channel
+    from aegis.gateway.channels import TelegramAdapter
+    from aegis.gateway.discord_channel import DiscordAdapter
+    from aegis.gateway.slack_channel import SlackAdapter
+
+    calls = []
+    telegram = TelegramAdapter("token")
+    telegram._api = lambda method, **params: calls.append((method, params)) or {"ok": True}
+
+    telegram.add_reaction("42", "101", "👍")
+    telegram.remove_reaction("42", "101", "👍")
+
+    assert calls[0][0] == "setMessageReaction"
+    assert calls[0][1]["chat_id"] == "42"
+    assert calls[0][1]["message_id"] == "101"
+    assert json.loads(calls[0][1]["reaction"]) == [{"type": "emoji", "emoji": "👍"}]
+    assert calls[1] == (
+        "setMessageReaction",
+        {"chat_id": "42", "message_id": "101", "reaction": "[]"},
+    )
+
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+    slack_calls = []
+
+    class FakeSlackClient:
+        def reactions_add(self, **kwargs):
+            slack_calls.append(("add", kwargs))
+
+        def reactions_remove(self, **kwargs):
+            slack_calls.append(("remove", kwargs))
+
+    slack = SlackAdapter()
+    slack._app = SimpleNamespace(client=FakeSlackClient())
+
+    slack.add_reaction("C1", "171.1", "✅")
+    slack.remove_reaction("C1", "171.1", ":eyes:")
+
+    assert slack_calls == [
+        ("add", {"channel": "C1", "timestamp": "171.1", "name": "white_check_mark"}),
+        ("remove", {"channel": "C1", "timestamp": "171.1", "name": "eyes"}),
+    ]
+
+    discord_calls = []
+
+    class FakeFuture:
+        def __init__(self, value):
+            self.value = value
+
+        def result(self, timeout=None):  # noqa: ARG002
+            return self.value
+
+    def run_coroutine_threadsafe(coro, loop):  # noqa: ARG001
+        return FakeFuture(asyncio.run(coro))
+
+    class FakeMessage:
+        async def add_reaction(self, reaction):
+            discord_calls.append(("add", reaction))
+
+        async def clear_reaction(self, reaction):
+            discord_calls.append(("clear", reaction))
+
+    class FakeChannel:
+        async def fetch_message(self, message_id):
+            discord_calls.append(("fetch", message_id))
+            return FakeMessage()
+
+    class FakeDiscordClient:
+        user = object()
+
+        def get_channel(self, channel_id):
+            discord_calls.append(("channel", channel_id))
+            return FakeChannel()
+
+    monkeypatch.setattr(discord_channel.asyncio, "run_coroutine_threadsafe", run_coroutine_threadsafe)
+
+    discord = DiscordAdapter("discord-token")
+    discord._client = FakeDiscordClient()
+    discord._loop = object()
+    discord.add_reaction("99", "123", "🚀")
+    discord.remove_reaction("99", "123", "🚀")
+
+    assert discord_calls == [
+        ("channel", 99),
+        ("fetch", 123),
+        ("add", "🚀"),
+        ("channel", 99),
+        ("fetch", 123),
+        ("clear", "🚀"),
+    ]
 
 
 def test_discord_adapter_enforces_guild_filters_and_trigger_mode(monkeypatch):
@@ -689,6 +791,66 @@ def test_discord_adapter_native_media_upload_targets_threads(monkeypatch, tmp_pa
         adapter.send_image("10", str(path), caption="retry", metadata={"thread_id": "30"})
         assert adapter._client.channels[30].sent == [
             ((f"retry\n📎 {path}",), {"allowed_mentions": "none"}),
+        ]
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(2)
+        loop.close()
+
+
+def test_discord_reply_media_uses_shared_safety_gate(monkeypatch, tmp_path):
+    import asyncio
+    import sys
+    import types
+
+    from aegis.gateway.base import MessageEvent
+    from aegis.gateway.discord_channel import DiscordAdapter
+
+    path = tmp_path / "secret.png"
+    path.write_bytes(b"png")
+
+    monkeypatch.setitem(sys.modules, "discord", types.SimpleNamespace(
+        File=lambda p: {"file": str(p)},
+        AllowedMentions=types.SimpleNamespace(none=lambda: "none"),
+    ))
+
+    class FakeChannel:
+        def __init__(self):
+            self.sent = []
+
+        async def send(self, *args, **kwargs):
+            self.sent.append((args, kwargs))
+            return {"ok": True}
+
+        def typing(self):
+            raise RuntimeError("not used")
+
+    loop = asyncio.new_event_loop()
+    ready = threading.Event()
+
+    def run_loop():
+        asyncio.set_event_loop(loop)
+        ready.set()
+        loop.run_forever()
+
+    thread = threading.Thread(target=run_loop)
+    thread.start()
+    assert ready.wait(2)
+    try:
+        channel = FakeChannel()
+        adapter = DiscordAdapter("token")
+        adapter._client = object()
+        adapter._loop = loop
+        adapter.filter_media_path = lambda _path: (False, "outside workspace")
+        ev = MessageEvent(platform="discord", chat_id="10", text="")
+        ev._discord_channel = channel
+        ev._discord_loop = loop
+
+        adapter._deliver_reply(ev, f"report\nMEDIA:{path}")
+
+        assert channel.sent == [
+            (("report",), {"allowed_mentions": "none"}),
+            (("📎 blocked media path: outside workspace",), {"allowed_mentions": "none"}),
         ]
     finally:
         loop.call_soon_threadsafe(loop.stop)
@@ -1309,6 +1471,66 @@ def test_gateway_webhook_channel_outbound_bridge_send(monkeypatch):
     assert metadata["security"]["outbound_secret_configured"] is True
 
 
+def test_gateway_webhook_channel_outbound_bridge_reactions(monkeypatch):
+    from aegis.gateway import webhook_channel
+    from aegis.gateway.webhook_channel import WebhookChannel
+
+    monkeypatch.setenv("WHATSAPP_CHANNEL_OUTBOUND_URL", "https://bridge.test/send")
+    monkeypatch.setenv("WHATSAPP_CHANNEL_OUTBOUND_SECRET", "outbound-secret")
+    sent = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, url, *, headers, json):
+            sent.append((url, dict(headers), dict(json)))
+            return FakeResponse()
+
+    monkeypatch.setattr(webhook_channel.httpx, "Client", FakeClient)
+
+    adapter = WebhookChannel(name="whatsapp", default_platform="whatsapp", env_prefix="WHATSAPP_CHANNEL")
+    adapter.add_reaction("12025550123@s.whatsapp.net", "BAE599999", "✅")
+    adapter.remove_reaction("12025550123@s.whatsapp.net", "BAE599999", "✅")
+
+    assert sent == [
+        (
+            "https://bridge.test/send",
+            {"Content-Type": "application/json", "X-Secret": "outbound-secret"},
+            {
+                "platform": "whatsapp",
+                "chat_id": "12025550123@s.whatsapp.net",
+                "type": "reaction",
+                "action": "add",
+                "message_id": "BAE599999",
+                "reaction": "✅",
+            },
+        ),
+        (
+            "https://bridge.test/send",
+            {"Content-Type": "application/json", "X-Secret": "outbound-secret"},
+            {
+                "platform": "whatsapp",
+                "chat_id": "12025550123@s.whatsapp.net",
+                "type": "reaction",
+                "action": "remove",
+                "message_id": "BAE599999",
+                "reaction": "✅",
+            },
+        ),
+    ]
+
+
 def test_gateway_delivery_preserves_event_metadata_for_adapter_send():
     from aegis.gateway.base import BasePlatformAdapter, MessageEvent
 
@@ -1467,6 +1689,75 @@ def test_gateway_mattermost_send_uses_clean_root_id(monkeypatch):
     assert sent[3][2] == {"channel_id": "channel-1", "message": "null root"}
     assert sent[4][2] == {"channel_id": "channel-1", "message": "parent reply", "root_id": "root-2"}
     assert sent[5][2] == {"channel_id": "channel-1", "message": "self root"}
+
+
+def test_gateway_mattermost_reactions_use_bot_identity(monkeypatch):
+    from aegis.gateway import mattermost_channel
+    from aegis.gateway.mattermost_channel import MattermostAdapter
+
+    monkeypatch.setenv("MATTERMOST_URL", "https://mattermost.test")
+    monkeypatch.setenv("MATTERMOST_BOT_TOKEN", "mm-token")
+    monkeypatch.delenv("MATTERMOST_BOT_USER_ID", raising=False)
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, payload=None):
+            self._payload = payload or {}
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get(self, url, *, headers):
+            calls.append(("GET", url, headers, None))
+            return FakeResponse({"id": "bot-user-1"})
+
+        def post(self, url, *, headers, json):
+            calls.append(("POST", url, headers, dict(json)))
+            return FakeResponse()
+
+        def delete(self, url, *, headers):
+            calls.append(("DELETE", url, headers, None))
+            return FakeResponse()
+
+    monkeypatch.setattr(mattermost_channel.httpx, "Client", FakeClient)
+
+    adapter = MattermostAdapter()
+    adapter.add_reaction("channel-1", "post-1", "✅")
+    adapter.remove_reaction("channel-1", "post-1", ":eyes:")
+
+    assert calls == [
+        (
+            "GET",
+            "https://mattermost.test/api/v4/users/me",
+            {"Authorization": "Bearer mm-token"},
+            None,
+        ),
+        (
+            "POST",
+            "https://mattermost.test/api/v4/reactions",
+            {"Authorization": "Bearer mm-token"},
+            {"user_id": "bot-user-1", "post_id": "post-1", "emoji_name": "white_check_mark"},
+        ),
+        (
+            "DELETE",
+            "https://mattermost.test/api/v4/users/bot-user-1/posts/post-1/reactions/eyes",
+            {"Authorization": "Bearer mm-token"},
+            None,
+        ),
+    ]
 
 
 def test_gateway_mattermost_resolves_child_roots_and_falls_back_flat(monkeypatch):

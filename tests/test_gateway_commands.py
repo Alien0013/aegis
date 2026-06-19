@@ -112,6 +112,27 @@ def test_gateway_send_via_adapter_normalizes_platform_aliases(tmp_path, monkeypa
     assert adapter.sent == [("12025550123@s.whatsapp.net", "hello", {})]
 
 
+def test_gateway_send_via_adapter_reports_telegram_delivery_failures(tmp_path, monkeypatch):
+    from aegis.gateway.channels import TelegramAdapter
+
+    r = _runner(tmp_path, monkeypatch)
+    adapter = TelegramAdapter("token")
+    calls = []
+
+    def fail_api(method, **params):
+        calls.append((method, params))
+        raise RuntimeError("telegram outage")
+
+    adapter._api = fail_api
+    r.add(adapter)
+
+    assert r._send_via_adapter("telegram", "42", "hello", metadata={"thread_id": "77"}) is False
+    assert calls == [(
+        "sendMessage",
+        {"chat_id": "42", "text": "hello", "message_thread_id": "77"},
+    )]
+
+
 def test_gateway_transcribes_discord_audio_url_with_cleanup(tmp_path, monkeypatch):
     from pathlib import Path
     from types import SimpleNamespace
