@@ -316,6 +316,8 @@ function PluginRow({
   const status = rowStatus(row);
   const route = openRoute(row);
   const manifest = row.dashboard_manifest;
+  const { pluginStatuses } = useDashboardPluginHost();
+  const clientStatus = pluginStatuses.get(manifest?.name || row.name) || pluginStatuses.get(row.name);
   const mount = mountInfo(row);
   const canToggle = status !== "dashboard";
   const contrib = contributions(row);
@@ -328,6 +330,7 @@ function PluginRow({
   const apiMountDuration = durationLabel(mount?.mount_duration_ms);
   const uiAssets = row.ui_asset_status || manifest?.ui_asset_status;
   const uiAssetErrors = row.asset_errors || manifest?.asset_errors || uiAssets?.errors || [];
+  const clientErrors = clientStatus?.errors || [];
   const lastApiErrorPath = mount?.last_error_path || "";
   const lastApiErrorType = mount?.last_error_type || "";
   const lastApiError = mount?.last_error || "";
@@ -377,6 +380,15 @@ function PluginRow({
           {row.has_dashboard_manifest && (
             <Badge tone={uiAssets?.status === "error" ? "danger" : "success"}>
               {uiAssets?.status === "error" ? `ui errors ${uiAssetErrors.length || 1}` : "ui ok"}
+            </Badge>
+          )}
+          {clientStatus && (
+            <Badge tone={
+              clientStatus.asset_status === "registered" ? "success"
+                : clientStatus.asset_status === "pending" || clientStatus.asset_status === "loaded" ? "info"
+                  : "danger"
+            }>
+              browser {clientStatus.asset_status}
             </Badge>
           )}
           {row.user_hidden && <Badge tone="warning">hidden</Badge>}
@@ -430,6 +442,12 @@ function PluginRow({
         {!!uiAssetErrors.length && (
           <div className="rounded-[var(--radius)] border border-danger/30 bg-danger/10 px-3 py-2 font-mono text-xs text-danger">
             UI asset: {uiAssetErrors[0]}
+          </div>
+        )}
+
+        {!!clientErrors.length && (
+          <div className="rounded-[var(--radius)] border border-danger/30 bg-danger/10 px-3 py-2 font-mono text-xs text-danger">
+            Browser plugin: {clientErrors[0]}
           </div>
         )}
 

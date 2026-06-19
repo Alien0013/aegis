@@ -93,14 +93,30 @@ type HostState = {
   manifests: DashboardPluginManifest[];
   routes: DashboardPluginRoute[];
   slots: Map<string, Array<{ name: string; render: PluginRenderer }>>;
+  pluginStatuses: Map<string, PluginClientStatus>;
   loading: boolean;
   error: string;
   reload: () => void;
 };
 
 type RegisteredPlugin = DashboardPluginRegistration;
+export type PluginClientAssetState = "pending" | "loaded" | "registered" | "error" | "unregistered" | "stale";
+export interface PluginClientStatus {
+  name: string;
+  asset_status: PluginClientAssetState;
+  registered: boolean;
+  stale?: boolean;
+  entry?: string;
+  script_src?: string;
+  errors?: string[];
+  css_errors?: string[];
+  loaded_at?: string;
+  registered_at?: string;
+  timeout_at?: string;
+}
 
 const registrations = new Map<string, RegisteredPlugin>();
+const pluginStatuses = new Map<string, PluginClientStatus>();
 const listeners = new Set<() => void>();
 
 function normalizePath(path: string | undefined, fallback: string): string {
@@ -113,10 +129,40 @@ function notify() {
   for (const listener of listeners) listener();
 }
 
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function setPluginStatus(name: string, patch: Partial<PluginClientStatus>) {
+  if (!name) return;
+  const previous = pluginStatuses.get(name) || {
+    name,
+    asset_status: "pending" as PluginClientAssetState,
+    registered: false,
+    errors: [],
+    css_errors: [],
+  };
+  pluginStatuses.set(name, {
+    ...previous,
+    ...patch,
+    name,
+    errors: patch.errors ?? previous.errors ?? [],
+    css_errors: patch.css_errors ?? previous.css_errors ?? [],
+  });
+  notify();
+}
+
 function register(plugin: DashboardPluginRegistration) {
   if (!plugin || !plugin.name) return;
   registrations.set(plugin.name, plugin);
-  notify();
+  const previous = pluginStatuses.get(plugin.name);
+  setPluginStatus(plugin.name, {
+    asset_status: "registered",
+    registered: true,
+    stale: false,
+    registered_at: nowIso(),
+    errors: previous?.css_errors || [],
+  });
 }
 
 function subscribe(listener: () => void) {
@@ -132,6 +178,12 @@ function pruneRegistrations(manifests: DashboardPluginManifest[]): boolean {
   for (const name of registrations.keys()) {
     if (active.has(name)) continue;
     registrations.delete(name);
+    setPluginStatus(name, {
+      asset_status: "stale",
+      registered: false,
+      stale: true,
+      errors: [`plugin registration no longer has a dashboard manifest: ${name}`],
+    });
     changed = true;
   }
   return changed;
@@ -165,17 +217,65 @@ function injectManifestAssets(manifest: DashboardPluginManifest) {
     link.id = id;
     link.rel = "stylesheet";
     link.href = assetUrl(manifest, css);
+    link.onerror = () => {
+      const previous = pluginStatuses.get(manifest.name);
+      const cssErrors = [...(previous?.css_errors || []), `stylesheet failed to load: ${css}`];
+      setPluginStatus(manifest.name, {
+        asset_status: "error",
+        css_errors: cssErrors,
+        errors: [...(previous?.errors || []), `stylesheet failed to load: ${css}`],
+      });
+    };
     document.head.appendChild(link);
   }
 
   const entry = manifest.entry || "dist/index.js";
   const id = `aegis-plugin-js-${manifest.name}`;
   if (document.getElementById(id)) return;
+  setPluginStatus(manifest.name, {
+    asset_status: registrations.has(manifest.name) ? "registered" : "pending",
+    registered: registrations.has(manifest.name),
+    stale: false,
+    entry,
+    script_src: assetUrl(manifest, entry),
+    errors: [],
+  });
   const script = document.createElement("script");
   script.id = id;
   script.src = assetUrl(manifest, entry);
   script.async = true;
   script.dataset.plugin = manifest.name;
+  script.onload = () => {
+    if (registrations.has(manifest.name)) {
+      const previous = pluginStatuses.get(manifest.name);
+      setPluginStatus(manifest.name, {
+        asset_status: "registered",
+        registered: true,
+        loaded_at: nowIso(),
+        errors: previous?.css_errors || [],
+      });
+      return;
+    }
+    setPluginStatus(manifest.name, {
+      asset_status: "loaded",
+      registered: false,
+      loaded_at: nowIso(),
+    });
+    window.setTimeout(() => {
+      if (registrations.has(manifest.name)) return;
+      setPluginStatus(manifest.name, {
+        asset_status: "unregistered",
+        registered: false,
+        timeout_at: nowIso(),
+        errors: [`plugin script loaded but did not register: ${manifest.name}`],
+      });
+    }, 2500);
+  };
+  script.onerror = () => setPluginStatus(manifest.name, {
+    asset_status: "error",
+    registered: false,
+    errors: [`script failed to load: ${entry}`],
+  });
   document.body.appendChild(script);
 }
 
@@ -244,13 +344,14 @@ function buildState(manifests: DashboardPluginManifest[], loading: boolean, erro
     }
   }
 
-  return { manifests, routes, slots, loading, error };
+  return { manifests, routes, slots, pluginStatuses: new Map(pluginStatuses), loading, error };
 }
 
 const PluginContext = createContext<HostState>({
   manifests: [],
   routes: [],
   slots: new Map(),
+  pluginStatuses: new Map(),
   loading: true,
   error: "",
   reload: noopReload,
@@ -338,7 +439,7 @@ function PluginMount({
 }
 
 export function PluginRoutePage({ route }: { route: DashboardPluginRoute }) {
-  const { manifests, loading } = useDashboardPluginHost();
+  const { manifests, pluginStatuses, loading } = useDashboardPluginHost();
   const manifest = manifests.find(
     (row) => row.name === route.plugin || normalizePath(row.tab?.override || row.tab?.path, `/plugins/${row.name}`) === route.path,
   );
@@ -348,11 +449,21 @@ export function PluginRoutePage({ route }: { route: DashboardPluginRoute }) {
   }
   if (loading) return <Loading />;
   const assetErrors = manifest?.asset_errors || manifest?.ui_asset_status?.errors || [];
+  const clientStatus = pluginStatuses.get(name);
   if (manifest?.ui_asset_status?.status === "error") {
     return (
       <Card>
         <Empty icon="alert">
           Plugin UI asset error: {assetErrors[0] || route.label || route.path}
+        </Empty>
+      </Card>
+    );
+  }
+  if (clientStatus?.asset_status === "error" || clientStatus?.asset_status === "unregistered") {
+    return (
+      <Card>
+        <Empty icon="alert">
+          Plugin script {clientStatus.asset_status}: {(clientStatus.errors || [])[0] || route.label || route.path}
         </Empty>
       </Card>
     );
