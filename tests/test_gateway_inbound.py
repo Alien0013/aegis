@@ -537,8 +537,14 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert TelegramAdapter("token").metadata["transport"] == "long_poll"
     assert "TELEGRAM_ALLOWED_CHATS" in TelegramAdapter("token").metadata["optional_env"]
     assert "TELEGRAM_REGISTER_COMMANDS" in TelegramAdapter("token").metadata["optional_env"]
+    assert "TELEGRAM_IDEMPOTENCY_CACHE_MAX" in TelegramAdapter("token").metadata["optional_env"]
     assert TelegramAdapter("token").metadata["security"]["group_trigger_mode"] == "all"
     assert TelegramAdapter("token").metadata["security"]["register_commands"] is True
+    assert TelegramAdapter("token").metadata["security"]["idempotency_env"] == [
+        "TELEGRAM_IDEMPOTENCY_TTL_SECONDS",
+        "TELEGRAM_IDEMPOTENCY_CACHE_MAX",
+    ]
+    assert TelegramAdapter("token").metadata["idempotency"]["delivery_cache"]["entries"] == 0
     assert TelegramAdapter("token").metadata["supports_reactions"] is True
     assert TelegramAdapter("token").metadata["supports_slash_commands"] is True
     assert DiscordAdapter("token").metadata["supports_threads"] is True
@@ -1231,6 +1237,68 @@ def test_telegram_long_poll_submits_media_only_updates(monkeypatch):
         "file_id": "voice-file",
         "duration": 3,
     }]
+
+
+def test_telegram_update_idempotency_drops_retries_and_reopens_on_failure(monkeypatch):
+    import pytest
+
+    from aegis.gateway.channels import TelegramAdapter
+
+    for name in (
+        "TELEGRAM_ALLOWED_USERS",
+        "TELEGRAM_ALLOWED_CHATS",
+        "TELEGRAM_IGNORED_CHATS",
+        "TELEGRAM_ALLOWED_CHAT_TYPES",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    adapter = TelegramAdapter("token")
+    update = {
+        "update_id": 42,
+        "message": {
+            "message_id": 10,
+            "date": 123456,
+            "chat": {"id": 42, "type": "private"},
+            "from": {"id": 7, "username": "ada"},
+            "text": "hello",
+        },
+    }
+    seen = []
+    adapter._submit_inbound = lambda ev, *, raw_text=None: seen.append((ev.text, raw_text)) or None
+
+    assert adapter._handle_update(update) is True
+    assert adapter._handle_update(update) is True
+
+    assert seen == [("hello", "hello")]
+    assert adapter._delivery_cache.stats()["accepted_count"] == 1
+    assert adapter._delivery_cache.stats()["duplicate_count"] == 1
+
+    callback_seen = []
+    callback_update = {
+        "callback_query": {
+            "id": "cb1",
+            "data": "/status",
+            "from": {"id": 7, "username": "ada"},
+            "message": {"message_id": 55, "chat": {"id": 42, "type": "private"}},
+        },
+    }
+    adapter._submit_inbound = lambda ev, *, raw_text=None: callback_seen.append((ev.text, raw_text)) or None
+    adapter._api = lambda *_args, **_kwargs: {"ok": True}
+
+    assert adapter._handle_update(callback_update) is True
+    assert adapter._handle_update(callback_update) is True
+    assert callback_seen == [("/status", "/status")]
+
+    failing = TelegramAdapter("token")
+    failing._submit_inbound = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("queue down"))
+    with pytest.raises(RuntimeError):
+        failing._handle_update(update)
+    assert failing._delivery_cache.stats()["entries"] == 0
+    assert failing._delivery_cache.stats()["discarded_count"] == 1
+
+    recovered = []
+    failing._submit_inbound = lambda ev, *, raw_text=None: recovered.append(ev.text) or None
+    assert failing._handle_update(update) is True
+    assert recovered == ["hello"]
 
 
 def test_telegram_startup_discovers_identity_and_registers_commands(monkeypatch):

@@ -990,6 +990,7 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     assert "TELEGRAM_ALLOWED_CHATS" in telegram["optional_env_vars"]
     assert "TELEGRAM_ALLOWED_CHATS" in telegram["metadata"]["optional_env"]
     assert "TELEGRAM_REGISTER_COMMANDS" in telegram["optional_env_vars"]
+    assert "TELEGRAM_IDEMPOTENCY_CACHE_MAX" in telegram["optional_env_vars"]
     assert "TELEGRAM_ALLOWED_CHATS" not in telegram["missing_env_vars"]
     assert telegram["auth_type"] == "bot_token"
     assert telegram["transport"] == "long_poll"
@@ -997,7 +998,12 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     assert "slash_commands" in telegram["capabilities"]
     assert "callbacks" in telegram["capabilities"]
     assert "reactions" in telegram["capabilities"]
+    assert "idempotency" in telegram["capabilities"]
     assert telegram["security"]["command_registration_env"] == "TELEGRAM_REGISTER_COMMANDS"
+    assert telegram["security"]["idempotency_env"] == [
+        "TELEGRAM_IDEMPOTENCY_TTL_SECONDS",
+        "TELEGRAM_IDEMPOTENCY_CACHE_MAX",
+    ]
     assert telegram["metadata"]["adapter_class"].endswith("TelegramAdapter")
     signal = next(row for row in rows if row["id"] == "signal")
     assert signal["transport"] == "signal_cli"

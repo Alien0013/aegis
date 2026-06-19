@@ -1122,6 +1122,8 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
             "TELEGRAM_REGISTER_COMMANDS",
             "TELEGRAM_COMMAND_SCOPE_CHAT_ID",
             "TELEGRAM_COMMAND_LANGUAGE_CODE",
+            "TELEGRAM_IDEMPOTENCY_TTL_SECONDS",
+            "TELEGRAM_IDEMPOTENCY_CACHE_MAX",
         ],
         "setup": "Create a bot with BotFather, set TELEGRAM_BOT_TOKEN, start the gateway, then approve the pairing code.",
         "pairing": True,
@@ -1138,6 +1140,7 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
             "slash_commands",
             "callbacks",
             "reactions",
+            "idempotency",
         ],
         "delivery_modes": ["direct", "group", "thread"],
         "security": {
@@ -1145,6 +1148,10 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
             "pairing": True,
             "command_cap": 30,
             "command_registration_env": "TELEGRAM_REGISTER_COMMANDS",
+            "idempotency_env": [
+                "TELEGRAM_IDEMPOTENCY_TTL_SECONDS",
+                "TELEGRAM_IDEMPOTENCY_CACHE_MAX",
+            ],
         },
     },
     {

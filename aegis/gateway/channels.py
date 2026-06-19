@@ -17,6 +17,7 @@ from ..platforms import (
     normalize_platform_name,
     utf16_units,
 )
+from ..webhook import DeliveryIdCache
 from .base import BasePlatformAdapter, Dispatch, MessageEvent
 
 
@@ -33,6 +34,14 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if value in {"", "auto"}:
         return default
     return value in {"1", "true", "yes", "on", "all"}
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)) or default)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
 
 
 _TELEGRAM_ALLOWED_UPDATES = json.dumps([
@@ -111,12 +120,17 @@ class TelegramAdapter(BasePlatformAdapter):
         self.register_commands = _env_bool("TELEGRAM_REGISTER_COMMANDS", True)
         self.command_scope_chat_id = os.environ.get("TELEGRAM_COMMAND_SCOPE_CHAT_ID", "").strip()
         self.command_language_code = os.environ.get("TELEGRAM_COMMAND_LANGUAGE_CODE", "").strip()
+        self._delivery_cache = DeliveryIdCache(
+            ttl_seconds=float(_env_int("TELEGRAM_IDEMPOTENCY_TTL_SECONDS", 3600)),
+            max_items=_env_int("TELEGRAM_IDEMPOTENCY_CACHE_MAX", 10000),
+        )
         self._base = f"https://api.telegram.org/bot{self.token}"
 
     @property
     def metadata(self) -> dict:
         data = super().metadata
         data["security"] = {
+            "auth_type": "bot_token",
             "allowed_users_configured": bool(self.allowed),
             "allowed_chats_configured": bool(self.allowed_chats),
             "ignored_chats_configured": bool(self.ignored_chats),
@@ -128,6 +142,18 @@ class TelegramAdapter(BasePlatformAdapter):
             "register_commands": self.register_commands,
             "command_scope_chat_id_configured": bool(self.command_scope_chat_id),
             "command_language_code_configured": bool(self.command_language_code),
+            "idempotency_env": [
+                "TELEGRAM_IDEMPOTENCY_TTL_SECONDS",
+                "TELEGRAM_IDEMPOTENCY_CACHE_MAX",
+            ],
+        }
+        data["idempotency"] = {
+            "delivery_id_sources": [
+                "update.update_id",
+                "callback_query.id",
+                "message.chat.id + message.message_id",
+            ],
+            "delivery_cache": self._delivery_cache.stats(),
         }
         return data
 
@@ -167,48 +193,82 @@ class TelegramAdapter(BasePlatformAdapter):
                 continue
             for upd in data.get("result", []):
                 offset = upd["update_id"] + 1
-                if self._handle_callback_update(upd):
-                    continue
-                msg, source = self._message_from_update(upd)
-                if not msg:
-                    continue
-                attachments = self._attachments_from_message(msg)
-                raw_text = self._raw_message_text(msg)
-                if not raw_text and not attachments:
-                    continue
-                user_id, username = self._author_from_message(msg)
-                if not self._author_allowed(user_id, username):
-                    self.send(str(msg["chat"]["id"]), "⛔ not authorized.")
-                    continue
-                reply_to = msg.get("reply_to_message") or {}
-                normalized_text = normalize_inbound_command(
-                    raw_text,
-                    platform="telegram",
-                    bot_username=self.bot_username,
-                )
-                if not self._message_allowed(msg, normalized_text):
-                    continue
-                event_text = self._event_text(msg, normalized_text, attachments=attachments)
-                thread_id = self._message_thread_id(msg)
-                ev = MessageEvent(
-                    platform="telegram",
-                    chat_id=str(msg["chat"]["id"]),
-                    text=event_text,   # prefix sender in groups; commands/DMs untouched
-                    user_id=user_id,
-                    user_name=username,
-                    thread_id=thread_id,
-                    message_id=str(msg.get("message_id") or "") or None,
-                    reply_to_message_id=str(reply_to.get("message_id") or "") or None,
-                    reply_to_text=reply_to.get("text") or reply_to.get("caption"),
-                    timestamp=msg.get("date"),
-                    attachments=attachments,
-                    metadata={
-                        "chat_type": msg.get("chat", {}).get("type"),
-                        "message_thread_id": thread_id,
-                        "source": source,
-                    },
-                )
-                self._submit_inbound(ev, raw_text=raw_text)
+                self._handle_update(upd)
+
+    def _handle_update(self, update: dict) -> bool:
+        delivery_id = self._delivery_id_from_update(update)
+        if delivery_id and not self._delivery_cache.record(delivery_id):
+            return True
+        try:
+            if self._handle_callback_update(update):
+                return True
+            msg, source = self._message_from_update(update)
+            if not msg:
+                return False
+            attachments = self._attachments_from_message(msg)
+            raw_text = self._raw_message_text(msg)
+            if not raw_text and not attachments:
+                return False
+            user_id, username = self._author_from_message(msg)
+            if not self._author_allowed(user_id, username):
+                self.send(str(msg["chat"]["id"]), "⛔ not authorized.")
+                return True
+            reply_to = msg.get("reply_to_message") or {}
+            normalized_text = normalize_inbound_command(
+                raw_text,
+                platform="telegram",
+                bot_username=self.bot_username,
+            )
+            if not self._message_allowed(msg, normalized_text):
+                return True
+            event_text = self._event_text(msg, normalized_text, attachments=attachments)
+            thread_id = self._message_thread_id(msg)
+            ev = MessageEvent(
+                platform="telegram",
+                chat_id=str(msg["chat"]["id"]),
+                text=event_text,   # prefix sender in groups; commands/DMs untouched
+                user_id=user_id,
+                user_name=username,
+                thread_id=thread_id,
+                message_id=str(msg.get("message_id") or "") or None,
+                reply_to_message_id=str(reply_to.get("message_id") or "") or None,
+                reply_to_text=reply_to.get("text") or reply_to.get("caption"),
+                timestamp=msg.get("date"),
+                attachments=attachments,
+                metadata={
+                    "chat_type": msg.get("chat", {}).get("type"),
+                    "message_thread_id": thread_id,
+                    "source": source,
+                    "delivery_id": delivery_id or "",
+                },
+            )
+            self._submit_inbound(ev, raw_text=raw_text)
+            return True
+        except Exception:
+            if delivery_id:
+                self._delivery_cache.discard(delivery_id)
+            raise
+
+    def _delivery_id_from_update(self, update: dict) -> str:
+        update_id = str(update.get("update_id") or "").strip()
+        if update_id:
+            return f"update:{update_id}"
+        query = update.get("callback_query")
+        if isinstance(query, dict):
+            query_id = str(query.get("id") or "").strip()
+            if query_id:
+                return f"callback_query:{query_id}"
+            inline_id = str(query.get("inline_message_id") or "").strip()
+            if inline_id:
+                return f"callback_inline:{inline_id}:{query.get('data') or ''}"
+        msg, source = self._message_from_update(update)
+        if isinstance(msg, dict):
+            chat = msg.get("chat") if isinstance(msg.get("chat"), dict) else {}
+            chat_id = str(chat.get("id") or "").strip()
+            message_id = str(msg.get("message_id") or "").strip()
+            if chat_id and message_id:
+                return f"{source}:{chat_id}:{message_id}"
+        return ""
 
     def _startup_sync(self) -> None:
         if self.auto_discover_bot:

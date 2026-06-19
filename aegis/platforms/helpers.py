@@ -58,6 +58,8 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
             "TELEGRAM_REGISTER_COMMANDS",
             "TELEGRAM_COMMAND_SCOPE_CHAT_ID",
             "TELEGRAM_COMMAND_LANGUAGE_CODE",
+            "TELEGRAM_IDEMPOTENCY_TTL_SECONDS",
+            "TELEGRAM_IDEMPOTENCY_CACHE_MAX",
         ],
         "max_message_length": 4096,
         "message_length_units": "utf16",
@@ -67,6 +69,13 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
         "supports_slash_commands": True,
         "typed_command_prefix": "/",
         "command_cap": MAX_TELEGRAM_COMMANDS,
+        "security": {
+            "auth_type": "bot_token",
+            "idempotency_env": [
+                "TELEGRAM_IDEMPOTENCY_TTL_SECONDS",
+                "TELEGRAM_IDEMPOTENCY_CACHE_MAX",
+            ],
+        },
     },
     "discord": {
         "display_name": "Discord",
