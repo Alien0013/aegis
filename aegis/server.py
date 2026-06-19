@@ -2958,6 +2958,7 @@ def make_handler(config: Config):
             response_id: str,
             *,
             response: dict[str, Any] | None = None,
+            state: dict[str, Any] | None = None,
             agent: Any = None,
             session: Any = None,
             store_response: bool = True,
@@ -2971,6 +2972,8 @@ def make_handler(config: Config):
             })
             if response is not None:
                 rec["response"] = dict(response)
+            if state is not None:
+                rec["state"] = dict(state)
             if agent is not None:
                 rec["agent"] = agent
             if session is not None:
@@ -3056,15 +3059,21 @@ def make_handler(config: Config):
         def _cancel_response(self, response_id: str) -> None:
             state = response_store.get_state(response_id)
             response = (state or {}).get("response") if state else None
+            active_state = None
+            store_response = True
             with state_lock:
                 rec = self._request_cancel_response_locked(response_id, "API cancel requested")
                 if not isinstance(response, dict) and rec is not None and isinstance(rec.get("response"), dict):
                     response = dict(rec["response"])
+                if rec is not None:
+                    active_state = dict(rec.get("state") or {})
+                    store_response = bool(rec.get("store_response", True))
             if not isinstance(response, dict):
                 return self._json(404, {"error": "response not found", "id": response_id})
             cancelled = self._mark_response_cancelled(response, "API cancel requested")
-            if state is not None and _coerce_request_bool(cancelled.get("store"), True):
-                response_store.put(cancelled, state)
+            persisted_state = state if state is not None else active_state
+            if persisted_state is not None and store_response and _coerce_request_bool(cancelled.get("store"), True):
+                response_store.put(cancelled, persisted_state)
             with state_lock:
                 rec = active_responses.get(response_id)
                 if rec is not None:
@@ -4808,8 +4817,43 @@ def make_handler(config: Config):
                         self._request_cancel_response_locked(response_id, "HTTP client disconnected")
                     start_response_cancel_watchdog()
 
+                pending_response = {
+                    "id": response_id,
+                    "object": "response",
+                    "created_at": int(time.time()),
+                    "status": "in_progress",
+                    "model": model or config.get("model.default", ""),
+                    "output": [],
+                    "output_text": "",
+                    "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                    "error": None,
+                    "incomplete_details": None,
+                    "metadata": metadata,
+                    "instructions": instructions,
+                    "previous_response_id": previous_id or None,
+                    "conversation": conversation or None,
+                    "store": store_response,
+                    "parallel_tool_calls": parallel_tool_calls,
+                }
+                _attach_response_include(pending_response, include_values)
+                pending_state = {
+                    "conversation_history": _history_payload(state_history + [last_user]),
+                    "input_items": _stored_response_input_items(
+                        state_history + [last_user],
+                        instructions,
+                        previous_state=previous_state,
+                    ),
+                    "instructions": instructions,
+                    "session_id": session_id,
+                    "conversation": conversation,
+                }
                 with state_lock:
-                    self._register_response_locked(response_id, store_response=store_response)
+                    self._register_response_locked(
+                        response_id,
+                        response=pending_response,
+                        state=pending_state,
+                        store_response=store_response,
+                    )
                 self._aegis_on_disconnect = cancel_on_disconnect
                 try:
                     response_session, response_agent = self._prepare_response_agent(
@@ -5274,10 +5318,26 @@ def make_handler(config: Config):
                         cwd=body.get("cwd"),
                         approver=approver,
                     )
+                    stop_before_prompt = False
                     with state_lock:
                         rec = self._set_run_state_locked(run_id, status="running", agent=agent, last_event="run.running")
                         if rec is not None and rec.get("cancel_requested"):
-                            rec = self._request_stop_run_locked(run_id, str(rec.get("cancel_reason") or "stop requested"))
+                            reason = str(rec.get("cancel_reason") or "stop requested")
+                            rec = self._request_stop_run_locked(run_id, reason)
+                            if rec is not None:
+                                rec = self._set_run_state_locked(
+                                    run_id,
+                                    status="cancelled",
+                                    result="",
+                                    error="",
+                                    last_event="run.cancelled",
+                                )
+                                self._append_run_event_locked(run_id, "run.cancelled", {
+                                    "status": "cancelled",
+                                    "session_id": session.id,
+                                    "reason": reason,
+                                })
+                            stop_before_prompt = True
                         elif rec is not None:
                             self._append_run_event_locked(run_id, "run.running", {
                                 "status": "running",
@@ -5286,6 +5346,8 @@ def make_handler(config: Config):
                         run_snapshot = dict(rec) if rec is not None else None
                     if run_snapshot is not None:
                         _persist_api_run_record(run_snapshot, title=title, prompt=prompt)
+                    if stop_before_prompt:
+                        return
 
                     def emit(ev: dict[str, Any]) -> None:
                         with state_lock:

@@ -1052,7 +1052,7 @@ def test_chat_completions_aiohttp_stream_disconnect_cancels_live_agent(monkeypat
                     blank_line = await asyncio.wait_for(resp.content.readline(), timeout=1)
                     assert data_line.startswith(b"data: ")
                     assert blank_line == b"\n"
-                    assert _BlockingResponsesRunner.started.wait(1)
+                    assert await asyncio.to_thread(_BlockingResponsesRunner.started.wait, 1)
                     resp.close()
                     deadline = time.monotonic() + 2
                     while time.monotonic() < deadline:
@@ -1103,7 +1103,7 @@ def test_chat_completions_disconnect_drops_late_stream_result(monkeypatch, tmp_p
                     blank_line = await asyncio.wait_for(resp.content.readline(), timeout=1)
                     assert data_line.startswith(b"data: ")
                     assert blank_line == b"\n"
-                    assert _LateAccessStreamingRunner.started.wait(1)
+                    assert await asyncio.to_thread(_LateAccessStreamingRunner.started.wait, 1)
                     resp.close()
                     deadline = time.monotonic() + 2
                     while time.monotonic() < deadline:
@@ -3616,7 +3616,7 @@ def test_responses_aiohttp_stream_disconnect_cancels_live_agent(monkeypatch, tmp
                     data_line = await asyncio.wait_for(resp.content.readline(), timeout=1)
                     assert event_line == b"event: response.created\n"
                     assert data_line.startswith(b"data: ")
-                    assert _BlockingResponsesRunner.started.wait(1)
+                    assert await asyncio.to_thread(_BlockingResponsesRunner.started.wait, 1)
                     resp.close()
                     deadline = time.monotonic() + 2
                     while time.monotonic() < deadline:
@@ -3667,7 +3667,7 @@ def test_responses_disconnect_drops_late_stream_result(monkeypatch, tmp_path):
                     data_line = await asyncio.wait_for(resp.content.readline(), timeout=1)
                     assert event_line == b"event: response.created\n"
                     assert data_line.startswith(b"data: ")
-                    assert _LateAccessStreamingRunner.started.wait(1)
+                    assert await asyncio.to_thread(_LateAccessStreamingRunner.started.wait, 1)
                     resp.close()
                     deadline = time.monotonic() + 2
                     while time.monotonic() < deadline:
@@ -3737,6 +3737,65 @@ def test_responses_nonstream_disconnect_cancels_agent(monkeypatch, tmp_path):
 
     assert asyncio.run(exercise()) is True
     assert not _LateAccessResult.accessed.is_set()
+
+
+def test_responses_nonstream_active_cancel_returns_cancelled_response(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _BlockingResponsesRunner.reset()
+    monkeypatch.setattr(server, "SurfaceRunner", _BlockingResponsesRunner)
+    original_new_id = server.new_id
+
+    def fake_new_id(prefix: str):
+        if prefix == "resp":
+            return "resp_active_cancel"
+        return original_new_id(prefix)
+
+    monkeypatch.setattr(server, "new_id", fake_new_id)
+    srv, port = _serve(server.make_handler(Config.load()))
+    post_result = {}
+
+    def post_response():
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": "cancel while running",
+            "metadata": {"session_id": "serve:response-active-cancel"},
+        })
+        post_result.update({"status": status, "data": data})
+
+    thread = threading.Thread(target=post_response, daemon=True)
+    try:
+        thread.start()
+        assert _BlockingResponsesRunner.started.wait(2)
+        cancel_status, cancel_data = _request(
+            port,
+            "POST",
+            "/v1/responses/resp_active_cancel/cancel",
+            {},
+        )
+        mid_get_status, mid_get_data = _request(port, "GET", "/v1/responses/resp_active_cancel")
+        _BlockingResponsesRunner.release.set()
+        thread.join(5)
+        final_get_status, final_get_data = _request(port, "GET", "/v1/responses/resp_active_cancel")
+    finally:
+        _BlockingResponsesRunner.release.set()
+        srv.shutdown()
+        srv.server_close()
+
+    assert cancel_status == 200
+    cancelled = json.loads(cancel_data)
+    assert cancelled["id"] == "resp_active_cancel"
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["metadata"]["cancel_reason"] == "API cancel requested"
+    assert _BlockingResponsesRunner.agents
+    assert _BlockingResponsesRunner.agents[0].cancel_event.is_set()
+    assert mid_get_status == 200
+    assert json.loads(mid_get_data)["status"] == "cancelled"
+    assert post_result["status"] == 200
+    assert json.loads(post_result["data"])["status"] == "cancelled"
+    assert final_get_status == 200
+    assert json.loads(final_get_data)["status"] == "cancelled"
 
 
 def test_responses_stream_failure_persists_failed_snapshot(monkeypatch, tmp_path):
@@ -4594,7 +4653,7 @@ def test_session_chat_aiohttp_stream_disconnect_cancels_live_agent(monkeypatch, 
                     data_line = await asyncio.wait_for(resp.content.readline(), timeout=1)
                     assert event_line == b"event: run.started\n"
                     assert data_line.startswith(b"data: ")
-                    assert _BlockingResponsesRunner.started.wait(1)
+                    assert await asyncio.to_thread(_BlockingResponsesRunner.started.wait, 1)
                     resp.close()
                     deadline = time.monotonic() + 2
                     while time.monotonic() < deadline:
@@ -4644,7 +4703,7 @@ def test_session_chat_disconnect_drops_late_stream_result(monkeypatch, tmp_path)
                     data_line = await asyncio.wait_for(resp.content.readline(), timeout=1)
                     assert event_line == b"event: run.started\n"
                     assert data_line.startswith(b"data: ")
-                    assert _LateAccessStreamingRunner.started.wait(1)
+                    assert await asyncio.to_thread(_LateAccessStreamingRunner.started.wait, 1)
                     resp.close()
                     deadline = time.monotonic() + 2
                     while time.monotonic() < deadline:
@@ -4807,6 +4866,28 @@ class _BlockingRunRunner:
                 budget=SimpleNamespace(usage=_Usage()),
             ),
         )
+
+
+class _QueuedStopRunRunner(_BlockingRunRunner):
+    make_agent_started = threading.Event()
+    allow_make_agent = threading.Event()
+    run_prompt_called = threading.Event()
+
+    @classmethod
+    def reset(cls):
+        super().reset()
+        cls.make_agent_started = threading.Event()
+        cls.allow_make_agent = threading.Event()
+        cls.run_prompt_called = threading.Event()
+
+    def make_agent(self, **kwargs):
+        self.make_agent_started.set()
+        self.allow_make_agent.wait(5)
+        return super().make_agent(**kwargs)
+
+    def run_prompt(self, prompt, **kwargs):
+        self.run_prompt_called.set()
+        return super().run_prompt(prompt, **kwargs)
 
 
 class _EmittingRunRunner(_BlockingRunRunner):
@@ -5022,6 +5103,54 @@ def test_server_run_lifecycle_caps_active_runs_and_stop_wins(monkeypatch, tmp_pa
     assert _BlockingRunRunner.agents and _BlockingRunRunner.agents[0].cancel_event.is_set()
     assert final["run"]["status"] == "cancelled"
     assert final["run"]["result"] == "finished"
+
+
+def test_server_run_stop_before_prompt_does_not_execute_runner(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import time
+    import aegis.server as server
+    from aegis.config import Config
+
+    _QueuedStopRunRunner.reset()
+    monkeypatch.setattr(server, "SurfaceRunner", _QueuedStopRunRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        create_status, create_data = _request(port, "POST", "/v1/runs", {
+            "input": "queued run",
+            "session_id": "serve:queued-stop",
+        })
+        run_id = json.loads(create_data)["run_id"]
+        assert _QueuedStopRunRunner.make_agent_started.wait(2)
+        stop_status, stop_data = _request(port, "POST", f"/v1/runs/{run_id}/stop", {})
+        assert not _QueuedStopRunRunner.run_prompt_called.is_set()
+        _QueuedStopRunRunner.allow_make_agent.set()
+
+        final = {}
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            get_status, get_data = _request(port, "GET", f"/v1/runs/{run_id}")
+            assert get_status == 200
+            final = json.loads(get_data)
+            if final.get("run", {}).get("status") == "cancelled":
+                break
+            time.sleep(0.05)
+        events_status, events_data = _request(port, "GET", f"/v1/runs/{run_id}/events")
+    finally:
+        _QueuedStopRunRunner.allow_make_agent.set()
+        srv.shutdown()
+        srv.server_close()
+
+    assert create_status == 202
+    assert stop_status == 200
+    assert json.loads(stop_data)["status"] == "stopping"
+    assert _QueuedStopRunRunner.agents
+    assert _QueuedStopRunRunner.agents[0].cancel_event.is_set()
+    assert _QueuedStopRunRunner.calls == []
+    assert not _QueuedStopRunRunner.run_prompt_called.is_set()
+    assert final["run"]["status"] == "cancelled"
+    assert final["run"]["result"] == ""
+    assert events_status == 200
+    assert any(event["type"] == "run.cancelled" for event in json.loads(events_data)["events"])
 
 
 def test_server_run_events_disconnect_does_not_cancel_run(monkeypatch, tmp_path):
