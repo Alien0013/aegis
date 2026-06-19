@@ -299,6 +299,63 @@ def _dashboard_toolset_toggle(body: dict, config: Config) -> dict:
     return {"ok": True, "toolset": name, "enabled": enable, "toolsets": toolsets}
 
 
+def _dashboard_api_adapter_status(config: Config) -> dict:
+    """Expose the Hermes-compatible API adapter's operational contract."""
+    payload: dict[str, Any] = {
+        "ok": True,
+        "server": "aegis",
+        "transport": "aiohttp",
+        "stores": {},
+        "errors": [],
+    }
+    try:
+        from .server import _capabilities
+
+        capabilities = _capabilities(config)
+        payload.update({
+            "object": capabilities.get("object"),
+            "auth": capabilities.get("auth", {}),
+            "limits": capabilities.get("limits", {}),
+            "endpoints": capabilities.get("endpoints", {}),
+            "features": capabilities.get("features", {}),
+        })
+    except Exception as exc:  # noqa: BLE001
+        payload["ok"] = False
+        payload["errors"].append(f"capabilities: {type(exc).__name__}: {exc}")
+    try:
+        from .server import ResponseStore
+
+        payload["stores"]["responses"] = ResponseStore(config).stats()
+    except Exception as exc:  # noqa: BLE001
+        payload["ok"] = False
+        payload["stores"]["responses"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    try:
+        from .runs import RunStore
+
+        rows = RunStore().list(limit=500)
+        statuses: dict[str, int] = {}
+        for row in rows:
+            status = str(row.get("status") or "unknown")
+            statuses[status] = statuses.get(status, 0) + 1
+        payload["stores"]["runs"] = {"count": len(rows), "statuses": statuses}
+    except Exception as exc:  # noqa: BLE001
+        payload["ok"] = False
+        payload["stores"]["runs"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    try:
+        from .cron import CronStore
+
+        jobs = CronStore().list()
+        states: dict[str, int] = {}
+        for job in jobs:
+            state = str(getattr(job, "state", "") or "idle")
+            states[state] = states.get(state, 0) + 1
+        payload["stores"]["jobs"] = {"count": len(jobs), "states": states}
+    except Exception as exc:  # noqa: BLE001
+        payload["ok"] = False
+        payload["stores"]["jobs"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    return _jsonable(payload)
+
+
 def _dashboard_status(config: Config) -> dict:
     from .session import SessionStore
     from .skills import SkillsLoader
@@ -323,6 +380,7 @@ def _dashboard_status(config: Config) -> dict:
         "context_length": context_length,
         "provider_error": provider_error,
         "capabilities": _jsonable(active_provider.get("capabilities", {})),
+        "api_adapter": _dashboard_api_adapter_status(config),
         "sessions": len(SessionStore().list(9999)),
         "skills": len(SkillsLoader(config).available()),
         "tools": len(default_registry().all()),

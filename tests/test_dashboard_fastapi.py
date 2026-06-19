@@ -88,6 +88,16 @@ def test_fastapi_dashboard_auth_and_cookie(tmp_path, monkeypatch):
 
     res = asyncio.run(_request(app, "GET", "/api/status", headers={"X-Aegis-Token": "t"}))
     assert res.status_code == 200
+    body = res.json()
+    assert body["api_adapter"]["ok"] is True
+    assert body["api_adapter"]["transport"] == "aiohttp"
+    assert body["api_adapter"]["endpoints"]["responses"] is True
+    assert body["api_adapter"]["endpoints"]["jobs"] is True
+    assert body["api_adapter"]["features"]["responses_persistence"] is True
+    assert body["api_adapter"]["features"]["run_approvals"] is True
+    assert "responses" in body["api_adapter"]["stores"]
+    assert "runs" in body["api_adapter"]["stores"]
+    assert "jobs" in body["api_adapter"]["stores"]
 
 
 def test_fastapi_basic_login_session_and_logout(tmp_path, monkeypatch):
