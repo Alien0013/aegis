@@ -1157,6 +1157,7 @@ def cmd_config(args, config: Config) -> int:
             "aegis config edit --secrets",
             "aegis config get <key>",
             "aegis config set <key> <value>",
+            "aegis config reset <key>",
             "aegis config doctor",
             "aegis config setup",
             "aegis setup",
@@ -1312,6 +1313,7 @@ def cmd_config(args, config: Config) -> int:
         _print("  aegis config edit --secrets       # Edit local .env secrets")
         _print("  aegis config get <key>            # Print a config value")
         _print("  aegis config set <key> <value>    # Update a config value")
+        _print("  aegis config reset <key>          # Reset a config key or section to defaults")
         _print("  aegis config doctor               # Validate config and provider credentials")
         _print("  aegis config setup                # Run setup wizard from config")
         _print("  aegis setup                       # Run setup wizard")
@@ -1402,6 +1404,25 @@ def cmd_config(args, config: Config) -> int:
         except ValueError as exc:
             return _die(str(exc))
         _print(f"set {key} -> {where}")
+        return 0
+    if args.action == "reset":
+        key = (args.key or "").strip()
+        if not key:
+            return _die("usage: aegis config reset <key|section|all>")
+        import shutil
+
+        target = cfg.config_path()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        backup = None
+        if target.exists():
+            backup = edit_backup_path(target)
+            shutil.copy2(target, backup)
+        try:
+            reset_key = config.reset(key)
+        except ValueError as exc:
+            return _die(str(exc))
+        suffix = f" (backup: {backup})" if backup else ""
+        _print(f"reset {reset_key} -> default{suffix}")
         return 0
     if args.action in ("check", "doctor", "migrate"):
         from ..config import DEFAULT_CONFIG, _deep_merge
@@ -2402,7 +2423,7 @@ def build_parser() -> argparse.ArgumentParser:
     cf.add_argument("action", nargs="?",
                     choices=[
                         "summary", "show", "status", "edit", "get", "set", "path", "env-path", "paths",
-                        "dump", "check", "doctor", "migrate", "setup",
+                        "dump", "check", "doctor", "migrate", "setup", "reset",
                     ],
                     default="summary")
     cf.add_argument("key", nargs="?")

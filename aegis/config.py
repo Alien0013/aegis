@@ -759,6 +759,27 @@ class Config:
         self.save()
         return f"config.yaml ({dotted})"
 
+    def reset(self, dotted: str) -> str:
+        """Reset a config key/section to its bundled default, or remove a custom key."""
+        import copy
+
+        dotted = (dotted or "").strip()
+        if not dotted:
+            raise ValueError("usage: aegis config reset <key|section|all>")
+        if dotted in {"all", "*"}:
+            self.data = copy.deepcopy(DEFAULT_CONFIG)
+            self.save()
+            return "all"
+        default_value = _get_nested_value(DEFAULT_CONFIG, dotted, _MISSING)
+        if default_value is _MISSING:
+            if not _delete_nested(self.data, dotted):
+                raise ValueError(f"unknown config key: {dotted}")
+            self.save()
+            return dotted
+        _set_nested(self.data, dotted, copy.deepcopy(default_value))
+        self.save()
+        return dotted
+
 
 def _list_index(items: list[Any], segment: str, dotted: str) -> int:
     try:
@@ -797,6 +818,56 @@ def _set_nested(config: dict[str, Any], dotted: str, value: Any) -> None:
         node[last] = value
     else:
         raise ValueError(f"cannot set {dotted!r} on {type(node).__name__}")
+
+
+_MISSING = object()
+
+
+def _get_nested_value(data: Any, dotted: str, default: Any = _MISSING) -> Any:
+    node = data
+    for part in dotted.split("."):
+        if isinstance(node, dict):
+            if part not in node:
+                return default
+            node = node[part]
+        elif isinstance(node, list):
+            try:
+                node = node[int(part)]
+            except (TypeError, ValueError, IndexError):
+                return default
+        else:
+            return default
+    return node
+
+
+def _delete_nested(config: dict[str, Any], dotted: str) -> bool:
+    parts = dotted.split(".")
+    node: Any = config
+    for part in parts[:-1]:
+        if isinstance(node, dict):
+            if part not in node:
+                return False
+            node = node[part]
+        elif isinstance(node, list):
+            try:
+                node = node[int(part)]
+            except (TypeError, ValueError, IndexError):
+                return False
+        else:
+            return False
+    last = parts[-1]
+    if isinstance(node, dict):
+        if last not in node:
+            return False
+        del node[last]
+        return True
+    if isinstance(node, list):
+        try:
+            del node[int(last)]
+            return True
+        except (TypeError, ValueError, IndexError):
+            return False
+    return False
 
 
 def _config_delta(data: dict, defaults: dict) -> dict:

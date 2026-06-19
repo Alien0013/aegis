@@ -153,3 +153,51 @@ def test_config_set_preserves_comments_and_readable_unicode(capsys):
     assert "# keep this model note" in saved
     assert "café" in saved
     assert "\\u" not in saved
+
+
+def test_config_reset_key_section_and_custom_override(capsys):
+    from aegis import config as cfg
+    from aegis.cli.main import main
+    from aegis.config import Config, DEFAULT_CONFIG
+
+    cfg.config_path().parent.mkdir(parents=True, exist_ok=True)
+    cfg.config_path().write_text(
+        "# keep reset note\n"
+        "model:\n"
+        "  provider: openai\n"
+        "  default: gpt-5.5\n"
+        "agent:\n"
+        "  max_iterations: 9\n"
+        "custom_block:\n"
+        "  enabled: true\n",
+        encoding="utf-8",
+    )
+
+    assert main(["config", "reset", "model.default"]) == 0
+    out = capsys.readouterr().out
+    assert "reset model.default -> default" in out
+    assert "backup:" in out
+    data = yaml.safe_load(cfg.config_path().read_text(encoding="utf-8")) or {}
+    assert data["model"] == {"provider": "openai"}
+    assert Config.load().get("model.default") == DEFAULT_CONFIG["model"]["default"]
+    assert "# keep reset note" in cfg.config_path().read_text(encoding="utf-8")
+    assert list(cfg.config_path().parent.glob("config.yaml.bak-*"))
+
+    assert main(["config", "reset", "agent"]) == 0
+    capsys.readouterr()
+    data = yaml.safe_load(cfg.config_path().read_text(encoding="utf-8")) or {}
+    assert "agent" not in data
+    assert Config.load().get("agent.max_iterations") == DEFAULT_CONFIG["agent"]["max_iterations"]
+
+    assert main(["config", "reset", "custom_block"]) == 0
+    capsys.readouterr()
+    data = yaml.safe_load(cfg.config_path().read_text(encoding="utf-8")) or {}
+    assert "custom_block" not in data
+
+
+def test_config_reset_unknown_key_errors(capsys):
+    from aegis.cli.main import main
+
+    assert main(["config", "reset", "does.not.exist"]) == 1
+    err = capsys.readouterr().err
+    assert "unknown config key: does.not.exist" in err

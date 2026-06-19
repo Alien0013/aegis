@@ -204,6 +204,7 @@ def test_cli_config_summary_dump_and_edit(monkeypatch, capsys):
     assert "aegis config paths" in out
     assert "aegis config status" in out
     assert "aegis config edit" in out
+    assert "aegis config reset <key>" in out
     assert "aegis config doctor" in out
 
     assert main(["config", "show"]) == 0

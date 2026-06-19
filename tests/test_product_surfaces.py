@@ -30,6 +30,7 @@ def test_cli_parser_exposes_upgrade_commands():
     assert parser.parse_args(["config", "show"]).action == "show"
     assert parser.parse_args(["config", "edit", "--secrets"]).secrets is True
     assert parser.parse_args(["config", "setup"]).action == "setup"
+    assert parser.parse_args(["config", "reset", "model.default"]).action == "reset"
     cfg_setup = parser.parse_args([
         "config",
         "setup",
@@ -80,6 +81,7 @@ def test_config_summary_prints_hermes_style_terminal_surface(monkeypatch, capsys
     assert "aegis config status" in out
     assert "aegis config edit --secrets" in out
     assert "aegis config get <key>" in out
+    assert "aegis config reset <key>" in out
     assert "aegis config doctor" in out
     assert "aegis config setup" in out
 
