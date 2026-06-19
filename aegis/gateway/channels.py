@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sys
+import time
 
 import httpx
 
@@ -122,6 +123,7 @@ class TelegramAdapter(BasePlatformAdapter):
         self.register_commands = _env_bool("TELEGRAM_REGISTER_COMMANDS", True)
         self.command_scope_chat_id = os.environ.get("TELEGRAM_COMMAND_SCOPE_CHAT_ID", "").strip()
         self.command_language_code = os.environ.get("TELEGRAM_COMMAND_LANGUAGE_CODE", "").strip()
+        self.callback_ttl_seconds = _env_int("TELEGRAM_CALLBACK_TTL_SECONDS", 3600)
         self._delivery_cache = DeliveryIdCache(
             ttl_seconds=float(_env_int("TELEGRAM_IDEMPOTENCY_TTL_SECONDS", 3600)),
             max_items=_env_int("TELEGRAM_IDEMPOTENCY_CACHE_MAX", 10000),
@@ -146,6 +148,8 @@ class TelegramAdapter(BasePlatformAdapter):
             "register_commands": self.register_commands,
             "command_scope_chat_id_configured": bool(self.command_scope_chat_id),
             "command_language_code_configured": bool(self.command_language_code),
+            "callback_ttl_env": "TELEGRAM_CALLBACK_TTL_SECONDS",
+            "callback_ttl_seconds": self.callback_ttl_seconds,
             "idempotency_env": [
                 "TELEGRAM_IDEMPOTENCY_TTL_SECONDS",
                 "TELEGRAM_IDEMPOTENCY_CACHE_MAX",
@@ -396,26 +400,44 @@ class TelegramAdapter(BasePlatformAdapter):
             pass
 
     def _callback_data_for(self, value: str, *, prefix: str = "c") -> str:
+        self._prune_callback_payloads()
         text = str(value or "").strip()
         digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:20]
         key = f"aegis:{prefix}:{digest}"
+        now = time.time()
         self._callback_payloads[key] = text
         self._callback_payload_meta[key] = {
             "action_id": key,
             "kind": prefix,
             "cached": True,
             "value_chars": len(text),
+            "created_at": now,
         }
+        self._prune_callback_payloads(now=now)
+        return key
+
+    def _prune_callback_payloads(self, *, now: float | None = None) -> None:
+        now = time.time() if now is None else float(now)
+        ttl = int(getattr(self, "callback_ttl_seconds", 3600) or 0)
+        if ttl > 0:
+            for key, meta in list(self._callback_payload_meta.items()):
+                try:
+                    created_at = float((meta or {}).get("created_at", now) or now)
+                except (TypeError, ValueError):
+                    created_at = now
+                if now - created_at > ttl:
+                    self._callback_payloads.pop(key, None)
+                    self._callback_payload_meta.pop(key, None)
         while len(self._callback_payloads) > 1024:
             stale = next(iter(self._callback_payloads))
             self._callback_payloads.pop(stale, None)
             self._callback_payload_meta.pop(stale, None)
-        return key
 
     def _resolve_callback_data(self, data: str) -> str:
         return self._resolve_callback_payload(data)[0]
 
     def _resolve_callback_payload(self, data: str) -> tuple[str, dict]:
+        self._prune_callback_payloads()
         raw = str(data or "").strip()
         if raw in self._callback_payloads:
             return self._callback_payloads.get(raw, ""), dict(self._callback_payload_meta.get(raw) or {})

@@ -58,6 +58,7 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
             "TELEGRAM_REGISTER_COMMANDS",
             "TELEGRAM_COMMAND_SCOPE_CHAT_ID",
             "TELEGRAM_COMMAND_LANGUAGE_CODE",
+            "TELEGRAM_CALLBACK_TTL_SECONDS",
             "TELEGRAM_IDEMPOTENCY_TTL_SECONDS",
             "TELEGRAM_IDEMPOTENCY_CACHE_MAX",
         ],
@@ -72,6 +73,8 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
         "command_cap": MAX_TELEGRAM_COMMANDS,
         "security": {
             "auth_type": "bot_token",
+            "callback_ttl_env": "TELEGRAM_CALLBACK_TTL_SECONDS",
+            "callback_ttl_default_seconds": 3600,
             "idempotency_env": [
                 "TELEGRAM_IDEMPOTENCY_TTL_SECONDS",
                 "TELEGRAM_IDEMPOTENCY_CACHE_MAX",

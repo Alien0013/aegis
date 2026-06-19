@@ -543,6 +543,9 @@ def test_platform_helper_command_caps_and_utf16_chunks():
         "SLACK_IDEMPOTENCY_CACHE_MAX",
     ]
     assert platform_metadata("tg")["supports_interactive_prompts"] is True
+    assert "TELEGRAM_CALLBACK_TTL_SECONDS" in platform_metadata("tg")["optional_env"]
+    assert platform_metadata("tg")["security"]["callback_ttl_env"] == "TELEGRAM_CALLBACK_TTL_SECONDS"
+    assert platform_metadata("tg")["security"]["callback_ttl_default_seconds"] == 3600
     assert platform_metadata("dc")["supports_reactions"] is True
     assert platform_metadata("dc")["supports_interactive_prompts"] is True
     mattermost_meta = platform_metadata("mattermost-webhook")
@@ -598,9 +601,12 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert TelegramAdapter("token").metadata["transport"] == "long_poll"
     assert "TELEGRAM_ALLOWED_CHATS" in TelegramAdapter("token").metadata["optional_env"]
     assert "TELEGRAM_REGISTER_COMMANDS" in TelegramAdapter("token").metadata["optional_env"]
+    assert "TELEGRAM_CALLBACK_TTL_SECONDS" in TelegramAdapter("token").metadata["optional_env"]
     assert "TELEGRAM_IDEMPOTENCY_CACHE_MAX" in TelegramAdapter("token").metadata["optional_env"]
     assert TelegramAdapter("token").metadata["security"]["group_trigger_mode"] == "all"
     assert TelegramAdapter("token").metadata["security"]["register_commands"] is True
+    assert TelegramAdapter("token").metadata["security"]["callback_ttl_seconds"] == 3600
+    assert TelegramAdapter("token").metadata["security"]["callback_ttl_env"] == "TELEGRAM_CALLBACK_TTL_SECONDS"
     assert TelegramAdapter("token").metadata["security"]["idempotency_env"] == [
         "TELEGRAM_IDEMPOTENCY_TTL_SECONDS",
         "TELEGRAM_IDEMPOTENCY_CACHE_MAX",
@@ -1814,6 +1820,41 @@ def test_telegram_expired_prompt_callback_is_not_dispatched(monkeypatch):
     }) is True
     assert calls == [("answerCallbackQuery", {
         "callback_query_id": "cb-expired",
+        "text": "Prompt expired",
+        "show_alert": "true",
+    })]
+
+
+def test_telegram_cached_callback_payloads_expire_by_ttl(monkeypatch):
+    from aegis.gateway import channels
+    from aegis.gateway.channels import TelegramAdapter
+
+    monkeypatch.setenv("TELEGRAM_ALLOWED_USERS", "7")
+    adapter = TelegramAdapter("token")
+    adapter.callback_ttl_seconds = 1
+    calls = []
+    seen = []
+    adapter._api = lambda method, **params: calls.append((method, params)) or {"ok": True}
+    adapter._submit_inbound = lambda ev, *, raw_text=None: seen.append((ev, raw_text)) or None
+
+    monkeypatch.setattr(channels.time, "time", lambda: 1000.0)
+    callback_data = adapter._callback_data_for("approve release", prefix="clarify")
+    assert callback_data.startswith("aegis:clarify:")
+    assert adapter._resolve_callback_data(callback_data) == "approve release"
+
+    monkeypatch.setattr(channels.time, "time", lambda: 1002.0)
+    assert adapter._resolve_callback_data(callback_data) == ""
+    assert adapter._handle_callback_update({
+        "callback_query": {
+            "id": "cb-ttl",
+            "data": callback_data,
+            "from": {"id": 7, "username": "ada"},
+            "message": {"message_id": 55, "chat": {"id": 42, "type": "private"}},
+        },
+    }) is True
+    assert seen == []
+    assert calls == [("answerCallbackQuery", {
+        "callback_query_id": "cb-ttl",
         "text": "Prompt expired",
         "show_alert": "true",
     })]
