@@ -192,12 +192,23 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
         "display_name": "ntfy",
         "transport": "ntfy_stream",
         "required_env": ["NTFY_TOPIC"],
-        "optional_env": ["NTFY_SERVER", "NTFY_TOKEN"],
+        "optional_env": [
+            "NTFY_SERVER",
+            "NTFY_TOKEN",
+            "NTFY_IDEMPOTENCY_TTL_SECONDS",
+            "NTFY_IDEMPOTENCY_CACHE_MAX",
+        ],
         "max_message_length": None,
         "message_length_units": "codepoints",
         "supports_threads": False,
         "supports_media": False,
         "typed_command_prefix": "/",
+        "security": {
+            "idempotency_env": [
+                "NTFY_IDEMPOTENCY_TTL_SECONDS",
+                "NTFY_IDEMPOTENCY_CACHE_MAX",
+            ],
+        },
     },
     "webhook": {
         "display_name": "Webhook",

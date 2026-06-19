@@ -484,7 +484,16 @@ def test_platform_helper_command_caps_and_utf16_chunks():
         "EMAIL_PASSWORD",
     ]
     assert "EMAIL_ALLOWED_SENDERS" in platform_metadata("mail")["optional_env"]
-    assert platform_metadata("ntfy.sh")["optional_env"] == ["NTFY_SERVER", "NTFY_TOKEN"]
+    assert platform_metadata("ntfy.sh")["optional_env"] == [
+        "NTFY_SERVER",
+        "NTFY_TOKEN",
+        "NTFY_IDEMPOTENCY_TTL_SECONDS",
+        "NTFY_IDEMPOTENCY_CACHE_MAX",
+    ]
+    assert platform_metadata("ntfy.sh")["security"]["idempotency_env"] == [
+        "NTFY_IDEMPOTENCY_TTL_SECONDS",
+        "NTFY_IDEMPOTENCY_CACHE_MAX",
+    ]
     assert "SLACK_TRIGGER_MODE" in platform_metadata("sl")["optional_env"]
     assert "SLACK_REPLY_IN_THREAD" in platform_metadata("sl")["optional_env"]
     assert platform_metadata("sl")["supports_slash_commands"] is True
@@ -1732,6 +1741,8 @@ def test_ntfy_adapter_preserves_metadata_headers_and_attachments(monkeypatch):
         "size": 123,
         "source": "ntfy",
     }]
+    assert adapter._delivery_id_from_event(event) == "ntfy:aegis-alerts:evt1"
+    assert adapter.metadata["idempotency"]["delivery_cache"]["entries"] == 0
     assert adapter._send_headers({
         "title": "Build",
         "tags": ["white_check_mark", "robot"],
@@ -1744,6 +1755,44 @@ def test_ntfy_adapter_preserves_metadata_headers_and_attachments(monkeypatch):
         "Priority": "4",
         "Click": "https://ci.example.com",
     }
+
+    seen = []
+    adapter._submit_inbound = lambda ev, *, raw_text=None: seen.append(ev) or None
+    handled = adapter._handle_stream_event(event)
+    duplicate = adapter._handle_stream_event(dict(event))
+
+    assert handled is seen[0]
+    assert duplicate is None
+    assert seen[0].platform == "ntfy"
+    assert seen[0].chat_id == "aegis-alerts"
+    assert seen[0].text == "build done"
+    assert seen[0].message_id == "evt1"
+    assert seen[0].metadata["delivery_id"] == "ntfy:aegis-alerts:evt1"
+    assert adapter._delivery_cache.stats()["accepted_count"] == 1
+    assert adapter._delivery_cache.stats()["duplicate_count"] == 1
+
+    media_only = {
+        "topic": "aegis-alerts",
+        "time": 12345,
+        "attachment": {
+            "url": "https://ci.example.com/artifact.zip",
+            "name": "artifact.zip",
+            "type": "application/zip",
+        },
+    }
+    media_event = adapter._message_event_from_event(media_only)
+
+    assert media_event is not None
+    assert media_event.text == "[application/zip attached: artifact.zip]"
+
+    failing = NtfyAdapter()
+    failing._submit_inbound = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("queue down"))
+    try:
+        failing._handle_stream_event(event)
+    except RuntimeError:
+        pass
+    assert failing._delivery_cache.stats()["entries"] == 0
+    assert failing._delivery_cache.stats()["discarded_count"] == 1
 
 
 def test_slack_adapter_enforces_workspace_filters_and_strips_mentions(monkeypatch):

@@ -10,14 +10,24 @@ Config (env): ``NTFY_TOPIC`` (required), ``NTFY_SERVER`` (default https://ntfy.s
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 
 import httpx
 
+from ..webhook import DeliveryIdCache
 from .base import BasePlatformAdapter, Dispatch, MessageEvent
 
 DEFAULT_SERVER = "https://ntfy.sh"
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)) or default)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
 
 
 class NtfyAdapter(BasePlatformAdapter):
@@ -32,6 +42,22 @@ class NtfyAdapter(BasePlatformAdapter):
         self.server = (server or os.environ.get("NTFY_SERVER") or DEFAULT_SERVER).rstrip("/")
         token = os.environ.get("NTFY_TOKEN")
         self._headers = {"Authorization": f"Bearer {token}"} if token else {}
+        self._delivery_cache = DeliveryIdCache(
+            ttl_seconds=float(_env_int("NTFY_IDEMPOTENCY_TTL_SECONDS", 3600)),
+            max_items=_env_int("NTFY_IDEMPOTENCY_CACHE_MAX", 10000),
+        )
+
+    @property
+    def metadata(self) -> dict:
+        data = super().metadata
+        data["idempotency"] = {
+            "delivery_id_sources": [
+                "event.topic + event.id",
+                "event.topic + event.time + message hash",
+            ],
+            "delivery_cache": self._delivery_cache.stats(),
+        }
+        return data
 
     def start(self, dispatch: Dispatch) -> None:
         self._init_inbound_queue(dispatch)
@@ -49,25 +75,70 @@ class NtfyAdapter(BasePlatformAdapter):
                             ev = json.loads(line)
                         except json.JSONDecodeError:
                             continue
-                        if ev.get("event") != "message" or not ev.get("message"):
+                        if ev.get("event") != "message":
                             continue
-                        attachments = self._attachments_from_event(ev)
-                        me = MessageEvent(platform="ntfy", chat_id=self.topic,
-                                          text=ev["message"], user_id="ntfy",
-                                          message_id=str(ev.get("id") or "") or None,
-                                          timestamp=ev.get("time"),
-                                          attachments=attachments,
-                                          metadata={
-                                              "id": ev.get("id"),
-                                              "title": ev.get("title"),
-                                              "tags": ev.get("tags") or [],
-                                              "priority": ev.get("priority"),
-                                              "click": ev.get("click"),
-                                              "topic": ev.get("topic") or self.topic,
-                                          })
-                        self._submit_inbound(me)
+                        self._handle_stream_event(ev)
             except Exception:  # noqa: BLE001 - keep the subscriber alive across drops
                 continue
+
+    def _delivery_id_from_event(self, event: dict) -> str:
+        topic = str(event.get("topic") or self.topic or "").strip()
+        event_id = str(event.get("id") or "").strip()
+        if topic and event_id:
+            return f"ntfy:{topic}:{event_id}"
+        timestamp = str(event.get("time") or "").strip()
+        message = str(event.get("message") or "").strip()
+        if topic and timestamp and message:
+            digest = hashlib.sha256(message.encode("utf-8")).hexdigest()[:16]
+            return f"ntfy:{topic}:{timestamp}:{digest}"
+        return ""
+
+    def _message_event_from_event(self, event: dict) -> MessageEvent | None:
+        attachments = self._attachments_from_event(event)
+        text = str(event.get("message") or "").strip()
+        if not text and attachments:
+            text = self._attachment_reference_text(attachments)
+        if not text and not attachments:
+            return None
+        topic = str(event.get("topic") or self.topic)
+        return MessageEvent(
+            platform="ntfy",
+            chat_id=topic,
+            text=text,
+            user_id="ntfy",
+            message_id=str(event.get("id") or "") or None,
+            timestamp=event.get("time"),
+            attachments=attachments,
+            metadata={
+                "id": event.get("id"),
+                "title": event.get("title"),
+                "tags": event.get("tags") or [],
+                "priority": event.get("priority"),
+                "click": event.get("click"),
+                "topic": topic,
+                "delivery_id": self._delivery_id_from_event(event),
+            },
+        )
+
+    def _handle_stream_event(self, event: dict) -> MessageEvent | None:
+        delivery_id = self._delivery_id_from_event(event)
+        delivery_recorded = False
+        if delivery_id:
+            delivery_recorded = self._delivery_cache.record(delivery_id)
+            if not delivery_recorded:
+                return None
+        try:
+            message = self._message_event_from_event(event)
+            if message is None:
+                if delivery_recorded:
+                    self._delivery_cache.discard(delivery_id)
+                return None
+            self._submit_inbound(message)
+            return message
+        except Exception:
+            if delivery_recorded:
+                self._delivery_cache.discard(delivery_id)
+            raise
 
     def _attachments_from_event(self, event: dict) -> list[dict]:
         attachment = event.get("attachment")
@@ -85,6 +156,14 @@ class NtfyAdapter(BasePlatformAdapter):
             "size": int(attachment.get("size") or 0),
             "source": "ntfy",
         }]
+
+    def _attachment_reference_text(self, attachments: list[dict]) -> str:
+        labels = []
+        for attachment in attachments:
+            kind = str(attachment.get("type") or "file").strip()
+            name = str(attachment.get("filename") or attachment.get("id") or "attachment").strip()
+            labels.append(f"[{kind} attached: {name}]")
+        return "\n".join(labels)
 
     def _send_headers(self, metadata: dict | None = None) -> dict:
         headers = dict(self._headers)
