@@ -2710,6 +2710,7 @@ def test_fastapi_dashboard_plugin_api_must_stay_under_dashboard_dir(tmp_path, mo
 
 
 def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api(tmp_path, monkeypatch):
+    monkeypatch.delenv("PULSE_PANEL_TOKEN", raising=False)
     plug = tmp_path / "plugins" / "analytics" / "pulse"
     (plug / "dashboard" / "dist").mkdir(parents=True)
     (plug / ".git").mkdir()
@@ -2718,7 +2719,9 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
         "version: 2.1.0\n"
         "description: Pulse dashboard plugin\n"
         "kind: backend\n"
-        "author: AEGIS\n",
+        "author: AEGIS\n"
+        "requires_env:\n"
+        "  - PULSE_PANEL_TOKEN\n",
         encoding="utf-8",
     )
     (plug / "__init__.py").write_text("def register(api):\n    pass\n", encoding="utf-8")
@@ -2765,6 +2768,9 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
     assert status["kind"] == "backend"
     assert status["source"] == "user"
     assert status["status"] == "loaded"
+    assert status["missing_env"] == ["PULSE_PANEL_TOKEN"]
+    assert status["auth_required"] is True
+    assert status["auth_command"] == "aegis secret set PULSE_PANEL_TOKEN <value>"
 
     hub = asyncio.run(_request(app, "GET", "/api/dashboard/plugins/hub", headers=headers))
     assert hub.status_code == 200
@@ -2774,6 +2780,9 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
     assert hub_row["load_status"] == "loaded"
     assert hub_row["load_duration_ms"] >= 0
     assert hub_row["loaded_at"]
+    assert hub_row["missing_env"] == ["PULSE_PANEL_TOKEN"]
+    assert hub_row["auth_required"] is True
+    assert hub_row["auth_command"] == "aegis secret set PULSE_PANEL_TOKEN <value>"
     assert hub_row["runtime_contributions"] == {
         "tools": [],
         "channels": [],

@@ -2312,6 +2312,7 @@ def test_hermes_style_plugin_yaml_metadata_category_key_and_safe_mode(tmp_path, 
     from aegis import plugins
     from aegis.config import Config
 
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
     cfg = Config.load()
     pkg = cfg_paths.sub("plugins") / "observability" / "langfuse"
     pkg.mkdir(parents=True, exist_ok=True)
@@ -2372,6 +2373,9 @@ def test_hermes_style_plugin_yaml_metadata_category_key_and_safe_mode(tmp_path, 
     assert row["runtime_contributions"]["tools"] == ["trace_export"]
     assert row["contribution_drift"]["channels"]["missing"] == ["webhook"]
     assert row["contribution_drift"]["providers"]["missing"] == ["langfuse-provider"]
+    assert row["missing_env"] == ["LANGFUSE_PUBLIC_KEY"]
+    assert row["auth_required"] is True
+    assert row["auth_command"] == "aegis secret set LANGFUSE_PUBLIC_KEY <value>"
     assert row["provides_middleware"] == ["tool_request"]
     assert row["provides_channels"] == ["webhook"]
     assert row["provides_providers"] == ["langfuse-provider"]

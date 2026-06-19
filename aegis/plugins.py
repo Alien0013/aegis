@@ -1064,8 +1064,14 @@ def _copy_example_files(plugin_dir: Path) -> None:
 
 
 def _missing_requires_env_names(manifest_data: dict[str, Any]) -> list[str]:
+    return _missing_env_names_from_requires(
+        manifest_data.get("requires_env") or manifest_data.get("required_env")
+    )
+
+
+def _missing_env_names_from_requires(requires_env: Any) -> list[str]:
     missing: list[str] = []
-    for item in _list_field(manifest_data.get("requires_env") or manifest_data.get("required_env")):
+    for item in _list_field(requires_env):
         if isinstance(item, dict):
             name = str(item.get("name") or item.get("key") or "").strip()
         else:
@@ -1311,6 +1317,7 @@ def plugin_status(config=None, api: PluginAPI | None = None) -> list[dict[str, A
         declared = _plugin_declared_contributions(manifest)
         runtime = _plugin_runtime_contributions(entrypoint)
         drift = _plugin_contribution_drift(declared, runtime)
+        missing_env = _missing_env_names_from_requires(manifest.requires_env)
         if not manifest.enabled:
             status = "disabled"
         elif entrypoint is None:
@@ -1332,6 +1339,16 @@ def plugin_status(config=None, api: PluginAPI | None = None) -> list[dict[str, A
             "declared_contributions": declared,
             "runtime_contributions": runtime,
             "contribution_drift": drift,
+            "missing_env": missing_env,
+            "auth_required": bool(missing_env),
+            "auth_command": (
+                f"aegis secret set {missing_env[0]} <value>"
+                if len(missing_env) == 1
+                else (
+                    " && ".join(f"aegis secret set {name} <value>" for name in missing_env)
+                    if missing_env else ""
+                )
+            ),
             "tool_names": runtime["tools"],
             "channel_names": runtime["channels"],
             "provider_names": runtime["providers"],

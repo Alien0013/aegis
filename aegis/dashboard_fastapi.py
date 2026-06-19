@@ -2224,8 +2224,9 @@ def _dashboard_plugin_hub(config: Config) -> dict[str, Any]:
             "asset_errors": dashboard_manifest.get("asset_errors") if dashboard_manifest else [],
             "can_remove": can_remove,
             "can_update_git": can_update_git,
-            "auth_required": False,
-            "auth_command": "",
+            "auth_required": bool(row.get("auth_required")),
+            "auth_command": str(row.get("auth_command") or ""),
+            "missing_env": row.get("missing_env") or [],
             "user_hidden": bool(aliases & hidden),
         })
         rows.append(enriched)
