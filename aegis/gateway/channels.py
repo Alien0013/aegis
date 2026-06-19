@@ -370,7 +370,7 @@ class TelegramAdapter(BasePlatformAdapter):
             user_name=username,
             thread_id=thread_id,
             message_id=str(message.get("message_id") or "") or None,
-            timestamp=query.get("chat_instance"),
+            timestamp=message.get("date") or query.get("date"),
             metadata={
                 "callback_query_id": str(query.get("id") or ""),
                 "chat_type": chat.get("type"),

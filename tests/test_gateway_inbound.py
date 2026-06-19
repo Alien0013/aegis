@@ -1703,7 +1703,9 @@ def test_telegram_callback_queries_dispatch_as_commands(monkeypatch):
                 "chat": {"id": 42, "type": "supergroup"},
                 "message_thread_id": 77,
                 "is_topic_message": True,
+                "date": 1781906000,
             },
+            "chat_instance": "opaque-chat-instance",
         },
     })
 
@@ -1718,6 +1720,7 @@ def test_telegram_callback_queries_dispatch_as_commands(monkeypatch):
     assert ev.user_name == "ada"
     assert ev.thread_id == "77"
     assert ev.message_id == "55"
+    assert ev.timestamp == 1781906000
     assert ev.metadata["source"] == "callback_query"
     assert ev.metadata["callback_query_id"] == "cb1"
     assert ev.metadata["command"] == "/status"
@@ -3304,6 +3307,76 @@ def test_gateway_webhook_channel_outbound_bridge_media(monkeypatch, tmp_path):
             },
         ),
     ]
+    sent.clear()
+
+    missing = tmp_path / "missing.ogg"
+    adapter.deliver(
+        "12025550123@s.whatsapp.net",
+        f"Here\nMEDIA:{missing}",
+        metadata={
+            "remote_jid": "12025550123@s.whatsapp.net",
+            "reply_to_message_id": "BAE599999",
+        },
+    )
+    assert sent == [
+        (
+            "https://bridge.test/send",
+            {"Content-Type": "application/json", "X-Secret": "outbound-secret"},
+            {
+                "platform": "whatsapp",
+                "chat_id": "12025550123@s.whatsapp.net",
+                "text": "Here",
+                "metadata": {
+                    "remote_jid": "12025550123@s.whatsapp.net",
+                    "reply_to_message_id": "BAE599999",
+                },
+                "remote_jid": "12025550123@s.whatsapp.net",
+                "reply_to_message_id": "BAE599999",
+            },
+        ),
+        (
+            "https://bridge.test/send",
+            {"Content-Type": "application/json", "X-Secret": "outbound-secret"},
+            {
+                "platform": "whatsapp",
+                "chat_id": "12025550123@s.whatsapp.net",
+                "text": "📎 blocked media path: file not found",
+                "metadata": {
+                    "remote_jid": "12025550123@s.whatsapp.net",
+                    "reply_to_message_id": "BAE599999",
+                },
+                "remote_jid": "12025550123@s.whatsapp.net",
+                "reply_to_message_id": "BAE599999",
+            },
+        ),
+    ]
+    sent.clear()
+
+    adapter.send_media(
+        "12025550123@s.whatsapp.net",
+        str(missing),
+        metadata={
+            "remote_jid": "12025550123@s.whatsapp.net",
+            "reply_to_message_id": "BAE599999",
+        },
+    )
+    assert sent == [
+        (
+            "https://bridge.test/send",
+            {"Content-Type": "application/json", "X-Secret": "outbound-secret"},
+            {
+                "platform": "whatsapp",
+                "chat_id": "12025550123@s.whatsapp.net",
+                "text": f"(file not found: {missing})",
+                "metadata": {
+                    "remote_jid": "12025550123@s.whatsapp.net",
+                    "reply_to_message_id": "BAE599999",
+                },
+                "remote_jid": "12025550123@s.whatsapp.net",
+                "reply_to_message_id": "BAE599999",
+            },
+        ),
+    ]
 
 
 def test_gateway_webhook_channel_outbound_bridge_reactions(monkeypatch):
@@ -3927,6 +4000,79 @@ def test_gateway_mattermost_interactive_prompts_use_action_buttons(monkeypatch):
             },
         ),
     ]
+
+
+def test_gateway_mattermost_threaded_interactive_response_consumes_waiter(monkeypatch):
+    from aegis.gateway import mattermost_channel
+    from aegis.gateway.base import MessageEvent
+    from aegis.gateway.mattermost_channel import MattermostAdapter
+
+    monkeypatch.setenv("MATTERMOST_URL", "https://mattermost.test")
+    monkeypatch.setenv("MATTERMOST_BOT_TOKEN", "mm-token")
+    monkeypatch.setenv("MATTERMOST_ACTION_URL", "https://aegis.example/mattermost/action")
+    monkeypatch.delenv("MATTERMOST_WEBHOOK_SECRET", raising=False)
+    monkeypatch.delenv("MATTERMOST_OUTGOING_TOKEN", raising=False)
+    sent = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, url, *, headers, json):
+            sent.append((url, headers, dict(json)))
+            return FakeResponse()
+
+    monkeypatch.setattr(mattermost_channel.httpx, "Client", FakeClient)
+
+    adapter = MattermostAdapter()
+    adapter._init_inbound_queue(lambda _ev: (_ for _ in ()).throw(AssertionError("should not dispatch")))
+    answer = {}
+    ev = MessageEvent(
+        platform="mattermost",
+        chat_id="channel-1",
+        text="question",
+        user_id="u1",
+        thread_id="root-1",
+        message_id="post-1",
+        metadata={"root_id": "root-1", "post_id": "post-1"},
+    )
+
+    def ask():
+        answer["text"] = adapter.ask_user(ev, "Pick a deploy lane?", ["stable", "canary"], timeout=2)
+
+    thread = threading.Thread(target=ask)
+    thread.start()
+    _wait_for(lambda: sent)
+    action_context = (
+        sent[0][2]["props"]["attachments"][0]["actions"][0]["integration"]["context"]
+    )
+    assert action_context["value"] == "stable"
+    assert action_context["root_id"] == "root-1"
+    assert action_context["thread_id"] == "root-1"
+
+    status, payload = adapter._handle_inbound_payload({}, {
+        "type": "interactive",
+        "channel_id": "channel-1",
+        "post_id": "button-post",
+        "user_id": "u1",
+        "user_name": "ada",
+        "context": action_context,
+    })
+    thread.join(2)
+
+    assert status == 200
+    assert payload == {"text": "", "response_type": "comment"}
+    assert answer["text"] == "stable"
 
 
 def test_gateway_mattermost_reactions_use_bot_identity(monkeypatch):

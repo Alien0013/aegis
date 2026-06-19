@@ -245,7 +245,16 @@ class MattermostAdapter(BasePlatformAdapter):
             text = self._attachment_reference_text(attachments)
         channel_id = str(body.get("channel_id") or body.get("channel") or "")
         post_id = str(body.get("post_id") or body.get("id") or body.get("message_id") or "")
-        root_id = str(body.get("root_id") or body.get("thread_id") or body.get("parent_id") or "").strip()
+        context = _dict_value(body.get("context"))
+        root_id = str(
+            body.get("root_id")
+            or body.get("thread_id")
+            or body.get("parent_id")
+            or context.get("root_id")
+            or context.get("thread_id")
+            or context.get("parent_id")
+            or ""
+        ).strip()
         if root_id.lower() in _NULL_THREAD_IDS:
             root_id = ""
         if root_id and post_id and root_id == post_id:
@@ -266,9 +275,11 @@ class MattermostAdapter(BasePlatformAdapter):
         if interactive_text:
             metadata["source"] = "interactive_action"
             metadata["action_id"] = _string_value(body.get("action_id") or body.get("callback_id"))
-            context = _dict_value(body.get("context"))
             if context.get("type"):
                 metadata["action_type"] = _string_value(context.get("type"))
+        for key in ("root_id", "thread_id", "parent_id"):
+            if context.get(key) and key not in metadata:
+                metadata[key] = _string_value(context.get(key))
         return MessageEvent(
             platform="mattermost",
             chat_id=channel_id,
@@ -517,17 +528,29 @@ class MattermostAdapter(BasePlatformAdapter):
         except Exception:  # noqa: BLE001
             super().send_media(chat_id, path, caption, metadata=metadata)
 
-    def _interactive_action(self, *, name: str, value: str, kind: str) -> dict:
+    def _interactive_action(
+        self,
+        *,
+        name: str,
+        value: str,
+        kind: str,
+        metadata: dict | None = None,
+    ) -> dict:
+        context = {
+            "source": "aegis",
+            "type": kind,
+            "value": str(value or ""),
+        }
+        root_id = self._root_id("", metadata)
+        if root_id:
+            context["root_id"] = root_id
+            context["thread_id"] = root_id
         return {
             "id": f"aegis_{kind}",
             "name": str(name or value)[:75] or "Choose",
             "integration": {
                 "url": self.action_url,
-                "context": {
-                    "source": "aegis",
-                    "type": kind,
-                    "value": str(value or ""),
-                },
+                "context": context,
             },
         }
 
@@ -570,7 +593,7 @@ class MattermostAdapter(BasePlatformAdapter):
         if not self.action_url or not choice_values:
             return super().send_clarify(chat_id, question, choices or [], metadata=metadata)
         actions = [
-            self._interactive_action(name=choice, value=choice, kind="clarify")
+            self._interactive_action(name=choice, value=choice, kind="clarify", metadata=metadata)
             for choice in choice_values[:5]
         ]
         try:
@@ -593,9 +616,9 @@ class MattermostAdapter(BasePlatformAdapter):
         if not self.action_url:
             return super().send_exec_approval(chat_id, prompt, metadata=metadata)
         actions = [
-            self._interactive_action(name="Approve", value="approve", kind="exec_approval"),
-            self._interactive_action(name="Always", value="always", kind="exec_approval"),
-            self._interactive_action(name="Deny", value="deny", kind="exec_approval"),
+            self._interactive_action(name="Approve", value="approve", kind="exec_approval", metadata=metadata),
+            self._interactive_action(name="Always", value="always", kind="exec_approval", metadata=metadata),
+            self._interactive_action(name="Deny", value="deny", kind="exec_approval", metadata=metadata),
         ]
         try:
             self._post_interactive_prompt(

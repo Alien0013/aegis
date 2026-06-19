@@ -853,7 +853,7 @@ class WebhookChannel(BasePlatformAdapter):
         metadata: dict | None = None,
         **_kwargs,
     ) -> None:
-        if not self.outbound_url:
+        if not self.outbound_url or not os.path.exists(path):
             return super().send_media(chat_id, path, caption, metadata=metadata)
         payload = self._outbound_payload(chat_id, str(caption or ""), dict(metadata or {}))
         payload.update({
