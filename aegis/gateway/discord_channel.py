@@ -147,8 +147,10 @@ class DiscordAdapter(BasePlatformAdapter):
         self._command_tree = tree
         return tree
 
-    async def _handle_app_command(self, interaction, command_name: str) -> MessageEvent:  # noqa: ANN001
+    async def _handle_app_command(self, interaction, command_name: str) -> MessageEvent | None:  # noqa: ANN001
         self._loop = asyncio.get_event_loop()
+        if not self._interaction_allowed(interaction):
+            return None
         response = getattr(interaction, "response", None)
         defer = getattr(response, "defer", None)
         if callable(defer):
@@ -206,6 +208,9 @@ class DiscordAdapter(BasePlatformAdapter):
     def _guild_allowed(self, message) -> bool:  # noqa: ANN001
         guild = getattr(message, "guild", None)
         guild_id = str(getattr(guild, "id", "") or "")
+        return self._guild_id_allowed(guild_id)
+
+    def _guild_id_allowed(self, guild_id: str) -> bool:
         is_dm = not guild_id
         ignored = self.ignored_guilds or set()
         if "*" in ignored or (is_dm and "dm" in ignored) or (guild_id and guild_id in ignored):
@@ -218,11 +223,17 @@ class DiscordAdapter(BasePlatformAdapter):
         return guild_id in allowed
 
     def _channel_allowed(self, message) -> bool:  # noqa: ANN001
-        channel_ids = {str(getattr(message.channel, "id", "") or "")}
-        parent = getattr(message.channel, "parent", None)
+        return self._channel_ids_allowed(self._channel_ids(getattr(message, "channel", None)))
+
+    def _channel_ids(self, channel) -> set[str]:  # noqa: ANN001
+        channel_ids = {str(getattr(channel, "id", "") or "")}
+        parent = getattr(channel, "parent", None)
         if parent is not None:
             channel_ids.add(str(getattr(parent, "id", "") or ""))
         channel_ids.discard("")
+        return channel_ids
+
+    def _channel_ids_allowed(self, channel_ids: set[str]) -> bool:
         ignored = {c.strip() for c in os.environ.get("DISCORD_IGNORED_CHANNELS", "").split(",") if c.strip()}
         if "*" in ignored or channel_ids & ignored:
             return False
@@ -230,14 +241,31 @@ class DiscordAdapter(BasePlatformAdapter):
         return not allowed or "*" in allowed or bool(channel_ids & allowed)
 
     def _author_allowed(self, message) -> bool:  # noqa: ANN001
-        if self.allowed and str(message.author.id) in self.allowed:
+        return self._author_identity_allowed(getattr(message, "author", None))
+
+    def _author_identity_allowed(self, user) -> bool:  # noqa: ANN001
+        if self.allowed and str(getattr(user, "id", "") or "") in self.allowed:
             return True
         if self.allowed_roles:
-            roles = getattr(message.author, "roles", None) or []
+            roles = getattr(user, "roles", None) or []
             role_ids = {str(getattr(role, "id", "") or "") for role in roles}
             if role_ids & self.allowed_roles:
                 return True
         return not self.allowed and not self.allowed_roles
+
+    def _interaction_allowed(self, interaction) -> bool:  # noqa: ANN001
+        guild = getattr(interaction, "guild", None)
+        guild_id = str(getattr(guild, "id", "") or "")
+        if not self._guild_id_allowed(guild_id):
+            return False
+        if not self._channel_ids_allowed(self._channel_ids(getattr(interaction, "channel", None))):
+            return False
+        user = getattr(interaction, "user", None)
+        if getattr(user, "bot", False):
+            mode = os.environ.get("DISCORD_ALLOW_BOTS", "none").strip().lower()
+            if mode not in {"all", "true", "1", "yes"}:
+                return False
+        return self._author_identity_allowed(user)
 
     def _trigger_allowed(self, message, client) -> bool:  # noqa: ANN001
         if not getattr(message, "guild", None):

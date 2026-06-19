@@ -800,6 +800,48 @@ def test_discord_adapter_registers_and_handles_app_commands(monkeypatch):
     assert seen == [(ev, "/status")]
 
 
+def test_discord_app_commands_respect_security_filters(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    from aegis.gateway.discord_channel import DiscordAdapter
+
+    monkeypatch.setenv("DISCORD_ALLOWED_GUILDS", "G1")
+    monkeypatch.setenv("DISCORD_ALLOWED_CHANNELS", "C1")
+    monkeypatch.setenv("DISCORD_ALLOWED_USERS", "U1")
+
+    adapter = DiscordAdapter("token")
+    seen = []
+    adapter._submit_inbound = lambda ev, *, raw_text=None: seen.append((ev, raw_text)) or None
+    deferred = []
+
+    class Response:
+        async def defer(self, *, thinking=False):
+            deferred.append(thinking)
+
+    def interaction(*, guild_id="G1", channel_id="C1", user_id="U1", parent_id=None):
+        parent = SimpleNamespace(id=parent_id) if parent_id else None
+        return SimpleNamespace(
+            id=123,
+            response=Response(),
+            channel=SimpleNamespace(id=channel_id, name="ops", parent=parent),
+            guild=SimpleNamespace(id=guild_id) if guild_id else None,
+            user=SimpleNamespace(id=user_id, roles=[], bot=False),
+            created_at="now",
+        )
+
+    assert asyncio.run(adapter._handle_app_command(interaction(guild_id="G2"), "status")) is None
+    assert asyncio.run(adapter._handle_app_command(interaction(channel_id="C2"), "status")) is None
+    assert asyncio.run(adapter._handle_app_command(interaction(user_id="U2"), "status")) is None
+    ev = asyncio.run(adapter._handle_app_command(interaction(), "status"))
+
+    assert ev is not None
+    assert ev.chat_id == "C1"
+    assert ev.text == "/status"
+    assert deferred == [True]
+    assert seen == [(ev, "/status")]
+
+
 def test_discord_adapter_native_media_upload_targets_threads(monkeypatch, tmp_path):
     import asyncio
     import sys
