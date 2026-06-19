@@ -170,6 +170,26 @@ def _unpacked_executable(target: Path, *, platform: str | None = None) -> Path:
     return next((path for path in candidates if path.exists()), candidates[0])
 
 
+def _desktop_drift(source: Any, target: Path) -> dict[str, list[str]]:
+    missing: list[str] = []
+    changed: list[str] = []
+    for name in DESKTOP_FILES:
+        try:
+            expected = _read_source_file(source, name)
+        except RuntimeError:
+            continue
+        current = target / name
+        if not current.exists():
+            missing.append(name)
+            continue
+        try:
+            if current.read_bytes() != expected:
+                changed.append(name)
+        except OSError:
+            changed.append(name)
+    return {"missing": missing, "changed": changed}
+
+
 def _packaged_launch_command(target: Path, *, sandbox: bool = False,
                              platform: str | None = None) -> list[str]:
     platform = platform or sys.platform
@@ -188,17 +208,61 @@ def _desktop_status(source: Any, target: Path, *, npm: str | None = None) -> dic
             missing.append(name)
     source_has_lock = "package-lock.json" not in missing
     install_cmd = _npm_install_command(npm or "npm", target, package_lock=source_has_lock)
+    drift = _desktop_drift(source, target)
+    template_changed = bool(drift["missing"] or drift["changed"])
+    dependencies_installed = (target / "node_modules" / "electron").exists()
+    packaged_app = _unpacked_executable(target).exists()
+    needs_npm_install = _needs_npm_install(
+        target,
+        force=False,
+        template_changed=template_changed,
+    )
+    needs_pack = template_changed or not packaged_app
+    env_preview = {
+        "AEGIS_BIN": _aegis_bin(),
+        "AEGIS_HOME": str(cfg.get_home()),
+        "TERMINAL_CWD": str(Path.cwd().resolve()),
+    }
+    if not npm:
+        next_action = "Install Node.js/npm, then run `aegis desktop --install-only`."
+    elif missing:
+        next_action = "Repair/reinstall AEGIS; desktop template files are missing."
+    elif needs_npm_install:
+        next_action = "Run `aegis desktop --install-only` to sync files and install dependencies."
+    elif needs_pack:
+        next_action = "Run `aegis desktop` to build and launch the packaged app."
+    else:
+        next_action = "Run `aegis desktop` to launch, or `aegis desktop --source` for source mode."
     return {
         "ok": bool(npm) and not missing,
         "target": str(target),
         "source": str(source),
         "npm": npm or "",
         "package_lock": (target / "package-lock.json").exists(),
-        "dependencies_installed": (target / "node_modules" / "electron").exists(),
-        "packaged_app": _unpacked_executable(target).exists(),
+        "dependencies_installed": dependencies_installed,
+        "packaged_app": packaged_app,
+        "template_synced": not template_changed,
+        "needs_sync": template_changed,
+        "needs_npm_install": needs_npm_install,
+        "needs_pack": needs_pack,
         "managed_files": len(DESKTOP_FILES),
         "missing_template_files": missing,
+        "missing_target_files": drift["missing"],
+        "changed_target_files": drift["changed"],
         "install_command": install_cmd,
+        "launch_commands": {
+            "source": [npm or "npm", "start"],
+            "source_sandbox": [npm or "npm", "run", "start:sandbox"],
+            "packaged": _packaged_launch_command(target),
+            "package": {
+                "auto": [npm or "npm", "run", "dist"],
+                "linux": [npm or "npm", "run", "dist:linux"],
+                "win": [npm or "npm", "run", "dist:win"],
+                "mac": [npm or "npm", "run", "dist:mac"],
+            },
+        },
+        "env": env_preview,
+        "next_action": next_action,
     }
 
 
@@ -206,14 +270,22 @@ def _aegis_bin() -> str:
     env_bin = os.environ.get("AEGIS_BIN")
     if env_bin:
         return env_bin
+    found = shutil.which("aegis")
+    if found:
+        return found
     if sys.argv and sys.argv[0]:
         argv0 = Path(sys.argv[0]).expanduser()
-        if (argv0.is_absolute() or argv0.parent != Path(".")) and argv0.exists():
+        if (
+            (argv0.is_absolute() or argv0.parent != Path("."))
+            and argv0.exists()
+            and os.access(argv0, os.X_OK)
+            and argv0.suffix.lower() not in {".py", ".pyc", ".pyo"}
+        ):
             return str(argv0.resolve())
-        found = shutil.which(argv0.name)
-        if found:
-            return found
-    return shutil.which("aegis") or "aegis"
+        found_argv = shutil.which(argv0.name)
+        if found_argv and Path(found_argv).name != "python":
+            return found_argv
+    return "aegis"
 
 
 def _terminal_cwd(args) -> str:
@@ -236,7 +308,7 @@ def cmd_desktop(args, config) -> int:  # noqa: ARG001
     source = _desktop_source()
     target = _desktop_dir()
 
-    if getattr(args, "status", False):
+    if getattr(args, "status", False) or getattr(args, "doctor", False):
         _print(json.dumps(_desktop_status(source, target, npm=npm), indent=2, sort_keys=True))
         return 0
 

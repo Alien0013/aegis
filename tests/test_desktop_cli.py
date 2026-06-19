@@ -62,13 +62,66 @@ def test_desktop_status_reports_bootstrap_without_running_npm(monkeypatch, tmp_p
     assert body["target"] == str(target)
     assert body["dependencies_installed"] is False
     assert body["package_lock"] is False
+    assert body["template_synced"] is False
+    assert body["needs_sync"] is True
+    assert body["needs_npm_install"] is True
+    assert body["needs_pack"] is True
+    assert set(body["missing_target_files"]) == set(desktop.DESKTOP_FILES)
+    assert body["changed_target_files"] == []
     assert body["install_command"] == ["/usr/bin/npm", "ci"]
+    assert body["launch_commands"]["source"] == ["/usr/bin/npm", "start"]
+    assert body["launch_commands"]["package"]["linux"] == ["/usr/bin/npm", "run", "dist:linux"]
+    assert body["env"]["AEGIS_HOME"]
+    assert body["next_action"] == "Run `aegis desktop --install-only` to sync files and install dependencies."
+
+
+def test_desktop_doctor_alias_uses_readonly_status(monkeypatch, tmp_path, capsys):
+    source = _write_desktop_template(tmp_path / "source")
+    target = tmp_path / "runtime"
+    calls: list[dict] = []
+
+    monkeypatch.setenv("AEGIS_DESKTOP_DIR", str(target))
+    monkeypatch.setattr(desktop, "_desktop_source", lambda: source)
+    monkeypatch.setattr(desktop.shutil, "which", lambda name: "/usr/bin/npm" if name == "npm" else None)
+    monkeypatch.setattr(desktop.subprocess, "run", lambda *a, **k: calls.append({"args": a, "kwargs": k}))
+
+    args = Namespace(doctor=True, status=False, install_only=False, reinstall=False, sandbox=False)
+    assert desktop.cmd_desktop(args, object()) == 0
+
+    body = json.loads(capsys.readouterr().out)
+    assert calls == []
+    assert body["target"] == str(target)
+    assert body["needs_sync"] is True
+    assert body["next_action"].startswith("Run `aegis desktop --install-only`")
 
 
 def test_desktop_npm_install_command_uses_lockfile(tmp_path):
     assert desktop._npm_install_command("/usr/bin/npm", tmp_path) == ["/usr/bin/npm", "install"]
     (tmp_path / "package-lock.json").write_text("{}", encoding="utf-8")
     assert desktop._npm_install_command("/usr/bin/npm", tmp_path) == ["/usr/bin/npm", "ci"]
+
+
+def test_desktop_aegis_bin_ignores_python_module_file(monkeypatch, tmp_path):
+    module_file = tmp_path / "main.py"
+    module_file.write_text("print('not a launcher')\n", encoding="utf-8")
+
+    monkeypatch.delenv("AEGIS_BIN", raising=False)
+    monkeypatch.setattr(desktop.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(desktop.sys, "argv", [str(module_file)])
+
+    assert desktop._aegis_bin() == "aegis"
+
+
+def test_desktop_aegis_bin_accepts_executable_argv_launcher(monkeypatch, tmp_path):
+    launcher = tmp_path / "aegis"
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    launcher.chmod(0o755)
+
+    monkeypatch.delenv("AEGIS_BIN", raising=False)
+    monkeypatch.setattr(desktop.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(desktop.sys, "argv", [str(launcher)])
+
+    assert desktop._aegis_bin() == str(launcher.resolve())
 
 
 def test_desktop_launch_skips_install_when_dependencies_exist(monkeypatch, tmp_path):
@@ -221,6 +274,10 @@ def test_desktop_parser_and_typo_alias():
     status_args = parser.parse_args(["desktop", "--status"])
     assert status_args.func is desktop.cmd_desktop
     assert status_args.status is True
+
+    doctor_args = parser.parse_args(["desktop", "--doctor"])
+    assert doctor_args.func is desktop.cmd_desktop
+    assert doctor_args.doctor is True
 
     cwd_args = parser.parse_args(["desktop", "--source", "--cwd", "/tmp/project"])
     assert cwd_args.func is desktop.cmd_desktop
