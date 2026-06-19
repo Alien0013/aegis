@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { del, post } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { Badge, Button, Card, Empty, Input, Loading, PageHeader, toast } from "../components/ui";
@@ -9,15 +10,38 @@ interface EnvPayload { env_path?: string; keys?: KeyRow[] }
 
 export function Keys() {
   const { data, loading, error, reload } = useApi<EnvPayload>("env");
+  const [searchParams, setSearchParams] = useSearchParams();
   const [editing, setEditing] = useState("");
   const [value, setValue] = useState("");
   const [newKey, setNewKey] = useState("");
   const rows = data?.keys || [];
+  const requestedKey = (searchParams.get("key") || "").trim().toUpperCase();
+
+  useEffect(() => {
+    if (!requestedKey) return;
+    if (rows.some((row) => row.key === requestedKey)) {
+      setEditing(requestedKey);
+      setNewKey("");
+    } else {
+      setNewKey(requestedKey);
+      setEditing("__new__");
+    }
+    setValue("");
+  }, [requestedKey, rows]);
 
   async function setVal(key: string, v: string) {
-    if (!v) return;
-    try { await post("env", { key, value: v }); toast(`Set ${key}`); setEditing(""); setValue(""); reload(); }
-    catch (e) { toast(String(e), "err"); }
+    if (!v) return false;
+    try {
+      await post("env", { key, value: v });
+      toast(`Set ${key}`);
+      setEditing("");
+      setValue("");
+      reload();
+      return true;
+    } catch (e) {
+      toast(String(e), "err");
+      return false;
+    }
   }
   async function remove(key: string) {
     try { await del(`env/${encodeURIComponent(key)}`); toast(`Removed ${key}`); reload(); }
@@ -37,7 +61,12 @@ export function Keys() {
               <Input className="flex-1" type="password" value={editing === "__new__" ? value : ""} placeholder="value (hidden)"
                 onFocus={() => setEditing("__new__")} onChange={(e) => setValue(e.target.value)} />
               <Button variant="primary" icon="plus" disabled={!newKey.trim() || !value}
-                onClick={() => { setVal(newKey.trim(), value); setNewKey(""); }}>Save</Button>
+                onClick={async () => {
+                  if (await setVal(newKey.trim(), value)) {
+                    setNewKey("");
+                    setSearchParams({});
+                  }
+                }}>Save</Button>
             </div>
           </Card>
           <Card title="Known keys" pad={false}>
@@ -50,7 +79,9 @@ export function Keys() {
                 {editing === k.key ? (
                   <Input autoFocus type="password" className="w-52" value={value} placeholder="new value"
                     onChange={(e) => setValue(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && setVal(k.key, value)} />
+                    onKeyDown={async (e) => {
+                      if (e.key === "Enter" && await setVal(k.key, value)) setSearchParams({});
+                    }} />
                 ) : (
                   <button onClick={() => { setEditing(k.key); setValue(""); }} className="text-faint hover:text-primary" title="Set value"><Icon name="config" size={15} /></button>
                 )}

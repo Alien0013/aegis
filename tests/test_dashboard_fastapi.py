@@ -697,6 +697,50 @@ def test_fastapi_config_and_env_control_plane(tmp_path, monkeypatch):
     assert delete_body.json()["ok"] is True
 
 
+def test_fastapi_env_rejects_invalid_keys_and_values(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    bad_key = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/env",
+        json={"key": "openai-api-key", "value": "sk-test"},
+        headers=headers,
+    ))
+    assert bad_key.status_code == 400
+    assert bad_key.json()["ok"] is False
+    assert "uppercase env var name" in bad_key.json()["error"]
+
+    empty = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/env",
+        json={"key": "OPENAI_API_KEY", "value": ""},
+        headers=headers,
+    ))
+    assert empty.status_code == 400
+    assert empty.json()["error"] == "value must not be empty"
+
+    multiline = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/env",
+        json={"key": "OPENAI_API_KEY", "value": "sk-test\nINJECTED_KEY=x"},
+        headers=headers,
+    ))
+    assert multiline.status_code == 400
+    assert multiline.json()["error"] == "value must fit on one .env line"
+
+    bad_delete = asyncio.run(_request(
+        app,
+        "DELETE",
+        "/api/env/not-valid",
+        headers=headers,
+    ))
+    assert bad_delete.status_code == 400
+
+
 def test_fastapi_provider_and_gateway_control_plane_routes(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
     headers = {"X-Aegis-Token": "t"}

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { del } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { Badge, Button, Card, Empty, Loading, MetricStrip, PageHeader, toast } from "../components/ui";
@@ -121,7 +122,16 @@ export function ProviderAuth() {
 
                     {!!row.missing_env_vars?.length && (
                       <div className="flex flex-wrap gap-1.5">
-                        {row.missing_env_vars.map((key) => <Badge key={key} tone="warning">{key}</Badge>)}
+                        {row.missing_env_vars.map((key) => (
+                          <Link
+                            key={key}
+                            to={`/env?key=${encodeURIComponent(key)}`}
+                            className="inline-flex"
+                            title={`Set ${key}`}
+                          >
+                            <Badge tone="warning">{key}</Badge>
+                          </Link>
+                        ))}
                       </div>
                     )}
 

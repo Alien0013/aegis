@@ -742,6 +742,29 @@ def _env_key_is_set(key: str) -> bool:
     return key in _env_file_values() or bool(os.environ.get(key))
 
 
+def _validate_env_key(key: Any) -> tuple[str, dict[str, Any] | None]:
+    from .secret_capture import validate_secret_key
+
+    try:
+        return validate_secret_key(str(key or "")), None
+    except ValueError as exc:
+        return "", {"ok": False, "error": str(exc)}
+
+
+def _validate_env_write(body: dict[str, Any]) -> tuple[str, str, dict[str, Any] | None]:
+    key, error = _validate_env_key(body.get("key"))
+    if error is not None:
+        return "", "", error
+    if "value" not in body:
+        return "", "", {"ok": False, "error": "missing value", "key": key}
+    value = str(body.get("value") or "")
+    if not value.strip():
+        return "", "", {"ok": False, "error": "value must not be empty", "key": key}
+    if any(ch in value for ch in ("\x00", "\r", "\n")):
+        return "", "", {"ok": False, "error": "value must fit on one .env line", "key": key}
+    return key, value, None
+
+
 def _delete_env_key(key: str) -> bool:
     from . import config as cfg
     from .util import atomic_write
@@ -766,24 +789,30 @@ def _delete_env_key(key: str) -> bool:
 
 
 def _env_set_payload(body: dict[str, Any]) -> tuple[dict[str, Any], int]:
-    key = str(body.get("key") or "").strip()
-    if not key:
-        return {"ok": False, "error": "missing key"}, 400
+    key, value, error = _validate_env_write(body)
+    if error is not None:
+        return error, 400
     from .config import set_env_var
 
-    set_env_var(key, str(body.get("value") or ""))
+    set_env_var(key, value)
     return {"ok": True, "key": key}, 200
 
 
 def _env_reveal_payload(key: str) -> tuple[dict[str, Any], int]:
+    key, error = _validate_env_key(key)
+    if error is not None:
+        return error, 400
     values = _env_file_values()
     if key not in values and key not in os.environ:
         return {"ok": False, "error": "key not set", "key": key}, 404
     return {"ok": True, "key": key, "value": values.get(key, os.environ.get(key, ""))}, 200
 
 
-def _env_delete_payload(key: str) -> dict[str, Any]:
-    return {"ok": _delete_env_key(key), "key": key}
+def _env_delete_payload(key: str) -> tuple[dict[str, Any], int]:
+    key, error = _validate_env_key(key)
+    if error is not None:
+        return error, 400
+    return {"ok": _delete_env_key(key), "key": key}, 200
 
 
 def _provider_auth_row(row: dict, config: Config) -> dict:
@@ -4509,12 +4538,8 @@ def _api_post(
     if path == "/api/providers/test":
         return _provider_probe(config, body)
     if path == "/api/keys":
-        from .config import set_env_var
-
-        if body.get("key"):
-            set_env_var(body["key"].strip(), body.get("value", ""))
-            return {"ok": True}
-        return {"error": "missing key"}
+        payload, _status = _env_set_payload(body)
+        return payload
     if path == "/api/pairing":
         from .gateway.pairing import PairingStore
 
@@ -5051,7 +5076,8 @@ def create_app(config: Config) -> FastAPI:
     @app.delete("/api/env/{key}")
     async def api_env_delete(key: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        return JSONResponse(_env_delete_payload(key))
+        payload, status = _env_delete_payload(key)
+        return JSONResponse(payload, status_code=status)
 
     @app.delete("/api/env")
     async def api_env_delete_body(request: Request) -> JSONResponse:
@@ -5063,7 +5089,8 @@ def create_app(config: Config) -> FastAPI:
         key = str((body if isinstance(body, dict) else {}).get("key") or "").strip()
         if not key:
             return JSONResponse({"ok": False, "error": "missing key"}, status_code=400)
-        return JSONResponse(_env_delete_payload(key))
+        payload, status = _env_delete_payload(key)
+        return JSONResponse(payload, status_code=status)
 
     @app.get("/api/providers")
     async def api_providers_get(request: Request) -> JSONResponse:
