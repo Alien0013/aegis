@@ -1869,6 +1869,44 @@ def test_gateway_webhook_channel_accepts_whatsapp_bridge_aliases():
     assert data_wrapped.metadata["remote_jid"] == "12025550123-222@g.us"
     assert data_wrapped.metadata["participant"] == "15557654321@s.whatsapp.net"
 
+    event_wrapped = WebhookChannel()._event_from_body({
+        "platform": "baileys",
+        "event": {
+            "messages": [{
+                "key": {
+                    "remoteJid": "12025550123-333@g.us",
+                    "participant": "15550001111@s.whatsapp.net",
+                    "id": "BAE522222",
+                },
+                "message": {
+                    "extendedTextMessage": {
+                        "text": "array wrapped text",
+                        "contextInfo": {
+                            "stanzaId": "QUOTEARRAY",
+                            "quotedMessage": {
+                                "extendedTextMessage": {"text": "array quoted text"},
+                            },
+                        },
+                    },
+                },
+            }],
+        },
+    })
+
+    assert event_wrapped.platform == "whatsapp"
+    assert event_wrapped.chat_id == "12025550123-333@g.us"
+    assert event_wrapped.text == "array wrapped text"
+    assert event_wrapped.user_id == "15550001111@s.whatsapp.net"
+    assert event_wrapped.message_id == "BAE522222"
+    assert event_wrapped.reply_to_message_id == "QUOTEARRAY"
+    assert event_wrapped.reply_to_text == "array quoted text"
+    assert event_wrapped.metadata["remote_jid"] == "12025550123-333@g.us"
+    assert event_wrapped.metadata["group_jid"] == "12025550123-333@g.us"
+    assert event_wrapped.metadata["participant"] == "15550001111@s.whatsapp.net"
+    assert WebhookChannel()._delivery_id({}, {
+        "event": {"messages": [{"key": {"id": "BAE522222"}}]},
+    }) == "body:event.messages.0.key.id:BAE522222"
+
 
 def test_gateway_webhook_channel_ignores_whatsapp_broadcast_pseudo_chats():
     from aegis.gateway.webhook_channel import WebhookChannel

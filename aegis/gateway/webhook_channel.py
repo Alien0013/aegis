@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
 
 import httpx
 
@@ -64,12 +65,22 @@ _WHATSAPP_BROADCAST_CHATS = {"status@broadcast"}
 _WHATSAPP_BROADCAST_SUFFIXES = ("@broadcast", "@newsletter")
 
 
-def _dig(source: dict, *path: str):
-    cur = source
+def _dig(source: dict, *path: Any):
+    cur: Any = source
     for key in path:
-        if not isinstance(cur, dict):
-            return None
-        cur = cur.get(key)
+        if isinstance(cur, dict):
+            cur = cur.get(key)
+            continue
+        if isinstance(cur, list):
+            try:
+                index = key if isinstance(key, int) else int(str(key))
+            except (TypeError, ValueError):
+                return None
+            if index < 0 or index >= len(cur):
+                return None
+            cur = cur[index]
+            continue
+        return None
     return cur
 
 
@@ -81,7 +92,7 @@ def _string_value(value) -> str:
     return ""
 
 
-def _first_string(source: dict, paths: tuple[tuple[str, ...], ...]) -> str:
+def _first_string(source: dict, paths: tuple[tuple[Any, ...], ...]) -> str:
     for path in paths:
         value = _dig(source, *path)
         text = _string_value(value)
@@ -208,10 +219,17 @@ class WebhookChannel(BasePlatformAdapter):
             value = str(body.get(key, "") or "").strip()
             if value:
                 return f"body:{key}:{value}"
-        for path in (("key", "id"), ("message", "key", "id"), ("data", "key", "id")):
+        for path in (
+            ("key", "id"),
+            ("message", "key", "id"),
+            ("data", "key", "id"),
+            ("messages", 0, "key", "id"),
+            ("data", "messages", 0, "key", "id"),
+            ("event", "messages", 0, "key", "id"),
+        ):
             value = _first_string(body, (path,))
             if value:
-                return f"body:{'.'.join(path)}:{value}"
+                return f"body:{'.'.join(str(part) for part in path)}:{value}"
         return ""
 
     def _event_from_body(self, body: dict) -> MessageEvent:
@@ -241,6 +259,12 @@ class WebhookChannel(BasePlatformAdapter):
             ("message", "key", "remote_jid"),
             ("data", "key", "remoteJid"),
             ("data", "key", "remote_jid"),
+            ("messages", 0, "key", "remoteJid"),
+            ("messages", 0, "key", "remote_jid"),
+            ("data", "messages", 0, "key", "remoteJid"),
+            ("data", "messages", 0, "key", "remote_jid"),
+            ("event", "messages", 0, "key", "remoteJid"),
+            ("event", "messages", 0, "key", "remote_jid"),
             ("jid",),
             ("from",),
             ("source",),
@@ -268,6 +292,18 @@ class WebhookChannel(BasePlatformAdapter):
             ("data", "message", "extendedTextMessage", "text"),
             ("data", "message", "imageMessage", "caption"),
             ("data", "message", "videoMessage", "caption"),
+            ("messages", 0, "message", "conversation"),
+            ("messages", 0, "message", "extendedTextMessage", "text"),
+            ("messages", 0, "message", "imageMessage", "caption"),
+            ("messages", 0, "message", "videoMessage", "caption"),
+            ("data", "messages", 0, "message", "conversation"),
+            ("data", "messages", 0, "message", "extendedTextMessage", "text"),
+            ("data", "messages", 0, "message", "imageMessage", "caption"),
+            ("data", "messages", 0, "message", "videoMessage", "caption"),
+            ("event", "messages", 0, "message", "conversation"),
+            ("event", "messages", 0, "message", "extendedTextMessage", "text"),
+            ("event", "messages", 0, "message", "imageMessage", "caption"),
+            ("event", "messages", 0, "message", "videoMessage", "caption"),
         ))
         user_id = _first_string(body, (
             ("user_id",),
@@ -281,6 +317,9 @@ class WebhookChannel(BasePlatformAdapter):
             ("data", "senderId"),
             ("data", "participant"),
             ("data", "key", "participant"),
+            ("messages", 0, "key", "participant"),
+            ("data", "messages", 0, "key", "participant"),
+            ("event", "messages", 0, "key", "participant"),
             ("author",),
             ("sender",),
             ("sender", "id"),
@@ -316,6 +355,12 @@ class WebhookChannel(BasePlatformAdapter):
             ("data", "id"),
             ("data", "key", "id"),
             ("data", "message", "id"),
+            ("messages", 0, "key", "id"),
+            ("data", "messages", 0, "key", "id"),
+            ("event", "messages", 0, "key", "id"),
+            ("messages", 0, "message", "id"),
+            ("data", "messages", 0, "message", "id"),
+            ("event", "messages", 0, "message", "id"),
         ))
         reply_to_message_id = _first_string(body, (
             ("reply_to_message_id",),
@@ -328,6 +373,18 @@ class WebhookChannel(BasePlatformAdapter):
             ("data", "message", "imageMessage", "contextInfo", "stanzaId"),
             ("data", "message", "videoMessage", "contextInfo", "stanzaId"),
             ("data", "message", "audioMessage", "contextInfo", "stanzaId"),
+            ("messages", 0, "message", "extendedTextMessage", "contextInfo", "stanzaId"),
+            ("messages", 0, "message", "imageMessage", "contextInfo", "stanzaId"),
+            ("messages", 0, "message", "videoMessage", "contextInfo", "stanzaId"),
+            ("messages", 0, "message", "audioMessage", "contextInfo", "stanzaId"),
+            ("data", "messages", 0, "message", "extendedTextMessage", "contextInfo", "stanzaId"),
+            ("data", "messages", 0, "message", "imageMessage", "contextInfo", "stanzaId"),
+            ("data", "messages", 0, "message", "videoMessage", "contextInfo", "stanzaId"),
+            ("data", "messages", 0, "message", "audioMessage", "contextInfo", "stanzaId"),
+            ("event", "messages", 0, "message", "extendedTextMessage", "contextInfo", "stanzaId"),
+            ("event", "messages", 0, "message", "imageMessage", "contextInfo", "stanzaId"),
+            ("event", "messages", 0, "message", "videoMessage", "contextInfo", "stanzaId"),
+            ("event", "messages", 0, "message", "audioMessage", "contextInfo", "stanzaId"),
             ("contextInfo", "stanzaId"),
         ))
         reply_to_text = _first_string(body, (
@@ -345,6 +402,18 @@ class WebhookChannel(BasePlatformAdapter):
             ("data", "message", "extendedTextMessage", "contextInfo", "quotedMessage", "videoMessage", "caption"),
             ("data", "message", "imageMessage", "contextInfo", "quotedMessage", "conversation"),
             ("data", "message", "videoMessage", "contextInfo", "quotedMessage", "conversation"),
+            ("messages", 0, "message", "extendedTextMessage", "contextInfo", "quotedMessage", "conversation"),
+            ("messages", 0, "message", "extendedTextMessage", "contextInfo", "quotedMessage", "extendedTextMessage", "text"),
+            ("messages", 0, "message", "extendedTextMessage", "contextInfo", "quotedMessage", "imageMessage", "caption"),
+            ("messages", 0, "message", "extendedTextMessage", "contextInfo", "quotedMessage", "videoMessage", "caption"),
+            ("data", "messages", 0, "message", "extendedTextMessage", "contextInfo", "quotedMessage", "conversation"),
+            ("data", "messages", 0, "message", "extendedTextMessage", "contextInfo", "quotedMessage", "extendedTextMessage", "text"),
+            ("data", "messages", 0, "message", "extendedTextMessage", "contextInfo", "quotedMessage", "imageMessage", "caption"),
+            ("data", "messages", 0, "message", "extendedTextMessage", "contextInfo", "quotedMessage", "videoMessage", "caption"),
+            ("event", "messages", 0, "message", "extendedTextMessage", "contextInfo", "quotedMessage", "conversation"),
+            ("event", "messages", 0, "message", "extendedTextMessage", "contextInfo", "quotedMessage", "extendedTextMessage", "text"),
+            ("event", "messages", 0, "message", "extendedTextMessage", "contextInfo", "quotedMessage", "imageMessage", "caption"),
+            ("event", "messages", 0, "message", "extendedTextMessage", "contextInfo", "quotedMessage", "videoMessage", "caption"),
             ("contextInfo", "quotedMessage", "conversation"),
             ("contextInfo", "quotedMessage", "extendedTextMessage", "text"),
         ))
@@ -395,6 +464,9 @@ class WebhookChannel(BasePlatformAdapter):
             ("key", "remote_jid"),
             ("message", "key", "remoteJid"),
             ("data", "key", "remoteJid"),
+            ("messages", 0, "key", "remoteJid"),
+            ("data", "messages", 0, "key", "remoteJid"),
+            ("event", "messages", 0, "key", "remoteJid"),
             ("jid",),
         )) or chat_id
         participant = _first_string(body, (
@@ -402,11 +474,17 @@ class WebhookChannel(BasePlatformAdapter):
             ("key", "participant"),
             ("message", "key", "participant"),
             ("data", "key", "participant"),
+            ("messages", 0, "key", "participant"),
+            ("data", "messages", 0, "key", "participant"),
+            ("event", "messages", 0, "key", "participant"),
         )) or user_id
         key_id = _first_string(body, (
             ("key", "id"),
             ("message", "key", "id"),
             ("data", "key", "id"),
+            ("messages", 0, "key", "id"),
+            ("data", "messages", 0, "key", "id"),
+            ("event", "messages", 0, "key", "id"),
         )) or message_id
         if remote_jid:
             metadata["remote_jid"] = remote_jid
