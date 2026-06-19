@@ -332,9 +332,17 @@ def _desktop_status(source: Any, target: Path, *, npm: str | None = None) -> dic
 
 
 def _aegis_bin() -> str:
-    env_bin = os.environ.get("AEGIS_BIN")
+    env_bin = str(os.environ.get("AEGIS_BIN") or "").strip()
     if env_bin:
-        return env_bin
+        env_path = Path(env_bin).expanduser()
+        path_like = env_path.is_absolute() or os.sep in env_bin or (os.altsep and os.altsep in env_bin)
+        if path_like:
+            if env_path.exists() and os.access(env_path, os.X_OK):
+                return str(env_path.resolve())
+        else:
+            found_env = shutil.which(env_bin)
+            if found_env:
+                return found_env
     found = shutil.which("aegis")
     if found:
         return found
@@ -408,7 +416,7 @@ def cmd_desktop(args, config) -> int:  # noqa: ARG001
         return _die(str(exc))
 
     env = os.environ.copy()
-    env.setdefault("AEGIS_BIN", _aegis_bin())
+    env["AEGIS_BIN"] = _aegis_bin()
     env.setdefault("AEGIS_HOME", str(cfg.get_home()))
     env["TERMINAL_CWD"] = terminal_cwd
 

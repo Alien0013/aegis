@@ -133,6 +133,20 @@ def test_desktop_aegis_bin_accepts_executable_argv_launcher(monkeypatch, tmp_pat
     assert desktop._aegis_bin() == str(launcher.resolve())
 
 
+def test_desktop_aegis_bin_ignores_stale_env_path(monkeypatch, tmp_path):
+    missing = tmp_path / "old" / "aegis"
+
+    monkeypatch.setenv("AEGIS_BIN", str(missing))
+    monkeypatch.setattr(
+        desktop.shutil,
+        "which",
+        lambda name: "/usr/local/bin/aegis" if name == "aegis" else None,
+    )
+    monkeypatch.setattr(desktop.sys, "argv", ["python"])
+
+    assert desktop._aegis_bin() == "/usr/local/bin/aegis"
+
+
 def test_desktop_launch_skips_install_when_dependencies_exist(monkeypatch, tmp_path):
     from aegis import config as cfg
 
@@ -175,6 +189,38 @@ def test_desktop_launch_skips_install_when_dependencies_exist(monkeypatch, tmp_p
     assert calls[1]["env"]["AEGIS_BIN"] == "/usr/local/bin/aegis"
     assert calls[1]["env"]["AEGIS_HOME"] == str(cfg.get_home())
     assert calls[1]["env"]["TERMINAL_CWD"] == str(project)
+
+
+def test_desktop_launch_replaces_stale_aegis_bin_env(monkeypatch, tmp_path):
+    source = _write_desktop_template(tmp_path / "source")
+    target = tmp_path / "runtime"
+    project = tmp_path / "project"
+    stale_bin = tmp_path / "old" / "aegis"
+    project.mkdir()
+    desktop._sync_desktop_app(source, target)
+    (target / "node_modules" / "electron").mkdir(parents=True)
+    calls: list[dict] = []
+
+    monkeypatch.setenv("AEGIS_DESKTOP_DIR", str(target))
+    monkeypatch.setenv("AEGIS_BIN", str(stale_bin))
+    monkeypatch.setattr(desktop, "_desktop_source", lambda: source)
+    monkeypatch.setattr(
+        desktop.shutil,
+        "which",
+        lambda name: "/usr/bin/npm" if name == "npm" else "/usr/local/bin/aegis",
+    )
+    monkeypatch.setattr(desktop.subprocess, "run", lambda cmd, cwd, env=None: calls.append({
+        "cmd": cmd,
+        "cwd": cwd,
+        "env": env,
+    }) or SimpleNamespace(returncode=0))
+
+    args = Namespace(install_only=False, reinstall=False, sandbox=False, source=True, cwd=str(project))
+    assert desktop.cmd_desktop(args, object()) == 0
+
+    assert calls[0]["cmd"] == ["/usr/bin/npm", "start"]
+    assert calls[0]["env"]["AEGIS_BIN"] == "/usr/local/bin/aegis"
+    assert calls[0]["env"]["TERMINAL_CWD"] == str(project)
 
 
 def test_desktop_source_launch_accepts_explicit_cwd(monkeypatch, tmp_path):
