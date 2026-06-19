@@ -1726,6 +1726,78 @@ def test_gateway_mattermost_webhook_secret_accepts_headers_and_body(monkeypatch)
     assert adapter._verify_webhook({}, {"token": "wrong"}) is False
 
 
+def test_gateway_mattermost_inbound_auth_idempotency_and_rate_limit(monkeypatch):
+    from aegis.gateway.mattermost_channel import MattermostAdapter
+
+    monkeypatch.setenv("MATTERMOST_URL", "https://mattermost.test")
+    monkeypatch.setenv("MATTERMOST_BOT_TOKEN", "mm-token")
+    monkeypatch.delenv("MATTERMOST_WEBHOOK_SECRET", raising=False)
+    monkeypatch.setenv("MATTERMOST_ALLOW_UNSIGNED_LOOPBACK", "0")
+    monkeypatch.setenv("MATTERMOST_RATE_LIMIT_PER_MINUTE", "2")
+
+    adapter = MattermostAdapter()
+    assert adapter.metadata["security"]["loopback_unsigned_allowed"] is False
+    assert adapter._auth_allowed({}, {}, "127.0.0.1") is False
+
+    monkeypatch.setenv("MATTERMOST_INSECURE_NO_AUTH", "1")
+    adapter = MattermostAdapter()
+    seen = []
+    adapter._submit_inbound = lambda ev, *, wait=False: seen.append((ev.chat_id, ev.text, wait)) or "reply"
+
+    body = {"channel_id": "channel-1", "text": "hello", "post_id": "post-1"}
+    status, payload = adapter._handle_inbound_payload({}, body, client_host="203.0.113.10")
+    duplicate_status, duplicate_payload = adapter._handle_inbound_payload({}, body, client_host="203.0.113.10")
+
+    assert status == 200
+    assert payload == {"text": "reply", "response_type": "comment"}
+    assert duplicate_status == 200
+    assert duplicate_payload == {"text": "", "response_type": "comment", "duplicate": True}
+    assert seen == [("channel-1", "hello", True)]
+
+    limited_status, limited_payload = adapter._handle_inbound_payload(
+        {},
+        {"channel_id": "channel-1", "text": "again", "post_id": "post-2"},
+        client_host="203.0.113.10",
+    )
+    assert limited_status == 429
+    assert limited_payload == {"error": "rate limit exceeded"}
+
+
+def test_gateway_mattermost_allows_retry_after_dispatch_failure(monkeypatch):
+    from aegis.gateway.mattermost_channel import MattermostAdapter
+
+    monkeypatch.setenv("MATTERMOST_URL", "https://mattermost.test")
+    monkeypatch.setenv("MATTERMOST_BOT_TOKEN", "mm-token")
+    monkeypatch.setenv("MATTERMOST_WEBHOOK_SECRET", "secret-token")
+
+    adapter = MattermostAdapter()
+    attempts = []
+
+    def fail_once(ev, *, wait=False):
+        attempts.append((ev.chat_id, ev.text, wait))
+        raise RuntimeError("mattermost down")
+
+    adapter._submit_inbound = fail_once
+    headers = {"X-Secret": "secret-token", "Idempotency-Key": "delivery-1"}
+    body = {"channel_id": "channel-1", "text": "hello"}
+
+    status, payload = adapter._handle_inbound_payload(headers, body)
+    assert status == 500
+    assert "mattermost down" in payload["error"]
+    assert adapter._delivery_cache.stats()["entries"] == 0
+    assert adapter._delivery_cache.stats()["discarded_count"] == 1
+
+    adapter._submit_inbound = lambda ev, *, wait=False: f"reply:{ev.text}"
+    retry_status, retry_payload = adapter._handle_inbound_payload(headers, body)
+    duplicate_status, duplicate_payload = adapter._handle_inbound_payload(headers, body)
+
+    assert retry_status == 200
+    assert retry_payload == {"text": "reply:hello", "response_type": "comment"}
+    assert duplicate_status == 200
+    assert duplicate_payload == {"text": "", "response_type": "comment", "duplicate": True}
+    assert attempts == [("channel-1", "hello", True)]
+
+
 def test_gateway_mattermost_send_uses_clean_root_id(monkeypatch):
     from aegis.gateway import mattermost_channel
     from aegis.gateway.mattermost_channel import MattermostAdapter

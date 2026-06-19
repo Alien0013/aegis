@@ -15,6 +15,7 @@ from urllib.parse import parse_qs
 import httpx
 
 from ..platforms import chunk_text_by_units, normalize_inbound_command
+from ..webhook import DeliveryIdCache, FixedWindowRateLimiter, _env_truthy, _is_loopback_host
 from .base import BasePlatformAdapter, Dispatch, MessageEvent
 
 _NULL_THREAD_IDS = {"", "none", "null", "undefined"}
@@ -26,6 +27,17 @@ def _env_int(name: str, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return value if value > 0 else default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    if name not in os.environ:
+        return default
+    value = os.environ.get(name, "").strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 class MattermostAdapter(BasePlatformAdapter):
@@ -50,6 +62,15 @@ class MattermostAdapter(BasePlatformAdapter):
             or ""
         )
         self.bot_user_id = os.environ.get("MATTERMOST_BOT_USER_ID", "").strip()
+        self.allow_unsigned_loopback = _env_bool("MATTERMOST_ALLOW_UNSIGNED_LOOPBACK", True)
+        self._delivery_cache = DeliveryIdCache(
+            ttl_seconds=float(_env_int("MATTERMOST_IDEMPOTENCY_TTL_SECONDS", 3600)),
+            max_items=_env_int("MATTERMOST_IDEMPOTENCY_CACHE_MAX", 10000),
+        )
+        self._rate_limiter = FixedWindowRateLimiter(
+            limit=_env_int("MATTERMOST_RATE_LIMIT_PER_MINUTE", 60),
+            window_seconds=60,
+        )
 
     @property
     def metadata(self) -> dict:
@@ -59,7 +80,21 @@ class MattermostAdapter(BasePlatformAdapter):
             "security": {
                 "webhook_secret_configured": bool(self.webhook_secret),
                 "auth_type": "bearer",
+                "loopback_unsigned_allowed": self.allow_unsigned_loopback,
+                "insecure_env_override": _env_truthy("MATTERMOST_INSECURE_NO_AUTH"),
             },
+            "idempotency": {
+                "delivery_id_sources": [
+                    "X-Request-ID",
+                    "X-Request-Id",
+                    "Idempotency-Key",
+                    "body.post_id",
+                    "body.id",
+                    "body.message_id",
+                ],
+                "delivery_cache": self._delivery_cache.stats(),
+            },
+            "rate_limiter": self._rate_limiter.stats(),
         })
         return data
 
@@ -224,6 +259,44 @@ class MattermostAdapter(BasePlatformAdapter):
         )
         return hmac.compare_digest(str(supplied or ""), self.webhook_secret)
 
+    def _auth_allowed(self, headers, body: dict, client_host: str) -> bool:
+        if self.webhook_secret:
+            return self._verify_webhook(headers, body)
+        return _env_truthy("MATTERMOST_INSECURE_NO_AUTH") or (
+            self.allow_unsigned_loopback and _is_loopback_host(client_host)
+        )
+
+    def _delivery_id(self, headers, body: dict) -> str:
+        for name in ("X-Request-ID", "X-Request-Id", "Idempotency-Key"):
+            value = str(headers.get(name, "") or "").strip()
+            if value:
+                return f"{name.lower()}:{value}"
+        for key in ("post_id", "id", "message_id"):
+            value = str(body.get(key, "") or "").strip()
+            if value:
+                return f"body:{key}:{value}"
+        return ""
+
+    def _handle_inbound_payload(self, headers, body: dict, *, client_host: str = "127.0.0.1") -> tuple[int, dict]:
+        if not self._rate_limiter.allow(str(client_host or "")):
+            return 429, {"error": "rate limit exceeded"}
+        if not self._auth_allowed(headers, body, client_host):
+            return 401, {"error": "invalid webhook token"}
+        delivery_id = self._delivery_id(headers, body)
+        delivery_recorded = False
+        if delivery_id:
+            delivery_recorded = self._delivery_cache.record(delivery_id)
+            if not delivery_recorded:
+                return 200, {"text": "", "response_type": "comment", "duplicate": True}
+        try:
+            ev = self._event_from_body(body)
+            reply = self._submit_inbound(ev, wait=True) or ""
+        except Exception as exc:  # noqa: BLE001
+            if delivery_recorded:
+                self._delivery_cache.discard(delivery_id)
+            return 500, {"error": f"dispatch failed: {type(exc).__name__}: {exc}"}
+        return 200, {"text": reply, "response_type": "comment"}
+
     def _parse_body(self, raw: bytes, content_type: str) -> dict:
         if "application/json" in content_type:
             data = json.loads(raw.decode("utf-8") or "{}")
@@ -259,11 +332,9 @@ class MattermostAdapter(BasePlatformAdapter):
                     body = adapter._parse_body(raw, self.headers.get("content-type", ""))
                 except Exception:  # noqa: BLE001
                     return self._json(400, {"error": "invalid body"})
-                if not adapter._verify_webhook(self.headers, body):
-                    return self._json(401, {"error": "invalid webhook token"})
-                ev = adapter._event_from_body(body)
-                reply = adapter._submit_inbound(ev, wait=True) or ""
-                return self._json(200, {"text": reply, "response_type": "comment"})
+                client_host = str((self.client_address or ("",))[0] or "")
+                status, payload = adapter._handle_inbound_payload(self.headers, body, client_host=client_host)
+                return self._json(status, payload)
 
         httpd = ThreadingHTTPServer(("0.0.0.0", self.port), Handler)
         print(f"  - mattermost channel listening on :{self.port}/in")
