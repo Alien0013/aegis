@@ -10,6 +10,7 @@ import hmac
 import importlib
 import importlib.util
 import json
+import logging
 import mimetypes
 import os
 import queue
@@ -51,6 +52,7 @@ _DESKTOP_CRON_STARTED = False
 _DESKTOP_CRON_LOCK = threading.Lock()
 _DASHBOARD_PLUGIN_API_MOUNT_STATUS: dict[str, dict[str, Any]] = {}
 _DASHBOARD_PLUGIN_API_MOUNT_LOCK = threading.Lock()
+logger = logging.getLogger(__name__)
 
 
 def _coerce_dashboard_bool(value: Any, default: bool = False) -> bool:
@@ -3285,6 +3287,43 @@ def _cron_job_detail(job_id: str) -> dict:
     return {"found": False, "id": job_id, "error": "cron job not found"}
 
 
+def _cron_job_invalid_id_response(job_id: str, request: Request | None = None) -> JSONResponse | None:
+    from .cron import _SAFE_JOB_ID_RE
+
+    text = str(job_id or "").strip()
+    valid = (
+        bool(text)
+        and text not in {".", ".."}
+        and "/" not in text
+        and "\\" not in text
+        and "\x00" not in text
+        and _SAFE_JOB_ID_RE.fullmatch(text) is not None
+    )
+    if valid:
+        return None
+    method = ""
+    path = ""
+    forwarded_for = ""
+    user_agent = ""
+    if request is not None:
+        method = request.method
+        path = request.url.path
+        forwarded_for = request.headers.get("X-Forwarded-For", "")
+        user_agent = request.headers.get("User-Agent", "")
+    logger.warning(
+        "Cron jobs API rejected invalid job_id %r method=%s path=%s forwarded_for=%s user_agent=%s",
+        text,
+        method,
+        path,
+        forwarded_for,
+        user_agent,
+    )
+    return JSONResponse(
+        {"ok": False, "error": "Invalid job ID", "code": "invalid_job_id", "id": text},
+        status_code=400,
+    )
+
+
 def _cron_context_refs(raw: Any) -> list[str]:
     if raw is None:
         return []
@@ -3351,9 +3390,12 @@ def _cron_job_create_response(config: Config, body: dict[str, Any]) -> JSONRespo
     return JSONResponse({"ok": True, "id": job.id, "job": _cron_job_detail(job.id)["job"]})
 
 
-def _cron_job_patch_response(job_id: str, body: dict[str, Any]) -> JSONResponse:
+def _cron_job_patch_response(job_id: str, body: dict[str, Any], request: Request | None = None) -> JSONResponse:
     from .cron import CronStore, _scan_cron_prompt
 
+    invalid = _cron_job_invalid_id_response(job_id, request)
+    if invalid is not None:
+        return invalid
     store = CronStore()
     updates = {key: body[key] for key in (
         "schedule", "prompt", "name", "channel", "enabled", "script", "skills", "context_from", "deliver",
@@ -3381,23 +3423,29 @@ def _cron_job_patch_response(job_id: str, body: dict[str, Any]) -> JSONResponse:
     return JSONResponse({"ok": True, "id": job.id, "job": _cron_job_detail(job.id)["job"]})
 
 
-def _cron_job_put_response(job_id: str, body: dict[str, Any]) -> JSONResponse:
+def _cron_job_put_response(job_id: str, body: dict[str, Any], request: Request | None = None) -> JSONResponse:
     updates = body.get("updates", body) if isinstance(body, dict) else {}
     if not isinstance(updates, dict):
         return JSONResponse({"ok": False, "error": "updates must be an object"}, status_code=400)
-    return _cron_job_patch_response(job_id, updates)
+    return _cron_job_patch_response(job_id, updates, request)
 
 
-def _cron_job_delete_response(job_id: str) -> JSONResponse:
+def _cron_job_delete_response(job_id: str, request: Request | None = None) -> JSONResponse:
     from .cron import CronStore
 
+    invalid = _cron_job_invalid_id_response(job_id, request)
+    if invalid is not None:
+        return invalid
     ok = CronStore().remove(job_id)
     return JSONResponse({"ok": ok, "id": job_id}, status_code=200 if ok else 404)
 
 
-def _cron_job_enabled_response(job_id: str, enabled: bool) -> JSONResponse:
+def _cron_job_enabled_response(job_id: str, enabled: bool, request: Request | None = None) -> JSONResponse:
     from .cron import CronStore
 
+    invalid = _cron_job_invalid_id_response(job_id, request)
+    if invalid is not None:
+        return invalid
     ok = CronStore().set_enabled(job_id, enabled)
     if not ok:
         return JSONResponse({"ok": False, "error": "cron job not found", "id": job_id}, status_code=404)
@@ -3405,9 +3453,12 @@ def _cron_job_enabled_response(job_id: str, enabled: bool) -> JSONResponse:
     return JSONResponse({"ok": True, "id": job_id, "paused": not enabled, "job": detail["job"]})
 
 
-def _cron_job_run_response(config: Config, job_id: str) -> JSONResponse:
+def _cron_job_run_response(config: Config, job_id: str, request: Request | None = None) -> JSONResponse:
     from .cron import CronStore, build_delivery_sink, run_job
 
+    invalid = _cron_job_invalid_id_response(job_id, request)
+    if invalid is not None:
+        return invalid
     store = CronStore()
     if store.get(job_id) is None:
         return JSONResponse({"ok": False, "error": "cron job not found", "id": job_id}, status_code=404)
@@ -3415,7 +3466,10 @@ def _cron_job_run_response(config: Config, job_id: str) -> JSONResponse:
     return JSONResponse(run_job(config, job_id, sink=sink, store=store, verbose=False))
 
 
-def _cron_job_runs_response(job_id: str, query: dict[str, list[str]]) -> JSONResponse:
+def _cron_job_runs_response(job_id: str, query: dict[str, list[str]], request: Request | None = None) -> JSONResponse:
+    invalid = _cron_job_invalid_id_response(job_id, request)
+    if invalid is not None:
+        return invalid
     try:
         limit = max(1, min(100, int(str(query.get("limit", ["20"])[0] or "20"))))
     except (TypeError, ValueError):
@@ -6219,6 +6273,9 @@ def create_app(config: Config) -> FastAPI:
     @app.get("/api/cron/jobs/{job_id}")
     async def api_cron_job_detail(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
+        invalid = _cron_job_invalid_id_response(job_id, request)
+        if invalid is not None:
+            return invalid
         detail = _cron_job_detail(job_id)
         return JSONResponse(detail, status_code=200 if detail.get("found") else 404)
 
@@ -6226,43 +6283,43 @@ def create_app(config: Config) -> FastAPI:
     async def api_cron_job_patch(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
         body = await request.json()
-        return _cron_job_patch_response(job_id, body)
+        return _cron_job_patch_response(job_id, body, request)
 
     @app.put("/api/cron/jobs/{job_id}")
     async def api_cron_job_put(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
         body = await request.json()
-        return _cron_job_put_response(job_id, body if isinstance(body, dict) else {})
+        return _cron_job_put_response(job_id, body if isinstance(body, dict) else {}, request)
 
     @app.delete("/api/cron/jobs/{job_id}")
     async def api_cron_job_delete(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        return _cron_job_delete_response(job_id)
+        return _cron_job_delete_response(job_id, request)
 
     @app.get("/api/cron/jobs/{job_id}/runs")
     async def api_cron_job_runs(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        return _cron_job_runs_response(job_id, _query_dict(request))
+        return _cron_job_runs_response(job_id, _query_dict(request), request)
 
     @app.post("/api/cron/jobs/{job_id}/run")
     async def api_cron_job_run(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        return _cron_job_run_response(config, job_id)
+        return _cron_job_run_response(config, job_id, request)
 
     @app.post("/api/cron/jobs/{job_id}/trigger")
     async def api_cron_job_trigger(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        return _cron_job_run_response(config, job_id)
+        return _cron_job_run_response(config, job_id, request)
 
     @app.post("/api/cron/jobs/{job_id}/pause")
     async def api_cron_job_pause(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        return _cron_job_enabled_response(job_id, False)
+        return _cron_job_enabled_response(job_id, False, request)
 
     @app.post("/api/cron/jobs/{job_id}/resume")
     async def api_cron_job_resume(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        return _cron_job_enabled_response(job_id, True)
+        return _cron_job_enabled_response(job_id, True, request)
 
     @app.get("/api/jobs")
     async def api_jobs(request: Request) -> JSONResponse:
@@ -6278,6 +6335,9 @@ def create_app(config: Config) -> FastAPI:
     @app.get("/api/jobs/{job_id}")
     async def api_job_detail(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
+        invalid = _cron_job_invalid_id_response(job_id, request)
+        if invalid is not None:
+            return invalid
         detail = _cron_job_detail(job_id)
         return JSONResponse(detail, status_code=200 if detail.get("found") else 404)
 
@@ -6285,32 +6345,32 @@ def create_app(config: Config) -> FastAPI:
     async def api_job_patch(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
         body = await request.json()
-        return _cron_job_patch_response(job_id, body)
+        return _cron_job_patch_response(job_id, body, request)
 
     @app.delete("/api/jobs/{job_id}")
     async def api_job_delete(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        return _cron_job_delete_response(job_id)
+        return _cron_job_delete_response(job_id, request)
 
     @app.post("/api/jobs/{job_id}/pause")
     async def api_job_pause(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        return _cron_job_enabled_response(job_id, False)
+        return _cron_job_enabled_response(job_id, False, request)
 
     @app.post("/api/jobs/{job_id}/resume")
     async def api_job_resume(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        return _cron_job_enabled_response(job_id, True)
+        return _cron_job_enabled_response(job_id, True, request)
 
     @app.post("/api/jobs/{job_id}/run")
     async def api_job_run(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        return _cron_job_run_response(config, job_id)
+        return _cron_job_run_response(config, job_id, request)
 
     @app.post("/api/jobs/{job_id}/trigger")
     async def api_job_trigger(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        return _cron_job_run_response(config, job_id)
+        return _cron_job_run_response(config, job_id, request)
 
     @app.get("/api/cron/service")
     async def api_cron_service_get(request: Request) -> JSONResponse:

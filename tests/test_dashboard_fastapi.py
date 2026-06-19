@@ -4,6 +4,7 @@ import asyncio
 import base64
 import copy
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import types
@@ -3551,6 +3552,40 @@ def test_fastapi_cron_control_plane(tmp_path, monkeypatch):
     alias_delete = asyncio.run(_request(app, "DELETE", f"/api/jobs/{alias_job_id}", headers=headers))
     assert alias_delete.status_code == 200
     assert alias_delete.json()["ok"] is True
+
+
+def test_fastapi_cron_job_routes_reject_invalid_ids(tmp_path, monkeypatch, caplog):
+    app = _app(tmp_path, monkeypatch)
+    headers = {
+        "X-Aegis-Token": "t",
+        "X-Forwarded-For": "203.0.113.9",
+        "User-Agent": "aegis-dashboard-test",
+    }
+    caplog.set_level(logging.WARNING, logger="aegis.dashboard_fastapi")
+
+    calls = [
+        ("GET", "/api/jobs/not-a-valid-hex!", {}),
+        ("PATCH", "/api/cron/jobs/not-a-valid-hex!", {"json": {}}),
+        ("DELETE", "/api/cron/jobs/not-a-valid-hex!", {}),
+        ("POST", "/api/jobs/not-a-valid-hex!/pause", {}),
+        ("POST", "/api/jobs/not-a-valid-hex!/run", {}),
+        ("GET", "/api/cron/jobs/not-a-valid-hex!/runs", {}),
+    ]
+    results = [
+        asyncio.run(_request(app, method, path, headers=headers, **kwargs))
+        for method, path, kwargs in calls
+    ]
+
+    for response in results:
+        payload = response.json()
+        assert response.status_code == 400
+        assert payload["ok"] is False
+        assert payload["code"] == "invalid_job_id"
+        assert "Invalid" in payload["error"]
+    logs = "\n".join(record.getMessage() for record in caplog.records)
+    assert "Cron jobs API rejected invalid job_id" in logs
+    assert "203.0.113.9" in logs
+    assert "aegis-dashboard-test" in logs
 
 
 def test_fastapi_gateway_control_plane(tmp_path, monkeypatch):
