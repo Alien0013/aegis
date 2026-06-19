@@ -551,9 +551,11 @@ def test_telegram_adapter_enforces_chat_filters_and_group_addressing(monkeypatch
         **base,
         "text": "@aegis_bot hello",
         "message_thread_id": 77,
+        "is_topic_message": True,
         "from": {"id": 7, "username": "ada"},
     }
     assert adapter._message_thread_id(topic_msg) == "77"
+    assert adapter._message_thread_id({**topic_msg, "is_topic_message": False}) is None
     assert adapter._event_text(topic_msg, "@aegis_bot hello") == "[ada]: hello"
     assert adapter._conversation_key(MessageEvent(
         platform="telegram",
@@ -596,6 +598,23 @@ def test_telegram_adapter_enforces_chat_filters_and_group_addressing(monkeypatch
         "text": "topic reply",
         "message_thread_id": "77",
     })
+
+    api_calls.clear()
+
+    def fake_api_thread_missing(method, **params):
+        api_calls.append((method, params))
+        if params.get("message_thread_id") == "gone":
+            raise RuntimeError("Bad Request: message thread not found")
+        if method == "sendMessage":
+            return {"result": {"message_id": 456}}
+        return {}
+
+    adapter._api = fake_api_thread_missing
+    adapter.send("42", "fallback reply", metadata={"message_thread_id": "gone"})
+    assert api_calls == [
+        ("sendMessage", {"chat_id": "42", "text": "fallback reply", "message_thread_id": "gone"}),
+        ("sendMessage", {"chat_id": "42", "text": "fallback reply"}),
+    ]
 
 
 def test_telegram_adapter_builds_inbound_attachment_rows(monkeypatch):
@@ -754,6 +773,8 @@ def test_slack_adapter_enforces_workspace_filters_and_strips_mentions(monkeypatc
     adapter = SlackAdapter()
 
     assert adapter._event_allowed({"user": "U1", "channel": "C1", "team": "T1"}) is True
+    assert adapter._resolve_thread_ts({"ts": "171.1"}) is None
+    assert adapter._resolve_thread_ts({"ts": "171.2", "thread_ts": "171.1"}) == "171.1"
     assert adapter._event_allowed({"user": "U3", "channel": "C1", "team": "T1"}) is False
     assert adapter._event_allowed({"user": "U1", "channel": "C2", "team": "T1"}) is False
     assert adapter._event_allowed({"user": "U1", "channel": "C9", "team": "T1"}) is False
@@ -835,6 +856,29 @@ def test_slack_adapter_enforces_workspace_filters_and_strips_mentions(monkeypatc
         "channel": "C1",
         "team": "T1",
     }) is False
+
+    monkeypatch.setenv("SLACK_REPLY_IN_THREAD", "1")
+    threaded_adapter = SlackAdapter()
+    assert threaded_adapter._resolve_thread_ts({"ts": "171.1"}) == "171.1"
+
+    posts = []
+
+    class FakeSlackClient:
+        def chat_postMessage(self, **kwargs):
+            posts.append(kwargs)
+
+    class FakeSlackApp:
+        client = FakeSlackClient()
+
+    from aegis.gateway.base import MessageEvent
+
+    adapter._app = FakeSlackApp()
+    adapter._deliver_reply(MessageEvent(platform="slack", chat_id="C1", text="", thread_id=None), "flat reply")
+    adapter._deliver_reply(MessageEvent(platform="slack", chat_id="C1", text="", thread_id="171.1"), "thread reply")
+    assert posts == [
+        {"channel": "C1", "text": "flat reply"},
+        {"channel": "C1", "text": "thread reply", "thread_ts": "171.1"},
+    ]
 
 
 def test_gateway_webhook_channel_normalizes_event_body():
@@ -1244,6 +1288,82 @@ def test_gateway_mattermost_send_uses_clean_root_id(monkeypatch):
     assert sent[3][2] == {"channel_id": "channel-1", "message": "null root"}
     assert sent[4][2] == {"channel_id": "channel-1", "message": "parent reply", "root_id": "root-2"}
     assert sent[5][2] == {"channel_id": "channel-1", "message": "self root"}
+
+
+def test_gateway_mattermost_resolves_child_roots_and_falls_back_flat(monkeypatch):
+    import pytest
+
+    from aegis.gateway import mattermost_channel
+    from aegis.gateway.mattermost_channel import MattermostAdapter
+
+    monkeypatch.setenv("MATTERMOST_URL", "https://mattermost.test")
+    monkeypatch.setenv("MATTERMOST_BOT_TOKEN", "mm-token")
+    calls = []
+    post_responses = []
+    get_payloads = {}
+
+    class FakeResponse:
+        def __init__(self, status_code=200, text="", payload=None):
+            self.status_code = status_code
+            self.text = text
+            self._payload = payload or {}
+            self.request = mattermost_channel.httpx.Request("POST", "https://mattermost.test/api/v4/posts")
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                response = mattermost_channel.httpx.Response(
+                    self.status_code,
+                    text=self.text,
+                    request=self.request,
+                )
+                raise mattermost_channel.httpx.HTTPStatusError(
+                    self.text or "mattermost error",
+                    request=self.request,
+                    response=response,
+                )
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get(self, url, *, headers):
+            calls.append(("GET", url, headers, None))
+            post_id = url.rsplit("/", 1)[-1]
+            payload = get_payloads.get(post_id)
+            if payload is None:
+                return FakeResponse(404, "root post not found")
+            return FakeResponse(payload=payload)
+
+        def post(self, url, *, headers, json):
+            calls.append(("POST", url, headers, dict(json)))
+            return post_responses.pop(0) if post_responses else FakeResponse()
+
+    monkeypatch.setattr(mattermost_channel.httpx, "Client", FakeClient)
+
+    adapter = MattermostAdapter()
+    get_payloads["child-1"] = {"id": "child-1", "root_id": "root-1"}
+    adapter.send("channel-1", "resolved", metadata={"root_id": "child-1"})
+    assert calls[-1][3] == {"channel_id": "channel-1", "message": "resolved", "root_id": "root-1"}
+
+    calls.clear()
+    post_responses[:] = [FakeResponse(404, "invalid root_id"), FakeResponse()]
+    adapter.send("channel-1", "fallback", metadata={"root_id": "stale-root"})
+    assert calls[-2][3] == {"channel_id": "channel-1", "message": "fallback", "root_id": "stale-root"}
+    assert calls[-1][3] == {"channel_id": "channel-1", "message": "fallback"}
+
+    calls.clear()
+    post_responses[:] = [FakeResponse(500, "server exploded")]
+    with pytest.raises(mattermost_channel.httpx.HTTPStatusError):
+        adapter.send("channel-1", "boom", metadata={"root_id": "root-500"})
 
 
 def test_shared_inbound_records_delivery_runs(monkeypatch, tmp_path):

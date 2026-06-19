@@ -74,6 +74,36 @@ class MattermostAdapter(BasePlatformAdapter):
             return ""
         return root_id
 
+    def _resolve_root_id(self, client: httpx.Client, chat_id: str, metadata: dict | None = None) -> str:
+        root_id = self._root_id(chat_id, metadata)
+        if not root_id:
+            return ""
+        try:
+            response = client.get(f"{self.base_url}/api/v4/posts/{root_id}", headers={"Authorization": f"Bearer {self.token}"})
+            response.raise_for_status()
+            post = response.json()
+        except Exception:  # noqa: BLE001
+            return root_id
+        if not isinstance(post, dict):
+            return root_id
+        resolved = str(post.get("root_id") or "").strip()
+        if resolved.lower() in _NULL_THREAD_IDS:
+            return root_id
+        return resolved or root_id
+
+    def _broken_root_response(self, exc: httpx.HTTPStatusError) -> bool:
+        status = getattr(exc.response, "status_code", 0)
+        if status not in {400, 404}:
+            return False
+        try:
+            text = exc.response.text
+        except Exception:  # noqa: BLE001
+            text = ""
+        lowered = str(text or "").lower()
+        if not lowered:
+            return True
+        return "root" in lowered or "thread" in lowered or "post" in lowered
+
     def _event_from_body(self, body: dict) -> MessageEvent:
         raw_text = str(body.get("text") or body.get("message") or "")
         text = normalize_inbound_command(raw_text, platform="mattermost")
@@ -159,11 +189,18 @@ class MattermostAdapter(BasePlatformAdapter):
 
     def send(self, chat_id: str, text: str, *, metadata: dict | None = None) -> None:
         headers = {"Authorization": f"Bearer {self.token}"}
-        root_id = self._root_id(chat_id, metadata)
         with httpx.Client(timeout=30) as client:
+            root_id = self._resolve_root_id(client, chat_id, metadata)
             for chunk in chunk_text_by_units(text, limit=16000):
                 payload = {"channel_id": chat_id, "message": chunk}
                 if root_id:
                     payload["root_id"] = root_id
                 response = client.post(f"{self.base_url}/api/v4/posts", headers=headers, json=payload)
-                response.raise_for_status()
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    if not root_id or not self._broken_root_response(exc):
+                        raise
+                    fallback = {"channel_id": chat_id, "message": chunk}
+                    retry = client.post(f"{self.base_url}/api/v4/posts", headers=headers, json=fallback)
+                    retry.raise_for_status()

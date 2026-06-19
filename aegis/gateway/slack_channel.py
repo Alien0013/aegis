@@ -42,6 +42,7 @@ class SlackAdapter(BasePlatformAdapter):
         self.allowed_teams = _csv_set(os.environ.get("SLACK_ALLOWED_TEAMS", ""))
         self.bot_user_id = os.environ.get("SLACK_BOT_USER_ID", "").strip()
         self.trigger_mode = os.environ.get("SLACK_TRIGGER_MODE", "all").strip().lower() or "all"
+        self.reply_in_thread = _env_truthy("SLACK_REPLY_IN_THREAD")
 
     @property
     def metadata(self) -> dict:
@@ -54,6 +55,7 @@ class SlackAdapter(BasePlatformAdapter):
             "allowed_teams_configured": bool(self.allowed_teams),
             "bot_user_id_configured": bool(self.bot_user_id),
             "trigger_mode": self.trigger_mode,
+            "reply_in_thread": self.reply_in_thread,
         }
         return data
 
@@ -74,7 +76,7 @@ class SlackAdapter(BasePlatformAdapter):
             if not self._event_allowed(event, raw_text):
                 return
             text = normalize_inbound_command(self._strip_own_mentions(raw_text), platform="slack")
-            thread_id = event.get("thread_ts") or event.get("ts")
+            thread_id = self._resolve_thread_ts(event)
             ev = MessageEvent(
                 platform="slack", chat_id=event["channel"],
                 text=text, user_id=event.get("user"),
@@ -84,11 +86,21 @@ class SlackAdapter(BasePlatformAdapter):
                 metadata={
                     "team": event.get("team"),
                     "channel_type": event.get("channel_type"),
+                    "thread_ts": thread_id,
                 },
             )
             self._submit_inbound(ev, raw_text=raw_text)
 
         SocketModeHandler(app, self.app_token).start()
+
+    def _resolve_thread_ts(self, event: dict) -> str | None:
+        thread_ts = str(event.get("thread_ts") or "").strip()
+        ts = str(event.get("ts") or "").strip()
+        if thread_ts and thread_ts != ts:
+            return thread_ts
+        if self.reply_in_thread:
+            return thread_ts or ts or None
+        return None
 
     def _event_allowed(self, event: dict, raw_text: str | None = None) -> bool:
         subtype = str(event.get("subtype") or "")
@@ -162,10 +174,9 @@ class SlackAdapter(BasePlatformAdapter):
             from .base import tableify
 
             for chunk in chunk_text_by_units(tableify(reply), limit=39000):
-                self._app.client.chat_postMessage(
-                    channel=ev.chat_id,
-                    text=chunk,
-                    thread_ts=ev.thread_id,
-                )
+                kwargs = {"channel": ev.chat_id, "text": chunk}
+                if ev.thread_id:
+                    kwargs["thread_ts"] = ev.thread_id
+                self._app.client.chat_postMessage(**kwargs)
         except Exception:  # noqa: BLE001
             pass

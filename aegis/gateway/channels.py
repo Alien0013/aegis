@@ -148,6 +148,10 @@ class TelegramAdapter(BasePlatformAdapter):
 
     def _message_thread_id(self, msg: dict) -> str | None:
         thread_id = str(msg.get("message_thread_id") or "").strip()
+        if not thread_id:
+            return None
+        if not bool(msg.get("is_topic_message")):
+            return None
         return thread_id or None
 
     def _raw_message_text(self, msg: dict) -> str:
@@ -337,6 +341,19 @@ class TelegramAdapter(BasePlatformAdapter):
         thread_id = (metadata or {}).get("message_thread_id") or (metadata or {}).get("thread_id")
         return {"message_thread_id": str(thread_id)} if thread_id else {}
 
+    def _api_with_thread_fallback(self, method: str, **params):
+        try:
+            return self._api(method, **params)
+        except Exception as exc:  # noqa: BLE001
+            if "message_thread_id" not in params or not self._telegram_thread_not_found(exc):
+                raise
+            retry = {key: value for key, value in params.items() if key != "message_thread_id"}
+            return self._api(method, **retry)
+
+    def _telegram_thread_not_found(self, exc: Exception) -> bool:
+        text = str(exc or "").lower()
+        return "message thread not found" in text or "thread not found" in text
+
     def _call_with_metadata(self, fn, *args, metadata: dict | None = None):
         import inspect
 
@@ -350,13 +367,13 @@ class TelegramAdapter(BasePlatformAdapter):
 
     def _typing(self, chat_id: str, *, metadata: dict | None = None) -> None:
         try:
-            self._api("sendChatAction", chat_id=chat_id, action="typing", **self._thread_params(metadata))
+            self._api_with_thread_fallback("sendChatAction", chat_id=chat_id, action="typing", **self._thread_params(metadata))
         except Exception:  # noqa: BLE001 — a missing indicator must never block the reply
             pass
 
     def _send_status(self, chat_id: str, text: str, *, metadata: dict | None = None) -> int | None:
         try:
-            return self._api(
+            return self._api_with_thread_fallback(
                 "sendMessage",
                 chat_id=chat_id,
                 text=text,
@@ -434,7 +451,7 @@ class TelegramAdapter(BasePlatformAdapter):
         params = self._thread_params(metadata)
         for chunk in chunk_text_by_units(text, limit=4000, len_fn=utf16_units):
             try:
-                self._api("sendMessage", chat_id=chat_id, text=chunk, **params)
+                self._api_with_thread_fallback("sendMessage", chat_id=chat_id, text=chunk, **params)
             except Exception:  # noqa: BLE001
                 pass
 
