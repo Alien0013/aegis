@@ -88,3 +88,26 @@ def test_config_set_dotted_yaml_preserves_unrelated_config(capsys):
         },
     ]
     assert data["display"]["platforms"]["telegram"]["memory_notifications"] == "verbose"
+
+
+def test_config_set_preserves_comments_and_readable_unicode(capsys):
+    from aegis import config as cfg
+    from aegis.cli.main import main
+
+    cfg.config_path().parent.mkdir(parents=True, exist_ok=True)
+    cfg.config_path().write_text(
+        "# keep this model note\n"
+        "model:\n"
+        "  provider: openai\n"
+        "  default: gpt-5\n",
+        encoding="utf-8",
+    )
+
+    assert main(["config", "set", "agent.personality", "café"]) == 0
+
+    out = capsys.readouterr().out
+    saved = cfg.config_path().read_text(encoding="utf-8")
+    assert "set agent.personality -> config.yaml" in out
+    assert "# keep this model note" in saved
+    assert "café" in saved
+    assert "\\u" not in saved

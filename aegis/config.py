@@ -243,6 +243,38 @@ def validate_config_file(path: Path | None = None) -> list[str]:
     return errors
 
 
+def _standalone_yaml_comment_lines(text: str) -> list[str]:
+    """Return standalone YAML comments worth carrying across generated saves."""
+    comments: list[str] = []
+    seen: set[str] = set()
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if not stripped.startswith("#"):
+            continue
+        line = raw.rstrip()
+        if line not in seen:
+            comments.append(line)
+            seen.add(line)
+    return comments
+
+
+def _dump_config_delta(
+    delta: dict[str, Any],
+    path: Path | None = None,
+    *,
+    comment_source: str | None = None,
+) -> str:
+    """Serialize config overrides while preserving user-authored comment notes."""
+    target = path or config_path()
+    body = yaml.safe_dump(delta, sort_keys=False, allow_unicode=True) if delta else ""
+    existing = read_text(target) if comment_source is None else comment_source
+    comments = _standalone_yaml_comment_lines(existing)
+    if not comments:
+        return body
+    prefix = "\n".join(comments).rstrip() + "\n"
+    return prefix + (body if body else "")
+
+
 # --- .env handling ----------------------------------------------------------
 def load_env() -> dict[str, str]:
     """Parse .env and inject into os.environ (without clobbering existing keys)."""
@@ -693,7 +725,7 @@ class Config:
         # the full merged tree. Writing the whole tree would freeze every default
         # into config.yaml, silently masking future upgrades that change defaults.
         delta = _config_delta(self.data, DEFAULT_CONFIG)
-        atomic_write(config_path(), yaml.safe_dump(delta, sort_keys=False) if delta else "")
+        atomic_write(config_path(), _dump_config_delta(delta))
 
     def get(self, dotted: str, default: Any = None) -> Any:
         node: Any = self.data

@@ -673,7 +673,10 @@ def _config_write_raw(text: str, config: Config) -> dict:
         return {"ok": False, "error": "config type validation failed: " + "; ".join(type_errors)}
     backup = _config_backup_now().get("backup", "")
     config.data = cfg._deep_merge(cfg.DEFAULT_CONFIG, parsed)
-    config.save()
+    from .util import atomic_write
+
+    delta = cfg._config_delta(config.data, cfg.DEFAULT_CONFIG)
+    atomic_write(cfg.config_path(), cfg._dump_config_delta(delta, comment_source=text))
     return {"ok": True, "backup": backup}
 
 

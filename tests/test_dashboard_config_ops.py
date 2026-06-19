@@ -48,6 +48,28 @@ def test_config_write_raw_saves_delta_not_full_effective_config():
     assert "display:" not in saved
 
 
+def test_config_write_raw_preserves_comments_and_readable_unicode():
+    cfg = _cfg()
+    raw = (
+        "# dashboard note\n"
+        "model:\n"
+        "  provider: openai\n"
+        "  default: gpt-5.5\n"
+        "agent:\n"
+        "  personality: café\n"
+    )
+
+    res = dash._config_write_raw(raw, cfg)
+    saved = config_path().read_text(encoding="utf-8")
+
+    assert res["ok"] is True
+    assert cfg.get("agent.personality") == "café"
+    assert "# dashboard note" in saved
+    assert "café" in saved
+    assert "\\u" not in saved
+    assert "max_iterations:" not in saved
+
+
 def test_config_write_raw_rejects_bad_yaml():
     res = dash._config_write_raw("model: [unclosed", _cfg())
     assert res["ok"] is False and "YAML" in res["error"]
