@@ -132,6 +132,29 @@ def test_config_set_dotted_yaml_preserves_unrelated_config(capsys):
     assert data["display"]["platforms"]["telegram"]["memory_notifications"] == "verbose"
 
 
+def test_config_set_unknown_key_requires_force(capsys):
+    from aegis.config import Config
+    from aegis.cli.main import main
+
+    assert main(["config", "set", "model.defualt", "gpt-5"]) == 1
+    captured = capsys.readouterr()
+    assert "unknown config key: model.defualt" in captured.err
+    assert "--force" in captured.err
+    assert Config.load().get("model.defualt") is None
+
+    assert main(["config", "set", "model.defualt", "gpt-5", "--force"]) == 0
+    out = capsys.readouterr().out
+    assert "set model.defualt -> config.yaml" in out
+    assert Config.load().get("model.defualt") == "gpt-5"
+
+    assert main(["config", "set", "model.unknown", "x", "--json"]) == 1
+    data = json.loads(capsys.readouterr().out)
+    assert data["ok"] is False
+    assert data["key"] == "model.unknown"
+    assert "unknown config key" in data["error"]
+    assert "--force" in data["error"]
+
+
 def test_config_set_preserves_comments_and_readable_unicode(capsys):
     from aegis import config as cfg
     from aegis.cli.main import main

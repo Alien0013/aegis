@@ -329,6 +329,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "agent": {
         "max_iterations": 50,
         "ultracode_max_iterations": 250,   # /ultracode raises the step budget so the loop can finish
+        "personality": "",
         "stream": True,
         "subagent_concurrency": 4,   # max child agents run in parallel by spawn_subagent
         "max_spawn_depth": 1,        # flat by default; role=orchestrator can opt into deeper trees

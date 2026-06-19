@@ -951,6 +951,45 @@ def _config_default_values() -> dict[str, object]:
     return flat(DEFAULT_CONFIG)
 
 
+_CONFIG_SET_EXTENSION_ROOTS = {
+    "auxiliary.approval",
+    "auxiliary.architect",
+    "auxiliary.compaction",
+    "auxiliary.curator",
+    "auxiliary.kanban_decomposer",
+    "auxiliary.mcp",
+    "auxiliary.session_summary",
+    "auxiliary.trajectory_compression",
+    "auxiliary.vision",
+    "auxiliary.web_extract",
+    "credential_pools",
+    "display.platforms",
+    "gateway.profiles",
+    "hooks",
+    "lsp.servers",
+    "mcp.servers",
+    "onboarding.seen",
+    "skills.bundles",
+}
+
+
+def _config_set_secret_key(key: str) -> bool:
+    low = key.lower()
+    return "." not in key and (key.isupper() or any(low.endswith(s) for s in cfg.SECRET_SUFFIXES))
+
+
+def _config_key_known_or_extension(key: str) -> bool:
+    defaults = _config_default_values()
+    if key in defaults:
+        return True
+    parts = key.split(".")
+    for index in range(len(parts) - 1, 0, -1):
+        prefix = ".".join(parts[:index])
+        if isinstance(defaults.get(prefix), list):
+            return True
+    return any(key == root or key.startswith(root + ".") for root in _CONFIG_SET_EXTENSION_ROOTS)
+
+
 def _parse_config_set_value(key: str, raw_parts: object) -> tuple[object, str]:
     from ..config import _coerce, config_enum_error
 
@@ -1453,6 +1492,16 @@ def cmd_config(args, config: Config) -> int:
             raw_text = " ".join(str(part) for part in raw_value or []).strip()
             if raw_text and not raw_text.startswith("{"):
                 key = "model.default"
+        if (
+            key
+            and not getattr(args, "force", False)
+            and not _config_set_secret_key(key)
+            and not _config_key_known_or_extension(key)
+        ):
+            message = f"unknown config key: {key} (use --force to create a custom key)"
+            if json_mode:
+                return json_error(message, key=key)
+            return _die(message)
         value, value_error = _parse_config_set_value(key, raw_value)
         if not key or value_error:
             if json_mode:
@@ -2527,6 +2576,7 @@ def build_parser() -> argparse.ArgumentParser:
     cf.add_argument("key", nargs="?")
     cf.add_argument("value", nargs="*")
     cf.add_argument("--secrets", action="store_true", help="edit the local secrets .env file")
+    cf.add_argument("--force", action="store_true", help="allow config set to create an unknown custom key")
     _add_setup_args(cf)
     cf.set_defaults(func=cmd_config)
 
