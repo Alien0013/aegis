@@ -1011,6 +1011,7 @@ def _parse_config_set_value(key: str, raw_parts: object) -> tuple[object, str]:
 
 
 def cmd_config(args, config: Config) -> int:
+    json_mode = bool(getattr(args, "json", False))
     api_key_specs = (
         ("OpenRouter", ("OPENROUTER_API_KEY",)),
         ("OpenAI", ("OPENAI_API_KEY",)),
@@ -1104,6 +1105,19 @@ def cmd_config(args, config: Config) -> int:
         if not errors:
             errors.extend(cfg.config_type_errors(parsed))
         return "; ".join(errors)
+
+    def redacted_value(key: str, value):
+        return redact_secret_values({key: value}).get(key)
+
+    def json_error(message: str, *, key: str = "") -> int:
+        _print(json.dumps({
+            "ok": False,
+            "object": "aegis.config.result",
+            "action": args.action,
+            "key": key,
+            "error": message,
+        }, indent=2, sort_keys=True))
+        return 1
 
     def show_summary() -> int:
         compression = config.get("agent.compression", {}) or {}
@@ -1323,12 +1337,40 @@ def cmd_config(args, config: Config) -> int:
         return 0
 
     if args.action == "path":
+        if json_mode:
+            _print(json.dumps({
+                "ok": True,
+                "object": "aegis.config.path",
+                "path": str(cfg.config_path()),
+            }, indent=2, sort_keys=True))
+            return 0
         _print(str(cfg.config_path()))
         return 0
     if args.action == "env-path":
+        if json_mode:
+            _print(json.dumps({
+                "ok": True,
+                "object": "aegis.config.env_path",
+                "path": str(cfg.env_path()),
+            }, indent=2, sort_keys=True))
+            return 0
         _print(str(cfg.env_path()))
         return 0
     if args.action == "paths":
+        paths_payload = {
+            "config": str(cfg.config_path()),
+            "secrets": str(cfg.env_path()),
+            "home": str(cfg.get_home()),
+            "profile": cfg.current_profile() or "default",
+            "install": str(Path(__file__).resolve().parents[2]),
+        }
+        if json_mode:
+            _print(json.dumps({
+                "ok": True,
+                "object": "aegis.config.paths",
+                "paths": paths_payload,
+            }, indent=2, sort_keys=True))
+            return 0
         _print(f"Config:  {cfg.config_path()}")
         _print(f"Secrets: {cfg.env_path()}")
         _print(f"Home:    {cfg.get_home()}")
@@ -1381,14 +1423,27 @@ def cmd_config(args, config: Config) -> int:
         return 0
     if args.action == "get":
         if not args.key:
+            if json_mode:
+                return json_error("usage: aegis config get <key>")
             return _die("usage: aegis config get <key>")
         low = args.key.lower()
         if "." not in args.key and (args.key.isupper() or any(low.endswith(s) for s in cfg.SECRET_SUFFIXES)):
             env_name = args.key if args.key.isupper() else args.key.upper()
             value = os.environ.get(env_name, config.get(args.key))
+            source = ".env"
         else:
             value = config.get(args.key)
-        value = redact_secret_values({args.key: value}).get(args.key)
+            source = "config"
+        value = redacted_value(args.key, value)
+        if json_mode:
+            _print(json.dumps({
+                "ok": True,
+                "object": "aegis.config.value",
+                "key": args.key,
+                "source": source,
+                "value": value,
+            }, indent=2, sort_keys=True))
+            return 0
         _print(str(value))
         return 0
     if args.action == "set":
@@ -1400,17 +1455,33 @@ def cmd_config(args, config: Config) -> int:
                 key = "model.default"
         value, value_error = _parse_config_set_value(key, raw_value)
         if not key or value_error:
+            if json_mode:
+                return json_error(value_error or "usage: aegis config set <key> <value>", key=key)
             print_config_usage()
             return _die(value_error) if value_error and args.key else 1
         try:
             where = config.set(key, value)
         except ValueError as exc:
+            if json_mode:
+                return json_error(str(exc), key=key)
             return _die(str(exc))
+        if json_mode:
+            _print(json.dumps({
+                "ok": True,
+                "object": "aegis.config.result",
+                "action": "set",
+                "key": key,
+                "value": redacted_value(key, value),
+                "where": where,
+            }, indent=2, sort_keys=True))
+            return 0
         _print(f"set {key} -> {where}")
         return 0
     if args.action == "reset":
         key = (args.key or "").strip()
         if not key:
+            if json_mode:
+                return json_error("usage: aegis config reset <key|section|all>")
             return _die("usage: aegis config reset <key|section|all>")
         import shutil
 
@@ -1423,7 +1494,19 @@ def cmd_config(args, config: Config) -> int:
         try:
             reset_key = config.reset(key)
         except ValueError as exc:
+            if json_mode:
+                return json_error(str(exc), key=key)
             return _die(str(exc))
+        if json_mode:
+            _print(json.dumps({
+                "ok": True,
+                "object": "aegis.config.result",
+                "action": "reset",
+                "key": reset_key,
+                "backup": str(backup) if backup else "",
+                "path": str(target),
+            }, indent=2, sort_keys=True))
+            return 0
         suffix = f" (backup: {backup})" if backup else ""
         _print(f"reset {reset_key} -> default{suffix}")
         return 0
@@ -1448,6 +1531,18 @@ def cmd_config(args, config: Config) -> int:
                    ("custom_providers", "fallback_providers", "hooks", "mcp", "routing")]
         type_errors = cfg.config_type_errors(config.data)
         if args.action in ("check", "doctor"):
+            if json_mode:
+                _print(json.dumps({
+                    "ok": not (file_errors or type_errors),
+                    "object": "aegis.config.check",
+                    "action": args.action,
+                    "config_yaml_errors": file_errors,
+                    "missing_default_keys": missing,
+                    "unknown_keys": unknown,
+                    "type_errors": type_errors,
+                    "provider_credentials": active_provider_credentials_status(),
+                }, indent=2, sort_keys=True))
+                return 1 if file_errors or type_errors else 0
             _print(f"config file: {'invalid' if file_errors or type_errors else 'ok'}")
             for error in file_errors:
                 _print(f"  - {error}")

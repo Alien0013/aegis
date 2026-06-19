@@ -201,3 +201,72 @@ def test_config_reset_unknown_key_errors(capsys):
     assert main(["config", "reset", "does.not.exist"]) == 1
     err = capsys.readouterr().err
     assert "unknown config key: does.not.exist" in err
+
+
+def test_config_mutation_commands_support_json(capsys):
+    from aegis import config as cfg
+    from aegis.cli.main import main
+    from aegis.config import Config, DEFAULT_CONFIG
+
+    cfg.config_path().parent.mkdir(parents=True, exist_ok=True)
+    cfg.config_path().write_text("model:\n  default: gpt-5.5\n", encoding="utf-8")
+
+    assert main(["config", "paths", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["object"] == "aegis.config.paths"
+    assert data["paths"]["config"] == str(cfg.config_path())
+
+    assert main(["config", "get", "model.default", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data == {
+        "ok": True,
+        "object": "aegis.config.value",
+        "key": "model.default",
+        "source": "config",
+        "value": "gpt-5.5",
+    }
+
+    assert main(["config", "set", "tools.exec_mode", "smart", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["ok"] is True
+    assert data["action"] == "set"
+    assert data["key"] == "tools.exec_mode"
+    assert data["value"] == "smart"
+    assert data["where"].startswith("config.yaml")
+    assert Config.load().get("tools.exec_mode") == "smart"
+
+    assert main(["config", "set", "tools.exec_mode", "bogus", "--json"]) == 1
+    data = json.loads(capsys.readouterr().out)
+    assert data["ok"] is False
+    assert data["key"] == "tools.exec_mode"
+    assert "one of" in data["error"]
+    assert Config.load().get("tools.exec_mode") == "smart"
+
+    assert main(["config", "reset", "tools.exec_mode", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["ok"] is True
+    assert data["action"] == "reset"
+    assert data["key"] == "tools.exec_mode"
+    assert data["backup"]
+    assert Config.load().get("tools.exec_mode") == DEFAULT_CONFIG["tools"]["exec_mode"]
+
+    assert main(["config", "check", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["object"] == "aegis.config.check"
+    assert data["ok"] is True
+    assert data["type_errors"] == []
+
+
+def test_config_json_redacts_secret_values(monkeypatch, capsys):
+    from aegis.cli.main import main
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert main(["config", "set", "OPENAI_API_KEY", "sk-env-secret", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["value"] == "[REDACTED]"
+    assert "sk-env-secret" not in json.dumps(data)
+
+    assert main(["config", "get", "OPENAI_API_KEY", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["source"] == ".env"
+    assert data["value"] == "[REDACTED]"
