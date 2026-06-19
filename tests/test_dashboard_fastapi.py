@@ -809,6 +809,58 @@ def test_fastapi_model_route_aliases(tmp_path, monkeypatch):
     assert vision["model"] == "small-helper"
 
 
+def test_fastapi_main_model_set_persists_and_clears_base_url(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    info = asyncio.run(_request(app, "GET", "/api/model/info", headers=headers))
+    original_provider = info.json()["provider"]
+    original_model = info.json()["model"]
+
+    set_custom = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/model/set",
+        json={
+            "scope": "main",
+            "provider": "local-proxy",
+            "model": "local-model",
+            "base_url": "http://127.0.0.1:11434/v1",
+        },
+        headers=headers,
+    ))
+    assert set_custom.status_code == 200
+    custom_body = set_custom.json()
+    assert custom_body["ok"] is True
+    assert custom_body["provider"] == "local-proxy"
+    assert custom_body["model"] == "local-model"
+    assert custom_body["base_url"] == "http://127.0.0.1:11434/v1"
+
+    from aegis.config import Config
+
+    saved = Config.load()
+    assert saved.get("model.provider") == "local-proxy"
+    assert saved.get("model.default") == "local-model"
+    assert saved.get("model.base_url") == "http://127.0.0.1:11434/v1"
+
+    clear_custom = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/model/set",
+        json={
+            "scope": "main",
+            "provider": original_provider,
+            "model": original_model,
+            "base_url": "",
+        },
+        headers=headers,
+    ))
+    assert clear_custom.status_code == 200
+    assert clear_custom.json()["ok"] is True
+    assert clear_custom.json()["base_url"] == ""
+    assert Config.load().get("model.base_url", "") == ""
+
+
 def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     for key in (
         "TELEGRAM_BOT_TOKEN",

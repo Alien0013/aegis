@@ -6,10 +6,18 @@ import { Badge, Button, Card, Empty, Field, Input, Loading, MetricStrip, PageHea
 interface ModelsPayload {
   provider?: string;
   model?: string;
+  base_url_override?: string;
   providers?: string[];
   presets?: Record<string, string[]>;
   preset_rows?: Record<string, ModelRow[]>;
+  provider_catalog?: ProviderRow[];
   active?: { context_length?: number; error?: string };
+}
+
+interface ProviderRow {
+  name?: string;
+  base_url?: string;
+  origin?: string;
 }
 
 interface ModelRow {
@@ -36,13 +44,23 @@ export function Models() {
   const configQ = useApi<Record<string, unknown>>("config");
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [defaultsBusy, setDefaultsBusy] = useState("");
   const [window, setWindow] = useState<Window>("30d");
 
   useEffect(() => {
-    if (data) { setProvider(data.provider || ""); setModel(data.model || ""); }
+    if (data) {
+      setProvider(data.provider || "");
+      setModel(data.model || "");
+      setBaseUrl(data.base_url_override || "");
+    }
   }, [data]);
+
+  function providerDefaultBaseUrl(name: string): string {
+    const row = (data?.provider_catalog || []).find((item) => item.name === name);
+    return row?.origin === "custom" ? (row.base_url || "") : "";
+  }
 
   const presets = (data?.presets || {})[provider] || [];
   const presetRows = (data?.preset_rows || {})[provider] || [];
@@ -62,10 +80,14 @@ export function Models() {
     : "medium") as ReasoningEffort;
   const fastOn = isFastTier(configQ.data?.["agent.service_tier"]);
 
-  async function setActive(nextProvider = provider, nextModel = model) {
+  async function setActive(nextProvider = provider, nextModel = model, nextBaseUrl = baseUrl) {
     setBusy(true);
     try {
-      const r = await post<{ ok?: boolean; error?: string; warning?: string }>("models", { provider: nextProvider, model: nextModel });
+      const r = await post<{ ok?: boolean; error?: string; warning?: string }>("models", {
+        provider: nextProvider,
+        model: nextModel,
+        base_url: nextBaseUrl.trim(),
+      });
       if (r.ok === false) toast(r.error || "Failed", "err");
       else { toast(r.warning ? `Set note: ${r.warning}` : "Model set", r.warning ? "info" : "ok"); reload(); }
     } catch (e) { toast(String(e), "err"); }
@@ -87,7 +109,11 @@ export function Models() {
   async function probe() {
     setBusy(true);
     try {
-      const r = await post<{ ok?: boolean; latency_ms?: number; error?: string }>("providers/probe", { provider });
+      const r = await post<{ ok?: boolean; latency_ms?: number; error?: string }>("providers/probe", {
+        provider,
+        model,
+        base_url: baseUrl.trim(),
+      });
       toast(r.ok ? `Reachable${r.latency_ms ? ` / ${r.latency_ms}ms` : ""}` : (r.error || "Unreachable"), r.ok ? "ok" : "err");
     } catch (e) { toast(String(e), "err"); }
     finally { setBusy(false); }
@@ -164,7 +190,12 @@ export function Models() {
 
                 <div className="grid gap-3 md:grid-cols-2">
                   <Field label="Provider">
-                    <Select value={provider} onChange={(e) => { setProvider(e.target.value); setModel(""); }}>
+                    <Select value={provider} onChange={(e) => {
+                      const nextProvider = e.target.value;
+                      setProvider(nextProvider);
+                      setModel("");
+                      setBaseUrl(nextProvider === data.provider ? (data.base_url_override || "") : providerDefaultBaseUrl(nextProvider));
+                    }}>
                       {(data.providers || []).map((p) => <option key={p} value={p}>{p}</option>)}
                     </Select>
                   </Field>
@@ -176,6 +207,13 @@ export function Models() {
                   </Field>
                 </div>
                 <Field label="Model id"><Input value={model} placeholder="model id" onChange={(e) => setModel(e.target.value)} /></Field>
+                <Field label="Base URL">
+                  <Input
+                    value={baseUrl}
+                    placeholder="http://localhost:11434/v1"
+                    onChange={(e) => setBaseUrl(e.target.value)}
+                  />
+                </Field>
                 {data.active?.error && (
                   <div className="border border-danger/35 bg-danger/10 p-2 text-xs text-danger">{data.active.error}</div>
                 )}
@@ -231,7 +269,7 @@ export function Models() {
                       ? capabilityBadges.map((badge) => <Badge key={badge.label} tone={badge.tone}>{badge.label}</Badge>)
                       : <Badge>basic</Badge>}
                   </div>
-                  <Button sm onClick={() => setActive(provider || data.provider || "", row.id)} disabled={busy || (row.id === data.model && provider === data.provider)}>
+                  <Button sm onClick={() => setActive(provider || data.provider || "", row.id, baseUrl)} disabled={busy || (row.id === data.model && provider === data.provider)}>
                     Use as
                   </Button>
                 </div>

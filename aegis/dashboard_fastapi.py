@@ -3434,6 +3434,55 @@ def _provider_probe(config: Config, body: dict[str, Any]) -> dict:
     }
 
 
+def _set_main_model_payload(config: Config, body: dict[str, Any]) -> dict[str, Any]:
+    from .providers import registry
+
+    provider = str(body.get("provider") or "").strip()
+    model = str(body.get("model") or "").strip()
+    base_url_present = "base_url" in body
+    base_url = str(body.get("base_url") or "").strip()
+    target_provider = provider or config.get("model.provider")
+    target_model = model or config.get("model.default")
+
+    validation_config = Config(copy.deepcopy(config.data))
+    validation_model = validation_config.data.setdefault("model", {})
+    if provider:
+        validation_model["provider"] = provider
+    if model:
+        validation_model["default"] = model
+    if base_url_present:
+        validation_model["base_url"] = base_url
+
+    validation = registry.validate_model_choice(target_provider, target_model, validation_config)
+    if not validation.get("ok", True):
+        return {
+            "ok": False,
+            "error": registry.model_validation_message(validation),
+            "validation": validation,
+        }
+
+    if provider:
+        config.set("model.provider", provider)
+    if model:
+        config.set("model.default", model)
+    if base_url_present:
+        config.set("model.base_url", base_url)
+
+    validation = registry.validate_model_choice(
+        config.get("model.provider"),
+        config.get("model.default"),
+        config,
+    )
+    return {
+        "ok": True,
+        "provider": config.get("model.provider"),
+        "model": config.get("model.default"),
+        "base_url": config.get("model.base_url", "") or "",
+        "warning": registry.model_validation_message(validation),
+        "validation": validation,
+    }
+
+
 def _model_info_payload(config: Config) -> dict[str, Any]:
     models = dash._dashboard_models(config)
     active = models.get("active") or {}
@@ -3541,7 +3590,16 @@ def _model_set_payload(config: Config, body: dict[str, Any]) -> dict[str, Any]:
     provider = str(body.get("provider") or "").strip()
     model = str(body.get("model") or "").strip()
     if scope == "main":
-        result = _api_post("/api/models", {"provider": provider, "model": model}, config, chat_runner=None)
+        result = _api_post(
+            "/api/models",
+            {
+                "provider": provider,
+                "model": model,
+                **({"base_url": body.get("base_url")} if "base_url" in body else {}),
+            },
+            config,
+            chat_runner=None,
+        )
         info = _model_info_payload(config)
         stale_aux = []
         aux = config.get("auxiliary", {}) or {}
@@ -4443,26 +4501,7 @@ def _api_post(
     if path == "/api/config/reset":
         return dash._config_reset_section(str(body.get("section") or ""), config)
     if path == "/api/models":
-        from .providers import registry
-
-        prov, model = body.get("provider"), body.get("model")
-        target_provider = prov or config.get("model.provider")
-        target_model = model or config.get("model.default")
-        validation = registry.validate_model_choice(target_provider, target_model, config)
-        if not validation.get("ok", True):
-            return {"ok": False, "error": registry.model_validation_message(validation),
-                    "validation": validation}
-        if prov:
-            config.set("model.provider", prov)
-        if model:
-            config.set("model.default", model)
-        validation = registry.validate_model_choice(
-            config.get("model.provider"), config.get("model.default"), config
-        )
-        return {"ok": True, "provider": config.get("model.provider"),
-                "model": config.get("model.default"),
-                "warning": registry.model_validation_message(validation),
-                "validation": validation}
+        return _set_main_model_payload(config, body)
     if path in {"/api/update/check", "/api/portal/update/check", "/api/check/update"}:
         return dash._update_check()
     if path == "/api/model/set":
