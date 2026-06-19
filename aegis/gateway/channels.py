@@ -105,6 +105,7 @@ class TelegramAdapter(BasePlatformAdapter):
     supports_threads = True
     supports_media = True
     supports_reactions = True
+    supports_interactive_prompts = True
 
     def __init__(self, token: str | None = None):
         self.token = token or os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -126,6 +127,7 @@ class TelegramAdapter(BasePlatformAdapter):
             max_items=_env_int("TELEGRAM_IDEMPOTENCY_CACHE_MAX", 10000),
         )
         self._callback_payloads: dict[str, str] = {}
+        self._callback_payload_meta: dict[str, dict] = {}
         self._base = f"https://api.telegram.org/bot{self.token}"
 
     @property
@@ -333,9 +335,11 @@ class TelegramAdapter(BasePlatformAdapter):
         query = update.get("callback_query")
         if not isinstance(query, dict):
             return False
-        data = self._resolve_callback_data(str(query.get("data") or "").strip())
+        raw_data = str(query.get("data") or "").strip()
+        data, callback_meta = self._resolve_callback_payload(raw_data)
         if not data:
-            self._answer_callback_query(str(query.get("id") or ""))
+            kwargs = {"text": "Prompt expired", "show_alert": True} if raw_data.startswith("aegis:") else {}
+            self._answer_callback_query(str(query.get("id") or ""), **kwargs)
             return True
         user = query.get("from") if isinstance(query.get("from"), dict) else {}
         user_id = str(user.get("id") or "").strip()
@@ -369,6 +373,9 @@ class TelegramAdapter(BasePlatformAdapter):
                 "message_thread_id": thread_id,
                 "source": "callback_query",
                 "command": normalized if normalized.startswith("/") else "",
+                "callback_action_id": callback_meta.get("action_id", ""),
+                "callback_kind": callback_meta.get("kind", ""),
+                "callback_cached": bool(callback_meta.get("cached")),
             },
         )
         self._answer_callback_query(str(query.get("id") or ""))
@@ -390,17 +397,31 @@ class TelegramAdapter(BasePlatformAdapter):
 
     def _callback_data_for(self, value: str, *, prefix: str = "c") -> str:
         text = str(value or "").strip()
-        if 0 < len(text.encode("utf-8")) <= 64:
-            return text
         digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:20]
         key = f"aegis:{prefix}:{digest}"
         self._callback_payloads[key] = text
+        self._callback_payload_meta[key] = {
+            "action_id": key,
+            "kind": prefix,
+            "cached": True,
+            "value_chars": len(text),
+        }
         while len(self._callback_payloads) > 1024:
-            self._callback_payloads.pop(next(iter(self._callback_payloads)))
+            stale = next(iter(self._callback_payloads))
+            self._callback_payloads.pop(stale, None)
+            self._callback_payload_meta.pop(stale, None)
         return key
 
     def _resolve_callback_data(self, data: str) -> str:
-        return self._callback_payloads.get(data, data)
+        return self._resolve_callback_payload(data)[0]
+
+    def _resolve_callback_payload(self, data: str) -> tuple[str, dict]:
+        raw = str(data or "").strip()
+        if raw in self._callback_payloads:
+            return self._callback_payloads.get(raw, ""), dict(self._callback_payload_meta.get(raw) or {})
+        if raw.startswith("aegis:"):
+            return "", {"action_id": raw, "cached": False}
+        return raw, {}
 
     def _message_thread_id(self, msg: dict) -> str | None:
         thread_id = str(msg.get("message_thread_id") or "").strip()
@@ -761,9 +782,9 @@ class TelegramAdapter(BasePlatformAdapter):
         metadata: dict | None = None,
     ) -> None:
         rows = [[
-            {"text": "Approve", "callback_data": "approve"},
-            {"text": "Always", "callback_data": "always"},
-            {"text": "Deny", "callback_data": "deny"},
+            {"text": "Approve", "callback_data": self._callback_data_for("approve", prefix="approval")},
+            {"text": "Always", "callback_data": self._callback_data_for("always", prefix="approval")},
+            {"text": "Deny", "callback_data": self._callback_data_for("deny", prefix="approval")},
         ]]
         params = {
             **self._thread_params(metadata),

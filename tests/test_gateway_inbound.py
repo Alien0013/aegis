@@ -498,6 +498,7 @@ def test_platform_helper_command_caps_and_utf16_chunks():
     assert "SLACK_REPLY_IN_THREAD" in platform_metadata("sl")["optional_env"]
     assert platform_metadata("sl")["supports_slash_commands"] is True
     assert platform_metadata("sl")["supports_reactions"] is True
+    assert platform_metadata("tg")["supports_interactive_prompts"] is True
     assert platform_metadata("dc")["supports_reactions"] is True
     assert platform_metadata("dc")["supports_interactive_prompts"] is True
     mattermost_meta = platform_metadata("mattermost-webhook")
@@ -560,6 +561,7 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     ]
     assert TelegramAdapter("token").metadata["idempotency"]["delivery_cache"]["entries"] == 0
     assert TelegramAdapter("token").metadata["supports_reactions"] is True
+    assert TelegramAdapter("token").metadata["supports_interactive_prompts"] is True
     assert TelegramAdapter("token").metadata["supports_slash_commands"] is True
     assert DiscordAdapter("token").metadata["supports_threads"] is True
     assert DiscordAdapter("token").metadata["supports_reactions"] is True
@@ -1642,6 +1644,7 @@ def test_telegram_clarify_and_approval_prompts_use_inline_buttons(monkeypatch):
     assert params["text"] == f"Pick one\n  1. {long_choice}"
     markup = json.loads(params["reply_markup"])
     callback_data = markup["inline_keyboard"][0][0]["callback_data"]
+    assert callback_data.startswith("aegis:clarify:")
     assert len(callback_data.encode("utf-8")) <= 64
     assert adapter._resolve_callback_data(callback_data) == long_choice
 
@@ -1669,10 +1672,36 @@ def test_telegram_clarify_and_approval_prompts_use_inline_buttons(monkeypatch):
     approval_markup = json.loads(approval_params["reply_markup"])
     assert approval_params["text"] == "Allow bash(ls)?"
     assert approval_params["message_thread_id"] == "77"
-    assert [
+    approval_data = [
         button["callback_data"]
         for button in approval_markup["inline_keyboard"][0]
-    ] == ["approve", "always", "deny"]
+    ]
+    assert all(item.startswith("aegis:approval:") for item in approval_data)
+    assert [adapter._resolve_callback_data(item) for item in approval_data] == ["approve", "always", "deny"]
+
+
+def test_telegram_expired_prompt_callback_is_not_dispatched(monkeypatch):
+    from aegis.gateway.channels import TelegramAdapter
+
+    monkeypatch.setenv("TELEGRAM_ALLOWED_USERS", "7")
+    adapter = TelegramAdapter("token")
+    calls = []
+    adapter._api = lambda method, **params: calls.append((method, params)) or {"ok": True}
+    adapter._submit_inbound = lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("should not dispatch"))
+
+    assert adapter._handle_callback_update({
+        "callback_query": {
+            "id": "cb-expired",
+            "data": "aegis:clarify:missing",
+            "from": {"id": 7, "username": "ada"},
+            "message": {"message_id": 55, "chat": {"id": 42, "type": "private"}},
+        },
+    }) is True
+    assert calls == [("answerCallbackQuery", {
+        "callback_query_id": "cb-expired",
+        "text": "Prompt expired",
+        "show_alert": "true",
+    })]
 
 
 def test_telegram_callback_rejects_unauthorized_users(monkeypatch):
