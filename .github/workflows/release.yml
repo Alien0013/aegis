@@ -78,6 +78,7 @@ jobs:
         working-directory: desktop
         env:
           AEGIS_RELEASE: "1"
+          AEGIS_ALLOW_EXTERNAL_DESKTOP_BACKEND: "1"
           AEGIS_DESKTOP_TARGETS: linux
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

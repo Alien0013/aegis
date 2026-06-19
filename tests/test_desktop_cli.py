@@ -361,6 +361,10 @@ def test_release_workflow_builds_linux_desktop_artifacts():
     assert "run: npm ci" in workflow
     assert "run: npm run dist:linux" in workflow
     assert 'AEGIS_RELEASE: "1"' in workflow
+    assert (
+        "AEGIS_DESKTOP_BACKEND_SOURCE:" in workflow
+        or 'AEGIS_ALLOW_EXTERNAL_DESKTOP_BACKEND: "1"' in workflow
+    )
     assert "GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in workflow
     assert "desktop/release/*" in workflow
     assert "softprops/action-gh-release@v2" in workflow

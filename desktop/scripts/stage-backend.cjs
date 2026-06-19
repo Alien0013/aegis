@@ -2,7 +2,10 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { inferTargetPlatforms } = require("./write-build-stamp.cjs");
+const {
+  inferTargetPlatforms,
+  isReleaseBuild,
+} = require("./write-build-stamp.cjs");
 
 const BACKEND_MANIFEST_SCHEMA_VERSION = 1;
 const WIN_EXTENSIONS = new Set([".exe", ".cmd", ".bat"]);
@@ -64,6 +67,10 @@ function _sourceFromEnv(env) {
   return env.AEGIS_DESKTOP_BACKEND_SOURCE || env.AEGIS_DESKTOP_BACKEND || "";
 }
 
+function _envFlag(env, name) {
+  return ["1", "true", "yes", "on"].includes(String(env[name] || "").trim().toLowerCase());
+}
+
 function _sourceStat(source) {
   if (!source) return null;
   try {
@@ -98,7 +105,18 @@ function stageBackend({
   };
 
   if (!sourcePath) {
+    if (isReleaseBuild(env) && !_envFlag(env, "AEGIS_ALLOW_EXTERNAL_DESKTOP_BACKEND")) {
+      throw new Error(
+        "release desktop builds need AEGIS_DESKTOP_BACKEND_SOURCE or "
+        + "AEGIS_ALLOW_EXTERNAL_DESKTOP_BACKEND=1",
+      );
+    }
     manifest.reason = "AEGIS_DESKTOP_BACKEND_SOURCE is not set; packaged app will use configured installs or PATH";
+    if (isReleaseBuild(env)) {
+      manifest.mode = "external";
+      manifest.externalBackend = true;
+      manifest.reason = "AEGIS_ALLOW_EXTERNAL_DESKTOP_BACKEND=1; packaged app will use configured installs or PATH";
+    }
     fs.writeFileSync(path.join(paths.backendDir, ".placeholder"), "AEGIS desktop backend not staged.\n", "utf8");
     _writeJson(paths.manifestPath, manifest);
     return { manifest, ...paths };

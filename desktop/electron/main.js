@@ -32,6 +32,7 @@ const {
 const {
   desktopDiagnostics,
   detectRemoteDisplay,
+  readBackendManifest,
   readInstallStamp,
   releaseUpdateEligibility,
 } = require("./desktop-status.cjs");
@@ -741,6 +742,7 @@ function initAutoUpdate(manual) {
   const updateEligibility = releaseUpdateEligibility({
     packaged: app.isPackaged,
     stamp: readInstallStamp(),
+    backendManifest: readBackendManifest(),
     platform: process.platform,
     appVersion: app.getVersion(),
   });

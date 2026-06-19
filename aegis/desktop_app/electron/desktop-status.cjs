@@ -73,6 +73,7 @@ function readBackendManifest(options = {}) {
 function releaseUpdateEligibility({
   packaged = false,
   stamp = null,
+  backendManifest = null,
   platform = process.platform,
   appVersion = "",
 } = {}) {
@@ -101,6 +102,15 @@ function releaseUpdateEligibility({
   const targets = Array.isArray(payload.targetPlatforms) ? payload.targetPlatforms : [];
   if (targets.length && !targets.includes(platform)) {
     return { ok: false, reason: `install stamp target does not match ${platform}` };
+  }
+  if (backendManifest) {
+    if (!backendManifest.found || !backendManifest.payload) {
+      return { ok: false, reason: backendManifest.error || "backend manifest not found" };
+    }
+    const backend = backendManifest.payload;
+    if (!backend.staged) {
+      return { ok: false, reason: "packaged backend was not staged for this release" };
+    }
   }
   return { ok: true, reason: "installed package is eligible for auto-update" };
 }
@@ -143,7 +153,7 @@ function desktopDiagnostics({
   const stamp = readInstallStamp({ desktopRoot, resourcesPath });
   const backendManifest = readBackendManifest({ desktopRoot, resourcesPath });
   const appVersion = _safeAppCall(app, "getVersion", "");
-  const updateEligibility = releaseUpdateEligibility({ packaged, stamp, platform, appVersion });
+  const updateEligibility = releaseUpdateEligibility({ packaged, stamp, backendManifest, platform, appVersion });
   const userDataPath = app && typeof app.getPath === "function" ? _safeAppCall(app, "getPath", "") : "";
   const appPath = app && typeof app.getAppPath === "function" ? _safeAppCall(app, "getAppPath", "") : "";
   const packagedBackendCandidates = packaged

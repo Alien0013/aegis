@@ -32,6 +32,35 @@ test("writes an explicit no-backend manifest when no source is configured", () =
   assert.deepEqual(JSON.parse(fs.readFileSync(result.manifestPath, "utf8")), result.manifest);
 });
 
+test("rejects release builds without a staged backend unless explicitly external", () => {
+  const root = tmpRoot();
+
+  assert.throws(
+    () => stageBackend({
+      desktopRoot: root,
+      env: { AEGIS_RELEASE: "1" },
+      platform: "linux",
+    }),
+    /AEGIS_DESKTOP_BACKEND_SOURCE or AEGIS_ALLOW_EXTERNAL_DESKTOP_BACKEND=1/,
+  );
+});
+
+test("release builds can explicitly declare an external backend dependency", () => {
+  const root = tmpRoot();
+  const result = stageBackend({
+    desktopRoot: root,
+    env: { AEGIS_RELEASE: "1", AEGIS_ALLOW_EXTERNAL_DESKTOP_BACKEND: "1" },
+    platform: "linux",
+    now: () => new Date("2026-06-18T12:00:00.000Z"),
+  });
+
+  assert.equal(result.manifest.staged, false);
+  assert.equal(result.manifest.mode, "external");
+  assert.equal(result.manifest.externalBackend, true);
+  assert.match(result.manifest.reason, /AEGIS_ALLOW_EXTERNAL_DESKTOP_BACKEND=1/);
+  assert.equal(fs.existsSync(path.join(result.backendDir, ".placeholder")), true);
+});
+
 test("stages a POSIX backend executable into build/backend/bin/aegis", () => {
   const root = tmpRoot();
   const source = path.join(root, "source-aegis");

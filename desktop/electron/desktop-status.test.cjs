@@ -22,6 +22,18 @@ function fakeApp({ packaged = false, version = "0.1.0", userData = "", appPath =
   };
 }
 
+function writeStagedBackendManifest(root) {
+  fs.writeFileSync(
+    path.join(root, "build", "backend-manifest.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      staged: true,
+      mode: "file",
+      targets: ["bin/aegis"],
+    }),
+  );
+}
+
 test("discovers install stamp from packaged resources before dev build dir", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "aegis-desktop-status-"));
   const resources = path.join(root, "resources");
@@ -84,6 +96,7 @@ test("desktop diagnostics exposes runtime, stamp, checks, and repair actions", (
       targetPlatforms: ["linux"],
     }),
   );
+  writeStagedBackendManifest(root);
 
   const report = desktopDiagnostics({
     app: fakeApp({ packaged: true, version: "1.2.3", userData: path.join(root, "user-data") }),
@@ -104,10 +117,10 @@ test("desktop diagnostics exposes runtime, stamp, checks, and repair actions", (
   assert.equal(report.renderer.gpuFallbackRecommended, false);
   assert.equal(report.backendDiscovery.configured, true);
   assert.equal(report.backendDiscovery.bundled, false);
-  assert.equal(report.backendManifest, null);
+  assert.equal(report.backendManifest.staged, true);
   assert.equal(report.updater.stage, "idle");
   assert.equal(report.updater.installable, false);
-  assert.equal(report.paths.backendManifest, "");
+  assert.equal(report.paths.backendManifest, path.join(root, "build", "backend-manifest.json"));
   assert.equal(report.checks.find((row) => row.id === "install_stamp").ok, true);
   assert.equal(report.checks.find((row) => row.id === "release_update_eligibility").ok, true);
   assert.equal(report.checks.find((row) => row.id === "backend_environment").ok, true);
@@ -134,6 +147,7 @@ test("desktop diagnostics gates update repair actions on live updater state", ()
       targetPlatforms: ["linux"],
     }),
   );
+  writeStagedBackendManifest(root);
 
   const checking = desktopDiagnostics({
     app: fakeApp({ packaged: true, version: "1.2.3" }),
@@ -317,6 +331,63 @@ test("releaseUpdateEligibility rejects dev, dirty, stale, and mismatched install
           appVersion: "1.2.3",
           targetPlatforms: ["linux"],
         },
+      },
+    }).ok,
+    true,
+  );
+  assert.match(
+    releaseUpdateEligibility({
+      packaged: true,
+      stamp: {
+        found: true,
+        payload: {
+          schemaVersion: 2,
+          release: true,
+          trustedRelease: true,
+          dirty: false,
+          targetPlatforms: ["linux"],
+        },
+      },
+      backendManifest: { found: false, error: "backend manifest missing" },
+    }).reason,
+    /backend manifest missing/,
+  );
+  assert.match(
+    releaseUpdateEligibility({
+      packaged: true,
+      stamp: {
+        found: true,
+        payload: {
+          schemaVersion: 2,
+          release: true,
+          trustedRelease: true,
+          dirty: false,
+          targetPlatforms: ["linux"],
+        },
+      },
+      backendManifest: {
+        found: true,
+        payload: { schemaVersion: 1, staged: false, mode: "external", externalBackend: true },
+      },
+    }).reason,
+    /backend was not staged/,
+  );
+  assert.equal(
+    releaseUpdateEligibility({
+      packaged: true,
+      stamp: {
+        found: true,
+        payload: {
+          schemaVersion: 2,
+          release: true,
+          trustedRelease: true,
+          dirty: false,
+          targetPlatforms: ["linux"],
+        },
+      },
+      backendManifest: {
+        found: true,
+        payload: { schemaVersion: 1, staged: true, mode: "file", targets: ["bin/aegis"] },
       },
     }).ok,
     true,
