@@ -955,6 +955,11 @@ def _observability_contract_payload(config: Config) -> dict[str, Any]:
         for row in dashboard_plugins
         if row.get("name")
     }
+    dashboard_ui_assets = {
+        str(row.get("name") or ""): row.get("ui_asset_status") or {}
+        for row in dashboard_plugins
+        if row.get("name")
+    }
     mounted_plugin_api_count = sum(
         1 for mount in dashboard_api_mounts.values() if mount.get("mounted")
     )
@@ -975,6 +980,14 @@ def _observability_contract_payload(config: Config) -> dict[str, Any]:
         int(mount.get("error_count") or 0)
         for mount in dashboard_api_mounts.values()
     )
+    dashboard_plugin_ui_asset_error_count = sum(
+        len(status.get("errors") or [])
+        for status in dashboard_ui_assets.values()
+    )
+    dashboard_plugin_ui_asset_error_plugin_count = sum(
+        1 for status in dashboard_ui_assets.values()
+        if str(status.get("status") or "") == "error"
+    )
     return {
         "ok": True,
         "version": __version__,
@@ -985,12 +998,15 @@ def _observability_contract_payload(config: Config) -> dict[str, Any]:
         "dashboard_plugins": {
             "count": len(dashboard_plugins),
             "api_mounts": dashboard_api_mounts,
+            "ui_assets": dashboard_ui_assets,
             "api_mounted_count": mounted_plugin_api_count,
             "api_route_count": dashboard_plugin_api_route_count,
             "api_request_count": dashboard_plugin_api_request_count,
             "api_mount_error_count": dashboard_plugin_api_error_count,
             "api_request_error_count": dashboard_plugin_api_request_error_count,
             "api_error_count": dashboard_plugin_api_error_count + dashboard_plugin_api_request_error_count,
+            "ui_asset_error_count": dashboard_plugin_ui_asset_error_count,
+            "ui_asset_error_plugin_count": dashboard_plugin_ui_asset_error_plugin_count,
         },
         "dashboard_plugin_api_mounts": dashboard_api_mounts,
         "routes": {
@@ -2100,6 +2116,8 @@ def _dashboard_plugin_hub(config: Config) -> dict[str, Any]:
             "dashboard_enabled": not dashboard_disabled,
             "dashboard_route": dashboard_manifest.get("route") if dashboard_manifest else None,
             "api_mount": dashboard_manifest.get("api_mount") if dashboard_manifest else None,
+            "ui_asset_status": dashboard_manifest.get("ui_asset_status") if dashboard_manifest else None,
+            "asset_errors": dashboard_manifest.get("asset_errors") if dashboard_manifest else [],
             "can_remove": can_remove,
             "can_update_git": can_update_git,
             "auth_required": False,
@@ -2142,6 +2160,8 @@ def _dashboard_plugin_hub(config: Config) -> dict[str, Any]:
             "dashboard_manifest": record,
             "dashboard_route": record.get("route"),
             "api_mount": record.get("api_mount"),
+            "ui_asset_status": record.get("ui_asset_status"),
+            "asset_errors": record.get("asset_errors") or [],
             "can_remove": False,
             "can_update_git": False,
             "auth_required": False,
@@ -2512,6 +2532,50 @@ def _dashboard_plugin_mount_info(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _dashboard_plugin_asset_exists(asset_root: Path, dist_root: Path, rel: str) -> bool:
+    if not rel:
+        return False
+    for root in (asset_root, dist_root):
+        root = root.resolve()
+        target = (root / rel).resolve()
+        if _contained(root, target) and target.is_file():
+            return True
+    return False
+
+
+def _dashboard_plugin_ui_asset_status(row: dict[str, Any]) -> dict[str, Any]:
+    entry = str(row.get("entry") or "")
+    css = [str(item) for item in (row.get("css") or []) if str(item)]
+    errors = [str(item) for item in (row.get("errors") or []) if str(item)] if row.get("_manifest_error") else []
+    missing: list[str] = []
+    asset_root = Path(row.get("_asset_root") or row.get("_dist") or ".").resolve()
+    dist_root = Path(row.get("_dist") or asset_root).resolve()
+
+    if row.get("_duplicate_name_conflict"):
+        errors.append(f"duplicate dashboard plugin name: {row.get('name') or ''}")
+    if not row.get("_manifest_error") and not row.get("_duplicate_name_conflict"):
+        if not entry:
+            errors.append("dashboard entry is invalid or empty")
+        elif not _dashboard_plugin_asset_exists(asset_root, dist_root, entry):
+            missing.append(entry)
+            errors.append(f"missing entry asset: {entry}")
+        for item in css:
+            if not _dashboard_plugin_asset_exists(asset_root, dist_root, item):
+                missing.append(item)
+                errors.append(f"missing stylesheet asset: {item}")
+
+    return {
+        "status": "error" if errors else "ok",
+        "entry": entry,
+        "entry_exists": bool(entry and entry not in missing),
+        "css": css,
+        "missing": missing,
+        "errors": errors,
+        "asset_count": (1 if entry else 0) + len(css),
+        "checked": True,
+    }
+
+
 def _read_dashboard_manifest(manifest_path: Path) -> dict[str, Any] | None:
     loaded, _error = _read_dashboard_manifest_with_error(manifest_path)
     return loaded
@@ -2783,10 +2847,13 @@ def _dashboard_plugins_payload(config: Config, *, include_hidden: bool = False) 
             continue
         item = {key: value for key, value in row.items() if not key.startswith("_")}
         mount = _dashboard_plugin_mount_info(row)
+        ui_assets = _dashboard_plugin_ui_asset_status(row)
         item["route"] = _dashboard_plugin_route_metadata(row)
         item["api_mount"] = mount
         item["api_mounted"] = mount["mounted"]
         item["api_routes"] = mount["routes"]
+        item["ui_asset_status"] = ui_assets
+        item["asset_errors"] = ui_assets["errors"]
         item["user_hidden"] = _dashboard_plugin_hidden(config, row)
         public.append(item)
     return public

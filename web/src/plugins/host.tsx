@@ -40,6 +40,17 @@ export interface DashboardPluginManifest {
   icon?: string;
   entry?: string;
   css?: string[];
+  ui_asset_status?: {
+    status?: string;
+    entry?: string;
+    entry_exists?: boolean;
+    css?: string[];
+    missing?: string[];
+    errors?: string[];
+    asset_count?: number;
+    checked?: boolean;
+  };
+  asset_errors?: string[];
   base_path: string;
   has_api?: boolean;
   api_mount?: DashboardPluginApiMount;
@@ -336,6 +347,16 @@ export function PluginRoutePage({ route }: { route: DashboardPluginRoute }) {
     return <PluginMount name={name} render={route.render} manifests={manifests} />;
   }
   if (loading) return <Loading />;
+  const assetErrors = manifest?.asset_errors || manifest?.ui_asset_status?.errors || [];
+  if (manifest?.ui_asset_status?.status === "error") {
+    return (
+      <Card>
+        <Empty icon="alert">
+          Plugin UI asset error: {assetErrors[0] || route.label || route.path}
+        </Empty>
+      </Card>
+    );
+  }
   return (
     <Card>
       <Empty icon="plugins">Plugin route waiting for its script: {route.label || route.path}</Empty>

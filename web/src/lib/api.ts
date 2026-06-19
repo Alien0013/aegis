@@ -93,6 +93,17 @@ export interface DashboardPluginApiMount {
   fingerprint?: string;
 }
 
+export interface DashboardPluginUiAssetStatus {
+  status?: string;
+  entry?: string;
+  entry_exists?: boolean;
+  css?: string[];
+  missing?: string[];
+  errors?: string[];
+  asset_count?: number;
+  checked?: boolean;
+}
+
 export interface DashboardPluginManifest {
   name: string;
   plugin?: string;
@@ -109,6 +120,8 @@ export interface DashboardPluginManifest {
   css?: string[];
   base_path?: string;
   has_api?: boolean;
+  ui_asset_status?: DashboardPluginUiAssetStatus;
+  asset_errors?: string[];
   api_mounted?: boolean;
   api_routes?: string[];
   api_mount?: DashboardPluginApiMount;
@@ -164,6 +177,8 @@ export interface DashboardPluginHubRow {
   dashboard_manifest?: DashboardPluginManifest | null;
   dashboard_route?: DashboardPluginManifest["route"] | null;
   api_mount?: DashboardPluginManifest["api_mount"] | null;
+  ui_asset_status?: DashboardPluginUiAssetStatus | null;
+  asset_errors?: string[];
   can_remove?: boolean;
   can_update_git?: boolean;
   auth_required?: boolean;

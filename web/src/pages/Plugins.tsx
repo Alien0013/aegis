@@ -326,6 +326,8 @@ function PluginRow({
   const apiErrors = Number(mount?.error_count || 0);
   const apiMountErrors = Number(mount?.mount_error_count || 0);
   const apiMountDuration = durationLabel(mount?.mount_duration_ms);
+  const uiAssets = row.ui_asset_status || manifest?.ui_asset_status;
+  const uiAssetErrors = row.asset_errors || manifest?.asset_errors || uiAssets?.errors || [];
   const lastApiErrorPath = mount?.last_error_path || "";
   const lastApiErrorType = mount?.last_error_type || "";
   const lastApiError = mount?.last_error || "";
@@ -372,6 +374,11 @@ function PluginRow({
           {row.category && <Badge tone="neutral">{row.category}</Badge>}
           {load && <Badge tone={row.load_status === "error" ? "danger" : "neutral"}>load {load}</Badge>}
           {!!drift && <Badge tone="warning">drift {drift}</Badge>}
+          {row.has_dashboard_manifest && (
+            <Badge tone={uiAssets?.status === "error" ? "danger" : "success"}>
+              {uiAssets?.status === "error" ? `ui errors ${uiAssetErrors.length || 1}` : "ui ok"}
+            </Badge>
+          )}
           {row.user_hidden && <Badge tone="warning">hidden</Badge>}
           {row.auth_required && <Badge tone="danger">auth required</Badge>}
           {manifest?.slots?.map((slot) => <Badge key={slot} tone="neutral">{slot}</Badge>)}
@@ -417,6 +424,12 @@ function PluginRow({
         {row.load_error && (
           <div className="rounded-[var(--radius)] border border-danger/30 bg-danger/10 px-3 py-2 font-mono text-xs text-danger">
             {row.load_error}
+          </div>
+        )}
+
+        {!!uiAssetErrors.length && (
+          <div className="rounded-[var(--radius)] border border-danger/30 bg-danger/10 px-3 py-2 font-mono text-xs text-danger">
+            UI asset: {uiAssetErrors[0]}
           </div>
         )}
 

@@ -2729,6 +2729,9 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
     assert row["api_mounted"] is True
     assert "/api/plugins/pulse-panel/pulse" in row["api_routes"]
     assert row["api_compat_root"] is False
+    assert row["ui_asset_status"]["status"] == "ok"
+    assert row["ui_asset_status"]["entry_exists"] is True
+    assert row["asset_errors"] == []
 
     asset = asyncio.run(_request(app, "GET", "/dashboard-plugins/pulse-panel/dist/index.js", headers=headers))
     assert asset.status_code == 200
@@ -2776,6 +2779,7 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
     assert hub_mount["last_error_path"] == "/api/plugins/pulse-panel/fail"
     assert hub_mount["last_error_type"] == "HTTPException"
     assert hub_mount["last_error"] == "plugin unavailable"
+    assert observed_hub_row["ui_asset_status"]["status"] == "ok"
     observability = asyncio.run(_request(app, "GET", "/api/observability/contract", headers=headers))
     assert observability.status_code == 200
     observed_mount = observability.json()["dashboard_plugin_api_mounts"]["pulse-panel"]
@@ -2788,11 +2792,14 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
     assert observability.json()["dashboard_plugins"]["api_route_count"] >= 1
     assert observability.json()["dashboard_plugins"]["api_request_error_count"] >= 1
     assert observability.json()["dashboard_plugins"]["api_error_count"] >= 1
+    assert observability.json()["dashboard_plugins"]["ui_assets"]["pulse-panel"]["status"] == "ok"
     assert observability.json()["routes"]["dashboard_plugin_hub"] == "/api/dashboard/plugins/hub"
 
     disabled = asyncio.run(_request(app, "POST", "/api/plugins/analytics/pulse/disable", headers=headers))
     assert disabled.status_code == 200
     assert "analytics/pulse" in disabled.json()["disabled"]
+
+
     disabled_hub = asyncio.run(_request(app, "GET", "/api/dashboard/plugins/hub", headers=headers))
     assert disabled_hub.status_code == 200
     disabled_row = next(row for row in disabled_hub.json()["plugins"] if row["key"] == "analytics/pulse")
@@ -2863,6 +2870,65 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
     assert updated.status_code == 200
     assert updated.json()["ok"] is True
     assert updated.json()["unchanged"] is True
+
+
+def test_fastapi_dashboard_plugin_reports_missing_ui_entry_without_blocking_api(tmp_path, monkeypatch):
+    plug = tmp_path / "plugins" / "broken-ui"
+    (plug / "dashboard").mkdir(parents=True)
+    (plug / "plugin.yaml").write_text(
+        "name: broken-ui\n"
+        "version: 1.0.0\n"
+        "description: Broken UI still has API\n",
+        encoding="utf-8",
+    )
+    (plug / "__init__.py").write_text("def register(api):\n    pass\n", encoding="utf-8")
+    (plug / "dashboard" / "manifest.json").write_text(
+        json.dumps({
+            "name": "broken-ui-panel",
+            "label": "Broken UI",
+            "entry": "dist/missing.js",
+            "css": ["dist/missing.css"],
+            "api": "plugin_api.py",
+        }),
+        encoding="utf-8",
+    )
+    (plug / "dashboard" / "plugin_api.py").write_text(
+        "from fastapi import APIRouter\n"
+        "router = APIRouter()\n"
+        "@router.get('/ping')\n"
+        "def ping():\n"
+        "    return {'ok': True}\n",
+        encoding="utf-8",
+    )
+
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    manifest = asyncio.run(_request(app, "GET", "/api/dashboard/plugins", headers=headers))
+    assert manifest.status_code == 200
+    row = next(item for item in manifest.json() if item["name"] == "broken-ui-panel")
+    assert row["has_api"] is True
+    assert row["api_mount"]["status"] == "mounted"
+    assert row["ui_asset_status"]["status"] == "error"
+    assert row["ui_asset_status"]["missing"] == ["dist/missing.js", "dist/missing.css"]
+    assert "missing entry asset: dist/missing.js" in row["asset_errors"]
+
+    api_route = asyncio.run(_request(app, "GET", "/api/plugins/broken-ui-panel/ping", headers=headers))
+    assert api_route.status_code == 200
+    assert api_route.json() == {"ok": True}
+
+    hub = asyncio.run(_request(app, "GET", "/api/dashboard/plugins/hub", headers=headers))
+    assert hub.status_code == 200
+    hub_row = next(item for item in hub.json()["plugins"] if item["key"] == "broken-ui")
+    assert hub_row["api_mount"]["mounted"] is True
+    assert hub_row["ui_asset_status"]["status"] == "error"
+
+    observability = asyncio.run(_request(app, "GET", "/api/observability/contract", headers=headers))
+    assert observability.status_code == 200
+    dashboard_plugins = observability.json()["dashboard_plugins"]
+    assert dashboard_plugins["ui_assets"]["broken-ui-panel"]["status"] == "error"
+    assert dashboard_plugins["ui_asset_error_plugin_count"] >= 1
+    assert dashboard_plugins["ui_asset_error_count"] >= 2
 
 
 def test_fastapi_dashboard_plugin_config_enabled_flag_disables_dashboard_mount(tmp_path, monkeypatch):
