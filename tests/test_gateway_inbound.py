@@ -718,6 +718,73 @@ def test_discord_adapter_enforces_guild_filters_and_trigger_mode(monkeypatch):
     assert adapter._attachment_reference_text(rows) == "[audio/ogg attached: voice.ogg]"
 
 
+def test_discord_adapter_registers_and_handles_app_commands(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    from aegis.gateway.discord_channel import DiscordAdapter
+
+    adapter = DiscordAdapter("token")
+    adapter.command_menu = lambda max_commands=100: ["/help", "/status"]  # noqa: ARG005
+    registered = []
+
+    class FakeTree:
+        def __init__(self, client):
+            self.client = client
+
+        def command(self, *, name, description):
+            registered.append((name, description))
+
+            def decorator(callback):
+                registered.append(("callback", name, callback.__name__))
+                return callback
+
+            return decorator
+
+    fake_discord = SimpleNamespace(
+        app_commands=SimpleNamespace(CommandTree=lambda client: FakeTree(client)),
+    )
+    tree = adapter._build_command_tree(fake_discord, object())
+
+    assert isinstance(tree, FakeTree)
+    assert registered == [
+        ("help", "AEGIS help"),
+        ("callback", "help", "aegis_help"),
+        ("status", "AEGIS status"),
+        ("callback", "status", "aegis_status"),
+    ]
+
+    seen = []
+    adapter._submit_inbound = lambda ev, *, raw_text=None: seen.append((ev, raw_text)) or None
+    deferred = []
+
+    class Response:
+        async def defer(self, *, thinking=False):
+            deferred.append(thinking)
+
+    channel = SimpleNamespace(id=99, name="ops", parent=None)
+    interaction = SimpleNamespace(
+        id=123,
+        response=Response(),
+        channel=channel,
+        guild=SimpleNamespace(id=456),
+        user=SimpleNamespace(id=7, __str__=lambda self: "ada"),
+        created_at="now",
+    )
+
+    ev = asyncio.run(adapter._handle_app_command(interaction, "status"))
+
+    assert deferred == [True]
+    assert ev.platform == "discord"
+    assert ev.chat_id == "99"
+    assert ev.text == "/status"
+    assert ev.user_id == "7"
+    assert ev.message_id == "123"
+    assert ev.metadata["source"] == "app_command"
+    assert ev.metadata["command"] == "/status"
+    assert seen == [(ev, "/status")]
+
+
 def test_discord_adapter_native_media_upload_targets_threads(monkeypatch, tmp_path):
     import asyncio
     import sys

@@ -66,6 +66,7 @@ class DiscordAdapter(BasePlatformAdapter):
         client = discord.Client(intents=intents)
         self._client = client
         self._loop = None
+        command_tree = self._build_command_tree(discord, client)
 
         @client.event
         async def on_message(message):  # noqa: ANN001
@@ -113,7 +114,76 @@ class DiscordAdapter(BasePlatformAdapter):
             ev._discord_loop = self._loop
             self._submit_inbound(ev, raw_text=raw_content)
 
+        @client.event
+        async def on_ready():  # noqa: ANN001
+            if command_tree is None:
+                return
+            try:
+                await command_tree.sync()
+            except Exception:  # noqa: BLE001 - slash command sync should not kill the gateway
+                pass
+
         client.run(self.token, log_handler=None)
+
+    def _build_command_tree(self, discord, client):  # noqa: ANN001
+        try:
+            tree = discord.app_commands.CommandTree(client)
+        except Exception:  # noqa: BLE001
+            return None
+        for command_name in self.command_menu():
+            name = command_name.lstrip("/")
+
+            def make_callback(slug: str):
+                async def callback(interaction):  # noqa: ANN001
+                    await self._handle_app_command(interaction, slug)
+
+                callback.__name__ = f"aegis_{slug.replace('-', '_')}"
+                return callback
+
+            try:
+                tree.command(name=name, description=f"AEGIS {name}")(make_callback(name))
+            except Exception:  # noqa: BLE001
+                continue
+        self._command_tree = tree
+        return tree
+
+    async def _handle_app_command(self, interaction, command_name: str) -> MessageEvent:  # noqa: ANN001
+        self._loop = asyncio.get_event_loop()
+        response = getattr(interaction, "response", None)
+        defer = getattr(response, "defer", None)
+        if callable(defer):
+            try:
+                await defer(thinking=True)
+            except TypeError:
+                await defer()
+            except Exception:  # noqa: BLE001
+                pass
+        channel = getattr(interaction, "channel", None)
+        chat_id, thread_id = self._chat_and_thread_ids_from_channel(channel)
+        user = getattr(interaction, "user", None)
+        guild = getattr(interaction, "guild", None)
+        text = normalize_inbound_command(f"/{str(command_name or '').lstrip('/')}", platform="discord")
+        ev = MessageEvent(
+            platform="discord",
+            chat_id=chat_id,
+            text=text,
+            user_id=str(getattr(user, "id", "") or "") or None,
+            user_name=str(user or "") or None,
+            message_id=str(getattr(interaction, "id", "") or "") or None,
+            timestamp=getattr(interaction, "created_at", None),
+            thread_id=thread_id,
+            metadata={
+                "guild_id": str(getattr(guild, "id", "") or ""),
+                "channel_id": str(getattr(channel, "id", "") or ""),
+                "channel_name": str(getattr(channel, "name", "") or ""),
+                "command": f"/{str(command_name or '').lstrip('/')}",
+                "source": "app_command",
+            },
+        )
+        ev._discord_channel = channel
+        ev._discord_loop = self._loop
+        self._submit_inbound(ev, raw_text=ev.text)
+        return ev
 
     def _message_type_allowed(self, message) -> bool:  # noqa: ANN001
         mtype = getattr(message, "type", None)
@@ -241,7 +311,9 @@ class DiscordAdapter(BasePlatformAdapter):
         return "\n".join(labels)
 
     def _chat_and_thread_ids(self, message) -> tuple[str, str | None]:  # noqa: ANN001
-        channel = message.channel
+        return self._chat_and_thread_ids_from_channel(message.channel)
+
+    def _chat_and_thread_ids_from_channel(self, channel) -> tuple[str, str | None]:  # noqa: ANN001
         channel_id = str(getattr(channel, "id", "") or "")
         parent = getattr(channel, "parent", None)
         if parent is not None:
