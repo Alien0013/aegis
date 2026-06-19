@@ -295,6 +295,7 @@ class DeliveryIdCache:
         self._lock = threading.RLock()
         self._accepted_count = 0
         self._duplicate_count = 0
+        self._discarded_count = 0
         self._pruned_expired = 0
         self._pruned_capacity = 0
 
@@ -330,6 +331,18 @@ class DeliveryIdCache:
             self._accepted_count += 1
             return True
 
+    def discard(self, key: str) -> bool:
+        """Remove a previously accepted delivery id so providers can retry failures."""
+        key = str(key or "").strip()
+        if not key:
+            return False
+        with self._lock:
+            if key not in self._seen:
+                return False
+            self._seen.pop(key, None)
+            self._discarded_count += 1
+            return True
+
     def stats(self, *, now: float | None = None) -> dict[str, float | int]:
         timestamp = time.time() if now is None else float(now)
         with self._lock:
@@ -342,6 +355,7 @@ class DeliveryIdCache:
                 "oldest_age_seconds": max(0.0, oldest),
                 "accepted_count": self._accepted_count,
                 "duplicate_count": self._duplicate_count,
+                "discarded_count": self._discarded_count,
                 "pruned_expired": self._pruned_expired,
                 "pruned_capacity": self._pruned_capacity,
             }
@@ -432,6 +446,7 @@ def _configured_runtime_status(config) -> dict[str, dict[str, float | int]]:
             "oldest_age_seconds": 0.0,
             "accepted_count": 0,
             "duplicate_count": 0,
+            "discarded_count": 0,
             "pruned_expired": 0,
             "pruned_capacity": 0,
         },
@@ -560,8 +575,11 @@ def make_handler(config, store: WebhookStore):
                 if event not in hook.events:
                     return self._json(200, {"ok": True, "skipped": "event"})
             delivery_id = _delivery_id(name, self.headers)
-            if delivery_id and not delivery_cache.record(delivery_id):
-                return self._json(200, {"ok": True, "duplicate": True})
+            delivery_recorded = False
+            if delivery_id:
+                delivery_recorded = delivery_cache.record(delivery_id)
+                if not delivery_recorded:
+                    return self._json(200, {"ok": True, "duplicate": True})
 
             from .automation import build_prompt, delivery_targets, enqueue_delivery, is_silent
             prompt = build_prompt(
@@ -586,6 +604,8 @@ def make_handler(config, store: WebhookStore):
                 )
                 reply = result.text
             except Exception as e:  # noqa: BLE001
+                if delivery_recorded:
+                    delivery_cache.discard(delivery_id)
                 return self._json(500, {"error": str(e)})
 
             # Deliver to configured channels via the durable outbox, honoring [SILENT].

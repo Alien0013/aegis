@@ -936,6 +936,37 @@ def test_gateway_webhook_channel_prefix_insecure_auth_override(monkeypatch):
     assert adapter.metadata["security"]["insecure_env_override"] is True
 
 
+def test_gateway_webhook_channel_allows_retry_after_dispatch_failure():
+    from aegis.gateway.webhook_channel import WebhookChannel
+
+    adapter = WebhookChannel()
+    attempts = []
+
+    def fail_once(ev, *, wait=False):
+        attempts.append((ev.chat_id, ev.text, wait))
+        raise RuntimeError("bridge down")
+
+    adapter._submit_inbound = fail_once
+    headers = {"Idempotency-Key": "delivery-1"}
+    body = {"chat_id": "c1", "text": "hello"}
+
+    status, payload = adapter._handle_inbound_payload(headers, body)
+    assert status == 500
+    assert "bridge down" in payload["error"]
+    assert adapter._delivery_cache.stats()["entries"] == 0
+    assert adapter._delivery_cache.stats()["discarded_count"] == 1
+
+    adapter._submit_inbound = lambda ev, *, wait=False: f"reply:{ev.text}"
+    retry_status, retry_payload = adapter._handle_inbound_payload(headers, body)
+    duplicate_status, duplicate_payload = adapter._handle_inbound_payload(headers, body)
+
+    assert retry_status == 200
+    assert retry_payload == {"reply": "reply:hello"}
+    assert duplicate_status == 200
+    assert duplicate_payload == {"reply": "", "duplicate": True}
+    assert attempts == [("c1", "hello", True)]
+
+
 def test_gateway_webhook_channel_outbound_bridge_send(monkeypatch):
     from aegis.gateway import webhook_channel
     from aegis.gateway.webhook_channel import WebhookChannel

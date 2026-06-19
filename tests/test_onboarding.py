@@ -287,6 +287,44 @@ def test_noninteractive_onboarding_json_configures_defaults(capsys):
     assert cfg.get("tools.exec_mode") == "auto"
 
 
+def test_config_setup_runs_noninteractive_onboarding(capsys):
+    import json
+
+    from aegis.cli.main import main
+    from aegis.config import Config
+
+    rc = main([
+        "config",
+        "setup",
+        "--non-interactive",
+        "--accept-risk",
+        "--json",
+        "--provider",
+        "openai",
+        "--auth",
+        "skip",
+        "--model",
+        "gpt-5.5",
+        "--web",
+        "skip",
+        "--toolsets",
+        "core",
+        "--exec-mode",
+        "ask",
+        "--no-services",
+    ])
+
+    assert rc == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["ok"] is True
+    assert data["model"]["provider"] == "openai"
+    assert data["model"]["model"] == "gpt-5.5"
+    assert data["web_search"] == "skip"
+    cfg = Config.load()
+    assert cfg.get("model.provider") == "openai"
+    assert cfg.get("model.default") == "gpt-5.5"
+
+
 def test_noninteractive_onboarding_requires_risk_ack(capsys):
     from aegis.cli.main import main
 

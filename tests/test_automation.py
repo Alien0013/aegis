@@ -297,6 +297,43 @@ def test_webhook_dedupes_provider_delivery_retries(monkeypatch, tmp_path):
     assert runtime["delivery_cache"]["duplicate_count"] == 1
 
 
+def test_webhook_allows_provider_retry_after_failed_delivery(monkeypatch, tmp_path):
+    cfg, store, make_handler = _webhook_server(monkeypatch, tmp_path)
+    import aegis.agent.agent as am
+
+    seen = {"calls": 0}
+
+    class A:
+        def run(self, prompt):
+            seen["calls"] += 1
+            seen["prompt"] = prompt
+            if seen["calls"] == 1:
+                raise RuntimeError("boom")
+            return type("R", (), {"content": "done"})()
+
+    monkeypatch.setattr(am.Agent, "create", staticmethod(lambda cfg, session=None: A()))
+    store.add("ci", "review {action}")
+    srv, port = _serve(make_handler, cfg, store)
+    headers = {"X-GitHub-Delivery": "delivery-retry", "Content-Type": "application/json"}
+    try:
+        first_status, first_body = _post(port, "/hook/ci", b'{"action":"opened"}', headers)
+        second_status, second_body = _post(port, "/hook/ci", b'{"action":"opened"}', headers)
+        from aegis.webhook import webhook_runtime_status
+        runtime = webhook_runtime_status(cfg)
+    finally:
+        srv.shutdown()
+
+    assert first_status == 500
+    assert "boom" in first_body["error"]
+    assert second_status == 200
+    assert second_body["ok"] is True
+    assert second_body["reply"] == "done"
+    assert seen["calls"] == 2
+    assert runtime["delivery_cache"]["accepted_count"] == 2
+    assert runtime["delivery_cache"]["duplicate_count"] == 0
+    assert runtime["delivery_cache"]["discarded_count"] == 1
+
+
 def test_webhook_accepts_generic_hmac_signature(monkeypatch, tmp_path):
     cfg, store, make_handler = _webhook_server(monkeypatch, tmp_path)
     seen = _fake_agent(monkeypatch, reply="done")
@@ -353,6 +390,22 @@ def test_webhook_delivery_cache_prunes_incrementally():
     assert stats["accepted_count"] == 4
     assert stats["duplicate_count"] == 1
     assert stats["pruned_expired"] == 2
+
+
+def test_webhook_delivery_cache_discards_failed_delivery():
+    from aegis.webhook import DeliveryIdCache
+
+    cache = DeliveryIdCache(ttl_seconds=60, max_items=3)
+    assert cache.record("delivery-1", now=100.0) is True
+    assert cache.discard("delivery-1") is True
+    assert cache.record("delivery-1", now=101.0) is True
+    assert cache.discard("missing") is False
+
+    stats = cache.stats(now=101.0)
+    assert stats["entries"] == 1
+    assert stats["accepted_count"] == 2
+    assert stats["duplicate_count"] == 0
+    assert stats["discarded_count"] == 1
 
 
 def test_webhook_delivery_cache_caps_entries_and_reports_stats():

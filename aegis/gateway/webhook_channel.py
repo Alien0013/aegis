@@ -360,6 +360,22 @@ class WebhookChannel(BasePlatformAdapter):
             metadata["message_key_id"] = key_id
         return metadata
 
+    def _handle_inbound_payload(self, headers, body: dict) -> tuple[int, dict]:
+        delivery_id = self._delivery_id(headers, body)
+        delivery_recorded = False
+        if delivery_id:
+            delivery_recorded = self._delivery_cache.record(delivery_id)
+            if not delivery_recorded:
+                return 200, {"reply": "", "duplicate": True}
+        try:
+            ev = self._event_from_body(body)
+            reply = self._submit_inbound(ev, wait=True) or ""
+        except Exception as exc:  # noqa: BLE001
+            if delivery_recorded:
+                self._delivery_cache.discard(delivery_id)
+            return 500, {"reply": "", "error": f"dispatch failed: {type(exc).__name__}: {exc}"}
+        return 200, {"reply": reply}
+
     def start(self, dispatch: Dispatch) -> None:
         secret = self.secret
         adapter = self
@@ -405,19 +421,11 @@ class WebhookChannel(BasePlatformAdapter):
                     self.send_response(400)
                     self.end_headers()
                     return
-                delivery_id = adapter._delivery_id(self.headers, body)
-                if delivery_id and not adapter._delivery_cache.record(delivery_id):
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/json")
-                    self.end_headers()
-                    self.wfile.write(json.dumps({"reply": "", "duplicate": True}).encode())
-                    return
-                ev = adapter._event_from_body(body)
-                reply = adapter._submit_inbound(ev, wait=True) or ""
-                self.send_response(200)
+                status, payload = adapter._handle_inbound_payload(self.headers, body)
+                self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
-                self.wfile.write(json.dumps({"reply": reply}).encode())
+                self.wfile.write(json.dumps(payload).encode())
 
         httpd = ThreadingHTTPServer(("0.0.0.0", self.port), Handler)
         print(f"  ▸ webhook channel listening on :{self.port}/in")
