@@ -1095,6 +1095,21 @@ def _derive_chat_session_id_from_messages(messages: list[dict]) -> str:
 
 def _usage(source) -> dict[str, Any]:
     usage = source
+    if isinstance(usage, dict):
+        prompt = int(usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0)
+        completion = int(usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0)
+        total = int(usage.get("total_tokens", prompt + completion) or 0)
+        prompt_details = usage.get("input_tokens_details") or usage.get("prompt_tokens_details") or {}
+        completion_details = usage.get("output_tokens_details") or usage.get("completion_tokens_details") or {}
+        return {
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": total,
+            "prompt_tokens_details": dict(prompt_details) if isinstance(prompt_details, dict) else {},
+            "completion_tokens_details": (
+                dict(completion_details) if isinstance(completion_details, dict) else {}
+            ),
+        }
     if not all(hasattr(usage, key) for key in ("input_tokens", "output_tokens")):
         usage = getattr(getattr(source, "budget", None), "usage", None)
     if usage is None:

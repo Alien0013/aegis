@@ -1548,6 +1548,49 @@ def test_responses_preserves_parallel_tool_calls_false(monkeypatch, tmp_path):
     assert json.loads(get_data)["parallel_tool_calls"] is False
 
 
+def test_responses_usage_accepts_dict_payloads(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    class DictUsageRunner:
+        def __init__(self, config, include_mcp=True):
+            pass
+
+        def run_prompt(self, prompt, **kwargs):
+            return SimpleNamespace(
+                text="counted",
+                usage={
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "total_tokens": 150,
+                    "input_tokens_details": {"cached_tokens": 9},
+                },
+                session=SimpleNamespace(id=kwargs.get("session_id") or "serve:dict-usage"),
+                trace_id="trace_dict_usage",
+                turn_id="turn_dict_usage",
+                run_id="run_dict_usage",
+                agent=SimpleNamespace(provider=SimpleNamespace(model="served-model")),
+            )
+
+    monkeypatch.setattr(server, "SurfaceRunner", DictUsageRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {"input": "hello"})
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    body = json.loads(data)
+    assert status == 200
+    assert body["usage"]["input_tokens"] == 100
+    assert body["usage"]["output_tokens"] == 50
+    assert body["usage"]["total_tokens"] == 150
+    assert body["usage"]["prompt_tokens"] == 100
+    assert body["usage"]["completion_tokens"] == 50
+    assert body["usage"]["input_tokens_details"]["cached_tokens"] == 9
+
+
 def test_responses_rejects_invalid_reasoning_effort(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
