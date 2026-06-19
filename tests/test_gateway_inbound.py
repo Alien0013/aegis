@@ -827,8 +827,13 @@ def test_discord_adapter_enforces_guild_filters_and_trigger_mode(monkeypatch):
 
 def test_discord_adapter_registers_and_handles_app_commands(monkeypatch):
     import asyncio
+    import inspect
+    import sys
+    import types
     from types import SimpleNamespace
 
+    from aegis.gateway import discord_channel
+    from aegis.gateway.base import MessageEvent
     from aegis.gateway.discord_channel import DiscordAdapter
 
     configured = DiscordAdapter("token")
@@ -843,24 +848,34 @@ def test_discord_adapter_registers_and_handles_app_commands(monkeypatch):
     assert "/deploy" in configured.command_menu(max_commands=50)
 
     adapter = DiscordAdapter("token")
-    adapter.command_menu = lambda max_commands=100: ["/help", "/status"]  # noqa: ARG005
+    adapter.command_menu = lambda max_commands=100: ["/help", "/model"]  # noqa: ARG005
     registered = []
+    described = []
 
     class FakeTree:
         def __init__(self, client):
             self.client = client
+            self.callbacks = {}
 
         def command(self, *, name, description):
             registered.append((name, description))
 
             def decorator(callback):
                 registered.append(("callback", name, callback.__name__))
+                self.callbacks[name] = callback
                 return callback
 
             return decorator
 
+    def describe(**kwargs):
+        def decorator(callback):
+            described.append((callback.__name__, kwargs))
+            return callback
+
+        return decorator
+
     fake_discord = SimpleNamespace(
-        app_commands=SimpleNamespace(CommandTree=lambda client: FakeTree(client)),
+        app_commands=SimpleNamespace(CommandTree=lambda client: FakeTree(client), describe=describe),
     )
     tree = adapter._build_command_tree(fake_discord, object())
 
@@ -868,9 +883,11 @@ def test_discord_adapter_registers_and_handles_app_commands(monkeypatch):
     assert registered == [
         ("help", "AEGIS help"),
         ("callback", "help", "aegis_help"),
-        ("status", "AEGIS status"),
-        ("callback", "status", "aegis_status"),
+        ("model", "AEGIS model"),
+        ("callback", "model", "aegis_model"),
     ]
+    assert described == [("aegis_model", {"args": "Optional text for the AEGIS command."})]
+    assert "args" in inspect.signature(tree.callbacks["model"]).parameters
 
     seen = []
     adapter._submit_inbound = lambda ev, *, raw_text=None: seen.append((ev, raw_text)) or None
@@ -900,7 +917,51 @@ def test_discord_adapter_registers_and_handles_app_commands(monkeypatch):
     assert ev.message_id == "123"
     assert ev.metadata["source"] == "app_command"
     assert ev.metadata["command"] == "/status"
+    assert ev.metadata["args"] == ""
     assert seen == [(ev, "/status")]
+
+    model_interaction = SimpleNamespace(
+        id=124,
+        response=Response(),
+        channel=channel,
+        guild=SimpleNamespace(id=456),
+        user=SimpleNamespace(id=7, __str__=lambda self: "ada"),
+        created_at="now",
+        data={"options": [{"name": "args", "value": "openai/gpt-5"}]},
+    )
+    model_ev = asyncio.run(adapter._handle_app_command(model_interaction, "model"))
+
+    assert model_ev.text == "/model openai/gpt-5"
+    assert model_ev.metadata["command"] == "/model"
+    assert model_ev.metadata["args"] == "openai/gpt-5"
+    assert seen[-1] == (model_ev, "/model openai/gpt-5")
+
+    class FakeFuture:
+        def __init__(self, value):
+            self.value = value
+
+        def result(self, timeout=None):  # noqa: ARG002
+            return self.value
+
+    def run_coroutine_threadsafe(coro, loop):  # noqa: ARG001
+        return FakeFuture(asyncio.run(coro))
+
+    monkeypatch.setitem(sys.modules, "discord", types.SimpleNamespace(
+        AllowedMentions=types.SimpleNamespace(none=lambda: "none"),
+    ))
+    monkeypatch.setattr(discord_channel.asyncio, "run_coroutine_threadsafe", run_coroutine_threadsafe)
+    followups = []
+
+    class Followup:
+        async def send(self, *args, **kwargs):
+            followups.append((args, kwargs))
+
+    reply_ev = MessageEvent(platform="discord", chat_id="99", text="/status")
+    reply_ev._discord_interaction = SimpleNamespace(followup=Followup(), channel=channel)
+    reply_ev._discord_loop = object()
+    adapter._deliver_reply(reply_ev, "done")
+
+    assert followups == [(("done",), {"allowed_mentions": "none"})]
 
 
 def test_discord_app_commands_respect_security_filters(monkeypatch):

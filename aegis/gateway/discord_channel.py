@@ -13,6 +13,18 @@ from ..platforms import (
 )
 from .base import BasePlatformAdapter, Dispatch, MessageEvent
 
+_ARGUMENT_COMMANDS = {
+    "model",
+    "provider",
+    "reasoning",
+    "fast",
+    "busy",
+    "compress",
+    "goal",
+    "subgoal",
+    "steer",
+}
+
 
 def _csv_set(value: str) -> set[str] | None:
     items = {item.strip() for item in str(value or "").split(",") if item.strip()}
@@ -145,10 +157,20 @@ class DiscordAdapter(BasePlatformAdapter):
             name = command_name.lstrip("/")
 
             def make_callback(slug: str):
-                async def callback(interaction):  # noqa: ANN001
-                    await self._handle_app_command(interaction, slug)
+                if slug in _ARGUMENT_COMMANDS:
+                    async def callback(interaction, args: str = ""):  # noqa: ANN001
+                        await self._handle_app_command(interaction, slug, args=args)
+                else:
+                    async def callback(interaction):  # noqa: ANN001
+                        await self._handle_app_command(interaction, slug)
 
                 callback.__name__ = f"aegis_{slug.replace('-', '_')}"
+                describe = getattr(getattr(discord, "app_commands", None), "describe", None)
+                if slug in _ARGUMENT_COMMANDS and callable(describe):
+                    try:
+                        callback = describe(args="Optional text for the AEGIS command.")(callback)
+                    except Exception:  # noqa: BLE001
+                        pass
                 return callback
 
             try:
@@ -158,7 +180,13 @@ class DiscordAdapter(BasePlatformAdapter):
         self._command_tree = tree
         return tree
 
-    async def _handle_app_command(self, interaction, command_name: str) -> MessageEvent | None:  # noqa: ANN001
+    async def _handle_app_command(
+        self,
+        interaction,
+        command_name: str,
+        *,
+        args: str = "",
+    ) -> MessageEvent | None:  # noqa: ANN001
         self._loop = asyncio.get_event_loop()
         if not self._interaction_allowed(interaction):
             await self._deny_interaction(interaction)
@@ -176,7 +204,10 @@ class DiscordAdapter(BasePlatformAdapter):
         chat_id, thread_id = self._chat_and_thread_ids_from_channel(channel)
         user = getattr(interaction, "user", None)
         guild = getattr(interaction, "guild", None)
-        text = normalize_inbound_command(f"/{str(command_name or '').lstrip('/')}", platform="discord")
+        command = f"/{str(command_name or '').lstrip('/')}"
+        arg_text = str(args or self._interaction_argument_text(interaction) or "").strip()
+        raw_text = f"{command} {arg_text}".strip()
+        text = normalize_inbound_command(raw_text, platform="discord")
         ev = MessageEvent(
             platform="discord",
             chat_id=chat_id,
@@ -190,14 +221,35 @@ class DiscordAdapter(BasePlatformAdapter):
                 "guild_id": str(getattr(guild, "id", "") or ""),
                 "channel_id": str(getattr(channel, "id", "") or ""),
                 "channel_name": str(getattr(channel, "name", "") or ""),
-                "command": f"/{str(command_name or '').lstrip('/')}",
+                "command": command,
+                "args": arg_text,
                 "source": "app_command",
             },
         )
         ev._discord_channel = channel
+        ev._discord_interaction = interaction
         ev._discord_loop = self._loop
         self._submit_inbound(ev, raw_text=ev.text)
         return ev
+
+    def _interaction_argument_text(self, interaction) -> str:  # noqa: ANN001
+        namespace = getattr(interaction, "namespace", None)
+        for name in ("args", "arg", "text", "value", "query"):
+            value = getattr(namespace, name, None) if namespace is not None else None
+            if value not in (None, ""):
+                return str(value)
+        data = getattr(interaction, "data", None)
+        options = data.get("options") if isinstance(data, dict) else None
+        if isinstance(options, list):
+            for option in options:
+                if not isinstance(option, dict):
+                    continue
+                name = str(option.get("name") or "").strip().lower()
+                if name in {"args", "arg", "text", "value", "query"}:
+                    value = option.get("value")
+                    if value not in (None, ""):
+                        return str(value)
+        return ""
 
     async def _deny_interaction(self, interaction) -> None:  # noqa: ANN001
         response = getattr(interaction, "response", None)
@@ -266,6 +318,7 @@ class DiscordAdapter(BasePlatformAdapter):
             },
         )
         ev._discord_channel = channel
+        ev._discord_interaction = interaction
         ev._discord_loop = self._loop
         self._submit_inbound(ev, raw_text=str(value or ""))
         return ev
@@ -539,8 +592,9 @@ class DiscordAdapter(BasePlatformAdapter):
 
     def _deliver_reply(self, ev: MessageEvent, reply: str, state=None) -> None:  # noqa: ANN001
         channel = getattr(ev, "_discord_channel", None)
+        interaction = getattr(ev, "_discord_interaction", None)
         loop = getattr(ev, "_discord_loop", None)
-        if channel is None or loop is None:
+        if (channel is None and interaction is None) or loop is None:
             return
 
         async def send_all():
@@ -553,18 +607,36 @@ class DiscordAdapter(BasePlatformAdapter):
             clean = tableify(clean)
             for chunk in chunk_text_by_units(clean, limit=1900):
                 if chunk:
-                    await self._discord_send_text(channel, chunk)
+                    if interaction is not None:
+                        await self._discord_send_interaction(interaction, chunk)
+                    else:
+                        await self._discord_send_text(channel, chunk)
             for path in media:
                 try:
                     allowed, reason = self.filter_media_path(path)
                     if not allowed:
-                        await self._discord_send_text(channel, f"📎 blocked media path: {reason}")
+                        text = f"📎 blocked media path: {reason}"
+                        if interaction is not None:
+                            await self._discord_send_interaction(interaction, text)
+                        else:
+                            await self._discord_send_text(channel, text)
                     elif os.path.exists(path):
-                        await channel.send(file=discord.File(path))
+                        if interaction is not None:
+                            await self._discord_send_interaction(interaction, file=discord.File(path))
+                        else:
+                            await channel.send(file=discord.File(path))
                     else:
-                        await channel.send(f"(file not found: {path})")
+                        text = f"(file not found: {path})"
+                        if interaction is not None:
+                            await self._discord_send_interaction(interaction, text)
+                        else:
+                            await channel.send(text)
                 except Exception:  # noqa: BLE001
-                    await channel.send(f"📎 {path}")
+                    text = f"📎 {path}"
+                    if interaction is not None:
+                        await self._discord_send_interaction(interaction, text)
+                    else:
+                        await channel.send(text)
 
         try:
             if reply:
@@ -588,6 +660,38 @@ class DiscordAdapter(BasePlatformAdapter):
             return await channel.send(text, allowed_mentions=allowed_mentions)
         except Exception:  # noqa: BLE001
             return await channel.send(text)
+
+    async def _discord_send_interaction(self, interaction, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        try:
+            import discord
+
+            kwargs.setdefault("allowed_mentions", discord.AllowedMentions.none())
+        except Exception:  # noqa: BLE001
+            pass
+        followup = getattr(interaction, "followup", None)
+        send = getattr(followup, "send", None)
+        if callable(send):
+            try:
+                return await send(*args, **kwargs)
+            except TypeError:
+                kwargs.pop("allowed_mentions", None)
+                return await send(*args, **kwargs)
+        edit = getattr(interaction, "edit_original_response", None)
+        if callable(edit):
+            if args and "content" not in kwargs:
+                kwargs["content"] = args[0]
+                args = args[1:]
+            try:
+                return await edit(*args, **kwargs)
+            except TypeError:
+                kwargs.pop("allowed_mentions", None)
+                return await edit(*args, **kwargs)
+        channel = getattr(interaction, "channel", None)
+        if channel is not None and args:
+            return await self._discord_send_text(channel, str(args[0]))
+        if channel is not None and kwargs.get("content"):
+            return await self._discord_send_text(channel, str(kwargs.get("content") or ""))
+        return None
 
     def _button_style(self, discord, style: str):  # noqa: ANN001
         styles = getattr(discord, "ButtonStyle", None)
