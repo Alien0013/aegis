@@ -110,12 +110,14 @@ class SlackAdapter(BasePlatformAdapter):
         def handle_slash_command(ack, command):  # noqa: ANN001
             self._handle_slash_command(command, ack)
 
-    def _handle_slash_command(self, command: dict, ack=None) -> MessageEvent:  # noqa: ANN001
+    def _handle_slash_command(self, command: dict, ack=None) -> MessageEvent | None:  # noqa: ANN001
         if callable(ack):
             try:
                 ack()
             except Exception:  # noqa: BLE001
                 pass
+        if not self._command_allowed(command):
+            return None
         command_name = str(command.get("command") or "").strip() or "/"
         command_text = str(command.get("text") or "").strip()
         raw_text = command_name if not command_text else f"{command_name} {command_text}"
@@ -138,6 +140,24 @@ class SlackAdapter(BasePlatformAdapter):
         )
         self._submit_inbound(ev, raw_text=raw_text)
         return ev
+
+    def _channel_values(self, *values: object) -> set[str]:
+        return {str(value or "").strip() for value in values if str(value or "").strip()}
+
+    def _channel_allowed(self, channels: set[str]) -> bool:
+        if self.ignored_channels and ("*" in self.ignored_channels or channels & self.ignored_channels):
+            return False
+        return not self.allowed_channels or "*" in self.allowed_channels or bool(channels & self.allowed_channels)
+
+    def _command_allowed(self, command: dict) -> bool:
+        user = str(command.get("user_id") or "").strip()
+        if self.allowed_users and user not in self.allowed_users:
+            return False
+        team = str(command.get("team_id") or command.get("team_domain") or "").strip()
+        if self.allowed_teams and team not in self.allowed_teams:
+            return False
+        channels = self._channel_values(command.get("channel_id"), command.get("channel_name"))
+        return self._channel_allowed(channels)
 
     def _resolve_thread_ts(self, event: dict) -> str | None:
         thread_ts = str(event.get("thread_ts") or "").strip()
@@ -163,10 +183,7 @@ class SlackAdapter(BasePlatformAdapter):
         team = str(event.get("team") or "")
         if self.allowed_teams and team not in self.allowed_teams:
             return False
-        channel = str(event.get("channel") or "")
-        if self.ignored_channels and ("*" in self.ignored_channels or channel in self.ignored_channels):
-            return False
-        if self.allowed_channels and "*" not in self.allowed_channels and channel not in self.allowed_channels:
+        if not self._channel_allowed(self._channel_values(event.get("channel"))):
             return False
         if not self._trigger_allowed(event, raw_text):
             return False

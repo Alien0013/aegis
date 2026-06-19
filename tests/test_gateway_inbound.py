@@ -1706,11 +1706,26 @@ def test_slack_adapter_handles_native_slash_commands(monkeypatch):
 
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
     monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+    monkeypatch.setenv("SLACK_ALLOWED_USERS", "U1")
+    monkeypatch.setenv("SLACK_ALLOWED_CHANNELS", "C1,ops")
+    monkeypatch.setenv("SLACK_ALLOWED_TEAMS", "T1")
 
     adapter = SlackAdapter()
     seen = []
     acked = []
     adapter._submit_inbound = lambda ev, *, raw_text=None: seen.append((ev, raw_text)) or None
+
+    blocked = adapter._handle_slash_command(
+        {
+            "command": "/status",
+            "channel_id": "C2",
+            "user_id": "U1",
+            "team_id": "T1",
+        },
+        ack=lambda: acked.append("blocked"),
+    )
+    assert blocked is None
+    assert seen == []
 
     ev = adapter._handle_slash_command(
         {
@@ -1727,7 +1742,7 @@ def test_slack_adapter_handles_native_slash_commands(monkeypatch):
         ack=lambda: acked.append(True),
     )
 
-    assert acked == [True]
+    assert acked == ["blocked", True]
     assert ev.platform == "slack"
     assert ev.chat_id == "C1"
     assert ev.text == "/status full"
