@@ -1117,6 +1117,8 @@ def test_slack_adapter_enforces_workspace_filters_and_strips_mentions(monkeypatc
     assert adapter._event_allowed({"user": "U1", "channel": "C1", "team": "T1"}) is True
     assert adapter._resolve_thread_ts({"ts": "171.1"}) is None
     assert adapter._resolve_thread_ts({"ts": "171.2", "thread_ts": "171.1"}) == "171.1"
+    assert adapter.metadata["supports_slash_commands"] is True
+    assert adapter.command_menu(max_commands=3) == ["/help", "/whoami", "/status"]
     assert adapter._event_allowed({"user": "U3", "channel": "C1", "team": "T1"}) is False
     assert adapter._event_allowed({"user": "U1", "channel": "C2", "team": "T1"}) is False
     assert adapter._event_allowed({"user": "U1", "channel": "C9", "team": "T1"}) is False
@@ -1253,6 +1255,45 @@ def test_slack_adapter_enforces_workspace_filters_and_strips_mentions(monkeypatc
         {"channel": "C1", "text": "flat reply"},
         {"channel": "C1", "text": "thread reply", "thread_ts": "171.1"},
     ]
+
+
+def test_slack_adapter_handles_native_slash_commands(monkeypatch):
+    from aegis.gateway.slack_channel import SlackAdapter
+
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+
+    adapter = SlackAdapter()
+    seen = []
+    acked = []
+    adapter._submit_inbound = lambda ev, *, raw_text=None: seen.append((ev, raw_text)) or None
+
+    ev = adapter._handle_slash_command(
+        {
+            "command": "/status",
+            "text": "full",
+            "channel_id": "C1",
+            "channel_name": "ops",
+            "user_id": "U1",
+            "user_name": "ada",
+            "team_id": "T1",
+            "trigger_id": "trigger-1",
+            "response_url": "https://slack.test/response",
+        },
+        ack=lambda: acked.append(True),
+    )
+
+    assert acked == [True]
+    assert ev.platform == "slack"
+    assert ev.chat_id == "C1"
+    assert ev.text == "/status full"
+    assert ev.user_id == "U1"
+    assert ev.user_name == "ada"
+    assert ev.message_id == "trigger-1"
+    assert ev.metadata["source"] == "slash_command"
+    assert ev.metadata["command"] == "/status"
+    assert ev.metadata["response_url"] == "https://slack.test/response"
+    assert seen == [(ev, "/status full")]
 
 
 def test_gateway_webhook_channel_normalizes_event_body():

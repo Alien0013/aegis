@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 import re
 
-from ..platforms import chunk_text_by_units, normalize_inbound_command
+from ..platforms import capped_command_menu, chunk_text_by_units, normalize_inbound_command
 from .base import BasePlatformAdapter, Dispatch, MessageEvent
 
 
@@ -48,6 +48,8 @@ class SlackAdapter(BasePlatformAdapter):
     @property
     def metadata(self) -> dict:
         data = super().metadata
+        data["command_cap"] = 30
+        data["supports_slash_commands"] = True
         data["security"] = {
             "allow_bots": self.allow_bots,
             "allowed_users_configured": bool(self.allowed_users),
@@ -60,6 +62,9 @@ class SlackAdapter(BasePlatformAdapter):
         }
         return data
 
+    def command_menu(self, *, max_commands: int = 30) -> list[str]:
+        return capped_command_menu(max_commands=max_commands)
+
     def start(self, dispatch: Dispatch) -> None:
         self._init_inbound_queue(dispatch)
         try:
@@ -70,6 +75,8 @@ class SlackAdapter(BasePlatformAdapter):
 
         app = App(token=self.bot_token)
         self._app = app
+        for command_name in self.command_menu():
+            self._register_slash_command(app, command_name)
 
         @app.event("message")
         def handle_message(event, say):  # noqa: ANN001
@@ -97,6 +104,40 @@ class SlackAdapter(BasePlatformAdapter):
             self._submit_inbound(ev, raw_text=raw_text)
 
         SocketModeHandler(app, self.app_token).start()
+
+    def _register_slash_command(self, app, command_name: str) -> None:  # noqa: ANN001
+        @app.command(command_name)
+        def handle_slash_command(ack, command):  # noqa: ANN001
+            self._handle_slash_command(command, ack)
+
+    def _handle_slash_command(self, command: dict, ack=None) -> MessageEvent:  # noqa: ANN001
+        if callable(ack):
+            try:
+                ack()
+            except Exception:  # noqa: BLE001
+                pass
+        command_name = str(command.get("command") or "").strip() or "/"
+        command_text = str(command.get("text") or "").strip()
+        raw_text = command_name if not command_text else f"{command_name} {command_text}"
+        text = normalize_inbound_command(raw_text, platform="slack")
+        ev = MessageEvent(
+            platform="slack",
+            chat_id=str(command.get("channel_id") or command.get("channel_name") or "unknown"),
+            text=text,
+            user_id=str(command.get("user_id") or "") or None,
+            user_name=str(command.get("user_name") or "") or None,
+            message_id=str(command.get("trigger_id") or "") or None,
+            metadata={
+                "team": command.get("team_id") or command.get("team_domain"),
+                "channel_name": command.get("channel_name"),
+                "command": command_name,
+                "response_url": command.get("response_url"),
+                "trigger_id": command.get("trigger_id"),
+                "source": "slash_command",
+            },
+        )
+        self._submit_inbound(ev, raw_text=raw_text)
+        return ev
 
     def _resolve_thread_ts(self, event: dict) -> str | None:
         thread_ts = str(event.get("thread_ts") or "").strip()
