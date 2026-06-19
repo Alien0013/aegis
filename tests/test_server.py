@@ -1497,6 +1497,12 @@ def test_responses_create_retrieve_cancel_delete(monkeypatch, tmp_path):
     assert body["previous_response_id"] is None
     assert body["metadata"]["session_id"] == "serve:responses"
     assert body["metadata"]["reasoning_effort"] == "low"
+    assert body["usage"]["input_tokens"] == 11
+    assert body["usage"]["output_tokens"] == 7
+    assert body["usage"]["total_tokens"] == 18
+    assert body["usage"]["prompt_tokens"] == 11
+    assert body["usage"]["completion_tokens"] == 7
+    assert body["usage"]["input_tokens_details"]["cached_tokens"] == 3
     assert get_status == 200
     retrieved = json.loads(get_data)
     assert retrieved["id"] == response_id
@@ -1506,7 +1512,11 @@ def test_responses_create_retrieve_cancel_delete(monkeypatch, tmp_path):
     assert cancelled["status"] == "cancelled"
     assert cancelled["include"] == ["output[*].content", "reasoning.encrypted_content"]
     assert delete_status == 200
-    assert json.loads(delete_data)["ok"] is True
+    deleted = json.loads(delete_data)
+    assert deleted["ok"] is True
+    assert deleted["id"] == response_id
+    assert deleted["object"] == "response"
+    assert deleted["deleted"] is True
     assert _FakeRunner.calls[0]["session_id"] == "serve:responses"
     assert _FakeRunner.calls[0]["meta"]["runtime_controls"]["reasoning_effort"] == "low"
     assert _FakeRunner.calls[0]["max_tokens"] == 77

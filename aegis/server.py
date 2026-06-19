@@ -1110,6 +1110,25 @@ def _usage(source) -> dict[str, Any]:
     }
 
 
+def _response_usage(source) -> dict[str, Any]:
+    """Responses API usage with OpenAI-style keys plus chat aliases."""
+
+    usage = _usage(source)
+    prompt = int(usage.get("prompt_tokens", 0) or 0)
+    completion = int(usage.get("completion_tokens", 0) or 0)
+    return {
+        "input_tokens": prompt,
+        "output_tokens": completion,
+        "total_tokens": int(usage.get("total_tokens", prompt + completion) or 0),
+        "input_tokens_details": dict(usage.get("prompt_tokens_details") or {}),
+        "output_tokens_details": dict(usage.get("completion_tokens_details") or {}),
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "prompt_tokens_details": dict(usage.get("prompt_tokens_details") or {}),
+        "completion_tokens_details": dict(usage.get("completion_tokens_details") or {}),
+    }
+
+
 def _models(config: Config) -> list[dict[str, Any]]:
     from .providers import registry
 
@@ -1270,7 +1289,7 @@ def _response_object(
         "parallel_tool_calls": parallel_tool_calls,
         "output": _response_output_items(result, text),
         "output_text": text,
-        "usage": _usage(getattr(result, "usage", None) or agent),
+        "usage": _response_usage(getattr(result, "usage", None) or agent),
         "metadata": metadata,
     }
 
@@ -3514,7 +3533,15 @@ def make_handler(config: Config):
             if path.startswith("/v1/responses/"):
                 rid = path.rsplit("/", 1)[-1]
                 existed = response_store.delete(rid)
-                return self._json(200 if existed else 404, {"ok": existed, "id": rid})
+                return self._json(
+                    200 if existed else 404,
+                    {
+                        "ok": existed,
+                        "id": rid,
+                        "object": "response",
+                        "deleted": bool(existed),
+                    },
+                )
             if path.startswith("/api/jobs/"):
                 from .cron import CronStore
 
@@ -4825,7 +4852,7 @@ def make_handler(config: Config):
                     "model": model or config.get("model.default", ""),
                     "output": [],
                     "output_text": "",
-                    "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                    "usage": _response_usage(None),
                     "error": None,
                     "incomplete_details": None,
                     "metadata": metadata,
