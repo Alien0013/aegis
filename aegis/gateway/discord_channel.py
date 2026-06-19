@@ -27,6 +27,7 @@ class DiscordAdapter(BasePlatformAdapter):
     supports_threads = True
     supports_media = True
     supports_reactions = True
+    supports_interactive_prompts = True
     typed_command_prefix = "!"
 
     def __init__(self, token: str | None = None):
@@ -42,6 +43,7 @@ class DiscordAdapter(BasePlatformAdapter):
     @property
     def metadata(self) -> dict:
         data = super().metadata
+        data["supports_interactive_prompts"] = True
         data["security"] = {
             "allowed_users_configured": bool(self.allowed),
             "allowed_roles_configured": bool(self.allowed_roles),
@@ -211,6 +213,62 @@ class DiscordAdapter(BasePlatformAdapter):
                 pass
         except Exception:  # noqa: BLE001
             pass
+
+    async def _ack_interaction(self, interaction) -> None:  # noqa: ANN001
+        response = getattr(interaction, "response", None)
+        defer = getattr(response, "defer", None)
+        if not callable(defer):
+            return
+        try:
+            await defer()
+        except TypeError:
+            try:
+                await defer(thinking=False)
+            except Exception:  # noqa: BLE001
+                pass
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def _handle_component_interaction(
+        self,
+        interaction,
+        value: str,
+        *,
+        action_id: str,
+        action_type: str,
+    ) -> MessageEvent | None:  # noqa: ANN001
+        self._loop = asyncio.get_event_loop()
+        if not self._interaction_allowed(interaction):
+            await self._deny_interaction(interaction)
+            return None
+        await self._ack_interaction(interaction)
+        channel = getattr(interaction, "channel", None)
+        chat_id, thread_id = self._chat_and_thread_ids_from_channel(channel)
+        user = getattr(interaction, "user", None)
+        guild = getattr(interaction, "guild", None)
+        text = normalize_inbound_command(str(value or ""), platform="discord")
+        ev = MessageEvent(
+            platform="discord",
+            chat_id=chat_id,
+            text=text,
+            user_id=str(getattr(user, "id", "") or "") or None,
+            user_name=str(user or "") or None,
+            message_id=str(getattr(interaction, "id", "") or "") or None,
+            timestamp=getattr(interaction, "created_at", None),
+            thread_id=thread_id,
+            metadata={
+                "guild_id": str(getattr(guild, "id", "") or ""),
+                "channel_id": str(getattr(channel, "id", "") or ""),
+                "channel_name": str(getattr(channel, "name", "") or ""),
+                "action_id": action_id,
+                "action_type": action_type,
+                "source": "component_interaction",
+            },
+        )
+        ev._discord_channel = channel
+        ev._discord_loop = self._loop
+        self._submit_inbound(ev, raw_text=str(value or ""))
+        return ev
 
     def _message_type_allowed(self, message) -> bool:  # noqa: ANN001
         mtype = getattr(message, "type", None)
@@ -530,6 +588,106 @@ class DiscordAdapter(BasePlatformAdapter):
             return await channel.send(text, allowed_mentions=allowed_mentions)
         except Exception:  # noqa: BLE001
             return await channel.send(text)
+
+    def _button_style(self, discord, style: str):  # noqa: ANN001
+        styles = getattr(discord, "ButtonStyle", None)
+        if styles is None:
+            return style
+        return getattr(styles, style, style)
+
+    def _build_prompt_view(self, discord, entries: list[tuple[str, str, str]], action_type: str):  # noqa: ANN001
+        view = discord.ui.View(timeout=None)
+        for index, (label, value, style) in enumerate(entries[:5]):
+            action_id = f"aegis_{action_type}_{index}"
+            button = discord.ui.Button(
+                label=str(label or value)[:80] or "Choose",
+                style=self._button_style(discord, style),
+                custom_id=action_id,
+            )
+
+            async def callback(interaction, *, answer=str(value or ""), aid=action_id):  # noqa: ANN001
+                await self._handle_component_interaction(
+                    interaction,
+                    answer,
+                    action_id=aid,
+                    action_type=action_type,
+                )
+
+            button.callback = callback
+            view.add_item(button)
+        return view
+
+    def _send_prompt_view(
+        self,
+        chat_id: str,
+        text: str,
+        entries: list[tuple[str, str, str]],
+        action_type: str,
+        *,
+        metadata: dict | None = None,
+    ) -> None:
+        client = getattr(self, "_client", None)
+        loop = getattr(self, "_loop", None)
+        if client is None or loop is None:
+            raise RuntimeError("discord client is not started")
+
+        async def send_all():
+            import discord
+
+            channel = await self._discord_target_channel(chat_id, metadata)
+            view = self._build_prompt_view(discord, entries, action_type)
+            kwargs = {"view": view}
+            try:
+                kwargs["allowed_mentions"] = discord.AllowedMentions.none()
+            except Exception:  # noqa: BLE001
+                pass
+            await channel.send(text, **kwargs)
+
+        asyncio.run_coroutine_threadsafe(send_all(), loop).result(timeout=60)
+
+    def send_clarify(
+        self,
+        chat_id: str,
+        question: str,
+        choices: list[str] | None = None,
+        *,
+        metadata: dict | None = None,
+    ) -> None:
+        choice_values = [str(choice).strip() for choice in (choices or []) if str(choice).strip()]
+        if not choice_values:
+            return super().send_clarify(chat_id, question, choices or [], metadata=metadata)
+        try:
+            self._send_prompt_view(
+                chat_id,
+                str(question or "").strip() or "Choose one:",
+                [(choice, choice, "secondary") for choice in choice_values],
+                "clarify",
+                metadata=metadata,
+            )
+        except Exception:  # noqa: BLE001
+            super().send_clarify(chat_id, question, choices or [], metadata=metadata)
+
+    def send_exec_approval(
+        self,
+        chat_id: str,
+        prompt: str,
+        *,
+        metadata: dict | None = None,
+    ) -> None:
+        try:
+            self._send_prompt_view(
+                chat_id,
+                str(prompt or "").strip() or "Approve this action?",
+                [
+                    ("Approve", "approve", "success"),
+                    ("Always", "always", "primary"),
+                    ("Deny", "deny", "danger"),
+                ],
+                "exec_approval",
+                metadata=metadata,
+            )
+        except Exception:  # noqa: BLE001
+            super().send_exec_approval(chat_id, prompt, metadata=metadata)
 
     def add_reaction(
         self,

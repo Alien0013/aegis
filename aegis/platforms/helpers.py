@@ -95,6 +95,8 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
         "message_length_units": "codepoints",
         "supports_threads": True,
         "supports_media": True,
+        "supports_reactions": True,
+        "supports_interactive_prompts": True,
         "typed_command_prefix": "!",
         "command_cap": MAX_DISCORD_APP_COMMANDS,
         "slash_command_cap": MAX_DISCORD_APP_COMMANDS,

@@ -498,6 +498,8 @@ def test_platform_helper_command_caps_and_utf16_chunks():
     assert "SLACK_REPLY_IN_THREAD" in platform_metadata("sl")["optional_env"]
     assert platform_metadata("sl")["supports_slash_commands"] is True
     assert platform_metadata("sl")["supports_reactions"] is True
+    assert platform_metadata("dc")["supports_reactions"] is True
+    assert platform_metadata("dc")["supports_interactive_prompts"] is True
     mattermost_meta = platform_metadata("mattermost-webhook")
     assert mattermost_meta["security"]["auth_type"] == "bearer"
     assert mattermost_meta["supports_interactive_prompts"] is True
@@ -561,6 +563,7 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert TelegramAdapter("token").metadata["supports_slash_commands"] is True
     assert DiscordAdapter("token").metadata["supports_threads"] is True
     assert DiscordAdapter("token").metadata["supports_reactions"] is True
+    assert DiscordAdapter("token").metadata["supports_interactive_prompts"] is True
     assert DiscordAdapter("token").metadata["command_cap"] == 100
     assert "DISCORD_ALLOWED_GUILDS" in DiscordAdapter("token").metadata["optional_env"]
     assert DiscordAdapter("token").metadata["security"]["trigger_mode"] == "all"
@@ -893,6 +896,158 @@ def test_discord_app_commands_respect_security_filters(monkeypatch):
     assert ev.text == "/status"
     assert deferred == [True]
     assert seen == [(ev, "/status")]
+
+
+def test_discord_adapter_interactive_prompts_and_callbacks(monkeypatch):
+    import asyncio
+    import sys
+    import types
+    from types import SimpleNamespace
+
+    from aegis.gateway import discord_channel
+    from aegis.gateway.discord_channel import DiscordAdapter
+
+    class FakeFuture:
+        def __init__(self, value):
+            self.value = value
+
+        def result(self, timeout=None):  # noqa: ARG002
+            return self.value
+
+    def run_coroutine_threadsafe(coro, loop):  # noqa: ARG001
+        return FakeFuture(asyncio.run(coro))
+
+    class FakeButton:
+        def __init__(self, *, label, style, custom_id):
+            self.label = label
+            self.style = style
+            self.custom_id = custom_id
+            self.callback = None
+
+    class FakeView:
+        def __init__(self, *, timeout=None):
+            self.timeout = timeout
+            self.items = []
+
+        def add_item(self, item):
+            self.items.append(item)
+
+    monkeypatch.setitem(sys.modules, "discord", types.SimpleNamespace(
+        AllowedMentions=types.SimpleNamespace(none=lambda: "none"),
+        ButtonStyle=types.SimpleNamespace(
+            primary="primary",
+            secondary="secondary",
+            success="success",
+            danger="danger",
+        ),
+        ui=types.SimpleNamespace(View=FakeView, Button=FakeButton),
+    ))
+    monkeypatch.setattr(discord_channel.asyncio, "run_coroutine_threadsafe", run_coroutine_threadsafe)
+
+    class FakeChannel:
+        def __init__(self, channel_id="C1", *, parent=None):
+            self.id = channel_id
+            self.name = "ops"
+            self.parent = parent
+            self.sent = []
+
+        async def send(self, *args, **kwargs):
+            self.sent.append((args, kwargs))
+            return {"ok": True}
+
+    class FakeClient:
+        def __init__(self):
+            self.channels = {10: FakeChannel("10")}
+
+        def get_channel(self, channel_id):
+            return self.channels.get(channel_id)
+
+        async def fetch_channel(self, channel_id):
+            return self.channels[channel_id]
+
+    adapter = DiscordAdapter("token")
+    adapter._client = FakeClient()
+    adapter._loop = object()
+    adapter.send_clarify("10", "Pick a deploy lane?", ["stable", "canary"])
+    adapter.send_exec_approval("10", "Run deploy?")
+
+    sent = adapter._client.channels[10].sent
+    assert sent[0][0] == ("Pick a deploy lane?",)
+    assert sent[0][1]["allowed_mentions"] == "none"
+    assert [button.label for button in sent[0][1]["view"].items] == ["stable", "canary"]
+    assert [button.custom_id for button in sent[0][1]["view"].items] == ["aegis_clarify_0", "aegis_clarify_1"]
+    assert [button.style for button in sent[0][1]["view"].items] == ["secondary", "secondary"]
+    assert sent[1][0] == ("Run deploy?",)
+    assert [button.label for button in sent[1][1]["view"].items] == ["Approve", "Always", "Deny"]
+    assert [button.custom_id for button in sent[1][1]["view"].items] == [
+        "aegis_exec_approval_0",
+        "aegis_exec_approval_1",
+        "aegis_exec_approval_2",
+    ]
+    assert [button.style for button in sent[1][1]["view"].items] == ["success", "primary", "danger"]
+
+    seen = []
+    adapter._submit_inbound = lambda ev, *, raw_text=None: seen.append((ev, raw_text)) or None
+    deferred = []
+    denied = []
+
+    class Response:
+        async def defer(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            deferred.append((args, kwargs))
+
+        async def send_message(self, text, *, ephemeral=False):
+            denied.append((text, ephemeral))
+
+    allowed = SimpleNamespace(
+        id=321,
+        response=Response(),
+        channel=FakeChannel("10"),
+        guild=SimpleNamespace(id="G1"),
+        user=SimpleNamespace(id="U1", roles=[], bot=False),
+        created_at="now",
+    )
+    ev = asyncio.run(adapter._handle_component_interaction(
+        allowed,
+        "approve",
+        action_id="aegis_exec_approval_0",
+        action_type="exec_approval",
+    ))
+
+    assert deferred == [((), {})]
+    assert ev.platform == "discord"
+    assert ev.chat_id == "10"
+    assert ev.text == "approve"
+    assert ev.user_id == "U1"
+    assert ev.message_id == "321"
+    assert ev.metadata["source"] == "component_interaction"
+    assert ev.metadata["action_id"] == "aegis_exec_approval_0"
+    assert ev.metadata["action_type"] == "exec_approval"
+    assert seen == [(ev, "approve")]
+
+    asyncio.run(sent[0][1]["view"].items[1].callback(allowed))
+    assert seen[-1][0].text == "canary"
+    assert seen[-1][0].metadata["action_id"] == "aegis_clarify_1"
+    assert seen[-1][0].metadata["action_type"] == "clarify"
+    assert seen[-1][1] == "canary"
+
+    monkeypatch.setenv("DISCORD_ALLOWED_USERS", "U1")
+    guarded = DiscordAdapter("token")
+    guarded._submit_inbound = lambda ev, *, raw_text=None: seen.append((ev, raw_text)) or None
+    blocked = SimpleNamespace(
+        id=322,
+        response=Response(),
+        channel=FakeChannel("10"),
+        guild=SimpleNamespace(id="G1"),
+        user=SimpleNamespace(id="U2", roles=[], bot=False),
+        created_at="now",
+    )
+    assert asyncio.run(guarded._handle_component_interaction(
+        blocked,
+        "deny",
+        action_id="aegis_exec_approval_2",
+        action_type="exec_approval",
+    )) is None
+    assert denied == [("Not authorized.", True)]
 
 
 def test_discord_adapter_native_media_upload_targets_threads(monkeypatch, tmp_path):

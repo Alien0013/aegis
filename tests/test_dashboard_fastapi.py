@@ -1157,6 +1157,11 @@ def test_fastapi_messaging_platform_optional_controls(tmp_path, monkeypatch):
     assert discord_fields["DISCORD_ALLOWED_GUILDS"]["required"] is False
     assert discord_fields["DISCORD_TRIGGER_MODE"]["required"] is False
     assert "DISCORD_ALLOWED_GUILDS" not in discord.json()["platform"]["missing_env_vars"]
+    assert "media" in discord.json()["platform"]["capabilities"]
+    assert "threads" in discord.json()["platform"]["capabilities"]
+    assert "interactive_prompts" in discord.json()["platform"]["capabilities"]
+    assert "reactions" in discord.json()["platform"]["capabilities"]
+    assert "thread" in discord.json()["platform"]["delivery_modes"]
 
     updated = asyncio.run(_request(
         app,
