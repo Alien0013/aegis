@@ -1083,6 +1083,26 @@ def test_gateway_mattermost_channel_normalizes_event_body_and_alias(monkeypatch)
     assert root_post.metadata["post_id"] == "post-2"
     assert root_post.metadata["root_id"] == ""
 
+    parent = adapter._event_from_body({
+        "channel_id": "channel-1",
+        "text": "parent alias",
+        "user_id": "user-1",
+        "post_id": "post-3",
+        "parent_id": "root-3",
+    })
+    assert parent.thread_id == "root-3"
+    assert parent.metadata["root_id"] == "root-3"
+
+    self_root = adapter._event_from_body({
+        "channel_id": "channel-1",
+        "text": "self root",
+        "user_id": "user-1",
+        "post_id": "post-4",
+        "root_id": "post-4",
+    })
+    assert self_root.thread_id is None
+    assert self_root.metadata["root_id"] == ""
+
 
 def test_gateway_mattermost_webhook_secret_accepts_headers_and_body(monkeypatch):
     from aegis.gateway.mattermost_channel import MattermostAdapter
@@ -1132,11 +1152,15 @@ def test_gateway_mattermost_send_uses_clean_root_id(monkeypatch):
     adapter.send("channel-1", "reply", metadata={"thread_id": "root-1"})
     adapter.send("channel-1", "root post", metadata={"post_id": "post-1"})
     adapter.send("channel-1", "null root", metadata={"root_id": "undefined"})
+    adapter.send("channel-1", "parent reply", metadata={"parent_id": "root-2"})
+    adapter.send("channel-1", "self root", metadata={"root_id": "post-2", "post_id": "post-2"})
 
     assert sent[0][2] == {"channel_id": "channel-1", "message": "first"}
     assert sent[1][2] == {"channel_id": "channel-1", "message": "reply", "root_id": "root-1"}
     assert sent[2][2] == {"channel_id": "channel-1", "message": "root post"}
     assert sent[3][2] == {"channel_id": "channel-1", "message": "null root"}
+    assert sent[4][2] == {"channel_id": "channel-1", "message": "parent reply", "root_id": "root-2"}
+    assert sent[5][2] == {"channel_id": "channel-1", "message": "self root"}
 
 
 def test_shared_inbound_records_delivery_runs(monkeypatch, tmp_path):

@@ -63,11 +63,14 @@ class MattermostAdapter(BasePlatformAdapter):
 
     def _root_id(self, chat_id: str, metadata: dict | None = None) -> str:
         source = metadata or {}
-        raw = source.get("root_id") or source.get("thread_id")
+        raw = source.get("root_id") or source.get("thread_id") or source.get("parent_id")
         root_id = str(raw or "").strip()
         if root_id.lower() in _NULL_THREAD_IDS:
             return ""
         if root_id == str(chat_id or "").strip():
+            return ""
+        current_post_id = str(source.get("post_id") or source.get("message_id") or source.get("id") or "").strip()
+        if current_post_id and root_id == current_post_id:
             return ""
         return root_id
 
@@ -76,8 +79,10 @@ class MattermostAdapter(BasePlatformAdapter):
         text = normalize_inbound_command(raw_text, platform="mattermost")
         channel_id = str(body.get("channel_id") or body.get("channel") or "")
         post_id = str(body.get("post_id") or body.get("id") or body.get("message_id") or "")
-        root_id = str(body.get("root_id") or body.get("thread_id") or "").strip()
+        root_id = str(body.get("root_id") or body.get("thread_id") or body.get("parent_id") or "").strip()
         if root_id.lower() in _NULL_THREAD_IDS:
+            root_id = ""
+        if root_id and post_id and root_id == post_id:
             root_id = ""
         return MessageEvent(
             platform="mattermost",
