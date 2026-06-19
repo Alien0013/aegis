@@ -1332,6 +1332,25 @@ def _dashboard_chat_response(body: dict, chat_runner) -> dict:
     }
 
 
+def _mark_dashboard_cancelled_run(result: Any, reason: str = "client disconnected") -> None:
+    run_id = str(getattr(result, "run_id", "") or "")
+    if not run_id:
+        return
+    try:
+        from .runs import RunStore
+
+        RunStore().finish(
+            run_id,
+            status="cancelled",
+            trace_id=str(getattr(result, "trace_id", "") or ""),
+            result="[cancelled]",
+            error=reason,
+            data={"cancelled": True, "cancel_reason": reason},
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _dashboard_chat_stream(
     body: dict,
     chat_runner,
@@ -1393,6 +1412,27 @@ def _dashboard_chat_stream(
             body.get("message", ""),
             **run_kwargs,
         )
+        if cancel_event is not None and cancel_event.is_set():
+            _mark_dashboard_cancelled_run(result)
+            final = {
+                "type": "cancelled",
+                "reply": "cancelled",
+                "cancelled": True,
+                "session_id": result.session.id,
+                "trace_id": result.trace_id,
+                "turn_id": result.turn_id,
+                "run_id": result.run_id,
+                "cwd": cwd,
+                "events": [_chat_event_row(e) for e in events[-80:]],
+            }
+            _publish_dashboard_chat_event(
+                body,
+                "chat_cancelled",
+                cwd=cwd,
+                row={"type": "chat_cancelled", "summary": "client disconnected"},
+            )
+            send(final)
+            return final
         final = {
             "type": "final",
             "reply": result.text or "(no response)",

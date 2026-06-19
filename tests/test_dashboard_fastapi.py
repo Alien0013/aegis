@@ -2039,6 +2039,65 @@ def test_fastapi_dashboard_chat_json_disconnect_reapplies_cancel_after_agent_ent
     assert runner.agents and runner.agents[0].cancel_event.is_set()
 
 
+def test_dashboard_chat_stream_marks_late_run_cancelled(tmp_path, monkeypatch):
+    import threading
+
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.dashboard import _dashboard_chat_stream
+    from aegis.runs import RunStore
+    from aegis.session import Session
+
+    class Runner:
+        def load_or_create_session(self, session_id=None, **_kwargs):
+            return Session(id=session_id or "dash:late-cancel", title="late cancel")
+
+        def make_agent(self, **_kwargs):
+            agent = types.SimpleNamespace(cancel_event=threading.Event())
+
+            def cancel():
+                agent.cancel_event.set()
+
+            agent.cancel = cancel
+            return agent
+
+        def run_prompt(self, prompt, **kwargs):  # noqa: ANN001
+            session = kwargs["session"]
+            run = RunStore().start(
+                surface="dashboard",
+                kind="dashboard",
+                session_id=session.id,
+                prompt=prompt,
+            )
+            RunStore().finish(run["id"], status="ok", result="late ok")
+            return types.SimpleNamespace(
+                text="late ok",
+                session=session,
+                trace_id="trace_late_cancel",
+                turn_id="turn_late_cancel",
+                run_id=run["id"],
+            )
+
+    sent = []
+    cancel_event = threading.Event()
+    cancel_event.set()
+
+    final = _dashboard_chat_stream(
+        {"message": "slow", "session_id": "dash:late-cancel"},
+        Runner(),
+        sent.append,
+        on_agent=lambda _agent: None,
+        cancel_event=cancel_event,
+    )
+
+    stored = RunStore().get(final["run_id"])
+    assert final["type"] == "cancelled"
+    assert final["cancelled"] is True
+    assert sent[-1]["type"] == "cancelled"
+    assert stored["status"] == "cancelled"
+    assert stored["error"] == "client disconnected"
+    assert stored["data"]["cancelled"] is True
+
+
 def test_fastapi_session_checks_reports_cross_session_integrity(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
     headers = {"X-Aegis-Token": "t"}
