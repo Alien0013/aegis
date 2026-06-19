@@ -170,7 +170,7 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
         "max_message_length": None,
         "message_length_units": "codepoints",
         "supports_threads": False,
-        "supports_media": False,
+        "supports_media": True,
         "typed_command_prefix": "/",
     },
     "matrix": {

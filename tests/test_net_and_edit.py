@@ -219,7 +219,7 @@ def test_media_hint_only_on_supporting_channels():
     from aegis.agent.context import PLATFORM_HINTS
     assert "MEDIA:/absolute/path" in PLATFORM_HINTS["telegram"]
     assert "MEDIA:/absolute/path" in PLATFORM_HINTS["discord"]
-    assert "MEDIA:" not in PLATFORM_HINTS["signal"]      # not wired there -> don't promise it
+    assert "MEDIA:/absolute/path" in PLATFORM_HINTS["signal"]
 
 
 # --- reasoning scrub + table rewrite ---------------------------------------

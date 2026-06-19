@@ -1230,7 +1230,7 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
         "adapter_class": "aegis.gateway.signal_channel.SignalAdapter",
         "auth_type": "local_account",
         "transport": "signal_cli",
-        "capabilities": ["text", "groups", "attachments"],
+        "capabilities": ["text", "groups", "attachments", "media"],
         "delivery_modes": ["direct", "group"],
         "security": {"local_binary": "signal-cli", "allowed_users_env": "SIGNAL_ALLOWED_USERS"},
     },

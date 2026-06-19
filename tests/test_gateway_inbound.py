@@ -473,6 +473,7 @@ def test_platform_helper_command_caps_and_utf16_chunks():
     assert chunks == ["😀😀", "😀😀", "😀"]
 
     assert platform_metadata("signal-cli")["id"] == "signal"
+    assert platform_metadata("signal-cli")["supports_media"] is True
     assert platform_metadata("matrix")["transport"] == "matrix_sync"
     assert platform_metadata("matrix")["supports_threads"] is True
     assert platform_metadata("baileys")["id"] == "whatsapp"
@@ -1754,7 +1755,7 @@ def test_telegram_channel_post_uses_sender_chat_identity(monkeypatch):
     }, "anonymous note") == "[Ada Admin]: anonymous note"
 
 
-def test_signal_adapter_preserves_attachment_metadata(monkeypatch):
+def test_signal_adapter_preserves_attachment_metadata(monkeypatch, tmp_path):
     import json
     import shutil
 
@@ -1807,9 +1808,18 @@ def test_signal_adapter_preserves_attachment_metadata(monkeypatch):
     assert ev.metadata["group_id"] == "group-1"
     assert ev.metadata["source_uuid"] == "uuid-1"
     sent = []
+    media_path = tmp_path / "chart.png"
+    media_path.write_text("png", encoding="utf-8")
     adapter._run = lambda *args, **kwargs: sent.append((args, kwargs)) or ""
     adapter.send("+15550002", "ok", metadata={"ignored": True})
-    assert sent == [(("send", "-m", "ok", "+15550002"), {"timeout": 60})]
+    adapter.send_media("group:group-1", str(media_path), "chart", metadata={"ignored": True})
+    adapter.send_media("+15550002", "/tmp/missing.png")
+    assert sent == [
+        (("send", "-m", "ok", "+15550002"), {"timeout": 60}),
+        (("send", "-m", "chart", "--attachment", str(media_path), "-g", "group-1"), {"timeout": 120}),
+        (("send", "-m", "(file not found: /tmp/missing.png)", "+15550002"), {"timeout": 60}),
+    ]
+    assert adapter.metadata["supports_media"] is True
 
 
 def test_matrix_adapter_threads_inbound_and_outbound_messages(monkeypatch):

@@ -1009,6 +1009,7 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     assert signal["transport"] == "signal_cli"
     assert "SIGNAL_ALLOWED_USERS" in signal["optional_env_vars"]
     assert "attachments" in signal["capabilities"]
+    assert "media" in signal["capabilities"]
     assert signal["security"]["allowed_users_env"] == "SIGNAL_ALLOWED_USERS"
     matrix = next(row for row in rows if row["id"] == "matrix")
     assert matrix["transport"] == "matrix_sync"

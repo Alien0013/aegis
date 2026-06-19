@@ -23,6 +23,7 @@ class SignalAdapter(BasePlatformAdapter):
     name = "signal"
     renders_tables = False
     transport = "signal_cli"
+    supports_media = True
 
     def __init__(self, account: str | None = None):
         self.account = account or os.environ.get("SIGNAL_CLI_ACCOUNT")
@@ -147,14 +148,36 @@ class SignalAdapter(BasePlatformAdapter):
             labels.append(f"[{kind} attached: {name}]")
         return "\n".join(labels)
 
+    def _target_args(self, chat_id: str) -> list[str]:
+        if chat_id.startswith("group:"):
+            return ["-g", chat_id[len("group:"):]]
+        return [chat_id]
+
     def send(self, chat_id: str, text: str, *, metadata: dict | None = None) -> None:  # noqa: ARG002
         if not text:
             return
-        if chat_id.startswith("group:"):
-            target = ["-g", chat_id[len("group:"):]]
-        else:
-            target = [chat_id]
         try:
-            self._run("send", "-m", text, *target, timeout=60)
+            self._run("send", "-m", text, *self._target_args(chat_id), timeout=60)
         except (RuntimeError, subprocess.TimeoutExpired):
             pass
+
+    def send_media(
+        self,
+        chat_id: str,
+        path: str,
+        caption: str = "",
+        *,
+        metadata: dict | None = None,
+        **_kwargs,
+    ) -> None:
+        if not os.path.exists(path):
+            self.send(chat_id, f"(file not found: {path})", metadata=metadata)
+            return
+        args = ["send"]
+        if caption:
+            args.extend(["-m", caption])
+        args.extend(["--attachment", path, *self._target_args(chat_id)])
+        try:
+            self._run(*args, timeout=120)
+        except (RuntimeError, subprocess.TimeoutExpired):
+            self.send(chat_id, (caption + "\n" if caption else "") + f"file ready: {path}", metadata=metadata)

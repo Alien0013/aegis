@@ -140,7 +140,9 @@ PLATFORM_HINTS = {
                 "uploaded as a native Discord attachment."),
     "slack": ("# You are on Slack\nUse Slack-flavored formatting; avoid pipe tables (they don't "
               "render) — prefer bullets or 'key: value' lines. Keep it concise."),
-    "signal": "# You are on Signal\nPlain text only — no markdown tables or code-block fences.",
+    "signal": ("# You are on Signal\nPlain text only — no markdown tables or code-block fences.\n"
+               "To send a file, include a line `MEDIA:/absolute/path` in your reply — it is "
+               "delivered via signal-cli as a native attachment."),
     "matrix": "# You are on Matrix\nKeep formatting simple; avoid wide tables.",
     "whatsapp": ("# You are on WhatsApp\nPlain text — markdown does not render. Use plain bullets "
                  "(•) and short paragraphs, no tables or code fences."),
