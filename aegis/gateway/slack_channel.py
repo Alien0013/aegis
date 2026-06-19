@@ -64,6 +64,7 @@ class SlackAdapter(BasePlatformAdapter):
         data = super().metadata
         data["command_cap"] = 30
         data["supports_slash_commands"] = True
+        data["supports_interactive_prompts"] = True
         data["security"] = {
             "allow_bots": self.allow_bots,
             "allowed_users_configured": bool(self.allowed_users),
@@ -109,6 +110,8 @@ class SlackAdapter(BasePlatformAdapter):
         self._app = app
         for command_name in self.command_menu():
             self._register_slash_command(app, command_name)
+        self._register_block_action(app, "aegis_clarify")
+        self._register_block_action(app, "aegis_exec_approval")
 
         @app.event("message")
         def handle_message(event, say):  # noqa: ANN001
@@ -171,6 +174,11 @@ class SlackAdapter(BasePlatformAdapter):
         def handle_slash_command(ack, command):  # noqa: ANN001
             self._handle_slash_command(command, ack)
 
+    def _register_block_action(self, app, action_id: str) -> None:  # noqa: ANN001
+        @app.action(action_id)
+        def handle_block_action(ack, body, action):  # noqa: ANN001
+            self._handle_block_action(body, action=action, ack=ack)
+
     def _handle_slash_command(self, command: dict, ack=None) -> MessageEvent | None:  # noqa: ANN001
         if callable(ack):
             try:
@@ -219,6 +227,68 @@ class SlackAdapter(BasePlatformAdapter):
             return False
         channels = self._channel_values(command.get("channel_id"), command.get("channel_name"))
         return self._channel_allowed(channels)
+
+    def _handle_block_action(self, body: dict, *, action: dict | None = None, ack=None) -> MessageEvent | None:  # noqa: ANN001
+        if callable(ack):
+            try:
+                ack()
+            except Exception:  # noqa: BLE001
+                pass
+        payload = body if isinstance(body, dict) else {}
+        selected = action if isinstance(action, dict) else {}
+        if not selected:
+            actions = payload.get("actions") if isinstance(payload.get("actions"), list) else []
+            selected = actions[0] if actions and isinstance(actions[0], dict) else {}
+        action_id = str(selected.get("action_id") or "").strip()
+        if action_id not in {"aegis_clarify", "aegis_exec_approval"}:
+            return None
+        text = str(selected.get("value") or "").strip()
+        if not text:
+            return None
+        channel = payload.get("channel") if isinstance(payload.get("channel"), dict) else {}
+        user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
+        team = payload.get("team") if isinstance(payload.get("team"), dict) else {}
+        message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+        container = payload.get("container") if isinstance(payload.get("container"), dict) else {}
+        channel_id = str(channel.get("id") or payload.get("channel_id") or "").strip()
+        channel_name = str(channel.get("name") or payload.get("channel_name") or "").strip()
+        user_id = str(user.get("id") or payload.get("user_id") or "").strip()
+        user_name = str(user.get("username") or user.get("name") or payload.get("user_name") or "").strip()
+        team_id = str(team.get("id") or payload.get("team_id") or "").strip()
+        if not self._command_allowed({
+            "user_id": user_id,
+            "team_id": team_id,
+            "channel_id": channel_id,
+            "channel_name": channel_name,
+        }):
+            return None
+        thread_id = str(message.get("thread_ts") or container.get("thread_ts") or "").strip() or None
+        message_id = str(
+            container.get("message_ts")
+            or message.get("ts")
+            or selected.get("action_ts")
+            or ""
+        ).strip() or None
+        ev = MessageEvent(
+            platform="slack",
+            chat_id=channel_id or channel_name or "unknown",
+            text=normalize_inbound_command(text, platform="slack"),
+            user_id=user_id or None,
+            user_name=user_name or None,
+            thread_id=thread_id,
+            message_id=message_id,
+            timestamp=selected.get("action_ts") or message.get("ts"),
+            metadata={
+                "team": team_id,
+                "channel_name": channel_name,
+                "thread_ts": thread_id,
+                "action_id": action_id,
+                "source": "block_action",
+                "response_url": payload.get("response_url"),
+            },
+        )
+        self._submit_inbound(ev, raw_text=text)
+        return ev
 
     def _resolve_thread_ts(self, event: dict) -> str | None:
         thread_ts = str(event.get("thread_ts") or "").strip()
@@ -333,6 +403,83 @@ class SlackAdapter(BasePlatformAdapter):
             kwargs["thread_ts"] = thread_ts
         for chunk in chunk_text_by_units(text, limit=39000):
             client.chat_postMessage(text=chunk, **kwargs)
+
+    def _thread_kwargs(self, metadata: dict | None = None) -> dict:
+        thread_ts = (metadata or {}).get("thread_ts") or (metadata or {}).get("thread_id")
+        return {"thread_ts": thread_ts} if thread_ts else {}
+
+    def _button(self, label: str, value: str, action_id: str, *, style: str | None = None) -> dict:
+        button = {
+            "type": "button",
+            "text": {"type": "plain_text", "text": str(label or value)[:75] or "Choose"},
+            "value": str(value or "")[:1900],
+            "action_id": action_id,
+        }
+        if style:
+            button["style"] = style
+        return button
+
+    def _post_blocks(self, chat_id: str, text: str, blocks: list[dict], *, metadata: dict | None = None) -> None:
+        app = getattr(self, "_app", None)
+        client = getattr(app, "client", None)
+        if client is None:
+            raise RuntimeError("slack client is not started")
+        client.chat_postMessage(
+            channel=chat_id,
+            text=text,
+            blocks=blocks,
+            **self._thread_kwargs(metadata),
+        )
+
+    def send_clarify(
+        self,
+        chat_id: str,
+        question: str,
+        choices: list[str] | None = None,
+        *,
+        metadata: dict | None = None,
+    ) -> None:
+        choice_values = [str(choice).strip() for choice in (choices or []) if str(choice).strip()]
+        if not choice_values:
+            return super().send_clarify(chat_id, question, choices or [], metadata=metadata)
+        blocks = [
+            {"type": "section", "text": {"type": "mrkdwn", "text": str(question or "").strip() or "Choose one:"}},
+            {
+                "type": "actions",
+                "elements": [
+                    self._button(choice, choice, "aegis_clarify")
+                    for choice in choice_values[:25]
+                ],
+            },
+        ]
+        try:
+            self._post_blocks(chat_id, str(question or "").strip() or "Choose one:", blocks, metadata=metadata)
+        except Exception:  # noqa: BLE001
+            super().send_clarify(chat_id, question, choices or [], metadata=metadata)
+
+    def send_exec_approval(
+        self,
+        chat_id: str,
+        prompt: str,
+        *,
+        metadata: dict | None = None,
+    ) -> None:
+        text = str(prompt or "").strip() or "Approve this action?"
+        blocks = [
+            {"type": "section", "text": {"type": "mrkdwn", "text": text}},
+            {
+                "type": "actions",
+                "elements": [
+                    self._button("Approve", "approve", "aegis_exec_approval", style="primary"),
+                    self._button("Always", "always", "aegis_exec_approval"),
+                    self._button("Deny", "deny", "aegis_exec_approval", style="danger"),
+                ],
+            },
+        ]
+        try:
+            self._post_blocks(chat_id, text, blocks, metadata=metadata)
+        except Exception:  # noqa: BLE001
+            super().send_exec_approval(chat_id, prompt, metadata=metadata)
 
     def _deliver_reply(self, ev: MessageEvent, reply: str, state=None) -> None:  # noqa: ANN001
         super()._deliver_reply(ev, reply, state)

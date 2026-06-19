@@ -1963,6 +1963,70 @@ def test_slack_adapter_enforces_workspace_filters_and_strips_mentions(monkeypatc
     ]
     posts.clear()
 
+    adapter.send_clarify("C1", "Pick a deploy lane?", ["stable", "canary"], metadata={"thread_ts": "171.1"})
+    assert posts == [{
+        "channel": "C1",
+        "text": "Pick a deploy lane?",
+        "thread_ts": "171.1",
+        "blocks": [
+            {"type": "section", "text": {"type": "mrkdwn", "text": "Pick a deploy lane?"}},
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "stable"},
+                        "value": "stable",
+                        "action_id": "aegis_clarify",
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "canary"},
+                        "value": "canary",
+                        "action_id": "aegis_clarify",
+                    },
+                ],
+            },
+        ],
+    }]
+    posts.clear()
+
+    adapter.send_exec_approval("C1", "Run deploy?", metadata={"thread_id": "171.1"})
+    assert posts == [{
+        "channel": "C1",
+        "text": "Run deploy?",
+        "thread_ts": "171.1",
+        "blocks": [
+            {"type": "section", "text": {"type": "mrkdwn", "text": "Run deploy?"}},
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Approve"},
+                        "value": "approve",
+                        "action_id": "aegis_exec_approval",
+                        "style": "primary",
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Always"},
+                        "value": "always",
+                        "action_id": "aegis_exec_approval",
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Deny"},
+                        "value": "deny",
+                        "action_id": "aegis_exec_approval",
+                        "style": "danger",
+                    },
+                ],
+            },
+        ],
+    }]
+    posts.clear()
+
     adapter._deliver_reply(MessageEvent(platform="slack", chat_id="C1", text="", thread_id=None), "flat reply")
     adapter._deliver_reply(MessageEvent(platform="slack", chat_id="C1", text="", thread_id="171.1"), "thread reply")
     adapter._deliver_reply(
@@ -2028,6 +2092,45 @@ def test_slack_adapter_handles_native_slash_commands(monkeypatch):
     assert ev.metadata["command"] == "/status"
     assert ev.metadata["response_url"] == "https://slack.test/response"
     assert seen == [(ev, "/status full")]
+
+    action_acks = []
+    blocked_action = adapter._handle_block_action(
+        {
+            "user": {"id": "U9", "name": "mallory"},
+            "channel": {"id": "C1", "name": "ops"},
+            "team": {"id": "T1"},
+            "message": {"ts": "171.2", "thread_ts": "171.1"},
+        },
+        action={"action_id": "aegis_clarify", "value": "stable", "action_ts": "171.3"},
+        ack=lambda: action_acks.append("blocked"),
+    )
+    assert blocked_action is None
+
+    action_ev = adapter._handle_block_action(
+        {
+            "user": {"id": "U1", "name": "ada"},
+            "channel": {"id": "C1", "name": "ops"},
+            "team": {"id": "T1"},
+            "message": {"ts": "171.2", "thread_ts": "171.1"},
+            "container": {"message_ts": "171.2"},
+            "response_url": "https://slack.test/action-response",
+        },
+        action={"action_id": "aegis_exec_approval", "value": "approve", "action_ts": "171.3"},
+        ack=lambda: action_acks.append(True),
+    )
+
+    assert action_acks == ["blocked", True]
+    assert action_ev.platform == "slack"
+    assert action_ev.chat_id == "C1"
+    assert action_ev.text == "approve"
+    assert action_ev.user_id == "U1"
+    assert action_ev.user_name == "ada"
+    assert action_ev.thread_id == "171.1"
+    assert action_ev.message_id == "171.2"
+    assert action_ev.metadata["source"] == "block_action"
+    assert action_ev.metadata["action_id"] == "aegis_exec_approval"
+    assert action_ev.metadata["response_url"] == "https://slack.test/action-response"
+    assert seen[-1] == (action_ev, "approve")
 
 
 def test_slack_adapter_dedupes_message_events_and_ignores_self_echoes(monkeypatch):

@@ -1196,6 +1196,7 @@ def test_fastapi_messaging_platform_optional_controls(tmp_path, monkeypatch):
     assert slack_fields["SLACK_IDEMPOTENCY_TTL_SECONDS"]["required"] is False
     assert slack_fields["SLACK_IDEMPOTENCY_CACHE_MAX"]["required"] is False
     assert "slash_commands" in slack.json()["platform"]["capabilities"]
+    assert "interactive_prompts" in slack.json()["platform"]["capabilities"]
     assert "reactions" in slack.json()["platform"]["capabilities"]
 
 

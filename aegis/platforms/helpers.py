@@ -119,6 +119,7 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
         "supports_media": False,
         "supports_reactions": True,
         "supports_slash_commands": True,
+        "supports_interactive_prompts": True,
         "typed_command_prefix": "!",
         "command_cap": MAX_TELEGRAM_COMMANDS,
     },
