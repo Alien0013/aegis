@@ -49,6 +49,8 @@ def _max_channel_webhook_bytes() -> int:
 
 
 MAX_CHANNEL_WEBHOOK_BYTES = _max_channel_webhook_bytes()
+_WHATSAPP_BROADCAST_CHATS = {"status@broadcast"}
+_WHATSAPP_BROADCAST_SUFFIXES = ("@broadcast", "@newsletter")
 
 
 def _dig(source: dict, *path: str):
@@ -85,6 +87,13 @@ def _first_string(source: dict, paths: tuple[tuple[str, ...], ...]) -> str:
             if nested:
                 return nested
     return ""
+
+
+def _is_whatsapp_broadcast_chat(chat_id: str) -> bool:
+    value = str(chat_id or "").strip().lower()
+    if not value:
+        return False
+    return value in _WHATSAPP_BROADCAST_CHATS or value.endswith(_WHATSAPP_BROADCAST_SUFFIXES)
 
 
 class WebhookChannel(BasePlatformAdapter):
@@ -202,8 +211,16 @@ class WebhookChannel(BasePlatformAdapter):
             ("room",),
             ("remote_jid",),
             ("remoteJid",),
+            ("data", "chat_id"),
+            ("data", "chatId"),
+            ("data", "remote_jid"),
+            ("data", "remoteJid"),
             ("key", "remoteJid"),
             ("key", "remote_jid"),
+            ("message", "key", "remoteJid"),
+            ("message", "key", "remote_jid"),
+            ("data", "key", "remoteJid"),
+            ("data", "key", "remote_jid"),
             ("jid",),
             ("from",),
             ("source",),
@@ -227,6 +244,10 @@ class WebhookChannel(BasePlatformAdapter):
             ("data", "body"),
             ("data", "message"),
             ("data", "message", "text"),
+            ("data", "message", "conversation"),
+            ("data", "message", "extendedTextMessage", "text"),
+            ("data", "message", "imageMessage", "caption"),
+            ("data", "message", "videoMessage", "caption"),
         ))
         user_id = _first_string(body, (
             ("user_id",),
@@ -235,6 +256,11 @@ class WebhookChannel(BasePlatformAdapter):
             ("senderId",),
             ("participant",),
             ("key", "participant"),
+            ("message", "key", "participant"),
+            ("data", "sender_id"),
+            ("data", "senderId"),
+            ("data", "participant"),
+            ("data", "key", "participant"),
             ("author",),
             ("sender",),
             ("sender", "id"),
@@ -265,8 +291,11 @@ class WebhookChannel(BasePlatformAdapter):
             ("eventId",),
             ("id",),
             ("key", "id"),
+            ("message", "key", "id"),
             ("message", "id"),
             ("data", "id"),
+            ("data", "key", "id"),
+            ("data", "message", "id"),
         ))
         reply_to_message_id = _first_string(body, (
             ("reply_to_message_id",),
@@ -275,6 +304,10 @@ class WebhookChannel(BasePlatformAdapter):
             ("message", "imageMessage", "contextInfo", "stanzaId"),
             ("message", "videoMessage", "contextInfo", "stanzaId"),
             ("message", "audioMessage", "contextInfo", "stanzaId"),
+            ("data", "message", "extendedTextMessage", "contextInfo", "stanzaId"),
+            ("data", "message", "imageMessage", "contextInfo", "stanzaId"),
+            ("data", "message", "videoMessage", "contextInfo", "stanzaId"),
+            ("data", "message", "audioMessage", "contextInfo", "stanzaId"),
             ("contextInfo", "stanzaId"),
         ))
         reply_to_text = _first_string(body, (
@@ -286,6 +319,12 @@ class WebhookChannel(BasePlatformAdapter):
             ("message", "extendedTextMessage", "contextInfo", "quotedMessage", "videoMessage", "caption"),
             ("message", "imageMessage", "contextInfo", "quotedMessage", "conversation"),
             ("message", "videoMessage", "contextInfo", "quotedMessage", "conversation"),
+            ("data", "message", "extendedTextMessage", "contextInfo", "quotedMessage", "conversation"),
+            ("data", "message", "extendedTextMessage", "contextInfo", "quotedMessage", "extendedTextMessage", "text"),
+            ("data", "message", "extendedTextMessage", "contextInfo", "quotedMessage", "imageMessage", "caption"),
+            ("data", "message", "extendedTextMessage", "contextInfo", "quotedMessage", "videoMessage", "caption"),
+            ("data", "message", "imageMessage", "contextInfo", "quotedMessage", "conversation"),
+            ("data", "message", "videoMessage", "contextInfo", "quotedMessage", "conversation"),
             ("contextInfo", "quotedMessage", "conversation"),
             ("contextInfo", "quotedMessage", "extendedTextMessage", "text"),
         ))
@@ -369,6 +408,8 @@ class WebhookChannel(BasePlatformAdapter):
                 return 200, {"reply": "", "duplicate": True}
         try:
             ev = self._event_from_body(body)
+            if ev.platform == "whatsapp" and _is_whatsapp_broadcast_chat(ev.chat_id):
+                return 200, {"reply": "", "ignored": True, "reason": "whatsapp_broadcast_chat"}
             reply = self._submit_inbound(ev, wait=True) or ""
         except Exception as exc:  # noqa: BLE001
             if delivery_recorded:

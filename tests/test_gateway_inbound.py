@@ -925,6 +925,58 @@ def test_gateway_webhook_channel_accepts_whatsapp_bridge_aliases():
     assert nested.metadata["message_key_id"] == "BAE599999"
     assert WebhookChannel()._delivery_id({}, {"key": {"id": "BAE599999"}}) == "body:key.id:BAE599999"
 
+    data_wrapped = WebhookChannel()._event_from_body({
+        "platform": "whatsapp-web.js",
+        "data": {
+            "key": {
+                "remoteJid": "12025550123-222@g.us",
+                "participant": "15557654321@s.whatsapp.net",
+                "id": "BAE511111",
+            },
+            "message": {
+                "extendedTextMessage": {
+                    "text": "nested under data.message",
+                    "contextInfo": {"stanzaId": "QUOTE999"},
+                },
+            },
+        },
+    })
+
+    assert data_wrapped.platform == "whatsapp"
+    assert data_wrapped.chat_id == "12025550123-222@g.us"
+    assert data_wrapped.text == "nested under data.message"
+    assert data_wrapped.user_id == "15557654321@s.whatsapp.net"
+    assert data_wrapped.message_id == "BAE511111"
+    assert data_wrapped.reply_to_message_id == "QUOTE999"
+    assert data_wrapped.metadata["remote_jid"] == "12025550123-222@g.us"
+    assert data_wrapped.metadata["participant"] == "15557654321@s.whatsapp.net"
+
+
+def test_gateway_webhook_channel_ignores_whatsapp_broadcast_pseudo_chats():
+    from aegis.gateway.webhook_channel import WebhookChannel
+
+    seen = []
+    channel = WebhookChannel(name="whatsapp", default_platform="whatsapp", env_prefix="WHATSAPP_CHANNEL")
+    channel._init_inbound_queue(lambda ev: seen.append(ev) or "should not run")
+
+    status, payload = channel._handle_inbound_payload(
+        {},
+        {"platform": "whatsapp", "chatId": "status@broadcast", "text": "story update"},
+    )
+
+    assert status == 200
+    assert payload == {"reply": "", "ignored": True, "reason": "whatsapp_broadcast_chat"}
+    assert seen == []
+
+    status, payload = channel._handle_inbound_payload(
+        {},
+        {"platform": "whatsapp", "data": {"chatId": "120363000000000000@newsletter", "text": "news"}},
+    )
+
+    assert status == 200
+    assert payload["ignored"] is True
+    assert seen == []
+
 
 def test_gateway_webhook_channel_prefix_insecure_auth_override(monkeypatch):
     from aegis.gateway.webhook_channel import WebhookChannel
