@@ -62,6 +62,11 @@ def test_desktop_status_reports_bootstrap_without_running_npm(monkeypatch, tmp_p
     assert body["target"] == str(target)
     assert body["dependencies_installed"] is False
     assert body["package_lock"] is False
+    assert body["packaged_app"] is False
+    assert body["packaged_targets"]["linux"][0]["path"].endswith("release/linux-unpacked/AEGIS")
+    assert body["packaged_targets"]["linux"][0]["exists"] is False
+    assert body["packaged_targets"]["win"][0]["path"].endswith("release/win-unpacked/AEGIS.exe")
+    assert body["packaged_targets"]["mac"][0]["path"].endswith("Contents/MacOS/AEGIS")
     assert body["template_synced"] is False
     assert body["needs_sync"] is True
     assert body["needs_npm_install"] is True
@@ -81,7 +86,40 @@ def test_desktop_status_reports_bootstrap_without_running_npm(monkeypatch, tmp_p
     assert body["launch_commands"]["source"] == ["/usr/bin/npm", "start"]
     assert body["launch_commands"]["package"]["linux"] == ["/usr/bin/npm", "run", "dist:linux"]
     assert body["env"]["AEGIS_HOME"]
+    assert body["env_diagnostics"]["aegis_bin"]["resolved"]
+    assert body["env_diagnostics"]["aegis_home"]["resolved"] == body["env"]["AEGIS_HOME"]
+    assert body["env_diagnostics"]["terminal_cwd"]["valid"] is True
     assert body["next_action"] == "Run `aegis desktop --install-only` to sync files and install dependencies."
+
+
+def test_desktop_status_reports_stale_aegis_bin_diagnostics(monkeypatch, tmp_path, capsys):
+    source = _write_desktop_template(tmp_path / "source")
+    target = tmp_path / "runtime"
+    stale_bin = tmp_path / "old" / "aegis"
+
+    monkeypatch.setenv("AEGIS_DESKTOP_DIR", str(target))
+    monkeypatch.setenv("AEGIS_BIN", str(stale_bin))
+    monkeypatch.setattr(desktop, "_desktop_source", lambda: source)
+    monkeypatch.setattr(
+        desktop.shutil,
+        "which",
+        lambda name: "/usr/bin/npm" if name == "npm" else "/usr/local/bin/aegis",
+    )
+
+    args = Namespace(status=True, install_only=False, reinstall=False, sandbox=False)
+    assert desktop.cmd_desktop(args, object()) == 0
+
+    body = json.loads(capsys.readouterr().out)
+    diag = body["env_diagnostics"]["aegis_bin"]
+    assert body["env"]["AEGIS_BIN"] == "/usr/local/bin/aegis"
+    assert diag == {
+        "raw": str(stale_bin),
+        "resolved": "/usr/local/bin/aegis",
+        "source": "path",
+        "valid": True,
+        "ignored": True,
+        "ignored_reason": "missing",
+    }
 
 
 def test_desktop_doctor_alias_uses_readonly_status(monkeypatch, tmp_path, capsys):

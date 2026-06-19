@@ -179,6 +179,16 @@ def _unpacked_executable(target: Path, *, platform: str | None = None) -> Path:
     return next((path for path in candidates if path.exists()), candidates[0])
 
 
+def _packaged_target_status(target: Path) -> dict[str, list[dict[str, Any]]]:
+    return {
+        name: [
+            {"path": str(path), "exists": path.exists()}
+            for path in _unpacked_executable_candidates(target, platform=platform)
+        ]
+        for name, platform in (("linux", "linux"), ("win", "win32"), ("mac", "darwin"))
+    }
+
+
 def _desktop_drift(source: Any, target: Path) -> dict[str, list[str]]:
     missing: list[str] = []
     changed: list[str] = []
@@ -276,14 +286,16 @@ def _desktop_status(source: Any, target: Path, *, npm: str | None = None) -> dic
     template_changed = bool(drift["missing"] or drift["changed"])
     dependencies_installed = (target / "node_modules" / "electron").exists()
     packaged_app = _unpacked_executable(target).exists()
+    packaged_targets = _packaged_target_status(target)
     needs_npm_install = _needs_npm_install(
         target,
         force=False,
         template_changed=template_changed,
     )
+    aegis_bin = _aegis_bin_resolution()
     needs_pack = template_changed or not packaged_app
     env_preview = {
-        "AEGIS_BIN": _aegis_bin(),
+        "AEGIS_BIN": aegis_bin["resolved"],
         "AEGIS_HOME": str(cfg.get_home()),
         "TERMINAL_CWD": str(Path.cwd().resolve()),
     }
@@ -305,6 +317,7 @@ def _desktop_status(source: Any, target: Path, *, npm: str | None = None) -> dic
         "package_lock": (target / "package-lock.json").exists(),
         "dependencies_installed": dependencies_installed,
         "packaged_app": packaged_app,
+        "packaged_targets": packaged_targets,
         "template_synced": not template_changed,
         "needs_sync": template_changed,
         "needs_npm_install": needs_npm_install,
@@ -327,25 +340,70 @@ def _desktop_status(source: Any, target: Path, *, npm: str | None = None) -> dic
             },
         },
         "env": env_preview,
+        "env_diagnostics": {
+            "aegis_bin": aegis_bin,
+            "aegis_home": {
+                "raw": os.environ.get("AEGIS_HOME") or "",
+                "resolved": str(cfg.get_home()),
+                "source": "env" if os.environ.get("AEGIS_HOME") else "default",
+            },
+            "terminal_cwd": {
+                "raw": str(Path.cwd()),
+                "resolved": str(Path.cwd().resolve()),
+                "valid": Path.cwd().exists(),
+            },
+        },
         "next_action": next_action,
     }
 
 
-def _aegis_bin() -> str:
-    env_bin = str(os.environ.get("AEGIS_BIN") or "").strip()
-    if env_bin:
-        env_path = Path(env_bin).expanduser()
-        path_like = env_path.is_absolute() or os.sep in env_bin or (os.altsep and os.altsep in env_bin)
-        if path_like:
+def _is_path_like_command(value: str) -> bool:
+    return (
+        Path(value).expanduser().is_absolute()
+        or os.sep in value
+        or bool(os.altsep and os.altsep in value)
+    )
+
+
+def _aegis_bin_resolution() -> dict[str, Any]:
+    raw = str(os.environ.get("AEGIS_BIN") or "").strip()
+    ignored_reason = ""
+    if raw:
+        if _is_path_like_command(raw):
+            env_path = Path(raw).expanduser()
             if env_path.exists() and os.access(env_path, os.X_OK):
-                return str(env_path.resolve())
+                return {
+                    "raw": raw,
+                    "resolved": str(env_path.resolve()),
+                    "source": "env",
+                    "valid": True,
+                    "ignored": False,
+                    "ignored_reason": "",
+                }
+            ignored_reason = "missing" if not env_path.exists() else "not_executable"
         else:
-            found_env = shutil.which(env_bin)
+            found_env = shutil.which(raw)
             if found_env:
-                return found_env
+                return {
+                    "raw": raw,
+                    "resolved": found_env,
+                    "source": "env_path",
+                    "valid": True,
+                    "ignored": False,
+                    "ignored_reason": "",
+                }
+            ignored_reason = "not_found_on_path"
+
     found = shutil.which("aegis")
     if found:
-        return found
+        return {
+            "raw": raw,
+            "resolved": found,
+            "source": "path",
+            "valid": True,
+            "ignored": bool(raw),
+            "ignored_reason": ignored_reason,
+        }
     if sys.argv and sys.argv[0]:
         argv0 = Path(sys.argv[0]).expanduser()
         if (
@@ -354,11 +412,36 @@ def _aegis_bin() -> str:
             and os.access(argv0, os.X_OK)
             and argv0.suffix.lower() not in {".py", ".pyc", ".pyo"}
         ):
-            return str(argv0.resolve())
+            return {
+                "raw": raw,
+                "resolved": str(argv0.resolve()),
+                "source": "argv",
+                "valid": True,
+                "ignored": bool(raw),
+                "ignored_reason": ignored_reason,
+            }
         found_argv = shutil.which(argv0.name)
         if found_argv and Path(found_argv).name != "python":
-            return found_argv
-    return "aegis"
+            return {
+                "raw": raw,
+                "resolved": found_argv,
+                "source": "argv_path",
+                "valid": True,
+                "ignored": bool(raw),
+                "ignored_reason": ignored_reason,
+            }
+    return {
+        "raw": raw,
+        "resolved": "aegis",
+        "source": "fallback",
+        "valid": False,
+        "ignored": bool(raw),
+        "ignored_reason": ignored_reason,
+    }
+
+
+def _aegis_bin() -> str:
+    return str(_aegis_bin_resolution()["resolved"])
 
 
 def _terminal_cwd(args) -> str:
