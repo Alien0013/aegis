@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node launch.js",
     "start:sandbox": "node launch.js --sandbox",
+    "test": "npm run test:desktop",
     "test:desktop": "node --test electron/*.test.cjs scripts/*.test.cjs",
     "build:stamp": "node scripts/write-build-stamp.cjs",
     "build:backend": "node scripts/stage-backend.cjs",
