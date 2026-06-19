@@ -63,6 +63,28 @@ test("writes install stamp from CI-style environment", () => {
   assert.equal(payload.ci, true);
 });
 
+test("writes non-release fallback stamp outside git checkouts", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "aegis-stamp-"));
+
+  const result = writeBuildStamp({
+    desktopRoot: root,
+    repoRoot: root,
+    env: {},
+    now: () => new Date("2026-06-16T12:30:00.000Z"),
+    packageJson: packageJson(),
+    platform: "linux",
+    arch: "x64",
+    versions: { node: "22.11.0" },
+  });
+
+  const payload = JSON.parse(fs.readFileSync(result.path, "utf8"));
+  assert.equal(payload.commit, "unknown-local");
+  assert.equal(payload.source, "local-fallback");
+  assert.equal(payload.release, false);
+  assert.equal(payload.trustedRelease, false);
+  assert.equal(payload.dirty, false);
+});
+
 test("infers electron-builder targets from npm lifecycle", () => {
   assert.deepEqual(inferTargetPlatforms({ env: { npm_lifecycle_event: "dist:win" }, platform: "linux" }), ["win32"]);
   assert.deepEqual(inferTargetPlatforms({ env: { AEGIS_DESKTOP_TARGETS: "win,mac,linux" }, platform: "linux" }), [

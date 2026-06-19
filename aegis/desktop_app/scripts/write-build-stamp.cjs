@@ -159,9 +159,19 @@ function stampFromGit(repoRoot) {
   };
 }
 
+function stampFromLocalFallback(env) {
+  if (isReleaseBuild(env)) return null;
+  return {
+    commit: "unknown-local",
+    branch: null,
+    dirty: false,
+    source: "local-fallback",
+  };
+}
+
 function resolveBuildStamp({ repoRoot, env = process.env } = {}) {
   const root = repoRoot || findRepoRoot(path.resolve(__dirname, ".."));
-  return stampFromEnv(env) || stampFromGit(root);
+  return stampFromEnv(env) || stampFromGit(root) || stampFromLocalFallback(env);
 }
 
 function writeBuildStamp({
