@@ -20,7 +20,7 @@ from datetime import datetime
 from io import BytesIO
 from http.server import BaseHTTPRequestHandler
 from typing import Any, Iterable
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from aiohttp import web
 
@@ -1218,6 +1218,16 @@ def _models(config: Config) -> list[dict[str, Any]]:
     return rows
 
 
+def _model(config: Config, model_id: str) -> dict[str, Any] | None:
+    wanted = str(model_id or "").strip()
+    if not wanted:
+        return None
+    for row in _models(config):
+        if str(row.get("id") or "") == wanted:
+            return row
+    return None
+
+
 def _event_metadata(event: dict[str, Any]) -> dict[str, Any]:
     keys = ("type", "name", "tool_name", "status", "summary", "preview", "is_error", "duration_ms")
     return {key: event[key] for key in keys if key in event}
@@ -1894,6 +1904,7 @@ def _capabilities(config: Config) -> dict[str, Any]:
         {"name": "responses.cancel", "path": "/v1/responses/{response_id}/cancel", "methods": ["POST"]},
         {"name": "responses.compact", "path": "/v1/responses/compact", "methods": ["POST"]},
         {"name": "models", "path": "/v1/models", "methods": ["GET"]},
+        {"name": "models.retrieve", "path": "/v1/models/{model_id}", "methods": ["GET"]},
         {"name": "health", "path": "/v1/health", "methods": ["GET"]},
         {"name": "health.detailed", "path": "/v1/health/detailed", "methods": ["GET"]},
         {"name": "skills", "path": "/v1/skills", "methods": ["GET"]},
@@ -3453,6 +3464,18 @@ def make_handler(config: Config):
                 return self._json(200, self._health(detailed=True))
             if path == "/v1/models":
                 return self._json(200, {"object": "list", "data": _models(config)})
+            if path.startswith("/v1/models/"):
+                model_id = unquote(path[len("/v1/models/"):])
+                row = _model(config, model_id)
+                if row is None:
+                    return self._json(404, {
+                        "error": {
+                            "message": f"Model not found: {model_id}",
+                            "type": "invalid_request_error",
+                            "code": "model_not_found",
+                        },
+                    })
+                return self._json(200, row)
             if path == "/v1/capabilities":
                 return self._json(200, _capabilities(config))
             if path == "/v1/skills":

@@ -375,6 +375,8 @@ def test_openai_models_lists_model_ids_not_only_provider_names(monkeypatch, tmp_
     srv, port = _serve(make_handler(cfg))
     try:
         status, data = _request(port, "GET", "/v1/models")
+        retrieve_status, retrieve_data = _request(port, "GET", "/v1/models/local-active-model")
+        missing_status, missing_data = _request(port, "GET", "/v1/models/does-not-exist")
     finally:
         srv.shutdown()
         srv.server_close()
@@ -388,6 +390,13 @@ def test_openai_models_lists_model_ids_not_only_provider_names(monkeypatch, tmp_
     assert "gpt-5.5" in ids
     assert "localtest" not in ids
     assert "serverplug" not in ids
+    assert retrieve_status == 200
+    retrieved = json.loads(retrieve_data)
+    assert retrieved["object"] == "model"
+    assert retrieved["id"] == "local-active-model"
+    assert retrieved["owned_by"] == "localtest"
+    assert missing_status == 404
+    assert json.loads(missing_data)["error"]["code"] == "model_not_found"
 
 
 def test_openai_models_dedupes_ids_but_preserves_provider_owners():
@@ -1267,6 +1276,7 @@ def test_server_health_capabilities_and_body_limit(monkeypatch, tmp_path):
     assert caps["endpoints"]["responses"] is True
     assert caps["endpoints"]["jobs"] is True
     routes = {row["name"]: row for row in caps["endpoint_descriptors"]}
+    assert routes["models.retrieve"]["path"] == "/v1/models/{model_id}"
     assert routes["responses"]["path"] == "/v1/responses"
     assert routes["responses"]["streaming"] is True
     assert routes["responses.input_items"]["path"] == "/v1/responses/{response_id}/input_items"
