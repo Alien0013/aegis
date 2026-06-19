@@ -1626,6 +1626,29 @@ def test_responses_rejects_invalid_reasoning_effort(monkeypatch, tmp_path):
     assert _FakeRunner.calls == []
 
 
+def test_responses_accepts_reasoning_none_as_off(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": "hello",
+            "reasoning": {"effort": "none"},
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    body = json.loads(data)
+    assert status == 200
+    assert body["metadata"]["reasoning_effort"] == "off"
+    assert _FakeRunner.calls[0]["meta"]["runtime_controls"]["reasoning_effort"] == "off"
+
+
 def test_responses_rejects_missing_or_empty_user_input(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
@@ -1891,6 +1914,11 @@ def test_responses_accepts_input_file_parts_as_document_references(monkeypatch, 
                 "content": [
                     {"type": "input_text", "text": "review this"},
                     {"type": "input_file", "file_id": "file_123", "filename": "brief.pdf"},
+                    {
+                        "type": "input_file",
+                        "file_url": "https://example.test/brief.pdf",
+                        "detail": "high",
+                    },
                 ],
             }],
         })
@@ -1901,12 +1929,15 @@ def test_responses_accepts_input_file_parts_as_document_references(monkeypatch, 
         srv.server_close()
 
     assert status == 200
-    assert _FakeRunner.calls[0]["prompt"].content == "review this\n[file: file_123]"
+    assert _FakeRunner.calls[0]["prompt"].content == (
+        "review this\n[file: file_123]\n[file: https://example.test/brief.pdf]"
+    )
     assert items_status == 200
     items = json.loads(items_data)["data"]
     assert items[0]["content"] == [
         {"type": "input_text", "text": "review this"},
         {"type": "input_file", "file_id": "file_123", "filename": "brief.pdf"},
+        {"type": "input_file", "file_url": "https://example.test/brief.pdf", "detail": "high"},
     ]
 
 
@@ -2531,6 +2562,45 @@ def test_responses_preserves_message_input_item_identity(monkeypatch, tmp_path):
     ]
 
 
+def test_responses_accepts_input_image_file_id(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        status, data = _request(port, "POST", "/v1/responses", {
+            "input": [{
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "inspect stored image"},
+                    {"type": "input_image", "file_id": "file_img_123", "detail": "high"},
+                ],
+            }],
+        })
+        response_id = json.loads(data)["id"]
+        items_status, items_data = _request(
+            port,
+            "GET",
+            f"/v1/responses/{response_id}/input_items?order=asc",
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert _FakeRunner.calls[0]["prompt"].content == "inspect stored image\n[image: file_img_123]"
+    assert _FakeRunner.calls[0]["prompt"].images == []
+    assert items_status == 200
+    items = json.loads(items_data)["data"]
+    assert items[0]["content"] == [
+        {"type": "input_text", "text": "inspect stored image"},
+        {"type": "input_image", "file_id": "file_img_123", "detail": "high"},
+    ]
+
+
 def test_responses_preserves_assistant_message_phase_across_previous_response(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
@@ -2719,8 +2789,12 @@ def test_responses_preserves_modern_opaque_input_items(monkeypatch, tmp_path):
     opaque_items = [
         {"id": "sh_1", "type": "shell_call", "status": "completed", "action": {"command": "pwd"}},
         {"id": "sho_1", "type": "shell_call_output", "call_id": "sh_1", "output": "ok"},
+        {"id": "ts_1", "type": "tool_search_call", "status": "completed", "query": "aegis"},
+        {"id": "tso_1", "type": "tool_search_output", "call_id": "ts_1", "output": [{"title": "docs"}]},
+        {"id": "at_1", "type": "additional_tools", "tools": [{"type": "web_search_preview"}]},
         {"id": "ap_1", "type": "apply_patch_call", "status": "completed", "input": "*** Begin Patch"},
         {"id": "apo_1", "type": "apply_patch_call_output", "call_id": "ap_1", "output": "patched"},
+        {"id": "ct_1", "type": "compaction_trigger", "reason": "context_window"},
         {"id": "cmp_1", "type": "compaction", "summary": [{"type": "summary_text", "text": "kept state"}]},
         {"id": "ref_1", "type": "item_reference", "item_id": "msg_prior"},
     ]
@@ -2759,20 +2833,30 @@ def test_responses_preserves_modern_opaque_input_items(monkeypatch, tmp_path):
     assert _FakeRunner.calls[0]["history"] == []
     assert items_status == 200
     items = json.loads(items_data)["data"]
-    assert [item["type"] for item in items[:6]] == [item["type"] for item in opaque_items]
+    first_opaque = items[:len(opaque_items)]
+    assert [item["type"] for item in first_opaque] == [item["type"] for item in opaque_items]
     assert items[0]["action"] == {"command": "pwd"}
-    assert items[4]["summary"] == [{"type": "summary_text", "text": "kept state"}]
-    assert items[5]["item_id"] == "msg_prior"
+    assert first_opaque[2]["query"] == "aegis"
+    assert first_opaque[3]["output"] == [{"title": "docs"}]
+    assert first_opaque[4]["tools"] == [{"type": "web_search_preview"}]
+    assert first_opaque[7]["reason"] == "context_window"
+    assert first_opaque[-2]["summary"] == [{"type": "summary_text", "text": "kept state"}]
+    assert first_opaque[-1]["item_id"] == "msg_prior"
     assert all(item["response_id"] == response_id for item in items)
     assert second_status == 200
     assert second_items_status == 200
     assert _FakeRunner.calls[1]["prompt"].content == "follow up"
     assert [m.content for m in _FakeRunner.calls[1]["history"]] == ["continue", "hello"]
     second_items = json.loads(second_items_data)["data"]
-    assert [item["type"] for item in second_items[:6]] == [item["type"] for item in opaque_items]
+    second_opaque = second_items[:len(opaque_items)]
+    assert [item["type"] for item in second_opaque] == [item["type"] for item in opaque_items]
     assert second_items[0]["action"] == {"command": "pwd"}
-    assert second_items[4]["summary"] == [{"type": "summary_text", "text": "kept state"}]
-    assert second_items[5]["item_id"] == "msg_prior"
+    assert second_opaque[2]["query"] == "aegis"
+    assert second_opaque[3]["output"] == [{"title": "docs"}]
+    assert second_opaque[4]["tools"] == [{"type": "web_search_preview"}]
+    assert second_opaque[7]["reason"] == "context_window"
+    assert second_opaque[-2]["summary"] == [{"type": "summary_text", "text": "kept state"}]
+    assert second_opaque[-1]["item_id"] == "msg_prior"
     assert all(item["response_id"] == second_id for item in second_items)
 
 
@@ -3276,6 +3360,46 @@ def test_responses_missing_previous_id_with_explicit_history_404s(monkeypatch, t
     assert status == 404
     assert "Previous response not found" in json.loads(data)["error"]
     assert _FakeRunner.calls == []
+
+
+def test_responses_previous_response_can_continue_without_new_input(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    _FakeRunner.calls = []
+    monkeypatch.setattr(server, "SurfaceRunner", _FakeRunner)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        first_status, first_data = _request(port, "POST", "/v1/responses", {
+            "input": "first",
+        })
+        first_id = json.loads(first_data)["id"]
+        second_status, second_data = _request(port, "POST", "/v1/responses", {
+            "previous_response_id": first_id,
+        })
+        second_id = json.loads(second_data)["id"]
+        items_status, items_data = _request(
+            port,
+            "GET",
+            f"/v1/responses/{second_id}/input_items?order=asc",
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert first_status == 200
+    assert second_status == 200
+    assert json.loads(second_data)["previous_response_id"] == first_id
+    second_call = _FakeRunner.calls[1]
+    assert second_call["prompt"].content == ""
+    assert second_call["prompt"].meta["_responses_synthetic_prompt"] is True
+    assert [m.content for m in second_call["history"]] == ["first", "hello"]
+    assert items_status == 200
+    items = json.loads(items_data)["data"]
+    assert [item["type"] for item in items] == ["message", "message"]
+    assert items[0]["content"] == [{"type": "input_text", "text": "first"}]
+    assert items[1]["role"] == "assistant"
 
 
 def test_responses_conversation_maps_to_latest_response(monkeypatch, tmp_path):

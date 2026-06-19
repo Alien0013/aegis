@@ -38,7 +38,7 @@ _DEFAULT_RESPONSE_AUTO_TRUNCATION_MESSAGES = 100
 _MAX_STORED_RUN_EVENTS = 500
 _TERMINAL_RUN_STATUSES = {"completed", "error", "cancelled", "interrupted"}
 _MAX_SESSION_KEY_CHARS = 256
-_REASONING_EFFORTS = {"off", "minimal", "low", "medium", "high", "xhigh"}
+_REASONING_EFFORTS = {"off", "none", "minimal", "low", "medium", "high", "xhigh"}
 _TEXT_CONTENT_PART_TYPES = {"text", "input_text", "output_text"}
 _IMAGE_CONTENT_PART_TYPES = {"image_url", "input_image"}
 _FILE_CONTENT_PART_TYPES = {"file", "input_file"}
@@ -49,9 +49,11 @@ _OPAQUE_RESPONSE_INPUT_ITEM_TYPES = {
     "code_interpreter_call",
     "computer_call",
     "computer_call_output",
+    "additional_tools",
     "apply_patch_call",
     "apply_patch_call_output",
     "compaction",
+    "compaction_trigger",
     "custom_tool_call",
     "custom_tool_call_output",
     "file_search_call",
@@ -66,6 +68,8 @@ _OPAQUE_RESPONSE_INPUT_ITEM_TYPES = {
     "reasoning",
     "shell_call",
     "shell_call_output",
+    "tool_search_call",
+    "tool_search_output",
     "web_search_call",
 }
 _CHAT_IDEMPOTENCY_FINGERPRINT_KEYS = [
@@ -264,9 +268,11 @@ def _request_reasoning_effort(
     value = str(raw or "").strip().lower()
     if value == "max":
         value = "xhigh"
+    if value == "none":
+        value = "off"
     if value not in _REASONING_EFFORTS:
         return "", _openai_error(
-            "'reasoning' effort must be one of off, minimal, low, medium, high, or xhigh",
+            "'reasoning' effort must be one of none, off, minimal, low, medium, high, or xhigh",
             code="invalid_reasoning_effort",
             param=param,
         )
@@ -385,6 +391,10 @@ def _content(value: Any) -> tuple[str, list[str]]:
             image = _image_url_from_part(part)
             if image:
                 images.append(str(image))
+            else:
+                label = _image_file_id_from_part(part)
+                if label:
+                    texts.append(f"[image: {label}]")
         elif ptype in _FILE_CONTENT_PART_TYPES:
             label = _file_label_from_part(part)
             if label:
@@ -403,8 +413,20 @@ def _image_url_from_part(part: dict[str, Any]) -> Any:
     return image
 
 
+def _image_file_id_from_part(part: dict[str, Any]) -> str:
+    image = part.get("image_url") or part.get("image")
+    if isinstance(image, dict):
+        value = image.get("file_id")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    value = part.get("file_id")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return ""
+
+
 def _file_label_from_part(part: dict[str, Any]) -> str:
-    for key in ("file_id", "filename", "name"):
+    for key in ("file_id", "file_url", "filename", "name"):
         value = part.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
@@ -469,6 +491,20 @@ def _image_url_validation_error(image: Any, *, param: str) -> dict[str, Any] | N
     return None
 
 
+def _image_part_validation_error(part: dict[str, Any], *, param: str) -> dict[str, Any] | None:
+    image = _image_url_from_part(part)
+    if image is not None:
+        return _image_url_validation_error(image, param=f"{param}.image_url")
+    file_id = _image_file_id_from_part(part)
+    if file_id:
+        return None
+    return _openai_error(
+        "Image content parts require a non-empty image URL or file_id",
+        code="invalid_image_content",
+        param=f"{param}.image_url",
+    )
+
+
 def _content_part_validation_error(
     value: Any,
     *,
@@ -497,7 +533,7 @@ def _content_part_validation_error(
                 )
             if not _file_label_from_part(part):
                 return _openai_error(
-                    "File content parts require 'file_id', 'filename', or 'file_data'.",
+                    "File content parts require 'file_id', 'file_url', 'filename', or 'file_data'.",
                     code="invalid_file_content",
                     param=f"{part_param}.file_id",
                 )
@@ -565,7 +601,7 @@ def _content_part_validation_error(
                 param=f"{part_param}.text",
             )
         if ptype in _IMAGE_CONTENT_PART_TYPES:
-            err = _image_url_validation_error(_image_url_from_part(part), param=f"{part_param}.image_url")
+            err = _image_part_validation_error(part, param=part_param)
             if err is not None:
                 return err
     return None
@@ -709,7 +745,7 @@ def _response_input_item_visible(item: Any) -> bool:
     if str(item.get("type") or "").strip().lower() in _AUDIO_CONTENT_PART_TYPES:
         return bool(_audio_label_from_part(item))
     image = _image_url_from_part(item)
-    return bool(image)
+    return bool(image or _image_file_id_from_part(item))
 
 
 def _chat_messages_validation_error(value: Any) -> dict[str, Any] | None:
@@ -734,12 +770,18 @@ def _chat_messages_validation_error(value: Any) -> dict[str, Any] | None:
     return None
 
 
-def _responses_input_validation_error(body: dict[str, Any]) -> dict[str, Any] | None:
+def _responses_input_validation_error(
+    body: dict[str, Any],
+    *,
+    allow_omitted: bool = False,
+) -> dict[str, Any] | None:
     if "input" in body:
         raw = body.get("input")
     elif "messages" in body:
         raw = body.get("messages")
     else:
+        if allow_omitted:
+            return None
         return _openai_error("Missing 'input' field", param="input")
 
     err = _response_content_validation_error(raw, param="input")
@@ -890,9 +932,14 @@ def _canonical_response_function_output_part(
         return {"type": "refusal", "refusal": str(part.get("refusal", ""))}
     if ptype in _IMAGE_CONTENT_PART_TYPES:
         image = _image_url_from_part(part)
-        if not image:
+        file_id = _image_file_id_from_part(part)
+        if not image and not file_id:
             return None
-        out: dict[str, Any] = {"type": "input_image", "image_url": str(image)}
+        out: dict[str, Any] = {"type": "input_image"}
+        if image:
+            out["image_url"] = str(image)
+        if file_id:
+            out["file_id"] = file_id
         detail = part.get("detail")
         image_obj = part.get("image_url") or part.get("image")
         if isinstance(image_obj, dict):
@@ -904,7 +951,7 @@ def _canonical_response_function_output_part(
         if not _file_label_from_part(part):
             return None
         out: dict[str, Any] = {"type": "input_file"}
-        for key in ("file_id", "filename", "file_data", "mime_type"):
+        for key in ("file_id", "file_url", "filename", "file_data", "mime_type", "detail"):
             if part.get(key) is not None:
                 out[key] = str(part[key])
         return out
@@ -1382,6 +1429,10 @@ def _response_input_item_to_message(item: Any) -> Message:
 
 
 def _responses_messages(body: dict[str, Any]) -> tuple[list[Message], Message]:
+    if "input" not in body and "messages" not in body:
+        last_user = Message.user("")
+        last_user.meta["_responses_synthetic_prompt"] = True
+        return [], last_user
     raw = body.get("messages", body.get("input", ""))
     if isinstance(raw, str):
         internal = [Message.user(raw)]
@@ -4284,9 +4335,6 @@ def make_handler(config: Config):
             if session_key_error is not None:
                 code, payload = session_key_error
                 return self._json(code, payload)
-            validation_error = _responses_input_validation_error(body)
-            if validation_error is not None:
-                return self._json(400, validation_error)
             include_values, include_error = _response_include_values(body.get("include"))
             if include_error is not None:
                 return self._json(400, include_error)
@@ -4314,6 +4362,12 @@ def make_handler(config: Config):
                     return self._json(404, {"error": f"Previous response not found: {previous_id}"})
                 if not explicit_history:
                     explicit_history = _history_from_state(previous_state)
+            validation_error = _responses_input_validation_error(
+                body,
+                allow_omitted=previous_state is not None,
+            )
+            if validation_error is not None:
+                return self._json(400, validation_error)
 
             input_history, last_user = _responses_messages(body)
             state_history = list(explicit_history) + list(input_history)
@@ -4646,6 +4700,12 @@ def make_handler(config: Config):
                     "parallel_tool_calls": parallel_tool_calls,
                 }
                 _attach_response_include(created_response, include_values)
+                with state_lock:
+                    self._register_response_locked(
+                        response_id,
+                        response=created_response,
+                        store_response=store_response,
+                    )
                 send_event("response.created", {
                     "response": {
                         **created_response,
