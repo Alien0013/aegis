@@ -989,11 +989,34 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     )
     assert "TELEGRAM_ALLOWED_CHATS" in telegram["optional_env_vars"]
     assert "TELEGRAM_ALLOWED_CHATS" in telegram["metadata"]["optional_env"]
+    assert "TELEGRAM_REGISTER_COMMANDS" in telegram["optional_env_vars"]
     assert "TELEGRAM_ALLOWED_CHATS" not in telegram["missing_env_vars"]
     assert telegram["auth_type"] == "bot_token"
     assert telegram["transport"] == "long_poll"
     assert "media" in telegram["capabilities"]
+    assert "slash_commands" in telegram["capabilities"]
+    assert "callbacks" in telegram["capabilities"]
+    assert "reactions" in telegram["capabilities"]
+    assert telegram["security"]["command_registration_env"] == "TELEGRAM_REGISTER_COMMANDS"
     assert telegram["metadata"]["adapter_class"].endswith("TelegramAdapter")
+    signal = next(row for row in rows if row["id"] == "signal")
+    assert signal["transport"] == "signal_cli"
+    assert "SIGNAL_ALLOWED_USERS" in signal["optional_env_vars"]
+    assert "attachments" in signal["capabilities"]
+    assert signal["security"]["allowed_users_env"] == "SIGNAL_ALLOWED_USERS"
+    matrix = next(row for row in rows if row["id"] == "matrix")
+    assert matrix["transport"] == "matrix_sync"
+    assert "threads" in matrix["capabilities"]
+    assert "thread" in matrix["delivery_modes"]
+    email = next(row for row in rows if row["id"] == "email")
+    assert "EMAIL_ALLOWED_SENDERS" in email["optional_env_vars"]
+    assert "reply_headers" in email["capabilities"]
+    assert email["security"]["allowed_senders_env"] == "EMAIL_ALLOWED_SENDERS"
+    ntfy = next(row for row in rows if row["id"] == "ntfy")
+    assert ntfy["required_env_vars"] == ["NTFY_TOPIC"]
+    assert "NTFY_TOKEN" in ntfy["optional_env_vars"]
+    assert ntfy["transport"] == "ntfy_stream"
+    assert "title_tags_priority" in ntfy["capabilities"]
     mattermost = next(row for row in rows if row["id"] == "mattermost")
     assert mattermost["transport"] == "http_webhook"
     assert mattermost["auth_type"] == "bearer_and_webhook_secret"
