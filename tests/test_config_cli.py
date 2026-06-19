@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import yaml
 
 
@@ -32,6 +34,46 @@ def test_config_summary_is_readable_ascii_and_redacts_secret(monkeypatch, capsys
     assert "sk-test-secret-value" not in out
     assert "telegram-secret" not in out
     assert "Telegram:   configured" in out
+
+
+def test_config_status_json_is_machine_readable_and_redacted(monkeypatch, capsys):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-secret-value")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "telegram-secret")
+
+    from aegis import config as cfg
+    from aegis.cli.main import main
+
+    cfg.config_path().parent.mkdir(parents=True, exist_ok=True)
+    cfg.config_path().write_text(
+        "model:\n"
+        "  provider: openai\n"
+        "  default: gpt-5.5\n"
+        "server:\n"
+        "  api_key: server-secret\n"
+        "gateway:\n"
+        "  channels: [telegram]\n",
+        encoding="utf-8",
+    )
+
+    assert main(["config", "status", "--json"]) == 0
+
+    out = capsys.readouterr().out
+    data = json.loads(out)
+    assert data["object"] == "aegis.config.status"
+    assert data["paths"]["config"] == str(cfg.config_path())
+    assert data["paths"]["secrets"] == str(cfg.env_path())
+    assert data["services"]["api_auth_configured"] is True
+    assert data["api_keys"]["OpenAI"]["set"] is True
+    assert data["api_keys"]["OpenAI"]["name"] == "OPENAI_API_KEY"
+    assert data["api_keys"]["OpenAI"]["chars"] == len("sk-test-secret-value")
+    assert data["model"]["provider"] == "openai"
+    assert data["model"]["default"] == "gpt-5.5"
+    assert data["messaging_platforms"]["telegram"] == "configured"
+    assert data["validation"]["config_yaml"] == "ok"
+    assert "aegis config edit" in data["commands"]
+    assert "sk-test-secret-value" not in out
+    assert "telegram-secret" not in out
+    assert "server-secret" not in out
 
 
 def test_config_edit_without_editor_prints_path(monkeypatch, capsys):

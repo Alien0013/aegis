@@ -1008,12 +1008,39 @@ def _parse_config_set_value(key: str, raw_parts: object) -> tuple[object, str]:
 
 
 def cmd_config(args, config: Config) -> int:
+    api_key_specs = (
+        ("OpenRouter", ("OPENROUTER_API_KEY",)),
+        ("OpenAI", ("OPENAI_API_KEY",)),
+        ("OpenAI (STT/TTS)", ("VOICE_TOOLS_OPENAI_KEY",)),
+        ("Anthropic", ("ANTHROPIC_API_KEY",)),
+        ("Google", ("GOOGLE_API_KEY", "GEMINI_API_KEY")),
+        ("Groq", ("GROQ_API_KEY",)),
+        ("DeepSeek", ("DEEPSEEK_API_KEY",)),
+        ("XAI", ("XAI_API_KEY",)),
+        ("Mistral", ("MISTRAL_API_KEY",)),
+        ("Together", ("TOGETHER_API_KEY",)),
+        ("Exa", ("EXA_API_KEY",)),
+        ("Parallel", ("PARALLEL_API_KEY",)),
+        ("Firecrawl", ("FIRECRAWL_API_KEY",)),
+        ("Tavily", ("TAVILY_API_KEY",)),
+        ("Browserbase", ("BROWSERBASE_API_KEY",)),
+        ("Browser Use", ("BROWSER_USE_API_KEY",)),
+        ("FAL", ("FAL_KEY", "FAL_API_KEY")),
+    )
+
     def configured_env(*names: str) -> str:
         for name in names:
             value = os.environ.get(name, "").strip()
             if value:
                 return f"(set, {len(value)} chars)"
         return "(not set)"
+
+    def env_status(*names: str) -> dict[str, object]:
+        for name in names:
+            value = os.environ.get(name, "").strip()
+            if value:
+                return {"set": True, "name": name, "chars": len(value)}
+        return {"set": False, "name": names[0] if names else "", "chars": 0}
 
     def active_provider_credentials_status() -> str:
         provider = str(config.get("model.provider") or "").strip()
@@ -1087,6 +1114,14 @@ def cmd_config(args, config: Config) -> int:
         mattermost = "configured" if os.environ.get("MATTERMOST_BOT_TOKEN") or "mattermost" in gateway_channels else "not configured"
         webhook = "configured" if os.environ.get("WEBHOOK_CHANNEL_SECRET") or "webhook" in gateway_channels else "not configured"
         whatsapp = "configured" if os.environ.get("WHATSAPP_CHANNEL_SECRET") or "whatsapp" in gateway_channels else "not configured"
+        platform_statuses = {
+            "telegram": telegram,
+            "discord": discord,
+            "slack": slack,
+            "mattermost": mattermost,
+            "webhook": webhook,
+            "whatsapp": whatsapp,
+        }
         active_profile = cfg.current_profile() or "default"
         model_view = {
             key: config.get(f"model.{key}")
@@ -1111,6 +1146,90 @@ def cmd_config(args, config: Config) -> int:
             )
         ):
             desktop_state = "packaged"
+        preview = config.get("display.user_message_preview", {}) or {}
+        if not isinstance(preview, dict):
+            preview = {}
+        timezone = config.get("timezone") or os.environ.get("TZ") or time.tzname[0] or "(server-local)"
+        commands = [
+            "aegis config status",
+            "aegis config paths",
+            "aegis config edit",
+            "aegis config edit --secrets",
+            "aegis config get <key>",
+            "aegis config set <key> <value>",
+            "aegis config doctor",
+            "aegis config setup",
+            "aegis setup",
+        ]
+        if getattr(args, "json", False):
+            payload = {
+                "object": "aegis.config.status",
+                "paths": {
+                    "config": str(cfg.config_path()),
+                    "secrets": str(cfg.env_path()),
+                    "home": str(cfg.get_home()),
+                    "profile": active_profile,
+                    "install": str(Path(__file__).resolve().parents[2]),
+                },
+                "services": {
+                    "api_adapter": f"http://{server_host}:{server_port}",
+                    "dashboard": f"http://{dashboard_host}:{dashboard_port}",
+                    "frontend": config.get("dashboard.frontend"),
+                    "api_auth_configured": bool(config.get("server.api_key")),
+                    "dashboard_auth_configured": bool(config.get("server.dashboard_token")),
+                    "desktop": {"state": desktop_state, "path": str(desktop_dir)},
+                },
+                "api_keys": {
+                    label: {
+                        **env_status(*names),
+                        "env": list(names),
+                    }
+                    for label, names in api_key_specs
+                },
+                "model": {
+                    "active": model_view,
+                    "provider": config.get("model.provider"),
+                    "default": config.get("model.default"),
+                    "base_url": config.get("model.base_url"),
+                    "max_turns": config.get("agent.max_iterations"),
+                },
+                "display": {
+                    "personality": config.get("agent.personality", "none") or "none",
+                    "reasoning": config.get("display.reasoning", "off") or "off",
+                    "model_effort": config.get("agent.reasoning_effort", "off") or "off",
+                    "bell": config.get("display.bell", "off") or "off",
+                    "user_message_preview": {
+                        "first_lines": preview.get("first_lines", 2),
+                        "last_lines": preview.get("last_lines", 2),
+                    },
+                    "platforms": sorted(platforms) if isinstance(platforms, dict) else [],
+                },
+                "terminal": {
+                    "backend": config.get("tools.terminal_backend"),
+                    "working_dir": str(Path.cwd()),
+                    "timeout_seconds": config.get("tools.terminal_lifetime_seconds"),
+                },
+                "timezone": timezone,
+                "context_compression": {
+                    "enabled": True,
+                    "threshold_percent": int(float(compression.get("threshold", 0.5) or 0.5) * 100),
+                    "target_ratio_percent": int(float(compression.get("tail_fraction", 0.25) or 0.25) * 100),
+                    "protect_last": compression.get("preserve_last", 20),
+                    "protect_first": compression.get("preserve_first", 3),
+                    "model": compression.get("model", "") or "(auto)",
+                },
+                "messaging_platforms": platform_statuses,
+                "validation": {
+                    "config_yaml": "ok" if not file_errors else "error",
+                    "config_yaml_errors": file_errors,
+                    "value_types": "ok" if not type_errors else "error",
+                    "type_errors": type_errors,
+                    "secrets_file": "present" if cfg.env_path().exists() else "not present",
+                },
+                "commands": commands,
+            }
+            _print(json.dumps(payload, indent=2, sort_keys=True))
+            return 0
         title = "AEGIS Configuration"
         width = 64
         _print("+" + "-" * (width - 2) + "+")
@@ -1133,25 +1252,7 @@ def cmd_config(args, config: Config) -> int:
         _print(f"  Desktop:      {desktop_state} ({desktop_dir})")
         _print()
         _print("== API Keys ==")
-        for label, names in (
-            ("OpenRouter", ("OPENROUTER_API_KEY",)),
-            ("OpenAI", ("OPENAI_API_KEY",)),
-            ("OpenAI (STT/TTS)", ("VOICE_TOOLS_OPENAI_KEY",)),
-            ("Anthropic", ("ANTHROPIC_API_KEY",)),
-            ("Google", ("GOOGLE_API_KEY", "GEMINI_API_KEY")),
-            ("Groq", ("GROQ_API_KEY",)),
-            ("DeepSeek", ("DEEPSEEK_API_KEY",)),
-            ("XAI", ("XAI_API_KEY",)),
-            ("Mistral", ("MISTRAL_API_KEY",)),
-            ("Together", ("TOGETHER_API_KEY",)),
-            ("Exa", ("EXA_API_KEY",)),
-            ("Parallel", ("PARALLEL_API_KEY",)),
-            ("Firecrawl", ("FIRECRAWL_API_KEY",)),
-            ("Tavily", ("TAVILY_API_KEY",)),
-            ("Browserbase", ("BROWSERBASE_API_KEY",)),
-            ("Browser Use", ("BROWSER_USE_API_KEY",)),
-            ("FAL", ("FAL_KEY", "FAL_API_KEY")),
-        ):
+        for label, names in api_key_specs:
             _print(f"  {label:<17} {configured_env(*names)}")
         _print()
         _print("== Model ==")
@@ -1167,9 +1268,6 @@ def cmd_config(args, config: Config) -> int:
         _print(f"  Reasoning:   {config.get('display.reasoning', 'off') or 'off'}")
         _print(f"  Model effort: {config.get('agent.reasoning_effort', 'off') or 'off'}")
         _print(f"  Bell:        {config.get('display.bell', 'off') or 'off'}")
-        preview = config.get("display.user_message_preview", {}) or {}
-        if not isinstance(preview, dict):
-            preview = {}
         _print(
             "  User preview: "
             f"first {preview.get('first_lines', 2)} line(s), "
@@ -1184,7 +1282,7 @@ def cmd_config(args, config: Config) -> int:
         _print(f"  Timeout:     {config.get('tools.terminal_lifetime_seconds')}s")
         _print()
         _print("== Timezone ==")
-        _print(f"  Timezone:    {config.get('timezone') or os.environ.get('TZ') or time.tzname[0] or '(server-local)'}")
+        _print(f"  Timezone:    {timezone}")
         _print()
         _print("== Context Compression ==")
         _print("  Enabled:        yes")
