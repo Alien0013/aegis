@@ -237,8 +237,17 @@ def _whatsapp_media_attachments_from_body(body: dict) -> list[dict]:
             ) or kind
             url = _string_value(media.get("url"))
             direct_path = _string_value(media.get("directPath") or media.get("direct_path"))
+            local_path = _string_value(
+                media.get("path")
+                or media.get("localPath")
+                or media.get("local_path")
+                or media.get("mediaPath")
+                or media.get("media_path")
+                or media.get("downloadedPath")
+                or media.get("downloaded_path")
+            )
             row_id = _string_value(media.get("id")) or message_key_id
-            dedupe_key = (message_key, row_id, filename, mimetype, url or direct_path)
+            dedupe_key = (message_key, row_id, filename, mimetype, url or direct_path or local_path)
             if dedupe_key in seen:
                 continue
             seen.add(dedupe_key)
@@ -256,6 +265,8 @@ def _whatsapp_media_attachments_from_body(body: dict) -> list[dict]:
                 row["url"] = url
             if direct_path:
                 row["direct_path"] = direct_path
+            if local_path:
+                row["path"] = local_path
             size = _positive_int(media.get("fileLength") or media.get("size"))
             if size is not None:
                 row["size"] = size
@@ -720,16 +731,16 @@ class WebhookChannel(BasePlatformAdapter):
     def _handle_inbound_payload(self, headers, body: dict) -> tuple[int, dict]:
         delivery_id = self._delivery_id(headers, body)
         delivery_recorded = False
-        if delivery_id:
-            delivery_recorded = self._delivery_cache.record(delivery_id)
-            if not delivery_recorded:
-                return 200, {"reply": "", "duplicate": True}
         try:
             ev = self._event_from_body(body)
             if ev.platform == "whatsapp" and _is_whatsapp_broadcast_chat(ev.chat_id):
                 return 200, {"reply": "", "ignored": True, "reason": "whatsapp_broadcast_chat"}
             if ev.platform == "whatsapp" and _is_whatsapp_self_echo(body):
                 return 200, {"reply": "", "ignored": True, "reason": "whatsapp_self_echo"}
+            if delivery_id:
+                delivery_recorded = self._delivery_cache.record(delivery_id)
+                if not delivery_recorded:
+                    return 200, {"reply": "", "duplicate": True}
             reply = self._submit_inbound(ev, wait=True) or ""
         except Exception as exc:  # noqa: BLE001
             if delivery_recorded:
@@ -758,12 +769,12 @@ class WebhookChannel(BasePlatformAdapter):
                     return
                 raw_body = self.rfile.read(n) if n else b"{}"
                 client_host = str((self.client_address or ("",))[0] or "")
-                if not adapter._rate_limiter.allow(client_host):
-                    self.send_response(429)
-                    self.end_headers()
-                    return
                 if not adapter._auth_allowed(self.headers, raw_body, client_host):
                     self.send_response(401)
+                    self.end_headers()
+                    return
+                if not adapter._rate_limiter.allow(client_host):
+                    self.send_response(429)
                     self.end_headers()
                     return
                 try:
@@ -832,6 +843,28 @@ class WebhookChannel(BasePlatformAdapter):
                 payload = self._outbound_payload(chat_id, chunk, metadata)
                 response = client.post(self.outbound_url, headers=headers, json=payload)
                 response.raise_for_status()
+
+    def send_media(
+        self,
+        chat_id: str,
+        path: str,
+        caption: str = "",
+        *,
+        metadata: dict | None = None,
+        **_kwargs,
+    ) -> None:
+        if not self.outbound_url:
+            return super().send_media(chat_id, path, caption, metadata=metadata)
+        payload = self._outbound_payload(chat_id, str(caption or ""), dict(metadata or {}))
+        payload.update({
+            "type": "media",
+            "path": str(path or ""),
+            "caption": str(caption or ""),
+        })
+        try:
+            self._post_outbound_event(payload)
+        except Exception:  # noqa: BLE001
+            super().send_media(chat_id, path, caption, metadata=metadata)
 
     def send_clarify(
         self,

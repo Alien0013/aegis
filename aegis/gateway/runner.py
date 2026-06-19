@@ -637,8 +637,31 @@ class GatewayRunner:
             evict_key = min(self._agents, key=lambda k: self._agent_last_used.get(k, 0.0))
             self._drop_agent(evict_key)
 
+    def _adapter_for_platform(self, platform: str):
+        normalized = normalize_platform_name(platform, default=str(platform or "").strip().lower())
+        for adapter in self.adapters:
+            if normalize_platform_name(getattr(adapter, "name", ""), default="") == normalized:
+                return adapter
+        for adapter in self.adapters:
+            default_platform = normalize_platform_name(getattr(adapter, "default_platform", ""), default="")
+            if default_platform == normalized:
+                return adapter
+            metadata = getattr(adapter, "metadata", {}) or {}
+            bridge = ""
+            security = metadata.get("security") if isinstance(metadata.get("security"), dict) else {}
+            if isinstance(security, dict):
+                bridge = str(security.get("bridge") or "")
+            bridge_caps = set(metadata.get("bridge_capabilities") or [])
+            if normalized == "whatsapp" and (
+                bridge == "webhook"
+                or "whatsapp_bridge_aliases" in bridge_caps
+                or normalize_platform_name(getattr(adapter, "name", ""), default="") == "webhook"
+            ):
+                return adapter
+        return None
+
     def _gateway_asker(self, ev: MessageEvent):
-        adapter = next((a for a in self.adapters if a.name == ev.platform), None)
+        adapter = self._adapter_for_platform(ev.platform)
         if adapter is None or not hasattr(adapter, "ask_user"):
             return None
         timeout = float(self.config.get("gateway.clarify_timeout_seconds", 3600) or 3600)
@@ -649,7 +672,7 @@ class GatewayRunner:
         return ask
 
     def _gateway_approver(self, ev: MessageEvent):
-        adapter = next((a for a in self.adapters if a.name == ev.platform), None)
+        adapter = self._adapter_for_platform(ev.platform)
         if adapter is None:
             return None
         timeout = float(self.config.get("gateway.approval_timeout_seconds",
@@ -1403,6 +1426,8 @@ class GatewayRunner:
             return self._download_telegram_attachment(attachment)
         if platform == "slack":
             return self._download_slack_attachment(attachment)
+        if platform == "mattermost":
+            return self._download_mattermost_attachment(attachment)
         if platform != "discord":
             return ""
         url = str(attachment.get("url") or attachment.get("proxy_url") or "").strip()
@@ -1433,6 +1458,62 @@ class GatewayRunner:
                         return ""
                     with tempfile.NamedTemporaryFile(
                         prefix="aegis-discord-audio-",
+                        suffix=suffix,
+                        delete=False,
+                    ) as fh:
+                        tmp_path = fh.name
+                        written = 0
+                        for chunk in response.iter_bytes():
+                            if not chunk:
+                                continue
+                            written += len(chunk)
+                            if written > _MAX_TRANSCRIBED_ATTACHMENT_BYTES:
+                                return ""
+                            fh.write(chunk)
+            keep_tmp = True
+            return tmp_path
+        except Exception:  # noqa: BLE001
+            return ""
+        finally:
+            if tmp_path and not keep_tmp:
+                try:
+                    Path(tmp_path).unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+    def _download_mattermost_attachment(self, attachment: dict) -> str:
+        file_id = str(attachment.get("id") or attachment.get("file_id") or "").strip()
+        if not file_id:
+            return ""
+        try:
+            declared_size = int(attachment.get("size") or 0)
+        except (TypeError, ValueError):
+            declared_size = 0
+        if declared_size > _MAX_TRANSCRIBED_ATTACHMENT_BYTES:
+            return ""
+        adapter = self._adapter_for_platform("mattermost")
+        base_url = str(getattr(adapter, "base_url", "") or "").rstrip("/")
+        token = str(getattr(adapter, "token", "") or "").strip()
+        if not base_url or not token:
+            return ""
+        suffix = Path(str(attachment.get("filename") or "")).suffix or ".audio"
+        tmp_path = ""
+        keep_tmp = False
+        try:
+            import httpx
+
+            headers = {"Authorization": f"Bearer {token}"}
+            with httpx.Client(timeout=30, follow_redirects=False) as client:
+                with client.stream("GET", f"{base_url}/api/v4/files/{quote(file_id, safe='')}", headers=headers) as response:
+                    response.raise_for_status()
+                    try:
+                        content_length = int(response.headers.get("content-length") or 0)
+                    except (TypeError, ValueError):
+                        content_length = 0
+                    if content_length > _MAX_TRANSCRIBED_ATTACHMENT_BYTES:
+                        return ""
+                    with tempfile.NamedTemporaryFile(
+                        prefix="aegis-mattermost-audio-",
                         suffix=suffix,
                         delete=False,
                     ) as fh:
@@ -1667,7 +1748,7 @@ class GatewayRunner:
         metadata: dict | None = None,
     ) -> bool:
         platform = normalize_platform_name(platform, default=str(platform or "").strip().lower())
-        adapter = next((a for a in self.adapters if a.name == platform), None)
+        adapter = self._adapter_for_platform(platform)
         if adapter is None:
             return False
         try:

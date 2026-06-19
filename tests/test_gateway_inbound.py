@@ -2715,6 +2715,7 @@ def test_gateway_webhook_channel_accepts_whatsapp_bridge_aliases():
                                 "seconds": "9",
                                 "ptt": True,
                                 "directPath": "/v/t62.7117-24/voice.enc",
+                                "localPath": "/tmp/voice.ogg",
                             },
                         },
                     },
@@ -2730,6 +2731,7 @@ def test_gateway_webhook_channel_accepts_whatsapp_bridge_aliases():
         "filename": "audio",
         "source": "whatsapp",
         "direct_path": "/v/t62.7117-24/voice.enc",
+        "path": "/tmp/voice.ogg",
         "seconds": 9,
         "ptt": True,
     }]
@@ -2913,6 +2915,24 @@ def test_gateway_webhook_channel_ignores_whatsapp_bridge_self_echoes():
     assert status == 200
     assert payload == {"reply": "", "ignored": True, "reason": "whatsapp_self_echo"}
     assert seen == []
+    assert channel._delivery_cache.stats()["entries"] == 0
+
+    channel._submit_inbound = lambda ev, *, wait=False: seen.append((ev.chat_id, ev.text, wait)) or "reply"
+    retry_status, retry_payload = channel._handle_inbound_payload(
+        {},
+        {
+            "platform": "baileys",
+            "key": {
+                "remoteJid": "12025550123@s.whatsapp.net",
+                "id": "BAESELF",
+            },
+            "message": {"conversation": "real inbound"},
+        },
+    )
+
+    assert retry_status == 200
+    assert retry_payload == {"reply": "reply"}
+    assert seen == [("12025550123@s.whatsapp.net", "real inbound", True)]
 
     status, payload = channel._handle_inbound_payload(
         {},
@@ -2934,7 +2954,7 @@ def test_gateway_webhook_channel_ignores_whatsapp_bridge_self_echoes():
     assert status == 200
     assert payload["ignored"] is True
     assert payload["reason"] == "whatsapp_self_echo"
-    assert seen == []
+    assert seen == [("12025550123@s.whatsapp.net", "real inbound", True)]
 
 
 def test_gateway_webhook_channel_prefix_insecure_auth_override(monkeypatch):
@@ -3105,6 +3125,83 @@ def test_gateway_webhook_channel_outbound_bridge_send(monkeypatch):
     metadata = adapter.metadata
     assert metadata["security"]["outbound_configured"] is True
     assert metadata["security"]["outbound_secret_configured"] is True
+
+
+def test_gateway_webhook_channel_outbound_bridge_media(monkeypatch, tmp_path):
+    from aegis.gateway import webhook_channel
+    from aegis.gateway.webhook_channel import WebhookChannel
+
+    monkeypatch.setenv("WHATSAPP_CHANNEL_OUTBOUND_URL", "https://bridge.test/send")
+    monkeypatch.setenv("WHATSAPP_CHANNEL_OUTBOUND_SECRET", "outbound-secret")
+    path = tmp_path / "voice.ogg"
+    path.write_bytes(b"voice")
+    sent = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, url, *, headers, json):
+            sent.append((url, dict(headers), dict(json)))
+            return FakeResponse()
+
+    monkeypatch.setattr(webhook_channel.httpx, "Client", FakeClient)
+
+    adapter = WebhookChannel(name="whatsapp", default_platform="whatsapp", env_prefix="WHATSAPP_CHANNEL")
+    adapter.deliver(
+        "12025550123@s.whatsapp.net",
+        f"Here\nMEDIA:{path}",
+        metadata={
+            "remote_jid": "12025550123@s.whatsapp.net",
+            "reply_to_message_id": "BAE599999",
+        },
+    )
+
+    assert sent == [
+        (
+            "https://bridge.test/send",
+            {"Content-Type": "application/json", "X-Secret": "outbound-secret"},
+            {
+                "platform": "whatsapp",
+                "chat_id": "12025550123@s.whatsapp.net",
+                "text": "Here",
+                "metadata": {
+                    "remote_jid": "12025550123@s.whatsapp.net",
+                    "reply_to_message_id": "BAE599999",
+                },
+                "remote_jid": "12025550123@s.whatsapp.net",
+                "reply_to_message_id": "BAE599999",
+            },
+        ),
+        (
+            "https://bridge.test/send",
+            {"Content-Type": "application/json", "X-Secret": "outbound-secret"},
+            {
+                "platform": "whatsapp",
+                "chat_id": "12025550123@s.whatsapp.net",
+                "text": "",
+                "metadata": {
+                    "remote_jid": "12025550123@s.whatsapp.net",
+                    "reply_to_message_id": "BAE599999",
+                },
+                "remote_jid": "12025550123@s.whatsapp.net",
+                "reply_to_message_id": "BAE599999",
+                "type": "media",
+                "path": str(path),
+                "caption": "",
+            },
+        ),
+    ]
 
 
 def test_gateway_webhook_channel_outbound_bridge_reactions(monkeypatch):
@@ -3390,6 +3487,15 @@ def test_gateway_mattermost_inbound_auth_idempotency_and_rate_limit(monkeypatch)
     adapter = MattermostAdapter()
     assert adapter.metadata["security"]["loopback_unsigned_allowed"] is False
     assert adapter._auth_allowed({}, {}, "127.0.0.1") is False
+    for _ in range(3):
+        status, payload = adapter._handle_inbound_payload(
+            {},
+            {"channel_id": "channel-1", "text": "bad auth", "post_id": "bad-auth"},
+            client_host="203.0.113.10",
+        )
+        assert status == 401
+        assert payload == {"error": "invalid webhook token"}
+    assert adapter._rate_limiter.stats()["allowed_count"] == 0
 
     monkeypatch.setenv("MATTERMOST_INSECURE_NO_AUTH", "1")
     adapter = MattermostAdapter()

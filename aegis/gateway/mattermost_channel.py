@@ -367,12 +367,12 @@ class MattermostAdapter(BasePlatformAdapter):
         return bool(user_id and user_id == self.bot_user_id)
 
     def _handle_inbound_payload(self, headers, body: dict, *, client_host: str = "127.0.0.1") -> tuple[int, dict]:
-        if not self._rate_limiter.allow(str(client_host or "")):
-            return 429, {"error": "rate limit exceeded"}
         if not self._auth_allowed(headers, body, client_host):
             return 401, {"error": "invalid webhook token"}
         if self._is_self_echo(body):
             return 200, {"text": "", "response_type": "comment", "ignored": True, "reason": "bot_self_echo"}
+        if not self._rate_limiter.allow(str(client_host or "")):
+            return 429, {"error": "rate limit exceeded"}
         delivery_id = self._delivery_id(headers, body)
         delivery_recorded = False
         if delivery_id:

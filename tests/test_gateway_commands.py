@@ -112,6 +112,44 @@ def test_gateway_send_via_adapter_normalizes_platform_aliases(tmp_path, monkeypa
     assert adapter.sent == [("12025550123@s.whatsapp.net", "hello", {})]
 
 
+def test_gateway_send_via_adapter_uses_webhook_bridge_for_whatsapp(tmp_path, monkeypatch):
+    from aegis.gateway.base import BasePlatformAdapter, MessageEvent
+
+    r = _runner(tmp_path, monkeypatch)
+
+    class WebhookBridgeAdapter(BasePlatformAdapter):
+        name = "webhook"
+        default_platform = "webhook"
+
+        @property
+        def metadata(self):
+            data = super().metadata
+            data["bridge_capabilities"] = ["whatsapp_bridge_aliases"]
+            return data
+
+        def __init__(self):
+            self.sent = []
+            self.asked = []
+
+        def send(self, chat_id: str, text: str, *, metadata=None):  # noqa: ANN001
+            self.sent.append((chat_id, text, metadata))
+
+        def ask_user(self, ev, question, choices, *, timeout=3600):  # noqa: ANN001
+            self.asked.append((ev.platform, question, choices, timeout))
+            return "stable"
+
+    adapter = WebhookBridgeAdapter()
+    r.add(adapter)
+
+    assert r._send_via_adapter("whatsapp", "12025550123@s.whatsapp.net", "hello") is True
+    asker = r._gateway_asker(MessageEvent(platform="whatsapp", chat_id="12025550123@s.whatsapp.net", text="pick"))
+
+    assert adapter.sent == [("12025550123@s.whatsapp.net", "hello", {})]
+    assert asker is not None
+    assert asker("Pick", ["stable", "canary"]) == "stable"
+    assert adapter.asked == [("whatsapp", "Pick", ["stable", "canary"], 3600.0)]
+
+
 def test_gateway_send_via_adapter_reports_telegram_delivery_failures(tmp_path, monkeypatch):
     from aegis.gateway.channels import TelegramAdapter
 
@@ -367,6 +405,87 @@ def test_gateway_transcribes_slack_private_audio_with_cleanup(tmp_path, monkeypa
     text = r._maybe_transcribe(ev, ev.text)
 
     assert text == "[audio/ogg attached: voice.ogg]\n\n[voice memo transcript]\nhello from slack audio"
+    assert downloaded
+    assert not Path(downloaded[0]).exists()
+
+
+def test_gateway_transcribes_mattermost_audio_file_with_cleanup(tmp_path, monkeypatch):
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    import httpx
+
+    from aegis.gateway.base import MessageEvent
+
+    r = _runner(tmp_path, monkeypatch)
+    r.adapters = [
+        SimpleNamespace(
+            name="mattermost",
+            base_url="https://mattermost.test",
+            token="mm-token",
+        )
+    ]
+    downloaded = []
+
+    class FakeStream:
+        headers = {"content-length": "7"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def raise_for_status(self):
+            return None
+
+        def iter_bytes(self):
+            yield b"ogg"
+            yield b"data"
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def stream(self, method, url, headers=None):
+            assert method == "GET"
+            assert url == "https://mattermost.test/api/v4/files/file-voice"
+            assert headers == {"Authorization": "Bearer mm-token"}
+            return FakeStream()
+
+    def fake_transcribe(_self, args, _ctx):
+        path = Path(args["path"])
+        assert path.exists()
+        assert path.read_bytes() == b"oggdata"
+        downloaded.append(str(path))
+        return SimpleNamespace(is_error=False, content="hello from mattermost audio")
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    monkeypatch.setattr("aegis.tools.voice.TranscribeTool.run", fake_transcribe)
+
+    ev = MessageEvent(
+        platform="mattermost",
+        chat_id="C1",
+        text="[audio/ogg attached: voice.ogg]",
+        attachments=[{
+            "source": "mattermost",
+            "type": "audio/ogg",
+            "media_type": "audio/ogg",
+            "filename": "voice.ogg",
+            "id": "file-voice",
+            "size": 7,
+        }],
+    )
+
+    text = r._maybe_transcribe(ev, ev.text)
+
+    assert text == "[audio/ogg attached: voice.ogg]\n\n[voice memo transcript]\nhello from mattermost audio"
     assert downloaded
     assert not Path(downloaded[0]).exists()
 
