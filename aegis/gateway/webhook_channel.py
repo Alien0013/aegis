@@ -270,6 +270,48 @@ def _whatsapp_media_attachments_from_body(body: dict) -> list[dict]:
     return rows
 
 
+def _interactive_text_from_body(body: dict) -> str:
+    event_type = _string_value(body.get("type") or body.get("event_type") or body.get("kind")).lower()
+    if event_type in {
+        "action",
+        "button",
+        "interactive",
+        "clarify_response",
+        "approval_response",
+        "exec_approval_response",
+    }:
+        text = _first_string(body, (
+            ("choice",),
+            ("answer",),
+            ("value",),
+            ("selected",),
+            ("selection",),
+            ("action", "value"),
+            ("action", "text"),
+            ("action", "id"),
+            ("button", "text"),
+            ("button", "id"),
+            ("payload", "value"),
+            ("payload", "text"),
+        ))
+        if text:
+            return text
+    for message in _iter_whatsapp_message_dicts(body):
+        text = _first_string(message, (
+            ("buttonsResponseMessage", "selectedDisplayText"),
+            ("buttonsResponseMessage", "selectedButtonId"),
+            ("templateButtonReplyMessage", "selectedDisplayText"),
+            ("templateButtonReplyMessage", "selectedId"),
+            ("listResponseMessage", "title"),
+            ("listResponseMessage", "singleSelectReply", "selectedRowId"),
+            ("interactiveResponseMessage", "body", "text"),
+            ("interactiveResponseMessage", "nativeFlowResponseMessage", "name"),
+        ))
+        if text:
+            return text
+    return ""
+
+
 class WebhookChannel(BasePlatformAdapter):
     name = "webhook"
     transport = "http"
@@ -421,7 +463,8 @@ class WebhookChannel(BasePlatformAdapter):
             ("from",),
             ("source",),
         )) or "unknown"
-        text = _first_string(body, (
+        interactive_text = _interactive_text_from_body(body)
+        text = interactive_text or _first_string(body, (
             ("text",),
             ("body",),
             ("content",),
@@ -581,6 +624,8 @@ class WebhookChannel(BasePlatformAdapter):
         )
         if salvaged_metadata and (not metadata or platform == "whatsapp"):
             metadata = {**salvaged_metadata, **metadata}
+        if interactive_text:
+            metadata.setdefault("source", "interactive_response")
         if platform == "whatsapp":
             attachments.extend(_whatsapp_media_attachments_from_body(body))
             if not text.strip() and attachments:
@@ -787,6 +832,47 @@ class WebhookChannel(BasePlatformAdapter):
                 payload = self._outbound_payload(chat_id, chunk, metadata)
                 response = client.post(self.outbound_url, headers=headers, json=payload)
                 response.raise_for_status()
+
+    def send_clarify(
+        self,
+        chat_id: str,
+        question: str,
+        choices: list[str] | None = None,
+        *,
+        metadata: dict | None = None,
+    ) -> None:
+        if not self.outbound_url:
+            return super().send_clarify(chat_id, question, choices or [], metadata=metadata)
+        payload = self._outbound_payload(chat_id, str(question or ""), dict(metadata or {}))
+        payload.update({
+            "type": "clarify",
+            "question": str(question or ""),
+            "choices": [str(choice) for choice in (choices or [])],
+        })
+        try:
+            self._post_outbound_event(payload)
+        except Exception:  # noqa: BLE001
+            super().send_clarify(chat_id, question, choices or [], metadata=metadata)
+
+    def send_exec_approval(
+        self,
+        chat_id: str,
+        prompt: str,
+        *,
+        metadata: dict | None = None,
+    ) -> None:
+        if not self.outbound_url:
+            return super().send_exec_approval(chat_id, prompt, metadata=metadata)
+        payload = self._outbound_payload(chat_id, str(prompt or ""), dict(metadata or {}))
+        payload.update({
+            "type": "exec_approval",
+            "prompt": str(prompt or ""),
+            "choices": ["approve", "always", "deny"],
+        })
+        try:
+            self._post_outbound_event(payload)
+        except Exception:  # noqa: BLE001
+            super().send_exec_approval(chat_id, prompt, metadata=metadata)
 
     def _post_outbound_event(self, payload: dict) -> None:
         if not self.outbound_url:

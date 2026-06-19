@@ -176,6 +176,7 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
         "message_length_units": "codepoints",
         "supports_threads": True,
         "supports_media": False,
+        "supports_interactive_prompts": True,
         "typed_command_prefix": "/",
     },
     "email": {
@@ -232,8 +233,9 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
         "message_length_units": "codepoints",
         "supports_threads": True,
         "supports_media": False,
+        "supports_interactive_prompts": True,
         "typed_command_prefix": "/",
-        "bridge_capabilities": ["whatsapp_bridge_aliases", "whatsapp_nested_media"],
+        "bridge_capabilities": ["whatsapp_bridge_aliases", "whatsapp_nested_media", "interactive_prompts"],
         "security": {
             "secret_env": "WEBHOOK_CHANNEL_SECRET",
             "signature_schemes": [

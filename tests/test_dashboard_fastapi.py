@@ -1042,6 +1042,7 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     assert "WEBHOOK_CHANNEL_RATE_LIMIT_PER_MINUTE" in webhook["optional_env_vars"]
     assert "WEBHOOK_CHANNEL_ALLOW_UNSIGNED_LOOPBACK" in webhook["optional_env_vars"]
     assert "idempotency" in webhook["capabilities"]
+    assert "interactive_prompts" in webhook["capabilities"]
     assert "thread" in webhook["delivery_modes"]
     assert "X-Webhook-Signature" in webhook["metadata"]["security"]["signature_schemes"]
     whatsapp = next(row for row in rows if row["id"] == "whatsapp")
@@ -1050,7 +1051,9 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     assert "WHATSAPP_CHANNEL_SECRET" in whatsapp["optional_env_vars"]
     assert "whatsapp_bridge_aliases" in whatsapp["capabilities"]
     assert "whatsapp_nested_media" in whatsapp["capabilities"]
+    assert "interactive_prompts" in whatsapp["capabilities"]
     assert "whatsapp_nested_media" in whatsapp["metadata"]["bridge_capabilities"]
+    assert "interactive_prompts" in whatsapp["metadata"]["bridge_capabilities"]
     assert whatsapp["metadata"]["security"]["bridge"] == "webhook"
 
     registry = asyncio.run(_request(app, "GET", "/api/platforms/registry", headers=headers))

@@ -2384,6 +2384,44 @@ def test_gateway_webhook_channel_accepts_whatsapp_bridge_aliases():
         "size": 4096,
     }]
 
+    button_reply = WebhookChannel()._event_from_body({
+        "platform": "baileys",
+        "key": {
+            "remoteJid": "12025550123@s.whatsapp.net",
+            "id": "BAEBUTTON1",
+        },
+        "message": {
+            "buttonsResponseMessage": {
+                "selectedButtonId": "approve",
+                "selectedDisplayText": "Approve",
+            },
+        },
+    })
+    assert button_reply.text == "Approve"
+    assert button_reply.metadata["source"] == "interactive_response"
+
+    list_reply = WebhookChannel()._event_from_body({
+        "platform": "whatsapp-web.js",
+        "message": {
+            "listResponseMessage": {
+                "title": "canary",
+                "singleSelectReply": {"selectedRowId": "deploy-canary"},
+            },
+        },
+        "chat_id": "12025550123@s.whatsapp.net",
+    })
+    assert list_reply.text == "canary"
+    assert list_reply.metadata["source"] == "interactive_response"
+
+    generic_action = WebhookChannel()._event_from_body({
+        "platform": "webhook",
+        "chat_id": "ops",
+        "type": "approval_response",
+        "action": {"value": "deny"},
+    })
+    assert generic_action.text == "deny"
+    assert generic_action.metadata["source"] == "interactive_response"
+
     data_wrapped = WebhookChannel()._event_from_body({
         "platform": "whatsapp-web.js",
         "data": {
@@ -2619,27 +2657,74 @@ def test_gateway_webhook_channel_outbound_bridge_send(monkeypatch):
             "thread_id": "thread-1",
         },
     )
-
-    assert sent == [(
-        "https://bridge.test/send",
-        {"Content-Type": "application/json", "X-Secret": "outbound-secret"},
-        {
-            "platform": "whatsapp",
-            "chat_id": "12025550123-111@g.us",
-            "text": "hello",
-            "metadata": {
-                "bridge_platform": "baileys",
-                "remote_jid": "12025550123-111@g.us",
-                "participant": "15551234567@s.whatsapp.net",
-                "message_key_id": "BAE599999",
-                "thread_id": "thread-1",
-            },
-            "thread_id": "thread-1",
+    adapter.send_clarify(
+        "12025550123-111@g.us",
+        "Pick a deploy lane?",
+        ["stable", "canary"],
+        metadata={
+            "bridge_platform": "baileys",
             "remote_jid": "12025550123-111@g.us",
             "participant": "15551234567@s.whatsapp.net",
-            "reply_to_message_id": "BAE599999",
+            "message_key_id": "BAE599999",
+            "thread_id": "thread-1",
         },
-    )]
+    )
+    adapter.send_exec_approval(
+        "12025550123-111@g.us",
+        "Run deploy?",
+        metadata={
+            "bridge_platform": "baileys",
+            "remote_jid": "12025550123-111@g.us",
+            "participant": "15551234567@s.whatsapp.net",
+            "message_key_id": "BAE599999",
+            "thread_id": "thread-1",
+        },
+    )
+
+    base_payload = {
+        "platform": "whatsapp",
+        "chat_id": "12025550123-111@g.us",
+        "metadata": {
+            "bridge_platform": "baileys",
+            "remote_jid": "12025550123-111@g.us",
+            "participant": "15551234567@s.whatsapp.net",
+            "message_key_id": "BAE599999",
+            "thread_id": "thread-1",
+        },
+        "thread_id": "thread-1",
+        "remote_jid": "12025550123-111@g.us",
+        "participant": "15551234567@s.whatsapp.net",
+        "reply_to_message_id": "BAE599999",
+    }
+    assert sent == [
+        (
+            "https://bridge.test/send",
+            {"Content-Type": "application/json", "X-Secret": "outbound-secret"},
+            {**base_payload, "text": "hello"},
+        ),
+        (
+            "https://bridge.test/send",
+            {"Content-Type": "application/json", "X-Secret": "outbound-secret"},
+            {
+                **base_payload,
+                "text": "Pick a deploy lane?",
+                "type": "clarify",
+                "question": "Pick a deploy lane?",
+                "choices": ["stable", "canary"],
+            },
+        ),
+        (
+            "https://bridge.test/send",
+            {"Content-Type": "application/json", "X-Secret": "outbound-secret"},
+            {
+                **base_payload,
+                "text": "Run deploy?",
+                "type": "exec_approval",
+                "prompt": "Run deploy?",
+                "choices": ["approve", "always", "deny"],
+            },
+        ),
+    ]
     metadata = adapter.metadata
     assert metadata["security"]["outbound_configured"] is True
     assert metadata["security"]["outbound_secret_configured"] is True
