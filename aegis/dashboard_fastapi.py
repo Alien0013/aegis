@@ -1984,7 +1984,23 @@ def _validate_plugin_source(source: str) -> dict:
             return {"ok": False, "source": source, "error": str(exc) or "source does not exist"}
     if path.is_file() and path.suffix != ".py":
         return {"ok": False, "source": str(path), "error": "plugin file must be a .py file"}
-    if path.is_dir() and not any((path / name).exists() for name in ("plugin.yaml", "plugin.yml", "plugin.json", "aegis-plugin.json")):
+    if path.is_dir():
+        try:
+            from . import plugins as plugin_runtime
+
+            manifest_data = plugin_runtime._manifest_data_for_install(path)
+            if manifest_data:
+                plugin_name = str(manifest_data.get("name") or path.name)
+                plugin_runtime._check_manifest_version(manifest_data, plugin_name)
+                return {
+                    "ok": True,
+                    "source": str(path),
+                    "kind": "directory",
+                    "plugin_name": plugin_name,
+                    "manifest_version": int(manifest_data.get("manifest_version") or 1),
+                }
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "source": str(path), "error": str(exc)}
         py_files = [p for p in path.glob("*.py") if not p.name.startswith("_")]
         if not py_files:
             return {"ok": False, "source": str(path), "error": "directory needs a plugin manifest or .py file"}
@@ -2528,18 +2544,32 @@ def _dashboard_plugin_hidden(config: Config, row: dict[str, Any]) -> bool:
 
 def _dashboard_plugin_route_metadata(row: dict[str, Any]) -> dict[str, Any]:
     name = str(row.get("name") or "")
+    route_config = row.get("route") if isinstance(row.get("route"), dict) else {}
     tab = row.get("tab") if isinstance(row.get("tab"), dict) else {}
-    raw_path = str(tab.get("override") or tab.get("path") or f"/plugins/{name}")
+    raw_path = str(
+        route_config.get("override")
+        or route_config.get("path")
+        or tab.get("override")
+        or tab.get("path")
+        or f"/plugins/{name}"
+    )
     path = raw_path if raw_path.startswith("/") else f"/{raw_path}"
     route = {
         "path": path,
-        "label": str(tab.get("label") or row.get("label") or row.get("title") or name),
+        "label": str(route_config.get("label") or tab.get("label") or row.get("label") or row.get("title") or name),
         "plugin": name,
-        "hidden": bool(tab.get("hidden")),
-        "position": str(tab.get("position") or "end"),
+        "hidden": bool(route_config.get("hidden") or tab.get("hidden")),
+        "position": str(route_config.get("position") or tab.get("position") or "end"),
     }
-    if isinstance(tab.get("override"), str) and str(tab.get("override")).startswith("/"):
-        route["override"] = str(tab["override"])
+    icon = route_config.get("icon")
+    if icon:
+        route["icon"] = str(icon)
+    override = route_config.get("override") or tab.get("override")
+    if isinstance(override, str) and str(override).startswith("/"):
+        route["override"] = str(override)
+    if row.get("_duplicate_route_conflict"):
+        route["conflict"] = True
+        route["error"] = f"duplicate dashboard plugin route: {path}"
     return route
 
 
@@ -2563,6 +2593,8 @@ def _dashboard_plugin_api_observability(info: dict[str, Any]) -> dict[str, Any]:
         "mount_error_at": str(info.get("mount_error_at") or ""),
         "mount_duration_ms": float(info.get("mount_duration_ms") or 0),
         "fingerprint": str(info.get("fingerprint") or ""),
+        "unmounted_at": str(info.get("unmounted_at") or ""),
+        "unmount_reason": str(info.get("unmount_reason") or ""),
     }
 
 
@@ -2588,6 +2620,8 @@ def _set_dashboard_plugin_api_mount_status(name: str, status: dict[str, Any]) ->
             ("mount_error_at", ""),
             ("mount_duration_ms", 0),
             ("fingerprint", ""),
+            ("unmounted_at", ""),
+            ("unmount_reason", ""),
         ):
             if key not in status:
                 status[key] = previous.get(key, default)
@@ -2726,6 +2760,33 @@ def _dashboard_plugin_asset_exists(asset_root: Path, dist_root: Path, rel: str) 
     return False
 
 
+def _dashboard_plugin_asset_fingerprint(asset_root: Path, dist_root: Path, rels: list[str]) -> str:
+    digest = hashlib.sha256()
+    seen = False
+    for rel in rels:
+        rel = str(rel or "").strip()
+        if not rel:
+            continue
+        seen = True
+        digest.update(rel.encode("utf-8", "ignore"))
+        found = False
+        for root in (asset_root, dist_root):
+            root = root.resolve()
+            target = (root / rel).resolve()
+            if not _contained(root, target) or not target.is_file():
+                continue
+            try:
+                stat = target.stat()
+            except OSError:
+                continue
+            digest.update(f":{stat.st_mtime_ns}:{stat.st_size}".encode())
+            found = True
+            break
+        if not found:
+            digest.update(b":missing")
+    return digest.hexdigest()[:20] if seen else ""
+
+
 def _dashboard_plugin_ui_asset_status(row: dict[str, Any]) -> dict[str, Any]:
     entry = str(row.get("entry") or "")
     css = [str(item) for item in (row.get("css") or []) if str(item)]
@@ -2736,6 +2797,9 @@ def _dashboard_plugin_ui_asset_status(row: dict[str, Any]) -> dict[str, Any]:
 
     if row.get("_duplicate_name_conflict"):
         errors.append(f"duplicate dashboard plugin name: {row.get('name') or ''}")
+    if row.get("_duplicate_route_conflict"):
+        route = _dashboard_plugin_route_metadata(row)
+        errors.append(f"duplicate dashboard plugin route: {route.get('path') or ''}")
     if not row.get("_manifest_error") and not row.get("_duplicate_name_conflict"):
         if not entry:
             errors.append("dashboard entry is invalid or empty")
@@ -2755,6 +2819,7 @@ def _dashboard_plugin_ui_asset_status(row: dict[str, Any]) -> dict[str, Any]:
         "missing": missing,
         "errors": errors,
         "asset_count": (1 if entry else 0) + len(css),
+        "fingerprint": _dashboard_plugin_asset_fingerprint(asset_root, dist_root, [entry, *css]),
         "checked": True,
     }
 
@@ -2870,7 +2935,19 @@ def _dashboard_plugin_row(
         tab["override"] = override
     if bool(raw_tab.get("hidden")):
         tab["hidden"] = True
+    raw_route = data.get("route") if isinstance(data.get("route"), dict) else {}
+    route: dict[str, Any] = {}
+    for key_name in ("path", "label", "position", "override", "icon"):
+        if raw_route.get(key_name):
+            route[key_name] = raw_route.get(key_name)
+    if bool(raw_route.get("hidden")):
+        route["hidden"] = True
     slots = [str(slot) for slot in (data.get("slots") or []) if isinstance(slot, str) and slot]
+    asset_fingerprint = _dashboard_plugin_asset_fingerprint(
+        asset_root,
+        (dash_root / "dist").resolve(),
+        [entry, *css],
+    )
     return {
         "name": name,
         "plugin": plugin_name,
@@ -2884,11 +2961,13 @@ def _dashboard_plugin_row(
         "description": str(data.get("description") or description or ""),
         "version": str(data.get("version") or version or ""),
         "tab": tab,
+        "route": route,
         "slots": slots,
         "entry": entry,
         "integrity": integrity,
         "css": css,
         "base_path": f"/dashboard-plugins/{name}",
+        "asset_fingerprint": asset_fingerprint,
         "has_api": bool(api_path and api_path.exists()),
         "api_compat_root": False,
         "_root": str(plugin_root.resolve()),
@@ -3022,6 +3101,29 @@ def _dashboard_plugin_records(config: Config) -> list[dict[str, Any]]:
             row["_duplicate_name_conflict"] = True
             row["name_conflict"] = True
             row["errors"] = [f"duplicate dashboard plugin name: {name}"]
+    route_counts: dict[str, int] = {}
+    for row in rows:
+        if row.get("_manifest_error") or row.get("_duplicate_name_conflict"):
+            continue
+        route = _dashboard_plugin_route_metadata(row)
+        if route.get("hidden"):
+            continue
+        path = str(route.get("path") or "")
+        if path:
+            route_counts[path] = route_counts.get(path, 0) + 1
+    for row in rows:
+        if row.get("_manifest_error") or row.get("_duplicate_name_conflict"):
+            continue
+        route = _dashboard_plugin_route_metadata(row)
+        path = str(route.get("path") or "")
+        if path and route_counts.get(path, 0) > 1:
+            row["_duplicate_route_conflict"] = True
+            row["route_conflict"] = True
+            errors = list(row.get("errors") or [])
+            message = f"duplicate dashboard plugin route: {path}"
+            if message not in errors:
+                errors.append(message)
+            row["errors"] = errors
     return rows
 
 
@@ -3154,8 +3256,17 @@ def _mount_dashboard_plugin_api_routes(app: FastAPI, config: Config) -> None:
             except ValueError:
                 pass
         mounted.pop(name, None)
-        with _DASHBOARD_PLUGIN_API_MOUNT_LOCK:
-            _DASHBOARD_PLUGIN_API_MOUNT_STATUS.pop(name, None)
+        reason = "fingerprint_changed" if live else "removed_or_disabled"
+        _set_dashboard_plugin_api_mount_status(name, {
+            "status": "unmounted",
+            "mounted": False,
+            "api_path": str(row.get("api") or ""),
+            "api": Path(str(row.get("api") or "")).name if row.get("api") else "",
+            "routes": list(row.get("route_paths") or []),
+            "error": "",
+            "unmounted_at": datetime.now(timezone.utc).isoformat(),
+            "unmount_reason": reason,
+        })
 
     for record in all_records:
         api_path = record.get("_api")

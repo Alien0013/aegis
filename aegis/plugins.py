@@ -378,6 +378,26 @@ def _read_manifest_data(path: Path) -> dict[str, Any] | None:
     return data
 
 
+def _read_install_manifest_data(plugin_dir: Path) -> tuple[dict[str, Any], Path | None]:
+    """Read the first install manifest, raising on malformed files.
+
+    Discovery is fail-soft because one broken plugin should not prevent the
+    harness from starting. Installation is stricter: copying a bad manifest into
+    the plugin home makes later recovery harder and leaves the dashboard in a
+    confusing partial state.
+    """
+
+    for name in MANIFEST_NAMES:
+        path = plugin_dir / name
+        if not path.exists():
+            continue
+        data, error = _read_manifest_data_with_error(path)
+        if error:
+            raise ValueError(f"invalid plugin manifest: {error}")
+        return data or {}, path
+    return {}, None
+
+
 def _invalid_manifest_records(base: Path) -> list[tuple[Path, str]]:
     records: list[tuple[Path, str]] = []
     seen_dirs: set[Path] = set()
@@ -1032,11 +1052,8 @@ def _first_manifest(path: Path, config, *, base: Path, source: str) -> PluginMan
 
 
 def _manifest_data_for_install(plugin_dir: Path) -> dict[str, Any]:
-    for name in MANIFEST_NAMES:
-        data = _read_manifest_data(plugin_dir / name)
-        if data:
-            return data
-    return {}
+    data, _path = _read_install_manifest_data(plugin_dir)
+    return data
 
 
 def _check_manifest_version(data: dict[str, Any], plugin_name: str) -> None:
@@ -1098,6 +1115,9 @@ def _install_local(source: str, config, *, force: bool) -> dict[str, Any]:
         target = dest
         manifest_data: dict[str, Any] = {}
     else:
+        manifest_data = _manifest_data_for_install(src)
+        plugin_name = str(manifest_data.get("name") or src.name)
+        _check_manifest_version(manifest_data, plugin_name)
         dest = base / src.name
         if dest.exists():
             if not force:
@@ -1111,7 +1131,7 @@ def _install_local(source: str, config, *, force: bool) -> dict[str, Any]:
             trusted=True,
         )
         manifest = _first_manifest(dest, config, base=base, source="local")
-        manifest_data = manifest.raw if manifest and manifest.raw else {}
+        manifest_data = manifest.raw if manifest and manifest.raw else manifest_data
         name = manifest.name if manifest else dest.name
         target = dest
     return {

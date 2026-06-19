@@ -1368,6 +1368,24 @@ def test_fastapi_typed_config_profile_gateway_and_plugin_routes(tmp_path, monkey
     assert valid.status_code == 200
     assert valid.json()["ok"] is True
 
+    future_plugin = tmp_path / "future_plugin"
+    future_plugin.mkdir()
+    (future_plugin / "plugin.yaml").write_text(
+        "name: future-plugin\n"
+        "manifest_version: 999\n",
+        encoding="utf-8",
+    )
+    future = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/plugins/validate",
+        json={"source": str(future_plugin)},
+        headers=headers,
+    ))
+    assert future.status_code == 400
+    assert future.json()["ok"] is False
+    assert "supports up to" in future.json()["error"]
+
     missing = asyncio.run(_request(
         app,
         "POST",
@@ -2644,6 +2662,36 @@ def test_fastapi_dashboard_plugin_duplicate_names_report_conflict_and_do_not_mou
     orphan_rows = [row for row in hub.json()["orphan_dashboard_plugins"] if row["name"] == "dup-panel"]
     assert len(orphan_rows) == 2
     assert all(row["name_conflict"] is True for row in orphan_rows)
+
+
+def test_fastapi_dashboard_plugin_duplicate_routes_report_conflict(tmp_path, monkeypatch):
+    for slug in ("alpha", "beta"):
+        plug = tmp_path / "plugins" / slug
+        (plug / "dashboard" / "dist").mkdir(parents=True)
+        (plug / "dashboard" / "manifest.json").write_text(
+            json.dumps({
+                "name": f"{slug}-panel",
+                "title": f"{slug.title()} Panel",
+                "entry": "dist/index.js",
+                "route": {"path": "/shared-plugin-route", "label": "Shared"},
+            }),
+            encoding="utf-8",
+        )
+        (plug / "dashboard" / "dist" / "index.js").write_text(f"window.{slug}=true;", encoding="utf-8")
+
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    manifest = asyncio.run(_request(app, "GET", "/api/dashboard/plugins", headers=headers))
+    assert manifest.status_code == 200
+    rows = [row for row in manifest.json() if row["name"] in {"alpha-panel", "beta-panel"}]
+    assert len(rows) == 2
+    assert all(row["route"]["path"] == "/shared-plugin-route" for row in rows)
+    assert all(row["route"]["conflict"] is True for row in rows)
+    assert all(row["route_conflict"] is True for row in rows)
+    assert all("duplicate dashboard plugin route" in row["errors"][0] for row in rows)
+    assert all(row["ui_asset_status"]["status"] == "error" for row in rows)
+    assert all(row["asset_fingerprint"] for row in rows)
 
 
 def test_fastapi_dashboard_plugin_invalid_manifest_reports_error(tmp_path, monkeypatch):

@@ -49,9 +49,11 @@ export interface DashboardPluginManifest {
     missing?: string[];
     errors?: string[];
     asset_count?: number;
+    fingerprint?: string;
     checked?: boolean;
   };
   asset_errors?: string[];
+  asset_fingerprint?: string;
   base_path: string;
   has_api?: boolean;
   api_mount?: DashboardPluginApiMount;
@@ -110,6 +112,7 @@ export interface PluginClientStatus {
   stale?: boolean;
   entry?: string;
   script_src?: string;
+  fingerprint?: string;
   errors?: string[];
   css_errors?: string[];
   loaded_at?: string;
@@ -245,17 +248,30 @@ function ensureGlobalHost(reload: () => void = noopReload) {
 
 function assetUrl(manifest: DashboardPluginManifest, rel: string | undefined): string {
   const clean = (rel || "").replace(/^\/+/, "");
-  return `${manifest.base_path}/${clean}`;
+  const raw = `${manifest.base_path}/${clean}`;
+  const fingerprint = manifest.asset_fingerprint || manifest.ui_asset_status?.fingerprint || "";
+  if (!fingerprint) return raw;
+  return `${raw}${raw.includes("?") ? "&" : "?"}v=${encodeURIComponent(fingerprint)}`;
+}
+
+function assetFingerprint(manifest: DashboardPluginManifest): string {
+  return manifest.asset_fingerprint || manifest.ui_asset_status?.fingerprint || "";
 }
 
 function injectManifestAssets(manifest: DashboardPluginManifest) {
+  const fingerprint = assetFingerprint(manifest);
   for (const css of manifest.css || []) {
     const id = `aegis-plugin-css-${manifest.name}-${css}`;
-    if (document.getElementById(id)) continue;
+    const href = assetUrl(manifest, css);
+    const existing = document.getElementById(id) as HTMLLinkElement | null;
+    const sameCssFingerprint = fingerprint ? existing?.dataset.fingerprint === fingerprint : true;
+    if (existing && sameCssFingerprint && existing.href.endsWith(href)) continue;
+    existing?.remove();
     const link = document.createElement("link");
     link.id = id;
     link.rel = "stylesheet";
-    link.href = assetUrl(manifest, css);
+    link.href = href;
+    link.dataset.fingerprint = fingerprint;
     link.onerror = () => {
       const previous = pluginStatuses.get(manifest.name);
       const cssErrors = [...(previous?.css_errors || []), `stylesheet failed to load: ${css}`];
@@ -270,20 +286,29 @@ function injectManifestAssets(manifest: DashboardPluginManifest) {
 
   const entry = manifest.entry || "dist/index.js";
   const id = `aegis-plugin-js-${manifest.name}`;
-  if (document.getElementById(id)) return;
+  const scriptSrc = assetUrl(manifest, entry);
+  const existing = document.getElementById(id) as HTMLScriptElement | null;
+  const sameScriptFingerprint = fingerprint ? existing?.dataset.fingerprint === fingerprint : true;
+  if (existing && sameScriptFingerprint && existing.src.endsWith(scriptSrc)) return;
+  if (existing) {
+    existing.remove();
+    registrations.delete(manifest.name);
+  }
   setPluginStatus(manifest.name, {
     asset_status: registrations.has(manifest.name) ? "registered" : "pending",
     registered: registrations.has(manifest.name),
     stale: false,
     entry,
-    script_src: assetUrl(manifest, entry),
+    script_src: scriptSrc,
+    fingerprint,
     errors: [],
   });
   const script = document.createElement("script");
   script.id = id;
-  script.src = assetUrl(manifest, entry);
+  script.src = scriptSrc;
   script.async = true;
   script.dataset.plugin = manifest.name;
+  script.dataset.fingerprint = fingerprint;
   if (manifest.integrity) {
     script.integrity = manifest.integrity;
     script.crossOrigin = "anonymous";

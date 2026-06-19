@@ -101,6 +101,7 @@ export interface DashboardPluginUiAssetStatus {
   missing?: string[];
   errors?: string[];
   asset_count?: number;
+  fingerprint?: string;
   checked?: boolean;
 }
 
@@ -119,6 +120,7 @@ export interface DashboardPluginManifest {
   entry?: string;
   integrity?: string;
   css?: string[];
+  asset_fingerprint?: string;
   base_path?: string;
   has_api?: boolean;
   ui_asset_status?: DashboardPluginUiAssetStatus;

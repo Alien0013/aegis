@@ -2310,6 +2310,33 @@ def test_manifest_plugin_enable_disable_and_remove(tmp_path):
     assert plugins.list_manifests(cfg) == []
 
 
+def test_local_plugin_install_rejects_unsupported_manifest_version_before_copy(tmp_path):
+    from aegis import config as cfg_paths
+    from aegis import plugins
+    from aegis.config import Config
+
+    cfg = Config.load()
+    pkg = tmp_path / "future_plugin"
+    pkg.mkdir()
+    (pkg / "plugin.yaml").write_text(
+        "name: future-plugin\n"
+        "manifest_version: 999\n"
+        "entrypoint: __init__.py\n",
+        encoding="utf-8",
+    )
+    (pkg / "__init__.py").write_text("def register(api):\n    pass\n", encoding="utf-8")
+
+    try:
+        plugins.install(str(pkg), cfg)
+    except ValueError as exc:
+        assert "supports up to" in str(exc)
+    else:  # pragma: no cover - keeps the assertion message useful
+        raise AssertionError("unsupported manifest_version was accepted")
+
+    assert not (cfg_paths.sub("plugins") / "future_plugin").exists()
+    assert plugins.list_manifests(cfg) == []
+
+
 def test_hermes_style_plugin_yaml_metadata_category_key_and_safe_mode(tmp_path, monkeypatch):
     from aegis import config as cfg_paths
     from aegis import plugins
