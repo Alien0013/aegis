@@ -998,11 +998,20 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     assert mattermost["transport"] == "http_webhook"
     assert mattermost["auth_type"] == "bearer_and_webhook_secret"
     assert "MATTERMOST_WEBHOOK_SECRET" in mattermost["optional_env_vars"]
+    assert "MATTERMOST_RATE_LIMIT_PER_MINUTE" in mattermost["optional_env_vars"]
+    assert "MATTERMOST_ALLOW_UNSIGNED_LOOPBACK" in mattermost["optional_env_vars"]
     assert "threads" in mattermost["capabilities"]
+    assert "idempotency" in mattermost["capabilities"]
+    assert "reactions" in mattermost["capabilities"]
     assert mattermost["metadata"]["security"]["auth_type"] == "bearer"
+    assert mattermost["metadata"]["security"]["idempotency_env"] == [
+        "MATTERMOST_IDEMPOTENCY_TTL_SECONDS",
+        "MATTERMOST_IDEMPOTENCY_CACHE_MAX",
+    ]
     webhook = next(row for row in rows if row["id"] == "webhook")
     assert webhook["transport"] == "http"
     assert "WEBHOOK_CHANNEL_RATE_LIMIT_PER_MINUTE" in webhook["optional_env_vars"]
+    assert "WEBHOOK_CHANNEL_ALLOW_UNSIGNED_LOOPBACK" in webhook["optional_env_vars"]
     assert "idempotency" in webhook["capabilities"]
     assert "thread" in webhook["delivery_modes"]
     assert "X-Webhook-Signature" in webhook["metadata"]["security"]["signature_schemes"]
@@ -1098,6 +1107,7 @@ def test_fastapi_messaging_platform_optional_controls(tmp_path, monkeypatch):
         "SLACK_BOT_TOKEN",
         "SLACK_APP_TOKEN",
         "SLACK_ALLOWED_CHANNELS",
+        "SLACK_REPLY_IN_THREAD",
     ):
         monkeypatch.delenv(key, raising=False)
     app = _app(tmp_path, monkeypatch)
@@ -1150,6 +1160,9 @@ def test_fastapi_messaging_platform_optional_controls(tmp_path, monkeypatch):
     assert slack_fields["SLACK_ALLOWED_CHANNELS"]["required"] is False
     assert slack_fields["SLACK_ALLOWED_CHANNELS"]["set"] is True
     assert slack_fields["SLACK_TRIGGER_MODE"]["required"] is False
+    assert slack_fields["SLACK_REPLY_IN_THREAD"]["required"] is False
+    assert "slash_commands" in slack.json()["platform"]["capabilities"]
+    assert "reactions" in slack.json()["platform"]["capabilities"]
 
 
 def test_fastapi_typed_config_profile_gateway_and_plugin_routes(tmp_path, monkeypatch):

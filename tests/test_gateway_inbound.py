@@ -484,10 +484,20 @@ def test_platform_helper_command_caps_and_utf16_chunks():
     ]
     assert platform_metadata("ntfy.sh")["optional_env"] == ["NTFY_SERVER", "NTFY_TOKEN"]
     assert "SLACK_TRIGGER_MODE" in platform_metadata("sl")["optional_env"]
-    assert platform_metadata("mattermost-webhook")["security"]["auth_type"] == "bearer"
+    assert "SLACK_REPLY_IN_THREAD" in platform_metadata("sl")["optional_env"]
+    assert platform_metadata("sl")["supports_slash_commands"] is True
+    assert platform_metadata("sl")["supports_reactions"] is True
+    mattermost_meta = platform_metadata("mattermost-webhook")
+    assert mattermost_meta["security"]["auth_type"] == "bearer"
+    assert "MATTERMOST_RATE_LIMIT_PER_MINUTE" in mattermost_meta["optional_env"]
+    assert mattermost_meta["security"]["idempotency_env"] == [
+        "MATTERMOST_IDEMPOTENCY_TTL_SECONDS",
+        "MATTERMOST_IDEMPOTENCY_CACHE_MAX",
+    ]
     webhook_meta = platform_metadata("webhooks")
     assert webhook_meta["supports_threads"] is True
     assert "WEBHOOK_CHANNEL_RATE_LIMIT_PER_MINUTE" in webhook_meta["optional_env"]
+    assert "WEBHOOK_CHANNEL_ALLOW_UNSIGNED_LOOPBACK" in webhook_meta["optional_env"]
     assert "X-Webhook-Signature" in webhook_meta["security"]["signature_schemes"]
 
 
