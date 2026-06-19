@@ -39,6 +39,7 @@ export interface DashboardPluginManifest {
   version?: string;
   icon?: string;
   entry?: string;
+  integrity?: string;
   css?: string[];
   ui_asset_status?: {
     status?: string;
@@ -79,6 +80,7 @@ export interface DashboardPluginRoute {
   label?: string;
   icon?: string;
   position?: string;
+  override?: string;
   hidden?: boolean;
   render?: PluginRenderer;
 }
@@ -154,7 +156,14 @@ function setPluginStatus(name: string, patch: Partial<PluginClientStatus>) {
 
 function register(plugin: DashboardPluginRegistration) {
   if (!plugin || !plugin.name) return;
-  registrations.set(plugin.name, plugin);
+  const previousRegistration = registrations.get(plugin.name);
+  registrations.set(plugin.name, {
+    ...plugin,
+    slots: {
+      ...(previousRegistration?.slots || {}),
+      ...(plugin.slots || {}),
+    },
+  });
   const previous = pluginStatuses.get(plugin.name);
   setPluginStatus(plugin.name, {
     asset_status: "registered",
@@ -162,6 +171,25 @@ function register(plugin: DashboardPluginRegistration) {
     stale: false,
     registered_at: nowIso(),
     errors: previous?.css_errors || [],
+  });
+}
+
+function registerSlot(pluginName: string, slotName: string, render: PluginRenderer) {
+  const name = String(pluginName || "").trim();
+  const slot = String(slotName || "").trim();
+  if (!name || !slot || typeof render !== "function") return;
+  const previous = registrations.get(name) || { name };
+  const slots = { ...(previous.slots || {}) };
+  const current = slots[slot];
+  slots[slot] = Array.isArray(current) ? [...current, render] : current ? [current, render] : [render];
+  registrations.set(name, { ...previous, name, slots });
+  const previousStatus = pluginStatuses.get(name);
+  setPluginStatus(name, {
+    asset_status: "registered",
+    registered: true,
+    stale: false,
+    registered_at: previousStatus?.registered_at || nowIso(),
+    errors: previousStatus?.errors || [],
   });
 }
 
@@ -191,17 +219,28 @@ function pruneRegistrations(manifests: DashboardPluginManifest[]): boolean {
 
 const noopReload = () => {};
 
+function pluginFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const raw = String(path || "");
+  const url = raw.startsWith("/") ? raw : `/api/${raw.replace(/^api\//, "")}`;
+  const headers = new Headers(init.headers || {});
+  if (TOKEN && !headers.has("X-Aegis-Token")) headers.set("X-Aegis-Token", TOKEN);
+  return window.fetch(url, { ...init, headers });
+}
+
 function ensureGlobalHost(reload: () => void = noopReload) {
   const existing = window.__AEGIS_PLUGINS__;
   const host = {
     ...(existing || {}),
     register,
+    registerSlot,
     reload,
     api,
+    fetch: pluginFetch,
     token: TOKEN,
   };
   window.__AEGIS_PLUGINS__ = host;
   window.__HERMES_PLUGINS__ = host;
+  window.__HERMES_PLUGIN_SDK__ = host;
 }
 
 function assetUrl(manifest: DashboardPluginManifest, rel: string | undefined): string {
@@ -245,6 +284,10 @@ function injectManifestAssets(manifest: DashboardPluginManifest) {
   script.src = assetUrl(manifest, entry);
   script.async = true;
   script.dataset.plugin = manifest.name;
+  if (manifest.integrity) {
+    script.integrity = manifest.integrity;
+    script.crossOrigin = "anonymous";
+  }
   script.onload = () => {
     if (registrations.has(manifest.name)) {
       const previous = pluginStatuses.get(manifest.name);
@@ -282,13 +325,15 @@ function injectManifestAssets(manifest: DashboardPluginManifest) {
 function manifestRoute(manifest: DashboardPluginManifest): DashboardPluginRoute | null {
   const tab = manifest.tab || {};
   if (tab.hidden) return null;
-  const path = normalizePath(tab.override || tab.path, `/plugins/${manifest.name}`);
+  const override = tab.override ? normalizePath(tab.override, "") : undefined;
+  const path = normalizePath(override || tab.path, `/plugins/${manifest.name}`);
   return {
     path,
     plugin: manifest.name,
     label: tab.label || manifest.label || manifest.title || manifest.name,
     icon: manifest.icon || "plugins",
     position: tab.position || "end",
+    override,
   };
 }
 
@@ -305,10 +350,11 @@ function buildState(manifests: DashboardPluginManifest[], loading: boolean, erro
       routes.push({
         ...route,
         plugin: manifest.name,
-        path: normalizePath(route.path, declared?.path || `/plugins/${manifest.name}`),
+        path: normalizePath(route.override || route.path, declared?.path || `/plugins/${manifest.name}`),
         label: route.label || declared?.label,
         icon: route.icon || declared?.icon || manifest.icon || "plugins",
         position: route.position || declared?.position || "end",
+        override: route.override ? normalizePath(route.override, "") : declared?.override,
       });
     }
     if (declared && !routes.some((route) => route.path === declared.path)) {
@@ -477,8 +523,10 @@ export function PluginRoutePage({ route }: { route: DashboardPluginRoute }) {
 
 interface DashboardPluginGlobal {
   register?: (plugin: DashboardPluginRegistration) => void;
+  registerSlot?: (pluginName: string, slotName: string, render: PluginRenderer) => void;
   reload?: () => void;
   api?: typeof api;
+  fetch?: typeof pluginFetch;
   token?: string;
   [key: string]: unknown;
 }
@@ -487,5 +535,6 @@ declare global {
   interface Window {
     __AEGIS_PLUGINS__?: DashboardPluginGlobal;
     __HERMES_PLUGINS__?: DashboardPluginGlobal;
+    __HERMES_PLUGIN_SDK__?: DashboardPluginGlobal;
   }
 }

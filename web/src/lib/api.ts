@@ -117,6 +117,7 @@ export interface DashboardPluginManifest {
   category?: string;
   source?: string;
   entry?: string;
+  integrity?: string;
   css?: string[];
   base_path?: string;
   has_api?: boolean;

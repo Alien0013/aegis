@@ -2,6 +2,7 @@
 // sidebar and router never drift. Pages not yet rebuilt fall back to Placeholder.
 
 import { lazy, Suspense, useEffect, useState } from "react";
+import type { ReactElement } from "react";
 import { HashRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { Sidebar } from "./components/Sidebar";
 import { ThemeSwitcher } from "./components/ThemeSwitcher";
@@ -45,6 +46,12 @@ const Terminal = lazy(() => import("./pages/Chat").then((m) => ({ default: m.Cha
 const DesktopShell = lazy(() =>
   import("./pages/DesktopShell").then((m) => ({ default: m.DesktopShell })),
 );
+
+function normalizeRoutePath(path: string): string {
+  const raw = String(path || "").trim();
+  if (!raw) return "";
+  return raw.startsWith("/") ? raw : `/${raw}`;
+}
 
 function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
   const loc = useLocation();
@@ -90,6 +97,7 @@ function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
       </div>
       <div className="flex items-center gap-2">
         <PluginSlot name="topbar:right" className="hidden items-center gap-2 lg:flex" />
+        <PluginSlot name="header-right" className="hidden items-center gap-2 lg:flex" />
         <div className="hidden items-center gap-1.5 rounded-[var(--radius)] border border-border bg-surface px-2.5 py-1.5 text-[11px] text-dim xl:flex">
           <span className={gateway === "running" ? "h-1.5 w-1.5 rounded-full bg-success" : "h-1.5 w-1.5 rounded-full bg-faint"} />
           {gateway}
@@ -114,39 +122,47 @@ function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
 function Routed({ full }: { full?: boolean }) {
   const loc = useLocation();
   const { routes: pluginRoutes } = useDashboardPluginHost();
+  const pluginOverride = (path: string) => {
+    const target = normalizeRoutePath(path);
+    return pluginRoutes.find((route) => normalizeRoutePath(route.override || "") === target);
+  };
+  const routeElement = (path: string, element: ReactElement) => {
+    const override = pluginOverride(path);
+    return override ? <PluginRoutePage route={override} /> : element;
+  };
   return (
     <div className={full ? "h-full animate-fade-in" : "mx-auto w-full max-w-[1500px] animate-fade-in"}>
       <ErrorBoundary key={loc.pathname}>
         <Suspense fallback={<Loading />}>
           <Routes>
             <Route path="/" element={<Navigate to="/sessions" replace />} />
-            <Route path="/dashboard" element={<Overview />} />
-            <Route path="/chat" element={<Terminal />} />
-            <Route path="/terminal" element={<Terminal />} />
-            <Route path="/sessions" element={<Sessions />} />
-            <Route path="/models" element={<Models />} />
-            <Route path="/memory" element={<Memory />} />
-            <Route path="/tools" element={<Tools />} />
-            <Route path="/skills" element={<Skills />} />
-            <Route path="/config" element={<Config />} />
-            <Route path="/cron" element={<Cron />} />
-            <Route path="/kanban" element={<Kanban />} />
-            <Route path="/mcp" element={<Mcp />} />
-            <Route path="/channels" element={<Channels />} />
-            <Route path="/webhooks" element={<Webhooks />} />
-            <Route path="/pairing" element={<Pairing />} />
-            <Route path="/accounts" element={<ProviderAuth />} />
-            <Route path="/keys" element={<Keys />} />
-            <Route path="/env" element={<Keys />} />
-            <Route path="/plugins" element={<Plugins />} />
-            <Route path="/profiles" element={<RuntimeProfiles />} />
-            <Route path="/profiles/new" element={<RuntimeProfileNew />} />
-            <Route path="/persona" element={<PersonaProfiles />} />
-            <Route path="/files" element={<Files />} />
-            <Route path="/logs" element={<Logs />} />
-            <Route path="/system" element={<System />} />
-            <Route path="/analytics" element={<Analytics />} />
-            <Route path="/docs" element={<Docs />} />
+            <Route path="/dashboard" element={routeElement("/dashboard", <Overview />)} />
+            <Route path="/chat" element={routeElement("/chat", <Terminal />)} />
+            <Route path="/terminal" element={routeElement("/terminal", <Terminal />)} />
+            <Route path="/sessions" element={routeElement("/sessions", <Sessions />)} />
+            <Route path="/models" element={routeElement("/models", <Models />)} />
+            <Route path="/memory" element={routeElement("/memory", <Memory />)} />
+            <Route path="/tools" element={routeElement("/tools", <Tools />)} />
+            <Route path="/skills" element={routeElement("/skills", <Skills />)} />
+            <Route path="/config" element={routeElement("/config", <Config />)} />
+            <Route path="/cron" element={routeElement("/cron", <Cron />)} />
+            <Route path="/kanban" element={routeElement("/kanban", <Kanban />)} />
+            <Route path="/mcp" element={routeElement("/mcp", <Mcp />)} />
+            <Route path="/channels" element={routeElement("/channels", <Channels />)} />
+            <Route path="/webhooks" element={routeElement("/webhooks", <Webhooks />)} />
+            <Route path="/pairing" element={routeElement("/pairing", <Pairing />)} />
+            <Route path="/accounts" element={routeElement("/accounts", <ProviderAuth />)} />
+            <Route path="/keys" element={routeElement("/keys", <Keys />)} />
+            <Route path="/env" element={routeElement("/env", <Keys />)} />
+            <Route path="/plugins" element={routeElement("/plugins", <Plugins />)} />
+            <Route path="/profiles" element={routeElement("/profiles", <RuntimeProfiles />)} />
+            <Route path="/profiles/new" element={routeElement("/profiles/new", <RuntimeProfileNew />)} />
+            <Route path="/persona" element={routeElement("/persona", <PersonaProfiles />)} />
+            <Route path="/files" element={routeElement("/files", <Files />)} />
+            <Route path="/logs" element={routeElement("/logs", <Logs />)} />
+            <Route path="/system" element={routeElement("/system", <System />)} />
+            <Route path="/analytics" element={routeElement("/analytics", <Analytics />)} />
+            <Route path="/docs" element={routeElement("/docs", <Docs />)} />
             {pluginRoutes.map((route) => (
               <Route key={`plugin-${route.plugin || route.path}-${route.path}`} path={route.path} element={<PluginRoutePage route={route} />} />
             ))}
@@ -171,7 +187,9 @@ function AdminShell() {
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar onOpenNav={() => setNavOpen(true)} />
         <main className={fullBleed ? "min-h-0 flex-1 overflow-hidden" : "scroll-thin flex-1 overflow-y-auto p-3 md:p-4 xl:p-5"}>
+          <PluginSlot name="pre-main" className={fullBleed ? "" : "mx-auto mb-[var(--gap)] w-full max-w-[1500px]"} />
           <Routed full={fullBleed} />
+          <PluginSlot name="post-main" className={fullBleed ? "" : "mx-auto mt-[var(--gap)] w-full max-w-[1500px]"} />
         </main>
       </div>
       <PluginSlot name="app:shell" />

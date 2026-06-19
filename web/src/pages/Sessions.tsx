@@ -6,6 +6,7 @@ import { ago, compact } from "../lib/format";
 import { cleanTranscript, type RawMessage } from "../lib/transcript";
 import { Badge, Button, Card, Empty, Input, Loading, MetricStrip, PageHeader, SectionTitle, Segmented, toast } from "../components/ui";
 import { Icon } from "../components/icons";
+import { PluginSlot } from "../plugins/host";
 
 interface SessionRow { id: string; title?: string; updated_at?: string; message_count?: number; archived?: boolean; surface?: string; model?: string }
 interface SessionStats { session_count?: number; message_count?: number; empty_sessions?: number; archived_sessions?: number }
@@ -91,6 +92,7 @@ export function Sessions() {
         sub={stats.data ? `${stats.data.session_count || 0} sessions / ${stats.data.message_count || 0} messages` : "Conversation history"}
         actions={<Button icon="refresh" onClick={() => { reload(); stats.reload(); gateway.reload(); }}>Refresh</Button>}
       />
+      <PluginSlot name="sessions:top" className="mt-[var(--gap)]" />
 
       <MetricStrip items={[
         { label: "total", value: stats.data?.session_count || data?.length || 0 },
@@ -207,6 +209,7 @@ export function Sessions() {
           </div>
         </div>
       )}
+      <PluginSlot name="sessions:bottom" className="mt-[var(--gap)]" />
     </>
   );
 }

@@ -2724,6 +2724,7 @@ def _dashboard_plugin_row(
         return None
     asset_root = dash_root.resolve()
     entry = _safe_plugin_relpath(str(data.get("entry") or "dist/index.js"))
+    integrity = str(data.get("integrity") or "").strip()
     css_raw = data.get("css") or []
     css = [_safe_plugin_relpath(str(item)) for item in (css_raw if isinstance(css_raw, list) else [css_raw])]
     css = [item for item in css if item]
@@ -2762,6 +2763,7 @@ def _dashboard_plugin_row(
         "tab": tab,
         "slots": slots,
         "entry": entry,
+        "integrity": integrity,
         "css": css,
         "base_path": f"/dashboard-plugins/{name}",
         "has_api": bool(api_path and api_path.exists()),

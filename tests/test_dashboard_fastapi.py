@@ -2694,6 +2694,7 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
             },
             "slots": ["overview.header", {"bad": True}, ""],
             "entry": "dist/index.js",
+            "integrity": "sha384-pulsehash",
             "css": ["dist/style.css"],
             "api": "plugin_api.py",
         }),
@@ -2772,6 +2773,7 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
     }
     assert row["slots"] == ["overview.header"]
     assert row["entry"] == "dist/index.js"
+    assert row["integrity"] == "sha384-pulsehash"
     assert row["css"] == ["dist/style.css"]
     assert row["has_api"] is True
     assert row["route"] == {
