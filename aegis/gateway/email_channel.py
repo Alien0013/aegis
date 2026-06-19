@@ -134,7 +134,7 @@ class EmailAdapter(BasePlatformAdapter):
                 self._clarify_waiters.pop(key, None)
         if waiter is None:
             return False
-        waiter["answer"] = self._clean_waiter_answer(ev)
+        waiter["answer"] = self._normalize_waiter_answer(self._clean_waiter_answer(ev), waiter)
         waiter["event"].set()
         return True
 

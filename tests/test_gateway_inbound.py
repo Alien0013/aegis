@@ -118,8 +118,8 @@ def test_shared_inbound_clarify_waiter_consumes_next_reply():
 
     thread = threading.Thread(target=ask)
     thread.start()
-    _wait_for(lambda: ("c1", "Pick one\n  1. A\n  2. B") in adapter.sent)
-    adapter._submit_inbound(_ev("B"))
+    _wait_for(lambda: ("c1", "Pick one\n  1. A\n  2. B\n\nReply with the number or exact choice.") in adapter.sent)
+    adapter._submit_inbound(_ev("2"))
     thread.join(2)
 
     assert answer["text"] == "B"
@@ -182,13 +182,13 @@ def test_shared_clarify_and_exec_prompts_preserve_delivery_metadata():
     thread = threading.Thread(target=ask)
     thread.start()
     _wait_for(lambda: len(adapter.sent) == 1)
-    adapter._submit_inbound(MessageEvent(platform="whatsapp", chat_id=ev.chat_id, thread_id=ev.thread_id, text="A"))
+    adapter._submit_inbound(MessageEvent(platform="whatsapp", chat_id=ev.chat_id, thread_id=ev.thread_id, text="1"))
     thread.join(2)
 
     assert answer["text"] == "A"
     chat_id, text, metadata = adapter.sent[0]
     assert chat_id == ev.chat_id
-    assert text == "Pick one\n  1. A\n  2. B"
+    assert text == "Pick one\n  1. A\n  2. B\n\nReply with the number or exact choice."
     assert metadata == {
         "remote_jid": "12025550123-111@g.us",
         "participant": "15551234567@s.whatsapp.net",
@@ -2003,7 +2003,7 @@ def test_email_adapter_prompt_waiter_matches_re_subject(monkeypatch):
     adapter._submit_inbound(MessageEvent(
         platform="email",
         chat_id="ada@example.com",
-        text="Re: Report\n\ncanary\n\n> Pick one?",
+        text="Re: Report\n\n2\n\n> Pick one?",
         user_id="ada@example.com",
         thread_id="Re: Report",
         message_id="<m2@example.com>",

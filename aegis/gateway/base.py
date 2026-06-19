@@ -411,6 +411,8 @@ class BasePlatformAdapter:
         rendered = question.strip()
         for i, choice in enumerate(choices or [], 1):
             rendered += f"\n  {i}. {choice}"
+        if choices:
+            rendered += "\n\nReply with the number or exact choice."
         try:
             self.send(chat_id, rendered, metadata=metadata)
         except TypeError:
@@ -462,7 +464,7 @@ class BasePlatformAdapter:
         self._ensure_inbound_queue()
         key = self._conversation_key(ev)
         done = threading.Event()
-        waiter = {"event": done, "answer": ""}
+        waiter = {"event": done, "answer": "", "choices": [str(choice) for choice in (choices or [])]}
         with self._qlock:
             self._clarify_waiters.setdefault(key, []).append(waiter)
         try:
@@ -494,7 +496,7 @@ class BasePlatformAdapter:
         self._ensure_inbound_queue()
         key = self._conversation_key(ev)
         done = threading.Event()
-        waiter = {"event": done, "answer": ""}
+        waiter = {"event": done, "answer": "", "choices": ["approve", "always", "deny"]}
         with self._qlock:
             self._clarify_waiters.setdefault(key, []).append(waiter)
         try:
@@ -529,9 +531,22 @@ class BasePlatformAdapter:
                 self._clarify_waiters.pop(key, None)
         if waiter is None:
             return False
-        waiter["answer"] = ev.text or ""
+        waiter["answer"] = self._normalize_waiter_answer(ev.text or "", waiter)
         waiter["event"].set()
         return True
+
+    def _normalize_waiter_answer(self, answer: str, waiter: dict | None = None) -> str:
+        text = str(answer or "").strip()
+        choices = [
+            str(choice).strip()
+            for choice in ((waiter or {}).get("choices") or [])
+            if str(choice).strip()
+        ]
+        if text.isdigit() and choices:
+            index = int(text) - 1
+            if 0 <= index < len(choices):
+                return choices[index]
+        return text
 
     def deliver(self, chat_id: str, text: str, *, metadata: dict | None = None) -> None:
         """Send a reply, extracting any ``MEDIA:/abs/path`` lines and sending each as a native
