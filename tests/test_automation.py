@@ -297,6 +297,43 @@ def test_webhook_dedupes_provider_delivery_retries(monkeypatch, tmp_path):
     assert runtime["delivery_cache"]["duplicate_count"] == 1
 
 
+def test_webhook_dedupes_json_body_delivery_ids(monkeypatch, tmp_path):
+    cfg, store, make_handler = _webhook_server(monkeypatch, tmp_path)
+    seen = _fake_agent(monkeypatch, reply="done")
+    store.add("ci", "review {action}")
+    srv, port = _serve(make_handler, cfg, store)
+    body = b'{"action":"opened","delivery_id":"body-delivery-1"}'
+    try:
+        first_status, first_body = _post(port, "/hook/ci", body, {"Content-Type": "application/json"})
+        second_status, second_body = _post(port, "/hook/ci", body, {"Content-Type": "application/json"})
+    finally:
+        srv.shutdown()
+
+    assert first_status == 200
+    assert first_body["reply"] == "done"
+    assert second_status == 200
+    assert second_body == {"ok": True, "duplicate": True}
+    assert seen["calls"] == 1
+
+
+def test_webhook_dedupes_nested_json_body_message_keys(monkeypatch, tmp_path):
+    cfg, store, make_handler = _webhook_server(monkeypatch, tmp_path)
+    seen = _fake_agent(monkeypatch, reply="done")
+    store.add("wa", "review {body}")
+    srv, port = _serve(make_handler, cfg, store)
+    body = b'{"message":{"key":{"id":"BAE599999"}}}'
+    try:
+        first_status, _first_body = _post(port, "/hook/wa", body, {"Content-Type": "application/json"})
+        second_status, second_body = _post(port, "/hook/wa", body, {"Content-Type": "application/json"})
+    finally:
+        srv.shutdown()
+
+    assert first_status == 200
+    assert second_status == 200
+    assert second_body == {"ok": True, "duplicate": True}
+    assert seen["calls"] == 1
+
+
 def test_webhook_allows_provider_retry_after_failed_delivery(monkeypatch, tmp_path):
     cfg, store, make_handler = _webhook_server(monkeypatch, tmp_path)
     import aegis.agent.agent as am

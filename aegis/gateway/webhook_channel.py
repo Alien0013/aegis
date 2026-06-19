@@ -40,6 +40,17 @@ def _channel_env_truthy(prefix: str, suffix: str) -> bool:
     return _env_truthy(f"{prefix}_{suffix}")
 
 
+def _channel_env_bool(prefix: str, suffix: str, default: bool) -> bool:
+    for key in (f"{prefix}_{suffix}", f"WEBHOOK_CHANNEL_{suffix}"):
+        if key in os.environ:
+            value = os.environ.get(key, "").strip().lower()
+            if value in {"1", "true", "yes", "on"}:
+                return True
+            if value in {"0", "false", "no", "off"}:
+                return False
+    return default
+
+
 def _max_channel_webhook_bytes() -> int:
     try:
         value = int(os.environ.get("WEBHOOK_CHANNEL_MAX_BYTES", "10000000") or "10000000")
@@ -125,6 +136,7 @@ class WebhookChannel(BasePlatformAdapter):
         self.outbound_secret = _channel_env(env_prefix, "OUTBOUND_SECRET", self.secret)
         self.outbound_max_chars = _channel_env_int(env_prefix, "OUTBOUND_MAX_CHARS", self.max_message_length)
         self.max_body_bytes = _channel_env_int(env_prefix, "MAX_BYTES", MAX_CHANNEL_WEBHOOK_BYTES)
+        self.allow_unsigned_loopback = _channel_env_bool(env_prefix, "ALLOW_UNSIGNED_LOOPBACK", True)
         self._delivery_cache = DeliveryIdCache(
             ttl_seconds=float(_channel_env(env_prefix, "IDEMPOTENCY_TTL_SECONDS", "3600") or "3600"),
             max_items=_channel_env_int(env_prefix, "IDEMPOTENCY_CACHE_MAX", 10000),
@@ -141,7 +153,7 @@ class WebhookChannel(BasePlatformAdapter):
             "port": self.port,
             "security": {
                 "secret_configured": bool(self.secret),
-                "loopback_unsigned_allowed": True,
+                "loopback_unsigned_allowed": self.allow_unsigned_loopback,
                 "insecure_env_override": self._insecure_no_auth(),
                 "env_prefix": self.env_prefix,
                 "max_body_bytes": self.max_body_bytes,
@@ -179,6 +191,13 @@ class WebhookChannel(BasePlatformAdapter):
             _channel_env_truthy(self.env_prefix, "INSECURE_NO_AUTH")
             or _env_truthy("WEBHOOK_CHANNEL_INSECURE_NO_AUTH")
         )
+
+    def _auth_allowed(self, headers, raw_body: bytes, client_host: str) -> bool:
+        if not self.secret:
+            return self._insecure_no_auth() or (
+                self.allow_unsigned_loopback and _is_loopback_host(client_host)
+            )
+        return headers.get("X-Secret") == self.secret or verify_signature(self.secret, raw_body, headers)
 
     def _delivery_id(self, headers, body: dict) -> str:
         for name in ("X-GitHub-Delivery", "svix-id", "X-Request-ID", "X-Request-Id", "Idempotency-Key"):
@@ -419,7 +438,6 @@ class WebhookChannel(BasePlatformAdapter):
         return 200, {"reply": reply}
 
     def start(self, dispatch: Dispatch) -> None:
-        secret = self.secret
         adapter = self
         self._init_inbound_queue(dispatch)
 
@@ -444,12 +462,7 @@ class WebhookChannel(BasePlatformAdapter):
                     self.send_response(429)
                     self.end_headers()
                     return
-                insecure = adapter._insecure_no_auth()
-                if not secret and not (insecure or _is_loopback_host(client_host)):
-                    self.send_response(401)
-                    self.end_headers()
-                    return
-                if secret and self.headers.get("X-Secret") != secret and not verify_signature(secret, raw_body, self.headers):
+                if not adapter._auth_allowed(self.headers, raw_body, client_host):
                     self.send_response(401)
                     self.end_headers()
                     return

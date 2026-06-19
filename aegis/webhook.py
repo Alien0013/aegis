@@ -36,6 +36,12 @@ from .util import atomic_write, read_text, truncate
 MAX_WEBHOOK_BYTES = 10_000_000
 WEBHOOK_REPLAY_WINDOW_SECONDS = 300
 _DELIVERY_ID_HEADERS = ("X-GitHub-Delivery", "svix-id", "X-Request-ID", "X-Request-Id", "Idempotency-Key")
+_DELIVERY_ID_BODY_KEYS = ("delivery_id", "event_id", "message_id", "id")
+_DELIVERY_ID_BODY_PATHS = (
+    ("key", "id"),
+    ("message", "key", "id"),
+    ("data", "key", "id"),
+)
 
 
 def _webhooks_path():
@@ -504,11 +510,47 @@ def webhook_runtime_status(config) -> dict[str, object]:
     }
 
 
-def _delivery_id(name: str, headers) -> str:
+def _body_path_value(source: dict, path: tuple[str, ...]) -> str:
+    cur = source
+    for key in path:
+        if not isinstance(cur, dict):
+            return ""
+        cur = cur.get(key)
+    if isinstance(cur, (str, int, float, bool)):
+        return str(cur).strip()
+    return ""
+
+
+def _body_delivery_id(body: bytes) -> tuple[str, str]:
+    if not body:
+        return "", ""
+    try:
+        payload = json.loads(body)
+    except Exception:  # noqa: BLE001
+        return "", ""
+    if not isinstance(payload, dict):
+        return "", ""
+    for key in _DELIVERY_ID_BODY_KEYS:
+        value = payload.get(key)
+        if isinstance(value, (str, int, float, bool)):
+            text = str(value).strip()
+            if text:
+                return f"body:{key}", text
+    for path in _DELIVERY_ID_BODY_PATHS:
+        text = _body_path_value(payload, path)
+        if text:
+            return f"body:{'.'.join(path)}", text
+    return "", ""
+
+
+def _delivery_id(name: str, headers, body: bytes | None = None) -> str:
     for header in _DELIVERY_ID_HEADERS:
         value = str(headers.get(header, "") or "").strip()
         if value:
             return f"{name}:{header.lower()}:{value}"
+    source, value = _body_delivery_id(body or b"")
+    if source and value:
+        return f"{name}:{source}:{value}"
     return ""
 
 
@@ -574,7 +616,7 @@ def make_handler(config, store: WebhookStore):
                 event = self.headers.get("X-GitHub-Event", "")
                 if event not in hook.events:
                     return self._json(200, {"ok": True, "skipped": "event"})
-            delivery_id = _delivery_id(name, self.headers)
+            delivery_id = _delivery_id(name, self.headers, body)
             delivery_recorded = False
             if delivery_id:
                 delivery_recorded = delivery_cache.record(delivery_id)

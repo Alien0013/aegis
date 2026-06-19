@@ -1373,6 +1373,21 @@ def test_gateway_webhook_channel_prefix_insecure_auth_override(monkeypatch):
     assert adapter.metadata["security"]["insecure_env_override"] is True
 
 
+def test_gateway_webhook_channel_can_disable_unsigned_loopback(monkeypatch):
+    from aegis.gateway.webhook_channel import WebhookChannel
+
+    monkeypatch.setenv("WEBHOOK_CHANNEL_ALLOW_UNSIGNED_LOOPBACK", "0")
+    adapter = WebhookChannel()
+
+    assert adapter.allow_unsigned_loopback is False
+    assert adapter.metadata["security"]["loopback_unsigned_allowed"] is False
+    assert adapter._auth_allowed({}, b"{}", "127.0.0.1") is False
+
+    monkeypatch.setenv("WEBHOOK_CHANNEL_INSECURE_NO_AUTH", "1")
+    insecure = WebhookChannel()
+    assert insecure._auth_allowed({}, b"{}", "127.0.0.1") is True
+
+
 def test_gateway_webhook_channel_allows_retry_after_dispatch_failure():
     from aegis.gateway.webhook_channel import WebhookChannel
 
