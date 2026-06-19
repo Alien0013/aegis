@@ -615,6 +615,87 @@ def test_discord_adapter_enforces_guild_filters_and_trigger_mode(monkeypatch):
     }]
 
 
+def test_discord_adapter_native_media_upload_targets_threads(monkeypatch, tmp_path):
+    import asyncio
+    import sys
+    import types
+
+    from aegis.gateway.discord_channel import DiscordAdapter
+
+    path = tmp_path / "image.png"
+    path.write_bytes(b"png")
+    missing = tmp_path / "missing.png"
+
+    monkeypatch.setitem(sys.modules, "discord", types.SimpleNamespace(
+        File=lambda p: {"file": str(p)},
+        AllowedMentions=types.SimpleNamespace(none=lambda: "none"),
+    ))
+
+    class FakeChannel:
+        def __init__(self, *, fail_upload=False):
+            self.fail_upload = fail_upload
+            self.sent = []
+
+        async def send(self, *args, **kwargs):
+            if self.fail_upload and "file" in kwargs:
+                raise RuntimeError("upload failed")
+            self.sent.append((args, kwargs))
+            return {"ok": True}
+
+    class FakeClient:
+        def __init__(self):
+            self.channels = {
+                10: FakeChannel(),
+                20: FakeChannel(),
+                30: FakeChannel(fail_upload=True),
+            }
+            self.fetched = []
+
+        def get_channel(self, channel_id):
+            return self.channels.get(channel_id)
+
+        async def fetch_channel(self, channel_id):
+            self.fetched.append(channel_id)
+            return self.channels[channel_id]
+
+    loop = asyncio.new_event_loop()
+    ready = threading.Event()
+
+    def run_loop():
+        asyncio.set_event_loop(loop)
+        ready.set()
+        loop.run_forever()
+
+    thread = threading.Thread(target=run_loop)
+    thread.start()
+    assert ready.wait(2)
+    try:
+        adapter = DiscordAdapter("token")
+        adapter._client = FakeClient()
+        adapter._loop = loop
+
+        adapter.send_image("10", str(path), caption="cap", metadata={"thread_id": "20"})
+        assert adapter._client.channels[20].sent == [
+            ((), {"file": {"file": str(path)}, "content": "cap", "allowed_mentions": "none"}),
+        ]
+        assert adapter._client.channels[10].sent == []
+
+        adapter.send_document("10", str(missing), caption="missing", metadata={"thread_id": "20"})
+        assert adapter._client.channels[20].sent[-1] == (
+            (f"missing\n(file not found: {missing})",),
+            {"allowed_mentions": "none"},
+        )
+
+        adapter.send_image("10", str(path), caption="retry", metadata={"thread_id": "30"})
+        assert adapter._client.channels[30].sent == [
+            ((f"retry\n📎 {path}",), {"allowed_mentions": "none"}),
+        ]
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(2)
+        loop.close()
+
+
 def test_telegram_adapter_enforces_chat_filters_and_group_addressing(monkeypatch):
     from aegis.gateway.base import MessageEvent
     from aegis.gateway.channels import TelegramAdapter

@@ -245,13 +245,62 @@ class DiscordAdapter(BasePlatformAdapter):
             return
 
         async def send_all():
-            target_id = str((metadata or {}).get("thread_id") or chat_id)
-            channel = client.get_channel(int(target_id)) if str(target_id).isdigit() else None
-            if channel is None:
-                channel = await client.fetch_channel(int(target_id))
+            channel = await self._discord_target_channel(chat_id, metadata)
             for chunk in chunk_text_by_units(text, limit=1900):
                 if chunk:
                     await self._discord_send_text(channel, chunk)
+
+        try:
+            asyncio.run_coroutine_threadsafe(send_all(), loop).result(timeout=60)
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def _discord_target_channel(self, chat_id: str, metadata: dict | None = None):  # noqa: ANN001
+        client = getattr(self, "_client", None)
+        if client is None:
+            raise RuntimeError("discord client is not started")
+        target_id = str((metadata or {}).get("thread_id") or chat_id)
+        channel = client.get_channel(int(target_id)) if target_id.isdigit() else None
+        if channel is None:
+            channel = await client.fetch_channel(int(target_id))
+        return channel
+
+    def send_media(
+        self,
+        chat_id: str,
+        path: str,
+        caption: str = "",
+        *,
+        metadata: dict | None = None,
+        **_kwargs,
+    ) -> None:
+        client = getattr(self, "_client", None)
+        loop = getattr(self, "_loop", None)
+        if client is None or loop is None:
+            return
+
+        async def send_all():
+            import os
+
+            import discord
+
+            channel = await self._discord_target_channel(chat_id, metadata)
+            if not os.path.exists(path):
+                prefix = f"{caption}\n" if caption else ""
+                await self._discord_send_text(channel, f"{prefix}(file not found: {path})")
+                return
+            try:
+                kwargs = {"file": discord.File(path)}
+                if caption:
+                    kwargs["content"] = caption
+                try:
+                    kwargs["allowed_mentions"] = discord.AllowedMentions.none()
+                except Exception:  # noqa: BLE001
+                    pass
+                await channel.send(**kwargs)
+            except Exception:  # noqa: BLE001
+                prefix = f"{caption}\n" if caption else ""
+                await self._discord_send_text(channel, f"{prefix}📎 {path}")
 
         try:
             asyncio.run_coroutine_threadsafe(send_all(), loop).result(timeout=60)
