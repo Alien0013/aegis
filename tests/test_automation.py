@@ -275,6 +275,38 @@ def test_webhook_rate_limits_per_hook_client(monkeypatch, tmp_path):
     assert runtime["rate_limiter"]["limited_count"] == 1
 
 
+def test_webhook_auth_failures_do_not_consume_rate_limit(monkeypatch, tmp_path):
+    cfg, store, make_handler = _webhook_server(monkeypatch, tmp_path)
+    cfg.data.setdefault("webhook", {})["rate_limit_per_minute"] = 1
+    seen = _fake_agent(monkeypatch, reply="done")
+    secret = "hook-secret"
+    body = b'{"action":"opened"}'
+    sig = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    store.add("ci", "review {action}", secret=secret)
+    srv, port = _serve(make_handler, cfg, store)
+    try:
+        bad_1_status, bad_1_body = _post(port, "/hook/ci", body, {"X-Webhook-Signature": "wrong"})
+        bad_2_status, bad_2_body = _post(port, "/hook/ci", body, {"X-Webhook-Signature": "also-wrong"})
+        good_status, good_body = _post(port, "/hook/ci", body, {"X-Webhook-Signature": sig})
+        limited_status, limited_body = _post(port, "/hook/ci", body, {"X-Webhook-Signature": sig})
+        from aegis.webhook import webhook_runtime_status
+        runtime = webhook_runtime_status(cfg)
+    finally:
+        srv.shutdown()
+
+    assert bad_1_status == 401
+    assert bad_1_body["error"] == "invalid signature"
+    assert bad_2_status == 401
+    assert bad_2_body["error"] == "invalid signature"
+    assert good_status == 200
+    assert good_body["reply"] == "done"
+    assert limited_status == 429
+    assert limited_body["error"] == "rate limit exceeded"
+    assert seen["calls"] == 1
+    assert runtime["rate_limiter"]["allowed_count"] == 1
+    assert runtime["rate_limiter"]["limited_count"] == 1
+
+
 def test_webhook_dedupes_provider_delivery_retries(monkeypatch, tmp_path):
     cfg, store, make_handler = _webhook_server(monkeypatch, tmp_path)
     seen = _fake_agent(monkeypatch, reply="done")

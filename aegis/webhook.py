@@ -597,8 +597,6 @@ def make_handler(config, store: WebhookStore):
             if hook is None:
                 return self._json(404, {"error": f"unknown hook: {name}"})
             client_host = str((self.client_address or ("",))[0] or "")
-            if not rate_limiter.allow(f"{name}:{client_host}"):
-                return self._json(429, {"error": "rate limit exceeded"})
 
             n, length_error = _request_length(self.headers)
             if length_error == "invalid":
@@ -610,6 +608,8 @@ def make_handler(config, store: WebhookStore):
                 return self._json(401, {"error": "webhook secret required"})
             if not verify_signature(hook.secret, body, self.headers):
                 return self._json(401, {"error": "invalid signature"})
+            if not rate_limiter.allow(f"{name}:{client_host}"):
+                return self._json(429, {"error": "rate limit exceeded"})
 
             # GitHub event allowlist: skip (200) when this event isn't in the hook's filter.
             if hook.events:
