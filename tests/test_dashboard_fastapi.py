@@ -1752,6 +1752,70 @@ def test_fastapi_dashboard_chat_stream_disconnect_reapplies_cancel_after_agent_e
     assert runner.agents and runner.agents[0].cancel_event.is_set()
 
 
+def test_fastapi_dashboard_chat_stream_close_cancels_live_agent():
+    import threading
+
+    from aegis.dashboard_fastapi import _dashboard_chat_streaming_response
+    from aegis.session import Session
+
+    class Runner:
+        def __init__(self):
+            self.started = threading.Event()
+            self.finished = threading.Event()
+            self.agents = []
+
+        def load_or_create_session(self, session_id=None, **_kwargs):
+            return Session(id=session_id or "dash:stream-close", title="stream close")
+
+        def make_agent(self, **_kwargs):
+            agent = types.SimpleNamespace(cancel_event=threading.Event())
+
+            def cancel():
+                agent.cancel_event.set()
+
+            agent.cancel = cancel
+            self.agents.append(agent)
+            return agent
+
+        def run_prompt(self, prompt, **kwargs):  # noqa: ANN001
+            self.started.set()
+            agent = kwargs["agent"]
+            deadline = time.monotonic() + 2
+            while not agent.cancel_event.is_set() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.finished.set()
+            return types.SimpleNamespace(
+                text=f"late:{prompt}",
+                session=kwargs["session"],
+                trace_id="",
+                turn_id="",
+                run_id="",
+            )
+
+    class NeverDisconnected:
+        async def is_disconnected(self):
+            return False
+
+    async def consume_one_then_close(response):
+        iterator = response.body_iterator
+        first = await iterator.__anext__()
+        await iterator.aclose()
+        return first
+
+    runner = Runner()
+    response = _dashboard_chat_streaming_response(
+        {"message": "slow", "session_id": "dash:stream-close"},
+        runner,
+        NeverDisconnected(),
+    )
+
+    first = asyncio.run(asyncio.wait_for(consume_one_then_close(response), timeout=3))
+
+    assert json.loads(first.decode().split("data: ", 1)[1])["type"] == "start"
+    assert runner.agents and runner.agents[0].cancel_event.is_set()
+    assert runner.finished.wait(1)
+
+
 def test_fastapi_dashboard_chat_json_disconnect_reapplies_cancel_after_agent_entry_clear():
     import threading
 
