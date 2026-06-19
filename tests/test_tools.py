@@ -372,6 +372,42 @@ def test_apply_patch_reports_and_refreshes_stale_state(tmp_path):
     assert file_state.stale_warning(f) == ""
 
 
+def test_apply_patch_records_lsp_delta_and_freshness(tmp_path, monkeypatch):
+    import shutil
+
+    if not shutil.which("git"):
+        return
+
+    from aegis.tools import builtin, file_state
+    from aegis.tools.extra_builtin import ApplyPatchTool
+
+    file_state.reset()
+    snapshots = []
+    deltas = []
+
+    def fake_snapshot(ctx, path):
+        snapshots.append(path.name)
+
+    def fake_delta(ctx, path):
+        deltas.append(path.name)
+        return "\nLSP updated"
+
+    monkeypatch.setattr(builtin, "_lsp_snapshot", fake_snapshot)
+    monkeypatch.setattr(builtin, "_lsp_delta", fake_delta)
+
+    f = tmp_path / "h.txt"
+    f.write_text("a\nb\nc\n")
+
+    patch = "--- a/h.txt\n+++ b/h.txt\n@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n"
+    res = ApplyPatchTool().run({"patch": patch}, _ctx(tmp_path))
+
+    assert not res.is_error, res.content
+    assert snapshots == ["h.txt"]
+    assert deltas == ["h.txt"]
+    assert "LSP updated" in res.content
+    assert file_state.stale_warning(f) == ""
+
+
 def test_schedule_task_tool(tmp_path):
     from aegis.tools.extra_builtin import ScheduleTaskTool
     from aegis.cron import CronStore
