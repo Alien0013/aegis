@@ -245,8 +245,106 @@ def test_media_helpers_accept_metadata_kwargs(tmp_path):
     assert fallback.sent == [("c1", f"doc\n📎 file ready: {path}")]
 
     telegram = TelegramAdapter("token")
-    telegram.send = lambda chat_id, text: None
+    telegram.send = lambda chat_id, text, *, metadata=None: None
     telegram.send_image("c1", str(path), metadata={"source": "remote"})
+
+
+def test_telegram_media_upload_retries_without_stale_topic(monkeypatch, tmp_path):
+    from aegis.gateway import channels
+    from aegis.gateway.channels import TelegramAdapter
+
+    path = tmp_path / "image.png"
+    path.write_bytes(b"png")
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, status_code=200, text=""):
+            self.status_code = status_code
+            self.text = text
+            self.request = channels.httpx.Request("POST", "https://api.telegram.org/bottoken/sendPhoto")
+
+        def json(self):
+            return {"description": self.text}
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                response = channels.httpx.Response(
+                    self.status_code,
+                    text=self.text,
+                    request=self.request,
+                )
+                raise channels.httpx.HTTPStatusError(
+                    self.text or "telegram error",
+                    request=self.request,
+                    response=response,
+                )
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, url, *, data, files):
+            calls.append((url, dict(data), sorted(files)))
+            if len(calls) == 1:
+                return FakeResponse(400, "Bad Request: message thread not found")
+            return FakeResponse()
+
+    monkeypatch.setattr(channels.httpx, "Client", FakeClient)
+
+    adapter = TelegramAdapter("token")
+    sent = []
+    adapter.send = lambda chat_id, text, *, metadata=None: sent.append((chat_id, text, metadata))
+    adapter.send_image("42", str(path), caption="cap", metadata={"message_thread_id": "gone"})
+
+    assert calls == [
+        (
+            "https://api.telegram.org/bottoken/sendPhoto",
+            {"chat_id": "42", "caption": "cap", "message_thread_id": "gone"},
+            ["photo"],
+        ),
+        (
+            "https://api.telegram.org/bottoken/sendPhoto",
+            {"chat_id": "42", "caption": "cap"},
+            ["photo"],
+        ),
+    ]
+    assert sent == []
+
+
+def test_telegram_media_upload_fallback_preserves_metadata(monkeypatch, tmp_path):
+    from aegis.gateway import channels
+    from aegis.gateway.channels import TelegramAdapter
+
+    path = tmp_path / "doc.pdf"
+    path.write_bytes(b"pdf")
+
+    class FailingClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, *_args, **_kwargs):
+            raise RuntimeError("upload failed")
+
+    monkeypatch.setattr(channels.httpx, "Client", FailingClient)
+
+    adapter = TelegramAdapter("token")
+    sent = []
+    adapter.send = lambda chat_id, text, *, metadata=None: sent.append((chat_id, text, metadata))
+    adapter.send_document("42", str(path), metadata={"message_thread_id": "77"})
+
+    assert sent == [("42", f"📎 file ready: {path}", {"message_thread_id": "77"})]
 
 
 def test_shared_inbound_busy_modes(monkeypatch, tmp_path):

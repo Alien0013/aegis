@@ -352,6 +352,18 @@ class TelegramAdapter(BasePlatformAdapter):
 
     def _telegram_thread_not_found(self, exc: Exception) -> bool:
         text = str(exc or "").lower()
+        response = getattr(exc, "response", None)
+        if response is not None:
+            try:
+                text = f"{text} {response.text}".lower()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                body = response.json()
+                if isinstance(body, dict):
+                    text = f"{text} {body.get('description') or ''} {body.get('message') or ''}".lower()
+            except Exception:  # noqa: BLE001
+                pass
         return "message thread not found" in text or "thread not found" in text
 
     def _call_with_metadata(self, fn, *args, metadata: dict | None = None):
@@ -441,10 +453,18 @@ class TelegramAdapter(BasePlatformAdapter):
                 data = {"chat_id": chat_id, "caption": caption}
                 if metadata:
                     data.update(self._thread_params(metadata))
-                r = c.post(f"{self._base}/{method}", data=data, files={field: fh})
-                r.raise_for_status()
+                try:
+                    r = c.post(f"{self._base}/{method}", data=data, files={field: fh})
+                    r.raise_for_status()
+                except Exception as exc:  # noqa: BLE001
+                    if "message_thread_id" not in data or not self._telegram_thread_not_found(exc):
+                        raise
+                    fh.seek(0)
+                    retry_data = {key: value for key, value in data.items() if key != "message_thread_id"}
+                    r = c.post(f"{self._base}/{method}", data=retry_data, files={field: fh})
+                    r.raise_for_status()
         except Exception:  # noqa: BLE001 — fall back to a path note
-            self.send(chat_id, f"📎 file ready: {path}")
+            self.send(chat_id, f"📎 file ready: {path}", metadata=metadata)
 
     def send(self, chat_id: str, text: str, *, metadata: dict | None = None) -> None:
         # Telegram caps messages at 4096 UTF-16 code units; leave a small margin.
