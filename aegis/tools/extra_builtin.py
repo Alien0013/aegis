@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 from contextlib import ExitStack
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
@@ -430,24 +431,51 @@ class SendMessageTool(Tool):
         "required": ["text"],
     }
 
+    def _current_gateway_context(self, agent: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+        session = getattr(agent, "session", None)
+        meta = getattr(session, "meta", {}) if session is not None else {}
+        if not isinstance(meta, dict):
+            return {}, {}
+        gateway = dict(meta.get("gateway") or {}) if isinstance(meta.get("gateway"), dict) else {}
+        delivery = (
+            dict(meta.get("gateway_delivery_metadata") or {})
+            if isinstance(meta.get("gateway_delivery_metadata"), dict)
+            else {}
+        )
+        return gateway, delivery
+
     def run(self, args, ctx: ToolContext) -> ToolResult:
         text = (args.get("text") or "").strip()
         if not text:
             return ToolResult.error("send_message: 'text' is required.")
         agent = ctx.agent
-        platform = args.get("platform") or getattr(agent, "platform", None)
+        gateway, delivery_metadata = self._current_gateway_context(agent)
+        platform = args.get("platform") or getattr(agent, "platform", None) or gateway.get("platform")
         explicit_chat_id = args.get("chat_id")
-        chat_id = explicit_chat_id or getattr(agent, "chat_id", None)
+        chat_id = explicit_chat_id or getattr(agent, "chat_id", None) or gateway.get("chat_id")
         thread_id = args.get("thread_id")
         if thread_id is None and not explicit_chat_id:
-            thread_id = getattr(agent, "thread_id", None)
+            thread_id = getattr(agent, "thread_id", None) or gateway.get("thread_id")
         if not platform or not chat_id:
             return ToolResult.error(
                 "send_message needs an active channel + conversation. It works inside the "
                 "gateway (`aegis gateway`); otherwise pass both platform and chat_id.")
         from ..gateway.queue import DeliveryQueue
         from ..redact import redact_secrets
-        DeliveryQueue().enqueue(str(platform), str(chat_id), redact_secrets(text), thread_id=thread_id)
+        metadata: dict[str, Any] = {}
+        current_platform = str(gateway.get("platform") or getattr(agent, "platform", "") or "")
+        current_chat_id = str(gateway.get("chat_id") or getattr(agent, "chat_id", "") or "")
+        if str(platform) == current_platform and str(chat_id) == current_chat_id:
+            metadata.update(delivery_metadata)
+        if thread_id:
+            metadata["thread_id"] = str(thread_id)
+        DeliveryQueue().enqueue(
+            str(platform),
+            str(chat_id),
+            redact_secrets(text),
+            thread_id=thread_id,
+            metadata=metadata,
+        )
         target = f"{platform}:{chat_id}" + (f" thread:{thread_id}" if thread_id else "")
         return ToolResult.ok(f"queued message to {target}", display="message queued")
 

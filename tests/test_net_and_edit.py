@@ -357,6 +357,8 @@ def test_compaction_uses_aux_provider_helper():
 
 # --- send_message tool (proactive channel push) -----------------------------
 def test_send_message_tool(tmp_path, monkeypatch):
+    import json
+
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     from types import SimpleNamespace
     from aegis.tools.extra_builtin import SendMessageTool
@@ -382,6 +384,44 @@ def test_send_message_tool(tmp_path, monkeypatch):
     assert row["platform"] == "slack"
     assert row["chat_id"] == "C1"
     assert row["thread_id"] == "167.1"
+
+    gateway_meta = {
+        "platform": "whatsapp",
+        "chat_id": "120363@g.us",
+        "thread_id": "root-1",
+    }
+    delivery_meta = {
+        "platform": "whatsapp",
+        "remote_jid": "120363@g.us",
+        "group_jid": "120363@g.us",
+        "participant": "15551234567@s.whatsapp.net",
+        "message_key_id": "BAE5",
+    }
+    agent = SimpleNamespace(
+        platform="whatsapp",
+        chat_id="120363@g.us",
+        thread_id="root-1",
+        session=SimpleNamespace(meta={
+            "gateway": gateway_meta,
+            "gateway_delivery_metadata": delivery_meta,
+        }),
+    )
+    r = SendMessageTool().run({"text": "native bridge reply"}, ToolContext(agent=agent))
+    assert not r.is_error
+    row = DeliveryQueue().due()[2]
+    queued_meta = json.loads(row["metadata"])
+    assert queued_meta["remote_jid"] == "120363@g.us"
+    assert queued_meta["participant"] == "15551234567@s.whatsapp.net"
+    assert queued_meta["message_key_id"] == "BAE5"
+    assert queued_meta["thread_id"] == "root-1"
+
+    r = SendMessageTool().run(
+        {"text": "different chat", "platform": "whatsapp", "chat_id": "other@s.whatsapp.net"},
+        ToolContext(agent=agent),
+    )
+    assert not r.is_error
+    row = DeliveryQueue().due()[3]
+    assert json.loads(row["metadata"]) == {}
 
 
 # --- ntfy push-notification channel -----------------------------------------

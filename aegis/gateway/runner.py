@@ -53,6 +53,63 @@ def _gateway_origin_from_event(ev: MessageEvent) -> dict[str, Any]:
     return origin
 
 
+_DELIVERY_METADATA_KEYS = (
+    "platform",
+    "normalized_platform",
+    "bridge_platform",
+    "thread_id",
+    "thread_ts",
+    "root_id",
+    "parent_id",
+    "topic",
+    "message_thread_id",
+    "message_id",
+    "reply_to_message_id",
+    "remote_jid",
+    "group_jid",
+    "participant",
+    "message_key_id",
+    "user_id",
+    "user_name",
+    "session_key",
+    "channel_id",
+    "guild_id",
+    "team_id",
+    "subject",
+    "references",
+    "in_reply_to",
+)
+
+
+def _metadata_scalar(value: Any) -> Any:
+    if value in (None, ""):
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value
+    return str(value)
+
+
+def _gateway_delivery_metadata(ev: MessageEvent) -> dict[str, Any]:
+    source = dict(ev.metadata or {})
+    base = {
+        "platform": ev.platform,
+        "thread_id": ev.thread_id,
+        "message_id": ev.message_id,
+        "reply_to_message_id": ev.reply_to_message_id,
+        "user_id": ev.user_id,
+        "user_name": ev.user_name,
+        "session_key": ev.session_key,
+    }
+    metadata: dict[str, Any] = {}
+    for key in _DELIVERY_METADATA_KEYS:
+        value = _metadata_scalar(source.get(key, base.get(key)))
+        if value is not None:
+            metadata[key] = value
+    return metadata
+
+
 def _gateway_user_message(config: Config, ev: MessageEvent, text: str) -> Message:
     from .message_timestamps import (
         coerce_message_timestamp,
@@ -341,8 +398,10 @@ class GatewayRunner:
 
     def _remember_gateway_context(self, session: Session, ev: MessageEvent) -> Session:
         origin = _gateway_origin_from_event(ev)
+        delivery_metadata = _gateway_delivery_metadata(ev)
         session.meta["surface"] = "gateway"
         session.meta["gateway"] = origin
+        session.meta["gateway_delivery_metadata"] = delivery_metadata
         for key in ("platform", "chat_id", "thread_id", "user_id", "user_name", "message_id"):
             if key in origin:
                 session.meta[key] = origin[key]
@@ -1101,6 +1160,11 @@ class GatewayRunner:
             agent.user_name = ev.user_name or ""
             agent.thread_id = ev.thread_id or ""
             agent.message_id = ev.message_id or ""
+            self._remember_gateway_context(session, ev)
+            agent.session = session
+            tool_context = getattr(agent, "tool_context", None)
+            if tool_context is not None:
+                tool_context.session = session
             asker = self._gateway_asker(ev)
             approver = self._gateway_approver(ev)
             if asker is not None:

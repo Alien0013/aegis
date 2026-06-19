@@ -216,6 +216,43 @@ def test_shared_clarify_and_exec_prompts_preserve_delivery_metadata():
     assert adapter.sent[1][2] == metadata
 
 
+def test_gateway_delivery_metadata_keeps_bridge_reply_context():
+    from aegis.gateway.base import MessageEvent
+    from aegis.gateway.runner import _gateway_delivery_metadata
+
+    ev = MessageEvent(
+        platform="whatsapp",
+        chat_id="120363@g.us",
+        text="hello",
+        user_id="15551234567@s.whatsapp.net",
+        user_name="A User",
+        thread_id="root-1",
+        message_id="BAE5",
+        reply_to_message_id="OLD",
+        metadata={
+            "remote_jid": "120363@g.us",
+            "group_jid": "120363@g.us",
+            "participant": "15551234567@s.whatsapp.net",
+            "message_key_id": "BAE5",
+            "response_url": "https://mattermost.example/hooks/secret",
+            "raw_payload": {"too": "large"},
+        },
+    )
+
+    metadata = _gateway_delivery_metadata(ev)
+
+    assert metadata["platform"] == "whatsapp"
+    assert metadata["thread_id"] == "root-1"
+    assert metadata["message_id"] == "BAE5"
+    assert metadata["reply_to_message_id"] == "OLD"
+    assert metadata["remote_jid"] == "120363@g.us"
+    assert metadata["group_jid"] == "120363@g.us"
+    assert metadata["participant"] == "15551234567@s.whatsapp.net"
+    assert metadata["message_key_id"] == "BAE5"
+    assert "response_url" not in metadata
+    assert "raw_payload" not in metadata
+
+
 def test_media_helpers_accept_metadata_kwargs(tmp_path):
     from aegis.gateway.base import BasePlatformAdapter
     from aegis.gateway.channels import TelegramAdapter
