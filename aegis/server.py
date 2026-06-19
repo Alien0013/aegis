@@ -10,6 +10,7 @@ import asyncio
 import concurrent.futures
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 import threading
@@ -28,6 +29,8 @@ from .config import Config
 from .surface import SurfaceRunner, normalize_service_tier, runtime_controls_meta
 from .types import Message, ToolCall, new_id
 from .util import estimate_tokens, now_iso
+
+logger = logging.getLogger(__name__)
 
 _MAX_BODY_BYTES = 10 * 1024 * 1024
 _DEFAULT_MAX_STORED_RESPONSES = 100
@@ -147,6 +150,43 @@ def _api_session_id_from_body(
     if len(session_id) > _MAX_SESSION_KEY_CHARS:
         return None, (400, {"ok": False, "error": "Session ID too long", "code": "invalid_session_id"})
     return session_id, None
+
+
+def _api_job_id_error(
+    job_id: str,
+    *,
+    method: str,
+    path: str,
+    headers: Any,
+) -> tuple[int, dict[str, Any]] | None:
+    from .cron import _SAFE_JOB_ID_RE
+
+    text = str(job_id or "").strip()
+    valid = (
+        bool(text)
+        and text not in {".", ".."}
+        and "/" not in text
+        and "\\" not in text
+        and "\x00" not in text
+        and _SAFE_JOB_ID_RE.fullmatch(text) is not None
+    )
+    if valid:
+        return None
+    try:
+        forwarded_for = headers.get("X-Forwarded-For", "")
+        user_agent = headers.get("User-Agent", "")
+    except AttributeError:
+        forwarded_for = ""
+        user_agent = ""
+    logger.warning(
+        "Cron jobs API rejected invalid job_id %r method=%s path=%s forwarded_for=%s user_agent=%s",
+        text,
+        method,
+        path,
+        forwarded_for,
+        user_agent,
+    )
+    return 400, {"ok": False, "error": "Invalid job ID", "code": "invalid_job_id", "id": text}
 
 
 def _coerce_request_bool(value: Any, default: bool = False) -> bool:
@@ -3115,9 +3155,12 @@ def make_handler(config: Config):
                     rec["status"] = "cancelled"
             return self._json(200, cancelled)
 
-        def _job_detail(self, job_id: str) -> tuple[int, dict[str, Any]]:
+        def _job_detail(self, job_id: str, *, method: str = "GET") -> tuple[int, dict[str, Any]]:
             from .cron import CronStore
 
+            invalid = _api_job_id_error(job_id, method=method, path=getattr(self, "path", ""), headers=self.headers)
+            if invalid is not None:
+                return invalid
             job = CronStore().get(job_id)
             if job is None:
                 return 404, {"ok": False, "error": "job not found", "id": job_id}
@@ -3155,6 +3198,9 @@ def make_handler(config: Config):
         def _update_job(self, job_id: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
             from .cron import CronStore, _scan_cron_prompt
 
+            invalid = _api_job_id_error(job_id, method="PATCH", path=getattr(self, "path", ""), headers=self.headers)
+            if invalid is not None:
+                return invalid
             updates = {key: body[key] for key in (
                 "schedule", "prompt", "name", "channel", "enabled", "script", "skills", "context_from",
                 "deliver", "no_agent", "max_runs", "model", "enabled_toolsets", "workdir",
@@ -3188,6 +3234,9 @@ def make_handler(config: Config):
         def _run_job_now(self, job_id: str) -> tuple[int, dict[str, Any]]:
             from .cron import CronStore, build_delivery_sink, run_job
 
+            invalid = _api_job_id_error(job_id, method="POST", path=getattr(self, "path", ""), headers=self.headers)
+            if invalid is not None:
+                return invalid
             store = CronStore()
             if store.get(job_id) is None:
                 return 404, {"ok": False, "error": "job not found", "id": job_id}
@@ -3561,6 +3610,10 @@ def make_handler(config: Config):
                 from .cron import CronStore
 
                 job_id = path.rsplit("/", 1)[-1]
+                invalid = _api_job_id_error(job_id, method="DELETE", path=getattr(self, "path", ""), headers=self.headers)
+                if invalid is not None:
+                    code, payload = invalid
+                    return self._json(code, payload)
                 ok = CronStore().remove(job_id)
                 return self._json(200 if ok else 404, {"ok": ok, "id": job_id})
             if path.startswith("/api/sessions/"):
@@ -3780,6 +3833,10 @@ def make_handler(config: Config):
 
                 parts = path.split("/")
                 job_id = parts[-2]
+                invalid = _api_job_id_error(job_id, method="POST", path=getattr(self, "path", ""), headers=self.headers)
+                if invalid is not None:
+                    code, payload = invalid
+                    return self._json(code, payload)
                 enabled = parts[-1] == "resume"
                 ok = CronStore().set_enabled(job_id, enabled)
                 code, payload = self._job_detail(job_id) if ok else (404, {"ok": False, "error": "job not found", "id": job_id})

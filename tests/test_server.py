@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import http.client
 import json
+import logging
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -5937,3 +5938,40 @@ def test_server_api_jobs_validation_errors_are_400(monkeypatch, tmp_path):
     assert "workdir" in json.loads(patch_workdir_data)["error"]
     assert patch_max_status == 400
     assert json.loads(patch_max_data)["id"] == job_id
+
+
+def test_server_api_jobs_rejects_invalid_job_ids(monkeypatch, tmp_path, caplog):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    caplog.set_level(logging.WARNING, logger="aegis.server")
+    srv, port = _serve(server.make_handler(Config.load()))
+    headers = {"X-Forwarded-For": "203.0.113.7", "User-Agent": "aegis-test"}
+    try:
+        calls = [
+            ("GET", "/api/jobs/not-a-valid-hex!", None),
+            ("PATCH", "/api/jobs/not-a-valid-hex!", {}),
+            ("DELETE", "/api/jobs/not-a-valid-hex!", None),
+            ("POST", "/api/jobs/not-a-valid-hex!/pause", {}),
+            ("POST", "/api/jobs/not-a-valid-hex!/trigger", {}),
+            ("GET", "/api/jobs/..%2F..%2Fetc%2Fpasswd", None),
+        ]
+        results = [
+            _request(port, method, path, body, headers=headers)
+            for method, path, body in calls
+        ]
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    for status, data in results:
+        payload = json.loads(data)
+        assert status == 400
+        assert payload["ok"] is False
+        assert payload["code"] == "invalid_job_id"
+        assert "Invalid" in payload["error"]
+    logs = "\n".join(record.getMessage() for record in caplog.records)
+    assert "Cron jobs API rejected invalid job_id" in logs
+    assert "203.0.113.7" in logs
+    assert "aegis-test" in logs
