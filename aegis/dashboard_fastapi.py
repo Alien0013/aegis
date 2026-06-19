@@ -1210,6 +1210,7 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
         "transport": "socket_mode",
         "capabilities": [
             "text",
+            "media",
             "threads",
             "status_edit",
             "mentions",

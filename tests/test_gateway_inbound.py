@@ -562,6 +562,7 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     from aegis.gateway.mattermost_channel import MattermostAdapter
     from aegis.gateway.slack_channel import SlackAdapter
     from aegis.gateway.webhook_channel import WebhookChannel
+    from aegis.platforms.helpers import platform_metadata
 
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
     monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
@@ -610,9 +611,11 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert len(DiscordAdapter("token").command_menu(max_commands=500)) <= 100
     assert SlackAdapter().metadata["typed_command_prefix"] == "!"
     assert SlackAdapter().metadata["supports_reactions"] is True
+    assert SlackAdapter().metadata["supports_media"] is True
     assert "SLACK_ALLOWED_CHANNELS" in SlackAdapter().metadata["optional_env"]
     assert "SLACK_TRIGGER_MODE" in SlackAdapter().metadata["optional_env"]
     assert SlackAdapter().metadata["security"]["trigger_mode"] == "all"
+    assert platform_metadata("slack")["supports_media"] is True
     mattermost = MattermostAdapter().metadata
     assert mattermost["transport"] == "http_webhook"
     assert mattermost["supports_threads"] is True
@@ -2137,7 +2140,7 @@ def test_ntfy_adapter_preserves_metadata_headers_and_attachments(monkeypatch):
     assert failing._delivery_cache.stats()["discarded_count"] == 1
 
 
-def test_slack_adapter_enforces_workspace_filters_and_strips_mentions(monkeypatch):
+def test_slack_adapter_enforces_workspace_filters_and_strips_mentions(monkeypatch, tmp_path):
     import pytest
 
     from aegis.gateway.slack_channel import SlackAdapter
@@ -2285,10 +2288,14 @@ def test_slack_adapter_enforces_workspace_filters_and_strips_mentions(monkeypatc
     assert threaded_adapter._resolve_thread_ts({"ts": "171.1"}) == "171.1"
 
     posts = []
+    uploads = []
 
     class FakeSlackClient:
         def chat_postMessage(self, **kwargs):
             posts.append(kwargs)
+
+        def files_upload_v2(self, **kwargs):
+            uploads.append(("v2", kwargs))
 
     class FakeSlackApp:
         client = FakeSlackClient()
@@ -2380,6 +2387,21 @@ def test_slack_adapter_enforces_workspace_filters_and_strips_mentions(monkeypatc
         {"channel": "C1", "text": "thread reply", "thread_ts": "171.1"},
         {"channel": "C1", "text": "metadata thread reply", "thread_ts": "171.2"},
     ]
+    posts.clear()
+
+    media_path = tmp_path / "report.txt"
+    media_path.write_text("hello", encoding="utf-8")
+    adapter.send_media("C1", str(media_path), caption="report", metadata={"thread_ts": "171.1"})
+    assert uploads == [("v2", {
+        "channel": "C1",
+        "file": str(media_path),
+        "title": "report.txt",
+        "initial_comment": "report",
+        "thread_ts": "171.1",
+    })]
+
+    adapter.send_media("C1", str(tmp_path / "missing.txt"), caption="lost")
+    assert posts == [{"channel": "C1", "text": f"lost\n(file not found: {tmp_path / 'missing.txt'})"}]
 
 
 def test_slack_adapter_handles_native_slash_commands(monkeypatch):

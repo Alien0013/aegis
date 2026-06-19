@@ -23,6 +23,10 @@ _DISCORD_ATTACHMENT_HOSTS = {
     "media.discordapp.net",
     "attachments.discordapp.net",
 }
+_SLACK_ATTACHMENT_HOST_SUFFIXES = (
+    ".slack.com",
+    ".slack-edge.com",
+)
 _MAX_TRANSCRIBED_ATTACHMENT_BYTES = 25 * 1024 * 1024
 
 
@@ -1397,6 +1401,8 @@ class GatewayRunner:
         platform = normalize_platform_name(ev.platform)
         if platform == "telegram":
             return self._download_telegram_attachment(attachment)
+        if platform == "slack":
+            return self._download_slack_attachment(attachment)
         if platform != "discord":
             return ""
         url = str(attachment.get("url") or attachment.get("proxy_url") or "").strip()
@@ -1427,6 +1433,64 @@ class GatewayRunner:
                         return ""
                     with tempfile.NamedTemporaryFile(
                         prefix="aegis-discord-audio-",
+                        suffix=suffix,
+                        delete=False,
+                    ) as fh:
+                        tmp_path = fh.name
+                        written = 0
+                        for chunk in response.iter_bytes():
+                            if not chunk:
+                                continue
+                            written += len(chunk)
+                            if written > _MAX_TRANSCRIBED_ATTACHMENT_BYTES:
+                                return ""
+                            fh.write(chunk)
+            keep_tmp = True
+            return tmp_path
+        except Exception:  # noqa: BLE001
+            return ""
+        finally:
+            if tmp_path and not keep_tmp:
+                try:
+                    Path(tmp_path).unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+    def _download_slack_attachment(self, attachment: dict) -> str:
+        url = str(attachment.get("url") or attachment.get("url_private") or "").strip()
+        parsed = urlparse(url)
+        host = str(parsed.hostname or "").lower()
+        if parsed.scheme != "https" or not any(host == suffix.lstrip(".") or host.endswith(suffix)
+                                               for suffix in _SLACK_ATTACHMENT_HOST_SUFFIXES):
+            return ""
+        try:
+            declared_size = int(attachment.get("size") or 0)
+        except (TypeError, ValueError):
+            declared_size = 0
+        if declared_size > _MAX_TRANSCRIBED_ATTACHMENT_BYTES:
+            return ""
+        adapter = next((a for a in self.adapters if getattr(a, "name", "") == "slack"), None)
+        token = str(getattr(adapter, "bot_token", "") or "").strip()
+        if not token:
+            return ""
+        suffix = Path(str(attachment.get("filename") or "")).suffix or ".audio"
+        tmp_path = ""
+        keep_tmp = False
+        try:
+            import httpx
+
+            headers = {"Authorization": f"Bearer {token}"}
+            with httpx.Client(timeout=30, follow_redirects=False) as client:
+                with client.stream("GET", url, headers=headers) as response:
+                    response.raise_for_status()
+                    try:
+                        content_length = int(response.headers.get("content-length") or 0)
+                    except (TypeError, ValueError):
+                        content_length = 0
+                    if content_length > _MAX_TRANSCRIBED_ATTACHMENT_BYTES:
+                        return ""
+                    with tempfile.NamedTemporaryFile(
+                        prefix="aegis-slack-audio-",
                         suffix=suffix,
                         delete=False,
                     ) as fh:

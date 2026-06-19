@@ -139,7 +139,9 @@ PLATFORM_HINTS = {
                 "To send a file, include a line `MEDIA:/absolute/path` in your reply — it's "
                 "uploaded as a native Discord attachment."),
     "slack": ("# You are on Slack\nUse Slack-flavored formatting; avoid pipe tables (they don't "
-              "render) — prefer bullets or 'key: value' lines. Keep it concise."),
+              "render) — prefer bullets or 'key: value' lines. Keep it concise.\n"
+              "To send a file, include a line `MEDIA:/absolute/path` in your reply — it's "
+              "uploaded as a native Slack file."),
     "signal": ("# You are on Signal\nPlain text only — no markdown tables or code-block fences.\n"
                "To send a file, include a line `MEDIA:/absolute/path` in your reply — it is "
                "delivered via signal-cli as a native attachment."),

@@ -119,7 +119,7 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
         "max_message_length": 39000,
         "message_length_units": "codepoints",
         "supports_threads": True,
-        "supports_media": False,
+        "supports_media": True,
         "supports_reactions": True,
         "supports_slash_commands": True,
         "supports_interactive_prompts": True,

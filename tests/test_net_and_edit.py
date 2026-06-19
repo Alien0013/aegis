@@ -193,6 +193,7 @@ def test_platform_hint_only_when_on_a_channel():
     tg = b.build(platform="telegram")
     assert "You are on Telegram" in tg and "NO table" in tg             # Telegram: formatting hint
     assert "You are on Discord" in b.build(platform="discord")
+    assert "MEDIA:/absolute/path" in b.build(platform="slack")
 
 
 # --- gateway MEDIA: native attachments --------------------------------------

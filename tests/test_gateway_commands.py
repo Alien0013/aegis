@@ -296,6 +296,81 @@ def test_gateway_transcribes_telegram_file_id_with_cleanup(tmp_path, monkeypatch
     assert not Path(downloaded[0]).exists()
 
 
+def test_gateway_transcribes_slack_private_audio_with_cleanup(tmp_path, monkeypatch):
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    import httpx
+
+    from aegis.gateway.base import MessageEvent
+
+    r = _runner(tmp_path, monkeypatch)
+    r.adapters = [SimpleNamespace(name="slack", bot_token="xoxb-token")]
+    downloaded = []
+
+    class FakeStream:
+        headers = {"content-length": "7"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def raise_for_status(self):
+            return None
+
+        def iter_bytes(self):
+            yield b"ogg"
+            yield b"data"
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def stream(self, method, url, headers=None):
+            assert method == "GET"
+            assert url == "https://files.slack.com/files-pri/T1-F1/voice.ogg"
+            assert headers == {"Authorization": "Bearer xoxb-token"}
+            return FakeStream()
+
+    def fake_transcribe(_self, args, _ctx):
+        path = Path(args["path"])
+        assert path.exists()
+        assert path.read_bytes() == b"oggdata"
+        downloaded.append(str(path))
+        return SimpleNamespace(is_error=False, content="hello from slack audio")
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    monkeypatch.setattr("aegis.tools.voice.TranscribeTool.run", fake_transcribe)
+
+    ev = MessageEvent(
+        platform="slack",
+        chat_id="C1",
+        text="[audio/ogg attached: voice.ogg]",
+        attachments=[{
+            "source": "slack",
+            "type": "audio/ogg",
+            "media_type": "audio/ogg",
+            "filename": "voice.ogg",
+            "url": "https://files.slack.com/files-pri/T1-F1/voice.ogg",
+            "size": 7,
+        }],
+    )
+
+    text = r._maybe_transcribe(ev, ev.text)
+
+    assert text == "[audio/ogg attached: voice.ogg]\n\n[voice memo transcript]\nhello from slack audio"
+    assert downloaded
+    assert not Path(downloaded[0]).exists()
+
+
 def test_handoff_is_adopted_before_control_commands(tmp_path, monkeypatch):
     from aegis import handoff
     from aegis.session import Session

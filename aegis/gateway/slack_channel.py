@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 
 from ..platforms import capped_command_menu, chunk_text_by_units, normalize_inbound_command
 from ..webhook import DeliveryIdCache
@@ -36,7 +37,7 @@ class SlackAdapter(BasePlatformAdapter):
     transport = "socket_mode"
     max_message_length = 39000
     supports_threads = True
-    supports_media = False
+    supports_media = True
     supports_reactions = True
     typed_command_prefix = "!"
 
@@ -403,6 +404,48 @@ class SlackAdapter(BasePlatformAdapter):
             kwargs["thread_ts"] = thread_ts
         for chunk in chunk_text_by_units(text, limit=39000):
             client.chat_postMessage(text=chunk, **kwargs)
+
+    def send_media(
+        self,
+        chat_id: str,
+        path: str,
+        caption: str = "",
+        *,
+        metadata: dict | None = None,
+        **_kwargs,
+    ) -> None:
+        app = getattr(self, "_app", None)
+        client = getattr(app, "client", None)
+        if client is None:
+            raise RuntimeError("slack client is not started")
+        media_path = Path(path).expanduser()
+        if not media_path.exists():
+            prefix = f"{caption}\n" if caption else ""
+            self.send(chat_id, f"{prefix}(file not found: {path})", metadata=metadata)
+            return
+        thread_kwargs = self._thread_kwargs(metadata)
+        title = media_path.name
+        upload_v2 = getattr(client, "files_upload_v2", None)
+        if callable(upload_v2):
+            upload_v2(
+                channel=chat_id,
+                file=str(media_path),
+                title=title,
+                initial_comment=caption or None,
+                **thread_kwargs,
+            )
+            return
+        upload = getattr(client, "files_upload", None)
+        if not callable(upload):
+            raise RuntimeError("slack client cannot upload files")
+        upload(
+            channels=chat_id,
+            file=str(media_path),
+            filename=title,
+            title=title,
+            initial_comment=caption or None,
+            **thread_kwargs,
+        )
 
     def _thread_kwargs(self, metadata: dict | None = None) -> dict:
         thread_ts = (metadata or {}).get("thread_ts") or (metadata or {}).get("thread_id")
