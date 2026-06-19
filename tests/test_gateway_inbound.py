@@ -474,6 +474,7 @@ def test_platform_helper_command_caps_and_utf16_chunks():
 
     assert platform_metadata("signal-cli")["id"] == "signal"
     assert platform_metadata("matrix")["transport"] == "matrix_sync"
+    assert platform_metadata("matrix")["supports_threads"] is True
     assert platform_metadata("baileys")["id"] == "whatsapp"
     assert platform_metadata("whatsapp-web.js")["security"]["bridge"] == "webhook"
     assert platform_metadata("mail")["required_env"] == [
@@ -482,6 +483,7 @@ def test_platform_helper_command_caps_and_utf16_chunks():
         "EMAIL_ADDRESS",
         "EMAIL_PASSWORD",
     ]
+    assert "EMAIL_ALLOWED_SENDERS" in platform_metadata("mail")["optional_env"]
     assert platform_metadata("ntfy.sh")["optional_env"] == ["NTFY_SERVER", "NTFY_TOKEN"]
     assert "SLACK_TRIGGER_MODE" in platform_metadata("sl")["optional_env"]
     assert "SLACK_REPLY_IN_THREAD" in platform_metadata("sl")["optional_env"]
@@ -1309,6 +1311,196 @@ def test_telegram_channel_post_uses_sender_chat_identity(monkeypatch):
     assert adapter._message_from_update({"channel_post": msg}) == (msg, "channel_post")
     assert adapter._author_from_message(msg) == ("-1001", "updates")
     assert adapter._message_allowed(msg, "/status") is True
+
+
+def test_signal_adapter_preserves_attachment_metadata(monkeypatch):
+    import json
+    import shutil
+
+    monkeypatch.setenv("SIGNAL_CLI_ACCOUNT", "+15550001")
+    monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/signal-cli")
+    from aegis.gateway.signal_channel import SignalAdapter
+
+    adapter = SignalAdapter()
+    payload = {
+        "envelope": {
+            "sourceNumber": "+15550002",
+            "sourceName": "Ada",
+            "sourceUuid": "uuid-1",
+            "sourceDevice": 1,
+            "serverGuid": "srv-1",
+            "timestamp": 123,
+            "dataMessage": {
+                "groupInfo": {"groupId": "group-1"},
+                "attachments": [{
+                    "id": "att-1",
+                    "contentType": "image/png",
+                    "filename": "chart.png",
+                    "size": 42,
+                    "width": 100,
+                    "height": 50,
+                }],
+            },
+        },
+    }
+
+    events = adapter._parse(json.dumps(payload))
+
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.platform == "signal"
+    assert ev.chat_id == "group:group-1"
+    assert ev.text == "[image/png attached: chart.png]"
+    assert ev.user_id == "+15550002"
+    assert ev.message_id == "123"
+    assert ev.attachments == [{
+        "id": "att-1",
+        "type": "image/png",
+        "media_type": "image/png",
+        "filename": "chart.png",
+        "size": 42,
+        "source": "signal",
+        "width": 100,
+        "height": 50,
+    }]
+    assert ev.metadata["group_id"] == "group-1"
+    assert ev.metadata["source_uuid"] == "uuid-1"
+    sent = []
+    adapter._run = lambda *args, **kwargs: sent.append((args, kwargs)) or ""
+    adapter.send("+15550002", "ok", metadata={"ignored": True})
+    assert sent == [(("send", "-m", "ok", "+15550002"), {"timeout": 60})]
+
+
+def test_matrix_adapter_threads_inbound_and_outbound_messages(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("MATRIX_HOMESERVER", "https://matrix.test")
+    monkeypatch.setenv("MATRIX_USER", "@aegis:matrix.test")
+    monkeypatch.setenv("MATRIX_PASSWORD", "pw")
+    from aegis.gateway.matrix_channel import MatrixAdapter
+
+    adapter = MatrixAdapter()
+    event = SimpleNamespace(
+        source={"content": {"m.relates_to": {"rel_type": "m.thread", "event_id": "$root"}}},
+        content={},
+    )
+
+    assert adapter._thread_id_from_event(event) == "$root"
+    assert adapter._message_content("hi", {"thread_id": "$root"}) == {
+        "msgtype": "m.text",
+        "body": "hi",
+        "m.relates_to": {
+            "rel_type": "m.thread",
+            "event_id": "$root",
+            "is_falling_back": True,
+        },
+    }
+
+
+def test_email_adapter_preserves_attachments_and_reply_headers(monkeypatch):
+    from email.message import EmailMessage
+
+    monkeypatch.setenv("EMAIL_ADDRESS", "bot@example.com")
+    monkeypatch.setenv("EMAIL_PASSWORD", "pw")
+    monkeypatch.setenv("EMAIL_IMAP_HOST", "imap.example.com")
+    monkeypatch.setenv("EMAIL_SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("EMAIL_ALLOWED_SENDERS", "ada@example.com")
+    from aegis.gateway.email_channel import EmailAdapter
+
+    adapter = EmailAdapter()
+    assert adapter.allowed_senders == {"ada@example.com"}
+
+    msg = EmailMessage()
+    msg["From"] = "Ada <ada@example.com>"
+    msg["Subject"] = "Report"
+    msg["Message-ID"] = "<m1@example.com>"
+    msg.set_content("See attached.")
+    msg.add_attachment(b"pdf", maintype="application", subtype="pdf", filename="report.pdf", cid="<cid-1>")
+
+    assert adapter._body(msg).strip() == "See attached."
+    assert adapter._attachments(msg) == [{
+        "id": "cid-1",
+        "type": "application/pdf",
+        "media_type": "application/pdf",
+        "filename": "report.pdf",
+        "size": 3,
+        "source": "email",
+    }]
+
+    sent = []
+
+    class FakeSMTP:
+        def __init__(self, host, port):
+            assert (host, port) == ("smtp.example.com", 465)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def login(self, address, password):
+            assert (address, password) == ("bot@example.com", "pw")
+
+        def send_message(self, message):
+            sent.append(message)
+
+    import smtplib
+
+    monkeypatch.setattr(smtplib, "SMTP_SSL", FakeSMTP)
+    adapter.send(
+        "ada@example.com",
+        "done",
+        subject="Re: Report",
+        metadata={"message_id": "<m1@example.com>", "references": "<root@example.com>"},
+    )
+
+    assert sent[0]["In-Reply-To"] == "<m1@example.com>"
+    assert sent[0]["References"] == "<root@example.com> <m1@example.com>"
+
+
+def test_ntfy_adapter_preserves_metadata_headers_and_attachments(monkeypatch):
+    monkeypatch.setenv("NTFY_TOPIC", "aegis-alerts")
+    monkeypatch.setenv("NTFY_TOKEN", "secret-token")
+    from aegis.gateway.ntfy_channel import NtfyAdapter
+
+    adapter = NtfyAdapter()
+    event = {
+        "id": "evt1",
+        "topic": "aegis-alerts",
+        "message": "build done",
+        "title": "Build",
+        "tags": ["white_check_mark"],
+        "priority": 4,
+        "click": "https://ci.example.com",
+        "attachment": {
+            "url": "https://ci.example.com/log.txt",
+            "name": "log.txt",
+            "type": "text/plain",
+            "size": 123,
+        },
+    }
+    assert adapter._attachments_from_event(event) == [{
+        "id": "https://ci.example.com/log.txt",
+        "type": "text/plain",
+        "media_type": "text/plain",
+        "filename": "log.txt",
+        "url": "https://ci.example.com/log.txt",
+        "size": 123,
+        "source": "ntfy",
+    }]
+    assert adapter._send_headers({
+        "title": "Build",
+        "tags": ["white_check_mark", "robot"],
+        "priority": 4,
+        "click": "https://ci.example.com",
+    }) == {
+        "Authorization": "Bearer secret-token",
+        "Title": "Build",
+        "Tags": "white_check_mark,robot",
+        "Priority": "4",
+        "Click": "https://ci.example.com",
+    }
 
 
 def test_slack_adapter_enforces_workspace_filters_and_strips_mentions(monkeypatch):

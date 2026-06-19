@@ -16,6 +16,9 @@ from .base import BasePlatformAdapter, Dispatch, MessageEvent
 
 class MatrixAdapter(BasePlatformAdapter):
     name = "matrix"
+    renders_tables = False
+    transport = "matrix_sync"
+    supports_threads = True
 
     def __init__(self):
         self.homeserver = os.environ.get("MATRIX_HOMESERVER")
@@ -49,12 +52,19 @@ class MatrixAdapter(BasePlatformAdapter):
             async def on_message(room, event):  # noqa: ANN001
                 if event.sender == client.user_id:
                     return  # ignore our own echoes to avoid loops
+                thread_id = self._thread_id_from_event(event)
                 ev = MessageEvent(
                     platform="matrix", chat_id=room.room_id,
                     text=event.body, user_id=event.sender,
                     user_name=room.user_name(event.sender),
+                    thread_id=thread_id,
                     message_id=str(getattr(event, "event_id", "") or "") or None,
                     timestamp=getattr(event, "server_timestamp", None),
+                    metadata={
+                        "room_id": room.room_id,
+                        "event_id": str(getattr(event, "event_id", "") or ""),
+                        "thread_id": thread_id,
+                    },
                 )
                 self._submit_inbound(ev)
 
@@ -66,14 +76,36 @@ class MatrixAdapter(BasePlatformAdapter):
 
         asyncio.run(_run())
 
-    def send(self, chat_id: str, text: str) -> None:
+    def _thread_id_from_event(self, event) -> str | None:  # noqa: ANN001
+        source = getattr(event, "source", None)
+        content = source.get("content") if isinstance(source, dict) else getattr(event, "content", None)
+        relates = content.get("m.relates_to") if isinstance(content, dict) else None
+        if not isinstance(relates, dict):
+            return None
+        rel_type = str(relates.get("rel_type") or "")
+        if rel_type != "m.thread":
+            return None
+        return str(relates.get("event_id") or "").strip() or None
+
+    def _message_content(self, text: str, metadata: dict | None = None) -> dict:
+        content = {"msgtype": "m.text", "body": text}
+        thread_id = str((metadata or {}).get("thread_id") or "").strip()
+        if thread_id:
+            content["m.relates_to"] = {
+                "rel_type": "m.thread",
+                "event_id": thread_id,
+                "is_falling_back": True,
+            }
+        return content
+
+    def send(self, chat_id: str, text: str, *, metadata: dict | None = None) -> None:
         client, loop = self._client, self._loop
         if client is None or loop is None:
             return
         coro = client.room_send(
             room_id=chat_id,
             message_type="m.room.message",
-            content={"msgtype": "m.text", "body": text},
+            content=self._message_content(text, metadata),
         )
         try:
             asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=30)
