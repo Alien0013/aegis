@@ -344,17 +344,29 @@ class DiscordAdapter(BasePlatformAdapter):
     def _chat_and_thread_ids_from_channel(self, channel) -> tuple[str, str | None]:  # noqa: ANN001
         channel_id = str(getattr(channel, "id", "") or "")
         parent = getattr(channel, "parent", None)
-        if parent is not None:
+        if parent is not None and self._is_thread_channel(channel):
             parent_id = str(getattr(parent, "id", "") or "")
             if parent_id and parent_id != channel_id:
                 return parent_id, channel_id
         return channel_id, None
 
+    def _is_thread_channel(self, channel) -> bool:  # noqa: ANN001
+        cls_name = channel.__class__.__name__.lower()
+        type_value = getattr(channel, "type", None)
+        type_name = str(getattr(type_value, "name", type_value) or "").lower()
+        if "thread" in cls_name or "thread" in type_name:
+            return True
+        return bool(
+            getattr(channel, "parent_id", None)
+            and hasattr(channel, "owner_id")
+            and hasattr(channel, "message_count")
+        )
+
     def send(self, chat_id: str, text: str, *, metadata: dict | None = None) -> None:
         client = getattr(self, "_client", None)
         loop = getattr(self, "_loop", None)
         if client is None or loop is None:
-            return
+            raise RuntimeError("discord client is not started")
 
         async def send_all():
             channel = await self._discord_target_channel(chat_id, metadata)
@@ -362,19 +374,33 @@ class DiscordAdapter(BasePlatformAdapter):
                 if chunk:
                     await self._discord_send_text(channel, chunk)
 
-        try:
-            asyncio.run_coroutine_threadsafe(send_all(), loop).result(timeout=60)
-        except Exception:  # noqa: BLE001
-            pass
+        asyncio.run_coroutine_threadsafe(send_all(), loop).result(timeout=60)
 
     async def _discord_target_channel(self, chat_id: str, metadata: dict | None = None):  # noqa: ANN001
         client = getattr(self, "_client", None)
         if client is None:
             raise RuntimeError("discord client is not started")
         target_id = str((metadata or {}).get("thread_id") or chat_id)
-        channel = client.get_channel(int(target_id)) if target_id.isdigit() else None
+        try:
+            return await self._fetch_discord_channel(target_id)
+        except Exception as exc:  # noqa: BLE001
+            if target_id == str(chat_id or ""):
+                raise
+            try:
+                return await self._fetch_discord_channel(str(chat_id or ""))
+            except Exception:  # noqa: BLE001
+                raise exc
+
+    async def _fetch_discord_channel(self, channel_id: str):  # noqa: ANN001
+        client = getattr(self, "_client", None)
+        if client is None:
+            raise RuntimeError("discord client is not started")
+        if not str(channel_id or "").strip():
+            raise RuntimeError("discord channel id is empty")
+        channel_id = str(channel_id or "").strip()
+        channel = client.get_channel(int(channel_id)) if channel_id.isdigit() else None
         if channel is None:
-            channel = await client.fetch_channel(int(target_id))
+            channel = await client.fetch_channel(int(channel_id))
         return channel
 
     def send_media(
@@ -389,7 +415,7 @@ class DiscordAdapter(BasePlatformAdapter):
         client = getattr(self, "_client", None)
         loop = getattr(self, "_loop", None)
         if client is None or loop is None:
-            return
+            raise RuntimeError("discord client is not started")
 
         async def send_all():
             import os
@@ -414,10 +440,7 @@ class DiscordAdapter(BasePlatformAdapter):
                 prefix = f"{caption}\n" if caption else ""
                 await self._discord_send_text(channel, f"{prefix}📎 {path}")
 
-        try:
-            asyncio.run_coroutine_threadsafe(send_all(), loop).result(timeout=60)
-        except Exception:  # noqa: BLE001
-            pass
+        asyncio.run_coroutine_threadsafe(send_all(), loop).result(timeout=60)
 
     def _before_dispatch(self, ev: MessageEvent):
         channel = getattr(ev, "_discord_channel", None)

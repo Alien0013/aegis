@@ -715,6 +715,11 @@ def test_discord_adapter_enforces_guild_filters_and_trigger_mode(monkeypatch):
     assert adapter._trigger_allowed(message("hello", guild_id="G1", mentions=[bot]), client) is True
     assert adapter._trigger_allowed(message("hello", guild_id="G1", reply_author_id="BOT"), client) is True
     assert adapter._trigger_allowed(message("plain dm", guild_id=""), client) is True
+    category = Obj(id="CAT", type=Obj(name="category"))
+    text_channel = Obj(id="C1", parent=category, type=Obj(name="text"))
+    thread_channel = Obj(id="T1", parent=Obj(id="C1"), type=Obj(name="public_thread"))
+    assert adapter._chat_and_thread_ids_from_channel(text_channel) == ("C1", None)
+    assert adapter._chat_and_thread_ids_from_channel(thread_channel) == ("C1", "T1")
 
     attachment = Obj(
         id="A1",
@@ -850,6 +855,7 @@ def test_discord_app_commands_respect_security_filters(monkeypatch):
 
 def test_discord_adapter_native_media_upload_targets_threads(monkeypatch, tmp_path):
     import asyncio
+    import pytest
     import sys
     import types
 
@@ -907,11 +913,21 @@ def test_discord_adapter_native_media_upload_targets_threads(monkeypatch, tmp_pa
         adapter._client = FakeClient()
         adapter._loop = loop
 
+        adapter.send("10", "stale thread fallback", metadata={"thread_id": "99"})
+        assert adapter._client.channels[10].sent == [
+            (("stale thread fallback",), {"allowed_mentions": "none"}),
+        ]
+
+        with pytest.raises(KeyError):
+            adapter.send("404", "missing target", metadata={"thread_id": "99"})
+
         adapter.send_image("10", str(path), caption="cap", metadata={"thread_id": "20"})
         assert adapter._client.channels[20].sent == [
             ((), {"file": {"file": str(path)}, "content": "cap", "allowed_mentions": "none"}),
         ]
-        assert adapter._client.channels[10].sent == []
+        assert adapter._client.channels[10].sent == [
+            (("stale thread fallback",), {"allowed_mentions": "none"}),
+        ]
 
         adapter.send_document("10", str(missing), caption="missing", metadata={"thread_id": "20"})
         assert adapter._client.channels[20].sent[-1] == (
