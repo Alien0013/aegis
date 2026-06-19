@@ -68,15 +68,15 @@ def test_config_summary_prints_hermes_style_terminal_surface(monkeypatch, capsys
 
     out = capsys.readouterr().out
     assert "AEGIS Configuration" in out
-    assert "◆ Paths" in out and "Config:" in out and "Secrets:" in out
-    assert "◆ Services" in out and "API adapter:" in out and "Dashboard:" in out
+    assert "== Paths ==" in out and "Config:" in out and "Secrets:" in out
+    assert "== Services ==" in out and "API adapter:" in out and "Dashboard:" in out
     assert "Desktop:" in out
-    assert "◆ API Keys" in out and "OpenAI" in out and "(set," in out
+    assert "== API Keys ==" in out and "OpenAI" in out and "(set," in out
     assert "sk-test" not in out
     assert "Model" in out and "Active:" in out and "Provider: openai" in out and "Model:    gpt-5.5" in out
     assert "Messaging Platforms" in out and "Telegram:   configured" in out
     assert "WhatsApp:" in out
-    assert "◆ Validation" in out and "Config YAML:  ok" in out and "Value types:  ok" in out
+    assert "== Validation ==" in out and "Config YAML:  ok" in out and "Value types:  ok" in out
     assert "aegis config status" in out
     assert "aegis config edit --secrets" in out
     assert "aegis config get <key>" in out
@@ -2432,6 +2432,81 @@ def test_plugin_yaml_nested_provides_contributions_are_reported(tmp_path):
     assert row["declared_contributions"]["tools"] == ["audit_tool", "trace_export"]
     assert row["contribution_drift"]["tools"]["missing"] == ["audit_tool", "trace_export"]
     assert row["contribution_drift"]["providers"]["missing"] == ["audit-provider", "langfuse-provider"]
+
+
+def test_project_plugins_are_ignored_by_default_and_opt_in_with_env(tmp_path, monkeypatch):
+    from aegis import plugins
+    from aegis.config import Config
+
+    monkeypatch.chdir(tmp_path)
+    pkg = tmp_path / ".aegis" / "plugins" / "demo"
+    pkg.mkdir(parents=True)
+    (pkg / "plugin.yaml").write_text(
+        "name: project-demo\n"
+        "entrypoint: main.py\n"
+        "provides_tools:\n"
+        "  - project_tool\n",
+        encoding="utf-8",
+    )
+    (pkg / "main.py").write_text(
+        "def register(api):\n"
+        "    class T:\n"
+        "        name='project_tool'\n"
+        "    api.register_tool(T())\n",
+        encoding="utf-8",
+    )
+    cfg = Config.load()
+    plugins.clear_runtime_cache()
+
+    assert [m.name for m in plugins.list_manifests(cfg)] == []
+    assert plugins.load_plugins(config=cfg).tools == []
+
+    monkeypatch.setenv("AEGIS_ENABLE_PROJECT_PLUGINS", "1")
+    manifest = next(m for m in plugins.list_manifests(cfg) if m.name == "project-demo")
+    assert manifest.source == "project"
+    assert manifest.key == "project-demo"
+    api = plugins.load_plugins(config=cfg)
+    row = next(r for r in plugins.plugin_status(cfg, api) if r["name"] == "project-demo")
+
+    assert [t.name for t in api.tools] == ["project_tool"]
+    assert row["source"] == "project"
+    assert row["status"] == "loaded"
+    assert row["declared_contributions"]["tools"] == ["project_tool"]
+
+
+def test_hermes_project_plugins_config_opt_in_and_safe_mode(tmp_path, monkeypatch):
+    from aegis import plugins
+    from aegis.config import Config
+
+    monkeypatch.chdir(tmp_path)
+    pkg = tmp_path / ".hermes" / "plugins" / "ops" / "pulse"
+    pkg.mkdir(parents=True)
+    (pkg / "plugin.yaml").write_text(
+        "name: pulse\n"
+        "entrypoint: __init__.py\n"
+        "kind: observability\n",
+        encoding="utf-8",
+    )
+    (pkg / "__init__.py").write_text(
+        "def register(api):\n"
+        "    class T:\n"
+        "        name='pulse_tool'\n"
+        "    api.register_tool(T())\n",
+        encoding="utf-8",
+    )
+    cfg = Config.load()
+    cfg.data.setdefault("plugins", {})["project_plugins"] = True
+    plugins.clear_runtime_cache()
+
+    manifest = next(m for m in plugins.list_manifests(cfg) if m.name == "pulse")
+    assert manifest.source == "project"
+    assert manifest.key == "ops/pulse"
+    assert manifest.category == "ops"
+    assert [t.name for t in plugins.load_plugins(config=cfg).tools] == ["pulse_tool"]
+
+    monkeypatch.setenv("HERMES_SAFE_MODE", "1")
+    assert plugins.list_manifests(cfg) == []
+    assert plugins.load_plugins(config=cfg).tools == []
 
 
 def test_hermes_entrypoint_plugins_are_discovered_opt_in_and_reported(tmp_path, monkeypatch):

@@ -276,12 +276,76 @@ def _plugin_base() -> Path:
     return cfg.sub("plugins")
 
 
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _env_truthy(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def safe_mode_enabled() -> bool:
     return _env_truthy("AEGIS_SAFE_MODE") or _env_truthy("HERMES_SAFE_MODE")
+
+
+def _project_plugins_enabled(config=None) -> bool:
+    if _env_truthy("AEGIS_ENABLE_PROJECT_PLUGINS") or _env_truthy("HERMES_ENABLE_PROJECT_PLUGINS"):
+        return True
+    if config is None:
+        return False
+    for key in ("plugins.enable_project", "plugins.project", "plugins.project_plugins"):
+        if _truthy(config.get(key, False)):
+            return True
+    return False
+
+
+def _project_plugin_bases() -> list[Path]:
+    roots: list[Path] = []
+    seen_roots: set[Path] = set()
+
+    def add_root(path: Path | str | None) -> None:
+        if not path:
+            return
+        try:
+            root = Path(path).resolve()
+        except OSError:
+            return
+        if root not in seen_roots:
+            seen_roots.add(root)
+            roots.append(root)
+
+    add_root(Path.cwd())
+    try:
+        from .lsp.workspace import find_git_worktree
+
+        add_root(find_git_worktree(str(Path.cwd())))
+    except Exception:  # noqa: BLE001 - project plugin discovery must stay optional.
+        pass
+
+    user_base = _plugin_base().resolve()
+    bases: list[Path] = []
+    seen_bases: set[Path] = set()
+    for root in roots:
+        for rel in ((".aegis", "plugins"), (".hermes", "plugins")):
+            base = root.joinpath(*rel).resolve()
+            if base == user_base or base in seen_bases:
+                continue
+            seen_bases.add(base)
+            bases.append(base)
+    return bases
+
+
+def _plugin_bases(config=None) -> list[tuple[Path, str]]:
+    bases: list[tuple[Path, str]] = [(_plugin_base(), "user")]
+    if not _project_plugins_enabled(config):
+        return bases
+    for base in _project_plugin_bases():
+        bases.append((base, "project"))
+    return bases
 
 
 def _contained_path(root: Path, path: Path) -> bool:
@@ -674,39 +738,39 @@ def _read_manifest(path: Path, config=None, *, base: Path | None = None,
 def list_manifests(config=None) -> list[PluginManifest]:
     if safe_mode_enabled():
         return []
-    base = _plugin_base()
     found: list[PluginManifest] = []
-    if not base.exists():
-        return _entrypoint_manifests(config)
-    seen: set[Path] = set()
-    seen_manifest_dirs: set[Path] = set()
-    for name in MANIFEST_NAMES:
-        for path in sorted(base.rglob(name)):
-            manifest_dir = path.parent.resolve()
-            if manifest_dir in seen_manifest_dirs:
-                continue
-            _data, error = _read_manifest_data_with_error(path)
-            if error:
-                seen_manifest_dirs.add(manifest_dir)
-                continue
-            manifest = _read_manifest(path, config, base=base, source="user")
-            if manifest:
-                seen_manifest_dirs.add(manifest_dir)
-                found.append(manifest)
-                if manifest.entrypoint:
-                    seen.add(manifest.entrypoint)
-    for path in sorted(base.glob("*.py")):
-        if path in seen or path.name.startswith("_"):
+    for base, source in _plugin_bases(config):
+        if not base.exists():
             continue
-        name = path.stem
-        found.append(PluginManifest(
-            name=name,
-            key=name,
-            path=path,
-            entrypoint=path,
-            source="user",
-            enabled=_manifest_enabled(name, name, config),
-        ))
+        seen: set[Path] = set()
+        seen_manifest_dirs: set[Path] = set()
+        for name in MANIFEST_NAMES:
+            for path in sorted(base.rglob(name)):
+                manifest_dir = path.parent.resolve()
+                if manifest_dir in seen_manifest_dirs:
+                    continue
+                _data, error = _read_manifest_data_with_error(path)
+                if error:
+                    seen_manifest_dirs.add(manifest_dir)
+                    continue
+                manifest = _read_manifest(path, config, base=base, source=source)
+                if manifest:
+                    seen_manifest_dirs.add(manifest_dir)
+                    found.append(manifest)
+                    if manifest.entrypoint:
+                        seen.add(manifest.entrypoint)
+        for path in sorted(base.glob("*.py")):
+            if path in seen or path.name.startswith("_"):
+                continue
+            name = path.stem
+            found.append(PluginManifest(
+                name=name,
+                key=name,
+                path=path,
+                entrypoint=path,
+                source=source,
+                enabled=_manifest_enabled(name, name, config),
+            ))
     found.extend(_entrypoint_manifests(config))
     return found
 
@@ -1287,17 +1351,19 @@ def load_plugins(*, quiet: bool = False, config=None) -> PluginAPI:
     api = PluginAPI()
     if safe_mode_enabled():
         return api
-    base = _plugin_base()
     if config is None:
         try:
             from .config import Config
             config = Config.load()
         except Exception:  # noqa: BLE001
             config = None
+    bases = _plugin_bases(config)
     manifest_entries = list_manifests(config)
     handled: set[Path] = set()
     manifest_dirs = {m.path.parent for m in manifest_entries if m.path.name in MANIFEST_NAMES}
-    invalid_manifests = _invalid_manifest_records(base)
+    invalid_manifests: list[tuple[Path, str]] = []
+    for base, _source in bases:
+        invalid_manifests.extend(_invalid_manifest_records(base))
     invalid_manifest_dirs = {path.parent.resolve() for path, _error in invalid_manifests}
     manifest_dirs.update(invalid_manifest_dirs)
     for path, error in invalid_manifests:
@@ -1321,7 +1387,9 @@ def load_plugins(*, quiet: bool = False, config=None) -> PluginAPI:
             _load_plugin_file(api, manifest.entrypoint, quiet=quiet)
         else:
             api.errors.append((manifest.path, f"entrypoint not found: {manifest.entrypoint}"))
-    if base.exists():
+    for base, _source in bases:
+        if not base.exists():
+            continue
         for f in sorted(base.glob("*.py")):
             if f.name.startswith(("_", ".")) or f in handled:
                 continue
