@@ -1604,6 +1604,64 @@ def test_fastapi_dashboard_chat_stream_persists_session_and_run_across_app_recre
     ]
 
 
+def test_fastapi_legacy_chat_fallback_uses_cancellable_json_path(tmp_path, monkeypatch):
+    import threading
+
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    monkeypatch.setenv("AEGIS_DASHBOARD_TOKEN", "t")
+
+    from aegis.config import Config
+    from aegis.dashboard_fastapi import create_app
+    from aegis.session import Session
+    import aegis.surface as surface
+
+    seen: dict[str, object] = {}
+
+    class Runner:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def load_or_create_session(self, session_id=None, **kwargs):
+            seen["load_kwargs"] = kwargs
+            return Session(id=session_id or "dash:legacy-fallback", title="legacy fallback")
+
+        def make_agent(self, **kwargs):
+            seen["make_agent_kwargs"] = kwargs
+            return types.SimpleNamespace(cancel_event=threading.Event())
+
+        def run_prompt(self, prompt, **kwargs):  # noqa: ANN001
+            seen["run_kwargs"] = kwargs
+            return types.SimpleNamespace(
+                text=f"legacy:{prompt}",
+                session=kwargs["session"],
+                trace_id="trace_legacy",
+                turn_id="turn_legacy",
+                run_id="run_legacy",
+            )
+
+    monkeypatch.setattr(surface, "SurfaceRunner", Runner)
+    app = create_app(Config.load())
+
+    response = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/legacy-chat",
+        json={"message": "hello", "session_id": "dash:legacy-fallback"},
+        headers={"X-Aegis-Token": "t"},
+    ))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["reply"] == "legacy:hello"
+    assert body["session_id"] == "dash:legacy-fallback"
+    assert body["trace_id"] == "trace_legacy"
+    assert seen["run_kwargs"]["surface"] == "dashboard"
+    assert seen["run_kwargs"]["reuse_agent"] is False
+    assert "agent" in seen["run_kwargs"]
+    assert "session" in seen["run_kwargs"]
+    assert "session_id" not in seen["run_kwargs"]
+
+
 def test_fastapi_dashboard_chat_stream_disconnect_cancels_live_agent():
     import threading
 

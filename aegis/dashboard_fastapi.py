@@ -4287,7 +4287,17 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
     return {"error": "not found"}
 
 
-def _api_post(path: str, body: dict, config: Config, chat_runner: Any) -> dict:
+_CHAT_FALLBACK = object()
+
+
+def _api_post(
+    path: str,
+    body: dict,
+    config: Config,
+    chat_runner: Any,
+    *,
+    chat_fallback: bool = True,
+) -> dict | object:
     if path in {
         "/api/session-checks",
         "/api/session-checks/repair",
@@ -4645,6 +4655,8 @@ def _api_post(path: str, body: dict, config: Config, chat_runner: Any) -> dict:
         return {"ok": True, "path": str(target)}
     if path in {"/api/files/delete", "/api/fs/delete"}:
         return _delete_managed_file(body)
+    if not chat_fallback:
+        return _CHAT_FALLBACK
     return dash._dashboard_chat_response(body, chat_runner)
 
 
@@ -6512,7 +6524,10 @@ def create_app(config: Config) -> FastAPI:
             body = {}
         if f"/api/{path}" == "/api/chat":
             return await _dashboard_chat_json_response(body, chat_runner, request)
-        return JSONResponse(_api_post(f"/api/{path}", body, config, chat_runner))
+        result = _api_post(f"/api/{path}", body, config, chat_runner, chat_fallback=False)
+        if result is _CHAT_FALLBACK:
+            return await _dashboard_chat_json_response(body, chat_runner, request)
+        return JSONResponse(result)
 
     @app.websocket("/api/pty")
     async def pty_socket(ws: WebSocket) -> None:
