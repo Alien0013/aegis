@@ -51,6 +51,26 @@ def _list_of_strings(value) -> list[str]:  # noqa: ANN001
     return [text] if text else []
 
 
+def _dict_value(value) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _string_value(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (str, int, float, bool)):
+        return str(value).strip()
+    return ""
+
+
+def _first_string(*values) -> str:  # noqa: ANN001
+    for value in values:
+        text = _string_value(value)
+        if text:
+            return text
+    return ""
+
+
 class MattermostAdapter(BasePlatformAdapter):
     name = "mattermost"
     renders_tables = False
@@ -72,6 +92,7 @@ class MattermostAdapter(BasePlatformAdapter):
             or os.environ.get("MATTERMOST_OUTGOING_TOKEN")
             or ""
         )
+        self.action_url = os.environ.get("MATTERMOST_ACTION_URL", "").strip()
         self.bot_user_id = os.environ.get("MATTERMOST_BOT_USER_ID", "").strip()
         self.allow_unsigned_loopback = _env_bool("MATTERMOST_ALLOW_UNSIGNED_LOOPBACK", True)
         self._delivery_cache = DeliveryIdCache(
@@ -90,10 +111,12 @@ class MattermostAdapter(BasePlatformAdapter):
             "port": self.port,
             "security": {
                 "webhook_secret_configured": bool(self.webhook_secret),
+                "action_url_configured": bool(self.action_url),
                 "auth_type": "bearer",
                 "loopback_unsigned_allowed": self.allow_unsigned_loopback,
                 "insecure_env_override": _env_truthy("MATTERMOST_INSECURE_NO_AUTH"),
             },
+            "supports_interactive_prompts": True,
             "idempotency": {
                 "delivery_id_sources": [
                     "X-Request-ID",
@@ -179,8 +202,41 @@ class MattermostAdapter(BasePlatformAdapter):
             return ""
         return self.bot_user_id
 
+    def _interactive_text_from_body(self, body: dict) -> str:
+        context = _dict_value(body.get("context"))
+        selected = _dict_value(body.get("selected_option") or context.get("selected_option"))
+        action = _dict_value(body.get("action"))
+        event_type = _string_value(body.get("type") or body.get("event_type") or body.get("kind")).lower()
+        if event_type and event_type not in {
+            "action",
+            "interactive",
+            "button",
+            "clarify_response",
+            "approval_response",
+            "exec_approval_response",
+        }:
+            event_type = ""
+        if not (event_type or context or selected or action or body.get("action_id")):
+            return ""
+        return _first_string(
+            body.get("value"),
+            body.get("choice"),
+            body.get("answer"),
+            body.get("selected"),
+            context.get("value"),
+            context.get("choice"),
+            context.get("answer"),
+            context.get("action"),
+            selected.get("value"),
+            selected.get("text"),
+            selected.get("name"),
+            action.get("value"),
+            action.get("text"),
+        )
+
     def _event_from_body(self, body: dict) -> MessageEvent:
-        body_text = str(body.get("text") or body.get("message") or "")
+        interactive_text = self._interactive_text_from_body(body)
+        body_text = interactive_text or str(body.get("text") or body.get("message") or "")
         command_name = str(body.get("command") or "").strip()
         raw_text = f"{command_name} {body_text}".strip() if command_name else body_text
         text = normalize_inbound_command(raw_text, platform="mattermost")
@@ -207,6 +263,12 @@ class MattermostAdapter(BasePlatformAdapter):
                 metadata["response_url"] = body.get("response_url")
             if body.get("trigger_id"):
                 metadata["trigger_id"] = body.get("trigger_id")
+        if interactive_text:
+            metadata["source"] = "interactive_action"
+            metadata["action_id"] = _string_value(body.get("action_id") or body.get("callback_id"))
+            context = _dict_value(body.get("context"))
+            if context.get("type"):
+                metadata["action_type"] = _string_value(context.get("type"))
         return MessageEvent(
             platform="mattermost",
             chat_id=channel_id,
@@ -374,18 +436,120 @@ class MattermostAdapter(BasePlatformAdapter):
         with httpx.Client(timeout=30) as client:
             root_id = self._resolve_root_id(client, chat_id, metadata)
             for chunk in chunk_text_by_units(text, limit=16000):
-                payload = {"channel_id": chat_id, "message": chunk}
-                if root_id:
-                    payload["root_id"] = root_id
-                response = client.post(f"{self.base_url}/api/v4/posts", headers=headers, json=payload)
-                try:
-                    response.raise_for_status()
-                except httpx.HTTPStatusError as exc:
-                    if not root_id or not self._broken_root_response(exc):
-                        raise
-                    fallback = {"channel_id": chat_id, "message": chunk}
-                    retry = client.post(f"{self.base_url}/api/v4/posts", headers=headers, json=fallback)
-                    retry.raise_for_status()
+                self._post_message(client, chat_id, {"message": chunk}, root_id=root_id, headers=headers)
+
+    def _post_message(
+        self,
+        client: httpx.Client,
+        chat_id: str,
+        payload: dict,
+        *,
+        root_id: str = "",
+        headers: dict | None = None,
+    ) -> None:
+        headers = headers or {"Authorization": f"Bearer {self.token}"}
+        post_payload = {"channel_id": chat_id, **payload}
+        if root_id:
+            post_payload["root_id"] = root_id
+        response = client.post(f"{self.base_url}/api/v4/posts", headers=headers, json=post_payload)
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            if not root_id or not self._broken_root_response(exc):
+                raise
+            fallback = {"channel_id": chat_id, **payload}
+            retry = client.post(f"{self.base_url}/api/v4/posts", headers=headers, json=fallback)
+            retry.raise_for_status()
+
+    def _interactive_action(self, *, name: str, value: str, kind: str) -> dict:
+        return {
+            "id": f"aegis_{kind}",
+            "name": str(name or value)[:75] or "Choose",
+            "integration": {
+                "url": self.action_url,
+                "context": {
+                    "source": "aegis",
+                    "type": kind,
+                    "value": str(value or ""),
+                },
+            },
+        }
+
+    def _post_interactive_prompt(
+        self,
+        chat_id: str,
+        text: str,
+        actions: list[dict],
+        *,
+        metadata: dict | None = None,
+    ) -> None:
+        headers = {"Authorization": f"Bearer {self.token}"}
+        with httpx.Client(timeout=30) as client:
+            root_id = self._resolve_root_id(client, chat_id, metadata)
+            self._post_message(
+                client,
+                chat_id,
+                {
+                    "message": text,
+                    "props": {
+                        "attachments": [{
+                            "text": text,
+                            "actions": actions,
+                        }],
+                    },
+                },
+                root_id=root_id,
+                headers=headers,
+            )
+
+    def send_clarify(
+        self,
+        chat_id: str,
+        question: str,
+        choices: list[str] | None = None,
+        *,
+        metadata: dict | None = None,
+    ) -> None:
+        choice_values = [str(choice).strip() for choice in (choices or []) if str(choice).strip()]
+        if not self.action_url or not choice_values:
+            return super().send_clarify(chat_id, question, choices or [], metadata=metadata)
+        actions = [
+            self._interactive_action(name=choice, value=choice, kind="clarify")
+            for choice in choice_values[:5]
+        ]
+        try:
+            self._post_interactive_prompt(
+                chat_id,
+                str(question or "").strip() or "Choose one:",
+                actions,
+                metadata=metadata,
+            )
+        except Exception:  # noqa: BLE001
+            super().send_clarify(chat_id, question, choices or [], metadata=metadata)
+
+    def send_exec_approval(
+        self,
+        chat_id: str,
+        prompt: str,
+        *,
+        metadata: dict | None = None,
+    ) -> None:
+        if not self.action_url:
+            return super().send_exec_approval(chat_id, prompt, metadata=metadata)
+        actions = [
+            self._interactive_action(name="Approve", value="approve", kind="exec_approval"),
+            self._interactive_action(name="Always", value="always", kind="exec_approval"),
+            self._interactive_action(name="Deny", value="deny", kind="exec_approval"),
+        ]
+        try:
+            self._post_interactive_prompt(
+                chat_id,
+                str(prompt or "").strip() or "Approve this action?",
+                actions,
+                metadata=metadata,
+            )
+        except Exception:  # noqa: BLE001
+            super().send_exec_approval(chat_id, prompt, metadata=metadata)
 
     def add_reaction(self, chat_id: str, message_id: str, reaction: str) -> None:  # noqa: ARG002
         post_id = str(message_id or "").strip()

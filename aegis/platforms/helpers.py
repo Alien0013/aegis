@@ -130,6 +130,7 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
         "optional_env": [
             "MATTERMOST_WEBHOOK_SECRET",
             "MATTERMOST_OUTGOING_TOKEN",
+            "MATTERMOST_ACTION_URL",
             "MATTERMOST_CHANNEL_PORT",
             "MATTERMOST_BOT_USER_ID",
             "MATTERMOST_ALLOW_UNSIGNED_LOOPBACK",
@@ -143,11 +144,13 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
         "supports_threads": True,
         "supports_media": False,
         "supports_reactions": True,
+        "supports_interactive_prompts": True,
         "typed_command_prefix": "!",
         "security": {
             "auth_type": "bearer",
             "webhook_secret_env": "MATTERMOST_WEBHOOK_SECRET",
             "outgoing_token_env": "MATTERMOST_OUTGOING_TOKEN",
+            "action_url_env": "MATTERMOST_ACTION_URL",
             "loopback_unsigned_env": "MATTERMOST_ALLOW_UNSIGNED_LOOPBACK",
             "rate_limit_env": "MATTERMOST_RATE_LIMIT_PER_MINUTE",
             "idempotency_env": [

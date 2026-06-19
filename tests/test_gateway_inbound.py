@@ -500,6 +500,9 @@ def test_platform_helper_command_caps_and_utf16_chunks():
     assert platform_metadata("sl")["supports_reactions"] is True
     mattermost_meta = platform_metadata("mattermost-webhook")
     assert mattermost_meta["security"]["auth_type"] == "bearer"
+    assert mattermost_meta["supports_interactive_prompts"] is True
+    assert "MATTERMOST_ACTION_URL" in mattermost_meta["optional_env"]
+    assert mattermost_meta["security"]["action_url_env"] == "MATTERMOST_ACTION_URL"
     assert "MATTERMOST_RATE_LIMIT_PER_MINUTE" in mattermost_meta["optional_env"]
     assert mattermost_meta["security"]["idempotency_env"] == [
         "MATTERMOST_IDEMPOTENCY_TTL_SECONDS",
@@ -571,6 +574,8 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert mattermost["transport"] == "http_webhook"
     assert mattermost["supports_threads"] is True
     assert mattermost["supports_reactions"] is True
+    assert mattermost["supports_interactive_prompts"] is True
+    assert mattermost["security"]["action_url_configured"] is False
     assert mattermost["security"]["auth_type"] == "bearer"
     webhook = WebhookChannel().metadata
     assert webhook["transport"] == "http"
@@ -2942,6 +2947,19 @@ def test_gateway_mattermost_channel_normalizes_event_body_and_alias(monkeypatch)
         },
     ]
 
+    action = adapter._event_from_body({
+        "channel_id": "channel-1",
+        "user_id": "user-1",
+        "user_name": "ada",
+        "post_id": "post-action",
+        "action_id": "aegis_exec_approval",
+        "context": {"type": "exec_approval", "value": "approve"},
+    })
+    assert action.text == "approve"
+    assert action.metadata["source"] == "interactive_action"
+    assert action.metadata["action_id"] == "aegis_exec_approval"
+    assert action.metadata["action_type"] == "exec_approval"
+
 
 def test_gateway_mattermost_native_slash_commands_preserve_command_name(monkeypatch):
     from aegis.gateway.mattermost_channel import MattermostAdapter
@@ -3125,6 +3143,134 @@ def test_gateway_mattermost_send_uses_clean_root_id(monkeypatch):
     assert sent[3][2] == {"channel_id": "channel-1", "message": "null root"}
     assert sent[4][2] == {"channel_id": "channel-1", "message": "parent reply", "root_id": "root-2"}
     assert sent[5][2] == {"channel_id": "channel-1", "message": "self root"}
+
+
+def test_gateway_mattermost_interactive_prompts_use_action_buttons(monkeypatch):
+    from aegis.gateway import mattermost_channel
+    from aegis.gateway.mattermost_channel import MattermostAdapter
+
+    monkeypatch.setenv("MATTERMOST_URL", "https://mattermost.test")
+    monkeypatch.setenv("MATTERMOST_BOT_TOKEN", "mm-token")
+    monkeypatch.setenv("MATTERMOST_ACTION_URL", "https://aegis.example/mattermost/action")
+    sent = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, url, *, headers, json):
+            sent.append((url, headers, dict(json)))
+            return FakeResponse()
+
+    monkeypatch.setattr(mattermost_channel.httpx, "Client", FakeClient)
+
+    adapter = MattermostAdapter()
+    assert adapter.metadata["security"]["action_url_configured"] is True
+    adapter.send_clarify("channel-1", "Pick a deploy lane?", ["stable", "canary"])
+    adapter.send_exec_approval("channel-1", "Run deploy?")
+
+    assert sent == [
+        (
+            "https://mattermost.test/api/v4/posts",
+            {"Authorization": "Bearer mm-token"},
+            {
+                "channel_id": "channel-1",
+                "message": "Pick a deploy lane?",
+                "props": {
+                    "attachments": [{
+                        "text": "Pick a deploy lane?",
+                        "actions": [
+                            {
+                                "id": "aegis_clarify",
+                                "name": "stable",
+                                "integration": {
+                                    "url": "https://aegis.example/mattermost/action",
+                                    "context": {
+                                        "source": "aegis",
+                                        "type": "clarify",
+                                        "value": "stable",
+                                    },
+                                },
+                            },
+                            {
+                                "id": "aegis_clarify",
+                                "name": "canary",
+                                "integration": {
+                                    "url": "https://aegis.example/mattermost/action",
+                                    "context": {
+                                        "source": "aegis",
+                                        "type": "clarify",
+                                        "value": "canary",
+                                    },
+                                },
+                            },
+                        ],
+                    }],
+                },
+            },
+        ),
+        (
+            "https://mattermost.test/api/v4/posts",
+            {"Authorization": "Bearer mm-token"},
+            {
+                "channel_id": "channel-1",
+                "message": "Run deploy?",
+                "props": {
+                    "attachments": [{
+                        "text": "Run deploy?",
+                        "actions": [
+                            {
+                                "id": "aegis_exec_approval",
+                                "name": "Approve",
+                                "integration": {
+                                    "url": "https://aegis.example/mattermost/action",
+                                    "context": {
+                                        "source": "aegis",
+                                        "type": "exec_approval",
+                                        "value": "approve",
+                                    },
+                                },
+                            },
+                            {
+                                "id": "aegis_exec_approval",
+                                "name": "Always",
+                                "integration": {
+                                    "url": "https://aegis.example/mattermost/action",
+                                    "context": {
+                                        "source": "aegis",
+                                        "type": "exec_approval",
+                                        "value": "always",
+                                    },
+                                },
+                            },
+                            {
+                                "id": "aegis_exec_approval",
+                                "name": "Deny",
+                                "integration": {
+                                    "url": "https://aegis.example/mattermost/action",
+                                    "context": {
+                                        "source": "aegis",
+                                        "type": "exec_approval",
+                                        "value": "deny",
+                                    },
+                                },
+                            },
+                        ],
+                    }],
+                },
+            },
+        ),
+    ]
 
 
 def test_gateway_mattermost_reactions_use_bot_identity(monkeypatch):

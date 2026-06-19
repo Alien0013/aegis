@@ -1259,6 +1259,7 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
         "optional_env": [
             "MATTERMOST_WEBHOOK_SECRET",
             "MATTERMOST_OUTGOING_TOKEN",
+            "MATTERMOST_ACTION_URL",
             "MATTERMOST_CHANNEL_PORT",
             "MATTERMOST_BOT_USER_ID",
             "MATTERMOST_ALLOW_UNSIGNED_LOOPBACK",
@@ -1272,12 +1273,22 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
         "adapter_class": "aegis.gateway.mattermost_channel.MattermostAdapter",
         "auth_type": "bearer_and_webhook_secret",
         "transport": "http_webhook",
-        "capabilities": ["text", "threads", "webhook_events", "slash_commands", "reactions", "idempotency", "rate_limit"],
+        "capabilities": [
+            "text",
+            "threads",
+            "webhook_events",
+            "slash_commands",
+            "interactive_prompts",
+            "reactions",
+            "idempotency",
+            "rate_limit",
+        ],
         "delivery_modes": ["channel", "thread", "webhook"],
         "security": {
             "auth_type": "bearer",
             "webhook_secret_env": "MATTERMOST_WEBHOOK_SECRET",
             "outgoing_token_env": "MATTERMOST_OUTGOING_TOKEN",
+            "action_url_env": "MATTERMOST_ACTION_URL",
             "loopback_unsigned_env": "MATTERMOST_ALLOW_UNSIGNED_LOOPBACK",
             "rate_limit_env": "MATTERMOST_RATE_LIMIT_PER_MINUTE",
             "idempotency_env": [

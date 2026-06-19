@@ -1027,12 +1027,15 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     assert mattermost["transport"] == "http_webhook"
     assert mattermost["auth_type"] == "bearer_and_webhook_secret"
     assert "MATTERMOST_WEBHOOK_SECRET" in mattermost["optional_env_vars"]
+    assert "MATTERMOST_ACTION_URL" in mattermost["optional_env_vars"]
     assert "MATTERMOST_RATE_LIMIT_PER_MINUTE" in mattermost["optional_env_vars"]
     assert "MATTERMOST_ALLOW_UNSIGNED_LOOPBACK" in mattermost["optional_env_vars"]
     assert "threads" in mattermost["capabilities"]
+    assert "interactive_prompts" in mattermost["capabilities"]
     assert "idempotency" in mattermost["capabilities"]
     assert "reactions" in mattermost["capabilities"]
     assert mattermost["metadata"]["security"]["auth_type"] == "bearer"
+    assert mattermost["metadata"]["security"]["action_url_env"] == "MATTERMOST_ACTION_URL"
     assert mattermost["metadata"]["security"]["idempotency_env"] == [
         "MATTERMOST_IDEMPOTENCY_TTL_SECONDS",
         "MATTERMOST_IDEMPOTENCY_CACHE_MAX",
