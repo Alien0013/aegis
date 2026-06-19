@@ -342,6 +342,15 @@ def test_cli_config_set_rejects_wrong_type_for_known_field(capsys):
     assert "value must be a JSON object" in out.err
     assert isinstance(Config.load().get("memory"), dict)
 
+    assert main(["config", "set", "tools.exec_mode", "garbage"]) == 1
+    out = capsys.readouterr()
+    assert "value must be one of: auto, ask, smart, allowlist, deny, full" in out.err
+    assert Config.load().get("tools.exec_mode") == "auto"
+
+    assert main(["config", "set", "tools.exec_mode", "smart"]) == 0
+    capsys.readouterr()
+    assert Config.load().get("tools.exec_mode") == "smart"
+
 
 def test_cli_config_edit_restores_invalid_yaml(monkeypatch, capsys):
     from types import SimpleNamespace

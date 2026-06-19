@@ -26,7 +26,7 @@ from typing import Annotated, Any
 from urllib.parse import parse_qs, urlsplit
 
 from . import __version__
-from .config import Config, DEFAULT_CONFIG, _deep_merge, config_type_errors
+from .config import Config, CONFIG_FIELD_ENUMS, DEFAULT_CONFIG, _deep_merge, config_type_errors
 
 try:
     from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket
@@ -466,7 +466,7 @@ _CONFIG_FIELD_META: dict[str, dict[str, Any]] = {
     "model.api_mode": {
         "label": "API mode override",
         "description": "Force a transport when auto-detection is not enough.",
-        "enum": ["", "chat_completions", "responses", "anthropic", "codex_app_server"],
+        "enum": list(CONFIG_FIELD_ENUMS["model.api_mode"]),
         "group": "Model",
     },
     "model.context_length": {
@@ -477,44 +477,44 @@ _CONFIG_FIELD_META: dict[str, dict[str, Any]] = {
     "tools.exec_mode": {
         "label": "Tool permissions",
         "description": "How shell/file/network tools ask for or apply permissions.",
-        "enum": ["auto", "ask", "smart", "allowlist", "deny", "full"],
+        "enum": list(CONFIG_FIELD_ENUMS["tools.exec_mode"]),
         "group": "Tools & permissions",
         "restart": "new turns",
     },
     "display.reasoning": {
         "label": "Reasoning display",
         "description": "How much reasoning telemetry the terminal and dashboard show.",
-        "enum": ["summary", "live", "off"],
+        "enum": list(CONFIG_FIELD_ENUMS["display.reasoning"]),
         "group": "Display",
     },
     "display.tool_progress": {
         "label": "Tool progress",
         "description": "How much tool-call progress is shown in dashboard and gateway surfaces.",
-        "enum": ["compact", "detailed"],
+        "enum": list(CONFIG_FIELD_ENUMS["display.tool_progress"]),
         "group": "Display",
     },
     "display.tool_progress_grouping": {
         "label": "Tool progress grouping",
         "description": "Group gateway tool progress into one editable bubble or send each tool as a separate message.",
-        "enum": ["accumulate", "separate"],
+        "enum": list(CONFIG_FIELD_ENUMS["display.tool_progress_grouping"]),
         "group": "Display",
     },
     "display.memory_notifications": {
         "label": "Memory notifications",
         "description": "Chat notification detail for background memory updates.",
-        "enum": ["off", "on", "verbose"],
+        "enum": list(CONFIG_FIELD_ENUMS["display.memory_notifications"]),
         "group": "Display",
     },
     "agent.reasoning_effort": {
         "label": "Reasoning effort",
         "description": "Default reasoning budget for providers that support it.",
-        "enum": ["medium", "high", "low", "minimal", "xhigh", "off"],
+        "enum": list(CONFIG_FIELD_ENUMS["agent.reasoning_effort"]),
         "group": "Agent",
     },
     "agent.service_tier": {
         "label": "Fast mode",
         "description": "Default provider priority tier for models that support Hermes-style fast mode.",
-        "enum": ["", "normal", "priority"],
+        "enum": list(CONFIG_FIELD_ENUMS["agent.service_tier"]),
         "group": "Agent",
     },
     "gateway.channels": {
@@ -526,13 +526,13 @@ _CONFIG_FIELD_META: dict[str, dict[str, Any]] = {
     "gateway.busy_mode": {
         "label": "Busy mode",
         "description": "What happens when a channel message arrives while the agent is mid-turn.",
-        "enum": ["queue", "steer", "interrupt"],
+        "enum": list(CONFIG_FIELD_ENUMS["gateway.busy_mode"]),
         "group": "Gateway",
     },
     "gateway.session_mode": {
         "label": "Session mode",
         "description": "How channel messages map to AEGIS sessions.",
-        "enum": ["main", "per_channel", "per_channel_peer", "per_peer"],
+        "enum": list(CONFIG_FIELD_ENUMS["gateway.session_mode"]),
         "group": "Gateway",
     },
     "gateway.require_mention": {

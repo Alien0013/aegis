@@ -952,7 +952,7 @@ def _config_default_values() -> dict[str, object]:
 
 
 def _parse_config_set_value(key: str, raw_parts: object) -> tuple[object, str]:
-    from ..config import _coerce
+    from ..config import _coerce, config_enum_error
 
     if raw_parts is None:
         return None, "usage: aegis config set <key> <value>"
@@ -1004,6 +1004,9 @@ def _parse_config_set_value(key: str, raw_parts: object) -> tuple[object, str]:
         return None, "value must be a number"
     if isinstance(expected, str) and not isinstance(value, str):
         return None, "value must be a string"
+    enum_error = config_enum_error(key, value)
+    if enum_error:
+        return None, enum_error
     return value, ""
 
 

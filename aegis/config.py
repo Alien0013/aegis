@@ -643,6 +643,27 @@ DEFAULT_CONFIG: dict[str, Any] = {
 }
 
 
+CONFIG_FIELD_ENUMS: dict[str, tuple[Any, ...]] = {
+    "model.api_mode": ("", "chat_completions", "responses", "anthropic", "codex_app_server"),
+    "tools.exec_mode": ("auto", "ask", "smart", "allowlist", "deny", "full"),
+    "display.reasoning": ("summary", "live", "off"),
+    "display.tool_progress": ("compact", "detailed"),
+    "display.tool_progress_grouping": ("accumulate", "separate"),
+    "display.memory_notifications": ("off", "on", "verbose"),
+    "agent.reasoning_effort": ("medium", "high", "low", "minimal", "xhigh", "off"),
+    "agent.service_tier": ("", "normal", "priority"),
+    "gateway.busy_mode": ("queue", "steer", "interrupt"),
+    "gateway.session_mode": ("main", "per_channel", "per_channel_peer", "per_peer"),
+}
+
+
+def config_enum_error(dotted: str, value: Any) -> str:
+    enum = CONFIG_FIELD_ENUMS.get(dotted)
+    if not enum or value in enum:
+        return ""
+    return f"value must be one of: {', '.join(str(x) or '(empty)' for x in enum)}"
+
+
 def _deep_merge(base: dict, override: dict) -> dict:
     import copy
     out = copy.deepcopy(base)   # never share nested refs with DEFAULT_CONFIG
