@@ -736,10 +736,34 @@ def _with_group_context(msg: dict) -> str:
     delivers every member's messages to the bot). DMs are returned unchanged."""
     text = msg.get("text", "")
     if msg.get("chat", {}).get("type") in ("group", "supergroup"):
-        frm = msg.get("from", {})
-        who = frm.get("username") or frm.get("first_name") or str(frm.get("id", "user"))
+        who = _telegram_sender_label(msg)
         return f"[{who}]: {text}"
     return text
+
+
+def _telegram_sender_label(msg: dict) -> str:
+    sender_chat = msg.get("sender_chat") if isinstance(msg.get("sender_chat"), dict) else {}
+    signature = str(msg.get("author_signature") or "").strip()
+    if sender_chat:
+        return (
+            str(sender_chat.get("username") or "").strip().lstrip("@")
+            or str(sender_chat.get("title") or "").strip()
+            or str(sender_chat.get("id") or "").strip()
+            or signature
+            or "sender_chat"
+        )
+    frm = msg.get("from") if isinstance(msg.get("from"), dict) else {}
+    if frm:
+        name = str(frm.get("username") or "").strip().lstrip("@")
+        if name:
+            return name
+        parts = [
+            str(frm.get("first_name") or "").strip(),
+            str(frm.get("last_name") or "").strip(),
+        ]
+        full_name = " ".join(part for part in parts if part)
+        return full_name or str(frm.get("id") or "user")
+    return signature or "user"
 
 
 def build_adapter(name: str) -> BasePlatformAdapter:

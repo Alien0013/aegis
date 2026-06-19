@@ -1421,6 +1421,16 @@ def test_telegram_channel_post_uses_sender_chat_identity(monkeypatch):
     assert adapter._message_from_update({"channel_post": msg}) == (msg, "channel_post")
     assert adapter._author_from_message(msg) == ("-1001", "updates")
     assert adapter._message_allowed(msg, "/status") is True
+    assert adapter._event_text({
+        "chat": {"id": -1002, "type": "supergroup"},
+        "sender_chat": {"id": -1002, "title": "Ops Announcements"},
+        "text": "deploy window",
+    }, "deploy window") == "[Ops Announcements]: deploy window"
+    assert adapter._event_text({
+        "chat": {"id": -1002, "type": "supergroup"},
+        "author_signature": "Ada Admin",
+        "text": "anonymous note",
+    }, "anonymous note") == "[Ada Admin]: anonymous note"
 
 
 def test_signal_adapter_preserves_attachment_metadata(monkeypatch):
@@ -2002,6 +2012,53 @@ def test_gateway_webhook_channel_ignores_whatsapp_broadcast_pseudo_chats():
     assert seen == []
 
 
+def test_gateway_webhook_channel_ignores_whatsapp_bridge_self_echoes():
+    from aegis.gateway.webhook_channel import WebhookChannel
+
+    seen = []
+    channel = WebhookChannel(name="whatsapp", default_platform="whatsapp", env_prefix="WHATSAPP_CHANNEL")
+    channel._init_inbound_queue(lambda ev: seen.append(ev) or "should not run")
+
+    status, payload = channel._handle_inbound_payload(
+        {},
+        {
+            "platform": "baileys",
+            "key": {
+                "remoteJid": "12025550123@s.whatsapp.net",
+                "id": "BAESELF",
+                "fromMe": True,
+            },
+            "message": {"conversation": "echoed outbound reply"},
+        },
+    )
+
+    assert status == 200
+    assert payload == {"reply": "", "ignored": True, "reason": "whatsapp_self_echo"}
+    assert seen == []
+
+    status, payload = channel._handle_inbound_payload(
+        {},
+        {
+            "platform": "whatsapp-web.js",
+            "data": {
+                "messages": [{
+                    "key": {
+                        "remoteJid": "12025550123@s.whatsapp.net",
+                        "id": "BAESELF2",
+                        "from_me": "true",
+                    },
+                    "message": {"conversation": "echoed nested reply"},
+                }],
+            },
+        },
+    )
+
+    assert status == 200
+    assert payload["ignored"] is True
+    assert payload["reason"] == "whatsapp_self_echo"
+    assert seen == []
+
+
 def test_gateway_webhook_channel_prefix_insecure_auth_override(monkeypatch):
     from aegis.gateway.webhook_channel import WebhookChannel
 
@@ -2367,6 +2424,29 @@ def test_gateway_mattermost_inbound_auth_idempotency_and_rate_limit(monkeypatch)
     )
     assert limited_status == 429
     assert limited_payload == {"error": "rate limit exceeded"}
+
+
+def test_gateway_mattermost_ignores_bot_self_echo(monkeypatch):
+    from aegis.gateway.mattermost_channel import MattermostAdapter
+
+    monkeypatch.setenv("MATTERMOST_URL", "https://mattermost.test")
+    monkeypatch.setenv("MATTERMOST_BOT_TOKEN", "mm-token")
+    monkeypatch.setenv("MATTERMOST_BOT_USER_ID", "bot-1")
+    monkeypatch.delenv("MATTERMOST_WEBHOOK_SECRET", raising=False)
+
+    adapter = MattermostAdapter()
+    seen = []
+    adapter._submit_inbound = lambda ev, *, wait=False: seen.append(ev) or "should not run"
+
+    status, payload = adapter._handle_inbound_payload(
+        {},
+        {"channel_id": "channel-1", "text": "echo", "user_id": "bot-1", "post_id": "post-1"},
+    )
+
+    assert status == 200
+    assert payload == {"text": "", "response_type": "comment", "ignored": True, "reason": "bot_self_echo"}
+    assert seen == []
+    assert adapter._delivery_cache.stats()["entries"] == 0
 
 
 def test_gateway_mattermost_allows_retry_after_dispatch_failure(monkeypatch):

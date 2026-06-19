@@ -92,6 +92,12 @@ def _string_value(value) -> str:
     return ""
 
 
+def _truthy_value(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _first_string(source: dict, paths: tuple[tuple[Any, ...], ...]) -> str:
     for path in paths:
         value = _dig(source, *path)
@@ -116,6 +122,30 @@ def _is_whatsapp_broadcast_chat(chat_id: str) -> bool:
     if not value:
         return False
     return value in _WHATSAPP_BROADCAST_CHATS or value.endswith(_WHATSAPP_BROADCAST_SUFFIXES)
+
+
+def _is_whatsapp_self_echo(body: dict) -> bool:
+    for path in (
+        ("from_me",),
+        ("fromMe",),
+        ("key", "fromMe"),
+        ("key", "from_me"),
+        ("message", "key", "fromMe"),
+        ("message", "key", "from_me"),
+        ("data", "from_me"),
+        ("data", "fromMe"),
+        ("data", "key", "fromMe"),
+        ("data", "key", "from_me"),
+        ("messages", 0, "key", "fromMe"),
+        ("messages", 0, "key", "from_me"),
+        ("data", "messages", 0, "key", "fromMe"),
+        ("data", "messages", 0, "key", "from_me"),
+        ("event", "messages", 0, "key", "fromMe"),
+        ("event", "messages", 0, "key", "from_me"),
+    ):
+        if _truthy_value(_dig(body, *path)):
+            return True
+    return False
 
 
 class WebhookChannel(BasePlatformAdapter):
@@ -508,6 +538,8 @@ class WebhookChannel(BasePlatformAdapter):
             ev = self._event_from_body(body)
             if ev.platform == "whatsapp" and _is_whatsapp_broadcast_chat(ev.chat_id):
                 return 200, {"reply": "", "ignored": True, "reason": "whatsapp_broadcast_chat"}
+            if ev.platform == "whatsapp" and _is_whatsapp_self_echo(body):
+                return 200, {"reply": "", "ignored": True, "reason": "whatsapp_self_echo"}
             reply = self._submit_inbound(ev, wait=True) or ""
         except Exception as exc:  # noqa: BLE001
             if delivery_recorded:
