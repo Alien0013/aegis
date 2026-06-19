@@ -40,6 +40,17 @@ def _env_bool(name: str, default: bool) -> bool:
     return default
 
 
+def _list_of_strings(value) -> list[str]:  # noqa: ANN001
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [part.strip() for part in value.split(",") if part.strip()]
+    if isinstance(value, (list, tuple, set)):
+        return [str(part).strip() for part in value if str(part).strip()]
+    text = str(value or "").strip()
+    return [text] if text else []
+
+
 class MattermostAdapter(BasePlatformAdapter):
     name = "mattermost"
     renders_tables = False
@@ -169,7 +180,9 @@ class MattermostAdapter(BasePlatformAdapter):
         return self.bot_user_id
 
     def _event_from_body(self, body: dict) -> MessageEvent:
-        raw_text = str(body.get("text") or body.get("message") or "")
+        body_text = str(body.get("text") or body.get("message") or "")
+        command_name = str(body.get("command") or "").strip()
+        raw_text = f"{command_name} {body_text}".strip() if command_name else body_text
         text = normalize_inbound_command(raw_text, platform="mattermost")
         attachments = self._attachments_from_body(body)
         if not text.strip() and attachments:
@@ -181,6 +194,19 @@ class MattermostAdapter(BasePlatformAdapter):
             root_id = ""
         if root_id and post_id and root_id == post_id:
             root_id = ""
+        metadata = {
+            "team_id": body.get("team_id"),
+            "channel_name": body.get("channel_name"),
+            "post_id": post_id,
+            "root_id": root_id or "",
+        }
+        if command_name:
+            metadata["command"] = command_name
+            metadata["source"] = "slash_command"
+            if body.get("response_url"):
+                metadata["response_url"] = body.get("response_url")
+            if body.get("trigger_id"):
+                metadata["trigger_id"] = body.get("trigger_id")
         return MessageEvent(
             platform="mattermost",
             chat_id=channel_id,
@@ -191,17 +217,12 @@ class MattermostAdapter(BasePlatformAdapter):
             message_id=post_id or None,
             timestamp=body.get("create_at") or body.get("timestamp"),
             attachments=attachments,
-            metadata={
-                "team_id": body.get("team_id"),
-                "channel_name": body.get("channel_name"),
-                "post_id": post_id,
-                "root_id": root_id or "",
-            },
+            metadata=metadata,
         )
 
     def _attachments_from_body(self, body: dict) -> list[dict]:
         rows: list[dict] = []
-        for file_id in body.get("file_ids") or body.get("fileIds") or []:
+        for file_id in _list_of_strings(body.get("file_ids") or body.get("fileIds")):
             text = str(file_id or "").strip()
             if text:
                 rows.append({

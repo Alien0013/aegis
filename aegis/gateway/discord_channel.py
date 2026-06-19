@@ -52,7 +52,16 @@ class DiscordAdapter(BasePlatformAdapter):
         return data
 
     def command_menu(self, *, max_commands: int = MAX_DISCORD_APP_COMMANDS) -> list[str]:
-        return discord_application_command_menu(max_commands=max_commands)
+        return discord_application_command_menu(self._extra_commands(), max_commands=max_commands)
+
+    def _extra_commands(self) -> list[str]:
+        config = getattr(self, "_config", None)
+        if config is None:
+            return []
+        try:
+            return list(config.get("gateway.user_commands", []) or [])
+        except Exception:  # noqa: BLE001
+            return []
 
     def start(self, dispatch: Dispatch) -> None:
         self._init_inbound_queue(dispatch)
@@ -150,6 +159,7 @@ class DiscordAdapter(BasePlatformAdapter):
     async def _handle_app_command(self, interaction, command_name: str) -> MessageEvent | None:  # noqa: ANN001
         self._loop = asyncio.get_event_loop()
         if not self._interaction_allowed(interaction):
+            await self._deny_interaction(interaction)
             return None
         response = getattr(interaction, "response", None)
         defer = getattr(response, "defer", None)
@@ -186,6 +196,21 @@ class DiscordAdapter(BasePlatformAdapter):
         ev._discord_loop = self._loop
         self._submit_inbound(ev, raw_text=ev.text)
         return ev
+
+    async def _deny_interaction(self, interaction) -> None:  # noqa: ANN001
+        response = getattr(interaction, "response", None)
+        send_message = getattr(response, "send_message", None)
+        if not callable(send_message):
+            return
+        try:
+            await send_message("Not authorized.", ephemeral=True)
+        except TypeError:
+            try:
+                await send_message("Not authorized.")
+            except Exception:  # noqa: BLE001
+                pass
+        except Exception:  # noqa: BLE001
+            pass
 
     def _message_type_allowed(self, message) -> bool:  # noqa: ANN001
         mtype = getattr(message, "type", None)

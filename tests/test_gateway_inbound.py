@@ -750,6 +750,17 @@ def test_discord_adapter_registers_and_handles_app_commands(monkeypatch):
 
     from aegis.gateway.discord_channel import DiscordAdapter
 
+    configured = DiscordAdapter("token")
+
+    class FakeConfig:
+        def get(self, dotted, default=None):
+            if dotted == "gateway.user_commands":
+                return ["/deploy"]
+            return default
+
+    configured._config = FakeConfig()
+    assert "/deploy" in configured.command_menu(max_commands=50)
+
     adapter = DiscordAdapter("token")
     adapter.command_menu = lambda max_commands=100: ["/help", "/status"]  # noqa: ARG005
     registered = []
@@ -825,10 +836,14 @@ def test_discord_app_commands_respect_security_filters(monkeypatch):
     seen = []
     adapter._submit_inbound = lambda ev, *, raw_text=None: seen.append((ev, raw_text)) or None
     deferred = []
+    denied = []
 
     class Response:
         async def defer(self, *, thinking=False):
             deferred.append(thinking)
+
+        async def send_message(self, text, *, ephemeral=False):
+            denied.append((text, ephemeral))
 
     def interaction(*, guild_id="G1", channel_id="C1", user_id="U1", parent_id=None):
         parent = SimpleNamespace(id=parent_id) if parent_id else None
@@ -846,6 +861,11 @@ def test_discord_app_commands_respect_security_filters(monkeypatch):
     assert asyncio.run(adapter._handle_app_command(interaction(user_id="U2"), "status")) is None
     ev = asyncio.run(adapter._handle_app_command(interaction(), "status"))
 
+    assert denied == [
+        ("Not authorized.", True),
+        ("Not authorized.", True),
+        ("Not authorized.", True),
+    ]
     assert ev is not None
     assert ev.chat_id == "C1"
     assert ev.text == "/status"
@@ -1026,6 +1046,7 @@ def test_telegram_adapter_enforces_chat_filters_and_group_addressing(monkeypatch
     base = {"chat": {"id": 42, "type": "supergroup"}, "text": "hello", "from": {"id": 7}}
     assert adapter._message_allowed(base, "hello") is False
     assert adapter._message_allowed({**base, "text": "@aegis_bot hello"}, "@aegis_bot hello") is True
+    assert adapter._message_allowed({**base, "text": "@aegis_bot_backup hello"}, "@aegis_bot_backup hello") is False
     assert adapter._message_allowed({**base, "text": "/status"}, "/status") is True
     assert adapter._message_allowed({
         **base,
@@ -1329,7 +1350,7 @@ def test_telegram_startup_discovers_identity_and_registers_commands(monkeypatch)
     class FakeConfig:
         def get(self, dotted, default=None):
             if dotted == "gateway.user_commands":
-                return ["/deploy", "/bad command", "/deploy"]
+                return ["/deploy", "/bad command", "/deploy-now", "/deploy_now", "/deploy"]
             return default
 
     adapter._config = FakeConfig()
@@ -1353,7 +1374,10 @@ def test_telegram_startup_discovers_identity_and_registers_commands(monkeypatch)
     assert commands[0] == {"command": "help", "description": "Show available AEGIS commands"}
     assert {"command": "deploy", "description": "Run /deploy"} in commands
     assert {"command": "bad", "description": "Run /bad"} in commands
+    assert {"command": "deploy_now", "description": "Run /deploy_now"} in commands
+    assert {"command": "deploy-now", "description": "Run /deploy-now"} not in commands
     assert all(" " not in row["command"] for row in commands)
+    assert all("-" not in row["command"] for row in commands)
     assert json.loads(params["scope"]) == {"type": "chat", "chat_id": "42"}
     assert params["language_code"] == "en"
 
@@ -1640,6 +1664,8 @@ def test_ntfy_adapter_preserves_metadata_headers_and_attachments(monkeypatch):
 
 
 def test_slack_adapter_enforces_workspace_filters_and_strips_mentions(monkeypatch):
+    import pytest
+
     from aegis.gateway.slack_channel import SlackAdapter
 
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
@@ -1657,6 +1683,15 @@ def test_slack_adapter_enforces_workspace_filters_and_strips_mentions(monkeypatc
     assert adapter._resolve_thread_ts({"ts": "171.2", "thread_ts": "171.1"}) == "171.1"
     assert adapter.metadata["supports_slash_commands"] is True
     assert adapter.command_menu(max_commands=3) == ["/help", "/whoami", "/status"]
+
+    class FakeConfig:
+        def get(self, dotted, default=None):
+            if dotted == "gateway.user_commands":
+                return ["/deploy"]
+            return default
+
+    adapter._config = FakeConfig()
+    assert "/deploy" in adapter.command_menu(max_commands=50)
     assert adapter._event_allowed({"user": "U3", "channel": "C1", "team": "T1"}) is False
     assert adapter._event_allowed({"user": "U1", "channel": "C2", "team": "T1"}) is False
     assert adapter._event_allowed({"user": "U1", "channel": "C9", "team": "T1"}) is False
@@ -1786,7 +1821,16 @@ def test_slack_adapter_enforces_workspace_filters_and_strips_mentions(monkeypatc
 
     from aegis.gateway.base import MessageEvent
 
+    with pytest.raises(RuntimeError):
+        adapter.send("C1", "not started")
+
     adapter._app = FakeSlackApp()
+    adapter.send("C1", "async reply", metadata={"thread_id": "171.1"})
+    assert posts == [
+        {"channel": "C1", "text": "async reply", "thread_ts": "171.1"},
+    ]
+    posts.clear()
+
     adapter._deliver_reply(MessageEvent(platform="slack", chat_id="C1", text="", thread_id=None), "flat reply")
     adapter._deliver_reply(MessageEvent(platform="slack", chat_id="C1", text="", thread_id="171.1"), "thread reply")
     assert posts == [
@@ -1849,6 +1893,64 @@ def test_slack_adapter_handles_native_slash_commands(monkeypatch):
     assert seen == [(ev, "/status full")]
 
 
+def test_slack_adapter_dedupes_message_events_and_ignores_self_echoes(monkeypatch):
+    import pytest
+
+    from aegis.gateway.slack_channel import SlackAdapter
+
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+    monkeypatch.setenv("SLACK_BOT_USER_ID", "UBOT")
+    monkeypatch.setenv("SLACK_BOT_ID", "BSELF")
+
+    adapter = SlackAdapter()
+
+    assert adapter._event_allowed({"user": "UBOT", "channel": "C1", "text": "echo"}) is False
+    assert adapter._event_allowed({"bot_id": "BSELF", "channel": "C1", "text": "echo"}) is False
+    assert adapter.metadata["idempotency"]["delivery_id_sources"] == [
+        "event.event_id",
+        "event.client_msg_id",
+        "event.channel + event.ts",
+    ]
+
+    seen = []
+    adapter._submit_inbound = lambda ev, *, raw_text=None: seen.append((ev, raw_text)) or None
+    event = {
+        "channel": "C1",
+        "channel_type": "channel",
+        "team": "T1",
+        "user": "U1",
+        "text": "!status",
+        "client_msg_id": "client-1",
+        "ts": "171.1",
+    }
+
+    ev = adapter._handle_message_event(event)
+    duplicate = adapter._handle_message_event(dict(event))
+
+    assert ev is seen[0][0]
+    assert ev.text == "/status"
+    assert ev.metadata["delivery_id"] == "client_msg:client-1"
+    assert seen == [(ev, "!status")]
+    assert duplicate is None
+    assert adapter._delivery_cache.stats()["duplicate_count"] == 1
+
+    def fail_once(_ev, *, raw_text=None):  # noqa: ANN001, ARG001
+        raise RuntimeError("slack dispatch down")
+
+    adapter._submit_inbound = fail_once
+    failing = dict(event, client_msg_id="client-2", ts="171.2")
+    with pytest.raises(RuntimeError, match="slack dispatch down"):
+        adapter._handle_message_event(failing)
+
+    assert adapter._delivery_cache.stats()["discarded_count"] == 1
+
+    adapter._submit_inbound = lambda ev, *, raw_text=None: seen.append((ev, raw_text)) or None
+    retried = adapter._handle_message_event(failing)
+    assert retried is seen[-1][0]
+    assert retried.metadata["delivery_id"] == "client_msg:client-2"
+
+
 def test_gateway_webhook_channel_normalizes_event_body():
     from aegis.gateway.webhook_channel import WebhookChannel
 
@@ -1901,7 +2003,12 @@ def test_gateway_webhook_channel_accepts_whatsapp_bridge_aliases():
     assert ev.user_id == "15551234567@s.whatsapp.net"
     assert ev.user_name == "Ada Lovelace"
     assert ev.message_id == "BAE512345"
-    assert ev.metadata == {"bridge": "baileys"}
+    assert ev.metadata["bridge"] == "baileys"
+    assert ev.metadata["bridge_platform"] == "baileys"
+    assert ev.metadata["normalized_platform"] == "whatsapp"
+    assert ev.metadata["remote_jid"] == "12025550123@s.whatsapp.net"
+    assert ev.metadata["participant"] == "15551234567@s.whatsapp.net"
+    assert ev.metadata["message_key_id"] == "BAE512345"
 
     nested = WebhookChannel()._event_from_body({
         "platform": "baileys",
@@ -1935,6 +2042,14 @@ def test_gateway_webhook_channel_accepts_whatsapp_bridge_aliases():
     assert nested.metadata["is_group"] is True
     assert nested.metadata["participant"] == "15551234567@s.whatsapp.net"
     assert nested.metadata["message_key_id"] == "BAE599999"
+
+    media_only = WebhookChannel()._event_from_body({
+        "platform": "whatsapp",
+        "chat_id": "12025550123@s.whatsapp.net",
+        "attachments": [{"type": "image/png", "filename": "photo.png"}],
+    })
+    assert media_only.text == "[image/png attached: photo.png]"
+    assert media_only.attachments == [{"type": "image/png", "filename": "photo.png"}]
     assert WebhookChannel()._delivery_id({}, {"key": {"id": "BAE599999"}}) == "body:key.id:BAE599999"
 
     data_wrapped = WebhookChannel()._event_from_body({
@@ -2388,6 +2503,57 @@ def test_gateway_mattermost_channel_normalizes_event_body_and_alias(monkeypatch)
             "size": 2048,
         },
     ]
+    scalar_files = adapter._event_from_body({
+        "channel_id": "channel-1",
+        "user_id": "user-1",
+        "post_id": "post-6",
+        "file_ids": "file-3,file-4",
+    })
+    assert scalar_files.text == "[file attached: file-3]\n[file attached: file-4]"
+    assert scalar_files.attachments == [
+        {
+            "id": "file-3",
+            "type": "file",
+            "filename": "file-3",
+            "source": "mattermost",
+        },
+        {
+            "id": "file-4",
+            "type": "file",
+            "filename": "file-4",
+            "source": "mattermost",
+        },
+    ]
+
+
+def test_gateway_mattermost_native_slash_commands_preserve_command_name(monkeypatch):
+    from aegis.gateway.mattermost_channel import MattermostAdapter
+
+    monkeypatch.setenv("MATTERMOST_URL", "https://mattermost.test")
+    monkeypatch.setenv("MATTERMOST_BOT_TOKEN", "mm-token")
+
+    adapter = MattermostAdapter()
+    ev = adapter._event_from_body({
+        "command": "/status",
+        "text": "full",
+        "channel_id": "channel-1",
+        "channel_name": "ops",
+        "user_id": "user-1",
+        "user_name": "ada",
+        "team_id": "team-1",
+        "trigger_id": "trigger-1",
+        "response_url": "https://mattermost.test/hooks/response",
+    })
+
+    assert ev.platform == "mattermost"
+    assert ev.chat_id == "channel-1"
+    assert ev.text == "/status full"
+    assert ev.user_id == "user-1"
+    assert ev.user_name == "ada"
+    assert ev.metadata["source"] == "slash_command"
+    assert ev.metadata["command"] == "/status"
+    assert ev.metadata["response_url"] == "https://mattermost.test/hooks/response"
+    assert ev.metadata["trigger_id"] == "trigger-1"
 
 
 def test_gateway_mattermost_webhook_secret_accepts_headers_and_body(monkeypatch):

@@ -1188,8 +1188,11 @@ def test_fastapi_messaging_platform_optional_controls(tmp_path, monkeypatch):
     slack_fields = {field["key"]: field for field in slack.json()["platform"]["env_vars"]}
     assert slack_fields["SLACK_ALLOWED_CHANNELS"]["required"] is False
     assert slack_fields["SLACK_ALLOWED_CHANNELS"]["set"] is True
+    assert slack_fields["SLACK_BOT_ID"]["required"] is False
     assert slack_fields["SLACK_TRIGGER_MODE"]["required"] is False
     assert slack_fields["SLACK_REPLY_IN_THREAD"]["required"] is False
+    assert slack_fields["SLACK_IDEMPOTENCY_TTL_SECONDS"]["required"] is False
+    assert slack_fields["SLACK_IDEMPOTENCY_CACHE_MAX"]["required"] is False
     assert "slash_commands" in slack.json()["platform"]["capabilities"]
     assert "reactions" in slack.json()["platform"]["capabilities"]
 

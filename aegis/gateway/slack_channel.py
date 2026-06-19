@@ -9,6 +9,7 @@ import os
 import re
 
 from ..platforms import capped_command_menu, chunk_text_by_units, normalize_inbound_command
+from ..webhook import DeliveryIdCache
 from .base import BasePlatformAdapter, Dispatch, MessageEvent
 
 
@@ -19,6 +20,14 @@ def _csv_set(value: str) -> set[str] | None:
 
 def _env_truthy(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on", "all"}
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)) or default)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
 
 
 class SlackAdapter(BasePlatformAdapter):
@@ -42,8 +51,13 @@ class SlackAdapter(BasePlatformAdapter):
         self.ignored_channels = _csv_set(os.environ.get("SLACK_IGNORED_CHANNELS", ""))
         self.allowed_teams = _csv_set(os.environ.get("SLACK_ALLOWED_TEAMS", ""))
         self.bot_user_id = os.environ.get("SLACK_BOT_USER_ID", "").strip()
+        self.bot_id = os.environ.get("SLACK_BOT_ID", "").strip()
         self.trigger_mode = os.environ.get("SLACK_TRIGGER_MODE", "all").strip().lower() or "all"
         self.reply_in_thread = _env_truthy("SLACK_REPLY_IN_THREAD")
+        self._delivery_cache = DeliveryIdCache(
+            ttl_seconds=float(_env_int("SLACK_IDEMPOTENCY_TTL_SECONDS", 3600)),
+            max_items=_env_int("SLACK_IDEMPOTENCY_CACHE_MAX", 10000),
+        )
 
     @property
     def metadata(self) -> dict:
@@ -57,13 +71,31 @@ class SlackAdapter(BasePlatformAdapter):
             "ignored_channels_configured": bool(self.ignored_channels),
             "allowed_teams_configured": bool(self.allowed_teams),
             "bot_user_id_configured": bool(self.bot_user_id),
+            "bot_id_configured": bool(self.bot_id),
             "trigger_mode": self.trigger_mode,
             "reply_in_thread": self.reply_in_thread,
+        }
+        data["idempotency"] = {
+            "delivery_id_sources": [
+                "event.event_id",
+                "event.client_msg_id",
+                "event.channel + event.ts",
+            ],
+            "delivery_cache": self._delivery_cache.stats(),
         }
         return data
 
     def command_menu(self, *, max_commands: int = 30) -> list[str]:
-        return capped_command_menu(max_commands=max_commands)
+        return capped_command_menu(self._extra_commands(), max_commands=max_commands)
+
+    def _extra_commands(self) -> list[str]:
+        config = getattr(self, "_config", None)
+        if config is None:
+            return []
+        try:
+            return list(config.get("gateway.user_commands", []) or [])
+        except Exception:  # noqa: BLE001
+            return []
 
     def start(self, dispatch: Dispatch) -> None:
         self._init_inbound_queue(dispatch)
@@ -80,9 +112,34 @@ class SlackAdapter(BasePlatformAdapter):
 
         @app.event("message")
         def handle_message(event, say):  # noqa: ANN001
-            raw_text = event.get("text", "")
-            if not self._event_allowed(event, raw_text):
-                return
+            self._handle_message_event(event)
+
+        SocketModeHandler(app, self.app_token).start()
+
+    def _delivery_id_from_event(self, event: dict) -> str:
+        event_id = str(event.get("event_id") or event.get("event_ts") or "").strip()
+        if event_id:
+            return f"event:{event_id}"
+        client_msg_id = str(event.get("client_msg_id") or "").strip()
+        if client_msg_id:
+            return f"client_msg:{client_msg_id}"
+        channel = str(event.get("channel") or "").strip()
+        ts = str(event.get("ts") or "").strip()
+        if channel and ts:
+            return f"message:{channel}:{ts}"
+        return ""
+
+    def _handle_message_event(self, event: dict) -> MessageEvent | None:
+        raw_text = event.get("text", "")
+        if not self._event_allowed(event, raw_text):
+            return None
+        delivery_id = self._delivery_id_from_event(event)
+        delivery_recorded = False
+        if delivery_id:
+            delivery_recorded = self._delivery_cache.record(delivery_id)
+            if not delivery_recorded:
+                return None
+        try:
             attachments = self._attachments_from_event(event)
             text = normalize_inbound_command(self._strip_own_mentions(raw_text), platform="slack")
             if not text.strip() and attachments:
@@ -99,11 +156,15 @@ class SlackAdapter(BasePlatformAdapter):
                     "team": event.get("team"),
                     "channel_type": event.get("channel_type"),
                     "thread_ts": thread_id,
+                    "delivery_id": delivery_id or "",
                 },
             )
             self._submit_inbound(ev, raw_text=raw_text)
-
-        SocketModeHandler(app, self.app_token).start()
+            return ev
+        except Exception:
+            if delivery_recorded:
+                self._delivery_cache.discard(delivery_id)
+            raise
 
     def _register_slash_command(self, app, command_name: str) -> None:  # noqa: ANN001
         @app.command(command_name)
@@ -171,6 +232,8 @@ class SlackAdapter(BasePlatformAdapter):
     def _event_allowed(self, event: dict, raw_text: str | None = None) -> bool:
         subtype = str(event.get("subtype") or "")
         is_bot = bool(event.get("bot_id"))
+        if self._is_self_echo(event):
+            return False
         if subtype and subtype not in {"bot_message", "file_share"}:
             return False
         if subtype == "bot_message" and not is_bot:
@@ -188,6 +251,14 @@ class SlackAdapter(BasePlatformAdapter):
         if not self._trigger_allowed(event, raw_text):
             return False
         return True
+
+    def _is_self_echo(self, event: dict) -> bool:
+        user = str(event.get("user") or "").strip()
+        bot_id = str(event.get("bot_id") or "").strip()
+        return bool(
+            (self.bot_user_id and user == self.bot_user_id)
+            or (self.bot_id and bot_id == self.bot_id)
+        )
 
     def _strip_own_mentions(self, text: str) -> str:
         if not self.bot_user_id:
@@ -252,15 +323,16 @@ class SlackAdapter(BasePlatformAdapter):
         return "\n".join(labels)
 
     def send(self, chat_id: str, text: str, *, metadata: dict | None = None) -> None:
-        try:
-            kwargs = {"channel": chat_id}
-            thread_ts = (metadata or {}).get("thread_ts") or (metadata or {}).get("thread_id")
-            if thread_ts:
-                kwargs["thread_ts"] = thread_ts
-            for chunk in chunk_text_by_units(text, limit=39000):
-                self._app.client.chat_postMessage(text=chunk, **kwargs)
-        except Exception:  # noqa: BLE001
-            pass
+        app = getattr(self, "_app", None)
+        client = getattr(app, "client", None)
+        if client is None:
+            raise RuntimeError("slack client is not started")
+        kwargs = {"channel": chat_id}
+        thread_ts = (metadata or {}).get("thread_ts") or (metadata or {}).get("thread_id")
+        if thread_ts:
+            kwargs["thread_ts"] = thread_ts
+        for chunk in chunk_text_by_units(text, limit=39000):
+            client.chat_postMessage(text=chunk, **kwargs)
 
     def _deliver_reply(self, ev: MessageEvent, reply: str, state=None) -> None:  # noqa: ANN001
         if not reply:

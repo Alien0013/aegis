@@ -294,7 +294,7 @@ class TelegramAdapter(BasePlatformAdapter):
         commands = []
         for command in self.command_menu():
             name = str(command or "").strip().lstrip("/")
-            if not name:
+            if not name or not re.fullmatch(r"[a-z0-9_]{1,32}", name):
                 continue
             commands.append({
                 "command": name,
@@ -544,7 +544,8 @@ class TelegramAdapter(BasePlatformAdapter):
     def _mentions_bot(self, text: str) -> bool:
         if not self.bot_username:
             return False
-        return f"@{self.bot_username.lower()}" in str(text or "").lower()
+        pattern = re.compile(rf"@{re.escape(self.bot_username)}\b", re.IGNORECASE)
+        return bool(pattern.search(str(text or "")))
 
     def _is_reply_to_bot(self, reply_to: dict) -> bool:
         if not isinstance(reply_to, dict):

@@ -335,6 +335,8 @@ class WebhookChannel(BasePlatformAdapter):
             ("event", "messages", 0, "message", "imageMessage", "caption"),
             ("event", "messages", 0, "message", "videoMessage", "caption"),
         ))
+        if not text.strip() and attachments:
+            text = self._attachment_reference_text(attachments)
         user_id = _first_string(body, (
             ("user_id",),
             ("userId",),
@@ -447,15 +449,16 @@ class WebhookChannel(BasePlatformAdapter):
             ("contextInfo", "quotedMessage", "conversation"),
             ("contextInfo", "quotedMessage", "extendedTextMessage", "text"),
         ))
-        if not metadata:
-            metadata = self._salvage_bridge_metadata(
-                body,
-                platform=platform,
-                raw_platform=raw_platform,
-                chat_id=chat_id,
-                user_id=user_id,
-                message_id=message_id,
-            )
+        salvaged_metadata = self._salvage_bridge_metadata(
+            body,
+            platform=platform,
+            raw_platform=raw_platform,
+            chat_id=chat_id,
+            user_id=user_id,
+            message_id=message_id,
+        )
+        if salvaged_metadata and (not metadata or platform == "whatsapp"):
+            metadata = {**salvaged_metadata, **metadata}
         return MessageEvent(
             platform=platform,
             chat_id=chat_id,
@@ -526,6 +529,22 @@ class WebhookChannel(BasePlatformAdapter):
         if key_id:
             metadata["message_key_id"] = key_id
         return metadata
+
+    def _attachment_reference_text(self, attachments: list[dict]) -> str:
+        labels = []
+        for attachment in attachments:
+            if not isinstance(attachment, dict):
+                continue
+            kind = str(attachment.get("type") or attachment.get("media_type") or "file").strip()
+            name = str(
+                attachment.get("filename")
+                or attachment.get("name")
+                or attachment.get("id")
+                or attachment.get("url")
+                or "file"
+            ).strip()
+            labels.append(f"[{kind} attached: {name}]")
+        return "\n".join(labels)
 
     def _handle_inbound_payload(self, headers, body: dict) -> tuple[int, dict]:
         delivery_id = self._delivery_id(headers, body)
