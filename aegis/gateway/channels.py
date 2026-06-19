@@ -25,6 +25,43 @@ def _csv_set(value: str) -> set[str] | None:
     return items or None
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if value in {"", "auto"}:
+        return default
+    return value in {"1", "true", "yes", "on", "all"}
+
+
+_TELEGRAM_ALLOWED_UPDATES = json.dumps([
+    "message",
+    "edited_message",
+    "channel_post",
+    "edited_channel_post",
+    "callback_query",
+])
+
+_COMMAND_DESCRIPTIONS = {
+    "help": "Show available AEGIS commands",
+    "whoami": "Show your gateway identity",
+    "status": "Show current agent status",
+    "stop": "Stop the active turn",
+    "new": "Start a fresh session",
+    "reset": "Reset the current session",
+    "model": "Show or change the model",
+    "provider": "Show or change the provider",
+    "reasoning": "Set reasoning effort",
+    "fast": "Switch to faster settings",
+    "busy": "Change busy handling",
+    "compress": "Compress session context",
+    "goal": "Set or inspect the active goal",
+    "subgoal": "Set or inspect a subgoal",
+    "steer": "Steer the active turn",
+}
+
+
 class CLIChannel(BasePlatformAdapter):
     """Reads stdin lines and prints replies. Lets you exercise the gateway locally."""
 
@@ -70,6 +107,10 @@ class TelegramAdapter(BasePlatformAdapter):
         self.group_trigger_mode = os.environ.get("TELEGRAM_GROUP_TRIGGER_MODE", "all").strip().lower() or "all"
         self.bot_username = os.environ.get("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@") or None
         self.bot_id = os.environ.get("TELEGRAM_BOT_ID", "").strip() or None
+        self.auto_discover_bot = _env_bool("TELEGRAM_AUTO_DISCOVER_BOT", True)
+        self.register_commands = _env_bool("TELEGRAM_REGISTER_COMMANDS", True)
+        self.command_scope_chat_id = os.environ.get("TELEGRAM_COMMAND_SCOPE_CHAT_ID", "").strip()
+        self.command_language_code = os.environ.get("TELEGRAM_COMMAND_LANGUAGE_CODE", "").strip()
         self._base = f"https://api.telegram.org/bot{self.token}"
 
     @property
@@ -83,11 +124,24 @@ class TelegramAdapter(BasePlatformAdapter):
             "group_trigger_mode": self.group_trigger_mode,
             "bot_username_configured": bool(self.bot_username),
             "bot_id_configured": bool(self.bot_id),
+            "auto_discover_bot": self.auto_discover_bot,
+            "register_commands": self.register_commands,
+            "command_scope_chat_id_configured": bool(self.command_scope_chat_id),
+            "command_language_code_configured": bool(self.command_language_code),
         }
         return data
 
     def command_menu(self, *, max_commands: int = MAX_TELEGRAM_COMMANDS) -> list[str]:
-        return capped_command_menu(max_commands=max_commands)
+        return capped_command_menu(self._extra_commands(), max_commands=max_commands)
+
+    def _extra_commands(self) -> list[str]:
+        config = getattr(self, "_config", None)
+        if config is None:
+            return []
+        try:
+            return list(config.get("gateway.user_commands", []) or [])
+        except Exception:  # noqa: BLE001
+            return []
 
     def _api(self, method: str, **params):
         with httpx.Client(timeout=70) as c:
@@ -99,23 +153,30 @@ class TelegramAdapter(BasePlatformAdapter):
         # Poll on this thread; run each turn on a per-chat worker so the poller keeps reading —
         # that's what lets a 'stop' message interrupt a run already in progress.
         self._init_inbound_queue(dispatch)
+        self._startup_sync()
         offset = 0
         while True:
             try:
-                data = self._api("getUpdates", offset=offset, timeout=60)
+                data = self._api(
+                    "getUpdates",
+                    offset=offset,
+                    timeout=60,
+                    allowed_updates=_TELEGRAM_ALLOWED_UPDATES,
+                )
             except Exception:  # noqa: BLE001 - keep the poller alive
                 continue
             for upd in data.get("result", []):
                 offset = upd["update_id"] + 1
-                msg = upd.get("message") or upd.get("edited_message")
+                if self._handle_callback_update(upd):
+                    continue
+                msg, source = self._message_from_update(upd)
                 if not msg:
                     continue
                 attachments = self._attachments_from_message(msg)
                 raw_text = self._raw_message_text(msg)
                 if not raw_text and not attachments:
                     continue
-                user_id = str(msg["from"]["id"])
-                username = msg["from"].get("username")
+                user_id, username = self._author_from_message(msg)
                 if not self._author_allowed(user_id, username):
                     self.send(str(msg["chat"]["id"]), "⛔ not authorized.")
                     continue
@@ -144,9 +205,126 @@ class TelegramAdapter(BasePlatformAdapter):
                     metadata={
                         "chat_type": msg.get("chat", {}).get("type"),
                         "message_thread_id": thread_id,
+                        "source": source,
                     },
                 )
                 self._submit_inbound(ev, raw_text=raw_text)
+
+    def _startup_sync(self) -> None:
+        if self.auto_discover_bot:
+            self._refresh_bot_identity()
+        if self.register_commands:
+            self._register_command_menu()
+
+    def _refresh_bot_identity(self) -> None:
+        if self.bot_username and self.bot_id:
+            return
+        try:
+            result = self._api("getMe").get("result") or {}
+        except Exception:  # noqa: BLE001 - identity discovery should not kill long-poll
+            return
+        username = str(result.get("username") or "").strip().lstrip("@")
+        bot_id = str(result.get("id") or "").strip()
+        if username and not self.bot_username:
+            self.bot_username = username
+        if bot_id and not self.bot_id:
+            self.bot_id = bot_id
+
+    def _register_command_menu(self) -> None:
+        commands = []
+        for command in self.command_menu():
+            name = str(command or "").strip().lstrip("/")
+            if not name:
+                continue
+            commands.append({
+                "command": name,
+                "description": _COMMAND_DESCRIPTIONS.get(name, f"Run /{name}"),
+            })
+        if not commands:
+            return
+        params = {"commands": json.dumps(commands)}
+        if self.command_scope_chat_id:
+            params["scope"] = json.dumps({"type": "chat", "chat_id": self.command_scope_chat_id})
+        if self.command_language_code:
+            params["language_code"] = self.command_language_code
+        try:
+            self._api("setMyCommands", **params)
+        except Exception:  # noqa: BLE001 - command publishing is best-effort
+            pass
+
+    def _message_from_update(self, update: dict) -> tuple[dict | None, str]:
+        for key in ("message", "edited_message", "channel_post", "edited_channel_post"):
+            msg = update.get(key)
+            if isinstance(msg, dict):
+                return msg, key
+        return None, ""
+
+    def _author_from_message(self, msg: dict) -> tuple[str, str | None]:
+        author = msg.get("from")
+        if not isinstance(author, dict):
+            author = msg.get("sender_chat") if isinstance(msg.get("sender_chat"), dict) else {}
+        user_id = str(author.get("id") or "").strip()
+        username = str(author.get("username") or msg.get("author_signature") or "").strip() or None
+        return user_id, username
+
+    def _handle_callback_update(self, update: dict) -> bool:
+        query = update.get("callback_query")
+        if not isinstance(query, dict):
+            return False
+        data = str(query.get("data") or "").strip()
+        if not data:
+            self._answer_callback_query(str(query.get("id") or ""))
+            return True
+        user = query.get("from") if isinstance(query.get("from"), dict) else {}
+        user_id = str(user.get("id") or "").strip()
+        username = str(user.get("username") or "").strip() or None
+        message = query.get("message") if isinstance(query.get("message"), dict) else {}
+        chat = message.get("chat") if isinstance(message.get("chat"), dict) else {}
+        chat_id = str(chat.get("id") or query.get("chat_instance") or "").strip()
+        if not chat_id:
+            self._answer_callback_query(str(query.get("id") or ""))
+            return True
+        if not self._author_allowed(user_id, username):
+            self._answer_callback_query(str(query.get("id") or ""), text="Not authorized", show_alert=True)
+            return True
+        normalized = normalize_inbound_command(data, platform="telegram", bot_username=self.bot_username)
+        if message and not self._message_allowed(message, normalized):
+            self._answer_callback_query(str(query.get("id") or ""))
+            return True
+        thread_id = self._message_thread_id(message)
+        ev = MessageEvent(
+            platform="telegram",
+            chat_id=chat_id,
+            text=normalized,
+            user_id=user_id or None,
+            user_name=username,
+            thread_id=thread_id,
+            message_id=str(message.get("message_id") or "") or None,
+            timestamp=query.get("chat_instance"),
+            metadata={
+                "callback_query_id": str(query.get("id") or ""),
+                "chat_type": chat.get("type"),
+                "message_thread_id": thread_id,
+                "source": "callback_query",
+                "command": normalized if normalized.startswith("/") else "",
+            },
+        )
+        self._answer_callback_query(str(query.get("id") or ""))
+        self._submit_inbound(ev, raw_text=data)
+        return True
+
+    def _answer_callback_query(self, callback_query_id: str, *, text: str = "", show_alert: bool = False) -> None:
+        if not callback_query_id:
+            return
+        params = {"callback_query_id": callback_query_id}
+        if text:
+            params["text"] = text
+        if show_alert:
+            params["show_alert"] = "true"
+        try:
+            self._api("answerCallbackQuery", **params)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _message_thread_id(self, msg: dict) -> str | None:
         thread_id = str(msg.get("message_thread_id") or "").strip()

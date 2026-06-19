@@ -534,8 +534,11 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
 
     assert TelegramAdapter("token").metadata["transport"] == "long_poll"
     assert "TELEGRAM_ALLOWED_CHATS" in TelegramAdapter("token").metadata["optional_env"]
+    assert "TELEGRAM_REGISTER_COMMANDS" in TelegramAdapter("token").metadata["optional_env"]
     assert TelegramAdapter("token").metadata["security"]["group_trigger_mode"] == "all"
+    assert TelegramAdapter("token").metadata["security"]["register_commands"] is True
     assert TelegramAdapter("token").metadata["supports_reactions"] is True
+    assert TelegramAdapter("token").metadata["supports_slash_commands"] is True
     assert DiscordAdapter("token").metadata["supports_threads"] is True
     assert DiscordAdapter("token").metadata["supports_reactions"] is True
     assert DiscordAdapter("token").metadata["command_cap"] == 100
@@ -1120,6 +1123,8 @@ def test_telegram_long_poll_submits_media_only_updates(monkeypatch):
         "TELEGRAM_ALLOWED_CHAT_TYPES",
     ):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("TELEGRAM_AUTO_DISCOVER_BOT", "0")
+    monkeypatch.setenv("TELEGRAM_REGISTER_COMMANDS", "0")
     adapter = TelegramAdapter("token")
     update = {
         "update_id": 1,
@@ -1155,7 +1160,13 @@ def test_telegram_long_poll_submits_media_only_updates(monkeypatch):
     with pytest.raises(KeyboardInterrupt):
         adapter.start(lambda _ev: "")
 
-    assert api_calls[0] == ("getUpdates", {"offset": 0, "timeout": 60})
+    assert api_calls[0] == ("getUpdates", {
+        "offset": 0,
+        "timeout": 60,
+        "allowed_updates": (
+            '["message", "edited_message", "channel_post", "edited_channel_post", "callback_query"]'
+        ),
+    })
     ev, raw_text = seen[0]
     assert raw_text == ""
     assert ev.platform == "telegram"
@@ -1176,6 +1187,128 @@ def test_telegram_long_poll_submits_media_only_updates(monkeypatch):
         "file_id": "voice-file",
         "duration": 3,
     }]
+
+
+def test_telegram_startup_discovers_identity_and_registers_commands(monkeypatch):
+    import json
+
+    from aegis.gateway.channels import TelegramAdapter
+
+    monkeypatch.setenv("TELEGRAM_COMMAND_SCOPE_CHAT_ID", "42")
+    monkeypatch.setenv("TELEGRAM_COMMAND_LANGUAGE_CODE", "en")
+    adapter = TelegramAdapter("token")
+
+    class FakeConfig:
+        def get(self, dotted, default=None):
+            if dotted == "gateway.user_commands":
+                return ["/deploy", "/bad command", "/deploy"]
+            return default
+
+    adapter._config = FakeConfig()
+    calls = []
+
+    def fake_api(method, **params):
+        calls.append((method, params))
+        if method == "getMe":
+            return {"result": {"id": 123, "username": "aegis_bot"}}
+        return {"ok": True}
+
+    adapter._api = fake_api
+    adapter._startup_sync()
+
+    assert adapter.bot_id == "123"
+    assert adapter.bot_username == "aegis_bot"
+    assert calls[0] == ("getMe", {})
+    method, params = calls[1]
+    assert method == "setMyCommands"
+    commands = json.loads(params["commands"])
+    assert commands[0] == {"command": "help", "description": "Show available AEGIS commands"}
+    assert {"command": "deploy", "description": "Run /deploy"} in commands
+    assert {"command": "bad", "description": "Run /bad"} in commands
+    assert all(" " not in row["command"] for row in commands)
+    assert json.loads(params["scope"]) == {"type": "chat", "chat_id": "42"}
+    assert params["language_code"] == "en"
+
+
+def test_telegram_callback_queries_dispatch_as_commands(monkeypatch):
+    from aegis.gateway.channels import TelegramAdapter
+
+    monkeypatch.setenv("TELEGRAM_BOT_USERNAME", "aegis_bot")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_USERS", "7")
+    adapter = TelegramAdapter("token")
+    calls = []
+    seen = []
+    adapter._api = lambda method, **params: calls.append((method, params)) or {"ok": True}
+    adapter._submit_inbound = lambda ev, *, raw_text=None: seen.append((ev, raw_text)) or None
+
+    handled = adapter._handle_callback_update({
+        "callback_query": {
+            "id": "cb1",
+            "data": "/status@aegis_bot",
+            "from": {"id": 7, "username": "ada"},
+            "message": {
+                "message_id": 55,
+                "chat": {"id": 42, "type": "supergroup"},
+                "message_thread_id": 77,
+                "is_topic_message": True,
+            },
+        },
+    })
+
+    assert handled is True
+    assert calls == [("answerCallbackQuery", {"callback_query_id": "cb1"})]
+    ev, raw_text = seen[0]
+    assert raw_text == "/status@aegis_bot"
+    assert ev.platform == "telegram"
+    assert ev.chat_id == "42"
+    assert ev.text == "/status"
+    assert ev.user_id == "7"
+    assert ev.user_name == "ada"
+    assert ev.thread_id == "77"
+    assert ev.message_id == "55"
+    assert ev.metadata["source"] == "callback_query"
+    assert ev.metadata["callback_query_id"] == "cb1"
+    assert ev.metadata["command"] == "/status"
+
+
+def test_telegram_callback_rejects_unauthorized_users(monkeypatch):
+    from aegis.gateway.channels import TelegramAdapter
+
+    monkeypatch.setenv("TELEGRAM_ALLOWED_USERS", "7")
+    adapter = TelegramAdapter("token")
+    calls = []
+    adapter._api = lambda method, **params: calls.append((method, params)) or {"ok": True}
+    adapter._submit_inbound = lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("should not dispatch"))
+
+    assert adapter._handle_callback_update({
+        "callback_query": {
+            "id": "cb1",
+            "data": "/status",
+            "from": {"id": 8, "username": "mallory"},
+            "message": {"message_id": 55, "chat": {"id": 42, "type": "private"}},
+        },
+    }) is True
+    assert calls == [("answerCallbackQuery", {
+        "callback_query_id": "cb1",
+        "text": "Not authorized",
+        "show_alert": "true",
+    })]
+
+
+def test_telegram_channel_post_uses_sender_chat_identity(monkeypatch):
+    from aegis.gateway.channels import TelegramAdapter
+
+    adapter = TelegramAdapter("token")
+    msg = {
+        "message_id": 9,
+        "chat": {"id": -1001, "type": "channel"},
+        "sender_chat": {"id": -1001, "username": "updates"},
+        "text": "/status",
+    }
+
+    assert adapter._message_from_update({"channel_post": msg}) == (msg, "channel_post")
+    assert adapter._author_from_message(msg) == ("-1001", "updates")
+    assert adapter._message_allowed(msg, "/status") is True
 
 
 def test_slack_adapter_enforces_workspace_filters_and_strips_mentions(monkeypatch):
