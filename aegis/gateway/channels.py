@@ -8,9 +8,11 @@ import os
 import re
 import sys
 import time
+from pathlib import Path
 
 import httpx
 
+from .. import config as cfg
 from ..platforms import (
     MAX_TELEGRAM_COMMANDS,
     capped_command_menu,
@@ -21,6 +23,7 @@ from ..platforms import (
 )
 from ..webhook import DeliveryIdCache
 from .base import BasePlatformAdapter, Dispatch, MessageEvent
+from .idempotency import PersistentDeliveryIdStore
 
 
 def _csv_set(value: str) -> set[str] | None:
@@ -124,9 +127,18 @@ class TelegramAdapter(BasePlatformAdapter):
         self.command_scope_chat_id = os.environ.get("TELEGRAM_COMMAND_SCOPE_CHAT_ID", "").strip()
         self.command_language_code = os.environ.get("TELEGRAM_COMMAND_LANGUAGE_CODE", "").strip()
         self.callback_ttl_seconds = _env_int("TELEGRAM_CALLBACK_TTL_SECONDS", 3600)
+        self.idempotency_ttl_seconds = _env_int("TELEGRAM_IDEMPOTENCY_TTL_SECONDS", 3600)
+        self.idempotency_cache_max = _env_int("TELEGRAM_IDEMPOTENCY_CACHE_MAX", 10000)
         self._delivery_cache = DeliveryIdCache(
-            ttl_seconds=float(_env_int("TELEGRAM_IDEMPOTENCY_TTL_SECONDS", 3600)),
-            max_items=_env_int("TELEGRAM_IDEMPOTENCY_CACHE_MAX", 10000),
+            ttl_seconds=float(self.idempotency_ttl_seconds),
+            max_items=self.idempotency_cache_max,
+        )
+        self.persist_idempotency = _env_bool("TELEGRAM_IDEMPOTENCY_PERSIST", True)
+        store_path = os.environ.get("TELEGRAM_IDEMPOTENCY_STORE_PATH", "").strip()
+        self._delivery_store = PersistentDeliveryIdStore(
+            cfg.sub("gateway", "telegram_delivery_ids.json") if not store_path else Path(store_path).expanduser(),
+            ttl_seconds=float(self.idempotency_ttl_seconds),
+            max_items=self.idempotency_cache_max,
         )
         self._callback_payloads: dict[str, str] = {}
         self._callback_payload_meta: dict[str, dict] = {}
@@ -153,6 +165,8 @@ class TelegramAdapter(BasePlatformAdapter):
             "idempotency_env": [
                 "TELEGRAM_IDEMPOTENCY_TTL_SECONDS",
                 "TELEGRAM_IDEMPOTENCY_CACHE_MAX",
+                "TELEGRAM_IDEMPOTENCY_PERSIST",
+                "TELEGRAM_IDEMPOTENCY_STORE_PATH",
             ],
         }
         data["idempotency"] = {
@@ -162,6 +176,8 @@ class TelegramAdapter(BasePlatformAdapter):
                 "message.chat.id + message.message_id",
             ],
             "delivery_cache": self._delivery_cache.stats(),
+            "persistent": self.persist_idempotency,
+            "delivery_store": self._delivery_store.stats() if self.persist_idempotency else {},
         }
         return data
 
@@ -205,7 +221,7 @@ class TelegramAdapter(BasePlatformAdapter):
 
     def _handle_update(self, update: dict) -> bool:
         delivery_id = self._delivery_id_from_update(update)
-        if delivery_id and not self._delivery_cache.record(delivery_id):
+        if delivery_id and not self._record_delivery_id(delivery_id):
             return True
         try:
             if self._handle_callback_update(update):
@@ -254,8 +270,27 @@ class TelegramAdapter(BasePlatformAdapter):
             return True
         except Exception:
             if delivery_id:
-                self._delivery_cache.discard(delivery_id)
+                self._discard_delivery_id(delivery_id)
             raise
+
+    def _record_delivery_id(self, delivery_id: str) -> bool:
+        delivery_id = str(delivery_id or "").strip()
+        if not delivery_id:
+            return True
+        if not self._delivery_cache.record(delivery_id):
+            return False
+        if self.persist_idempotency and not self._delivery_store.record(delivery_id):
+            self._delivery_cache.discard(delivery_id)
+            return False
+        return True
+
+    def _discard_delivery_id(self, delivery_id: str) -> None:
+        delivery_id = str(delivery_id or "").strip()
+        if not delivery_id:
+            return
+        self._delivery_cache.discard(delivery_id)
+        if self.persist_idempotency:
+            self._delivery_store.discard(delivery_id)
 
     def _delivery_id_from_update(self, update: dict) -> str:
         update_id = str(update.get("update_id") or "").strip()
@@ -753,11 +788,31 @@ class TelegramAdapter(BasePlatformAdapter):
         metadata = dict(ev.metadata or {})
         if ev.thread_id and not metadata.get("message_thread_id"):
             metadata["message_thread_id"] = ev.thread_id
+        if ev.message_id:
+            metadata.setdefault("message_id", ev.message_id)
+            metadata["reply_to_message_id"] = ev.message_id
+        elif ev.reply_to_message_id:
+            metadata.setdefault("reply_to_message_id", ev.reply_to_message_id)
         return metadata
 
     def _thread_params(self, metadata: dict | None = None) -> dict[str, str]:
         thread_id = (metadata or {}).get("message_thread_id") or (metadata or {}).get("thread_id")
         return {"message_thread_id": str(thread_id)} if thread_id else {}
+
+    def _reply_params(self, metadata: dict | None = None) -> dict[str, str]:
+        reply_to = (metadata or {}).get("reply_to_message_id") or (metadata or {}).get("message_id")
+        if not reply_to:
+            return {}
+        return {
+            "reply_to_message_id": str(reply_to),
+            "allow_sending_without_reply": "true",
+        }
+
+    def _send_params(self, metadata: dict | None = None, *, reply: bool = True) -> dict[str, str]:
+        params = self._thread_params(metadata)
+        if reply:
+            params.update(self._reply_params(metadata))
+        return params
 
     def _api_with_thread_fallback(self, method: str, **params):
         try:
@@ -807,7 +862,7 @@ class TelegramAdapter(BasePlatformAdapter):
                 "sendMessage",
                 chat_id=chat_id,
                 text=text,
-                **self._thread_params(metadata),
+                **self._send_params(metadata),
             ).get("result", {}).get("message_id")
         except Exception:  # noqa: BLE001
             return None
@@ -870,7 +925,7 @@ class TelegramAdapter(BasePlatformAdapter):
             with open(path, "rb") as fh, httpx.Client(timeout=120) as c:
                 data = {"chat_id": chat_id, "caption": caption}
                 if metadata:
-                    data.update(self._thread_params(metadata))
+                    data.update(self._send_params(metadata))
                 try:
                     r = c.post(f"{self._base}/{method}", data=data, files={field: fh})
                     r.raise_for_status()
@@ -886,7 +941,7 @@ class TelegramAdapter(BasePlatformAdapter):
 
     def send(self, chat_id: str, text: str, *, metadata: dict | None = None) -> None:
         # Telegram caps messages at 4096 UTF-16 code units; leave a small margin.
-        params = self._thread_params(metadata)
+        params = self._send_params(metadata)
         for chunk in chunk_text_by_units(text, limit=4000, len_fn=utf16_units):
             self._api_with_thread_fallback("sendMessage", chat_id=chat_id, text=chunk, **params)
 
@@ -906,7 +961,7 @@ class TelegramAdapter(BasePlatformAdapter):
                 continue
             rendered += f"\n  {i}. {text}"
             rows.append([{"text": text, "callback_data": self._callback_data_for(text, prefix="clarify")}])
-        params = self._thread_params(metadata)
+        params = self._send_params(metadata)
         if rows:
             params["reply_markup"] = json.dumps({"inline_keyboard": rows}, ensure_ascii=False)
         try:
@@ -927,7 +982,7 @@ class TelegramAdapter(BasePlatformAdapter):
             {"text": "Deny", "callback_data": self._callback_data_for("deny", prefix="approval")},
         ]]
         params = {
-            **self._thread_params(metadata),
+            **self._send_params(metadata),
             "reply_markup": json.dumps({"inline_keyboard": rows}, ensure_ascii=False),
         }
         try:

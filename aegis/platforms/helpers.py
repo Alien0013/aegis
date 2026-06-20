@@ -61,6 +61,8 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
             "TELEGRAM_CALLBACK_TTL_SECONDS",
             "TELEGRAM_IDEMPOTENCY_TTL_SECONDS",
             "TELEGRAM_IDEMPOTENCY_CACHE_MAX",
+            "TELEGRAM_IDEMPOTENCY_PERSIST",
+            "TELEGRAM_IDEMPOTENCY_STORE_PATH",
         ],
         "max_message_length": 4096,
         "message_length_units": "utf16",
@@ -78,6 +80,8 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
             "idempotency_env": [
                 "TELEGRAM_IDEMPOTENCY_TTL_SECONDS",
                 "TELEGRAM_IDEMPOTENCY_CACHE_MAX",
+                "TELEGRAM_IDEMPOTENCY_PERSIST",
+                "TELEGRAM_IDEMPOTENCY_STORE_PATH",
             ],
         },
     },

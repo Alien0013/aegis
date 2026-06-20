@@ -1138,6 +1138,8 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
             "TELEGRAM_CALLBACK_TTL_SECONDS",
             "TELEGRAM_IDEMPOTENCY_TTL_SECONDS",
             "TELEGRAM_IDEMPOTENCY_CACHE_MAX",
+            "TELEGRAM_IDEMPOTENCY_PERSIST",
+            "TELEGRAM_IDEMPOTENCY_STORE_PATH",
         ],
         "setup": "Create a bot with BotFather, set TELEGRAM_BOT_TOKEN, start the gateway, then approve the pairing code.",
         "pairing": True,
@@ -1167,6 +1169,8 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
             "idempotency_env": [
                 "TELEGRAM_IDEMPOTENCY_TTL_SECONDS",
                 "TELEGRAM_IDEMPOTENCY_CACHE_MAX",
+                "TELEGRAM_IDEMPOTENCY_PERSIST",
+                "TELEGRAM_IDEMPOTENCY_STORE_PATH",
             ],
         },
     },

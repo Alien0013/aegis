@@ -549,7 +549,9 @@ def test_platform_helper_command_caps_and_utf16_chunks():
     ]
     assert platform_metadata("tg")["supports_interactive_prompts"] is True
     assert "TELEGRAM_CALLBACK_TTL_SECONDS" in platform_metadata("tg")["optional_env"]
+    assert "TELEGRAM_IDEMPOTENCY_PERSIST" in platform_metadata("tg")["optional_env"]
     assert platform_metadata("tg")["security"]["callback_ttl_env"] == "TELEGRAM_CALLBACK_TTL_SECONDS"
+    assert "TELEGRAM_IDEMPOTENCY_STORE_PATH" in platform_metadata("tg")["security"]["idempotency_env"]
     assert platform_metadata("tg")["security"]["callback_ttl_default_seconds"] == 3600
     assert platform_metadata("dc")["supports_reactions"] is True
     assert platform_metadata("dc")["supports_interactive_prompts"] is True
@@ -624,6 +626,7 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert "TELEGRAM_REGISTER_COMMANDS" in TelegramAdapter("token").metadata["optional_env"]
     assert "TELEGRAM_CALLBACK_TTL_SECONDS" in TelegramAdapter("token").metadata["optional_env"]
     assert "TELEGRAM_IDEMPOTENCY_CACHE_MAX" in TelegramAdapter("token").metadata["optional_env"]
+    assert "TELEGRAM_IDEMPOTENCY_PERSIST" in TelegramAdapter("token").metadata["optional_env"]
     assert TelegramAdapter("token").metadata["security"]["group_trigger_mode"] == "all"
     assert TelegramAdapter("token").metadata["security"]["register_commands"] is True
     assert TelegramAdapter("token").metadata["security"]["callback_ttl_seconds"] == 3600
@@ -631,8 +634,12 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert TelegramAdapter("token").metadata["security"]["idempotency_env"] == [
         "TELEGRAM_IDEMPOTENCY_TTL_SECONDS",
         "TELEGRAM_IDEMPOTENCY_CACHE_MAX",
+        "TELEGRAM_IDEMPOTENCY_PERSIST",
+        "TELEGRAM_IDEMPOTENCY_STORE_PATH",
     ]
     assert TelegramAdapter("token").metadata["idempotency"]["delivery_cache"]["entries"] == 0
+    assert TelegramAdapter("token").metadata["idempotency"]["persistent"] is True
+    assert TelegramAdapter("token").metadata["idempotency"]["delivery_store"]["entries"] == 0
     assert TelegramAdapter("token").metadata["supports_reactions"] is True
     assert TelegramAdapter("token").metadata["supports_interactive_prompts"] is True
     assert TelegramAdapter("token").metadata["supports_slash_commands"] is True
@@ -1523,6 +1530,37 @@ def test_telegram_adapter_enforces_chat_filters_and_group_addressing(monkeypatch
     })
 
     api_calls.clear()
+    reply_ev = MessageEvent(
+        platform="telegram",
+        chat_id="42",
+        text="reply",
+        thread_id="77",
+        message_id="321",
+        metadata={"message_thread_id": "77"},
+    )
+    reply_state = adapter._before_dispatch(reply_ev)
+    adapter._deliver_reply(reply_ev, "anchored reply", reply_state)
+    assert api_calls[0] == ("sendChatAction", {
+        "chat_id": "42",
+        "action": "typing",
+        "message_thread_id": "77",
+    })
+    assert api_calls[1] == ("sendMessage", {
+        "chat_id": "42",
+        "text": "🤔 working…",
+        "message_thread_id": "77",
+        "reply_to_message_id": "321",
+        "allow_sending_without_reply": "true",
+    })
+    assert api_calls[-1] == ("sendMessage", {
+        "chat_id": "42",
+        "text": "anchored reply",
+        "message_thread_id": "77",
+        "reply_to_message_id": "321",
+        "allow_sending_without_reply": "true",
+    })
+
+    api_calls.clear()
 
     def fake_api_thread_missing(method, **params):
         api_calls.append((method, params))
@@ -1795,6 +1833,14 @@ def test_telegram_update_idempotency_drops_retries_and_reopens_on_failure(monkey
     assert seen == [("hello", "hello")]
     assert adapter._delivery_cache.stats()["accepted_count"] == 1
     assert adapter._delivery_cache.stats()["duplicate_count"] == 1
+    assert adapter.metadata["idempotency"]["delivery_store"]["entries"] == 1
+
+    after_restart = TelegramAdapter("token")
+    after_restart._submit_inbound = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("durable duplicate should not dispatch")
+    )
+    assert after_restart._handle_update(update) is True
+    assert after_restart.metadata["idempotency"]["delivery_store"]["duplicate_count"] == 1
 
     callback_seen = []
     callback_update = {
@@ -1813,16 +1859,22 @@ def test_telegram_update_idempotency_drops_retries_and_reopens_on_failure(monkey
     assert callback_seen == [("/status", "/status")]
 
     failing = TelegramAdapter("token")
+    failing_update = {
+        **update,
+        "update_id": 43,
+        "message": {**update["message"], "message_id": 11, "text": "retry me"},
+    }
     failing._submit_inbound = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("queue down"))
     with pytest.raises(RuntimeError):
-        failing._handle_update(update)
+        failing._handle_update(failing_update)
     assert failing._delivery_cache.stats()["entries"] == 0
     assert failing._delivery_cache.stats()["discarded_count"] == 1
+    assert failing.metadata["idempotency"]["delivery_store"]["discarded_count"] == 1
 
     recovered = []
     failing._submit_inbound = lambda ev, *, raw_text=None: recovered.append(ev.text) or None
-    assert failing._handle_update(update) is True
-    assert recovered == ["hello"]
+    assert failing._handle_update(failing_update) is True
+    assert recovered == ["retry me"]
 
 
 def test_telegram_startup_discovers_identity_and_registers_commands(monkeypatch):
