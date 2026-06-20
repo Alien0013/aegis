@@ -997,6 +997,7 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     assert "TELEGRAM_REGISTER_COMMANDS" in telegram["optional_env_vars"]
     assert "TELEGRAM_CALLBACK_TTL_SECONDS" in telegram["optional_env_vars"]
     assert "TELEGRAM_IDEMPOTENCY_CACHE_MAX" in telegram["optional_env_vars"]
+    assert "TELEGRAM_IDEMPOTENCY_PERSIST" in telegram["optional_env_vars"]
     assert "TELEGRAM_ALLOWED_CHATS" not in telegram["missing_env_vars"]
     assert telegram["auth_type"] == "bot_token"
     assert telegram["transport"] == "long_poll"
@@ -1011,6 +1012,8 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     assert telegram["security"]["idempotency_env"] == [
         "TELEGRAM_IDEMPOTENCY_TTL_SECONDS",
         "TELEGRAM_IDEMPOTENCY_CACHE_MAX",
+        "TELEGRAM_IDEMPOTENCY_PERSIST",
+        "TELEGRAM_IDEMPOTENCY_STORE_PATH",
     ]
     assert telegram["metadata"]["adapter_class"].endswith("TelegramAdapter")
     slack = next(row for row in rows if row["id"] == "slack")
@@ -1069,6 +1072,7 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     assert webhook["transport"] == "http"
     assert "WEBHOOK_CHANNEL_RATE_LIMIT_PER_MINUTE" in webhook["optional_env_vars"]
     assert "WEBHOOK_CHANNEL_ALLOW_UNSIGNED_LOOPBACK" in webhook["optional_env_vars"]
+    assert "WEBHOOK_CHANNEL_IDEMPOTENCY_STORE_PATH" in webhook["optional_env_vars"]
     assert "idempotency" in webhook["capabilities"]
     assert "interactive_prompts" in webhook["capabilities"]
     assert "thread" in webhook["delivery_modes"]
@@ -1077,6 +1081,7 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     assert whatsapp["transport"] == "http_bridge"
     assert whatsapp["auth_type"] == "local_http_bridge"
     assert "WHATSAPP_CHANNEL_SECRET" in whatsapp["optional_env_vars"]
+    assert "WHATSAPP_CHANNEL_IDEMPOTENCY_STORE_PATH" in whatsapp["optional_env_vars"]
     assert "whatsapp_bridge_aliases" in whatsapp["capabilities"]
     assert "whatsapp_nested_media" in whatsapp["capabilities"]
     assert "interactive_prompts" in whatsapp["capabilities"]

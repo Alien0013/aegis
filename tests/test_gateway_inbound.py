@@ -578,6 +578,7 @@ def test_platform_helper_command_caps_and_utf16_chunks():
     assert webhook_meta["supports_threads"] is True
     assert "WEBHOOK_CHANNEL_RATE_LIMIT_PER_MINUTE" in webhook_meta["optional_env"]
     assert "WEBHOOK_CHANNEL_ALLOW_UNSIGNED_LOOPBACK" in webhook_meta["optional_env"]
+    assert "WEBHOOK_CHANNEL_IDEMPOTENCY_STORE_PATH" in webhook_meta["optional_env"]
     assert "X-Webhook-Signature" in webhook_meta["security"]["signature_schemes"]
 
 
@@ -691,8 +692,12 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert webhook["supports_threads"] is True
     assert webhook["supports_reactions"] is True
     assert webhook["security"]["secret_configured"] is False
+    assert "WEBHOOK_CHANNEL_IDEMPOTENCY_STORE_PATH" in webhook["optional_env"]
+    assert "WEBHOOK_CHANNEL_IDEMPOTENCY_STORE_PATH" in webhook["security"]["idempotency_env"]
     assert "X-Secret" in webhook["security"]["signature_schemes"]
     assert webhook["idempotency"]["delivery_cache"]["entries"] == 0
+    assert webhook["idempotency"]["persistent"] is True
+    assert webhook["idempotency"]["delivery_store"]["entries"] == 0
     assert webhook["rate_limiter"]["limit"] >= 1
 
     from aegis.gateway.channels import build_adapter
@@ -3475,6 +3480,16 @@ def test_gateway_webhook_channel_auth_and_delivery_headers_are_case_insensitive(
     assert payload == {"reply": "reply:webhook:hello"}
     assert duplicate_status == 200
     assert duplicate_payload == {"reply": "", "duplicate": True}
+    assert adapter.metadata["idempotency"]["delivery_store"]["entries"] == 1
+
+    after_restart = WebhookChannel()
+    after_restart._submit_inbound = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("durable duplicate should not dispatch")
+    )
+    restart_status, restart_payload = after_restart._handle_inbound_payload(headers, body)
+    assert restart_status == 200
+    assert restart_payload == {"reply": "", "duplicate": True}
+    assert after_restart.metadata["idempotency"]["delivery_store"]["duplicate_count"] == 1
 
 
 def test_gateway_webhook_channel_handler_only_accepts_in_path(monkeypatch):
@@ -3569,6 +3584,7 @@ def test_gateway_webhook_channel_allows_retry_after_dispatch_failure():
     assert "bridge down" in payload["error"]
     assert adapter._delivery_cache.stats()["entries"] == 0
     assert adapter._delivery_cache.stats()["discarded_count"] == 1
+    assert adapter.metadata["idempotency"]["delivery_store"]["discarded_count"] == 1
 
     adapter._submit_inbound = lambda ev, *, wait=False: f"reply:{ev.text}"
     retry_status, retry_payload = adapter._handle_inbound_payload(headers, body)

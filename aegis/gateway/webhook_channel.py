@@ -19,13 +19,16 @@ import os
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 
 import httpx
 
+from .. import config as cfg
 from ..platforms import chunk_text_by_units, normalize_platform_name
 from ..webhook import DeliveryIdCache, FixedWindowRateLimiter, _env_truthy, _is_loopback_host, verify_signature
 from .base import BasePlatformAdapter, Dispatch, MessageEvent
+from .idempotency import PersistentDeliveryIdStore
 
 
 def _channel_env(prefix: str, suffix: str, default: str = "") -> str:
@@ -388,9 +391,18 @@ class WebhookChannel(BasePlatformAdapter):
         self.allowed_platforms = self._normalized_platform_set(
             _channel_env_with_fallback(env_prefix, "ALLOWED_PLATFORMS")
         )
+        self.idempotency_ttl_seconds = float(_channel_env(env_prefix, "IDEMPOTENCY_TTL_SECONDS", "3600") or "3600")
+        self.idempotency_cache_max = _channel_env_int(env_prefix, "IDEMPOTENCY_CACHE_MAX", 10000)
         self._delivery_cache = DeliveryIdCache(
-            ttl_seconds=float(_channel_env(env_prefix, "IDEMPOTENCY_TTL_SECONDS", "3600") or "3600"),
-            max_items=_channel_env_int(env_prefix, "IDEMPOTENCY_CACHE_MAX", 10000),
+            ttl_seconds=self.idempotency_ttl_seconds,
+            max_items=self.idempotency_cache_max,
+        )
+        self.persist_idempotency = _channel_env_bool(env_prefix, "IDEMPOTENCY_PERSIST", True)
+        store_path = _channel_env(env_prefix, "IDEMPOTENCY_STORE_PATH", "").strip()
+        self._delivery_store = PersistentDeliveryIdStore(
+            cfg.sub("gateway", f"{self.name}_delivery_ids.json") if not store_path else Path(store_path).expanduser(),
+            ttl_seconds=self.idempotency_ttl_seconds,
+            max_items=self.idempotency_cache_max,
         )
         self._rate_limiter = FixedWindowRateLimiter(
             limit=_channel_env_int(env_prefix, "RATE_LIMIT_PER_MINUTE", 60),
@@ -418,6 +430,12 @@ class WebhookChannel(BasePlatformAdapter):
                 ],
                 "allowed_platforms": sorted(self.allowed_platforms or []),
                 "allowed_platforms_env": f"{self.env_prefix}_ALLOWED_PLATFORMS",
+                "idempotency_env": [
+                    f"{self.env_prefix}_IDEMPOTENCY_TTL_SECONDS",
+                    f"{self.env_prefix}_IDEMPOTENCY_CACHE_MAX",
+                    f"{self.env_prefix}_IDEMPOTENCY_PERSIST",
+                    f"{self.env_prefix}_IDEMPOTENCY_STORE_PATH",
+                ],
                 "signature_schemes": [
                     "X-Secret",
                     "X-Hub-Signature-256",
@@ -440,6 +458,8 @@ class WebhookChannel(BasePlatformAdapter):
                     "body.id",
                 ],
                 "delivery_cache": self._delivery_cache.stats(),
+                "persistent": self.persist_idempotency,
+                "delivery_store": self._delivery_store.stats() if self.persist_idempotency else {},
             },
             "rate_limiter": self._rate_limiter.stats(),
         })
@@ -495,6 +515,25 @@ class WebhookChannel(BasePlatformAdapter):
             if value:
                 return f"body:{'.'.join(str(part) for part in path)}:{value}"
         return ""
+
+    def _record_delivery_id(self, delivery_id: str) -> bool:
+        delivery_id = str(delivery_id or "").strip()
+        if not delivery_id:
+            return True
+        if not self._delivery_cache.record(delivery_id):
+            return False
+        if self.persist_idempotency and not self._delivery_store.record(delivery_id):
+            self._delivery_cache.discard(delivery_id)
+            return False
+        return True
+
+    def _discard_delivery_id(self, delivery_id: str) -> None:
+        delivery_id = str(delivery_id or "").strip()
+        if not delivery_id:
+            return
+        self._delivery_cache.discard(delivery_id)
+        if self.persist_idempotency:
+            self._delivery_store.discard(delivery_id)
 
     def _event_from_body(self, body: dict) -> MessageEvent:
         raw_platform = _string_value(body.get("platform", self.default_platform)) or self.default_platform
@@ -804,13 +843,13 @@ class WebhookChannel(BasePlatformAdapter):
             if ev.platform == "whatsapp" and _is_whatsapp_self_echo(body):
                 return 200, {"reply": "", "ignored": True, "reason": "whatsapp_self_echo"}
             if delivery_id:
-                delivery_recorded = self._delivery_cache.record(delivery_id)
+                delivery_recorded = self._record_delivery_id(delivery_id)
                 if not delivery_recorded:
                     return 200, {"reply": "", "duplicate": True}
             reply = self._submit_inbound(ev, wait=True) or ""
         except Exception as exc:  # noqa: BLE001
             if delivery_recorded:
-                self._delivery_cache.discard(delivery_id)
+                self._discard_delivery_id(delivery_id)
             return 500, {"reply": "", "error": f"dispatch failed: {type(exc).__name__}: {exc}"}
         return 200, {"reply": reply}
 

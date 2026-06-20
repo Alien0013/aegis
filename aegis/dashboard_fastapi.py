@@ -1370,6 +1370,8 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
             "WEBHOOK_CHANNEL_RATE_LIMIT_PER_MINUTE",
             "WEBHOOK_CHANNEL_IDEMPOTENCY_TTL_SECONDS",
             "WEBHOOK_CHANNEL_IDEMPOTENCY_CACHE_MAX",
+            "WEBHOOK_CHANNEL_IDEMPOTENCY_PERSIST",
+            "WEBHOOK_CHANNEL_IDEMPOTENCY_STORE_PATH",
             "WEBHOOK_CHANNEL_INSECURE_NO_AUTH",
             "WEBHOOK_CHANNEL_ALLOW_UNSIGNED_LOOPBACK",
             "WEBHOOK_CHANNEL_ALLOWED_PLATFORMS",
@@ -1401,6 +1403,8 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
             "idempotency_env": [
                 "WEBHOOK_CHANNEL_IDEMPOTENCY_TTL_SECONDS",
                 "WEBHOOK_CHANNEL_IDEMPOTENCY_CACHE_MAX",
+                "WEBHOOK_CHANNEL_IDEMPOTENCY_PERSIST",
+                "WEBHOOK_CHANNEL_IDEMPOTENCY_STORE_PATH",
             ],
             "signature_schemes": [
                 "X-Secret",
@@ -1423,6 +1427,8 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
             "WHATSAPP_CHANNEL_RATE_LIMIT_PER_MINUTE",
             "WHATSAPP_CHANNEL_IDEMPOTENCY_TTL_SECONDS",
             "WHATSAPP_CHANNEL_IDEMPOTENCY_CACHE_MAX",
+            "WHATSAPP_CHANNEL_IDEMPOTENCY_PERSIST",
+            "WHATSAPP_CHANNEL_IDEMPOTENCY_STORE_PATH",
             "WHATSAPP_CHANNEL_INSECURE_NO_AUTH",
             "WHATSAPP_CHANNEL_ALLOW_UNSIGNED_LOOPBACK",
             "WHATSAPP_CHANNEL_ALLOWED_PLATFORMS",
@@ -1458,6 +1464,8 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
             "idempotency_env": [
                 "WHATSAPP_CHANNEL_IDEMPOTENCY_TTL_SECONDS",
                 "WHATSAPP_CHANNEL_IDEMPOTENCY_CACHE_MAX",
+                "WHATSAPP_CHANNEL_IDEMPOTENCY_PERSIST",
+                "WHATSAPP_CHANNEL_IDEMPOTENCY_STORE_PATH",
             ],
             "signature_schemes": [
                 "X-Secret",
