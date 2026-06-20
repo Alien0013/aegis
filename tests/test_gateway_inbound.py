@@ -622,8 +622,10 @@ def test_platform_helper_command_caps_and_utf16_chunks():
     ]
     assert platform_metadata("tg")["supports_interactive_prompts"] is True
     assert "TELEGRAM_CALLBACK_TTL_SECONDS" in platform_metadata("tg")["optional_env"]
+    assert "TELEGRAM_RATE_LIMIT_PER_MINUTE" in platform_metadata("tg")["optional_env"]
     assert "TELEGRAM_IDEMPOTENCY_PERSIST" in platform_metadata("tg")["optional_env"]
     assert platform_metadata("tg")["security"]["callback_ttl_env"] == "TELEGRAM_CALLBACK_TTL_SECONDS"
+    assert platform_metadata("tg")["security"]["rate_limit_env"] == "TELEGRAM_RATE_LIMIT_PER_MINUTE"
     assert "TELEGRAM_IDEMPOTENCY_STORE_PATH" in platform_metadata("tg")["security"]["idempotency_env"]
     assert platform_metadata("tg")["security"]["callback_ttl_default_seconds"] == 3600
     assert platform_metadata("dc")["supports_reactions"] is True
@@ -708,12 +710,14 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert "TELEGRAM_ALLOWED_CHATS" in TelegramAdapter("token").metadata["optional_env"]
     assert "TELEGRAM_REGISTER_COMMANDS" in TelegramAdapter("token").metadata["optional_env"]
     assert "TELEGRAM_CALLBACK_TTL_SECONDS" in TelegramAdapter("token").metadata["optional_env"]
+    assert "TELEGRAM_RATE_LIMIT_PER_MINUTE" in TelegramAdapter("token").metadata["optional_env"]
     assert "TELEGRAM_IDEMPOTENCY_CACHE_MAX" in TelegramAdapter("token").metadata["optional_env"]
     assert "TELEGRAM_IDEMPOTENCY_PERSIST" in TelegramAdapter("token").metadata["optional_env"]
     assert TelegramAdapter("token").metadata["security"]["group_trigger_mode"] == "all"
     assert TelegramAdapter("token").metadata["security"]["register_commands"] is True
     assert TelegramAdapter("token").metadata["security"]["callback_ttl_seconds"] == 3600
     assert TelegramAdapter("token").metadata["security"]["callback_ttl_env"] == "TELEGRAM_CALLBACK_TTL_SECONDS"
+    assert TelegramAdapter("token").metadata["security"]["rate_limit_env"] == "TELEGRAM_RATE_LIMIT_PER_MINUTE"
     assert TelegramAdapter("token").metadata["security"]["idempotency_env"] == [
         "TELEGRAM_IDEMPOTENCY_TTL_SECONDS",
         "TELEGRAM_IDEMPOTENCY_CACHE_MAX",
@@ -723,6 +727,7 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert TelegramAdapter("token").metadata["idempotency"]["delivery_cache"]["entries"] == 0
     assert TelegramAdapter("token").metadata["idempotency"]["persistent"] is True
     assert TelegramAdapter("token").metadata["idempotency"]["delivery_store"]["entries"] == 0
+    assert TelegramAdapter("token").metadata["rate_limiter"]["limit"] == 60
     assert TelegramAdapter("token").metadata["supports_reactions"] is True
     assert TelegramAdapter("token").metadata["supports_interactive_prompts"] is True
     assert TelegramAdapter("token").metadata["supports_slash_commands"] is True
@@ -2015,6 +2020,36 @@ def test_telegram_update_idempotency_drops_retries_and_reopens_on_failure(monkey
     failing._submit_inbound = lambda ev, *, raw_text=None: recovered.append(ev.text) or None
     assert failing._handle_update(failing_update) is True
     assert recovered == ["retry me"]
+
+
+def test_telegram_rate_limit_drops_excess_updates(monkeypatch):
+    from aegis.gateway.channels import TelegramAdapter
+
+    monkeypatch.setenv("TELEGRAM_RATE_LIMIT_PER_MINUTE", "1")
+    for name in (
+        "TELEGRAM_ALLOWED_USERS",
+        "TELEGRAM_ALLOWED_CHATS",
+        "TELEGRAM_IGNORED_CHATS",
+        "TELEGRAM_ALLOWED_CHAT_TYPES",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    adapter = TelegramAdapter("token")
+    calls = []
+    seen = []
+    adapter._api = lambda method, **params: calls.append((method, params)) or {"ok": True}
+    adapter._submit_inbound = lambda ev, *, raw_text=None: seen.append((ev.text, raw_text)) or None
+
+    base_message = {
+        "date": 123456,
+        "chat": {"id": 42, "type": "private"},
+        "from": {"id": 7, "username": "ada"},
+    }
+    assert adapter._handle_update({"update_id": 501, "message": {**base_message, "message_id": 1, "text": "hello"}}) is True
+    assert adapter._handle_update({"update_id": 502, "message": {**base_message, "message_id": 2, "text": "again"}}) is True
+
+    assert seen == [("hello", "hello")]
+    assert ("sendMessage", {"chat_id": "42", "text": "⏳ rate limit exceeded."}) in calls
+    assert adapter.metadata["rate_limiter"]["limited_count"] == 1
 
 
 def test_telegram_startup_discovers_identity_and_registers_commands(monkeypatch):

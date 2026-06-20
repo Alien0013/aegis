@@ -996,6 +996,7 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     assert "TELEGRAM_ALLOWED_CHATS" in telegram["metadata"]["optional_env"]
     assert "TELEGRAM_REGISTER_COMMANDS" in telegram["optional_env_vars"]
     assert "TELEGRAM_CALLBACK_TTL_SECONDS" in telegram["optional_env_vars"]
+    assert "TELEGRAM_RATE_LIMIT_PER_MINUTE" in telegram["optional_env_vars"]
     assert "TELEGRAM_IDEMPOTENCY_CACHE_MAX" in telegram["optional_env_vars"]
     assert "TELEGRAM_IDEMPOTENCY_PERSIST" in telegram["optional_env_vars"]
     assert "TELEGRAM_ALLOWED_CHATS" not in telegram["missing_env_vars"]
@@ -1009,6 +1010,7 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     assert telegram["security"]["command_registration_env"] == "TELEGRAM_REGISTER_COMMANDS"
     assert telegram["security"]["callback_ttl_env"] == "TELEGRAM_CALLBACK_TTL_SECONDS"
     assert telegram["security"]["callback_ttl_default_seconds"] == 3600
+    assert telegram["security"]["rate_limit_env"] == "TELEGRAM_RATE_LIMIT_PER_MINUTE"
     assert telegram["security"]["idempotency_env"] == [
         "TELEGRAM_IDEMPOTENCY_TTL_SECONDS",
         "TELEGRAM_IDEMPOTENCY_CACHE_MAX",

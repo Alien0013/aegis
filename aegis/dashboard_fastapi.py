@@ -1136,6 +1136,7 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
             "TELEGRAM_COMMAND_SCOPE_CHAT_ID",
             "TELEGRAM_COMMAND_LANGUAGE_CODE",
             "TELEGRAM_CALLBACK_TTL_SECONDS",
+            "TELEGRAM_RATE_LIMIT_PER_MINUTE",
             "TELEGRAM_IDEMPOTENCY_TTL_SECONDS",
             "TELEGRAM_IDEMPOTENCY_CACHE_MAX",
             "TELEGRAM_IDEMPOTENCY_PERSIST",
@@ -1166,6 +1167,7 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
             "command_registration_env": "TELEGRAM_REGISTER_COMMANDS",
             "callback_ttl_env": "TELEGRAM_CALLBACK_TTL_SECONDS",
             "callback_ttl_default_seconds": 3600,
+            "rate_limit_env": "TELEGRAM_RATE_LIMIT_PER_MINUTE",
             "idempotency_env": [
                 "TELEGRAM_IDEMPOTENCY_TTL_SECONDS",
                 "TELEGRAM_IDEMPOTENCY_CACHE_MAX",

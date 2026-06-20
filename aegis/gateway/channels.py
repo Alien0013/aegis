@@ -21,7 +21,7 @@ from ..platforms import (
     normalize_platform_name,
     utf16_units,
 )
-from ..webhook import DeliveryIdCache
+from ..webhook import DeliveryIdCache, FixedWindowRateLimiter
 from .base import BasePlatformAdapter, Dispatch, MessageEvent
 from .idempotency import PersistentDeliveryIdStore
 
@@ -129,6 +129,7 @@ class TelegramAdapter(BasePlatformAdapter):
         self.callback_ttl_seconds = _env_int("TELEGRAM_CALLBACK_TTL_SECONDS", 3600)
         self.idempotency_ttl_seconds = _env_int("TELEGRAM_IDEMPOTENCY_TTL_SECONDS", 3600)
         self.idempotency_cache_max = _env_int("TELEGRAM_IDEMPOTENCY_CACHE_MAX", 10000)
+        self.rate_limit_per_minute = _env_int("TELEGRAM_RATE_LIMIT_PER_MINUTE", 60)
         self._delivery_cache = DeliveryIdCache(
             ttl_seconds=float(self.idempotency_ttl_seconds),
             max_items=self.idempotency_cache_max,
@@ -140,6 +141,7 @@ class TelegramAdapter(BasePlatformAdapter):
             ttl_seconds=float(self.idempotency_ttl_seconds),
             max_items=self.idempotency_cache_max,
         )
+        self._rate_limiter = FixedWindowRateLimiter(limit=self.rate_limit_per_minute, window_seconds=60)
         self._callback_payloads: dict[str, str] = {}
         self._callback_payload_meta: dict[str, dict] = {}
         self._base = f"https://api.telegram.org/bot{self.token}"
@@ -168,6 +170,7 @@ class TelegramAdapter(BasePlatformAdapter):
                 "TELEGRAM_IDEMPOTENCY_PERSIST",
                 "TELEGRAM_IDEMPOTENCY_STORE_PATH",
             ],
+            "rate_limit_env": "TELEGRAM_RATE_LIMIT_PER_MINUTE",
         }
         data["idempotency"] = {
             "delivery_id_sources": [
@@ -179,6 +182,7 @@ class TelegramAdapter(BasePlatformAdapter):
             "persistent": self.persist_idempotency,
             "delivery_store": self._delivery_store.stats() if self.persist_idempotency else {},
         }
+        data["rate_limiter"] = self._rate_limiter.stats()
         return data
 
     def command_menu(self, *, max_commands: int = MAX_TELEGRAM_COMMANDS) -> list[str]:
@@ -237,6 +241,10 @@ class TelegramAdapter(BasePlatformAdapter):
             if not self._author_allowed(user_id, username):
                 self.send(str(msg["chat"]["id"]), "⛔ not authorized.")
                 return True
+            chat_id = str(msg["chat"]["id"])
+            if not self._rate_limiter.allow(self._rate_limit_key(chat_id, user_id)):
+                self.send(chat_id, "⏳ rate limit exceeded.")
+                return True
             reply_to = msg.get("reply_to_message") or {}
             normalized_text = normalize_inbound_command(
                 raw_text,
@@ -249,7 +257,7 @@ class TelegramAdapter(BasePlatformAdapter):
             thread_id = self._message_thread_id(msg)
             ev = MessageEvent(
                 platform="telegram",
-                chat_id=str(msg["chat"]["id"]),
+                chat_id=chat_id,
                 text=event_text,   # prefix sender in groups; commands/DMs untouched
                 user_id=user_id,
                 user_name=username,
@@ -392,6 +400,9 @@ class TelegramAdapter(BasePlatformAdapter):
         if not self._author_allowed(user_id, username):
             self._answer_callback_query(str(query.get("id") or ""), text="Not authorized", show_alert=True)
             return True
+        if not self._rate_limiter.allow(self._rate_limit_key(chat_id, user_id)):
+            self._answer_callback_query(str(query.get("id") or ""), text="Rate limit exceeded", show_alert=True)
+            return True
         normalized = normalize_inbound_command(data, platform="telegram", bot_username=self.bot_username)
         if message and not self._message_allowed(message, normalized):
             self._answer_callback_query(str(query.get("id") or ""))
@@ -422,6 +433,11 @@ class TelegramAdapter(BasePlatformAdapter):
         self._answer_callback_query(str(query.get("id") or ""))
         self._submit_inbound(ev, raw_text=data)
         return True
+
+    def _rate_limit_key(self, chat_id: str, user_id: str | None = None) -> str:
+        chat = str(chat_id or "").strip() or "unknown"
+        user = str(user_id or "").strip()
+        return f"{chat}:{user}" if user else chat
 
     def _answer_callback_query(self, callback_query_id: str, *, text: str = "", show_alert: bool = False) -> None:
         if not callback_query_id:
