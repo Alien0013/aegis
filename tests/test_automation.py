@@ -421,6 +421,13 @@ def test_webhook_accepts_generic_hmac_signature(monkeypatch, tmp_path):
     assert seen["calls"] == 1
 
 
+def test_webhook_delivery_id_headers_are_case_insensitive():
+    from aegis.webhook import _delivery_id
+
+    assert _delivery_id("ci", {"x-github-delivery": "abc"}, b"{}") == "ci:x-github-delivery:abc"
+    assert _delivery_id("ci", {"idempotency-key": "idem-1"}, b"{}") == "ci:idempotency-key:idem-1"
+
+
 def test_webhook_rejects_svix_replay_signature():
     from aegis.webhook import _verify_svix_signature
 

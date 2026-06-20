@@ -3180,6 +3180,60 @@ def test_gateway_webhook_channel_can_disable_unsigned_loopback(monkeypatch):
     assert insecure._auth_allowed({}, b"{}", "127.0.0.1") is True
 
 
+def test_gateway_webhook_channel_auth_and_delivery_headers_are_case_insensitive(monkeypatch):
+    from aegis.gateway.webhook_channel import WebhookChannel
+
+    monkeypatch.setenv("WEBHOOK_CHANNEL_SECRET", "bridge-secret")
+    adapter = WebhookChannel()
+
+    assert adapter._auth_allowed({"x-secret": "bridge-secret"}, b"{}", "203.0.113.10") is True
+    assert adapter._auth_allowed({"x-secret": "wrong"}, b"{}", "203.0.113.10") is False
+    assert adapter._delivery_id({"idempotency-key": "delivery-1"}, {}) == "idempotency-key:delivery-1"
+
+    adapter._submit_inbound = lambda ev, *, wait=False: f"reply:{ev.platform}:{ev.text}"
+    headers = {"idempotency-key": "delivery-1"}
+    body = {"platform": "webhook", "chat_id": "c1", "text": "hello"}
+
+    status, payload = adapter._handle_inbound_payload(headers, body)
+    duplicate_status, duplicate_payload = adapter._handle_inbound_payload(headers, body)
+
+    assert status == 200
+    assert payload == {"reply": "reply:webhook:hello"}
+    assert duplicate_status == 200
+    assert duplicate_payload == {"reply": "", "duplicate": True}
+
+
+def test_gateway_webhook_channel_allowed_platforms_normalize_aliases(monkeypatch):
+    from aegis.gateway.webhook_channel import WebhookChannel
+
+    monkeypatch.setenv("WEBHOOK_CHANNEL_ALLOWED_PLATFORMS", "telegram, whatsapp")
+    adapter = WebhookChannel()
+    seen = []
+    adapter._submit_inbound = lambda ev, *, wait=False: seen.append((ev.platform, ev.chat_id, ev.text, wait)) or "ok"
+
+    status, payload = adapter._handle_inbound_payload(
+        {},
+        {"platform": "tg", "chat_id": "42", "text": "hello"},
+    )
+    blocked_status, blocked_payload = adapter._handle_inbound_payload(
+        {},
+        {"platform": "discord", "chat_id": "99", "text": "nope"},
+    )
+
+    assert status == 200
+    assert payload == {"reply": "ok"}
+    assert seen == [("telegram", "42", "hello", True)]
+    assert blocked_status == 403
+    assert blocked_payload == {
+        "reply": "",
+        "error": "platform not allowed",
+        "platform": "discord",
+        "allowed_platforms": ["telegram", "whatsapp"],
+    }
+    assert adapter.metadata["security"]["allowed_platforms"] == ["telegram", "whatsapp"]
+    assert adapter.metadata["security"]["allowed_platforms_env"] == "WEBHOOK_CHANNEL_ALLOWED_PLATFORMS"
+
+
 def test_gateway_webhook_channel_allows_retry_after_dispatch_failure():
     from aegis.gateway.webhook_channel import WebhookChannel
 

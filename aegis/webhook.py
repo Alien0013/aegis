@@ -545,7 +545,7 @@ def _body_delivery_id(body: bytes) -> tuple[str, str]:
 
 def _delivery_id(name: str, headers, body: bytes | None = None) -> str:
     for header in _DELIVERY_ID_HEADERS:
-        value = str(headers.get(header, "") or "").strip()
+        value = _headers_get(headers, header).strip()
         if value:
             return f"{name}:{header.lower()}:{value}"
     source, value = _body_delivery_id(body or b"")

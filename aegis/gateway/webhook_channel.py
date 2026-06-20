@@ -13,6 +13,7 @@ Bridge contract:
 from __future__ import annotations
 
 import json
+import hmac
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -27,6 +28,34 @@ from .base import BasePlatformAdapter, Dispatch, MessageEvent
 def _channel_env(prefix: str, suffix: str, default: str = "") -> str:
     key = f"{prefix}_{suffix}"
     return os.environ.get(key, default) or default
+
+
+def _channel_env_with_fallback(prefix: str, suffix: str, fallback_prefix: str = "WEBHOOK_CHANNEL") -> str:
+    key = f"{prefix}_{suffix}"
+    value = os.environ.get(key)
+    if value not in (None, ""):
+        return value or ""
+    if prefix != fallback_prefix:
+        return os.environ.get(f"{fallback_prefix}_{suffix}", "") or ""
+    return ""
+
+
+def _header_value(headers, name: str) -> str:
+    if headers is None:
+        return ""
+    get = getattr(headers, "get", None)
+    if callable(get):
+        value = get(name)
+        if value in (None, ""):
+            value = get(name.lower())
+        if value in (None, ""):
+            value = get(name.upper())
+        if value not in (None, ""):
+            return str(value)
+    if isinstance(headers, dict):
+        lower = {str(k).lower(): v for k, v in headers.items()}
+        return str(lower.get(name.lower(), "") or "")
+    return ""
 
 
 def _channel_env_int(prefix: str, suffix: str, default: int) -> int:
@@ -353,6 +382,9 @@ class WebhookChannel(BasePlatformAdapter):
         self.outbound_max_chars = _channel_env_int(env_prefix, "OUTBOUND_MAX_CHARS", self.max_message_length)
         self.max_body_bytes = _channel_env_int(env_prefix, "MAX_BYTES", MAX_CHANNEL_WEBHOOK_BYTES)
         self.allow_unsigned_loopback = _channel_env_bool(env_prefix, "ALLOW_UNSIGNED_LOOPBACK", True)
+        self.allowed_platforms = self._normalized_platform_set(
+            _channel_env_with_fallback(env_prefix, "ALLOWED_PLATFORMS")
+        )
         self._delivery_cache = DeliveryIdCache(
             ttl_seconds=float(_channel_env(env_prefix, "IDEMPOTENCY_TTL_SECONDS", "3600") or "3600"),
             max_items=_channel_env_int(env_prefix, "IDEMPOTENCY_CACHE_MAX", 10000),
@@ -375,6 +407,8 @@ class WebhookChannel(BasePlatformAdapter):
                 "max_body_bytes": self.max_body_bytes,
                 "outbound_configured": bool(self.outbound_url),
                 "outbound_secret_configured": bool(self.outbound_secret),
+                "allowed_platforms": sorted(self.allowed_platforms or []),
+                "allowed_platforms_env": f"{self.env_prefix}_ALLOWED_PLATFORMS",
                 "signature_schemes": [
                     "X-Secret",
                     "X-Hub-Signature-256",
@@ -408,16 +442,32 @@ class WebhookChannel(BasePlatformAdapter):
             or _env_truthy("WEBHOOK_CHANNEL_INSECURE_NO_AUTH")
         )
 
+    def _normalized_platform_set(self, value: str) -> set[str] | None:
+        items = {
+            normalize_platform_name(item.strip(), default=item.strip().lower())
+            for item in str(value or "").split(",")
+            if item.strip()
+        }
+        return items or None
+
+    def _platform_allowed(self, platform: str) -> bool:
+        if not self.allowed_platforms:
+            return True
+        return normalize_platform_name(platform, default=str(platform or "").strip().lower()) in self.allowed_platforms
+
     def _auth_allowed(self, headers, raw_body: bytes, client_host: str) -> bool:
         if not self.secret:
             return self._insecure_no_auth() or (
                 self.allow_unsigned_loopback and _is_loopback_host(client_host)
             )
-        return headers.get("X-Secret") == self.secret or verify_signature(self.secret, raw_body, headers)
+        supplied = _header_value(headers, "X-Secret")
+        return (
+            bool(supplied) and hmac.compare_digest(supplied, self.secret)
+        ) or verify_signature(self.secret, raw_body, headers)
 
     def _delivery_id(self, headers, body: dict) -> str:
         for name in ("X-GitHub-Delivery", "svix-id", "X-Request-ID", "X-Request-Id", "Idempotency-Key"):
-            value = str(headers.get(name, "") or "").strip()
+            value = _header_value(headers, name).strip()
             if value:
                 return f"{name.lower()}:{value}"
         for key in ("delivery_id", "event_id", "message_id", "id"):
@@ -733,6 +783,13 @@ class WebhookChannel(BasePlatformAdapter):
         delivery_recorded = False
         try:
             ev = self._event_from_body(body)
+            if not self._platform_allowed(ev.platform):
+                return 403, {
+                    "reply": "",
+                    "error": "platform not allowed",
+                    "platform": ev.platform,
+                    "allowed_platforms": sorted(self.allowed_platforms or []),
+                }
             if ev.platform == "whatsapp" and _is_whatsapp_broadcast_chat(ev.chat_id):
                 return 200, {"reply": "", "ignored": True, "reason": "whatsapp_broadcast_chat"}
             if ev.platform == "whatsapp" and _is_whatsapp_self_echo(body):

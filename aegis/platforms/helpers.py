@@ -251,6 +251,7 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
             "WEBHOOK_CHANNEL_IDEMPOTENCY_CACHE_MAX",
             "WEBHOOK_CHANNEL_INSECURE_NO_AUTH",
             "WEBHOOK_CHANNEL_ALLOW_UNSIGNED_LOOPBACK",
+            "WEBHOOK_CHANNEL_ALLOWED_PLATFORMS",
             "WEBHOOK_CHANNEL_OUTBOUND_URL",
             "WEBHOOK_CHANNEL_OUTBOUND_SECRET",
             "WEBHOOK_CHANNEL_OUTBOUND_MAX_CHARS",
@@ -272,6 +273,7 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
                 "X-Gitlab-Token",
             ],
             "rate_limit_env": "WEBHOOK_CHANNEL_RATE_LIMIT_PER_MINUTE",
+            "allowed_platforms_env": "WEBHOOK_CHANNEL_ALLOWED_PLATFORMS",
             "idempotency_env": [
                 "WEBHOOK_CHANNEL_IDEMPOTENCY_TTL_SECONDS",
                 "WEBHOOK_CHANNEL_IDEMPOTENCY_CACHE_MAX",
@@ -291,6 +293,7 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
             "WHATSAPP_CHANNEL_IDEMPOTENCY_CACHE_MAX",
             "WHATSAPP_CHANNEL_INSECURE_NO_AUTH",
             "WHATSAPP_CHANNEL_ALLOW_UNSIGNED_LOOPBACK",
+            "WHATSAPP_CHANNEL_ALLOWED_PLATFORMS",
             "WHATSAPP_CHANNEL_OUTBOUND_URL",
             "WHATSAPP_CHANNEL_OUTBOUND_SECRET",
             "WHATSAPP_CHANNEL_OUTBOUND_MAX_CHARS",
@@ -311,6 +314,7 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
                 "X-Gitlab-Token",
             ],
             "rate_limit_env": "WHATSAPP_CHANNEL_RATE_LIMIT_PER_MINUTE",
+            "allowed_platforms_env": "WHATSAPP_CHANNEL_ALLOWED_PLATFORMS",
             "idempotency_env": [
                 "WHATSAPP_CHANNEL_IDEMPOTENCY_TTL_SECONDS",
                 "WHATSAPP_CHANNEL_IDEMPOTENCY_CACHE_MAX",
