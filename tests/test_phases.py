@@ -180,6 +180,7 @@ def test_cli_config_summary_dump_and_edit(monkeypatch, capsys):
     assert "+--------------------------------------------------------------+" in out
     assert "== Paths ==" in out
     assert f"Config:       {cfg.config_path()}" in out
+    assert "Workspace:" in out
     assert "Profile:      default" in out
     assert "Install:" in out
     assert "== Services ==" in out
@@ -194,9 +195,11 @@ def test_cli_config_summary_dump_and_edit(monkeypatch, capsys):
     assert "Browser Use" in out
     assert "Active:" in out
     assert "Model effort:" in out
-    assert "User preview:" in out
+    assert "Theme:" in out
+    assert "Tool progress:" in out
+    assert "Exec mode:" in out
     assert "Timezone" in out
-    assert "Model:          (auto)" in out
+    assert "Protect last:" in out
     assert "WhatsApp:" in out
     assert "== Validation ==" in out
     assert "Config YAML:  ok" in out
@@ -215,6 +218,10 @@ def test_cli_config_summary_dump_and_edit(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "AEGIS Configuration" in out
 
+    assert main(["config", "view"]) == 0
+    out = capsys.readouterr().out
+    assert "AEGIS Configuration" in out
+
     assert main(["config", "path"]) == 0
     out = capsys.readouterr().out
     assert out.strip() == str(cfg.config_path())
@@ -228,6 +235,7 @@ def test_cli_config_summary_dump_and_edit(monkeypatch, capsys):
     assert f"Config:  {cfg.config_path()}" in out
     assert f"Secrets: {cfg.env_path()}" in out
     assert f"Home:    {cfg.get_home()}" in out
+    assert f"Workspace: {cfg.workspace_dir()}" in out
     assert "Profile: default" in out
     assert "Install:" in out
 

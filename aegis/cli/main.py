@@ -1051,39 +1051,156 @@ def _parse_config_set_value(key: str, raw_parts: object) -> tuple[object, str]:
 
 def cmd_config(args, config: Config) -> int:
     json_mode = bool(getattr(args, "json", False))
-    api_key_specs = (
-        ("OpenRouter", ("OPENROUTER_API_KEY",)),
-        ("OpenAI", ("OPENAI_API_KEY",)),
-        ("OpenAI (STT/TTS)", ("VOICE_TOOLS_OPENAI_KEY",)),
-        ("Anthropic", ("ANTHROPIC_API_KEY",)),
-        ("Google", ("GOOGLE_API_KEY", "GEMINI_API_KEY")),
-        ("Groq", ("GROQ_API_KEY",)),
-        ("DeepSeek", ("DEEPSEEK_API_KEY",)),
-        ("XAI", ("XAI_API_KEY",)),
-        ("Mistral", ("MISTRAL_API_KEY",)),
-        ("Together", ("TOGETHER_API_KEY",)),
-        ("Exa", ("EXA_API_KEY",)),
-        ("Parallel", ("PARALLEL_API_KEY",)),
-        ("Firecrawl", ("FIRECRAWL_API_KEY",)),
-        ("Tavily", ("TAVILY_API_KEY",)),
-        ("Browserbase", ("BROWSERBASE_API_KEY",)),
-        ("Browser Use", ("BROWSER_USE_API_KEY",)),
-        ("FAL", ("FAL_KEY", "FAL_API_KEY")),
-    )
+
+    def provider_label(name: str, display_name: str | None = None) -> str:
+        labels = {
+            "anthropic": "Anthropic",
+            "cerebras": "Cerebras",
+            "dashscope": "DashScope",
+            "deepseek": "DeepSeek",
+            "fireworks": "Fireworks",
+            "google": "Google",
+            "groq": "Groq",
+            "huggingface": "Hugging Face",
+            "hyperbolic": "Hyperbolic",
+            "kimi": "Kimi",
+            "minimax": "MiniMax",
+            "mistral": "Mistral",
+            "novita": "Novita",
+            "nvidia": "NVIDIA",
+            "openai": "OpenAI",
+            "openrouter": "OpenRouter",
+            "perplexity": "Perplexity",
+            "qwen": "Qwen",
+            "sambanova": "SambaNova",
+            "stepfun": "StepFun",
+            "together": "Together",
+            "xai": "xAI",
+            "zai": "Z.ai",
+        }
+        key = str(name or "").strip().lower()
+        if key in labels:
+            return labels[key]
+        raw = str(display_name or name or "").strip()
+        return raw.replace("_", " ").replace("-", " ").title() if raw else "Provider"
+
+    def api_key_specs() -> list[tuple[str, tuple[str, ...]]]:
+        specs: list[tuple[str, tuple[str, ...]]] = []
+        seen: set[tuple[str, tuple[str, ...]]] = set()
+
+        def add(label: str, names) -> None:
+            clean = tuple(str(name).strip() for name in names if str(name).strip())
+            if not clean:
+                return
+            key = (str(label).strip().lower(), clean)
+            if key in seen:
+                return
+            seen.add(key)
+            specs.append((str(label).strip() or clean[0], clean))
+
+        rows: dict[str, dict] = {}
+        try:
+            from ..providers import registry
+
+            rows = {
+                str(row.get("name") or ""): row
+                for row in registry.oauth_catalog(config)
+                if row.get("env_vars")
+            }
+        except Exception:  # noqa: BLE001
+            rows = {}
+
+        preferred = (
+            "openrouter", "openai", "anthropic", "google", "groq", "deepseek",
+            "xai", "mistral", "together",
+        )
+        for name in preferred:
+            row = rows.pop(name, None)
+            if row:
+                add(provider_label(name, row.get("display_name")), row.get("env_vars") or [])
+        for name, row in sorted(rows.items(), key=lambda item: provider_label(item[0], item[1].get("display_name")).lower()):
+            add(provider_label(name, row.get("display_name")), row.get("env_vars") or [])
+
+        for label, names in (
+            ("OpenAI (STT/TTS)", ("VOICE_TOOLS_OPENAI_KEY",)),
+            ("Exa", ("EXA_API_KEY",)),
+            ("Parallel", ("PARALLEL_API_KEY",)),
+            ("Firecrawl", ("FIRECRAWL_API_KEY",)),
+            ("Tavily", ("TAVILY_API_KEY",)),
+            ("Browserbase", ("BROWSERBASE_API_KEY",)),
+            ("Browser Use", ("BROWSER_USE_API_KEY",)),
+            ("FAL", ("FAL_KEY", "FAL_API_KEY")),
+        ):
+            add(label, names)
+        return specs
+
+    api_keys = api_key_specs()
+
+    def masked_env_preview(value: str) -> str:
+        return "*" * min(max(len(value), 4), 12)
 
     def configured_env(*names: str) -> str:
         for name in names:
             value = os.environ.get(name, "").strip()
             if value:
-                return f"(set, {len(value)} chars)"
+                return f"(set, {len(value)} chars, {name}={masked_env_preview(value)})"
         return "(not set)"
 
     def env_status(*names: str) -> dict[str, object]:
         for name in names:
             value = os.environ.get(name, "").strip()
             if value:
-                return {"set": True, "name": name, "chars": len(value)}
-        return {"set": False, "name": names[0] if names else "", "chars": 0}
+                return {
+                    "set": True,
+                    "name": name,
+                    "source": name,
+                    "chars": len(value),
+                    "preview": masked_env_preview(value),
+                }
+        return {"set": False, "name": names[0] if names else "", "source": "", "chars": 0, "preview": ""}
+
+    def collect_platform_statuses() -> tuple[dict[str, str], dict[str, dict[str, object]]]:
+        try:
+            from ..platforms.helpers import PLATFORM_METADATA, normalize_platform_name
+        except Exception:  # noqa: BLE001
+            PLATFORM_METADATA = {}
+
+            def normalize_platform_name(value, *, default="webhook"):
+                return str(value or default).strip().lower()
+
+        gateway_channels = {
+            normalize_platform_name(item, default="")
+            for item in (config.get("gateway.channels", []) or [])
+            if str(item or "").strip()
+        }
+        statuses: dict[str, str] = {}
+        details: dict[str, dict[str, object]] = {}
+        for platform, metadata in sorted(
+            PLATFORM_METADATA.items(),
+            key=lambda item: str(item[1].get("display_name") or item[0]).lower(),
+        ):
+            required = [str(name) for name in metadata.get("required_env", []) if str(name)]
+            optional = [str(name) for name in metadata.get("optional_env", []) if str(name)]
+            required_set = [name for name in required if os.environ.get(name, "").strip()]
+            optional_set = [name for name in optional if os.environ.get(name, "").strip()]
+            configured = platform in gateway_channels
+            if required:
+                configured = configured or len(required_set) == len(required)
+            else:
+                configured = configured or bool(optional_set)
+            state = "configured" if configured else "not configured"
+            statuses[platform] = state
+            details[platform] = {
+                "display_name": str(metadata.get("display_name") or platform),
+                "status": state,
+                "enabled_in_gateway": platform in gateway_channels,
+                "required_env": required,
+                "optional_env": optional,
+                "required_set": required_set,
+                "optional_set": optional_set,
+                "transport": metadata.get("transport"),
+            }
+        return statuses, details
 
     def active_provider_credentials_status() -> str:
         provider = str(config.get("model.provider") or "").strip()
@@ -1163,21 +1280,7 @@ def cmd_config(args, config: Config) -> int:
         platforms = config.get("display.platforms", {}) or {}
         file_errors = cfg.validate_config_file()
         type_errors = cfg.config_type_errors(config.data)
-        gateway_channels = set(str(x) for x in (config.get("gateway.channels", []) or []))
-        telegram = "configured" if os.environ.get("TELEGRAM_BOT_TOKEN") or "telegram" in gateway_channels else "not configured"
-        discord = "configured" if os.environ.get("DISCORD_BOT_TOKEN") or "discord" in gateway_channels else "not configured"
-        slack = "configured" if os.environ.get("SLACK_BOT_TOKEN") or "slack" in gateway_channels else "not configured"
-        mattermost = "configured" if os.environ.get("MATTERMOST_BOT_TOKEN") or "mattermost" in gateway_channels else "not configured"
-        webhook = "configured" if os.environ.get("WEBHOOK_CHANNEL_SECRET") or "webhook" in gateway_channels else "not configured"
-        whatsapp = "configured" if os.environ.get("WHATSAPP_CHANNEL_SECRET") or "whatsapp" in gateway_channels else "not configured"
-        platform_statuses = {
-            "telegram": telegram,
-            "discord": discord,
-            "slack": slack,
-            "mattermost": mattermost,
-            "webhook": webhook,
-            "whatsapp": whatsapp,
-        }
+        platform_statuses, platform_details = collect_platform_statuses()
         active_profile = cfg.current_profile() or "default"
         model_view = {
             key: config.get(f"model.{key}")
@@ -1202,11 +1305,9 @@ def cmd_config(args, config: Config) -> int:
             )
         ):
             desktop_state = "packaged"
-        preview = config.get("display.user_message_preview", {}) or {}
-        if not isinstance(preview, dict):
-            preview = {}
         timezone = config.get("timezone") or os.environ.get("TZ") or time.tzname[0] or "(server-local)"
         commands = [
+            "aegis config view",
             "aegis config status",
             "aegis config paths",
             "aegis config edit",
@@ -1225,6 +1326,7 @@ def cmd_config(args, config: Config) -> int:
                     "config": str(cfg.config_path()),
                     "secrets": str(cfg.env_path()),
                     "home": str(cfg.get_home()),
+                    "workspace": str(cfg.workspace_dir()),
                     "profile": active_profile,
                     "install": str(Path(__file__).resolve().parents[2]),
                 },
@@ -1241,7 +1343,7 @@ def cmd_config(args, config: Config) -> int:
                         **env_status(*names),
                         "env": list(names),
                     }
-                    for label, names in api_key_specs
+                    for label, names in api_keys
                 },
                 "model": {
                     "active": model_view,
@@ -1254,15 +1356,18 @@ def cmd_config(args, config: Config) -> int:
                     "personality": config.get("agent.personality", "none") or "none",
                     "reasoning": config.get("display.reasoning", "off") or "off",
                     "model_effort": config.get("agent.reasoning_effort", "off") or "off",
-                    "bell": config.get("display.bell", "off") or "off",
-                    "user_message_preview": {
-                        "first_lines": preview.get("first_lines", 2),
-                        "last_lines": preview.get("last_lines", 2),
-                    },
+                    "status_footer": config.get("display.status_footer", True),
+                    "tool_progress": config.get("display.tool_progress", True),
+                    "tool_progress_grouping": config.get("display.tool_progress_grouping", True),
+                    "memory_notifications": config.get("display.memory_notifications", True),
+                    "theme": config.get("display.theme", ""),
                     "platforms": sorted(platforms) if isinstance(platforms, dict) else [],
                 },
                 "terminal": {
                     "backend": config.get("tools.terminal_backend"),
+                    "exec_mode": config.get("tools.exec_mode"),
+                    "subagent_backend": config.get("tools.subagent_terminal_backend") or "(inherit)",
+                    "allow_local_fallback": config.get("tools.allow_local_fallback"),
                     "working_dir": str(Path.cwd()),
                     "timeout_seconds": config.get("tools.terminal_lifetime_seconds"),
                 },
@@ -1273,9 +1378,9 @@ def cmd_config(args, config: Config) -> int:
                     "target_ratio_percent": int(float(compression.get("tail_fraction", 0.25) or 0.25) * 100),
                     "protect_last": compression.get("preserve_last", 20),
                     "protect_first": compression.get("preserve_first", 3),
-                    "model": compression.get("model", "") or "(auto)",
                 },
                 "messaging_platforms": platform_statuses,
+                "messaging_platform_details": platform_details,
                 "validation": {
                     "config_yaml": "ok" if not file_errors else "error",
                     "config_yaml_errors": file_errors,
@@ -1297,6 +1402,7 @@ def cmd_config(args, config: Config) -> int:
         _print(f"  Config:       {cfg.config_path()}")
         _print(f"  Secrets:      {cfg.env_path()}")
         _print(f"  Home:         {cfg.get_home()}")
+        _print(f"  Workspace:    {cfg.workspace_dir()}")
         _print(f"  Profile:      {active_profile}")
         _print(f"  Install:      {Path(__file__).resolve().parents[2]}")
         _print()
@@ -1309,7 +1415,7 @@ def cmd_config(args, config: Config) -> int:
         _print(f"  Desktop:      {desktop_state} ({desktop_dir})")
         _print()
         _print("== API Keys ==")
-        for label, names in api_key_specs:
+        for label, names in api_keys:
             _print(f"  {label:<17} {configured_env(*names)}")
         _print()
         _print("== Model ==")
@@ -1324,17 +1430,19 @@ def cmd_config(args, config: Config) -> int:
         _print(f"  Personality: {config.get('agent.personality', 'none') or 'none'}")
         _print(f"  Reasoning:   {config.get('display.reasoning', 'off') or 'off'}")
         _print(f"  Model effort: {config.get('agent.reasoning_effort', 'off') or 'off'}")
-        _print(f"  Bell:        {config.get('display.bell', 'off') or 'off'}")
-        _print(
-            "  User preview: "
-            f"first {preview.get('first_lines', 2)} line(s), "
-            f"last {preview.get('last_lines', 2)} line(s)"
-        )
+        _print(f"  Theme:       {config.get('display.theme') or '(default)'}")
+        _print(f"  Status line: {config.get('display.status_footer', True)}")
+        _print(f"  Tool progress: {config.get('display.tool_progress', True)}")
+        _print(f"  Tool grouping: {config.get('display.tool_progress_grouping', True)}")
+        _print(f"  Memory notes: {config.get('display.memory_notifications', True)}")
         if platforms:
             _print(f"  Platforms:   {', '.join(sorted(platforms))}")
         _print()
         _print("== Terminal ==")
         _print(f"  Backend:     {config.get('tools.terminal_backend')}")
+        _print(f"  Exec mode:   {config.get('tools.exec_mode')}")
+        _print(f"  Subagents:   {config.get('tools.subagent_terminal_backend') or '(inherit)'}")
+        _print(f"  Local fallback: {config.get('tools.allow_local_fallback')}")
         _print(f"  Working dir: {Path.cwd()}")
         _print(f"  Timeout:     {config.get('tools.terminal_lifetime_seconds')}s")
         _print()
@@ -1347,15 +1455,11 @@ def cmd_config(args, config: Config) -> int:
         _print(f"  Target ratio:   {int(float(compression.get('tail_fraction', 0.25) or 0.25) * 100)}% preserved")
         _print(f"  Protect last:   {compression.get('preserve_last', 20)} messages")
         _print(f"  Protect first:  {compression.get('preserve_first', 3)} messages")
-        _print(f"  Model:          {compression.get('model', '') or '(auto)'}")
         _print()
         _print("== Messaging Platforms ==")
-        _print(f"  Telegram:   {telegram}")
-        _print(f"  Discord:    {discord}")
-        _print(f"  Slack:      {slack}")
-        _print(f"  Mattermost: {mattermost}")
-        _print(f"  Webhook:    {webhook}")
-        _print(f"  WhatsApp:   {whatsapp}")
+        for platform, detail in platform_details.items():
+            label = str(detail.get("display_name") or platform)
+            _print(f"  {label + ':':<11} {platform_statuses.get(platform, 'not configured')}")
         _print()
         _print("== Validation ==")
         _print(f"  Config YAML:  {'ok' if not file_errors else str(len(file_errors)) + ' error(s)'}")
@@ -1363,6 +1467,7 @@ def cmd_config(args, config: Config) -> int:
         _print(f"  Secrets file: {'present' if cfg.env_path().exists() else 'not present'}")
         _print()
         _print("== Commands ==")
+        _print("  aegis config view                 # Show this configuration screen")
         _print("  aegis config status               # Show this configuration screen")
         _print("  aegis config paths                # Show config/secrets/home/install paths")
         _print("  aegis config edit                 # Edit config file")
@@ -1400,6 +1505,7 @@ def cmd_config(args, config: Config) -> int:
             "config": str(cfg.config_path()),
             "secrets": str(cfg.env_path()),
             "home": str(cfg.get_home()),
+            "workspace": str(cfg.workspace_dir()),
             "profile": cfg.current_profile() or "default",
             "install": str(Path(__file__).resolve().parents[2]),
         }
@@ -1413,10 +1519,11 @@ def cmd_config(args, config: Config) -> int:
         _print(f"Config:  {cfg.config_path()}")
         _print(f"Secrets: {cfg.env_path()}")
         _print(f"Home:    {cfg.get_home()}")
+        _print(f"Workspace: {cfg.workspace_dir()}")
         _print(f"Profile: {cfg.current_profile() or 'default'}")
         _print(f"Install: {Path(__file__).resolve().parents[2]}")
         return 0
-    if args.action in ("summary", "show", "status"):
+    if args.action in ("summary", "show", "status", "view"):
         return show_summary()
     if args.action == "setup":
         return cmd_setup(args, config)
@@ -2569,7 +2676,7 @@ def build_parser() -> argparse.ArgumentParser:
     cf = sub.add_parser("config", help="view, edit, get, or set configuration")
     cf.add_argument("action", nargs="?",
                     choices=[
-                        "summary", "show", "status", "edit", "get", "set", "path", "env-path", "paths",
+                        "summary", "show", "status", "view", "edit", "get", "set", "path", "env-path", "paths",
                         "dump", "check", "doctor", "migrate", "setup", "reset",
                     ],
                     default="summary")

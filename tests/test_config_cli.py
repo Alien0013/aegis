@@ -28,12 +28,20 @@ def test_config_summary_is_readable_ascii_and_redacts_secret(monkeypatch, capsys
     out.encode("ascii")
     assert "AEGIS Configuration" in out
     assert "== Paths ==" in out
+    assert "Workspace:" in out
     assert "== API Keys ==" in out
     assert "OpenAI" in out
+    assert "Qwen" in out
+    assert "MiniMax" in out
+    assert "Cerebras" in out
     assert "(set," in out
     assert "sk-test-secret-value" not in out
     assert "telegram-secret" not in out
     assert "Telegram:   configured" in out
+
+    assert main(["config", "view"]) == 0
+    out = capsys.readouterr().out
+    assert "AEGIS Configuration" in out
 
 
 def test_config_status_json_is_machine_readable_and_redacted(monkeypatch, capsys):
@@ -62,14 +70,27 @@ def test_config_status_json_is_machine_readable_and_redacted(monkeypatch, capsys
     assert data["object"] == "aegis.config.status"
     assert data["paths"]["config"] == str(cfg.config_path())
     assert data["paths"]["secrets"] == str(cfg.env_path())
+    assert data["paths"]["workspace"] == str(cfg.workspace_dir())
     assert data["services"]["api_auth_configured"] is True
     assert data["api_keys"]["OpenAI"]["set"] is True
     assert data["api_keys"]["OpenAI"]["name"] == "OPENAI_API_KEY"
+    assert data["api_keys"]["OpenAI"]["source"] == "OPENAI_API_KEY"
+    assert data["api_keys"]["OpenAI"]["preview"] != "sk-test-secret-value"
     assert data["api_keys"]["OpenAI"]["chars"] == len("sk-test-secret-value")
+    assert data["api_keys"]["Qwen"]["env"] == ["QWEN_API_KEY", "DASHSCOPE_API_KEY"]
+    assert data["api_keys"]["MiniMax"]["env"] == ["MINIMAX_API_KEY"]
+    assert data["api_keys"]["Cerebras"]["env"] == ["CEREBRAS_API_KEY"]
     assert data["model"]["provider"] == "openai"
     assert data["model"]["default"] == "gpt-5.5"
+    assert data["terminal"]["exec_mode"] == "auto"
+    assert data["terminal"]["subagent_backend"] == "(inherit)"
+    assert data["terminal"]["allow_local_fallback"] is False
     assert data["messaging_platforms"]["telegram"] == "configured"
+    assert "matrix" in data["messaging_platforms"]
+    assert "signal" in data["messaging_platforms"]
+    assert data["messaging_platform_details"]["telegram"]["display_name"] == "Telegram"
     assert data["validation"]["config_yaml"] == "ok"
+    assert "aegis config view" in data["commands"]
     assert "aegis config edit" in data["commands"]
     assert "sk-test-secret-value" not in out
     assert "telegram-secret" not in out
