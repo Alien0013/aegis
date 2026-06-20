@@ -554,6 +554,8 @@ def test_platform_helper_command_caps_and_utf16_chunks():
     assert platform_metadata("sl")["security"]["idempotency_env"] == [
         "SLACK_IDEMPOTENCY_TTL_SECONDS",
         "SLACK_IDEMPOTENCY_CACHE_MAX",
+        "SLACK_IDEMPOTENCY_PERSIST",
+        "SLACK_IDEMPOTENCY_STORE_PATH",
     ]
     assert platform_metadata("tg")["supports_interactive_prompts"] is True
     assert "TELEGRAM_CALLBACK_TTL_SECONDS" in platform_metadata("tg")["optional_env"]
@@ -563,6 +565,13 @@ def test_platform_helper_command_caps_and_utf16_chunks():
     assert platform_metadata("tg")["security"]["callback_ttl_default_seconds"] == 3600
     assert platform_metadata("dc")["supports_reactions"] is True
     assert platform_metadata("dc")["supports_interactive_prompts"] is True
+    assert "DISCORD_IDEMPOTENCY_STORE_PATH" in platform_metadata("dc")["optional_env"]
+    assert platform_metadata("dc")["security"]["idempotency_env"] == [
+        "DISCORD_IDEMPOTENCY_TTL_SECONDS",
+        "DISCORD_IDEMPOTENCY_CACHE_MAX",
+        "DISCORD_IDEMPOTENCY_PERSIST",
+        "DISCORD_IDEMPOTENCY_STORE_PATH",
+    ]
     mattermost_meta = platform_metadata("mattermost-webhook")
     assert mattermost_meta["security"]["auth_type"] == "bearer"
     assert mattermost_meta["supports_media"] is True
@@ -663,7 +672,11 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert DiscordAdapter("token").metadata["security"]["idempotency_env"] == [
         "DISCORD_IDEMPOTENCY_TTL_SECONDS",
         "DISCORD_IDEMPOTENCY_CACHE_MAX",
+        "DISCORD_IDEMPOTENCY_PERSIST",
+        "DISCORD_IDEMPOTENCY_STORE_PATH",
     ]
+    assert "DISCORD_IDEMPOTENCY_STORE_PATH" in DiscordAdapter("token").metadata["optional_env"]
+    assert DiscordAdapter("token").metadata["idempotency"]["persistent"] is True
     assert DiscordAdapter("token").metadata["idempotency"]["delivery_id_sources"] == [
         "message.id",
         "interaction.id",
@@ -675,11 +688,15 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert "SLACK_ALLOWED_CHANNELS" in SlackAdapter().metadata["optional_env"]
     assert "SLACK_TRIGGER_MODE" in SlackAdapter().metadata["optional_env"]
     assert "SLACK_IDEMPOTENCY_CACHE_MAX" in SlackAdapter().metadata["optional_env"]
+    assert "SLACK_IDEMPOTENCY_STORE_PATH" in SlackAdapter().metadata["optional_env"]
     assert SlackAdapter().metadata["security"]["trigger_mode"] == "all"
     assert SlackAdapter().metadata["security"]["idempotency_env"] == [
         "SLACK_IDEMPOTENCY_TTL_SECONDS",
         "SLACK_IDEMPOTENCY_CACHE_MAX",
+        "SLACK_IDEMPOTENCY_PERSIST",
+        "SLACK_IDEMPOTENCY_STORE_PATH",
     ]
+    assert SlackAdapter().metadata["idempotency"]["persistent"] is True
     assert platform_metadata("slack")["supports_media"] is True
     mattermost = MattermostAdapter().metadata
     assert mattermost["transport"] == "http_webhook"
@@ -1064,6 +1081,15 @@ def test_discord_app_and_component_idempotency_reopens_on_failure():
     assert ev.metadata["delivery_id"] == "app_command:C1:123"
     assert adapter._delivery_cache.stats()["accepted_count"] == 1
     assert adapter._delivery_cache.stats()["duplicate_count"] == 1
+    assert adapter.metadata["idempotency"]["delivery_store"]["entries"] == 1
+
+    after_restart = DiscordAdapter("token")
+    after_restart._submit_inbound = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("durable duplicate should not dispatch")
+    )
+    restart_duplicate = asyncio.run(after_restart._handle_app_command(interaction, "status"))
+    assert restart_duplicate is None
+    assert after_restart.metadata["idempotency"]["delivery_store"]["duplicate_count"] == 1
 
     component = SimpleNamespace(
         id=124,
@@ -1090,6 +1116,14 @@ def test_discord_app_and_component_idempotency_reopens_on_failure():
     assert seen[-1] == (component_ev, "approve")
     assert component_ev.metadata["delivery_id"] == "component_interaction:C1:124:aegis_exec_approval_0"
     assert adapter._delivery_cache.stats()["duplicate_count"] == 2
+    component_restart_duplicate = asyncio.run(after_restart._handle_component_interaction(
+        component,
+        "approve",
+        action_id="aegis_exec_approval_0",
+        action_type="exec_approval",
+    ))
+    assert component_restart_duplicate is None
+    assert after_restart.metadata["idempotency"]["delivery_store"]["duplicate_count"] == 2
 
     def fail_once(_ev, *, raw_text=None):  # noqa: ANN001, ARG001
         raise RuntimeError("discord dispatch down")
@@ -1107,6 +1141,7 @@ def test_discord_app_and_component_idempotency_reopens_on_failure():
         asyncio.run(adapter._handle_app_command(failing, "status"))
 
     assert adapter._delivery_cache.stats()["discarded_count"] == 1
+    assert adapter.metadata["idempotency"]["delivery_store"]["discarded_count"] == 1
 
     adapter._submit_inbound = lambda ev, *, raw_text=None: seen.append((ev, raw_text)) or None
     retry_ev = asyncio.run(adapter._handle_app_command(failing, "status"))
@@ -2959,6 +2994,15 @@ def test_slack_adapter_dedupes_slash_commands_and_block_actions(monkeypatch):
     assert seen == [(ev, "/status full")]
     assert ev.metadata["delivery_id"] == "slash:trigger:trigger-1"
     assert adapter._delivery_cache.stats()["duplicate_count"] == 1
+    assert adapter.metadata["idempotency"]["delivery_store"]["entries"] == 1
+
+    after_restart = SlackAdapter()
+    after_restart._submit_inbound = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("durable duplicate should not dispatch")
+    )
+    restart_duplicate = after_restart._handle_slash_command(dict(command))
+    assert restart_duplicate is None
+    assert after_restart.metadata["idempotency"]["delivery_store"]["duplicate_count"] == 1
 
     body = {
         "trigger_id": "trigger-action-1",
@@ -2978,6 +3022,9 @@ def test_slack_adapter_dedupes_slash_commands_and_block_actions(monkeypatch):
     assert seen[-1] == (action_ev, "approve")
     assert action_ev.metadata["delivery_id"] == "block:trigger:trigger-action-1"
     assert adapter._delivery_cache.stats()["duplicate_count"] == 2
+    action_restart_duplicate = after_restart._handle_block_action(dict(body), action=dict(action))
+    assert action_restart_duplicate is None
+    assert after_restart.metadata["idempotency"]["delivery_store"]["duplicate_count"] == 2
 
     def fail_once(_ev, *, raw_text=None):  # noqa: ANN001, ARG001
         raise RuntimeError("slack slash dispatch down")
@@ -2988,6 +3035,7 @@ def test_slack_adapter_dedupes_slash_commands_and_block_actions(monkeypatch):
         adapter._handle_slash_command(failing)
 
     assert adapter._delivery_cache.stats()["discarded_count"] == 1
+    assert adapter.metadata["idempotency"]["delivery_store"]["discarded_count"] == 1
 
     adapter._submit_inbound = lambda ev, *, raw_text=None: seen.append((ev, raw_text)) or None
     retried = adapter._handle_slash_command(failing)
@@ -3038,6 +3086,15 @@ def test_slack_adapter_dedupes_message_events_and_ignores_self_echoes(monkeypatc
     assert seen == [(ev, "!status")]
     assert duplicate is None
     assert adapter._delivery_cache.stats()["duplicate_count"] == 1
+    assert adapter.metadata["idempotency"]["delivery_store"]["entries"] == 1
+
+    after_restart = SlackAdapter()
+    after_restart._submit_inbound = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("durable duplicate should not dispatch")
+    )
+    restart_duplicate = after_restart._handle_message_event(dict(event))
+    assert restart_duplicate is None
+    assert after_restart.metadata["idempotency"]["delivery_store"]["duplicate_count"] == 1
 
     def fail_once(_ev, *, raw_text=None):  # noqa: ANN001, ARG001
         raise RuntimeError("slack dispatch down")
@@ -3048,6 +3105,7 @@ def test_slack_adapter_dedupes_message_events_and_ignores_self_echoes(monkeypatc
         adapter._handle_message_event(failing)
 
     assert adapter._delivery_cache.stats()["discarded_count"] == 1
+    assert adapter.metadata["idempotency"]["delivery_store"]["discarded_count"] == 1
 
     adapter._submit_inbound = lambda ev, *, raw_text=None: seen.append((ev, raw_text)) or None
     retried = adapter._handle_message_event(failing)

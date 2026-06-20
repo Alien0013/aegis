@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+from pathlib import Path
 
+from .. import config as cfg
 from ..platforms import (
     MAX_DISCORD_APP_COMMANDS,
     chunk_text_by_units,
@@ -13,6 +15,7 @@ from ..platforms import (
 )
 from ..webhook import DeliveryIdCache
 from .base import BasePlatformAdapter, Dispatch, MessageEvent
+from .idempotency import PersistentDeliveryIdStore
 
 _ARGUMENT_COMMANDS = {
     "model",
@@ -40,6 +43,18 @@ def _env_int(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    text = raw.strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 class DiscordAdapter(BasePlatformAdapter):
     name = "discord"
     renders_tables = False
@@ -60,9 +75,18 @@ class DiscordAdapter(BasePlatformAdapter):
         self.allowed_guilds = _csv_set(os.environ.get("DISCORD_ALLOWED_GUILDS", ""))
         self.ignored_guilds = _csv_set(os.environ.get("DISCORD_IGNORED_GUILDS", ""))
         self.trigger_mode = os.environ.get("DISCORD_TRIGGER_MODE", "all").strip().lower() or "all"
+        self.idempotency_ttl_seconds = _env_int("DISCORD_IDEMPOTENCY_TTL_SECONDS", 3600)
+        self.idempotency_cache_max = _env_int("DISCORD_IDEMPOTENCY_CACHE_MAX", 10000)
         self._delivery_cache = DeliveryIdCache(
-            ttl_seconds=float(_env_int("DISCORD_IDEMPOTENCY_TTL_SECONDS", 3600)),
-            max_items=_env_int("DISCORD_IDEMPOTENCY_CACHE_MAX", 10000),
+            ttl_seconds=float(self.idempotency_ttl_seconds),
+            max_items=self.idempotency_cache_max,
+        )
+        self.persist_idempotency = _env_bool("DISCORD_IDEMPOTENCY_PERSIST", True)
+        store_path = os.environ.get("DISCORD_IDEMPOTENCY_STORE_PATH", "").strip()
+        self._delivery_store = PersistentDeliveryIdStore(
+            cfg.sub("gateway", "discord_delivery_ids.json") if not store_path else Path(store_path).expanduser(),
+            ttl_seconds=float(self.idempotency_ttl_seconds),
+            max_items=self.idempotency_cache_max,
         )
 
     @property
@@ -78,6 +102,8 @@ class DiscordAdapter(BasePlatformAdapter):
             "idempotency_env": [
                 "DISCORD_IDEMPOTENCY_TTL_SECONDS",
                 "DISCORD_IDEMPOTENCY_CACHE_MAX",
+                "DISCORD_IDEMPOTENCY_PERSIST",
+                "DISCORD_IDEMPOTENCY_STORE_PATH",
             ],
         }
         data["idempotency"] = {
@@ -86,6 +112,8 @@ class DiscordAdapter(BasePlatformAdapter):
                 "interaction.id",
             ],
             "delivery_cache": self._delivery_cache.stats(),
+            "persistent": self.persist_idempotency,
+            "delivery_store": self._delivery_store.stats() if self.persist_idempotency else {},
         }
         return data
 
@@ -135,7 +163,7 @@ class DiscordAdapter(BasePlatformAdapter):
             delivery_id = self._delivery_id_from_message(message)
             delivery_recorded = False
             if delivery_id:
-                delivery_recorded = self._delivery_cache.record(delivery_id)
+                delivery_recorded = self._record_delivery_id(delivery_id)
                 if not delivery_recorded:
                     return
             try:
@@ -170,7 +198,7 @@ class DiscordAdapter(BasePlatformAdapter):
                 self._submit_inbound(ev, raw_text=raw_content)
             except Exception:
                 if delivery_recorded:
-                    self._delivery_cache.discard(delivery_id)
+                    self._discard_delivery_id(delivery_id)
                 raise
 
         @client.event
@@ -239,7 +267,7 @@ class DiscordAdapter(BasePlatformAdapter):
         delivery_id = self._delivery_id_from_interaction(interaction, kind="app_command")
         delivery_recorded = False
         if delivery_id:
-            delivery_recorded = self._delivery_cache.record(delivery_id)
+            delivery_recorded = self._record_delivery_id(delivery_id)
             if not delivery_recorded:
                 return None
         try:
@@ -277,7 +305,7 @@ class DiscordAdapter(BasePlatformAdapter):
             return ev
         except Exception:
             if delivery_recorded:
-                self._delivery_cache.discard(delivery_id)
+                self._discard_delivery_id(delivery_id)
             raise
 
     def _interaction_argument_text(self, interaction) -> str:  # noqa: ANN001
@@ -349,7 +377,7 @@ class DiscordAdapter(BasePlatformAdapter):
         )
         delivery_recorded = False
         if delivery_id:
-            delivery_recorded = self._delivery_cache.record(delivery_id)
+            delivery_recorded = self._record_delivery_id(delivery_id)
             if not delivery_recorded:
                 return None
         try:
@@ -384,8 +412,27 @@ class DiscordAdapter(BasePlatformAdapter):
             return ev
         except Exception:
             if delivery_recorded:
-                self._delivery_cache.discard(delivery_id)
+                self._discard_delivery_id(delivery_id)
             raise
+
+    def _record_delivery_id(self, delivery_id: str) -> bool:
+        delivery_id = str(delivery_id or "").strip()
+        if not delivery_id:
+            return True
+        if not self._delivery_cache.record(delivery_id):
+            return False
+        if self.persist_idempotency and not self._delivery_store.record(delivery_id):
+            self._delivery_cache.discard(delivery_id)
+            return False
+        return True
+
+    def _discard_delivery_id(self, delivery_id: str) -> None:
+        delivery_id = str(delivery_id or "").strip()
+        if not delivery_id:
+            return
+        self._delivery_cache.discard(delivery_id)
+        if self.persist_idempotency:
+            self._delivery_store.discard(delivery_id)
 
     def _delivery_id_from_message(self, message) -> str:  # noqa: ANN001
         message_id = str(getattr(message, "id", "") or "").strip()

@@ -9,9 +9,11 @@ import os
 import re
 from pathlib import Path
 
+from .. import config as cfg
 from ..platforms import capped_command_menu, chunk_text_by_units, normalize_inbound_command
 from ..webhook import DeliveryIdCache
 from .base import BasePlatformAdapter, Dispatch, MessageEvent
+from .idempotency import PersistentDeliveryIdStore
 
 
 def _csv_set(value: str) -> set[str] | None:
@@ -29,6 +31,18 @@ def _env_int(name: str, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return value if value > 0 else default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    text = raw.strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 class SlackAdapter(BasePlatformAdapter):
@@ -55,9 +69,18 @@ class SlackAdapter(BasePlatformAdapter):
         self.bot_id = os.environ.get("SLACK_BOT_ID", "").strip()
         self.trigger_mode = os.environ.get("SLACK_TRIGGER_MODE", "all").strip().lower() or "all"
         self.reply_in_thread = _env_truthy("SLACK_REPLY_IN_THREAD")
+        self.idempotency_ttl_seconds = _env_int("SLACK_IDEMPOTENCY_TTL_SECONDS", 3600)
+        self.idempotency_cache_max = _env_int("SLACK_IDEMPOTENCY_CACHE_MAX", 10000)
         self._delivery_cache = DeliveryIdCache(
-            ttl_seconds=float(_env_int("SLACK_IDEMPOTENCY_TTL_SECONDS", 3600)),
-            max_items=_env_int("SLACK_IDEMPOTENCY_CACHE_MAX", 10000),
+            ttl_seconds=float(self.idempotency_ttl_seconds),
+            max_items=self.idempotency_cache_max,
+        )
+        self.persist_idempotency = _env_bool("SLACK_IDEMPOTENCY_PERSIST", True)
+        store_path = os.environ.get("SLACK_IDEMPOTENCY_STORE_PATH", "").strip()
+        self._delivery_store = PersistentDeliveryIdStore(
+            cfg.sub("gateway", "slack_delivery_ids.json") if not store_path else Path(store_path).expanduser(),
+            ttl_seconds=float(self.idempotency_ttl_seconds),
+            max_items=self.idempotency_cache_max,
         )
 
     @property
@@ -79,6 +102,8 @@ class SlackAdapter(BasePlatformAdapter):
             "idempotency_env": [
                 "SLACK_IDEMPOTENCY_TTL_SECONDS",
                 "SLACK_IDEMPOTENCY_CACHE_MAX",
+                "SLACK_IDEMPOTENCY_PERSIST",
+                "SLACK_IDEMPOTENCY_STORE_PATH",
             ],
         }
         data["idempotency"] = {
@@ -91,6 +116,8 @@ class SlackAdapter(BasePlatformAdapter):
                 "block.container.message_ts + action.action_ts",
             ],
             "delivery_cache": self._delivery_cache.stats(),
+            "persistent": self.persist_idempotency,
+            "delivery_store": self._delivery_store.stats() if self.persist_idempotency else {},
         }
         return data
 
@@ -147,7 +174,7 @@ class SlackAdapter(BasePlatformAdapter):
         delivery_id = self._delivery_id_from_event(event)
         delivery_recorded = False
         if delivery_id:
-            delivery_recorded = self._delivery_cache.record(delivery_id)
+            delivery_recorded = self._record_delivery_id(delivery_id)
             if not delivery_recorded:
                 return None
         try:
@@ -174,7 +201,7 @@ class SlackAdapter(BasePlatformAdapter):
             return ev
         except Exception:
             if delivery_recorded:
-                self._delivery_cache.discard(delivery_id)
+                self._discard_delivery_id(delivery_id)
             raise
 
     def _register_slash_command(self, app, command_name: str) -> None:  # noqa: ANN001
@@ -198,7 +225,7 @@ class SlackAdapter(BasePlatformAdapter):
         delivery_id = self._delivery_id_from_slash_command(command)
         delivery_recorded = False
         if delivery_id:
-            delivery_recorded = self._delivery_cache.record(delivery_id)
+            delivery_recorded = self._record_delivery_id(delivery_id)
             if not delivery_recorded:
                 return None
         command_name = str(command.get("command") or "").strip() or "/"
@@ -227,7 +254,7 @@ class SlackAdapter(BasePlatformAdapter):
             return ev
         except Exception:
             if delivery_recorded:
-                self._delivery_cache.discard(delivery_id)
+                self._discard_delivery_id(delivery_id)
             raise
 
     def _delivery_id_from_slash_command(self, command: dict) -> str:
@@ -301,7 +328,7 @@ class SlackAdapter(BasePlatformAdapter):
         delivery_id = self._delivery_id_from_block_action(payload, selected)
         delivery_recorded = False
         if delivery_id:
-            delivery_recorded = self._delivery_cache.record(delivery_id)
+            delivery_recorded = self._record_delivery_id(delivery_id)
             if not delivery_recorded:
                 return None
         thread_id = str(message.get("thread_ts") or container.get("thread_ts") or "").strip() or None
@@ -335,8 +362,27 @@ class SlackAdapter(BasePlatformAdapter):
             return ev
         except Exception:
             if delivery_recorded:
-                self._delivery_cache.discard(delivery_id)
+                self._discard_delivery_id(delivery_id)
             raise
+
+    def _record_delivery_id(self, delivery_id: str) -> bool:
+        delivery_id = str(delivery_id or "").strip()
+        if not delivery_id:
+            return True
+        if not self._delivery_cache.record(delivery_id):
+            return False
+        if self.persist_idempotency and not self._delivery_store.record(delivery_id):
+            self._delivery_cache.discard(delivery_id)
+            return False
+        return True
+
+    def _discard_delivery_id(self, delivery_id: str) -> None:
+        delivery_id = str(delivery_id or "").strip()
+        if not delivery_id:
+            return
+        self._delivery_cache.discard(delivery_id)
+        if self.persist_idempotency:
+            self._delivery_store.discard(delivery_id)
 
     def _delivery_id_from_block_action(self, payload: dict, action: dict) -> str:
         trigger_id = str(payload.get("trigger_id") or "").strip()

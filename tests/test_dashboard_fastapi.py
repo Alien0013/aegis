@@ -1016,14 +1016,29 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
         "TELEGRAM_IDEMPOTENCY_STORE_PATH",
     ]
     assert telegram["metadata"]["adapter_class"].endswith("TelegramAdapter")
+    discord = next(row for row in rows if row["id"] == "discord")
+    assert "DISCORD_IDEMPOTENCY_CACHE_MAX" in discord["optional_env_vars"]
+    assert "DISCORD_IDEMPOTENCY_PERSIST" in discord["optional_env_vars"]
+    assert "DISCORD_IDEMPOTENCY_STORE_PATH" in discord["optional_env_vars"]
+    assert "idempotency" in discord["capabilities"]
+    assert discord["security"]["idempotency_env"] == [
+        "DISCORD_IDEMPOTENCY_TTL_SECONDS",
+        "DISCORD_IDEMPOTENCY_CACHE_MAX",
+        "DISCORD_IDEMPOTENCY_PERSIST",
+        "DISCORD_IDEMPOTENCY_STORE_PATH",
+    ]
     slack = next(row for row in rows if row["id"] == "slack")
     assert "SLACK_BOT_ID" in slack["optional_env_vars"]
     assert "SLACK_IDEMPOTENCY_CACHE_MAX" in slack["optional_env_vars"]
+    assert "SLACK_IDEMPOTENCY_PERSIST" in slack["optional_env_vars"]
+    assert "SLACK_IDEMPOTENCY_STORE_PATH" in slack["optional_env_vars"]
     assert "media" in slack["capabilities"]
     assert "idempotency" in slack["capabilities"]
     assert slack["security"]["idempotency_env"] == [
         "SLACK_IDEMPOTENCY_TTL_SECONDS",
         "SLACK_IDEMPOTENCY_CACHE_MAX",
+        "SLACK_IDEMPOTENCY_PERSIST",
+        "SLACK_IDEMPOTENCY_STORE_PATH",
     ]
     signal = next(row for row in rows if row["id"] == "signal")
     assert signal["transport"] == "signal_cli"
@@ -1189,10 +1204,14 @@ def test_fastapi_messaging_platform_optional_controls(tmp_path, monkeypatch):
         "DISCORD_BOT_TOKEN",
         "DISCORD_ALLOWED_GUILDS",
         "DISCORD_TRIGGER_MODE",
+        "DISCORD_IDEMPOTENCY_PERSIST",
+        "DISCORD_IDEMPOTENCY_STORE_PATH",
         "SLACK_BOT_TOKEN",
         "SLACK_APP_TOKEN",
         "SLACK_ALLOWED_CHANNELS",
         "SLACK_REPLY_IN_THREAD",
+        "SLACK_IDEMPOTENCY_PERSIST",
+        "SLACK_IDEMPOTENCY_STORE_PATH",
     ):
         monkeypatch.delenv(key, raising=False)
     app = _app(tmp_path, monkeypatch)
@@ -1204,6 +1223,8 @@ def test_fastapi_messaging_platform_optional_controls(tmp_path, monkeypatch):
     assert discord_fields["DISCORD_BOT_TOKEN"]["required"] is True
     assert discord_fields["DISCORD_ALLOWED_GUILDS"]["required"] is False
     assert discord_fields["DISCORD_TRIGGER_MODE"]["required"] is False
+    assert discord_fields["DISCORD_IDEMPOTENCY_PERSIST"]["required"] is False
+    assert discord_fields["DISCORD_IDEMPOTENCY_STORE_PATH"]["required"] is False
     assert "DISCORD_ALLOWED_GUILDS" not in discord.json()["platform"]["missing_env_vars"]
     assert "media" in discord.json()["platform"]["capabilities"]
     assert "threads" in discord.json()["platform"]["capabilities"]
@@ -1254,6 +1275,8 @@ def test_fastapi_messaging_platform_optional_controls(tmp_path, monkeypatch):
     assert slack_fields["SLACK_REPLY_IN_THREAD"]["required"] is False
     assert slack_fields["SLACK_IDEMPOTENCY_TTL_SECONDS"]["required"] is False
     assert slack_fields["SLACK_IDEMPOTENCY_CACHE_MAX"]["required"] is False
+    assert slack_fields["SLACK_IDEMPOTENCY_PERSIST"]["required"] is False
+    assert slack_fields["SLACK_IDEMPOTENCY_STORE_PATH"]["required"] is False
     assert "slash_commands" in slack.json()["platform"]["capabilities"]
     assert "interactive_prompts" in slack.json()["platform"]["capabilities"]
     assert "media" in slack.json()["platform"]["capabilities"]
