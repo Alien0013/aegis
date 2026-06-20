@@ -186,12 +186,25 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
         "display_name": "Signal",
         "transport": "signal_cli",
         "required_env": ["SIGNAL_CLI_ACCOUNT"],
-        "optional_env": ["SIGNAL_ALLOWED_USERS", "SIGNAL_CLI_BIN"],
+        "optional_env": [
+            "SIGNAL_ALLOWED_USERS",
+            "SIGNAL_CLI_BIN",
+            "SIGNAL_IDEMPOTENCY_TTL_SECONDS",
+            "SIGNAL_IDEMPOTENCY_CACHE_MAX",
+        ],
         "max_message_length": None,
         "message_length_units": "codepoints",
         "supports_threads": False,
         "supports_media": True,
         "typed_command_prefix": "/",
+        "security": {
+            "local_binary": "signal-cli",
+            "allowed_users_env": "SIGNAL_ALLOWED_USERS",
+            "idempotency_env": [
+                "SIGNAL_IDEMPOTENCY_TTL_SECONDS",
+                "SIGNAL_IDEMPOTENCY_CACHE_MAX",
+            ],
+        },
     },
     "matrix": {
         "display_name": "Matrix",

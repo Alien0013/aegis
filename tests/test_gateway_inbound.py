@@ -511,6 +511,11 @@ def test_platform_helper_command_caps_and_utf16_chunks():
 
     assert platform_metadata("signal-cli")["id"] == "signal"
     assert platform_metadata("signal-cli")["supports_media"] is True
+    assert "SIGNAL_IDEMPOTENCY_CACHE_MAX" in platform_metadata("signal-cli")["optional_env"]
+    assert platform_metadata("signal-cli")["security"]["idempotency_env"] == [
+        "SIGNAL_IDEMPOTENCY_TTL_SECONDS",
+        "SIGNAL_IDEMPOTENCY_CACHE_MAX",
+    ]
     assert platform_metadata("matrix")["transport"] == "matrix_sync"
     assert platform_metadata("matrix")["supports_threads"] is True
     assert platform_metadata("baileys")["id"] == "whatsapp"
@@ -2074,6 +2079,13 @@ def test_signal_adapter_preserves_attachment_metadata(monkeypatch, tmp_path):
     }]
     assert ev.metadata["group_id"] == "group-1"
     assert ev.metadata["source_uuid"] == "uuid-1"
+    assert ev.metadata["server_guid"] == "srv-1"
+    assert ev.metadata["delivery_id"] == "signal:guid:srv-1"
+    assert adapter.metadata["idempotency"]["delivery_cache"]["entries"] == 0
+    assert adapter.metadata["security"]["idempotency_env"] == [
+        "SIGNAL_IDEMPOTENCY_TTL_SECONDS",
+        "SIGNAL_IDEMPOTENCY_CACHE_MAX",
+    ]
     sent = []
     media_path = tmp_path / "chart.png"
     media_path.write_text("png", encoding="utf-8")
@@ -2087,6 +2099,50 @@ def test_signal_adapter_preserves_attachment_metadata(monkeypatch, tmp_path):
         (("send", "-m", "(file not found: /tmp/missing.png)", "+15550002"), {"timeout": 60}),
     ]
     assert adapter.metadata["supports_media"] is True
+
+
+def test_signal_adapter_dedupes_receive_envelopes_and_allows_retry(monkeypatch):
+    import json
+    import shutil
+
+    import pytest
+
+    monkeypatch.setenv("SIGNAL_CLI_ACCOUNT", "+15550001")
+    monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/signal-cli")
+    from aegis.gateway.signal_channel import SignalAdapter
+
+    adapter = SignalAdapter()
+    payload = {
+        "envelope": {
+            "sourceNumber": "+15550002",
+            "timestamp": 123,
+            "dataMessage": {"message": "hello"},
+        },
+    }
+    ev = adapter._parse(json.dumps(payload))[0]
+    assert ev.metadata["delivery_id"] == "signal:+15550002:+15550002:123"
+
+    seen = []
+    adapter._submit_inbound = lambda event: seen.append(event.text)
+    assert adapter._handle_event(ev) is ev
+    assert adapter._handle_event(ev) is None
+    assert seen == ["hello"]
+    assert adapter.metadata["idempotency"]["delivery_cache"]["duplicate_count"] == 1
+
+    failing = SignalAdapter()
+    failing_ev = failing._parse(json.dumps(payload))[0]
+    attempts = []
+
+    def fail_once(event):  # noqa: ANN001
+        attempts.append(event.text)
+        raise RuntimeError("signal dispatch failed")
+
+    failing._submit_inbound = fail_once
+    with pytest.raises(RuntimeError):
+        failing._handle_event(failing_ev)
+    failing._submit_inbound = lambda event: attempts.append(f"retry:{event.text}")
+    assert failing._handle_event(failing_ev) is failing_ev
+    assert attempts == ["hello", "retry:hello"]
 
 
 def test_matrix_adapter_threads_inbound_and_outbound_messages(monkeypatch):

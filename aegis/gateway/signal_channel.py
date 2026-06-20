@@ -14,7 +14,16 @@ import os
 import shutil
 import subprocess
 
+from ..webhook import DeliveryIdCache
 from .base import BasePlatformAdapter, Dispatch, MessageEvent
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)) or default)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
 
 
 class SignalAdapter(BasePlatformAdapter):
@@ -36,6 +45,30 @@ class SignalAdapter(BasePlatformAdapter):
             )
         allowed = os.environ.get("SIGNAL_ALLOWED_USERS", "").strip()
         self.allowed = {u.strip() for u in allowed.split(",") if u.strip()} if allowed else None
+        self._delivery_cache = DeliveryIdCache(
+            ttl_seconds=float(_env_int("SIGNAL_IDEMPOTENCY_TTL_SECONDS", 3600)),
+            max_items=_env_int("SIGNAL_IDEMPOTENCY_CACHE_MAX", 10000),
+        )
+
+    @property
+    def metadata(self) -> dict:
+        data = super().metadata
+        data["idempotency"] = {
+            "delivery_id_sources": [
+                "envelope.serverGuid",
+                "envelope.source + envelope.timestamp",
+                "envelope.source + message hash",
+            ],
+            "delivery_cache": self._delivery_cache.stats(),
+        }
+        data["security"] = {
+            "allowed_users_configured": bool(self.allowed),
+            "idempotency_env": [
+                "SIGNAL_IDEMPOTENCY_TTL_SECONDS",
+                "SIGNAL_IDEMPOTENCY_CACHE_MAX",
+            ],
+        }
+        return data
 
     def _run(self, *args: str, timeout: int | None = None) -> str:
         proc = subprocess.run(
@@ -59,10 +92,25 @@ class SignalAdapter(BasePlatformAdapter):
             except RuntimeError:
                 continue  # keep the poller alive across transient signal-cli errors
             for ev in self._parse(out):
-                if self.allowed and ev.user_id not in self.allowed:
-                    self.send(ev.chat_id, "not authorized.")
-                    continue
-                self._submit_inbound(ev)
+                self._handle_event(ev)
+
+    def _handle_event(self, ev: MessageEvent) -> MessageEvent | None:
+        delivery_id = str((ev.metadata or {}).get("delivery_id") or "").strip()
+        delivery_recorded = False
+        if delivery_id:
+            delivery_recorded = self._delivery_cache.record(delivery_id)
+            if not delivery_recorded:
+                return None
+        try:
+            if self.allowed and ev.user_id not in self.allowed:
+                self.send(ev.chat_id, "not authorized.")
+                return None
+            self._submit_inbound(ev)
+            return ev
+        except Exception:
+            if delivery_recorded:
+                self._delivery_cache.discard(delivery_id)
+            raise
 
     def _parse(self, out: str) -> list[MessageEvent]:
         """signal-cli emits one JSON object per line (JSON-RPC envelope)."""
@@ -92,6 +140,7 @@ class SignalAdapter(BasePlatformAdapter):
             # Reply target: the group if present, else the individual sender.
             chat_id = f"group:{group}" if group else source
             timestamp = envelope.get("timestamp") or data.get("timestamp")
+            delivery_id = self._delivery_id_from_payload(envelope, data, chat_id=chat_id, source=source)
             events.append(
                 MessageEvent(
                     platform="signal",
@@ -107,10 +156,26 @@ class SignalAdapter(BasePlatformAdapter):
                         "source_uuid": envelope.get("sourceUuid") or envelope.get("sourceUUID"),
                         "source_device": envelope.get("sourceDevice"),
                         "server_guid": envelope.get("serverGuid") or envelope.get("serverGUID"),
+                        "delivery_id": delivery_id,
                     },
                 )
             )
         return events
+
+    def _delivery_id_from_payload(self, envelope: dict, data: dict, *, chat_id: str, source: str) -> str:
+        guid = str(envelope.get("serverGuid") or envelope.get("serverGUID") or "").strip()
+        if guid:
+            return f"signal:guid:{guid}"
+        timestamp = str(envelope.get("timestamp") or data.get("timestamp") or "").strip()
+        if timestamp and source:
+            return f"signal:{chat_id}:{source}:{timestamp}"
+        message = str(data.get("message") or "").strip()
+        if source and message:
+            import hashlib
+
+            digest = hashlib.sha256(message.encode("utf-8")).hexdigest()[:16]
+            return f"signal:{chat_id}:{source}:{digest}"
+        return ""
 
     def _attachments_from_data(self, data: dict) -> list[dict]:
         rows: list[dict] = []
