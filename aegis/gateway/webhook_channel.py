@@ -16,6 +16,7 @@ import hashlib
 import hmac
 import json
 import os
+import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -900,7 +901,13 @@ class WebhookChannel(BasePlatformAdapter):
         headers["X-AEGIS-Delivery-Id"] = delivery_id
         if self.outbound_secret:
             headers["X-Secret"] = self.outbound_secret
-            signature = hmac.new(self.outbound_secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+            timestamp = str(int(time.time()))
+            headers["X-Webhook-Timestamp"] = timestamp
+            signature = hmac.new(
+                self.outbound_secret.encode("utf-8"),
+                f"{timestamp}.{delivery_id}.".encode("utf-8") + body,
+                hashlib.sha256,
+            ).hexdigest()
             headers["X-Webhook-Signature"] = f"sha256={signature}"
         return payload, body, headers
 

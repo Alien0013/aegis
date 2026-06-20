@@ -12,6 +12,20 @@ import time
 from http.server import ThreadingHTTPServer
 
 
+def _generic_hmac_headers(secret: str, body: bytes, delivery_id: str, *, timestamp: int | None = None) -> dict[str, str]:
+    ts = str(int(time.time()) if timestamp is None else int(timestamp))
+    signature = hmac.new(
+        secret.encode(),
+        f"{ts}.{delivery_id}.".encode() + body,
+        hashlib.sha256,
+    ).hexdigest()
+    return {
+        "X-Webhook-Signature": f"sha256={signature}",
+        "X-Webhook-Timestamp": ts,
+        "Idempotency-Key": delivery_id,
+    }
+
+
 # --- shared helpers ---------------------------------------------------------
 def test_automation_helpers(tmp_path):
     from aegis import automation as a
@@ -281,14 +295,13 @@ def test_webhook_auth_failures_do_not_consume_rate_limit(monkeypatch, tmp_path):
     seen = _fake_agent(monkeypatch, reply="done")
     secret = "hook-secret"
     body = b'{"action":"opened"}'
-    sig = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
     store.add("ci", "review {action}", secret=secret)
     srv, port = _serve(make_handler, cfg, store)
     try:
         bad_1_status, bad_1_body = _post(port, "/hook/ci", body, {"X-Webhook-Signature": "wrong"})
         bad_2_status, bad_2_body = _post(port, "/hook/ci", body, {"X-Webhook-Signature": "also-wrong"})
-        good_status, good_body = _post(port, "/hook/ci", body, {"X-Webhook-Signature": sig})
-        limited_status, limited_body = _post(port, "/hook/ci", body, {"X-Webhook-Signature": sig})
+        good_status, good_body = _post(port, "/hook/ci", body, _generic_hmac_headers(secret, body, "delivery-good"))
+        limited_status, limited_body = _post(port, "/hook/ci", body, _generic_hmac_headers(secret, body, "delivery-limited"))
         from aegis.webhook import webhook_runtime_status
         runtime = webhook_runtime_status(cfg)
     finally:
@@ -408,17 +421,41 @@ def test_webhook_accepts_generic_hmac_signature(monkeypatch, tmp_path):
     seen = _fake_agent(monkeypatch, reply="done")
     secret = "hook-secret"
     body = b'{"action":"opened"}'
-    sig = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
     store.add("ci", "review {action}", secret=secret)
     srv, port = _serve(make_handler, cfg, store)
     try:
-        status, response = _post(port, "/hook/ci", body, {"X-Webhook-Signature": sig})
+        status, response = _post(port, "/hook/ci", body, _generic_hmac_headers(secret, body, "delivery-1"))
     finally:
         srv.shutdown()
 
     assert status == 200
     assert response["ok"] is True
     assert seen["calls"] == 1
+
+
+def test_webhook_rejects_generic_hmac_without_fresh_delivery_binding(monkeypatch, tmp_path):
+    cfg, store, make_handler = _webhook_server(monkeypatch, tmp_path)
+    seen = _fake_agent(monkeypatch, reply="done")
+    secret = "hook-secret"
+    body = b'{"action":"opened"}'
+    timestamp = int(time.time())
+    bare_sig = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    stale_headers = _generic_hmac_headers(secret, body, "delivery-stale", timestamp=timestamp - 1000)
+    store.add("ci", "review {action}", secret=secret)
+    srv, port = _serve(make_handler, cfg, store)
+    try:
+        missing_status, missing_body = _post(port, "/hook/ci", body, {
+            "X-Webhook-Signature": f"sha256={bare_sig}",
+        })
+        stale_status, stale_body = _post(port, "/hook/ci", body, stale_headers)
+    finally:
+        srv.shutdown()
+
+    assert missing_status == 401
+    assert missing_body["error"] == "invalid signature"
+    assert stale_status == 401
+    assert stale_body["error"] == "invalid signature"
+    assert seen["calls"] == 0
 
 
 def test_webhook_delivery_id_headers_are_case_insensitive():

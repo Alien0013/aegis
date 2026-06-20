@@ -175,6 +175,41 @@ def _verify_sha256_hmac(secret: str, body: bytes, header: str) -> bool:
     return hmac.compare_digest(expected, raw)
 
 
+def _verify_timestamped_sha256_hmac(
+    secret: str,
+    body: bytes,
+    header: str,
+    *,
+    timestamp: str,
+    delivery_id: str,
+    now: int | None = None,
+) -> bool:
+    raw = str(header or "").strip()
+    if raw.startswith("sha256="):
+        raw = raw[len("sha256="):]
+    if not (raw and timestamp and delivery_id):
+        return False
+    try:
+        ts = int(str(timestamp).strip())
+    except (TypeError, ValueError):
+        return False
+    current = int(time.time()) if now is None else int(now)
+    if abs(current - ts) > WEBHOOK_REPLAY_WINDOW_SECONDS:
+        return False
+    signed = f"{ts}.{delivery_id}.".encode("utf-8") + body
+    expected = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, raw)
+
+
+def _generic_signature_delivery_id(headers, body: bytes) -> str:
+    for header in _DELIVERY_ID_HEADERS:
+        value = _headers_get(headers, header).strip()
+        if value:
+            return value
+    _source, value = _body_delivery_id(body or b"")
+    return value
+
+
 def _verify_svix_signature(
     secret: str,
     body: bytes,
@@ -244,7 +279,18 @@ def verify_signature(secret: str, body: bytes, header) -> bool:
 
     generic_signature = _headers_get(header, "X-Webhook-Signature")
     if generic_signature:
-        return _verify_sha256_hmac(secret, body, generic_signature)
+        timestamp = (
+            _headers_get(header, "X-Webhook-Timestamp")
+            or _headers_get(header, "X-AEGIS-Timestamp")
+            or _headers_get(header, "X-Timestamp")
+        )
+        return _verify_timestamped_sha256_hmac(
+            secret,
+            body,
+            generic_signature,
+            timestamp=timestamp,
+            delivery_id=_generic_signature_delivery_id(header, body),
+        )
 
     return False
 

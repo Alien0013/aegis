@@ -3548,9 +3548,11 @@ def _assert_signed_bridge_posts(sent, expected_payloads):
         assert delivery_id
         assert headers["Idempotency-Key"] == delivery_id
         assert headers["X-AEGIS-Delivery-Id"] == delivery_id
+        timestamp = headers["X-Webhook-Timestamp"]
+        assert timestamp.isdigit()
         expected_signature = "sha256=" + hmac.new(
             b"outbound-secret",
-            content,
+            f"{timestamp}.{delivery_id}.".encode("utf-8") + content,
             hashlib.sha256,
         ).hexdigest()
         assert headers["X-Webhook-Signature"] == expected_signature
