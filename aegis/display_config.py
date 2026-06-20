@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .platforms import normalize_platform_name
+
 
 DISPLAY_DEFAULTS: dict[str, Any] = {
     "reasoning": "summary",
@@ -34,7 +36,7 @@ def display_setting_key(setting: str) -> str:
 
 
 def platform_key(platform: Any) -> str:
-    return str(platform or "").strip().lower()
+    return normalize_platform_name(platform, default="")
 
 
 def normalize_display_setting(setting: str, value: Any, default: Any = None) -> Any:
@@ -71,6 +73,11 @@ def resolve_display_setting(config: Any, platform: Any, setting: str, default: A
     platforms = display.get("platforms")
     if pkey and isinstance(platforms, dict):
         platform_cfg = platforms.get(pkey)
+        if not isinstance(platform_cfg, dict):
+            for raw_platform, raw_cfg in platforms.items():
+                if platform_key(raw_platform) == pkey and isinstance(raw_cfg, dict):
+                    platform_cfg = raw_cfg
+                    break
         if isinstance(platform_cfg, dict) and key in platform_cfg:
             return normalize_display_setting(key, platform_cfg.get(key), fallback)
     return normalize_display_setting(key, display.get(key, fallback), fallback)

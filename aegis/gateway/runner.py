@@ -57,6 +57,26 @@ def _gateway_origin_from_event(ev: MessageEvent) -> dict[str, Any]:
     return origin
 
 
+def _gateway_profile_for_platform(config: Config, platform: str) -> dict:
+    """Resolve gateway.profiles by exact key or normalized platform alias."""
+
+    profiles = config.get("gateway.profiles", {}) or {}
+    if not isinstance(profiles, dict):
+        return {}
+    raw = str(platform or "").strip()
+    exact = profiles.get(raw)
+    if isinstance(exact, dict):
+        return exact
+    normalized = normalize_platform_name(raw, default=raw.lower())
+    for key, value in profiles.items():
+        if (
+            isinstance(value, dict)
+            and normalize_platform_name(key, default=str(key or "").strip().lower()) == normalized
+        ):
+            return value
+    return {}
+
+
 _DELIVERY_METADATA_KEYS = (
     "platform",
     "normalized_platform",
@@ -1148,7 +1168,7 @@ class GatewayRunner:
             # model's prompt prefix stays cached); rebuild if the session was reset.
             generation = self._generation(key)
             self._stamp_generation(key, session, generation)
-            prof = (self.config.get("gateway.profiles", {}) or {}).get(ev.platform, {}) or {}
+            prof = _gateway_profile_for_platform(self.config, ev.platform)
             run_cfg = self.config
             if prof.get("personality"):       # isolated copy — must not leak across platforms
                 import copy

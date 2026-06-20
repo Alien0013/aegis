@@ -8,12 +8,13 @@ def test_display_resolver_uses_platform_override():
         "display": {
             "memory_notifications": "off",
             "platforms": {
-                "telegram": {"memory_notifications": "verbose"},
+                "tg": {"memory_notifications": "verbose"},
             },
         }
     }
 
     assert resolve_display_setting(config, "telegram", "memory_notifications") == "verbose"
+    assert resolve_display_setting(config, "telegram-bot", "memory_notifications") == "verbose"
     assert resolve_display_setting(config, "slack", "memory_notifications") == "off"
 
 
@@ -26,6 +27,7 @@ def test_display_resolver_normalizes_aliases_and_invalid_values():
             "memory_notifications": False,
             "unknown": "ignored",
         },
+        "wa": {"memory_notifications": "verbose"},
         "": {"memory_notifications": "verbose"},
         "slack": {"tool_progress_grouping": "noisy"},
     })
@@ -35,6 +37,7 @@ def test_display_resolver_normalizes_aliases_and_invalid_values():
             "tool_progress_grouping": "separate",
             "memory_notifications": "off",
         },
+        "whatsapp": {"memory_notifications": "verbose"},
         "slack": {"tool_progress_grouping": "accumulate"},
     }
     assert resolve_display_setting({"display": {"platforms": overrides}}, "telegram", "tool_progress_grouping") == "separate"

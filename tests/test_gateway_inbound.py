@@ -566,6 +566,22 @@ def test_platform_helper_command_caps_and_utf16_chunks():
     assert "X-Webhook-Signature" in webhook_meta["security"]["signature_schemes"]
 
 
+def test_gateway_profile_lookup_normalizes_platform_aliases():
+    from aegis.config import Config
+    from aegis.gateway.runner import _gateway_profile_for_platform
+
+    cfg = Config.load()
+    cfg.data.setdefault("gateway", {})["profiles"] = {
+        "wa": {"personality": "phone"},
+        "tg": {"model": "telegram-model"},
+    }
+
+    assert _gateway_profile_for_platform(cfg, "whatsapp") == {"personality": "phone"}
+    assert _gateway_profile_for_platform(cfg, "baileys") == {"personality": "phone"}
+    assert _gateway_profile_for_platform(cfg, "telegram-bot") == {"model": "telegram-model"}
+    assert _gateway_profile_for_platform(cfg, "discord") == {}
+
+
 def test_adapter_metadata_for_core_platforms(monkeypatch):
     from aegis.gateway.channels import TelegramAdapter
     from aegis.gateway.discord_channel import DiscordAdapter
