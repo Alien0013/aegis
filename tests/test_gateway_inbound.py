@@ -3477,6 +3477,48 @@ def test_gateway_webhook_channel_auth_and_delivery_headers_are_case_insensitive(
     assert duplicate_payload == {"reply": "", "duplicate": True}
 
 
+def test_gateway_webhook_channel_handler_only_accepts_in_path(monkeypatch):
+    import http.client
+    import json
+    from http.server import ThreadingHTTPServer
+
+    from aegis.gateway.webhook_channel import WebhookChannel
+
+    monkeypatch.delenv("WEBHOOK_CHANNEL_SECRET", raising=False)
+    adapter = WebhookChannel()
+    adapter._init_inbound_queue(lambda ev: f"reply:{ev.text}")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), adapter._make_handler())
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def post(path: str):
+        conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+        try:
+            conn.request(
+                "POST",
+                path,
+                body=b'{"chat_id":"c1","text":"hello"}',
+                headers={"Content-Type": "application/json"},
+            )
+            response = conn.getresponse()
+            body = response.read()
+            return response.status, body
+        finally:
+            conn.close()
+
+    try:
+        wrong_status, wrong_body = post("/wrong")
+        ok_status, ok_body = post("/in")
+    finally:
+        server.shutdown()
+        thread.join(2)
+
+    assert wrong_status == 404
+    assert wrong_body == b""
+    assert ok_status == 200
+    assert json.loads(ok_body.decode("utf-8")) == {"reply": "reply:hello"}
+
+
 def test_gateway_webhook_channel_allowed_platforms_normalize_aliases(monkeypatch):
     from aegis.gateway.webhook_channel import WebhookChannel
 

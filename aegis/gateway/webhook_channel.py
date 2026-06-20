@@ -814,15 +814,19 @@ class WebhookChannel(BasePlatformAdapter):
             return 500, {"reply": "", "error": f"dispatch failed: {type(exc).__name__}: {exc}"}
         return 200, {"reply": reply}
 
-    def start(self, dispatch: Dispatch) -> None:
+    def _make_handler(self):
         adapter = self
-        self._init_inbound_queue(dispatch)
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *a):  # quiet
                 pass
 
             def do_POST(self):  # noqa: N802
+                path = self.path.split("?", 1)[0].rstrip("/") or "/"
+                if path != "/in":
+                    self.send_response(404)
+                    self.end_headers()
+                    return
                 try:
                     n = int(self.headers.get("content-length", 0) or 0)
                 except (TypeError, ValueError):
@@ -859,7 +863,11 @@ class WebhookChannel(BasePlatformAdapter):
                 self.end_headers()
                 self.wfile.write(json.dumps(payload).encode())
 
-        httpd = ThreadingHTTPServer(("0.0.0.0", self.port), Handler)
+        return Handler
+
+    def start(self, dispatch: Dispatch) -> None:
+        self._init_inbound_queue(dispatch)
+        httpd = ThreadingHTTPServer(("0.0.0.0", self.port), self._make_handler())
         print(f"  ▸ webhook channel listening on :{self.port}/in")
         httpd.serve_forever()
 
