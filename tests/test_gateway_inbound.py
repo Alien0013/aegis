@@ -3806,6 +3806,25 @@ def _assert_signed_bridge_posts(sent, expected_payloads):
         assert payload == {**expected, "delivery_id": delivery_id}
 
 
+def test_gateway_webhook_channel_outbound_payload_reuses_delivery_id(monkeypatch):
+    import json
+
+    from aegis.gateway.webhook_channel import WebhookChannel
+
+    monkeypatch.setenv("WEBHOOK_CHANNEL_OUTBOUND_URL", "https://bridge.test/send")
+    monkeypatch.setenv("WEBHOOK_CHANNEL_OUTBOUND_SECRET", "outbound-secret")
+    adapter = WebhookChannel()
+    payload = adapter._outbound_payload("ops", "hello", {"thread_id": "t1"})
+
+    first_payload, first_body, first_headers = adapter._prepare_outbound_request(payload)
+    second_payload, second_body, second_headers = adapter._prepare_outbound_request(payload)
+
+    assert first_payload["delivery_id"] == second_payload["delivery_id"]
+    assert first_headers["Idempotency-Key"] == second_headers["Idempotency-Key"]
+    assert json.loads(first_body)["delivery_id"] == json.loads(second_body)["delivery_id"]
+    assert first_headers["X-AEGIS-Delivery-Id"] == second_headers["X-AEGIS-Delivery-Id"]
+
+
 def test_gateway_webhook_channel_outbound_bridge_send(monkeypatch):
     from aegis.gateway import webhook_channel
     from aegis.gateway.webhook_channel import WebhookChannel

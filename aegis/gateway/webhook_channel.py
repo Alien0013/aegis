@@ -950,6 +950,7 @@ class WebhookChannel(BasePlatformAdapter):
             "chat_id": str(chat_id),
             "text": text,
             "metadata": metadata,
+            "delivery_id": uuid.uuid4().hex,
         }
         for source, target in (
             ("thread_id", "thread_id"),
@@ -969,8 +970,10 @@ class WebhookChannel(BasePlatformAdapter):
         return payload
 
     def _prepare_outbound_request(self, payload: dict) -> tuple[dict, bytes, dict[str, str]]:
+        if not payload.get("delivery_id"):
+            payload["delivery_id"] = uuid.uuid4().hex
         payload = dict(payload)
-        payload["delivery_id"] = str(payload.get("delivery_id") or uuid.uuid4().hex)
+        payload["delivery_id"] = str(payload["delivery_id"])
         body = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
         headers = {"Content-Type": "application/json"}
         delivery_id = str(payload["delivery_id"])
