@@ -165,6 +165,8 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
             "MATTERMOST_RATE_LIMIT_PER_MINUTE",
             "MATTERMOST_IDEMPOTENCY_TTL_SECONDS",
             "MATTERMOST_IDEMPOTENCY_CACHE_MAX",
+            "MATTERMOST_IDEMPOTENCY_PERSIST",
+            "MATTERMOST_IDEMPOTENCY_STORE_PATH",
         ],
         "max_message_length": 16000,
         "message_length_units": "codepoints",
@@ -183,6 +185,8 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
             "idempotency_env": [
                 "MATTERMOST_IDEMPOTENCY_TTL_SECONDS",
                 "MATTERMOST_IDEMPOTENCY_CACHE_MAX",
+                "MATTERMOST_IDEMPOTENCY_PERSIST",
+                "MATTERMOST_IDEMPOTENCY_STORE_PATH",
             ],
         },
     },

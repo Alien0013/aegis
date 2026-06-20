@@ -1067,6 +1067,8 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     assert mattermost["metadata"]["security"]["idempotency_env"] == [
         "MATTERMOST_IDEMPOTENCY_TTL_SECONDS",
         "MATTERMOST_IDEMPOTENCY_CACHE_MAX",
+        "MATTERMOST_IDEMPOTENCY_PERSIST",
+        "MATTERMOST_IDEMPOTENCY_STORE_PATH",
     ]
     webhook = next(row for row in rows if row["id"] == "webhook")
     assert webhook["transport"] == "http"

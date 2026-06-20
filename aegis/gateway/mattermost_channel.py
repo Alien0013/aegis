@@ -10,13 +10,16 @@ import hmac
 import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs
 
 import httpx
 
+from .. import config as cfg
 from ..platforms import chunk_text_by_units, normalize_inbound_command
 from ..webhook import DeliveryIdCache, FixedWindowRateLimiter, _env_truthy, _is_loopback_host
 from .base import BasePlatformAdapter, Dispatch, MessageEvent
+from .idempotency import PersistentDeliveryIdStore
 
 _NULL_THREAD_IDS = {"", "none", "null", "undefined"}
 
@@ -121,9 +124,18 @@ class MattermostAdapter(BasePlatformAdapter):
             ("MATTERMOST_CHANNEL_MAX_BYTES", "MATTERMOST_MAX_BYTES"),
             10_000_000,
         )
+        self.idempotency_ttl_seconds = _env_int("MATTERMOST_IDEMPOTENCY_TTL_SECONDS", 3600)
+        self.idempotency_cache_max = _env_int("MATTERMOST_IDEMPOTENCY_CACHE_MAX", 10000)
         self._delivery_cache = DeliveryIdCache(
-            ttl_seconds=float(_env_int("MATTERMOST_IDEMPOTENCY_TTL_SECONDS", 3600)),
-            max_items=_env_int("MATTERMOST_IDEMPOTENCY_CACHE_MAX", 10000),
+            ttl_seconds=float(self.idempotency_ttl_seconds),
+            max_items=self.idempotency_cache_max,
+        )
+        self.persist_idempotency = _env_bool("MATTERMOST_IDEMPOTENCY_PERSIST", True)
+        store_path = os.environ.get("MATTERMOST_IDEMPOTENCY_STORE_PATH", "").strip()
+        self._delivery_store = PersistentDeliveryIdStore(
+            cfg.sub("gateway", "mattermost_delivery_ids.json") if not store_path else Path(store_path).expanduser(),
+            ttl_seconds=float(self.idempotency_ttl_seconds),
+            max_items=self.idempotency_cache_max,
         )
         self._rate_limiter = FixedWindowRateLimiter(
             limit=_env_int("MATTERMOST_RATE_LIMIT_PER_MINUTE", 60),
@@ -142,6 +154,12 @@ class MattermostAdapter(BasePlatformAdapter):
                 "loopback_unsigned_allowed": self.allow_unsigned_loopback,
                 "insecure_env_override": _env_truthy("MATTERMOST_INSECURE_NO_AUTH"),
                 "max_body_bytes": self.max_body_bytes,
+                "idempotency_env": [
+                    "MATTERMOST_IDEMPOTENCY_TTL_SECONDS",
+                    "MATTERMOST_IDEMPOTENCY_CACHE_MAX",
+                    "MATTERMOST_IDEMPOTENCY_PERSIST",
+                    "MATTERMOST_IDEMPOTENCY_STORE_PATH",
+                ],
             },
             "supports_interactive_prompts": True,
             "idempotency": {
@@ -154,6 +172,8 @@ class MattermostAdapter(BasePlatformAdapter):
                     "body.message_id",
                 ],
                 "delivery_cache": self._delivery_cache.stats(),
+                "persistent": self.persist_idempotency,
+                "delivery_store": self._delivery_store.stats() if self.persist_idempotency else {},
             },
             "rate_limiter": self._rate_limiter.stats(),
         })
@@ -398,6 +418,25 @@ class MattermostAdapter(BasePlatformAdapter):
                 return f"body:{key}:{value}"
         return ""
 
+    def _record_delivery_id(self, delivery_id: str) -> bool:
+        delivery_id = str(delivery_id or "").strip()
+        if not delivery_id:
+            return True
+        if not self._delivery_cache.record(delivery_id):
+            return False
+        if self.persist_idempotency and not self._delivery_store.record(delivery_id):
+            self._delivery_cache.discard(delivery_id)
+            return False
+        return True
+
+    def _discard_delivery_id(self, delivery_id: str) -> None:
+        delivery_id = str(delivery_id or "").strip()
+        if not delivery_id:
+            return
+        self._delivery_cache.discard(delivery_id)
+        if self.persist_idempotency:
+            self._delivery_store.discard(delivery_id)
+
     def _payload_size_error(self, size: int) -> tuple[int, dict] | None:
         if size < 0:
             return 400, {"error": "payload too large"}
@@ -421,7 +460,7 @@ class MattermostAdapter(BasePlatformAdapter):
         delivery_id = self._delivery_id(headers, body)
         delivery_recorded = False
         if delivery_id:
-            delivery_recorded = self._delivery_cache.record(delivery_id)
+            delivery_recorded = self._record_delivery_id(delivery_id)
             if not delivery_recorded:
                 return 200, {"text": "", "response_type": "comment", "duplicate": True}
         try:
@@ -429,7 +468,7 @@ class MattermostAdapter(BasePlatformAdapter):
             reply = self._submit_inbound(ev, wait=True) or ""
         except Exception as exc:  # noqa: BLE001
             if delivery_recorded:
-                self._delivery_cache.discard(delivery_id)
+                self._discard_delivery_id(delivery_id)
             return 500, {"error": f"dispatch failed: {type(exc).__name__}: {exc}"}
         return 200, {"text": reply, "response_type": "comment"}
 

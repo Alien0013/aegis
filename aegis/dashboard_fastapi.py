@@ -1327,6 +1327,8 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
             "MATTERMOST_RATE_LIMIT_PER_MINUTE",
             "MATTERMOST_IDEMPOTENCY_TTL_SECONDS",
             "MATTERMOST_IDEMPOTENCY_CACHE_MAX",
+            "MATTERMOST_IDEMPOTENCY_PERSIST",
+            "MATTERMOST_IDEMPOTENCY_STORE_PATH",
         ],
         "setup": "Configure a Mattermost bot token plus an outgoing webhook or slash-command endpoint.",
         "pairing": False,
@@ -1355,6 +1357,8 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
             "idempotency_env": [
                 "MATTERMOST_IDEMPOTENCY_TTL_SECONDS",
                 "MATTERMOST_IDEMPOTENCY_CACHE_MAX",
+                "MATTERMOST_IDEMPOTENCY_PERSIST",
+                "MATTERMOST_IDEMPOTENCY_STORE_PATH",
             ],
         },
     },

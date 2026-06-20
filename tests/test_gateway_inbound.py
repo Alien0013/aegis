@@ -573,6 +573,8 @@ def test_platform_helper_command_caps_and_utf16_chunks():
     assert mattermost_meta["security"]["idempotency_env"] == [
         "MATTERMOST_IDEMPOTENCY_TTL_SECONDS",
         "MATTERMOST_IDEMPOTENCY_CACHE_MAX",
+        "MATTERMOST_IDEMPOTENCY_PERSIST",
+        "MATTERMOST_IDEMPOTENCY_STORE_PATH",
     ]
     webhook_meta = platform_metadata("webhooks")
     assert webhook_meta["supports_threads"] is True
@@ -687,6 +689,14 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert mattermost["supports_interactive_prompts"] is True
     assert mattermost["security"]["action_url_configured"] is False
     assert mattermost["security"]["auth_type"] == "bearer"
+    assert "MATTERMOST_IDEMPOTENCY_STORE_PATH" in mattermost["optional_env"]
+    assert mattermost["security"]["idempotency_env"] == [
+        "MATTERMOST_IDEMPOTENCY_TTL_SECONDS",
+        "MATTERMOST_IDEMPOTENCY_CACHE_MAX",
+        "MATTERMOST_IDEMPOTENCY_PERSIST",
+        "MATTERMOST_IDEMPOTENCY_STORE_PATH",
+    ]
+    assert mattermost["idempotency"]["persistent"] is True
     webhook = WebhookChannel().metadata
     assert webhook["transport"] == "http"
     assert webhook["supports_threads"] is True
@@ -4167,6 +4177,20 @@ def test_gateway_mattermost_inbound_auth_idempotency_and_rate_limit(monkeypatch)
     assert duplicate_status == 200
     assert duplicate_payload == {"text": "", "response_type": "comment", "duplicate": True}
     assert seen == [("channel-1", "hello", True)]
+    assert adapter.metadata["idempotency"]["delivery_store"]["entries"] == 1
+
+    after_restart = MattermostAdapter()
+    after_restart._submit_inbound = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("durable duplicate should not dispatch")
+    )
+    restart_status, restart_payload = after_restart._handle_inbound_payload(
+        headers,
+        body,
+        client_host="203.0.113.10",
+    )
+    assert restart_status == 200
+    assert restart_payload == {"text": "", "response_type": "comment", "duplicate": True}
+    assert after_restart.metadata["idempotency"]["delivery_store"]["duplicate_count"] == 1
 
     limited_status, limited_payload = adapter._handle_inbound_payload(
         {},
@@ -4223,6 +4247,7 @@ def test_gateway_mattermost_allows_retry_after_dispatch_failure(monkeypatch):
     assert "mattermost down" in payload["error"]
     assert adapter._delivery_cache.stats()["entries"] == 0
     assert adapter._delivery_cache.stats()["discarded_count"] == 1
+    assert adapter.metadata["idempotency"]["delivery_store"]["discarded_count"] == 1
 
     adapter._submit_inbound = lambda ev, *, wait=False: f"reply:{ev.text}"
     retry_status, retry_payload = adapter._handle_inbound_payload(headers, body)
