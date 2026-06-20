@@ -41,7 +41,7 @@ _MAX_SESSION_KEY_CHARS = 256
 _REASONING_EFFORTS = {"off", "none", "minimal", "low", "medium", "high", "xhigh"}
 _TEXT_CONTENT_PART_TYPES = {"text", "input_text", "output_text"}
 _IMAGE_CONTENT_PART_TYPES = {"image_url", "input_image"}
-_FILE_CONTENT_PART_TYPES = {"file", "input_file"}
+_FILE_CONTENT_PART_TYPES = {"file", "input_file", "document"}
 _AUDIO_CONTENT_PART_TYPES = {"audio", "input_audio"}
 _REFUSAL_CONTENT_PART_TYPES = {"refusal"}
 _MESSAGE_PHASES = {"commentary", "final_answer"}
@@ -426,13 +426,55 @@ def _image_file_id_from_part(part: dict[str, Any]) -> str:
 
 
 def _file_label_from_part(part: dict[str, Any]) -> str:
-    for key in ("file_id", "file_url", "filename", "name"):
-        value = part.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    if part.get("file_data") is not None:
+    document = _document_payload_from_part(part)
+    for payload, keys in (
+        (part, ("file_id", "file_url", "filename", "name", "id", "url")),
+        (document, ("file_id", "id", "file_url", "url", "filename", "name")),
+    ):
+        for key in keys:
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    has_inline_data = (
+        part.get("file_data") is not None
+        or document.get("file_data") is not None
+        or document.get("data") is not None
+    )
+    if has_inline_data:
         return "inline file"
     return ""
+
+
+def _document_payload_from_part(part: dict[str, Any]) -> dict[str, Any]:
+    document = part.get("document")
+    if isinstance(document, dict):
+        return document
+    if isinstance(document, str) and document.strip():
+        return {"id": document.strip()}
+    return {}
+
+
+def _file_content_field(part: dict[str, Any], key: str) -> Any:
+    document = _document_payload_from_part(part)
+    aliases = {
+        "file_id": ("file_id", "id"),
+        "file_url": ("file_url", "url"),
+        "filename": ("filename", "name"),
+        "file_data": ("file_data", "data"),
+        "mime_type": ("mime_type", "media_type", "content_type"),
+        "detail": ("detail",),
+    }
+    for candidate in aliases.get(key, (key,)):
+        value = part.get(candidate)
+        if value is not None:
+            return value
+    for candidate in aliases.get(key, (key,)):
+        value = document.get(candidate)
+        if isinstance(value, str) and value.strip():
+            return value
+        if value is not None:
+            return value
+    return None
 
 
 def _audio_payload_from_part(part: dict[str, Any]) -> Any:
@@ -537,7 +579,8 @@ def _content_part_validation_error(
                     code="invalid_file_content",
                     param=f"{part_param}.file_id",
                 )
-            if "file_data" in part and not isinstance(part.get("file_data"), str):
+            file_data = _file_content_field(part, "file_data")
+            if file_data is not None and not isinstance(file_data, str):
                 return _openai_error(
                     "File content parts require string 'file_data' when provided.",
                     code="invalid_file_content",
@@ -952,8 +995,9 @@ def _canonical_response_function_output_part(
             return None
         out: dict[str, Any] = {"type": "input_file"}
         for key in ("file_id", "file_url", "filename", "file_data", "mime_type", "detail"):
-            if part.get(key) is not None:
-                out[key] = str(part[key])
+            value = _file_content_field(part, key)
+            if value is not None:
+                out[key] = str(value)
         return out
     if ptype in _AUDIO_CONTENT_PART_TYPES:
         if not _audio_label_from_part(part):

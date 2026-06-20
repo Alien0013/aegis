@@ -1919,6 +1919,10 @@ def test_responses_accepts_input_file_parts_as_document_references(monkeypatch, 
                         "file_url": "https://example.test/brief.pdf",
                         "detail": "high",
                     },
+                    {
+                        "type": "document",
+                        "document": {"id": "doc_123", "filename": "brief-notes.pdf"},
+                    },
                 ],
             }],
         })
@@ -1930,7 +1934,7 @@ def test_responses_accepts_input_file_parts_as_document_references(monkeypatch, 
 
     assert status == 200
     assert _FakeRunner.calls[0]["prompt"].content == (
-        "review this\n[file: file_123]\n[file: https://example.test/brief.pdf]"
+        "review this\n[file: file_123]\n[file: https://example.test/brief.pdf]\n[file: doc_123]"
     )
     assert items_status == 200
     items = json.loads(items_data)["data"]
@@ -1938,6 +1942,7 @@ def test_responses_accepts_input_file_parts_as_document_references(monkeypatch, 
         {"type": "input_text", "text": "review this"},
         {"type": "input_file", "file_id": "file_123", "filename": "brief.pdf"},
         {"type": "input_file", "file_url": "https://example.test/brief.pdf", "detail": "high"},
+        {"type": "input_file", "file_id": "doc_123", "filename": "brief-notes.pdf"},
     ]
 
 
@@ -1956,6 +1961,7 @@ def test_responses_groups_top_level_typed_content_parts(monkeypatch, tmp_path):
                 {"type": "input_text", "text": "review this"},
                 {"type": "input_image", "image_url": image_url},
                 {"type": "input_file", "file_id": "file_123", "filename": "brief.pdf"},
+                {"type": "document", "document": {"url": "https://example.test/notes.md"}},
             ],
         })
         response_id = json.loads(data)["id"]
@@ -1966,7 +1972,7 @@ def test_responses_groups_top_level_typed_content_parts(monkeypatch, tmp_path):
 
     assert status == 200
     call = _FakeRunner.calls[0]
-    assert call["prompt"].content == "review this\n[file: file_123]"
+    assert call["prompt"].content == "review this\n[file: file_123]\n[file: https://example.test/notes.md]"
     assert call["prompt"].images == [image_url]
     assert call["history"] == []
     assert items_status == 200
@@ -1977,6 +1983,7 @@ def test_responses_groups_top_level_typed_content_parts(monkeypatch, tmp_path):
         {"type": "input_text", "text": "review this"},
         {"type": "input_image", "image_url": image_url},
         {"type": "input_file", "file_id": "file_123", "filename": "brief.pdf"},
+        {"type": "input_file", "file_url": "https://example.test/notes.md"},
     ]
 
 
@@ -2067,7 +2074,7 @@ def test_responses_rejects_malformed_input_file_parts(monkeypatch, tmp_path):
         status, data = _request(port, "POST", "/v1/responses", {
             "input": [{
                 "role": "user",
-                "content": [{"type": "input_file"}],
+                "content": [{"type": "document", "document": {}}],
             }],
         })
     finally:
@@ -2119,7 +2126,7 @@ def test_responses_rejects_unsupported_content_parts(monkeypatch, tmp_path):
         status, data = _request(port, "POST", "/v1/responses", {
             "input": [{
                 "role": "user",
-                "content": [{"type": "document", "document": {"id": "doc_123"}}],
+                "content": [{"type": "widget", "widget": {"id": "widget_123"}}],
             }],
         })
     finally:
