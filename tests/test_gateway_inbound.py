@@ -1584,11 +1584,65 @@ def test_telegram_adapter_builds_inbound_attachment_rows(monkeypatch):
             "duration": 9,
             "file_size": 8192,
         },
+        "animation": {
+            "file_id": "anim-file",
+            "mime_type": "video/mp4",
+            "file_name": "loop.mp4",
+            "duration": 2,
+            "file_size": 1024,
+        },
+        "video_note": {
+            "file_id": "note-file",
+            "duration": 5,
+            "length": 240,
+            "file_size": 512,
+        },
+        "sticker": {
+            "file_id": "sticker-file",
+            "emoji": "ok",
+            "set_name": "aegis",
+            "is_animated": True,
+            "file_size": 256,
+        },
+        "contact": {
+            "phone_number": "+15551234567",
+            "first_name": "Ada",
+            "last_name": "Lovelace",
+            "user_id": 99,
+        },
+        "location": {"latitude": 49.2827, "longitude": -123.1207, "horizontal_accuracy": 8},
+        "venue": {
+            "location": {"latitude": 40.7128, "longitude": -74.006},
+            "title": "Ops HQ",
+            "address": "1 Main St",
+            "google_place_id": "place-1",
+        },
+        "poll": {
+            "id": "poll-1",
+            "question": "Ship it?",
+            "options": [{"text": "Yes", "voter_count": 3}, {"text": "No", "voter_count": 1}],
+            "total_voter_count": 4,
+            "is_closed": False,
+            "type": "regular",
+        },
     }
 
     rows = adapter._attachments_from_message(msg)
 
-    assert [row["kind"] for row in rows] == ["voice", "audio", "document", "photo", "video"]
+    assert [row["kind"] for row in rows] == [
+        "voice",
+        "audio",
+        "document",
+        "animation",
+        "video_note",
+        "sticker",
+        "photo",
+        "video",
+        "contact",
+        "location",
+        "venue",
+        "poll",
+    ]
     assert rows[0] == {
         "id": "voice-file",
         "type": "audio/ogg",
@@ -1603,8 +1657,27 @@ def test_telegram_adapter_builds_inbound_attachment_rows(monkeypatch):
     }
     assert rows[1]["filename"] == "song.mp3"
     assert rows[2]["type"] == "application/pdf"
-    assert rows[3]["file_id"] == "large-photo"
-    assert rows[4]["width"] == 640
+    assert rows[3]["kind"] == "animation"
+    assert rows[3]["filename"] == "loop.mp4"
+    assert rows[4]["kind"] == "video_note"
+    assert rows[4]["filename"] == "video_note.mp4"
+    assert rows[5]["kind"] == "sticker"
+    assert rows[5]["emoji"] == "ok"
+    assert rows[5]["is_animated"] is True
+    assert rows[6]["file_id"] == "large-photo"
+    assert rows[7]["width"] == 640
+    assert rows[8]["kind"] == "contact"
+    assert rows[8]["filename"] == "Ada Lovelace"
+    assert rows[8]["phone_number"] == "+15551234567"
+    assert rows[9]["kind"] == "location"
+    assert rows[9]["latitude"] == 49.2827
+    assert rows[10]["kind"] == "venue"
+    assert rows[10]["filename"] == "Ops HQ"
+    assert rows[10]["google_place_id"] == "place-1"
+    assert rows[11]["kind"] == "poll"
+    assert rows[11]["question"] == "Ship it?"
+    assert rows[11]["options"][0] == {"text": "Yes", "voter_count": 3}
+    assert rows[11]["poll_type"] == "regular"
     assert adapter._event_text(
         {"chat": {"type": "private"}},
         "",

@@ -476,6 +476,9 @@ class TelegramAdapter(BasePlatformAdapter):
             ("voice", "audio/ogg", "voice.ogg"),
             ("audio", "audio", "audio"),
             ("document", "document", "document"),
+            ("animation", "video/mp4", "animation.mp4"),
+            ("video_note", "video/mp4", "video_note.mp4"),
+            ("sticker", "image/webp", "sticker.webp"),
         ):
             payload = msg.get(kind)
             if isinstance(payload, dict):
@@ -512,6 +515,7 @@ class TelegramAdapter(BasePlatformAdapter):
             )
             if row:
                 rows.append(row)
+        rows.extend(self._structured_attachments_from_message(msg))
         return rows
 
     def _telegram_file_attachment(
@@ -540,9 +544,123 @@ class TelegramAdapter(BasePlatformAdapter):
         file_unique_id = str(payload.get("file_unique_id") or "").strip()
         if file_unique_id:
             row["file_unique_id"] = file_unique_id
-        for key in ("duration", "width", "height"):
+        for key in ("duration", "width", "height", "length"):
             value = self._safe_int(payload.get(key))
             if value:
+                row[key] = value
+        for key in ("emoji", "set_name", "custom_emoji_id", "performer", "title"):
+            value = str(payload.get(key) or "").strip()
+            if value:
+                row[key] = value
+        for key in ("is_animated", "is_video"):
+            if key in payload:
+                row[key] = bool(payload.get(key))
+        return row
+
+    def _structured_attachments_from_message(self, msg: dict) -> list[dict]:
+        rows: list[dict] = []
+        contact = msg.get("contact")
+        if isinstance(contact, dict):
+            first = str(contact.get("first_name") or "").strip()
+            last = str(contact.get("last_name") or "").strip()
+            name = " ".join(part for part in (first, last) if part).strip()
+            phone = str(contact.get("phone_number") or "").strip()
+            row = {
+                "id": str(contact.get("user_id") or phone or name or "contact"),
+                "type": "contact",
+                "media_type": "contact",
+                "filename": name or phone or "contact",
+                "source": "telegram",
+                "kind": "contact",
+            }
+            for key in ("phone_number", "first_name", "last_name", "user_id", "vcard"):
+                value = contact.get(key)
+                if value not in (None, ""):
+                    row[key] = value
+            rows.append(row)
+
+        location = msg.get("location")
+        if isinstance(location, dict):
+            row = self._telegram_location_attachment(location, kind="location")
+            if row:
+                rows.append(row)
+
+        venue = msg.get("venue")
+        if isinstance(venue, dict):
+            loc = venue.get("location") if isinstance(venue.get("location"), dict) else {}
+            row = self._telegram_location_attachment(loc, kind="venue")
+            if row:
+                title = str(venue.get("title") or "").strip()
+                address = str(venue.get("address") or "").strip()
+                row["id"] = str(venue.get("foursquare_id") or venue.get("google_place_id") or row["id"])
+                row["filename"] = title or address or row["filename"]
+                for key in (
+                    "title",
+                    "address",
+                    "foursquare_id",
+                    "foursquare_type",
+                    "google_place_id",
+                    "google_place_type",
+                ):
+                    value = venue.get(key)
+                    if value not in (None, ""):
+                        row[key] = value
+                rows.append(row)
+
+        poll = msg.get("poll")
+        if isinstance(poll, dict):
+            question = str(poll.get("question") or "").strip()
+            options = []
+            for item in poll.get("options") or []:
+                if not isinstance(item, dict):
+                    continue
+                option = {"text": str(item.get("text") or "").strip()}
+                if "voter_count" in item:
+                    option["voter_count"] = self._safe_int(item.get("voter_count"))
+                options.append(option)
+            row = {
+                "id": str(poll.get("id") or question or "poll"),
+                "type": "poll",
+                "media_type": "poll",
+                "filename": question or "poll",
+                "source": "telegram",
+                "kind": "poll",
+                "question": question,
+                "options": options,
+            }
+            for source, target in (
+                ("total_voter_count", "total_voter_count"),
+                ("is_closed", "is_closed"),
+                ("is_anonymous", "is_anonymous"),
+                ("type", "poll_type"),
+                ("allows_multiple_answers", "allows_multiple_answers"),
+                ("correct_option_id", "correct_option_id"),
+                ("explanation", "explanation"),
+            ):
+                if source in poll:
+                    row[target] = poll.get(source)
+            rows.append(row)
+
+        return rows
+
+    def _telegram_location_attachment(self, location: dict, *, kind: str) -> dict | None:
+        latitude = location.get("latitude")
+        longitude = location.get("longitude")
+        if latitude in (None, "") or longitude in (None, ""):
+            return None
+        row = {
+            "id": f"{latitude},{longitude}",
+            "type": kind,
+            "media_type": kind,
+            "filename": kind,
+            "source": "telegram",
+            "kind": kind,
+            "latitude": latitude,
+            "longitude": longitude,
+        }
+        for key in ("horizontal_accuracy", "live_period", "heading", "proximity_alert_radius"):
+            value = location.get(key)
+            if value not in (None, ""):
                 row[key] = value
         return row
 
