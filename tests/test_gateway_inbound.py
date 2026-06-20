@@ -3350,6 +3350,33 @@ def test_gateway_webhook_channel_allows_retry_after_dispatch_failure():
     assert attempts == [("c1", "hello", True)]
 
 
+def _assert_signed_bridge_posts(sent, expected_payloads):
+    import hashlib
+    import hmac
+    import json
+
+    from aegis.webhook import verify_signature
+
+    assert len(sent) == len(expected_payloads)
+    for (url, headers, content), expected in zip(sent, expected_payloads, strict=True):
+        assert url == "https://bridge.test/send"
+        assert headers["Content-Type"] == "application/json"
+        assert headers["X-Secret"] == "outbound-secret"
+        payload = json.loads(content.decode("utf-8"))
+        delivery_id = payload.get("delivery_id")
+        assert delivery_id
+        assert headers["Idempotency-Key"] == delivery_id
+        assert headers["X-AEGIS-Delivery-Id"] == delivery_id
+        expected_signature = "sha256=" + hmac.new(
+            b"outbound-secret",
+            content,
+            hashlib.sha256,
+        ).hexdigest()
+        assert headers["X-Webhook-Signature"] == expected_signature
+        assert verify_signature("outbound-secret", content, headers) is True
+        assert payload == {**expected, "delivery_id": delivery_id}
+
+
 def test_gateway_webhook_channel_outbound_bridge_send(monkeypatch):
     from aegis.gateway import webhook_channel
     from aegis.gateway.webhook_channel import WebhookChannel
@@ -3373,8 +3400,8 @@ def test_gateway_webhook_channel_outbound_bridge_send(monkeypatch):
         def __exit__(self, *_args):
             return None
 
-        def post(self, url, *, headers, json):
-            sent.append((url, dict(headers), dict(json)))
+        def post(self, url, *, headers, content):
+            sent.append((url, dict(headers), bytes(content)))
             return FakeResponse()
 
     monkeypatch.setattr(webhook_channel.httpx, "Client", FakeClient)
@@ -3430,38 +3457,32 @@ def test_gateway_webhook_channel_outbound_bridge_send(monkeypatch):
         "participant": "15551234567@s.whatsapp.net",
         "reply_to_message_id": "BAE599999",
     }
-    assert sent == [
-        (
-            "https://bridge.test/send",
-            {"Content-Type": "application/json", "X-Secret": "outbound-secret"},
-            {**base_payload, "text": "hello"},
-        ),
-        (
-            "https://bridge.test/send",
-            {"Content-Type": "application/json", "X-Secret": "outbound-secret"},
-            {
-                **base_payload,
-                "text": "Pick a deploy lane?",
-                "type": "clarify",
-                "question": "Pick a deploy lane?",
-                "choices": ["stable", "canary"],
-            },
-        ),
-        (
-            "https://bridge.test/send",
-            {"Content-Type": "application/json", "X-Secret": "outbound-secret"},
-            {
-                **base_payload,
-                "text": "Run deploy?",
-                "type": "exec_approval",
-                "prompt": "Run deploy?",
-                "choices": ["approve", "always", "deny"],
-            },
-        ),
-    ]
+    _assert_signed_bridge_posts(sent, [
+        {**base_payload, "text": "hello"},
+        {
+            **base_payload,
+            "text": "Pick a deploy lane?",
+            "type": "clarify",
+            "question": "Pick a deploy lane?",
+            "choices": ["stable", "canary"],
+        },
+        {
+            **base_payload,
+            "text": "Run deploy?",
+            "type": "exec_approval",
+            "prompt": "Run deploy?",
+            "choices": ["approve", "always", "deny"],
+        },
+    ])
     metadata = adapter.metadata
     assert metadata["security"]["outbound_configured"] is True
     assert metadata["security"]["outbound_secret_configured"] is True
+    assert metadata["security"]["outbound_signature_schemes"] == [
+        "X-Secret",
+        "X-Webhook-Signature",
+        "Idempotency-Key",
+        "X-AEGIS-Delivery-Id",
+    ]
 
 
 def test_gateway_webhook_channel_outbound_bridge_media(monkeypatch, tmp_path):
@@ -3488,8 +3509,8 @@ def test_gateway_webhook_channel_outbound_bridge_media(monkeypatch, tmp_path):
         def __exit__(self, *_args):
             return None
 
-        def post(self, url, *, headers, json):
-            sent.append((url, dict(headers), dict(json)))
+        def post(self, url, *, headers, content):
+            sent.append((url, dict(headers), bytes(content)))
             return FakeResponse()
 
     monkeypatch.setattr(webhook_channel.httpx, "Client", FakeClient)
@@ -3504,41 +3525,33 @@ def test_gateway_webhook_channel_outbound_bridge_media(monkeypatch, tmp_path):
         },
     )
 
-    assert sent == [
-        (
-            "https://bridge.test/send",
-            {"Content-Type": "application/json", "X-Secret": "outbound-secret"},
-            {
-                "platform": "whatsapp",
-                "chat_id": "12025550123@s.whatsapp.net",
-                "text": "Here",
-                "metadata": {
-                    "remote_jid": "12025550123@s.whatsapp.net",
-                    "reply_to_message_id": "BAE599999",
-                },
+    _assert_signed_bridge_posts(sent, [
+        {
+            "platform": "whatsapp",
+            "chat_id": "12025550123@s.whatsapp.net",
+            "text": "Here",
+            "metadata": {
                 "remote_jid": "12025550123@s.whatsapp.net",
                 "reply_to_message_id": "BAE599999",
             },
-        ),
-        (
-            "https://bridge.test/send",
-            {"Content-Type": "application/json", "X-Secret": "outbound-secret"},
-            {
-                "platform": "whatsapp",
-                "chat_id": "12025550123@s.whatsapp.net",
-                "text": "",
-                "metadata": {
-                    "remote_jid": "12025550123@s.whatsapp.net",
-                    "reply_to_message_id": "BAE599999",
-                },
+            "remote_jid": "12025550123@s.whatsapp.net",
+            "reply_to_message_id": "BAE599999",
+        },
+        {
+            "platform": "whatsapp",
+            "chat_id": "12025550123@s.whatsapp.net",
+            "text": "",
+            "metadata": {
                 "remote_jid": "12025550123@s.whatsapp.net",
                 "reply_to_message_id": "BAE599999",
-                "type": "media",
-                "path": str(path),
-                "caption": "",
             },
-        ),
-    ]
+            "remote_jid": "12025550123@s.whatsapp.net",
+            "reply_to_message_id": "BAE599999",
+            "type": "media",
+            "path": str(path),
+            "caption": "",
+        },
+    ])
     sent.clear()
 
     missing = tmp_path / "missing.ogg"
@@ -3550,38 +3563,30 @@ def test_gateway_webhook_channel_outbound_bridge_media(monkeypatch, tmp_path):
             "reply_to_message_id": "BAE599999",
         },
     )
-    assert sent == [
-        (
-            "https://bridge.test/send",
-            {"Content-Type": "application/json", "X-Secret": "outbound-secret"},
-            {
-                "platform": "whatsapp",
-                "chat_id": "12025550123@s.whatsapp.net",
-                "text": "Here",
-                "metadata": {
-                    "remote_jid": "12025550123@s.whatsapp.net",
-                    "reply_to_message_id": "BAE599999",
-                },
+    _assert_signed_bridge_posts(sent, [
+        {
+            "platform": "whatsapp",
+            "chat_id": "12025550123@s.whatsapp.net",
+            "text": "Here",
+            "metadata": {
                 "remote_jid": "12025550123@s.whatsapp.net",
                 "reply_to_message_id": "BAE599999",
             },
-        ),
-        (
-            "https://bridge.test/send",
-            {"Content-Type": "application/json", "X-Secret": "outbound-secret"},
-            {
-                "platform": "whatsapp",
-                "chat_id": "12025550123@s.whatsapp.net",
-                "text": "📎 blocked media path: file not found",
-                "metadata": {
-                    "remote_jid": "12025550123@s.whatsapp.net",
-                    "reply_to_message_id": "BAE599999",
-                },
+            "remote_jid": "12025550123@s.whatsapp.net",
+            "reply_to_message_id": "BAE599999",
+        },
+        {
+            "platform": "whatsapp",
+            "chat_id": "12025550123@s.whatsapp.net",
+            "text": "📎 blocked media path: file not found",
+            "metadata": {
                 "remote_jid": "12025550123@s.whatsapp.net",
                 "reply_to_message_id": "BAE599999",
             },
-        ),
-    ]
+            "remote_jid": "12025550123@s.whatsapp.net",
+            "reply_to_message_id": "BAE599999",
+        },
+    ])
     sent.clear()
 
     adapter.send_media(
@@ -3592,23 +3597,19 @@ def test_gateway_webhook_channel_outbound_bridge_media(monkeypatch, tmp_path):
             "reply_to_message_id": "BAE599999",
         },
     )
-    assert sent == [
-        (
-            "https://bridge.test/send",
-            {"Content-Type": "application/json", "X-Secret": "outbound-secret"},
-            {
-                "platform": "whatsapp",
-                "chat_id": "12025550123@s.whatsapp.net",
-                "text": f"(file not found: {missing})",
-                "metadata": {
-                    "remote_jid": "12025550123@s.whatsapp.net",
-                    "reply_to_message_id": "BAE599999",
-                },
+    _assert_signed_bridge_posts(sent, [
+        {
+            "platform": "whatsapp",
+            "chat_id": "12025550123@s.whatsapp.net",
+            "text": f"(file not found: {missing})",
+            "metadata": {
                 "remote_jid": "12025550123@s.whatsapp.net",
                 "reply_to_message_id": "BAE599999",
             },
-        ),
-    ]
+            "remote_jid": "12025550123@s.whatsapp.net",
+            "reply_to_message_id": "BAE599999",
+        },
+    ])
 
 
 def test_gateway_webhook_channel_outbound_bridge_reactions(monkeypatch):
@@ -3633,8 +3634,8 @@ def test_gateway_webhook_channel_outbound_bridge_reactions(monkeypatch):
         def __exit__(self, *_args):
             return None
 
-        def post(self, url, *, headers, json):
-            sent.append((url, dict(headers), dict(json)))
+        def post(self, url, *, headers, content):
+            sent.append((url, dict(headers), bytes(content)))
             return FakeResponse()
 
     monkeypatch.setattr(webhook_channel.httpx, "Client", FakeClient)
@@ -3643,32 +3644,24 @@ def test_gateway_webhook_channel_outbound_bridge_reactions(monkeypatch):
     adapter.add_reaction("12025550123@s.whatsapp.net", "BAE599999", "✅")
     adapter.remove_reaction("12025550123@s.whatsapp.net", "BAE599999", "✅")
 
-    assert sent == [
-        (
-            "https://bridge.test/send",
-            {"Content-Type": "application/json", "X-Secret": "outbound-secret"},
-            {
-                "platform": "whatsapp",
-                "chat_id": "12025550123@s.whatsapp.net",
-                "type": "reaction",
-                "action": "add",
-                "message_id": "BAE599999",
-                "reaction": "✅",
-            },
-        ),
-        (
-            "https://bridge.test/send",
-            {"Content-Type": "application/json", "X-Secret": "outbound-secret"},
-            {
-                "platform": "whatsapp",
-                "chat_id": "12025550123@s.whatsapp.net",
-                "type": "reaction",
-                "action": "remove",
-                "message_id": "BAE599999",
-                "reaction": "✅",
-            },
-        ),
-    ]
+    _assert_signed_bridge_posts(sent, [
+        {
+            "platform": "whatsapp",
+            "chat_id": "12025550123@s.whatsapp.net",
+            "type": "reaction",
+            "action": "add",
+            "message_id": "BAE599999",
+            "reaction": "✅",
+        },
+        {
+            "platform": "whatsapp",
+            "chat_id": "12025550123@s.whatsapp.net",
+            "type": "reaction",
+            "action": "remove",
+            "message_id": "BAE599999",
+            "reaction": "✅",
+        },
+    ])
 
 
 def test_gateway_delivery_preserves_event_metadata_for_adapter_send():

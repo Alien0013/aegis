@@ -12,9 +12,11 @@ Bridge contract:
 
 from __future__ import annotations
 
-import json
+import hashlib
 import hmac
+import json
 import os
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -407,6 +409,12 @@ class WebhookChannel(BasePlatformAdapter):
                 "max_body_bytes": self.max_body_bytes,
                 "outbound_configured": bool(self.outbound_url),
                 "outbound_secret_configured": bool(self.outbound_secret),
+                "outbound_signature_schemes": [
+                    "X-Secret",
+                    "X-Webhook-Signature",
+                    "Idempotency-Key",
+                    "X-AEGIS-Delivery-Id",
+                ],
                 "allowed_platforms": sorted(self.allowed_platforms or []),
                 "allowed_platforms_env": f"{self.env_prefix}_ALLOWED_PLATFORMS",
                 "signature_schemes": [
@@ -882,6 +890,20 @@ class WebhookChannel(BasePlatformAdapter):
                 payload[target] = value
         return payload
 
+    def _prepare_outbound_request(self, payload: dict) -> tuple[dict, bytes, dict[str, str]]:
+        payload = dict(payload)
+        payload["delivery_id"] = str(payload.get("delivery_id") or uuid.uuid4().hex)
+        body = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        delivery_id = str(payload["delivery_id"])
+        headers["Idempotency-Key"] = delivery_id
+        headers["X-AEGIS-Delivery-Id"] = delivery_id
+        if self.outbound_secret:
+            headers["X-Secret"] = self.outbound_secret
+            signature = hmac.new(self.outbound_secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+            headers["X-Webhook-Signature"] = f"sha256={signature}"
+        return payload, body, headers
+
     def send(self, chat_id: str, text: str, *, metadata: dict | None = None) -> None:
         """Optionally deliver replies to an external bridge endpoint.
 
@@ -892,13 +914,11 @@ class WebhookChannel(BasePlatformAdapter):
         if not self.outbound_url:
             return
         metadata = dict(metadata or {})
-        headers = {"Content-Type": "application/json"}
-        if self.outbound_secret:
-            headers["X-Secret"] = self.outbound_secret
         with httpx.Client(timeout=30) as client:
             for chunk in chunk_text_by_units(text or "", limit=self.outbound_max_chars):
                 payload = self._outbound_payload(chat_id, chunk, metadata)
-                response = client.post(self.outbound_url, headers=headers, json=payload)
+                _payload, body, headers = self._prepare_outbound_request(payload)
+                response = client.post(self.outbound_url, headers=headers, content=body)
                 response.raise_for_status()
 
     def send_media(
@@ -967,11 +987,9 @@ class WebhookChannel(BasePlatformAdapter):
     def _post_outbound_event(self, payload: dict) -> None:
         if not self.outbound_url:
             return
-        headers = {"Content-Type": "application/json"}
-        if self.outbound_secret:
-            headers["X-Secret"] = self.outbound_secret
+        _payload, body, headers = self._prepare_outbound_request(payload)
         with httpx.Client(timeout=30) as client:
-            response = client.post(self.outbound_url, headers=headers, json=payload)
+            response = client.post(self.outbound_url, headers=headers, content=body)
             response.raise_for_status()
 
     def _reaction_payload(self, action: str, chat_id: str, message_id: str, reaction: str) -> dict:
