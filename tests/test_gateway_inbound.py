@@ -172,6 +172,10 @@ def test_shared_clarify_and_exec_prompts_preserve_delivery_metadata():
         metadata={
             "remote_jid": "12025550123-111@g.us",
             "participant": "15551234567@s.whatsapp.net",
+            "response_url": "https://slack.example/response/secret",
+            "raw_payload": {"token": "secret"},
+            "authorization": "Bearer secret",
+            "headers": {"X-Secret": "secret"},
         },
     )
     answer = {}
@@ -199,6 +203,10 @@ def test_shared_clarify_and_exec_prompts_preserve_delivery_metadata():
         "user_id": "15551234567@s.whatsapp.net",
         "user_name": "Ada",
     }
+    assert "response_url" not in metadata
+    assert "raw_payload" not in metadata
+    assert "authorization" not in metadata
+    assert "headers" not in metadata
 
     approval = {}
 

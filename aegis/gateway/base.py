@@ -6,7 +6,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Any, Callable
 
 from ..platforms import (
     known_gateway_commands,
@@ -17,6 +17,43 @@ from ..platforms import (
 
 # A dispatcher takes a normalized event and returns the agent's reply text.
 Dispatch = Callable[["MessageEvent"], str]
+
+_DELIVERY_METADATA_KEYS = (
+    "platform",
+    "normalized_platform",
+    "bridge_platform",
+    "thread_id",
+    "thread_ts",
+    "root_id",
+    "parent_id",
+    "topic",
+    "message_thread_id",
+    "message_id",
+    "reply_to_message_id",
+    "remote_jid",
+    "group_jid",
+    "participant",
+    "message_key_id",
+    "user_id",
+    "user_name",
+    "session_key",
+    "channel_id",
+    "guild_id",
+    "team_id",
+    "subject",
+    "references",
+    "in_reply_to",
+)
+
+
+def _metadata_scalar(value: Any) -> Any:
+    if value in (None, ""):
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value
+    return str(value)
 
 
 @dataclass
@@ -279,18 +316,21 @@ class BasePlatformAdapter:
         return None
 
     def _event_delivery_metadata(self, ev: MessageEvent) -> dict:
-        metadata = dict(ev.metadata or {})
-        for key, value in (
-            ("platform", ev.platform),
-            ("thread_id", ev.thread_id),
-            ("message_id", ev.message_id),
-            ("reply_to_message_id", ev.reply_to_message_id),
-            ("user_id", ev.user_id),
-            ("user_name", ev.user_name),
-            ("session_key", ev.session_key),
-        ):
-            if value:
-                metadata.setdefault(key, value)
+        source = dict(ev.metadata or {})
+        base = {
+            "platform": ev.platform,
+            "thread_id": ev.thread_id,
+            "message_id": ev.message_id,
+            "reply_to_message_id": ev.reply_to_message_id,
+            "user_id": ev.user_id,
+            "user_name": ev.user_name,
+            "session_key": ev.session_key,
+        }
+        metadata: dict[str, Any] = {}
+        for key in _DELIVERY_METADATA_KEYS:
+            value = _metadata_scalar(source.get(key, base.get(key)))
+            if value is not None:
+                metadata[key] = value
         return metadata
 
     def _deliver_reply(self, ev: MessageEvent, reply: str, state=None) -> None:  # noqa: ANN001
