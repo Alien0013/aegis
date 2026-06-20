@@ -86,6 +86,9 @@ class SlackAdapter(BasePlatformAdapter):
                 "event.event_id",
                 "event.client_msg_id",
                 "event.channel + event.ts",
+                "slash.trigger_id",
+                "block.trigger_id",
+                "block.container.message_ts + action.action_ts",
             ],
             "delivery_cache": self._delivery_cache.stats(),
         }
@@ -192,28 +195,56 @@ class SlackAdapter(BasePlatformAdapter):
                 pass
         if not self._command_allowed(command):
             return None
+        delivery_id = self._delivery_id_from_slash_command(command)
+        delivery_recorded = False
+        if delivery_id:
+            delivery_recorded = self._delivery_cache.record(delivery_id)
+            if not delivery_recorded:
+                return None
         command_name = str(command.get("command") or "").strip() or "/"
         command_text = str(command.get("text") or "").strip()
         raw_text = command_name if not command_text else f"{command_name} {command_text}"
         text = normalize_inbound_command(raw_text, platform="slack")
-        ev = MessageEvent(
-            platform="slack",
-            chat_id=str(command.get("channel_id") or command.get("channel_name") or "unknown"),
-            text=text,
-            user_id=str(command.get("user_id") or "") or None,
-            user_name=str(command.get("user_name") or "") or None,
-            message_id=str(command.get("trigger_id") or "") or None,
-            metadata={
-                "team": command.get("team_id") or command.get("team_domain"),
-                "channel_name": command.get("channel_name"),
-                "command": command_name,
-                "response_url": command.get("response_url"),
-                "trigger_id": command.get("trigger_id"),
-                "source": "slash_command",
-            },
-        )
-        self._submit_inbound(ev, raw_text=raw_text)
-        return ev
+        try:
+            ev = MessageEvent(
+                platform="slack",
+                chat_id=str(command.get("channel_id") or command.get("channel_name") or "unknown"),
+                text=text,
+                user_id=str(command.get("user_id") or "") or None,
+                user_name=str(command.get("user_name") or "") or None,
+                message_id=str(command.get("trigger_id") or "") or None,
+                metadata={
+                    "team": command.get("team_id") or command.get("team_domain"),
+                    "channel_name": command.get("channel_name"),
+                    "command": command_name,
+                    "response_url": command.get("response_url"),
+                    "trigger_id": command.get("trigger_id"),
+                    "source": "slash_command",
+                    "delivery_id": delivery_id or "",
+                },
+            )
+            self._submit_inbound(ev, raw_text=raw_text)
+            return ev
+        except Exception:
+            if delivery_recorded:
+                self._delivery_cache.discard(delivery_id)
+            raise
+
+    def _delivery_id_from_slash_command(self, command: dict) -> str:
+        trigger_id = str(command.get("trigger_id") or "").strip()
+        if trigger_id:
+            return f"slash:trigger:{trigger_id}"
+        response_url = str(command.get("response_url") or "").strip()
+        if response_url:
+            return f"slash:response_url:{response_url}"
+        team = str(command.get("team_id") or command.get("team_domain") or "").strip()
+        channel = str(command.get("channel_id") or command.get("channel_name") or "").strip()
+        user = str(command.get("user_id") or "").strip()
+        command_name = str(command.get("command") or "").strip()
+        text = str(command.get("text") or "").strip()
+        if team or channel or user or command_name or text:
+            return f"slash:fallback:{team}:{channel}:{user}:{command_name}:{text}"
+        return ""
 
     def _channel_values(self, *values: object) -> set[str]:
         return {str(value or "").strip() for value in values if str(value or "").strip()}
@@ -267,6 +298,12 @@ class SlackAdapter(BasePlatformAdapter):
             "channel_name": channel_name,
         }):
             return None
+        delivery_id = self._delivery_id_from_block_action(payload, selected)
+        delivery_recorded = False
+        if delivery_id:
+            delivery_recorded = self._delivery_cache.record(delivery_id)
+            if not delivery_recorded:
+                return None
         thread_id = str(message.get("thread_ts") or container.get("thread_ts") or "").strip() or None
         message_id = str(
             container.get("message_ts")
@@ -274,26 +311,50 @@ class SlackAdapter(BasePlatformAdapter):
             or selected.get("action_ts")
             or ""
         ).strip() or None
-        ev = MessageEvent(
-            platform="slack",
-            chat_id=channel_id or channel_name or "unknown",
-            text=normalize_inbound_command(text, platform="slack"),
-            user_id=user_id or None,
-            user_name=user_name or None,
-            thread_id=thread_id,
-            message_id=message_id,
-            timestamp=selected.get("action_ts") or message.get("ts"),
-            metadata={
-                "team": team_id,
-                "channel_name": channel_name,
-                "thread_ts": thread_id,
-                "action_id": action_id,
-                "source": "block_action",
-                "response_url": payload.get("response_url"),
-            },
-        )
-        self._submit_inbound(ev, raw_text=text)
-        return ev
+        try:
+            ev = MessageEvent(
+                platform="slack",
+                chat_id=channel_id or channel_name or "unknown",
+                text=normalize_inbound_command(text, platform="slack"),
+                user_id=user_id or None,
+                user_name=user_name or None,
+                thread_id=thread_id,
+                message_id=message_id,
+                timestamp=selected.get("action_ts") or message.get("ts"),
+                metadata={
+                    "team": team_id,
+                    "channel_name": channel_name,
+                    "thread_ts": thread_id,
+                    "action_id": action_id,
+                    "source": "block_action",
+                    "response_url": payload.get("response_url"),
+                    "delivery_id": delivery_id or "",
+                },
+            )
+            self._submit_inbound(ev, raw_text=text)
+            return ev
+        except Exception:
+            if delivery_recorded:
+                self._delivery_cache.discard(delivery_id)
+            raise
+
+    def _delivery_id_from_block_action(self, payload: dict, action: dict) -> str:
+        trigger_id = str(payload.get("trigger_id") or "").strip()
+        if trigger_id:
+            return f"block:trigger:{trigger_id}"
+        container = payload.get("container") if isinstance(payload.get("container"), dict) else {}
+        message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+        channel = payload.get("channel") if isinstance(payload.get("channel"), dict) else {}
+        user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
+        channel_id = str(channel.get("id") or payload.get("channel_id") or "").strip()
+        user_id = str(user.get("id") or payload.get("user_id") or "").strip()
+        message_ts = str(container.get("message_ts") or message.get("ts") or "").strip()
+        action_ts = str(action.get("action_ts") or "").strip()
+        action_id = str(action.get("action_id") or "").strip()
+        value = str(action.get("value") or "").strip()
+        if message_ts or action_ts or action_id or value:
+            return f"block:fallback:{channel_id}:{user_id}:{message_ts}:{action_ts}:{action_id}:{value}"
+        return ""
 
     def _resolve_thread_ts(self, event: dict) -> str | None:
         thread_ts = str(event.get("thread_ts") or "").strip()

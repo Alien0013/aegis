@@ -2708,6 +2708,72 @@ def test_slack_adapter_handles_native_slash_commands(monkeypatch):
     assert seen[-1] == (action_ev, "approve")
 
 
+def test_slack_adapter_dedupes_slash_commands_and_block_actions(monkeypatch):
+    import pytest
+
+    from aegis.gateway.slack_channel import SlackAdapter
+
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+
+    adapter = SlackAdapter()
+    seen = []
+    adapter._submit_inbound = lambda ev, *, raw_text=None: seen.append((ev, raw_text)) or None
+
+    command = {
+        "command": "/status",
+        "text": "full",
+        "channel_id": "C1",
+        "channel_name": "ops",
+        "user_id": "U1",
+        "user_name": "ada",
+        "team_id": "T1",
+        "trigger_id": "trigger-1",
+        "response_url": "https://slack.test/response",
+    }
+
+    ev = adapter._handle_slash_command(command)
+    duplicate = adapter._handle_slash_command(dict(command))
+
+    assert duplicate is None
+    assert seen == [(ev, "/status full")]
+    assert ev.metadata["delivery_id"] == "slash:trigger:trigger-1"
+    assert adapter._delivery_cache.stats()["duplicate_count"] == 1
+
+    body = {
+        "trigger_id": "trigger-action-1",
+        "user": {"id": "U1", "name": "ada"},
+        "channel": {"id": "C1", "name": "ops"},
+        "team": {"id": "T1"},
+        "message": {"ts": "171.2", "thread_ts": "171.1"},
+        "container": {"message_ts": "171.2"},
+        "response_url": "https://slack.test/action-response",
+    }
+    action = {"action_id": "aegis_exec_approval", "value": "approve", "action_ts": "171.3"}
+
+    action_ev = adapter._handle_block_action(body, action=action)
+    action_duplicate = adapter._handle_block_action(dict(body), action=dict(action))
+
+    assert action_duplicate is None
+    assert seen[-1] == (action_ev, "approve")
+    assert action_ev.metadata["delivery_id"] == "block:trigger:trigger-action-1"
+    assert adapter._delivery_cache.stats()["duplicate_count"] == 2
+
+    def fail_once(_ev, *, raw_text=None):  # noqa: ANN001, ARG001
+        raise RuntimeError("slack slash dispatch down")
+
+    adapter._submit_inbound = fail_once
+    failing = dict(command, trigger_id="trigger-2")
+    with pytest.raises(RuntimeError, match="slack slash dispatch down"):
+        adapter._handle_slash_command(failing)
+
+    assert adapter._delivery_cache.stats()["discarded_count"] == 1
+
+    adapter._submit_inbound = lambda ev, *, raw_text=None: seen.append((ev, raw_text)) or None
+    retried = adapter._handle_slash_command(failing)
+    assert retried is seen[-1][0]
+
+
 def test_slack_adapter_dedupes_message_events_and_ignores_self_echoes(monkeypatch):
     import pytest
 
@@ -2726,6 +2792,9 @@ def test_slack_adapter_dedupes_message_events_and_ignores_self_echoes(monkeypatc
         "event.event_id",
         "event.client_msg_id",
         "event.channel + event.ts",
+        "slash.trigger_id",
+        "block.trigger_id",
+        "block.container.message_ts + action.action_ts",
     ]
 
     seen = []
