@@ -94,6 +94,8 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
             "DISCORD_ALLOWED_GUILDS",
             "DISCORD_IGNORED_GUILDS",
             "DISCORD_TRIGGER_MODE",
+            "DISCORD_IDEMPOTENCY_TTL_SECONDS",
+            "DISCORD_IDEMPOTENCY_CACHE_MAX",
         ],
         "max_message_length": 2000,
         "message_length_units": "codepoints",
@@ -104,6 +106,12 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
         "typed_command_prefix": "!",
         "command_cap": MAX_DISCORD_APP_COMMANDS,
         "slash_command_cap": MAX_DISCORD_APP_COMMANDS,
+        "security": {
+            "idempotency_env": [
+                "DISCORD_IDEMPOTENCY_TTL_SECONDS",
+                "DISCORD_IDEMPOTENCY_CACHE_MAX",
+            ],
+        },
     },
     "slack": {
         "display_name": "Slack",

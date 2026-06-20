@@ -11,6 +11,7 @@ from ..platforms import (
     discord_application_command_menu,
     normalize_inbound_command,
 )
+from ..webhook import DeliveryIdCache
 from .base import BasePlatformAdapter, Dispatch, MessageEvent
 
 _ARGUMENT_COMMANDS = {
@@ -29,6 +30,14 @@ _ARGUMENT_COMMANDS = {
 def _csv_set(value: str) -> set[str] | None:
     items = {item.strip() for item in str(value or "").split(",") if item.strip()}
     return items or None
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)) or default)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
 
 
 class DiscordAdapter(BasePlatformAdapter):
@@ -51,6 +60,10 @@ class DiscordAdapter(BasePlatformAdapter):
         self.allowed_guilds = _csv_set(os.environ.get("DISCORD_ALLOWED_GUILDS", ""))
         self.ignored_guilds = _csv_set(os.environ.get("DISCORD_IGNORED_GUILDS", ""))
         self.trigger_mode = os.environ.get("DISCORD_TRIGGER_MODE", "all").strip().lower() or "all"
+        self._delivery_cache = DeliveryIdCache(
+            ttl_seconds=float(_env_int("DISCORD_IDEMPOTENCY_TTL_SECONDS", 3600)),
+            max_items=_env_int("DISCORD_IDEMPOTENCY_CACHE_MAX", 10000),
+        )
 
     @property
     def metadata(self) -> dict:
@@ -62,6 +75,17 @@ class DiscordAdapter(BasePlatformAdapter):
             "allowed_guilds_configured": bool(self.allowed_guilds),
             "ignored_guilds_configured": bool(self.ignored_guilds),
             "trigger_mode": self.trigger_mode,
+            "idempotency_env": [
+                "DISCORD_IDEMPOTENCY_TTL_SECONDS",
+                "DISCORD_IDEMPOTENCY_CACHE_MAX",
+            ],
+        }
+        data["idempotency"] = {
+            "delivery_id_sources": [
+                "message.id",
+                "interaction.id",
+            ],
+            "delivery_cache": self._delivery_cache.stats(),
         }
         return data
 
@@ -108,34 +132,46 @@ class DiscordAdapter(BasePlatformAdapter):
                 return
             if not self._trigger_allowed(message, client):
                 return
-            reference = getattr(message, "reference", None)
-            replied = getattr(reference, "resolved", None) if reference is not None else None
-            raw_content = message.content or ""
-            content = self._strip_own_mentions(raw_content, client)
-            content = normalize_inbound_command(content, platform="discord")
-            attachments = self._attachments_from_message(message)
-            if not content.strip() and attachments:
-                content = self._attachment_reference_text(attachments)
-            chat_id, thread_id = self._chat_and_thread_ids(message)
-            ev = MessageEvent(
-                platform="discord", chat_id=chat_id,
-                text=content, user_id=str(message.author.id),
-                user_name=str(message.author),
-                message_id=str(getattr(message, "id", "") or "") or None,
-                reply_to_message_id=str(getattr(replied, "id", "") or "") or None,
-                reply_to_text=getattr(replied, "content", None),
-                timestamp=getattr(message, "created_at", None),
-                thread_id=thread_id,
-                attachments=attachments,
-                metadata={
-                    "guild_id": str(getattr(getattr(message, "guild", None), "id", "") or ""),
-                    "channel_id": str(getattr(message.channel, "id", "") or ""),
-                    "channel_name": str(getattr(message.channel, "name", "") or ""),
-                },
-            )
-            ev._discord_channel = message.channel
-            ev._discord_loop = self._loop
-            self._submit_inbound(ev, raw_text=raw_content)
+            delivery_id = self._delivery_id_from_message(message)
+            delivery_recorded = False
+            if delivery_id:
+                delivery_recorded = self._delivery_cache.record(delivery_id)
+                if not delivery_recorded:
+                    return
+            try:
+                reference = getattr(message, "reference", None)
+                replied = getattr(reference, "resolved", None) if reference is not None else None
+                raw_content = message.content or ""
+                content = self._strip_own_mentions(raw_content, client)
+                content = normalize_inbound_command(content, platform="discord")
+                attachments = self._attachments_from_message(message)
+                if not content.strip() and attachments:
+                    content = self._attachment_reference_text(attachments)
+                chat_id, thread_id = self._chat_and_thread_ids(message)
+                ev = MessageEvent(
+                    platform="discord", chat_id=chat_id,
+                    text=content, user_id=str(message.author.id),
+                    user_name=str(message.author),
+                    message_id=str(getattr(message, "id", "") or "") or None,
+                    reply_to_message_id=str(getattr(replied, "id", "") or "") or None,
+                    reply_to_text=getattr(replied, "content", None),
+                    timestamp=getattr(message, "created_at", None),
+                    thread_id=thread_id,
+                    attachments=attachments,
+                    metadata={
+                        "guild_id": str(getattr(getattr(message, "guild", None), "id", "") or ""),
+                        "channel_id": str(getattr(message.channel, "id", "") or ""),
+                        "channel_name": str(getattr(message.channel, "name", "") or ""),
+                        "delivery_id": delivery_id or "",
+                    },
+                )
+                ev._discord_channel = message.channel
+                ev._discord_loop = self._loop
+                self._submit_inbound(ev, raw_text=raw_content)
+            except Exception:
+                if delivery_recorded:
+                    self._delivery_cache.discard(delivery_id)
+                raise
 
         @client.event
         async def on_ready():  # noqa: ANN001
@@ -200,37 +236,49 @@ class DiscordAdapter(BasePlatformAdapter):
                 await defer()
             except Exception:  # noqa: BLE001
                 pass
-        channel = getattr(interaction, "channel", None)
-        chat_id, thread_id = self._chat_and_thread_ids_from_channel(channel)
-        user = getattr(interaction, "user", None)
-        guild = getattr(interaction, "guild", None)
-        command = f"/{str(command_name or '').lstrip('/')}"
-        arg_text = str(args or self._interaction_argument_text(interaction) or "").strip()
-        raw_text = f"{command} {arg_text}".strip()
-        text = normalize_inbound_command(raw_text, platform="discord")
-        ev = MessageEvent(
-            platform="discord",
-            chat_id=chat_id,
-            text=text,
-            user_id=str(getattr(user, "id", "") or "") or None,
-            user_name=str(user or "") or None,
-            message_id=str(getattr(interaction, "id", "") or "") or None,
-            timestamp=getattr(interaction, "created_at", None),
-            thread_id=thread_id,
-            metadata={
-                "guild_id": str(getattr(guild, "id", "") or ""),
-                "channel_id": str(getattr(channel, "id", "") or ""),
-                "channel_name": str(getattr(channel, "name", "") or ""),
-                "command": command,
-                "args": arg_text,
-                "source": "app_command",
-            },
-        )
-        ev._discord_channel = channel
-        ev._discord_interaction = interaction
-        ev._discord_loop = self._loop
-        self._submit_inbound(ev, raw_text=ev.text)
-        return ev
+        delivery_id = self._delivery_id_from_interaction(interaction, kind="app_command")
+        delivery_recorded = False
+        if delivery_id:
+            delivery_recorded = self._delivery_cache.record(delivery_id)
+            if not delivery_recorded:
+                return None
+        try:
+            channel = getattr(interaction, "channel", None)
+            chat_id, thread_id = self._chat_and_thread_ids_from_channel(channel)
+            user = getattr(interaction, "user", None)
+            guild = getattr(interaction, "guild", None)
+            command = f"/{str(command_name or '').lstrip('/')}"
+            arg_text = str(args or self._interaction_argument_text(interaction) or "").strip()
+            raw_text = f"{command} {arg_text}".strip()
+            text = normalize_inbound_command(raw_text, platform="discord")
+            ev = MessageEvent(
+                platform="discord",
+                chat_id=chat_id,
+                text=text,
+                user_id=str(getattr(user, "id", "") or "") or None,
+                user_name=str(user or "") or None,
+                message_id=str(getattr(interaction, "id", "") or "") or None,
+                timestamp=getattr(interaction, "created_at", None),
+                thread_id=thread_id,
+                metadata={
+                    "guild_id": str(getattr(guild, "id", "") or ""),
+                    "channel_id": str(getattr(channel, "id", "") or ""),
+                    "channel_name": str(getattr(channel, "name", "") or ""),
+                    "command": command,
+                    "args": arg_text,
+                    "source": "app_command",
+                    "delivery_id": delivery_id or "",
+                },
+            )
+            ev._discord_channel = channel
+            ev._discord_interaction = interaction
+            ev._discord_loop = self._loop
+            self._submit_inbound(ev, raw_text=ev.text)
+            return ev
+        except Exception:
+            if delivery_recorded:
+                self._delivery_cache.discard(delivery_id)
+            raise
 
     def _interaction_argument_text(self, interaction) -> str:  # noqa: ANN001
         namespace = getattr(interaction, "namespace", None)
@@ -294,34 +342,76 @@ class DiscordAdapter(BasePlatformAdapter):
             await self._deny_interaction(interaction)
             return None
         await self._ack_interaction(interaction)
-        channel = getattr(interaction, "channel", None)
-        chat_id, thread_id = self._chat_and_thread_ids_from_channel(channel)
-        user = getattr(interaction, "user", None)
-        guild = getattr(interaction, "guild", None)
-        text = normalize_inbound_command(str(value or ""), platform="discord")
-        ev = MessageEvent(
-            platform="discord",
-            chat_id=chat_id,
-            text=text,
-            user_id=str(getattr(user, "id", "") or "") or None,
-            user_name=str(user or "") or None,
-            message_id=str(getattr(interaction, "id", "") or "") or None,
-            timestamp=getattr(interaction, "created_at", None),
-            thread_id=thread_id,
-            metadata={
-                "guild_id": str(getattr(guild, "id", "") or ""),
-                "channel_id": str(getattr(channel, "id", "") or ""),
-                "channel_name": str(getattr(channel, "name", "") or ""),
-                "action_id": action_id,
-                "action_type": action_type,
-                "source": "component_interaction",
-            },
+        delivery_id = self._delivery_id_from_interaction(
+            interaction,
+            kind="component_interaction",
+            action_id=action_id,
         )
-        ev._discord_channel = channel
-        ev._discord_interaction = interaction
-        ev._discord_loop = self._loop
-        self._submit_inbound(ev, raw_text=str(value or ""))
-        return ev
+        delivery_recorded = False
+        if delivery_id:
+            delivery_recorded = self._delivery_cache.record(delivery_id)
+            if not delivery_recorded:
+                return None
+        try:
+            channel = getattr(interaction, "channel", None)
+            chat_id, thread_id = self._chat_and_thread_ids_from_channel(channel)
+            user = getattr(interaction, "user", None)
+            guild = getattr(interaction, "guild", None)
+            text = normalize_inbound_command(str(value or ""), platform="discord")
+            ev = MessageEvent(
+                platform="discord",
+                chat_id=chat_id,
+                text=text,
+                user_id=str(getattr(user, "id", "") or "") or None,
+                user_name=str(user or "") or None,
+                message_id=str(getattr(interaction, "id", "") or "") or None,
+                timestamp=getattr(interaction, "created_at", None),
+                thread_id=thread_id,
+                metadata={
+                    "guild_id": str(getattr(guild, "id", "") or ""),
+                    "channel_id": str(getattr(channel, "id", "") or ""),
+                    "channel_name": str(getattr(channel, "name", "") or ""),
+                    "action_id": action_id,
+                    "action_type": action_type,
+                    "source": "component_interaction",
+                    "delivery_id": delivery_id or "",
+                },
+            )
+            ev._discord_channel = channel
+            ev._discord_interaction = interaction
+            ev._discord_loop = self._loop
+            self._submit_inbound(ev, raw_text=str(value or ""))
+            return ev
+        except Exception:
+            if delivery_recorded:
+                self._delivery_cache.discard(delivery_id)
+            raise
+
+    def _delivery_id_from_message(self, message) -> str:  # noqa: ANN001
+        message_id = str(getattr(message, "id", "") or "").strip()
+        if not message_id:
+            return ""
+        guild_id = str(getattr(getattr(message, "guild", None), "id", "") or "dm").strip() or "dm"
+        channel_id = str(getattr(getattr(message, "channel", None), "id", "") or "").strip()
+        if channel_id:
+            return f"message:{guild_id}:{channel_id}:{message_id}"
+        return f"message:{guild_id}:{message_id}"
+
+    def _delivery_id_from_interaction(
+        self,
+        interaction,  # noqa: ANN001
+        *,
+        kind: str,
+        action_id: str = "",
+    ) -> str:
+        interaction_id = str(getattr(interaction, "id", "") or "").strip()
+        if not interaction_id:
+            return ""
+        channel_id = str(getattr(getattr(interaction, "channel", None), "id", "") or "").strip()
+        suffix = f":{action_id}" if action_id else ""
+        if channel_id:
+            return f"{kind}:{channel_id}:{interaction_id}{suffix}"
+        return f"{kind}:{interaction_id}{suffix}"
 
     def _message_type_allowed(self, message) -> bool:  # noqa: ANN001
         mtype = getattr(message, "type", None)

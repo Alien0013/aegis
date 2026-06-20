@@ -1183,6 +1183,8 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
             "DISCORD_ALLOWED_GUILDS",
             "DISCORD_IGNORED_GUILDS",
             "DISCORD_TRIGGER_MODE",
+            "DISCORD_IDEMPOTENCY_TTL_SECONDS",
+            "DISCORD_IDEMPOTENCY_CACHE_MAX",
         ],
         "setup": "Create a Discord bot token and install the discord extra when using this adapter.",
         "pairing": True,
@@ -1198,9 +1200,17 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
             "slash_commands",
             "interactive_prompts",
             "reactions",
+            "idempotency",
         ],
         "delivery_modes": ["direct", "guild_channel", "thread"],
-        "security": {"pairing": True, "command_cap": 100},
+        "security": {
+            "pairing": True,
+            "command_cap": 100,
+            "idempotency_env": [
+                "DISCORD_IDEMPOTENCY_TTL_SECONDS",
+                "DISCORD_IDEMPOTENCY_CACHE_MAX",
+            ],
+        },
     },
     {
         "id": "slack",

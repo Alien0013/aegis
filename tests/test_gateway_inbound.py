@@ -621,6 +621,14 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert DiscordAdapter("token").metadata["command_cap"] == 100
     assert "DISCORD_ALLOWED_GUILDS" in DiscordAdapter("token").metadata["optional_env"]
     assert DiscordAdapter("token").metadata["security"]["trigger_mode"] == "all"
+    assert DiscordAdapter("token").metadata["security"]["idempotency_env"] == [
+        "DISCORD_IDEMPOTENCY_TTL_SECONDS",
+        "DISCORD_IDEMPOTENCY_CACHE_MAX",
+    ]
+    assert DiscordAdapter("token").metadata["idempotency"]["delivery_id_sources"] == [
+        "message.id",
+        "interaction.id",
+    ]
     assert len(DiscordAdapter("token").command_menu(max_commands=500)) <= 100
     assert SlackAdapter().metadata["typed_command_prefix"] == "!"
     assert SlackAdapter().metadata["supports_reactions"] is True
@@ -968,6 +976,91 @@ def test_discord_adapter_registers_and_handles_app_commands(monkeypatch):
     adapter._deliver_reply(reply_ev, "done")
 
     assert followups == [(("done",), {"allowed_mentions": "none"})]
+
+
+def test_discord_app_and_component_idempotency_reopens_on_failure():
+    import asyncio
+    from types import SimpleNamespace
+
+    import pytest
+
+    from aegis.gateway.discord_channel import DiscordAdapter
+
+    adapter = DiscordAdapter("token")
+    seen = []
+    adapter._submit_inbound = lambda ev, *, raw_text=None: seen.append((ev, raw_text)) or None
+    deferred = []
+
+    class Response:
+        async def defer(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            deferred.append((args, kwargs))
+
+    channel = SimpleNamespace(id="C1", name="ops", parent=None)
+    interaction = SimpleNamespace(
+        id=123,
+        response=Response(),
+        channel=channel,
+        guild=SimpleNamespace(id="G1"),
+        user=SimpleNamespace(id="U1", roles=[], bot=False),
+        created_at="now",
+    )
+
+    ev = asyncio.run(adapter._handle_app_command(interaction, "status"))
+    duplicate = asyncio.run(adapter._handle_app_command(interaction, "status"))
+
+    assert duplicate is None
+    assert seen == [(ev, "/status")]
+    assert ev.metadata["delivery_id"] == "app_command:C1:123"
+    assert adapter._delivery_cache.stats()["accepted_count"] == 1
+    assert adapter._delivery_cache.stats()["duplicate_count"] == 1
+
+    component = SimpleNamespace(
+        id=124,
+        response=Response(),
+        channel=channel,
+        guild=SimpleNamespace(id="G1"),
+        user=SimpleNamespace(id="U1", roles=[], bot=False),
+        created_at="now",
+    )
+    component_ev = asyncio.run(adapter._handle_component_interaction(
+        component,
+        "approve",
+        action_id="aegis_exec_approval_0",
+        action_type="exec_approval",
+    ))
+    component_duplicate = asyncio.run(adapter._handle_component_interaction(
+        component,
+        "approve",
+        action_id="aegis_exec_approval_0",
+        action_type="exec_approval",
+    ))
+
+    assert component_duplicate is None
+    assert seen[-1] == (component_ev, "approve")
+    assert component_ev.metadata["delivery_id"] == "component_interaction:C1:124:aegis_exec_approval_0"
+    assert adapter._delivery_cache.stats()["duplicate_count"] == 2
+
+    def fail_once(_ev, *, raw_text=None):  # noqa: ANN001, ARG001
+        raise RuntimeError("discord dispatch down")
+
+    adapter._submit_inbound = fail_once
+    failing = SimpleNamespace(
+        id=125,
+        response=Response(),
+        channel=channel,
+        guild=SimpleNamespace(id="G1"),
+        user=SimpleNamespace(id="U1", roles=[], bot=False),
+        created_at="now",
+    )
+    with pytest.raises(RuntimeError, match="discord dispatch down"):
+        asyncio.run(adapter._handle_app_command(failing, "status"))
+
+    assert adapter._delivery_cache.stats()["discarded_count"] == 1
+
+    adapter._submit_inbound = lambda ev, *, raw_text=None: seen.append((ev, raw_text)) or None
+    retry_ev = asyncio.run(adapter._handle_app_command(failing, "status"))
+    assert retry_ev is not None
+    assert seen[-1] == (retry_ev, "/status")
 
 
 def test_discord_app_commands_respect_security_filters(monkeypatch):
