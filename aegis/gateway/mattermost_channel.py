@@ -29,6 +29,13 @@ def _env_int(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
+def _env_int_any(names: tuple[str, ...], default: int) -> int:
+    for name in names:
+        if name in os.environ:
+            return _env_int(name, default)
+    return default
+
+
 def _env_bool(name: str, default: bool) -> bool:
     if name not in os.environ:
         return default
@@ -71,6 +78,21 @@ def _first_string(*values) -> str:  # noqa: ANN001
     return ""
 
 
+def _header_value(headers, name: str) -> str:  # noqa: ANN001
+    if headers is None:
+        return ""
+    get = getattr(headers, "get", None)
+    if callable(get):
+        for key in (name, name.lower(), name.upper()):
+            value = get(key)
+            if value not in (None, ""):
+                return str(value)
+    if isinstance(headers, dict):
+        lower = {str(key).lower(): value for key, value in headers.items()}
+        return str(lower.get(name.lower(), "") or "")
+    return ""
+
+
 class MattermostAdapter(BasePlatformAdapter):
     name = "mattermost"
     renders_tables = False
@@ -95,6 +117,10 @@ class MattermostAdapter(BasePlatformAdapter):
         self.action_url = os.environ.get("MATTERMOST_ACTION_URL", "").strip()
         self.bot_user_id = os.environ.get("MATTERMOST_BOT_USER_ID", "").strip()
         self.allow_unsigned_loopback = _env_bool("MATTERMOST_ALLOW_UNSIGNED_LOOPBACK", True)
+        self.max_body_bytes = _env_int_any(
+            ("MATTERMOST_CHANNEL_MAX_BYTES", "MATTERMOST_MAX_BYTES"),
+            10_000_000,
+        )
         self._delivery_cache = DeliveryIdCache(
             ttl_seconds=float(_env_int("MATTERMOST_IDEMPOTENCY_TTL_SECONDS", 3600)),
             max_items=_env_int("MATTERMOST_IDEMPOTENCY_CACHE_MAX", 10000),
@@ -115,6 +141,7 @@ class MattermostAdapter(BasePlatformAdapter):
                 "auth_type": "bearer",
                 "loopback_unsigned_allowed": self.allow_unsigned_loopback,
                 "insecure_env_override": _env_truthy("MATTERMOST_INSECURE_NO_AUTH"),
+                "max_body_bytes": self.max_body_bytes,
             },
             "supports_interactive_prompts": True,
             "idempotency": {
@@ -346,8 +373,8 @@ class MattermostAdapter(BasePlatformAdapter):
         if not self.webhook_secret:
             return True
         supplied = (
-            headers.get("X-Secret")
-            or headers.get("X-Mattermost-Token")
+            _header_value(headers, "X-Secret")
+            or _header_value(headers, "X-Mattermost-Token")
             or body.get("token")
             or ""
         )
@@ -362,7 +389,7 @@ class MattermostAdapter(BasePlatformAdapter):
 
     def _delivery_id(self, headers, body: dict) -> str:
         for name in ("X-Request-ID", "X-Request-Id", "Idempotency-Key"):
-            value = str(headers.get(name, "") or "").strip()
+            value = _header_value(headers, name).strip()
             if value:
                 return f"{name.lower()}:{value}"
         for key in ("post_id", "id", "message_id"):
@@ -370,6 +397,13 @@ class MattermostAdapter(BasePlatformAdapter):
             if value:
                 return f"body:{key}:{value}"
         return ""
+
+    def _payload_size_error(self, size: int) -> tuple[int, dict] | None:
+        if size < 0:
+            return 400, {"error": "payload too large"}
+        if size > self.max_body_bytes:
+            return 413, {"error": "payload too large"}
+        return None
 
     def _is_self_echo(self, body: dict) -> bool:
         if not self.bot_user_id:
@@ -427,8 +461,9 @@ class MattermostAdapter(BasePlatformAdapter):
                     size = int(self.headers.get("content-length", "0") or "0")
                 except (TypeError, ValueError):
                     return self._json(400, {"error": "invalid content-length"})
-                if size < 0 or size > 1_000_000:
-                    return self._json(413 if size > 1_000_000 else 400, {"error": "payload too large"})
+                size_error = adapter._payload_size_error(size)
+                if size_error is not None:
+                    return self._json(*size_error)
                 raw = self.rfile.read(size) if size else b"{}"
                 try:
                     body = adapter._parse_body(raw, self.headers.get("content-type", ""))

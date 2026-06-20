@@ -3870,7 +3870,9 @@ def test_gateway_mattermost_webhook_secret_accepts_headers_and_body(monkeypatch)
     adapter = MattermostAdapter()
 
     assert adapter._verify_webhook({"X-Secret": "secret-token"}, {}) is True
+    assert adapter._verify_webhook({"x-secret": "secret-token"}, {}) is True
     assert adapter._verify_webhook({"X-Mattermost-Token": "secret-token"}, {}) is True
+    assert adapter._verify_webhook({"x-mattermost-token": "secret-token"}, {}) is True
     assert adapter._verify_webhook({}, {"token": "secret-token"}) is True
     assert adapter._verify_webhook({}, {"token": "wrong"}) is False
 
@@ -3883,9 +3885,13 @@ def test_gateway_mattermost_inbound_auth_idempotency_and_rate_limit(monkeypatch)
     monkeypatch.delenv("MATTERMOST_WEBHOOK_SECRET", raising=False)
     monkeypatch.setenv("MATTERMOST_ALLOW_UNSIGNED_LOOPBACK", "0")
     monkeypatch.setenv("MATTERMOST_RATE_LIMIT_PER_MINUTE", "2")
+    monkeypatch.setenv("MATTERMOST_CHANNEL_MAX_BYTES", "2048")
 
     adapter = MattermostAdapter()
     assert adapter.metadata["security"]["loopback_unsigned_allowed"] is False
+    assert adapter.metadata["security"]["max_body_bytes"] == 2048
+    assert adapter._payload_size_error(2048) is None
+    assert adapter._payload_size_error(2049) == (413, {"error": "payload too large"})
     assert adapter._auth_allowed({}, {}, "127.0.0.1") is False
     for _ in range(3):
         status, payload = adapter._handle_inbound_payload(
@@ -3902,9 +3908,10 @@ def test_gateway_mattermost_inbound_auth_idempotency_and_rate_limit(monkeypatch)
     seen = []
     adapter._submit_inbound = lambda ev, *, wait=False: seen.append((ev.chat_id, ev.text, wait)) or "reply"
 
-    body = {"channel_id": "channel-1", "text": "hello", "post_id": "post-1"}
-    status, payload = adapter._handle_inbound_payload({}, body, client_host="203.0.113.10")
-    duplicate_status, duplicate_payload = adapter._handle_inbound_payload({}, body, client_host="203.0.113.10")
+    body = {"channel_id": "channel-1", "text": "hello"}
+    headers = {"idempotency-key": "post-1"}
+    status, payload = adapter._handle_inbound_payload(headers, body, client_host="203.0.113.10")
+    duplicate_status, duplicate_payload = adapter._handle_inbound_payload(headers, body, client_host="203.0.113.10")
 
     assert status == 200
     assert payload == {"text": "reply", "response_type": "comment"}
