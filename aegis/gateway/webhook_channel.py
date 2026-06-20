@@ -735,6 +735,36 @@ class WebhookChannel(BasePlatformAdapter):
             metadata = {**salvaged_metadata, **metadata}
         if interactive_text:
             metadata.setdefault("source", "interactive_response")
+            prompt_id = _first_string(body, (
+                ("prompt_id",),
+                ("promptId",),
+                ("action", "prompt_id"),
+                ("action", "promptId"),
+                ("button", "prompt_id"),
+                ("button", "promptId"),
+                ("payload", "prompt_id"),
+                ("payload", "promptId"),
+                ("context", "prompt_id"),
+                ("context", "promptId"),
+                ("metadata", "prompt_id"),
+            ))
+            prompt_kind = _first_string(body, (
+                ("prompt_kind",),
+                ("promptKind",),
+                ("action", "prompt_kind"),
+                ("action", "promptKind"),
+                ("button", "prompt_kind"),
+                ("button", "promptKind"),
+                ("payload", "prompt_kind"),
+                ("payload", "promptKind"),
+                ("context", "prompt_kind"),
+                ("context", "promptKind"),
+                ("metadata", "prompt_kind"),
+            ))
+            if prompt_id:
+                metadata.setdefault("prompt_id", prompt_id)
+            if prompt_kind:
+                metadata.setdefault("prompt_kind", prompt_kind)
         if platform == "whatsapp":
             attachments.extend(_whatsapp_media_attachments_from_body(body))
             if not text.strip() and attachments:

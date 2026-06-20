@@ -324,6 +324,10 @@ class MattermostAdapter(BasePlatformAdapter):
             metadata["action_id"] = _string_value(body.get("action_id") or body.get("callback_id"))
             if context.get("type"):
                 metadata["action_type"] = _string_value(context.get("type"))
+            if context.get("prompt_id"):
+                metadata["prompt_id"] = _string_value(context.get("prompt_id"))
+            if context.get("prompt_kind"):
+                metadata["prompt_kind"] = _string_value(context.get("prompt_kind"))
         for key in ("root_id", "thread_id", "parent_id"):
             if context.get(key) and key not in metadata:
                 metadata[key] = _string_value(context.get(key))
@@ -615,6 +619,10 @@ class MattermostAdapter(BasePlatformAdapter):
             "type": kind,
             "value": str(value or ""),
         }
+        prompt_id = str((metadata or {}).get("prompt_id") or "").strip()
+        if prompt_id:
+            context["prompt_id"] = prompt_id
+            context["prompt_kind"] = str((metadata or {}).get("prompt_kind") or kind).strip()
         root_id = self._root_id("", metadata)
         if root_id:
             context["root_id"] = root_id

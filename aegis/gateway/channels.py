@@ -414,6 +414,8 @@ class TelegramAdapter(BasePlatformAdapter):
                 "command": normalized if normalized.startswith("/") else "",
                 "callback_action_id": callback_meta.get("action_id", ""),
                 "callback_kind": callback_meta.get("kind", ""),
+                "prompt_id": callback_meta.get("prompt_id", ""),
+                "prompt_kind": callback_meta.get("prompt_kind", callback_meta.get("kind", "")),
                 "callback_cached": bool(callback_meta.get("cached")),
             },
         )
@@ -434,16 +436,20 @@ class TelegramAdapter(BasePlatformAdapter):
         except Exception:  # noqa: BLE001
             pass
 
-    def _callback_data_for(self, value: str, *, prefix: str = "c") -> str:
+    def _callback_data_for(self, value: str, *, prefix: str = "c", metadata: dict | None = None) -> str:
         self._prune_callback_payloads()
         text = str(value or "").strip()
-        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:20]
+        prompt_id = str((metadata or {}).get("prompt_id") or "").strip()
+        digest_source = f"{prefix}\0{prompt_id}\0{text}"
+        digest = hashlib.sha256(digest_source.encode("utf-8")).hexdigest()[:20]
         key = f"aegis:{prefix}:{digest}"
         now = time.time()
         self._callback_payloads[key] = text
         self._callback_payload_meta[key] = {
             "action_id": key,
             "kind": prefix,
+            "prompt_id": prompt_id,
+            "prompt_kind": str((metadata or {}).get("prompt_kind") or prefix).strip(),
             "cached": True,
             "value_chars": len(text),
             "created_at": now,
@@ -960,7 +966,10 @@ class TelegramAdapter(BasePlatformAdapter):
             if not text:
                 continue
             rendered += f"\n  {i}. {text}"
-            rows.append([{"text": text, "callback_data": self._callback_data_for(text, prefix="clarify")}])
+            rows.append([{
+                "text": text,
+                "callback_data": self._callback_data_for(text, prefix="clarify", metadata=metadata),
+            }])
         params = self._send_params(metadata)
         if rows:
             params["reply_markup"] = json.dumps({"inline_keyboard": rows}, ensure_ascii=False)
@@ -977,9 +986,18 @@ class TelegramAdapter(BasePlatformAdapter):
         metadata: dict | None = None,
     ) -> None:
         rows = [[
-            {"text": "Approve", "callback_data": self._callback_data_for("approve", prefix="approval")},
-            {"text": "Always", "callback_data": self._callback_data_for("always", prefix="approval")},
-            {"text": "Deny", "callback_data": self._callback_data_for("deny", prefix="approval")},
+            {
+                "text": "Approve",
+                "callback_data": self._callback_data_for("approve", prefix="approval", metadata=metadata),
+            },
+            {
+                "text": "Always",
+                "callback_data": self._callback_data_for("always", prefix="approval", metadata=metadata),
+            },
+            {
+                "text": "Deny",
+                "callback_data": self._callback_data_for("deny", prefix="approval", metadata=metadata),
+            },
         ]]
         params = {
             **self._send_params(metadata),

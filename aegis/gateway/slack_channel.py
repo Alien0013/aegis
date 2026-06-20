@@ -5,6 +5,7 @@ Needs SLACK_BOT_TOKEN (xoxb-…) and SLACK_APP_TOKEN (xapp-…, connections:writ
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
@@ -305,7 +306,7 @@ class SlackAdapter(BasePlatformAdapter):
         action_id = str(selected.get("action_id") or "").strip()
         if action_id not in {"aegis_clarify", "aegis_exec_approval"}:
             return None
-        text = str(selected.get("value") or "").strip()
+        text, prompt_meta = self._decode_prompt_button_value(selected.get("value"))
         if not text:
             return None
         channel = payload.get("channel") if isinstance(payload.get("channel"), dict) else {}
@@ -353,6 +354,8 @@ class SlackAdapter(BasePlatformAdapter):
                     "channel_name": channel_name,
                     "thread_ts": thread_id,
                     "action_id": action_id,
+                    "prompt_id": prompt_meta.get("prompt_id", ""),
+                    "prompt_kind": prompt_meta.get("prompt_kind", ""),
                     "source": "block_action",
                     "response_url": payload.get("response_url"),
                     "delivery_id": delivery_id or "",
@@ -562,11 +565,53 @@ class SlackAdapter(BasePlatformAdapter):
         thread_ts = (metadata or {}).get("thread_ts") or (metadata or {}).get("thread_id")
         return {"thread_ts": thread_ts} if thread_ts else {}
 
-    def _button(self, label: str, value: str, action_id: str, *, style: str | None = None) -> dict:
+    def _encode_prompt_button_value(self, value: str, metadata: dict | None = None) -> str:
+        text = str(value or "")
+        prompt_id = str((metadata or {}).get("prompt_id") or "").strip()
+        if not prompt_id:
+            return text[:1900]
+        payload = json.dumps(
+            {
+                "v": text,
+                "pid": prompt_id,
+                "k": str((metadata or {}).get("prompt_kind") or "").strip(),
+            },
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        if len(payload) <= 1900:
+            return payload
+        trimmed = {"v": text[:1500], "pid": prompt_id, "k": str((metadata or {}).get("prompt_kind") or "").strip()}
+        return json.dumps(trimmed, separators=(",", ":"), ensure_ascii=False)[:1900]
+
+    def _decode_prompt_button_value(self, value: object) -> tuple[str, dict[str, str]]:
+        text = str(value or "").strip()
+        if not text.startswith("{"):
+            return text, {}
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            return text, {}
+        if not isinstance(payload, dict):
+            return text, {}
+        return str(payload.get("v") or "").strip(), {
+            "prompt_id": str(payload.get("pid") or "").strip(),
+            "prompt_kind": str(payload.get("k") or "").strip(),
+        }
+
+    def _button(
+        self,
+        label: str,
+        value: str,
+        action_id: str,
+        *,
+        style: str | None = None,
+        metadata: dict | None = None,
+    ) -> dict:
         button = {
             "type": "button",
             "text": {"type": "plain_text", "text": str(label or value)[:75] or "Choose"},
-            "value": str(value or "")[:1900],
+            "value": self._encode_prompt_button_value(value, metadata),
             "action_id": action_id,
         }
         if style:
@@ -601,7 +646,7 @@ class SlackAdapter(BasePlatformAdapter):
             {
                 "type": "actions",
                 "elements": [
-                    self._button(choice, choice, "aegis_clarify")
+                    self._button(choice, choice, "aegis_clarify", metadata=metadata)
                     for choice in choice_values[:25]
                 ],
             },
@@ -624,9 +669,9 @@ class SlackAdapter(BasePlatformAdapter):
             {
                 "type": "actions",
                 "elements": [
-                    self._button("Approve", "approve", "aegis_exec_approval", style="primary"),
-                    self._button("Always", "always", "aegis_exec_approval"),
-                    self._button("Deny", "deny", "aegis_exec_approval", style="danger"),
+                    self._button("Approve", "approve", "aegis_exec_approval", style="primary", metadata=metadata),
+                    self._button("Always", "always", "aegis_exec_approval", metadata=metadata),
+                    self._button("Deny", "deny", "aegis_exec_approval", style="danger", metadata=metadata),
                 ],
             },
         ]

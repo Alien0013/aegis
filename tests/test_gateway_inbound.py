@@ -193,7 +193,7 @@ def test_shared_clarify_and_exec_prompts_preserve_delivery_metadata():
     chat_id, text, metadata = adapter.sent[0]
     assert chat_id == ev.chat_id
     assert text == "Pick one\n  1. A\n  2. B\n\nReply with the number or exact choice."
-    assert metadata == {
+    base_metadata = {
         "remote_jid": "12025550123-111@g.us",
         "participant": "15551234567@s.whatsapp.net",
         "platform": "whatsapp",
@@ -203,6 +203,11 @@ def test_shared_clarify_and_exec_prompts_preserve_delivery_metadata():
         "user_id": "15551234567@s.whatsapp.net",
         "user_name": "Ada",
     }
+    for key, value in base_metadata.items():
+        assert metadata[key] == value
+    assert metadata["prompt_kind"] == "clarify"
+    assert metadata["prompt_id"].startswith("clarify:")
+    assert metadata["prompt_user_id"] == "15551234567@s.whatsapp.net"
     assert "response_url" not in metadata
     assert "raw_payload" not in metadata
     assert "authorization" not in metadata
@@ -221,7 +226,65 @@ def test_shared_clarify_and_exec_prompts_preserve_delivery_metadata():
 
     assert approval["text"] == "deny"
     assert adapter.sent[1][1] == "Allow bash(ls)?\nReply approve, always, or deny."
-    assert adapter.sent[1][2] == metadata
+    approval_metadata = adapter.sent[1][2]
+    for key, value in base_metadata.items():
+        assert approval_metadata[key] == value
+    assert approval_metadata["prompt_kind"] == "exec_approval"
+    assert approval_metadata["prompt_id"].startswith("exec_approval:")
+    assert approval_metadata["prompt_id"] != metadata["prompt_id"]
+    assert approval_metadata["prompt_user_id"] == "15551234567@s.whatsapp.net"
+
+
+def test_shared_prompt_waiter_rejects_stale_prompt_nonce():
+    from aegis.gateway.base import BasePlatformAdapter, MessageEvent
+
+    class MetadataAdapter(BasePlatformAdapter):
+        def __init__(self):
+            self.sent = []
+
+        def send(self, chat_id: str, text: str, *, metadata: dict | None = None) -> None:
+            self.sent.append((chat_id, text, dict(metadata or {})))
+
+    adapter = MetadataAdapter()
+    dispatched = []
+    adapter._init_inbound_queue(lambda ev: dispatched.append(ev.text) or f"reply:{ev.text}")
+    ev = MessageEvent(platform="webhook", chat_id="c1", text="ask", user_id="u1", session_key="s1")
+    answer = {}
+
+    def ask():
+        answer["text"] = adapter.ask_user(ev, "Pick one", ["A", "B"], timeout=2)
+
+    thread = threading.Thread(target=ask)
+    thread.start()
+    _wait_for(lambda: len(adapter.sent) == 1)
+    prompt_id = adapter.sent[0][2]["prompt_id"]
+
+    stale = MessageEvent(
+        platform="webhook",
+        chat_id="c1",
+        text="B",
+        user_id="u1",
+        session_key="s1",
+        metadata={"prompt_id": "clarify:stale"},
+    )
+    adapter._submit_inbound(stale)
+    _wait_for(lambda: len(adapter.sent) == 2)
+    assert adapter.sent[1][1] == "That prompt is no longer active."
+    assert answer == {}
+    assert dispatched == []
+
+    adapter._submit_inbound(MessageEvent(
+        platform="webhook",
+        chat_id="c1",
+        text="2",
+        user_id="u1",
+        session_key="s1",
+        metadata={"prompt_id": prompt_id},
+    ))
+    thread.join(2)
+
+    assert answer["text"] == "B"
+    assert dispatched == []
 
 
 def test_gateway_delivery_metadata_keeps_bridge_reply_context():
@@ -1326,6 +1389,25 @@ def test_discord_adapter_interactive_prompts_and_callbacks(monkeypatch):
     assert ev.metadata["action_type"] == "exec_approval"
     assert seen == [(ev, "approve")]
 
+    bound = SimpleNamespace(
+        id=323,
+        response=Response(),
+        channel=FakeChannel("10"),
+        guild=SimpleNamespace(id="G1"),
+        user=SimpleNamespace(id="U1", roles=[], bot=False),
+        created_at="now",
+    )
+    bound_ev = asyncio.run(adapter._handle_component_interaction(
+        bound,
+        "stable",
+        action_id="aegis_clarify_0",
+        action_type="clarify",
+        prompt_id="clarify:prompt-1",
+        prompt_kind="clarify",
+    ))
+    assert bound_ev.metadata["prompt_id"] == "clarify:prompt-1"
+    assert bound_ev.metadata["prompt_kind"] == "clarify"
+
     asyncio.run(sent[0][1]["view"].items[1].callback(allowed))
     assert seen[-1][0].text == "canary"
     assert seen[-1][0].metadata["action_id"] == "aegis_clarify_1"
@@ -2068,6 +2150,9 @@ def test_telegram_clarify_and_approval_prompts_use_inline_buttons(monkeypatch):
     assert callback_data.startswith("aegis:clarify:")
     assert len(callback_data.encode("utf-8")) <= 64
     assert adapter._resolve_callback_data(callback_data) == long_choice
+    callback_meta = adapter._resolve_callback_payload(callback_data)[1]
+    assert callback_meta["prompt_id"].startswith("clarify:")
+    assert callback_meta["prompt_kind"] == "clarify"
 
     assert adapter._handle_callback_update({
         "callback_query": {
@@ -2962,6 +3047,27 @@ def test_slack_adapter_handles_native_slash_commands(monkeypatch):
     assert action_ev.metadata["response_url"] == "https://slack.test/action-response"
     assert seen[-1] == (action_ev, "approve")
 
+    encoded_value = adapter._button(
+        "Approve",
+        "approve",
+        "aegis_exec_approval",
+        metadata={"prompt_id": "exec_approval:prompt-1", "prompt_kind": "exec_approval"},
+    )["value"]
+    bound_action = adapter._handle_block_action(
+        {
+            "trigger_id": "trigger-bound",
+            "user": {"id": "U1", "name": "ada"},
+            "channel": {"id": "C1", "name": "ops"},
+            "team": {"id": "T1"},
+            "message": {"ts": "171.4", "thread_ts": "171.1"},
+            "container": {"message_ts": "171.4"},
+        },
+        action={"action_id": "aegis_exec_approval", "value": encoded_value, "action_ts": "171.5"},
+    )
+    assert bound_action.text == "approve"
+    assert bound_action.metadata["prompt_id"] == "exec_approval:prompt-1"
+    assert bound_action.metadata["prompt_kind"] == "exec_approval"
+
 
 def test_slack_adapter_dedupes_slash_commands_and_block_actions(monkeypatch):
     import pytest
@@ -3341,10 +3447,16 @@ def test_gateway_webhook_channel_accepts_whatsapp_bridge_aliases():
         "platform": "webhook",
         "chat_id": "ops",
         "type": "approval_response",
-        "action": {"value": "deny"},
+        "action": {
+            "value": "deny",
+            "prompt_id": "exec_approval:prompt-1",
+            "prompt_kind": "exec_approval",
+        },
     })
     assert generic_action.text == "deny"
     assert generic_action.metadata["source"] == "interactive_response"
+    assert generic_action.metadata["prompt_id"] == "exec_approval:prompt-1"
+    assert generic_action.metadata["prompt_kind"] == "exec_approval"
 
     data_wrapped = WebhookChannel()._event_from_body({
         "platform": "whatsapp-web.js",
@@ -4623,6 +4735,8 @@ def test_gateway_mattermost_threaded_interactive_response_consumes_waiter(monkey
     assert action_context["value"] == "stable"
     assert action_context["root_id"] == "root-1"
     assert action_context["thread_id"] == "root-1"
+    assert action_context["prompt_id"].startswith("clarify:")
+    assert action_context["prompt_kind"] == "clarify"
 
     status, payload = adapter._handle_inbound_payload({}, {
         "type": "interactive",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import secrets
 import threading
 import time
 from dataclasses import dataclass, field
@@ -504,7 +505,16 @@ class BasePlatformAdapter:
         self._ensure_inbound_queue()
         key = self._conversation_key(ev)
         done = threading.Event()
-        waiter = {"event": done, "answer": "", "choices": [str(choice) for choice in (choices or [])]}
+        prompt_id = self._new_prompt_id("clarify")
+        waiter = {
+            "event": done,
+            "answer": "",
+            "choices": [str(choice) for choice in (choices or [])],
+            "prompt_id": prompt_id,
+            "prompt_kind": "clarify",
+            "user_id": ev.user_id or "",
+            "session_key": ev.session_key or "",
+        }
         with self._qlock:
             self._clarify_waiters.setdefault(key, []).append(waiter)
         try:
@@ -512,7 +522,7 @@ class BasePlatformAdapter:
                 ev.chat_id,
                 question,
                 choices or [],
-                metadata=self._event_delivery_metadata(ev),
+                metadata=self._prompt_metadata(ev, prompt_id=prompt_id, prompt_kind="clarify"),
             )
             done.wait(max(0.1, float(timeout or 0)))
             return str(waiter.get("answer") or "")
@@ -536,7 +546,16 @@ class BasePlatformAdapter:
         self._ensure_inbound_queue()
         key = self._conversation_key(ev)
         done = threading.Event()
-        waiter = {"event": done, "answer": "", "choices": ["approve", "always", "deny"]}
+        prompt_id = self._new_prompt_id("exec_approval")
+        waiter = {
+            "event": done,
+            "answer": "",
+            "choices": ["approve", "always", "deny"],
+            "prompt_id": prompt_id,
+            "prompt_kind": "exec_approval",
+            "user_id": ev.user_id or "",
+            "session_key": ev.session_key or "",
+        }
         with self._qlock:
             self._clarify_waiters.setdefault(key, []).append(waiter)
         try:
@@ -547,7 +566,7 @@ class BasePlatformAdapter:
             self.send_exec_approval(
                 ev.chat_id,
                 rendered,
-                metadata=self._event_delivery_metadata(ev),
+                metadata=self._prompt_metadata(ev, prompt_id=prompt_id, prompt_kind="exec_approval"),
             )
             done.wait(max(0.1, float(timeout or 0)))
             return str(waiter.get("answer") or "")
@@ -566,14 +585,62 @@ class BasePlatformAdapter:
         key = self._conversation_key(ev)
         with self._qlock:
             waiters = self._clarify_waiters.get(key) or []
-            waiter = waiters.pop(0) if waiters else None
-            if not waiters:
-                self._clarify_waiters.pop(key, None)
+            waiter = waiters[0] if waiters else None
         if waiter is None:
             return False
+        rejection = self._prompt_rejection_reason(ev, waiter)
+        if rejection:
+            if self._event_prompt_id(ev):
+                self._deliver_reply(ev, rejection, None)
+                return True
+            return False
+        with self._qlock:
+            waiters = self._clarify_waiters.get(key) or []
+            if waiter in waiters:
+                waiters.remove(waiter)
+            if not waiters:
+                self._clarify_waiters.pop(key, None)
         waiter["answer"] = self._normalize_waiter_answer(ev.text or "", waiter)
         waiter["event"].set()
         return True
+
+    def _new_prompt_id(self, kind: str) -> str:
+        prefix = re.sub(r"[^a-z0-9_]+", "_", str(kind or "prompt").lower()).strip("_") or "prompt"
+        return f"{prefix}:{secrets.token_urlsafe(12)}"
+
+    def _prompt_metadata(self, ev: MessageEvent, *, prompt_id: str, prompt_kind: str) -> dict:
+        metadata = self._event_delivery_metadata(ev)
+        metadata["prompt_id"] = str(prompt_id or "")
+        metadata["prompt_kind"] = str(prompt_kind or "")
+        if ev.user_id:
+            metadata["prompt_user_id"] = str(ev.user_id)
+        if ev.session_key:
+            metadata["prompt_session_key"] = str(ev.session_key)
+        return metadata
+
+    def _event_prompt_id(self, ev: MessageEvent) -> str:
+        metadata = ev.metadata or {}
+        return str(
+            metadata.get("prompt_id")
+            or metadata.get("callback_prompt_id")
+            or metadata.get("action_prompt_id")
+            or ""
+        ).strip()
+
+    def _prompt_rejection_reason(self, ev: MessageEvent, waiter: dict) -> str:
+        expected_prompt = str(waiter.get("prompt_id") or "").strip()
+        incoming_prompt = self._event_prompt_id(ev)
+        if incoming_prompt and expected_prompt and incoming_prompt != expected_prompt:
+            return "That prompt is no longer active."
+        expected_user = str(waiter.get("user_id") or "").strip()
+        incoming_user = str(ev.user_id or (ev.metadata or {}).get("user_id") or "").strip()
+        if expected_user and incoming_user and incoming_user != expected_user:
+            return "Only the original requester can answer that prompt."
+        expected_session = str(waiter.get("session_key") or "").strip()
+        incoming_session = str(ev.session_key or (ev.metadata or {}).get("session_key") or "").strip()
+        if expected_session and incoming_session and incoming_session != expected_session:
+            return "That prompt belongs to another session."
+        return ""
 
     def _normalize_waiter_answer(self, answer: str, waiter: dict | None = None) -> str:
         text = str(answer or "").strip()

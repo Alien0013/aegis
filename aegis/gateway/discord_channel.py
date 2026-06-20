@@ -364,6 +364,8 @@ class DiscordAdapter(BasePlatformAdapter):
         *,
         action_id: str,
         action_type: str,
+        prompt_id: str = "",
+        prompt_kind: str = "",
     ) -> MessageEvent | None:  # noqa: ANN001
         self._loop = asyncio.get_event_loop()
         if not self._interaction_allowed(interaction):
@@ -401,6 +403,8 @@ class DiscordAdapter(BasePlatformAdapter):
                     "channel_name": str(getattr(channel, "name", "") or ""),
                     "action_id": action_id,
                     "action_type": action_type,
+                    "prompt_id": str(prompt_id or ""),
+                    "prompt_kind": str(prompt_kind or action_type or ""),
                     "source": "component_interaction",
                     "delivery_id": delivery_id or "",
                 },
@@ -836,8 +840,17 @@ class DiscordAdapter(BasePlatformAdapter):
             return style
         return getattr(styles, style, style)
 
-    def _build_prompt_view(self, discord, entries: list[tuple[str, str, str]], action_type: str):  # noqa: ANN001
+    def _build_prompt_view(
+        self,
+        discord,
+        entries: list[tuple[str, str, str]],
+        action_type: str,
+        *,
+        metadata: dict | None = None,
+    ):  # noqa: ANN001
         view = discord.ui.View(timeout=None)
+        prompt_id = str((metadata or {}).get("prompt_id") or "").strip()
+        prompt_kind = str((metadata or {}).get("prompt_kind") or action_type or "").strip()
         for index, (label, value, style) in enumerate(entries[:5]):
             action_id = f"aegis_{action_type}_{index}"
             button = discord.ui.Button(
@@ -852,6 +865,8 @@ class DiscordAdapter(BasePlatformAdapter):
                     answer,
                     action_id=aid,
                     action_type=action_type,
+                    prompt_id=prompt_id,
+                    prompt_kind=prompt_kind,
                 )
 
             button.callback = callback
@@ -876,7 +891,7 @@ class DiscordAdapter(BasePlatformAdapter):
             import discord
 
             channel = await self._discord_target_channel(chat_id, metadata)
-            view = self._build_prompt_view(discord, entries, action_type)
+            view = self._build_prompt_view(discord, entries, action_type, metadata=metadata)
             kwargs = {"view": view}
             try:
                 kwargs["allowed_mentions"] = discord.AllowedMentions.none()
