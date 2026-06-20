@@ -26,6 +26,10 @@ test("writes an explicit no-backend manifest when no source is configured", () =
   assert.equal(result.manifest.schemaVersion, BACKEND_MANIFEST_SCHEMA_VERSION);
   assert.equal(result.manifest.staged, false);
   assert.equal(result.manifest.mode, "none");
+  assert.deepEqual(result.manifest.files, []);
+  assert.equal(result.manifest.fileCount, 0);
+  assert.equal(result.manifest.totalBytes, 0);
+  assert.equal(result.manifest.sha256, "");
   assert.deepEqual(result.manifest.targetPlatforms, ["linux"]);
   assert.match(result.manifest.reason, /AEGIS_DESKTOP_BACKEND_SOURCE/);
   assert.equal(fs.existsSync(path.join(result.backendDir, ".placeholder")), true);
@@ -77,6 +81,11 @@ test("stages a POSIX backend executable into build/backend/bin/aegis", () => {
   assert.equal(result.manifest.staged, true);
   assert.equal(result.manifest.mode, "file");
   assert.deepEqual(result.manifest.targets, ["bin/aegis"]);
+  assert.equal(result.manifest.fileCount, 1);
+  assert.equal(result.manifest.files[0].path, "bin/aegis");
+  assert.equal(result.manifest.files[0].sha256.length, 64);
+  assert.equal(result.manifest.totalBytes, result.manifest.files[0].size);
+  assert.equal(result.manifest.sha256.length, 64);
   assert.equal(fs.readFileSync(target, "utf8"), fs.readFileSync(source, "utf8"));
 });
 
@@ -94,6 +103,9 @@ test("stages a Windows backend executable into build/backend/Scripts/aegis.exe",
 
   assert.equal(result.manifest.staged, true);
   assert.deepEqual(result.manifest.targets, ["Scripts/aegis.exe"]);
+  assert.equal(result.manifest.fileCount, 1);
+  assert.equal(result.manifest.files[0].path, "Scripts/aegis.exe");
+  assert.equal(result.manifest.files[0].sha256.length, 64);
   assert.equal(fs.readFileSync(path.join(result.backendDir, "Scripts", "aegis.exe"), "utf8"), "binary-ish");
 });
 
@@ -129,6 +141,9 @@ test("stages a ready backend directory unchanged", () => {
   });
 
   assert.deepEqual(result.manifest.targets, ["bin/aegis"]);
+  assert.equal(result.manifest.fileCount, 2);
+  assert.deepEqual(result.manifest.files.map((file) => file.path), ["bin/aegis", "support.txt"]);
+  assert.equal(result.manifest.sha256.length, 64);
   assert.equal(fs.readFileSync(path.join(result.backendDir, "support.txt"), "utf8"), "kept");
   const target = path.join(result.backendDir, "bin", "aegis");
   assert.equal(fs.existsSync(target), true);

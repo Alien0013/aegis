@@ -1,6 +1,7 @@
 "use strict";
 
 const fs = require("node:fs");
+const crypto = require("node:crypto");
 const path = require("node:path");
 const {
   inferTargetPlatforms,
@@ -52,6 +53,58 @@ function _markExecutable(target) {
   }
 }
 
+function _walkFiles(root) {
+  const rows = [];
+  const visit = (dir) => {
+    for (const name of fs.readdirSync(dir).sort()) {
+      const candidate = path.join(dir, name);
+      let stat;
+      try {
+        stat = fs.statSync(candidate);
+      } catch {
+        continue;
+      }
+      if (stat.isDirectory()) {
+        visit(candidate);
+      } else if (stat.isFile()) {
+        rows.push(candidate);
+      }
+    }
+  };
+  if (fs.existsSync(root)) visit(root);
+  return rows;
+}
+
+function _sha256File(file) {
+  const hash = crypto.createHash("sha256");
+  hash.update(fs.readFileSync(file));
+  return hash.digest("hex");
+}
+
+function _summarizeStagedBackend(manifest, backendDir) {
+  const files = _walkFiles(backendDir).map((file) => {
+    const stat = fs.statSync(file);
+    return {
+      path: _relativeFromBackend(backendDir, file),
+      size: stat.size,
+      sha256: _sha256File(file),
+    };
+  });
+  const digest = crypto.createHash("sha256");
+  for (const file of files) {
+    digest.update(file.path);
+    digest.update("\0");
+    digest.update(String(file.size));
+    digest.update("\0");
+    digest.update(file.sha256);
+    digest.update("\0");
+  }
+  manifest.files = files;
+  manifest.fileCount = files.length;
+  manifest.totalBytes = files.reduce((total, file) => total + file.size, 0);
+  manifest.sha256 = files.length ? digest.digest("hex") : "";
+}
+
 function _copyExecutable(source, target) {
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.copyFileSync(source, target);
@@ -101,6 +154,10 @@ function stageBackend({
     targets: [],
     warnings: [],
     reason: "",
+    files: [],
+    fileCount: 0,
+    totalBytes: 0,
+    sha256: "",
     createdAt: now().toISOString(),
   };
 
@@ -135,6 +192,7 @@ function stageBackend({
     manifest.staged = true;
     manifest.mode = "directory";
     manifest.targets = commands;
+    _summarizeStagedBackend(manifest, paths.backendDir);
     _writeJson(paths.manifestPath, manifest);
     return { manifest, ...paths };
   }
@@ -171,6 +229,7 @@ function stageBackend({
   manifest.staged = true;
   manifest.mode = "file";
   manifest.targets = targets.map((target) => _relativeFromBackend(paths.backendDir, target));
+  _summarizeStagedBackend(manifest, paths.backendDir);
   _writeJson(paths.manifestPath, manifest);
   return { manifest, ...paths };
 }
