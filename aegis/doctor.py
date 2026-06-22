@@ -9,13 +9,177 @@ auth + model end to end, reports latency) and per-channel token validation
 from __future__ import annotations
 
 import os
+import subprocess
 import time
+from pathlib import Path
 
 import httpx
 
 from .config import Config
 
 _TIMEOUT = 12.0
+
+WINDOWS_SIGNING_SECRETS = ("DESKTOP_WINDOWS_CSC_LINK", "DESKTOP_WINDOWS_CSC_NAME", "CSC_LINK", "CSC_NAME")
+MAC_SIGNING_SECRETS = ("DESKTOP_MAC_CSC_LINK", "DESKTOP_MAC_CSC_NAME", "CSC_LINK", "CSC_NAME")
+MAC_APPLE_ID_NOTARY_SECRETS = (
+    ("APPLE_ID",),
+    ("APPLE_APP_SPECIFIC_PASSWORD", "APPLE_ID_PASSWORD"),
+    ("APPLE_TEAM_ID", "APPLE_ID_TEAM_ID"),
+)
+MAC_API_KEY_NOTARY_SECRETS = (
+    ("APPLE_API_KEY", "APPLE_API_KEY_PATH"),
+    ("APPLE_API_KEY_ID", "APPLE_API_KEYID"),
+    ("APPLE_API_ISSUER", "APPLE_API_ISSUER_ID"),
+)
+CHANNEL_ENV_HINTS = {
+    "telegram": ("TELEGRAM_BOT_TOKEN",),
+    "discord": ("DISCORD_BOT_TOKEN",),
+    "slack": ("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"),
+    "webhook": (
+        "WEBHOOK_CHANNEL_SECRET",
+        "WEBHOOK_CHANNEL_ALLOW_UNSIGNED_LOOPBACK",
+        "WEBHOOK_CHANNEL_INSECURE_NO_AUTH",
+    ),
+    "whatsapp": (
+        "WHATSAPP_CHANNEL_SECRET",
+        "WHATSAPP_CHANNEL_ALLOW_UNSIGNED_LOOPBACK",
+        "WHATSAPP_CHANNEL_INSECURE_NO_AUTH",
+    ),
+}
+
+
+def _secret_present(name: str, available: set[str] | None = None) -> bool:
+    if os.environ.get(name):
+        return True
+    return available is not None and name in available
+
+
+def _any_secret_present(names: tuple[str, ...], available: set[str] | None = None) -> bool:
+    return any(_secret_present(name, available) for name in names)
+
+
+def _secret_groups_present(groups: tuple[tuple[str, ...], ...], available: set[str] | None = None) -> bool:
+    return all(_any_secret_present(group, available) for group in groups)
+
+
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _github_repo_slug(cwd: Path | None = None) -> str:
+    try:
+        proc = subprocess.run(
+            ["git", "config", "--get", "remote.origin.url"],
+            cwd=str(cwd or Path.cwd()),
+            capture_output=True,
+            text=True,
+            timeout=4,
+            check=False,
+        )
+    except Exception:  # noqa: BLE001
+        return ""
+    remote = proc.stdout.strip()
+    if not remote:
+        return ""
+    if remote.startswith("git@github.com:"):
+        return remote.removeprefix("git@github.com:").removesuffix(".git")
+    marker = "github.com/"
+    if marker in remote:
+        return remote.split(marker, 1)[1].removesuffix(".git")
+    return ""
+
+
+def github_secret_names(repo: str | None = None) -> tuple[set[str], str]:
+    """Return visible GitHub secret names. Values are never available through gh."""
+    repo = repo or _github_repo_slug()
+    if not repo:
+        return set(), "repo remote not detected"
+    try:
+        proc = subprocess.run(
+            ["gh", "secret", "list", "--repo", repo],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except FileNotFoundError:
+        return set(), "gh not installed"
+    except Exception as exc:  # noqa: BLE001
+        return set(), f"{type(exc).__name__}: {exc}"
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout).strip()
+        return set(), detail or f"gh exited {proc.returncode}"
+    names = {
+        line.split()[0].strip()
+        for line in proc.stdout.splitlines()
+        if line.strip()
+    }
+    return names, f"{repo}: {len(names)} secret name(s) visible"
+
+
+def release_preflight(secret_names: set[str] | None = None) -> tuple[bool, list[str]]:
+    names = set(secret_names or set())
+    rows: list[str] = []
+    ok = True
+
+    windows_ready = _any_secret_present(WINDOWS_SIGNING_SECRETS, names)
+    rows.append(
+        ("✓" if windows_ready else "✗")
+        + " Windows signing — "
+        + (
+            "certificate identity configured"
+            if windows_ready
+            else "missing DESKTOP_WINDOWS_CSC_LINK/DESKTOP_WINDOWS_CSC_NAME or local CSC_LINK/CSC_NAME"
+        )
+    )
+    ok = ok and windows_ready
+
+    mac_signing = _any_secret_present(MAC_SIGNING_SECRETS, names)
+    rows.append(
+        ("✓" if mac_signing else "✗")
+        + " macOS signing — "
+        + (
+            "certificate identity configured"
+            if mac_signing
+            else "missing DESKTOP_MAC_CSC_LINK/DESKTOP_MAC_CSC_NAME or local CSC_LINK/CSC_NAME"
+        )
+    )
+    ok = ok and mac_signing
+
+    apple_id_notary = _secret_groups_present(MAC_APPLE_ID_NOTARY_SECRETS, names)
+    api_key_notary = _secret_groups_present(MAC_API_KEY_NOTARY_SECRETS, names)
+    notary_ready = apple_id_notary or api_key_notary
+    if apple_id_notary:
+        notary_detail = "Apple ID notarization configured"
+    elif api_key_notary:
+        notary_detail = "App Store Connect API key notarization configured"
+    else:
+        notary_detail = (
+            "missing APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD/APPLE_ID_PASSWORD + APPLE_TEAM_ID/APPLE_ID_TEAM_ID "
+            "or APPLE_API_KEY/APPLE_API_KEY_PATH + APPLE_API_KEY_ID/APPLE_API_KEYID "
+            "+ APPLE_API_ISSUER/APPLE_API_ISSUER_ID"
+        )
+    rows.append(("✓" if notary_ready else "✗") + " macOS notarization — " + notary_detail)
+    ok = ok and notary_ready
+    return ok, rows
+
+
+def run_release_preflight(out=print, *, secret_names: set[str] | None = None) -> int:
+    """Check whether CI can produce signed/notarized desktop releases."""
+    names = secret_names
+    source = "env"
+    if names is None:
+        names, source = github_secret_names()
+    ok, rows = release_preflight(names)
+    out("desktop release signing preflight:")
+    out(f"  source: {source}")
+    for row in rows:
+        out(f"  {row}")
+    if ok:
+        out("  ✓ signed Windows and signed/notarized macOS release inputs are present")
+        return 0
+    out("  ✗ release will fall back to unsigned artifacts until these secrets are configured")
+    return 1
 
 
 def probe_provider(config: Config) -> tuple[bool, str]:
@@ -71,7 +235,48 @@ def probe_slack() -> tuple[bool, str]:
     return False, f"auth.test: {data.get('error', f'HTTP {r.status_code}')}"
 
 
-CHANNEL_PROBES = {"telegram": probe_telegram, "discord": probe_discord, "slack": probe_slack}
+def _probe_webhook_prefix(prefix: str) -> tuple[bool, str]:
+    if os.environ.get(f"{prefix}_SECRET"):
+        return True, f"{prefix}_SECRET configured"
+    if _env_truthy(f"{prefix}_ALLOW_UNSIGNED_LOOPBACK"):
+        return True, "unsigned loopback explicitly enabled"
+    if _env_truthy(f"{prefix}_INSECURE_NO_AUTH"):
+        return True, "insecure no-auth mode explicitly enabled"
+    return False, f"{prefix}_SECRET not set and unsigned loopback/no-auth not enabled"
+
+
+def probe_webhook() -> tuple[bool, str]:
+    return _probe_webhook_prefix("WEBHOOK_CHANNEL")
+
+
+def probe_whatsapp() -> tuple[bool, str]:
+    return _probe_webhook_prefix("WHATSAPP_CHANNEL")
+
+
+CHANNEL_PROBES = {
+    "telegram": probe_telegram,
+    "discord": probe_discord,
+    "slack": probe_slack,
+    "webhook": probe_webhook,
+    "whatsapp": probe_whatsapp,
+}
+
+
+def _probe_channels(config: Config) -> list[str]:
+    configured = [str(c).strip() for c in (config.get("gateway.channels", []) or []) if str(c).strip()]
+    seen: set[str] = set()
+    channels: list[str] = []
+    for name in configured:
+        if name not in seen:
+            seen.add(name)
+            channels.append(name)
+    for name, hints in CHANNEL_ENV_HINTS.items():
+        if name in seen:
+            continue
+        if any(os.environ.get(hint) for hint in hints):
+            seen.add(name)
+            channels.append(name)
+    return channels
 
 
 def run_probes(config: Config, out=print) -> int:
@@ -81,7 +286,7 @@ def run_probes(config: Config, out=print) -> int:
     ok, detail = probe_provider(config)
     out(f"  {'✓' if ok else '✗'} provider — {detail}")
     failures += 0 if ok else 1
-    channels = config.get("gateway.channels", []) or []
+    channels = _probe_channels(config)
     for name in channels:
         probe = CHANNEL_PROBES.get(name)
         if probe is None:
@@ -94,7 +299,7 @@ def run_probes(config: Config, out=print) -> int:
         out(f"  {'✓' if ok else '✗'} {name} — {detail}")
         failures += 0 if ok else 1
     if not channels:
-        out("  – no gateway channels configured (channel probes skipped)")
+        out("  – no gateway channels configured and no channel token env vars present (channel probes skipped)")
     return failures
 
 

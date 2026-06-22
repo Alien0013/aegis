@@ -6,6 +6,7 @@ back to plain stdin/stdout otherwise so the harness runs anywhere.
 
 from __future__ import annotations
 
+import os
 import sys
 import threading
 from dataclasses import dataclass
@@ -163,6 +164,28 @@ TERM_MUTED = "#8f968f"
 TERM_TEXT = "#f3f1e8"
 
 
+def _env_enabled(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _repl_unicode_enabled() -> bool:
+    if _env_enabled("AEGIS_ASCII"):
+        return False
+    forced = os.environ.get("AEGIS_UNICODE")
+    if forced is not None:
+        return forced.strip().lower() in {"1", "true", "yes", "on"}
+    if os.environ.get("TERM", "").strip().lower() == "dumb":
+        return False
+    if not getattr(sys.stdout, "isatty", lambda: False)():
+        return False
+    encoding = (getattr(sys.stdout, "encoding", "") or "").lower()
+    return "utf" in encoding
+
+
+def _ui(glyph: str, fallback: str) -> str:
+    return glyph if _repl_unicode_enabled() else fallback
+
+
 # ANSI-Shadow "AEGIS" for the startup banner, drawn with the AEGIS desktop palette.
 _AEGIS_ART = [
     " █████╗ ███████╗ ██████╗ ██╗███████╗",
@@ -173,27 +196,33 @@ _AEGIS_ART = [
     "╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═╝╚══════╝",
 ]
 _AEGIS_ART_COLORS = [TERM_AMBER, "#c9aa6b", TERM_GREEN, "#78c7a5", TERM_CYAN, "#8aa0a4"]
+_AEGIS_ASCII_ART = [
+    "    ___    ______  ______  ___   _____",
+    "   / _ |  / __/ / / / __/ / _ | / ___/",
+    "  / __ | / _// /_/ / _/  / __ |/ /__  ",
+    " /_/ |_|/___/\\____/___/ /_/ |_|\\___/  ",
+]
 
 
 def _tool_icon(name: str) -> str:
     n = (name or "").lower()
     if "read" in n or "file" in n:
-        return "📄"
+        return _ui("▤", "file")
     if "write" in n or "edit" in n:
-        return "✎"
+        return _ui("✎", "edit")
     if "bash" in n or "shell" in n or "exec" in n or "command" in n:
-        return "▷"
+        return _ui("▶", "run")
     if "search" in n or "grep" in n or "glob" in n or "recall" in n:
-        return "🔍"
+        return _ui("⌕", "find")
     if "web" in n or "fetch" in n or "url" in n or "browser" in n:
-        return "🌐"
+        return _ui("◌", "web")
     if "memory" in n:
-        return "🧠"
+        return _ui("◆", "mem")
     if "skill" in n:
-        return "📦"
+        return _ui("▣", "skill")
     if "kanban" in n or "todo" in n:
-        return "🗂"
-    return "⚙"
+        return _ui("☑", "task")
+    return _ui("●", "tool")
 
 
 # Short aligned verbs so the tool trail reads as a tidy column rather than raw
@@ -316,7 +345,7 @@ def make_approver(auto: bool = False):
             return True
         with _approve_lock:
             try:
-                ans = input(f"\n  ⚠ {prompt_text} [y/N/a=always] ").strip().lower()
+                ans = input(f"\n  {_ui('⚠', '!')} {prompt_text} [y/N/a=always] ").strip().lower()
             except (EOFError, KeyboardInterrupt):
                 return False
             if ans in ("a", "always"):
@@ -387,7 +416,10 @@ class Renderer:
                     self._thinking = True
                     import shutil
                     w = max(24, min(shutil.get_terminal_size((80, 20)).columns, 100))
-                    _raw("\x1b[2m\u256d\u2500 reasoning " + "\u2500" * (w - 13) + "\x1b[0m\n")
+                    if _repl_unicode_enabled():
+                        _raw("\x1b[2m╭─ reasoning " + "─" * (w - 13) + "\x1b[0m\n")
+                    else:
+                        _raw("\x1b[2m+-- reasoning " + "-" * max(0, w - 14) + "\x1b[0m\n")
                 _raw("\x1b[2m" + text + "\x1b[0m")
             elif not getattr(self, "_thinking_summary", False):
                 self._thinking_summary = True
@@ -397,7 +429,10 @@ class Renderer:
             self._thinking = False
             import shutil
             w = max(24, min(shutil.get_terminal_size((80, 20)).columns, 100))
-            _raw("\x1b[0m\n\x1b[2m╰" + "─" * (w - 1) + "\x1b[0m\n")
+            if _repl_unicode_enabled():
+                _raw("\x1b[0m\n\x1b[2m╰" + "─" * (w - 1) + "\x1b[0m\n")
+            else:
+                _raw("\x1b[0m\n\x1b[2m+" + "-" * max(0, w - 1) + "\x1b[0m\n")
         if t in ("assistant_message", "final", "tool_start", "error") and \
                 getattr(self, "_thinking_summary", False):
             self._thinking_summary = False
@@ -456,41 +491,41 @@ class Renderer:
             summary = _oneline(e.get("summary") or "", 76)
             failure = e.get("is_error") or _result_is_failure(summary)
             if failure:
-                _out(f"    ✗ {summary}{secs}", style="red")
+                _out(f"    {_ui('✗', 'x')} {summary}{secs}", style="red")
             elif e.get("name") == "memory":
-                _out(f"    🧠 {summary}{secs}", style=TERM_AMBER)
+                _out(f"    {_ui('◆', 'mem')} {summary}{secs}", style=TERM_AMBER)
             elif e.get("name") == "skill":
-                _out(f"    📦 {summary}{secs}", style=TERM_AMBER)
+                _out(f"    {_ui('▣', 'skill')} {summary}{secs}", style=TERM_AMBER)
             else:
-                _out(f"    ✓ {summary}{secs}", style=TERM_GREEN)
+                _out(f"    {_ui('✓', 'ok')} {summary}{secs}", style=TERM_GREEN)
         elif t == "ultracode_continue":
-            _out(f"  ↻ ultracode: {e.get('remaining', '?')} todo(s) left — continuing "
+            _out(f"  {_ui('↻', '...')} ultracode: {e.get('remaining', '?')} todo(s) left — continuing "
                  f"(push {e.get('n', '')}/{12})", style=TERM_CYAN)
         elif t == "compacting":
-            _out("  ⋯ context filling up — compacting older turns to free room …", style="yellow")
+            _out(f"  {_ui('⋯', '...')} context filling up — compacting older turns to free room …", style="yellow")
         elif t == "compacted":
             before = int(e.get("tokens_before") or 0)
             after = int(e.get("tokens_after") or 0)
             if before and after and before > after:
                 freed = before - after
                 pct = int(100 * freed / before)
-                _out(f"  ✓ compacted — freed {_fmt_token_count(freed)} tokens "
+                _out(f"  {_ui('✓', 'ok')} compacted — freed {_fmt_token_count(freed)} tokens "
                      f"({_fmt_token_count(after)} kept, {pct}% lighter)", style=TERM_GREEN)
             else:
-                _out("  ✓ compacted context", style=TERM_GREEN)
+                _out(f"  {_ui('✓', 'ok')} compacted context", style=TERM_GREEN)
         elif t == "compaction_aborted":
-            _out(f"  ⚠ compaction couldn't shrink further — {e.get('error') or 'tail is the floor'}",
+            _out(f"  {_ui('⚠', '!')} compaction couldn't shrink further — {e.get('error') or 'tail is the floor'}",
                  style="yellow")
         elif t == "budget_exhausted":
-            _out("  ⋯ step limit reached; summarizing progress so far …", style="yellow")
+            _out(f"  {_ui('⋯', '...')} step limit reached; summarizing progress so far …", style="yellow")
         elif t == "review_started":
-            _out(f"  🧠 reflecting on this session ({e.get('kind', '')})…", style="bright_black")
+            _out(f"  {_ui('◆', 'mem')} reflecting on this session ({e.get('kind', '')})…", style="bright_black")
         elif t == "review_done":
             acts = e.get("actions") or []
             if acts:
-                _out("  🧠 learned & saved: " + "; ".join(acts), style="magenta")
+                _out(f"  {_ui('◆', 'mem')} learned & saved: " + "; ".join(acts), style="magenta")
         elif t == "error":
-            _out(f"  ✖ {e['message']}", style="red")
+            _out(f"  {_ui('✖', 'x')} {e['message']}", style="red")
         elif t == "final":
             if self._streaming:
                 _raw("\n")
@@ -533,14 +568,14 @@ class TerminalStatusState:
         if self.iteration and self.max_iterations:
             bits.append(f"iter {self.iteration}/{self.max_iterations}")
         if self.active_tool:
-            bits.append(f"tool {self.active_tool}")
+            bits.append(f"{_ui('▶ ', '')}tool {self.active_tool}")
         elif self.last_tool:
-            bits.append(f"last tool {self.last_tool}")
+            bits.append(f"{_ui('✓ ', '')}last tool {self.last_tool}")
         if self.compacting:
-            bits.append("compacting")
+            bits.append(f"{_ui('◇ ', '')}compacting")
         if self.budget_exhausted:
-            bits.append("budget exhausted")
-        return " · ".join(bits)
+            bits.append(f"{_ui('! ', '')}budget exhausted")
+        return _ui(" · ", " | ").join(bits)
 
 
 def _run_refs(agent: Any) -> tuple[str, str, str]:
@@ -623,11 +658,16 @@ def _render_context(agent: Any) -> list[str]:
         lines.append(f"Context window — {_fmt_token_count(b['used'])} / {_fmt_token_count(win)} ({pct}%)")
         free = max(0, win - b["used"])
         fill = min(28, round(28 * b["used"] / win))
-        lines.append("  [" + "█" * fill + "·" * (28 - fill) + f"]  {_fmt_token_count(free)} free")
+        lines.append(
+            "  ["
+            + _ui("█", "#") * fill
+            + _ui("·", ".") * (28 - fill)
+            + f"]  {_fmt_token_count(free)} free"
+        )
     else:
         lines.append(f"Context — {_fmt_token_count(b['used'])} tokens (window unknown)")
     for label, val, note in rows:
-        bar = "▇" * max(1, round(16 * val / peak)) if val else ""
+        bar = _ui("▇", "#") * max(1, round(16 * val / peak)) if val else ""
         lines.append(f"  {label:<14} {_fmt_token_count(val):>8}  {bar} {note}")
     big = sorted(b["parts"], key=lambda p: -p["tokens"])[:5]
     if big:
@@ -663,23 +703,29 @@ def _status_line(agent: Agent, progress: TerminalStatusState | None = None) -> s
     else:
         ctx_text = f"ctx {_fmt_token_count(ctx['used'])}"
     suffix = ""
+    sep = _ui(" │ ", " | ")
+    brand = _ui("◆ AEGIS", "AEGIS")
     if progress and progress.segment():
-        suffix += f" · {progress.segment()}"
+        suffix += f"{sep}{progress.segment()}"
     if run_id:
-        suffix += f" · run {run_id[:12]}"
+        suffix += f"{sep}run {run_id[:12]}"
     if trace:
-        suffix += f" · trace {trace[:12]}"
-    return (
-        f"  AEGIS · {model} · {ctx_text} · tokens in {input_tokens:,} "
-        f"out {output_tokens:,} · reasoning {reasoning} · perms {perms}{suffix}"
-    )
+        suffix += f"{sep}trace {trace[:12]}"
+    return sep.join((
+        f"  {brand}",
+        model,
+        ctx_text,
+        f"tokens in {input_tokens:,} out {output_tokens:,}",
+        f"reasoning {reasoning}",
+        f"perms {perms}",
+    )) + suffix
 
 
 def _ctx_bar(percent: int, width: int = 10) -> str:
     """Compact context-usage sparkline, e.g. ███░░░░░░░ for 30%."""
     percent = max(0, min(100, int(percent or 0)))
     filled = round(percent / 100 * width)
-    return "█" * filled + "░" * (width - filled)
+    return _ui("█", "#") * filled + _ui("░", "-") * (width - filled)
 
 
 def _bottom_toolbar(agent: Agent):
@@ -700,11 +746,13 @@ def _bottom_toolbar(agent: Agent):
                     f"({_fmt_token_count(ctx['used'])}/{_fmt_token_count(ctx['window'])})")
     else:
         ctx_text = _fmt_token_count(ctx["used"])
+    sep = " │ " if _repl_unicode_enabled() else "  "
+    brand = "◆ AEGIS" if _repl_unicode_enabled() else "AEGIS"
     return HTML(
-        f" <style fg='{TERM_AMBER}'><b>AEGIS</b></style> "
-        f"<style fg='{TERM_TEXT}'>{escape(model)}</style>  "
-        f"<style fg='{TERM_MUTED}'>ctx</style> <style fg='{TERM_GREEN}'>{escape(ctx_text)}</style>  "
-        f"<style fg='{TERM_MUTED}'>reasoning</style> <style fg='{TERM_TEXT}'>{escape(reasoning)}</style>  "
+        f" <style fg='{TERM_AMBER}'><b>{escape(brand)}</b></style>{escape(sep)}"
+        f"<style fg='{TERM_TEXT}'>{escape(model)}</style>{escape(sep)}"
+        f"<style fg='{TERM_MUTED}'>ctx</style> <style fg='{TERM_GREEN}'>{escape(ctx_text)}</style>{escape(sep)}"
+        f"<style fg='{TERM_MUTED}'>reasoning</style> <style fg='{TERM_TEXT}'>{escape(reasoning)}</style>{escape(sep)}"
         f"<style fg='{TERM_MUTED}'>perms</style> <style fg='{TERM_TEXT}'>{escape(perms)}</style> "
     )
 
@@ -720,9 +768,10 @@ def _prompt_message(agent: Agent):
     if profile:
         label += f":{profile}"
     from html import escape
+    arrow = "❯" if _repl_unicode_enabled() else ">"
     return HTML(
         f"<style fg='{TERM_AMBER}'><b>{escape(label)}</b></style>"
-        f"<style fg='{TERM_MUTED}'> › </style>"
+        f"<style fg='{TERM_MUTED}'> {escape(arrow)} </style>"
     )
 
 
@@ -739,7 +788,8 @@ def banner(agent: Agent) -> None:
     if _console:
         from rich.text import Text
         art = Text()
-        for line, color in zip(_AEGIS_ART, _AEGIS_ART_COLORS, strict=False):
+        art_lines = _AEGIS_ART if _repl_unicode_enabled() else _AEGIS_ASCII_ART
+        for line, color in zip(art_lines, _AEGIS_ART_COLORS, strict=False):
             art.append("  " + line + "\n", style=f"bold {color}")
         _console.print(art)
         body = Text()
@@ -849,7 +899,7 @@ def handle_ultracode_command(text: str, agent: Any) -> str | None:
     if not arg:
         _out("usage: /ultracode <task> — run the rigorous plan → implement → verify loop", style="yellow")
         return None
-    _out("🚀 ultracode — autonomous loop: plan → test → implement → verify.", style="cyan")
+    _out(f"{_ui('↻', 'ultracode')} ultracode — autonomous loop: plan → test → implement → verify.", style="cyan")
     # The rigorous autonomous loop needs room to actually finish: raise the step budget
     # for this run, and mark the turn so the loop won't stop while todo items remain open.
     try:
@@ -895,7 +945,7 @@ def handle_architect_command(text: str, agent: Any) -> str | None:
         _out("usage: /architect <task> — a strong model plans, then this model implements",
              style="yellow")
         return None
-    _out("🏛  architect — planning with the reasoning model…", style="cyan")
+    _out(f"{_ui('▣', 'architect')} architect — planning with the reasoning model…", style="cyan")
     plan = ""
     try:
         from ..auxiliary import router_for
@@ -907,7 +957,7 @@ def handle_architect_command(text: str, agent: Any) -> str | None:
     except Exception as e:  # noqa: BLE001
         _out(f"  architect model unavailable ({e}); implementing directly.", style="yellow")
     if plan:
-        _out("  ✓ plan ready — implementing.", style=TERM_GREEN)
+        _out(f"  {_ui('✓', 'ok')} plan ready — implementing.", style=TERM_GREEN)
         return (
             "<system-reminder>An architect model produced this implementation plan. Execute it "
             "now on the real workspace: make the real edits and run the real verification. Adapt "
@@ -991,7 +1041,7 @@ def handle_spec_command(text: str, agent: Any) -> str | None:
         title = arg if len(arg) <= 60 else arg[:57] + "…"
         spec = store.create(title, body or None)
         done, total = spec.progress()
-        _out(f"  ✓ spec saved: {spec.path}  ({total} tasks)", style=TERM_GREEN)
+        _out(f"  {_ui('✓', 'ok')} spec saved: {spec.path}  ({total} tasks)", style=TERM_GREEN)
         _out(f"    implement with: /spec implement {spec.slug}", style="cyan")
         return None
 
@@ -1002,7 +1052,7 @@ def handle_spec_command(text: str, agent: Any) -> str | None:
             return None
         store.set_status(spec.slug, "in_progress")
         done, total = spec.progress()
-        _out(f"  ▶ implementing spec '{spec.title}' — {done}/{total} tasks done", style=TERM_GREEN)
+        _out(f"  {_ui('▶', '>')} implementing spec '{spec.title}' — {done}/{total} tasks done", style=TERM_GREEN)
         return implementation_prompt(spec)
 
     _out("usage: /spec new|list|show|implement [arg]", style="yellow")
@@ -1035,7 +1085,7 @@ def handle_plan_command(text: str, agent: Any) -> str | None:
     if not task:
         _out("nothing to proceed with — run /plan <task> first", style="yellow")
         return None
-    _out("▶ executing the approved plan…", style="green")
+    _out(f"{_ui('▶', '>')} executing the approved plan…", style="green")
     return (
         "<system-reminder>The user approved the plan. Execute it now end-to-end — make the changes "
         "and run the commands needed to finish, then verify.</system-reminder>\n\n" + task

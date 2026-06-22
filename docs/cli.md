@@ -45,10 +45,17 @@ preempts the loop; `/status` shows the active goal plus a local session recap.
 - `aegis config edit [--secrets]` — open `config.yaml` or the profile `.env`
   in `$EDITOR`, with backup/validation for YAML edits
 - `aegis config [get|set|path|env-path|paths|dump|check|migrate|setup]`
-- `aegis doctor [--fix] [--probe]` — `--probe` makes a live one-token provider call
-  (reports latency) and validates channel tokens (Telegram/Discord/Slack)
+- `aegis doctor [--fix] [--probe] [--release]` — `--probe` makes a live
+  one-token provider call (reports latency) and validates channel tokens
+  (configured Telegram/Discord/Slack/webhook/WhatsApp channels, plus any of
+  those token env vars already present); `--release` checks GitHub/env signing
+  and notarization inputs for signed Windows and notarized macOS desktop releases
 - `aegis update [--check|--branch]`, `aegis uninstall [--purge]`
 - `aegis completion bash|zsh|fish`
+
+Terminal rendering uses Unicode automatically on UTF-8 interactive terminals.
+Set `AEGIS_UNICODE=1` to force the polished glyph set, or `AEGIS_ASCII=1` for
+plain output in older terminals and log captures.
 
 ## Desktop
 - `aegis desktop` — copy the bundled Electron app to `~/.aegis/desktop`, run

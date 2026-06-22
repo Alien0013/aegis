@@ -20,6 +20,7 @@ def test_cli_parser_exposes_upgrade_commands():
     assert parser.parse_args(["rpc"]).command == "rpc"
     assert parser.parse_args(["tui", "--once"]).command == "tui"
     assert parser.parse_args(["model", "doctor"]).action == "doctor"
+    assert parser.parse_args(["doctor", "--release"]).release is True
     assert parser.parse_args(["chat", "--skills", "frontend-design,ultracode", "build"]).skills == (
         "frontend-design,ultracode"
     )
@@ -408,7 +409,21 @@ def test_terminal_status_state_summarizes_progress():
     assert "budget exhausted" in state.segment()
 
 
-def test_terminal_status_line_surfaces_context_controls():
+def test_terminal_unicode_switch_controls_glyphs(monkeypatch):
+    from aegis.cli import repl
+
+    monkeypatch.setenv("AEGIS_ASCII", "1")
+    monkeypatch.delenv("AEGIS_UNICODE", raising=False)
+    assert repl._tool_icon("read_file") == "file"
+    assert repl._ctx_bar(50, width=4) == "##--"
+
+    monkeypatch.delenv("AEGIS_ASCII", raising=False)
+    monkeypatch.setenv("AEGIS_UNICODE", "1")
+    assert repl._tool_icon("read_file") == "▤"
+    assert repl._ctx_bar(50, width=4) == "██░░"
+
+
+def test_terminal_status_line_surfaces_context_controls(monkeypatch):
     from types import SimpleNamespace
 
     from aegis.cli import repl
@@ -432,12 +447,21 @@ def test_terminal_status_line_surfaces_context_controls():
         _trace_context={},
     )
 
+    monkeypatch.setenv("AEGIS_ASCII", "1")
+    monkeypatch.delenv("AEGIS_UNICODE", raising=False)
     line = repl._status_line(agent)
 
     assert "ctx" in line and "/1.0k" in line
     assert "tokens in 12 out 5" in line
     assert "reasoning live/high" in line
     assert "perms ask" in line
+    assert " | " in line
+
+    monkeypatch.delenv("AEGIS_ASCII", raising=False)
+    monkeypatch.setenv("AEGIS_UNICODE", "1")
+    unicode_line = repl._status_line(agent)
+    assert "◆ AEGIS" in unicode_line
+    assert " │ " in unicode_line
 
 
 def test_terminal_session_picker_resume_and_branch(monkeypatch):

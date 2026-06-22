@@ -2036,6 +2036,11 @@ def cmd_doctor(args, config: Config) -> int:
         failures = run_probes(config, out=_print)
         if failures:
             _print(f"✗ {failures} probe(s) failed")
+    if getattr(args, "release", False):
+        from ..doctor import run_release_preflight
+        failures = run_release_preflight(out=_print)
+        if failures:
+            _print("✗ desktop release preflight failed")
     if getattr(args, "fix", False):
         from ..util import ensure_dir
         for d in (cfg.memories_dir(), cfg.skills_dir(), cfg.workspace_dir(), cfg.logs_dir(),
@@ -2837,6 +2842,8 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--fix", action="store_true", help="create missing dirs + tighten secret perms")
     d.add_argument("--probe", action="store_true",
                    help="live checks: one-token provider call + channel token validation")
+    d.add_argument("--release", action="store_true",
+                   help="check GitHub/env signing and notarization inputs for desktop releases")
     d.set_defaults(func=cmd_doctor)
 
     return p

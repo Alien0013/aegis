@@ -37,6 +37,8 @@ def test_oneline_collapses_and_truncates():
 def test_renderer_handles_full_event_stream(capsys, monkeypatch):
     # Force the plain-print path so output is captured deterministically.
     monkeypatch.setattr(repl, "_console", None)
+    monkeypatch.setenv("AEGIS_ASCII", "1")
+    monkeypatch.delenv("AEGIS_UNICODE", raising=False)
     r = Renderer(None)
     for e in (
         {"type": "tool_start", "name": "read_file", "args": {"path": "main.py"}},
@@ -48,6 +50,11 @@ def test_renderer_handles_full_event_stream(capsys, monkeypatch):
     ):
         r(e)
     out = capsys.readouterr().out
-    assert "read" in out and "✓ read 12 lines" in out
-    assert "✗ Error: exit 1" in out                 # non-is_error failure still flagged
+    assert "read" in out and "ok read 12 lines" in out
+    assert "x Error: exit 1" in out                 # non-is_error failure still flagged
     assert "freed" in out and "75%" in out           # compaction delta line
+
+    monkeypatch.delenv("AEGIS_ASCII", raising=False)
+    monkeypatch.setenv("AEGIS_UNICODE", "1")
+    r({"type": "tool_result", "name": "read_file", "summary": "read 12 lines", "duration_ms": 30})
+    assert "✓ read 12 lines" in capsys.readouterr().out
