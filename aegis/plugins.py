@@ -21,6 +21,7 @@ import importlib
 import importlib.metadata as importlib_metadata
 import json
 import importlib.util
+import inspect
 import os
 import re
 import shutil
@@ -31,6 +32,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
+from types import SimpleNamespace
 from typing import Any
 
 from . import config as cfg
@@ -40,6 +42,7 @@ class PluginAPI:
     def __init__(self):
         self.tools: list = []
         self.channels: dict = {}
+        self.platforms: dict[str, dict[str, Any]] = {}
         self.providers: list[str] = []
         self.files: list[Path] = []
         self.errors: list[tuple[Path, str]] = []
@@ -56,6 +59,77 @@ class PluginAPI:
         self.channels[name] = factory
         if self._current_plugin is not None:
             _PLUGIN_CHANNELS.setdefault(self._current_plugin, []).append(name)
+
+    def register_platform(
+        self,
+        name: str,
+        label: str | None = None,
+        adapter_factory=None,
+        check_fn=None,
+        validate_config=None,
+        required_env: list | None = None,
+        install_hint: str = "",
+        **entry_kwargs: Any,
+    ) -> None:
+        """Register a Hermes-style gateway platform adapter.
+
+        AEGIS builds plugin platforms through the existing channel adapter path,
+        while preserving richer metadata for dashboard/setup surfaces.
+        """
+        from .platforms import normalize_platform_name
+
+        clean = normalize_platform_name(name, default=str(name or "").strip().lower())
+        if not clean:
+            raise ValueError("platform name is required")
+        if adapter_factory is None:
+            raise ValueError("adapter_factory is required")
+        plugin_path = str(self._current_plugin) if self._current_plugin is not None else ""
+        plugin_name = Path(plugin_path).stem if plugin_path else ""
+        label_text = str(label or entry_kwargs.get("display_name") or clean).strip() or clean
+        check = check_fn or (lambda: True)
+        env_vars = [str(item) for item in (required_env or entry_kwargs.get("env") or [])]
+        optional_env = [str(item) for item in (entry_kwargs.get("optional_env") or entry_kwargs.get("optional_env_vars") or [])]
+
+        def platform_factory():
+            if callable(check) and not bool(check()):
+                raise RuntimeError(install_hint or f"plugin platform {clean} is not available")
+            platform_config = SimpleNamespace(
+                name=clean,
+                label=label_text,
+                enabled=True,
+                extra=dict(entry_kwargs.get("extra") or {}),
+                plugin=plugin_name,
+            )
+            if callable(validate_config) and not bool(validate_config(platform_config)):
+                raise RuntimeError(f"plugin platform {clean} is not configured")
+            return _call_plugin_platform_factory(adapter_factory, platform_config)
+
+        metadata = {
+            "id": clean,
+            "label": label_text,
+            "setup": str(entry_kwargs.get("setup") or entry_kwargs.get("description") or install_hint or ""),
+            "docs_url": str(entry_kwargs.get("docs_url") or ""),
+            "env": env_vars,
+            "optional_env": optional_env,
+            "adapter_class": _callable_label(adapter_factory),
+            "auth_type": str(entry_kwargs.get("auth_type") or "plugin"),
+            "transport": str(entry_kwargs.get("transport") or "plugin"),
+            "capabilities": list(entry_kwargs.get("capabilities") or []),
+            "bridge_capabilities": list(entry_kwargs.get("bridge_capabilities") or []),
+            "delivery_modes": list(entry_kwargs.get("delivery_modes") or []),
+            "security": dict(entry_kwargs.get("security") or {}),
+            "pairing": bool(entry_kwargs.get("pairing", False)),
+            "install_hint": install_hint,
+            "source": "plugin",
+            "plugin": plugin_name,
+            "plugin_path": plugin_path,
+        }
+        self.channels[clean] = platform_factory
+        self.platforms[clean] = dict(metadata)
+        _PLUGIN_PLATFORM_METADATA[clean] = dict(metadata)
+        if self._current_plugin is not None:
+            _PLUGIN_CHANNELS.setdefault(self._current_plugin, []).append(clean)
+            _PLUGIN_PLATFORMS.setdefault(self._current_plugin, []).append(clean)
 
     def register_provider(self, spec) -> None:
         from .providers.registry import register_provider
@@ -106,6 +180,8 @@ _PLUGIN_MIDDLEWARE: dict[Path, list[tuple[str, Any]]] = {}
 _PLUGIN_PROVIDERS: dict[Path, list[str]] = {}
 _PLUGIN_TOOLS: dict[Path, list[str]] = {}
 _PLUGIN_CHANNELS: dict[Path, list[str]] = {}
+_PLUGIN_PLATFORMS: dict[Path, list[str]] = {}
+_PLUGIN_PLATFORM_METADATA: dict[str, dict[str, Any]] = {}
 _PLUGIN_MODULES: dict[Path, str] = {}
 _PLUGIN_LOADS: dict[Path, dict[str, Any]] = {}
 
@@ -231,6 +307,34 @@ def _call_middleware(fn, payload, next_call, agent):
     if argc == 2:
         return fn(payload, next_call)
     return fn(payload)
+
+
+def _callable_label(fn) -> str:
+    module = getattr(fn, "__module__", "")
+    qualname = getattr(fn, "__qualname__", "") or getattr(fn, "__name__", "")
+    if module and qualname:
+        return f"{module}.{qualname}"
+    return qualname or type(fn).__name__
+
+
+def _call_plugin_platform_factory(factory, platform_config):
+    try:
+        params = inspect.signature(factory).parameters
+    except (TypeError, ValueError):
+        try:
+            return factory(platform_config)
+        except TypeError:
+            return factory()
+    if any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params.values()):
+        return factory(platform_config)
+    positional = [
+        p for p in params.values()
+        if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    ]
+    required = [p for p in positional if p.default is inspect.Parameter.empty]
+    if required:
+        return factory(platform_config)
+    return factory()
 
 
 def fire_middleware(kind: str, payload: dict[str, Any], call_next, agent=None):
@@ -820,6 +924,8 @@ def _clear_plugin_side_effects(path: Path) -> None:
             pass
     _PLUGIN_TOOLS.pop(path, None)
     _PLUGIN_CHANNELS.pop(path, None)
+    for name in _PLUGIN_PLATFORMS.pop(path, []):
+        _PLUGIN_PLATFORM_METADATA.pop(name, None)
     _PLUGIN_LOADS.pop(path, None)
 
 
@@ -1282,6 +1388,7 @@ def clear_runtime_cache() -> None:
     paths.update(_PLUGIN_PROVIDERS)
     paths.update(_PLUGIN_TOOLS)
     paths.update(_PLUGIN_CHANNELS)
+    paths.update(_PLUGIN_PLATFORMS)
     paths.update(_PLUGIN_MODULES)
     paths.update(_PLUGIN_LOADS)
     for path in list(paths):
@@ -1310,6 +1417,21 @@ def _plugin_runtime_contributions(entrypoint: Path | None) -> dict[str, list[str
     }
 
 
+def _plugin_runtime_platforms(entrypoint: Path | None) -> list[str]:
+    if entrypoint is None:
+        return []
+    return sorted(dict.fromkeys(_PLUGIN_PLATFORMS.get(entrypoint, [])))
+
+
+def plugin_platforms(config=None, api: PluginAPI | None = None) -> list[dict[str, Any]]:
+    if api is None:
+        api = load_plugins(quiet=True, config=config)
+    rows = [dict(row) for row in getattr(api, "platforms", {}).values()]
+    if not rows:
+        rows = [dict(row) for row in _PLUGIN_PLATFORM_METADATA.values()]
+    return sorted(rows, key=lambda row: str(row.get("id") or ""))
+
+
 def _plugin_contribution_drift(
     declared: dict[str, list[str]],
     runtime: dict[str, list[str]],
@@ -1318,6 +1440,8 @@ def _plugin_contribution_drift(
     for kind in sorted(set(declared) | set(runtime)):
         expected = set(declared.get(kind, []))
         actual = set(runtime.get(kind, []))
+        if kind == "platforms" and not expected:
+            continue
         missing = sorted(expected - actual)
         extra = sorted(actual - expected)
         if missing or extra:
@@ -1371,12 +1495,14 @@ def plugin_status(config=None, api: PluginAPI | None = None) -> list[dict[str, A
             ),
             "tool_names": runtime["tools"],
             "channel_names": runtime["channels"],
+            "platform_names": _plugin_runtime_platforms(entrypoint),
             "provider_names": runtime["providers"],
             "hook_names": runtime["hooks"],
             "middleware_kinds": runtime["middleware"],
         })
         row["tools_registered"] = len(row["tool_names"])
         row["channels_registered"] = len(row["channel_names"])
+        row["platforms_registered"] = len(row["platform_names"])
         row["providers_registered"] = len(row["provider_names"])
         row["hooks_registered"] = len(row["hook_names"])
         row["middleware_registered"] = len(row["middleware_kinds"])

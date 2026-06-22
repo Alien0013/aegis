@@ -1212,6 +1212,45 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     assert cleared_fields["TELEGRAM_ALLOWED_CHATS"]["set"] is False
 
 
+def test_fastapi_plugin_platform_appears_in_registry(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+    from aegis import config as cfg_paths
+
+    base = cfg_paths.sub("plugins")
+    base.mkdir(parents=True, exist_ok=True)
+    (base / "platform_plugin.py").write_text(
+        "from aegis.gateway.base import BasePlatformAdapter\n"
+        "class PlugChat(BasePlatformAdapter):\n"
+        "    name='plugchat'\n"
+        "    def start(self, dispatch): pass\n"
+        "    def send(self, chat_id, text): return None\n"
+        "def register(api):\n"
+        "    api.register_platform(\n"
+        "        name='plugchat', label='Plug Chat', adapter_factory=lambda cfg: PlugChat(),\n"
+        "        check_fn=lambda: True, required_env=['PLUGCHAT_TOKEN'],\n"
+        "        optional_env=['PLUGCHAT_ROOM'], install_hint='install plugchat',\n"
+        "        transport='websocket', auth_type='bot_token', capabilities=['thread'],\n"
+        "        delivery_modes=['channel'])\n",
+        encoding="utf-8",
+    )
+
+    registry = asyncio.run(_request(app, "GET", "/api/platforms/registry", headers=headers))
+    detail = asyncio.run(_request(app, "GET", "/api/platforms/plugchat", headers=headers))
+    plugins = asyncio.run(_request(app, "GET", "/api/plugins", headers=headers))
+
+    assert registry.status_code == 200
+    row = next(item for item in registry.json()["registry"] if item["id"] == "plugchat")
+    assert row["label"] == "Plug Chat"
+    assert row["source"] == "plugin"
+    assert row["required_env_vars"] == ["PLUGCHAT_TOKEN"]
+    assert row["optional_env_vars"] == ["PLUGCHAT_ROOM"]
+    assert row["metadata"]["install_hint"] == "install plugchat"
+    assert detail.status_code == 200
+    assert detail.json()["platform"]["id"] == "plugchat"
+    assert "plugchat" in plugins.json()["platform_names"]
+
+
 def test_fastapi_messaging_platform_optional_controls(tmp_path, monkeypatch):
     for key in (
         "DISCORD_BOT_TOKEN",

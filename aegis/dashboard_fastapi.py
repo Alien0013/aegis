@@ -1518,8 +1518,33 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
 ]
 
 
-def _channel_catalog_map() -> dict[str, dict[str, Any]]:
-    return {row["id"]: row for row in _CHANNEL_CATALOG}
+def _plugin_platform_catalog(config: Config | None = None) -> list[dict[str, Any]]:
+    try:
+        from .plugins import load_plugins, plugin_platforms
+
+        api = load_plugins(quiet=True, config=config)
+        return plugin_platforms(config=config, api=api)
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _channel_catalog(config: Config | None = None) -> list[dict[str, Any]]:
+    rows: dict[str, dict[str, Any]] = {str(row["id"]): dict(row) for row in _CHANNEL_CATALOG}
+    for item in _plugin_platform_catalog(config):
+        platform_id = _normalize_platform_id(str(item.get("id") or item.get("name") or ""))
+        if not platform_id:
+            continue
+        row = dict(item)
+        row["id"] = platform_id
+        row.setdefault("label", row.get("name") or platform_id)
+        row.setdefault("setup", row.get("install_hint") or "")
+        row.setdefault("source", "plugin")
+        rows[platform_id] = row
+    return list(rows.values())
+
+
+def _channel_catalog_map(config: Config | None = None) -> dict[str, dict[str, Any]]:
+    return {row["id"]: row for row in _channel_catalog(config)}
 
 
 def _normalize_platform_id(platform_id: str) -> str:
@@ -1545,7 +1570,7 @@ def _gateway_channel_payload(config: Config, channel: str | None = None) -> dict
     enabled = set(config.get("gateway.channels", []) or [])
     profiles = config.get("gateway.profiles", {}) or {}
     rows = []
-    for item in _CHANNEL_CATALOG:
+    for item in _channel_catalog(config):
         row = dict(item)
         env_vars = _platform_required_env(row)
         optional_env_vars = _platform_optional_env(row)
@@ -1573,7 +1598,7 @@ def _gateway_channel_payload(config: Config, channel: str | None = None) -> dict
 
 def _set_gateway_channel(config: Config, channel: str, body: dict) -> dict:
     channel = _safe_resource_name(channel, "channel").lower()
-    if channel not in _channel_catalog_map():
+    if channel not in _channel_catalog_map(config):
         return {"ok": False, "error": "unknown channel", "channel": channel}
     channels = set(config.get("gateway.channels", []) or [])
     if "enabled" in body:
@@ -1626,6 +1651,9 @@ def _messaging_platform_metadata(item: dict[str, Any]) -> dict[str, Any]:
         "bridge_capabilities": list(item.get("bridge_capabilities", []) or []),
         "delivery_modes": list(item.get("delivery_modes", []) or []),
         "security": copy.deepcopy(item.get("security", {}) or {}),
+        "install_hint": item.get("install_hint", ""),
+        "plugin": item.get("plugin", ""),
+        "plugin_path": item.get("plugin_path", ""),
         "required_env": _platform_required_env(item),
         "optional_env": _platform_optional_env(item),
         "pairing": bool(item.get("pairing", False)),
@@ -1675,14 +1703,14 @@ def _messaging_platform_row(config: Config, item: dict[str, Any]) -> dict[str, A
 
 
 def _messaging_platforms_payload(config: Config, platform_id: str = "") -> dict[str, Any]:
-    catalog = _channel_catalog_map()
+    catalog = _channel_catalog_map(config)
     if platform_id:
         safe = _normalize_platform_id(platform_id)
         item = catalog.get(safe)
         if not item:
             return {"ok": False, "error": "unknown messaging platform", "platform": safe}
         return {"ok": True, "platform": _messaging_platform_row(config, item)}
-    return {"platforms": [_messaging_platform_row(config, item) for item in _CHANNEL_CATALOG]}
+    return {"platforms": [_messaging_platform_row(config, item) for item in _channel_catalog(config)]}
 
 
 def _platform_registry_payload(config: Config, platform_id: str = "") -> dict[str, Any]:
@@ -1709,7 +1737,7 @@ def _messaging_platform_update(config: Config, platform_id: str, body: dict[str,
     from .config import set_env_var
 
     safe = _normalize_platform_id(platform_id)
-    item = _channel_catalog_map().get(safe)
+    item = _channel_catalog_map(config).get(safe)
     if not item:
         return {"ok": False, "error": "unknown messaging platform", "platform": safe}
     allowed_env = _platform_configurable_env(item)
@@ -1747,7 +1775,7 @@ def _messaging_platform_update(config: Config, platform_id: str, body: dict[str,
 
 def _messaging_platform_test(config: Config, platform_id: str) -> dict[str, Any]:
     safe = _normalize_platform_id(platform_id)
-    item = _channel_catalog_map().get(safe)
+    item = _channel_catalog_map(config).get(safe)
     if not item:
         return {"ok": False, "error": "unknown messaging platform", "platform": safe}
     platform = _messaging_platform_row(config, item)
@@ -2173,10 +2201,11 @@ def _patched_message(message, body: dict):
 
 
 def _plugins_payload(config: Config) -> dict:
-    from .plugins import list_manifests, load_plugins, plugin_status, safe_mode_enabled
+    from .plugins import list_manifests, load_plugins, plugin_platforms, plugin_status, safe_mode_enabled
 
     api = load_plugins(quiet=True, config=config)
     status_rows = plugin_status(config, api)
+    platform_rows = plugin_platforms(config=config, api=api)
     dashboard_plugins = _dashboard_plugins_payload(config, include_hidden=True)
     dashboard_mounts = {
         str(row.get("name") or ""): row.get("api_mount") or {}
@@ -2199,6 +2228,8 @@ def _plugins_payload(config: Config) -> dict:
         "tools": [getattr(t, "name", "") for t in api.tools],
         "tool_names": [getattr(t, "name", "") for t in api.tools],
         "channels": sorted(api.channels.keys()),
+        "platforms": platform_rows,
+        "platform_names": [str(row.get("id") or "") for row in platform_rows],
         "providers": list(api.providers),
         "errors": [{"path": str(path), "error": error} for path, error in api.errors],
         "enabled": config.get("plugins.enabled", []) or [],
@@ -3847,7 +3878,7 @@ def _cron_job_runs_response(job_id: str, query: dict[str, list[str]], request: R
 
 def _cron_delivery_targets(config: Config) -> dict[str, Any]:
     enabled_channels = set(config.get("gateway.channels", []) or [])
-    catalog = _channel_catalog_map()
+    catalog = _channel_catalog_map(config)
     targets: list[dict[str, Any]] = [
         {"id": "local", "label": "Local dashboard", "kind": "local", "enabled": True},
     ]
@@ -6828,7 +6859,7 @@ def create_app(config: Config) -> FastAPI:
     async def api_gateway_channel_probe(channel: str, request: Request) -> JSONResponse:
         _require_request(request, config)
         safe = _safe_resource_name(channel, "channel").lower()
-        if safe not in _channel_catalog_map():
+        if safe not in _channel_catalog_map(config):
             return JSONResponse({"ok": False, "error": "unknown channel", "channel": safe}, status_code=404)
         return JSONResponse(_gateway_probe({"channel": safe}))
 

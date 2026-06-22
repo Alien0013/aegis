@@ -2886,6 +2886,48 @@ def test_plugin_gateway_channel_builds_like_builtin():
     assert adapter.sent == [("local", "reply:hi")]
 
 
+def test_plugin_platform_registration_builds_adapter_and_status():
+    from aegis import config as cfg_paths
+    from aegis import plugins
+    from aegis.gateway.channels import build_adapter
+
+    base = cfg_paths.sub("plugins")
+    base.mkdir(parents=True, exist_ok=True)
+    (base / "platform_plugin.py").write_text(
+        "from aegis.gateway.base import BasePlatformAdapter, MessageEvent\n"
+        "class PlugChat(BasePlatformAdapter):\n"
+        "    name='plugchat'\n"
+        "    def __init__(self, platform_config=None):\n"
+        "        self.platform_config=platform_config\n"
+        "        self.sent=[]\n"
+        "    def start(self, dispatch):\n"
+        "        self.send('room', dispatch(MessageEvent(platform='plugchat', chat_id='room', text='ping')))\n"
+        "    def send(self, chat_id, text): self.sent.append((chat_id, text))\n"
+        "def register(api):\n"
+        "    api.register_platform(\n"
+        "        name='plugchat', label='Plug Chat', adapter_factory=lambda cfg: PlugChat(cfg),\n"
+        "        check_fn=lambda: True, required_env=['PLUGCHAT_TOKEN'],\n"
+        "        optional_env=['PLUGCHAT_ROOM'], install_hint='install plugchat',\n"
+        "        transport='websocket', auth_type='bot_token', capabilities=['thread'],\n"
+        "        delivery_modes=['channel'])\n",
+        encoding="utf-8",
+    )
+
+    adapter = build_adapter("plugchat")
+    adapter.start(lambda ev: "reply:" + ev.text)
+    api = plugins.load_plugins(config=None)
+    status = next(row for row in plugins.plugin_status(api=api) if row["name"] == "platform_plugin")
+    platform = next(row for row in plugins.plugin_platforms(api=api) if row["id"] == "plugchat")
+
+    assert adapter.name == "plugchat"
+    assert adapter.platform_config.name == "plugchat"
+    assert adapter.sent == [("room", "reply:ping")]
+    assert status["platform_names"] == ["plugchat"]
+    assert status["platforms_registered"] == 1
+    assert platform["label"] == "Plug Chat"
+    assert platform["env"] == ["PLUGCHAT_TOKEN"]
+
+
 def test_plugin_hooks_are_idempotent_across_loads():
     from aegis import config as cfg_paths
     from aegis import plugins
