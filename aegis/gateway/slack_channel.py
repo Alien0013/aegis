@@ -51,6 +51,7 @@ class SlackAdapter(BasePlatformAdapter):
     renders_tables = False
     transport = "socket_mode"
     max_message_length = 39000
+    splits_long_messages = True
     supports_threads = True
     supports_media = True
     supports_reactions = True

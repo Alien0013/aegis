@@ -44,6 +44,13 @@ def _message_timestamps_enabled(config: Config | None) -> bool:
     return bool(raw)
 
 
+def _redact_approval_prompt(prompt: str | None) -> str:
+    """Redact credentials before an approval prompt leaves the gateway."""
+    from ..redact import redact_secrets
+
+    return redact_secrets(str(prompt or ""))
+
+
 def _gateway_origin_from_event(ev: MessageEvent) -> dict[str, Any]:
     origin: dict[str, Any] = {
         "platform": normalize_platform_name(ev.platform),
@@ -699,6 +706,7 @@ class GatewayRunner:
                                         self.config.get("gateway.clarify_timeout_seconds", 3600)) or 3600)
 
         def approve(prompt: str):
+            prompt = _redact_approval_prompt(prompt)
             ask_exec = getattr(adapter, "ask_exec_approval", None)
             if callable(ask_exec):
                 answer = str(ask_exec(ev, prompt, timeout=timeout) or "")

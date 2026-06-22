@@ -775,6 +775,58 @@ def test_gateway_wires_exec_approval_to_platform_adapter(tmp_path, monkeypatch):
     assert approvals[0][1] == "Allow bash(ls)?"
 
 
+def test_gateway_redacts_exec_approval_prompt_before_adapter(tmp_path, monkeypatch):
+    import threading
+    from types import SimpleNamespace
+
+    import aegis.gateway.runner as rmod
+    from aegis.gateway.base import BasePlatformAdapter
+    from aegis.types import Message
+
+    fake_key = "sk-" + ("X" * 32)
+    r = _runner(tmp_path, monkeypatch)
+    approvals = []
+
+    class ApprovalAdapter(BasePlatformAdapter):
+        name = "telegram"
+
+        def send(self, chat_id: str, text: str) -> None:
+            return None
+
+        def ask_exec_approval(self, ev, prompt: str, *, timeout: float = 3600) -> str:
+            approvals.append(prompt)
+            return "deny"
+
+    class FakeAgent:
+        def __init__(self, session):
+            self.config = r.config
+            self.session = session
+            self.cwd = tmp_path
+            self.tool_context = SimpleNamespace(session=session)
+            self.provider = SimpleNamespace(name="fake", model="fake-model")
+            self.budget = SimpleNamespace(api_call_count=0)
+            self.cancel_event = threading.Event()
+            self.tools_used = 0
+
+    monkeypatch.setattr(
+        rmod.Agent,
+        "create",
+        staticmethod(lambda _config, **kwargs: FakeAgent(kwargs["session"])),
+    )
+
+    def fake_run_prompt(_prompt, **kwargs):
+        kwargs["agent"].tool_context.approver(f"Allow bash(export OPENAI_API_KEY={fake_key})?")
+        return SimpleNamespace(message=Message.assistant("denied"), session=kwargs["session"])
+
+    r.add(ApprovalAdapter())
+    monkeypatch.setattr(r._surface_runner, "run_prompt", fake_run_prompt)
+
+    assert r.dispatch(_ev("needs shell")) == "denied"
+    assert approvals
+    assert fake_key not in approvals[0]
+    assert "[REDACTED]" in approvals[0]
+
+
 def test_agent_cache_eviction_closes_cached_agent(tmp_path, monkeypatch):
     from types import SimpleNamespace
 

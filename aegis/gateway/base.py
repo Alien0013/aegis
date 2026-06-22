@@ -84,6 +84,7 @@ class BasePlatformAdapter:
     supports_threads: bool = False
     supports_media: bool = False
     supports_reactions: bool = False
+    splits_long_messages: bool = False
     typed_command_prefix: str = "/"
     transport: str = "custom"
 
@@ -105,6 +106,7 @@ class BasePlatformAdapter:
             "supports_threads": bool(getattr(self, "supports_threads", data.get("supports_threads", False))),
             "supports_media": bool(getattr(self, "supports_media", data.get("supports_media", False))),
             "supports_reactions": bool(getattr(self, "supports_reactions", data.get("supports_reactions", False))),
+            "splits_long_messages": bool(getattr(self, "splits_long_messages", data.get("splits_long_messages", False))),
             "typed_command_prefix": getattr(
                 self,
                 "typed_command_prefix",

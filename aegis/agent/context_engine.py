@@ -16,7 +16,13 @@ from typing import Any, Protocol, runtime_checkable
 class ContextEngine(Protocol):
     name: str
 
-    def should_compress(self, messages: list, context_length: int, overhead_tokens: int = 0) -> bool:
+    def should_compress(
+        self,
+        messages: list,
+        context_length: int,
+        overhead_tokens: int = 0,
+        max_output_tokens: int | None = None,
+    ) -> bool:
         ...
 
     def compress(self, messages: list, provider: Any, **kw) -> list:
@@ -45,9 +51,21 @@ class DefaultContextEngine:
         # Fraction of the window that triggers compaction (None = built-in default).
         self._threshold = threshold
 
-    def should_compress(self, messages: list, context_length: int, overhead_tokens: int = 0) -> bool:
+    def should_compress(
+        self,
+        messages: list,
+        context_length: int,
+        overhead_tokens: int = 0,
+        max_output_tokens: int | None = None,
+    ) -> bool:
         from . import compaction
-        return compaction.should_compress(messages, context_length, overhead_tokens, self._threshold)
+        return compaction.should_compress(
+            messages,
+            context_length,
+            overhead_tokens,
+            self._threshold,
+            max_output_tokens=max_output_tokens,
+        )
 
     def threshold_fraction(self) -> float | None:
         return self._threshold

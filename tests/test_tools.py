@@ -1009,6 +1009,45 @@ def test_docker_environment_injects_task_id(tmp_path, monkeypatch):
     assert ["docker", "rm", "-f", container_name] in calls["run"]
 
 
+def test_docker_environment_adds_extra_run_args_before_image(tmp_path, monkeypatch):
+    import aegis.tools.environments.docker as docker_env
+    from aegis.tools.environments.docker import DockerEnvironment
+
+    calls = []
+
+    class Proc:
+        def __init__(self, stdout="", stderr="", returncode=0):
+            self.stdout = stdout
+            self.stderr = stderr
+            self.returncode = returncode
+
+    def fake_run(argv, **_kwargs):
+        calls.append(argv)
+        if argv[:2] == ["docker", "inspect"]:
+            return Proc("", returncode=1)
+        if argv[:2] == ["docker", "run"]:
+            return Proc("container-id\n", returncode=0)
+        return Proc(returncode=0)
+
+    monkeypatch.setattr(docker_env.subprocess, "run", fake_run)
+    monkeypatch.setattr(docker_env.DockerEnvironment, "init_session", lambda self: None)
+
+    DockerEnvironment(
+        image="python:3.12-slim",
+        cwd=str(tmp_path),
+        timeout=10,
+        task_id="sub_extra",
+        extra_args=["--add-host", "host.docker.internal:host-gateway"],
+    )
+
+    docker_run = next(argv for argv in calls if argv[:2] == ["docker", "run"])
+    image_index = docker_run.index("python:3.12-slim")
+    assert docker_run[image_index - 2:image_index] == [
+        "--add-host",
+        "host.docker.internal:host-gateway",
+    ]
+
+
 def test_daytona_backend_fails_closed(tmp_path):
     from aegis.config import Config
     from aegis.tools.backends import run_command
@@ -1341,6 +1380,32 @@ def test_docker_backend_uses_task_image_override(tmp_path, monkeypatch):
     assert (out, code) == ("ok", 0)
     assert seen["image"] == "custom:latest"
     assert seen["task_id"] == "sub_img"
+
+
+def test_docker_backend_merges_config_and_env_extra_args(tmp_path, monkeypatch):
+    import aegis.tools.backends as backends
+    from aegis.config import Config
+
+    seen = {}
+
+    class FakeDockerEnvironment:
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+
+        def execute(self, command, **_kwargs):
+            seen["command"] = command
+            return {"output": "ok", "returncode": 0}
+
+    config = Config.load()
+    config.data.setdefault("tools", {})["docker_extra_args"] = ["--cpus", "2"]
+    monkeypatch.setenv("TERMINAL_DOCKER_EXTRA_ARGS", "--memory 1g")
+    monkeypatch.setattr(backends.shutil, "which", lambda *_args: "/usr/bin/docker")
+    monkeypatch.setattr(backends, "DockerEnvironment", FakeDockerEnvironment)
+
+    out, code = backends.run_command("echo hi", str(tmp_path), 10, "docker", config)
+
+    assert (out, code) == ("ok", 0)
+    assert seen["extra_args"] == ["--cpus", "2", "--memory", "1g"]
 
 
 def test_registry_has_full_surface():

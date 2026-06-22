@@ -22,10 +22,12 @@ class DockerEnvironment(BaseEnvironment):
         timeout: int,
         task_id: str = "default",
         persist_across_processes: bool = True,
+        extra_args: list[str] | None = None,
     ) -> None:
         self.image = image
         self.host_cwd = str(Path(cwd).expanduser().resolve()) if cwd else os.getcwd()
         self.persist_across_processes = bool(persist_across_processes)
+        self.extra_args = list(extra_args or [])
         self._container_name = _container_name(task_id or "default", self.host_cwd)
         self._container_id = ""
         super().__init__(cwd="/work", timeout=timeout, task_id=task_id)
@@ -130,6 +132,7 @@ class DockerEnvironment(BaseEnvironment):
             "-e", f"AEGIS_TASK_ID={self.task_id}",
             "-v", f"{self.host_cwd}:/work",
             "-w", "/work",
+            *self.extra_args,
             self.image,
             "bash",
             "-lc",

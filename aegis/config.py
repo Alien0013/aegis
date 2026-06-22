@@ -381,6 +381,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "subagent_terminal_backend": "", # "" inherits terminal_backend; else backend for subagents
         "terminal_lifetime_seconds": 300, # idle task environments are cleaned after this long
         "docker_image": "python:3.12-slim",
+        "docker_extra_args": [],      # extra docker run args before the image (or TERMINAL_DOCKER_EXTRA_ARGS)
         "singularity_image": "docker://python:3.12-slim",
         "modal_pip": [],             # extra pip packages for the modal sandbox image
         "allow_local_fallback": False,  # if a sandbox backend is down, refuse (fail closed)
@@ -504,6 +505,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "status_footer": True,
         "tool_progress": "compact",  # compact | detailed
         "tool_progress_grouping": "accumulate",  # accumulate | separate
+        "timestamps": False,          # opt-in terminal timestamp display controls
         "memory_notifications": "on",  # off | on | verbose
         "theme": "system",
         "platforms": {},              # per-platform display overrides

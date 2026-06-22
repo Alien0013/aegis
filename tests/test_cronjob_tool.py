@@ -34,6 +34,37 @@ def test_cronstore_coerces_string_booleans_for_no_agent(tmp_path, monkeypatch):
     assert updated.no_agent is False
 
 
+def test_cron_runtime_toolsets_preserve_global_mcp(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.config import Config
+    from aegis.cron import CronStore, _cron_run_config
+
+    config = Config.load()
+    config.data.setdefault("tools", {})["toolsets"] = ["core", "web", "mcp"]
+    config.data.setdefault("mcp", {})["enabled"] = True
+
+    store = CronStore()
+    job = store.add("30m", "check server status", enabled_toolsets=["core", "web"])
+    run_config = _cron_run_config(config, job)
+
+    assert job.enabled_toolsets == ["core", "web"]
+    assert run_config.get("tools.toolsets") == ["core", "web", "mcp"]
+
+    no_mcp = store.add("30m", "check without mcp", enabled_toolsets=["core", "no_mcp"])
+    no_mcp_config = _cron_run_config(config, no_mcp)
+    assert no_mcp_config.get("tools.toolsets") == ["core"]
+
+    config.data.setdefault("tools", {})["toolsets"] = ["all"]
+    all_job = store.add("30m", "check with all", enabled_toolsets=["core"])
+    all_config = _cron_run_config(config, all_job)
+    assert all_config.get("tools.toolsets") == ["core", "mcp"]
+
+    config.data.setdefault("mcp", {})["enabled"] = False
+    disabled_job = store.add("30m", "check disabled mcp", enabled_toolsets=["core"])
+    disabled_config = _cron_run_config(config, disabled_job)
+    assert disabled_config.get("tools.toolsets") == ["core"]
+
+
 def test_cronjob_create_list_update_delete(tmp_path):
     from aegis.cron import CronStore
     from aegis.tools.cronjob_tool import CronJobTool

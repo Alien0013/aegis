@@ -731,9 +731,11 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert TelegramAdapter("token").metadata["supports_reactions"] is True
     assert TelegramAdapter("token").metadata["supports_interactive_prompts"] is True
     assert TelegramAdapter("token").metadata["supports_slash_commands"] is True
+    assert TelegramAdapter("token").metadata["splits_long_messages"] is True
     assert DiscordAdapter("token").metadata["supports_threads"] is True
     assert DiscordAdapter("token").metadata["supports_reactions"] is True
     assert DiscordAdapter("token").metadata["supports_interactive_prompts"] is True
+    assert DiscordAdapter("token").metadata["splits_long_messages"] is True
     assert DiscordAdapter("token").metadata["command_cap"] == 100
     assert "DISCORD_ALLOWED_GUILDS" in DiscordAdapter("token").metadata["optional_env"]
     assert DiscordAdapter("token").metadata["security"]["trigger_mode"] == "all"
@@ -753,6 +755,7 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert SlackAdapter().metadata["typed_command_prefix"] == "!"
     assert SlackAdapter().metadata["supports_reactions"] is True
     assert SlackAdapter().metadata["supports_media"] is True
+    assert SlackAdapter().metadata["splits_long_messages"] is True
     assert "SLACK_ALLOWED_CHANNELS" in SlackAdapter().metadata["optional_env"]
     assert "SLACK_TRIGGER_MODE" in SlackAdapter().metadata["optional_env"]
     assert "SLACK_IDEMPOTENCY_CACHE_MAX" in SlackAdapter().metadata["optional_env"]
@@ -772,6 +775,7 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
     assert mattermost["supports_media"] is True
     assert mattermost["supports_reactions"] is True
     assert mattermost["supports_interactive_prompts"] is True
+    assert mattermost["splits_long_messages"] is True
     assert mattermost["security"]["action_url_configured"] is False
     assert mattermost["security"]["auth_type"] == "bearer"
     assert "MATTERMOST_IDEMPOTENCY_STORE_PATH" in mattermost["optional_env"]
@@ -985,6 +989,15 @@ def test_discord_adapter_registers_and_handles_app_commands(monkeypatch):
     from aegis.gateway import discord_channel
     from aegis.gateway.base import MessageEvent
     from aegis.gateway.discord_channel import DiscordAdapter
+
+    for key in (
+        "DISCORD_ALLOWED_GUILDS",
+        "DISCORD_ALLOWED_CHANNELS",
+        "DISCORD_ALLOWED_USERS",
+        "DISCORD_ALLOWED_ROLES",
+        "DISCORD_TRIGGER_MODE",
+    ):
+        monkeypatch.delenv(key, raising=False)
 
     configured = DiscordAdapter("token")
 

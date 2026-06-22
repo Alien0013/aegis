@@ -22,6 +22,7 @@ _TICK_LOCAL = threading.local()
 _JOBS_LOCK = threading.RLock()
 _JOBS_LOCK_STATE = threading.local()
 _CRON_BLOCKED_TOOLS = ("clarify", "send_message", "cronjob", "schedule_task")
+_NO_MCP_SENTINEL = "no_mcp"
 
 
 def _cron_path():
@@ -902,8 +903,40 @@ def _cron_run_config(config, job: CronJob | None = None):
             seen_disabled.add(name)
     tools["disabled"] = merged_disabled
     if job is not None and job.enabled_toolsets:
-        tools["toolsets"] = list(job.enabled_toolsets)
+        tools["toolsets"] = _merge_mcp_into_per_job_toolsets(job.enabled_toolsets, base)
     return Config(data)
+
+
+def _merge_mcp_into_per_job_toolsets(per_job: list[str], config) -> list[str]:
+    """Preserve globally enabled MCP when a cron job narrows native toolsets.
+
+    Per-job toolsets are an allowlist for native AEGIS toolsets. Without this merge,
+    a job that asks for e.g. ["core", "web"] accidentally drops all MCP tools even
+    when MCP is globally enabled. Use "no_mcp" to opt out explicitly.
+    """
+    result: list[str] = []
+    saw_no_mcp = False
+    for item in per_job or []:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        if text == _NO_MCP_SENTINEL:
+            saw_no_mcp = True
+            continue
+        if text not in result:
+            result.append(text)
+    if saw_no_mcp or "mcp" in result:
+        return result
+    try:
+        global_toolsets = [str(item) for item in (config.get("tools.toolsets", []) or [])]
+        globally_enabled = "mcp" in global_toolsets or "all" in global_toolsets
+        mcp_enabled = bool(config.get("mcp.enabled", True))
+    except Exception:  # noqa: BLE001
+        globally_enabled = False
+        mcp_enabled = False
+    if globally_enabled and mcp_enabled:
+        result.append("mcp")
+    return result
 
 
 def run_job(config, job: CronJob | str, *, sink=None, store: "CronStore | None" = None,

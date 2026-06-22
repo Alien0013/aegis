@@ -60,6 +60,7 @@ class DiscordAdapter(BasePlatformAdapter):
     renders_tables = False
     transport = "gateway"
     max_message_length = 2000
+    splits_long_messages = True
     supports_threads = True
     supports_media = True
     supports_reactions = True

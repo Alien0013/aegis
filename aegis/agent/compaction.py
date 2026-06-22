@@ -119,25 +119,55 @@ def _prune_messages(messages: list[Message], max_tool_tokens: int) -> list[Messa
     return out
 
 
+def _tool_call_tokens(tc: ToolCall) -> int:
+    """Estimate the full tool-call envelope, not just arguments.
+
+    Large parallel tool-call turns carry ids/names plus argument JSON. Counting only
+    arguments underestimates the protected tail and lets compaction keep too much.
+    """
+    try:
+        payload = tc.to_dict()
+    except Exception:  # noqa: BLE001
+        payload = {
+            "id": getattr(tc, "id", ""),
+            "name": getattr(tc, "name", ""),
+            "arguments": getattr(tc, "arguments", {}),
+        }
+    return estimate_tokens(str(payload))
+
+
 def estimated_tokens(messages: list[Message]) -> int:
     return sum(estimate_tokens(m.content or "") + estimate_tokens(m.reasoning or "")
                + sum(estimate_tokens(str(img)) for img in getattr(m, "images", []) or [])
-               + sum(estimate_tokens(str(tc.arguments)) for tc in m.tool_calls)
+               + sum(_tool_call_tokens(tc) for tc in m.tool_calls)
                for m in messages)
 
 
 def should_compress(messages: list[Message], context_length: int, overhead_tokens: int = 0,
-                    threshold: float | None = None) -> bool:
+                    threshold: float | None = None,
+                    max_output_tokens: int | None = None) -> bool:
     frac = COMPACT_THRESHOLD if threshold is None else threshold
     if context_length <= 0:
         context_length = DEFAULT_CONTEXT_LENGTH
-    return estimated_tokens(messages) + overhead_tokens > context_length * frac
+    reserved = _coerce_positive_int(max_output_tokens)
+    effective_context = context_length - reserved if reserved else context_length
+    if effective_context <= 0:
+        effective_context = context_length
+    return estimated_tokens(messages) + overhead_tokens > effective_context * frac
+
+
+def _coerce_positive_int(value) -> int:
+    try:
+        out = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return out if out > 0 else 0
 
 
 def _msg_tokens(m: Message) -> int:
     return (estimate_tokens(m.content or "") + estimate_tokens(m.reasoning or "")
             + sum(estimate_tokens(str(img)) for img in getattr(m, "images", []) or [])
-            + sum(estimate_tokens(str(tc.arguments)) for tc in m.tool_calls))
+            + sum(_tool_call_tokens(tc) for tc in m.tool_calls))
 
 
 def _snap_to_boundary(convo: list[Message], start: int) -> int:

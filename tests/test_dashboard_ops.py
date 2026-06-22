@@ -55,6 +55,45 @@ def test_update_check_reports_version():
     assert "hint" in res and "install" in res
 
 
+def test_update_check_shallow_clone_avoids_rev_list(monkeypatch):
+    import subprocess
+
+    calls = []
+
+    class Result:
+        def __init__(self, stdout="", returncode=0):
+            self.stdout = stdout
+            self.returncode = returncode
+
+    def fake_run(argv, **_kwargs):
+        calls.append(argv)
+        command = argv[3:]
+        if command == ["rev-parse", "--is-inside-work-tree"]:
+            return Result("true\n")
+        if command == ["rev-parse", "--abbrev-ref", "HEAD"]:
+            return Result("main\n")
+        if command == ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]:
+            return Result("origin/main\n")
+        if command == ["rev-parse", "--is-shallow-repository"]:
+            return Result("true\n")
+        if command == ["fetch", "--quiet", "--depth", "1", "origin", "main"]:
+            return Result("")
+        if command == ["rev-parse", "HEAD"]:
+            return Result("local-sha\n")
+        if command == ["rev-parse", "origin/main"]:
+            return Result("remote-sha\n")
+        raise AssertionError(f"unexpected git call: {command}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    res = dash._update_check()
+
+    assert res["install"] == "git"
+    assert res["update_available"] is True
+    assert res["commit_count_available"] is False
+    assert not any("rev-list" in call for call in calls)
+
+
 def test_gateway_control_requires_systemd(monkeypatch):
     monkeypatch.setattr("aegis.daemon.systemd_available", lambda: False)
     res = dash._ops_action("gateway", {"op": "restart"}, _config())

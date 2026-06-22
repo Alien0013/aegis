@@ -5190,6 +5190,7 @@ class _ApprovalBlockingRunRunner:
     approval_returned = threading.Event()
     calls = []
     agents = []
+    approval_prompt = "Allow shell command?"
 
     def __init__(self, config, include_mcp=True):
         self.config = config
@@ -5200,6 +5201,7 @@ class _ApprovalBlockingRunRunner:
         cls.approval_returned = threading.Event()
         cls.calls = []
         cls.agents = []
+        cls.approval_prompt = "Allow shell command?"
 
     def load_or_create_session(self, session_id=None, title=None, surface="", meta=None):
         return SimpleNamespace(id=session_id or "serve:approval-run", title=title or "", meta=meta or {})
@@ -5216,7 +5218,7 @@ class _ApprovalBlockingRunRunner:
 
     def run_prompt(self, prompt, **kwargs):
         agent = kwargs["agent"]
-        approved = bool(agent.approver("Allow shell command?"))
+        approved = bool(agent.approver(self.approval_prompt))
         self.approval_returned.set()
         self.calls.append({"prompt": prompt, "approved": approved, **kwargs})
         session = kwargs.get("session") or SimpleNamespace(id="serve:approval-run")
@@ -5906,6 +5908,62 @@ def test_server_run_approval_choice_unblocks_pending_run(monkeypatch, tmp_path):
     assert restart_responded["approval_id"] == pending["pending"][0]["id"]
     assert restart_responded["approved"] is True
     assert restart_responded["choice"] == "once"
+
+
+def test_server_run_approval_redacts_prompt_in_api_state(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import time
+    import aegis.server as server
+    from aegis.config import Config
+
+    fake_key = "sk-proj-" + ("X" * 40)
+    _ApprovalBlockingRunRunner.reset()
+    _ApprovalBlockingRunRunner.approval_prompt = (
+        f"Allow bash(export OPENAI_API_KEY={fake_key} && python deploy.py)?"
+    )
+    monkeypatch.setattr(server, "SurfaceRunner", _ApprovalBlockingRunRunner)
+    cfg = Config.load()
+    cfg.data.setdefault("server", {})["approval_timeout_seconds"] = 60
+    srv, port = _serve(server.make_handler(cfg))
+    try:
+        create_status, create_data = _request(port, "POST", "/v1/runs", {
+            "input": "needs secret approval redaction",
+            "session_id": "serve:approval-redaction-run",
+        })
+        run_id = json.loads(create_data)["run_id"]
+
+        pending = {}
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            pending_status, pending_data = _request(port, "GET", f"/v1/runs/{run_id}/approval")
+            pending = json.loads(pending_data)
+            if pending.get("pending"):
+                break
+            time.sleep(0.05)
+        events_status, events_data = _request(port, "GET", f"/v1/runs/{run_id}/events")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        restart_events_status, restart_events_data = _request(port, "GET", f"/v1/runs/{run_id}/events")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert create_status == 202
+    assert pending_status == 200
+    assert events_status == 200
+    assert restart_events_status == 200
+
+    pending_text = json.dumps(pending)
+    events_text = events_data
+    restart_events_text = restart_events_data
+    for rendered in (pending_text, events_text, restart_events_text):
+        assert fake_key not in rendered
+        assert "[REDACTED]" in rendered
+        assert "python deploy.py" in rendered
 
 
 def test_server_run_approval_session_choice_reuses_prompt(monkeypatch, tmp_path):

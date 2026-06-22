@@ -29,6 +29,28 @@ def test_should_compress_unknown_context_uses_default_window():
     assert compaction.should_compress(msgs, 0, 0) is False
 
 
+def test_should_compress_reserves_output_tokens():
+    msgs = [Message.user("x" * 18_000)]
+    assert compaction.should_compress(msgs, 10_000, 0, threshold=0.50) is False
+    assert compaction.should_compress(
+        msgs,
+        10_000,
+        0,
+        threshold=0.50,
+        max_output_tokens=2_000,
+    ) is True
+
+
+def test_tool_call_envelope_counts_toward_compaction_budget():
+    from aegis.types import ToolCall
+    from aegis.util import estimate_tokens
+
+    call = ToolCall(id="call_" + ("a" * 40), name="read_file", arguments={"path": "a.py"})
+    msg = Message.assistant("", tool_calls=[call])
+    assert compaction.estimated_tokens([msg]) >= estimate_tokens(str(call.to_dict()))
+    assert compaction.estimated_tokens([msg]) > estimate_tokens(str(call.arguments))
+
+
 def test_config_defaults_are_aegis_aligned():
     c = Config.load()
     assert c.get("agent.reasoning_effort") == "medium"

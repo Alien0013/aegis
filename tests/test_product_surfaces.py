@@ -839,6 +839,28 @@ def test_terminal_runtime_controls_persist_and_resume(monkeypatch):
     assert resumed.config.get("gateway.busy_mode") == "interrupt"
 
 
+def test_terminal_timestamps_command_persists(monkeypatch):
+    from types import SimpleNamespace
+
+    from aegis.cli import repl
+    from aegis.config import Config
+    from aegis.session import Session
+
+    cfg = Config.load()
+    cfg.data.setdefault("display", {})["timestamps"] = False
+    agent = SimpleNamespace(config=cfg, session=Session.create())
+    lines = []
+    monkeypatch.setattr(repl, "_out", lambda text, style=None: lines.append(text))
+
+    assert repl.handle_slash("/timestamps status", agent) == ""
+    assert lines[-1] == "timestamps: off"
+    assert repl.handle_slash("/timestamps on", agent) == ""
+    assert Config.load().get("display.timestamps") is True
+    assert lines[-1] == "timestamps → on"
+    assert repl.handle_slash("/timestamps off", agent) == ""
+    assert Config.load().get("display.timestamps") is False
+
+
 def test_terminal_model_override_rejects_unknown_provider(monkeypatch, tmp_path):
     from aegis.agent.agent import Agent
     from aegis.cli import repl

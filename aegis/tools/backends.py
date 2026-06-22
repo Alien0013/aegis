@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import atexit
 import os
+import shlex
 import shutil
 import threading
 import time
@@ -501,6 +502,7 @@ def _run_docker(command: str, cwd: str, timeout: int, config: Any,
         except Exception:  # noqa: BLE001 — config may be a bare dict or None
             image = DEFAULT_DOCKER_IMAGE
     image = str(overrides.get("docker_image") or image)
+    extra_args = _docker_extra_args(config, overrides)
 
     try:
         result = DockerEnvironment(
@@ -508,6 +510,7 @@ def _run_docker(command: str, cwd: str, timeout: int, config: Any,
             cwd=cwd,
             timeout=timeout,
             task_id=task_id or "default",
+            extra_args=extra_args,
         ).execute(command, timeout=timeout)
     except OSError as e:
         return _degraded(config, f"docker failed to start ({e})", command, cwd, timeout, task_id)
@@ -523,6 +526,28 @@ def _run_docker(command: str, cwd: str, timeout: int, config: Any,
         return _degraded(config, f"docker run failed: {out.strip() or 'unknown error'}",
                          command, cwd, timeout, task_id)
     return out, code
+
+
+def _docker_extra_args(config: Any, overrides: dict[str, Any] | None = None) -> list[str]:
+    def extend_from(value: Any, out: list[str]) -> None:
+        if value is None:
+            return
+        if isinstance(value, str):
+            out.extend(shlex.split(value))
+            return
+        if isinstance(value, (list, tuple)):
+            out.extend(str(item) for item in value if str(item))
+
+    args: list[str] = []
+    if config is not None:
+        try:
+            extend_from(config.get("tools.docker_extra_args", []), args)
+        except Exception:  # noqa: BLE001
+            pass
+    if overrides:
+        extend_from(overrides.get("docker_extra_args"), args)
+    extend_from(os.environ.get("TERMINAL_DOCKER_EXTRA_ARGS"), args)
+    return args
 
 
 # --------------------------------------------------------------------------- #

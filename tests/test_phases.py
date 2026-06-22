@@ -292,6 +292,12 @@ def test_cli_config_summary_dump_and_edit(monkeypatch, capsys):
     assert main(["config", "get", "model.base_url"]) == 0
     assert capsys.readouterr().out == "\n"
 
+    assert main(["config", "set", "model.api_base", "http://local.test/v1"]) == 0
+    out = capsys.readouterr().out
+    assert "model.base_url" in out
+    assert main(["config", "get", "model.api_base"]) == 0
+    assert capsys.readouterr().out.strip() == "http://local.test/v1"
+
 
 def test_cli_config_set_accepts_multiword_and_list_values(capsys):
     from aegis.cli.main import main
@@ -321,6 +327,45 @@ def test_cli_config_set_model_shorthand_updates_default(capsys):
     assert "model.default" in out
     assert reloaded.get("model.default") == "gpt-5.5"
     assert isinstance(reloaded.get("model"), dict)
+
+
+def test_cli_update_check_shallow_clone_avoids_rev_list(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    import aegis
+    from aegis.cli.main import cmd_update
+    from aegis.config import Config
+
+    pkg_root = tmp_path / "pkg"
+    pkg_dir = pkg_root / "aegis"
+    pkg_dir.mkdir(parents=True)
+    (pkg_root / ".git").mkdir()
+    monkeypatch.setattr(aegis, "__file__", str(pkg_dir / "__init__.py"))
+    calls = []
+
+    class Result:
+        def __init__(self, stdout=""):
+            self.stdout = stdout
+
+    def fake_run(argv, **_kwargs):
+        calls.append(argv)
+        if argv == ["git", "rev-parse", "--is-shallow-repository"]:
+            return Result("true\n")
+        if argv == ["git", "fetch", "-q", "--depth", "1", "origin", "main"]:
+            return Result("")
+        if argv == ["git", "rev-parse", "HEAD"]:
+            return Result("local-sha\n")
+        if argv == ["git", "rev-parse", "origin/main"]:
+            return Result("remote-sha\n")
+        raise AssertionError(f"unexpected git call: {argv}")
+
+    monkeypatch.setattr("aegis.cli.main.subprocess.run", fake_run)
+
+    assert cmd_update(SimpleNamespace(check=True, branch="main"), Config.load()) == 0
+    out = capsys.readouterr().out
+
+    assert "shallow checkout" in out
+    assert not any("rev-list" in call for call in calls)
 
 
 def test_cli_config_set_timezone_is_shown(capsys):

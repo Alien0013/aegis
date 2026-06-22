@@ -365,6 +365,7 @@ class WebhookChannel(BasePlatformAdapter):
     supports_media = False
     supports_reactions = True
     max_message_length = 16000
+    splits_long_messages = True
 
     def __init__(
         self,

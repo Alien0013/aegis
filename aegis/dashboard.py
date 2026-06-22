@@ -615,8 +615,11 @@ def _reset_memory_file(target: str) -> dict:
 
 
 def _update_check() -> dict:
-    """Best-effort, network-free update status: installed version, package location, and (if the
-    install is a git checkout) how far the local branch is from its already-fetched upstream."""
+    """Best-effort update status: installed version, package location, and git distance.
+
+    Shallow checkouts compare fetched commit SHAs instead of asking git for a bogus
+    rev-list count across the shallow boundary.
+    """
     import subprocess
     pkg_dir = Path(__file__).resolve().parent.parent
     info: dict = {"version": __version__, "path": str(pkg_dir)}
@@ -632,15 +635,31 @@ def _update_check() -> dict:
     if _git("rev-parse", "--is-inside-work-tree") == "true":
         branch = _git("rev-parse", "--abbrev-ref", "HEAD")
         upstream = _git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+        shallow = _git("rev-parse", "--is-shallow-repository") == "true"
         behind = ahead = 0
-        if upstream:
+        commit_count_available = True
+        update_available = False
+        if upstream and shallow:
+            upstream_branch = upstream.split("/", 1)[1] if upstream.startswith("origin/") else branch
+            if upstream_branch:
+                _git("fetch", "--quiet", "--depth", "1", "origin", upstream_branch)
+            head_sha = _git("rev-parse", "HEAD")
+            upstream_sha = _git("rev-parse", upstream)
+            if head_sha and upstream_sha and head_sha != upstream_sha:
+                behind = None
+                ahead = None
+                update_available = True
+            commit_count_available = False
+        elif upstream:
             counts = _git("rev-list", "--left-right", "--count", f"{upstream}...HEAD").split()
             if len(counts) == 2:
                 behind, ahead = int(counts[0]), int(counts[1])
+                update_available = behind > 0
         info.update({"install": "git", "branch": branch, "upstream": upstream,
                      "behind": behind, "ahead": ahead,
-                     "update_available": behind > 0,
-                     "hint": f"git -C {pkg_dir} pull" if behind else "up to date with fetched upstream"})
+                     "commit_count_available": commit_count_available,
+                     "update_available": update_available,
+                     "hint": f"git -C {pkg_dir} pull" if update_available else "up to date with fetched upstream"})
     else:
         info.update({"install": "package", "update_available": None,
                      "hint": "pip install -U aegis (or your package manager)"})

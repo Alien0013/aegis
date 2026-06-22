@@ -973,6 +973,15 @@ _CONFIG_SET_EXTENSION_ROOTS = {
 }
 
 
+_CONFIG_KEY_ALIASES = {
+    "model.api_base": "model.base_url",
+}
+
+
+def _normalize_config_key(key: str) -> str:
+    return _CONFIG_KEY_ALIASES.get(key, key)
+
+
 def _config_set_secret_key(key: str) -> bool:
     low = key.lower()
     return "." not in key and (key.isupper() or any(low.endswith(s) for s in cfg.SECRET_SUFFIXES))
@@ -1572,20 +1581,21 @@ def cmd_config(args, config: Config) -> int:
             if json_mode:
                 return json_error("usage: aegis config get <key>")
             return _die("usage: aegis config get <key>")
-        low = args.key.lower()
-        if "." not in args.key and (args.key.isupper() or any(low.endswith(s) for s in cfg.SECRET_SUFFIXES)):
-            env_name = args.key if args.key.isupper() else args.key.upper()
-            value = os.environ.get(env_name, config.get(args.key))
+        key = _normalize_config_key(args.key)
+        low = key.lower()
+        if "." not in key and (key.isupper() or any(low.endswith(s) for s in cfg.SECRET_SUFFIXES)):
+            env_name = key if key.isupper() else key.upper()
+            value = os.environ.get(env_name, config.get(key))
             source = ".env"
         else:
-            value = config.get(args.key)
+            value = config.get(key)
             source = "config"
-        value = redacted_value(args.key, value)
+        value = redacted_value(key, value)
         if json_mode:
             _print(json.dumps({
                 "ok": True,
                 "object": "aegis.config.value",
-                "key": args.key,
+                "key": key,
                 "source": source,
                 "value": value,
             }, indent=2, sort_keys=True))
@@ -1593,7 +1603,7 @@ def cmd_config(args, config: Config) -> int:
         _print(str(value))
         return 0
     if args.action == "set":
-        key = args.key or ""
+        key = _normalize_config_key(args.key or "")
         raw_value = getattr(args, "value", None)
         if key == "model":
             raw_text = " ".join(str(part) for part in raw_value or []).strip()
@@ -1634,7 +1644,7 @@ def cmd_config(args, config: Config) -> int:
         _print(f"set {key} -> {where}")
         return 0
     if args.action == "reset":
-        key = (args.key or "").strip()
+        key = _normalize_config_key((args.key or "").strip())
         if not key:
             if json_mode:
                 return json_error("usage: aegis config reset <key|section|all>")
@@ -1967,11 +1977,28 @@ def cmd_update(args, config: Config) -> int:
 
     if getattr(args, "check", False):
         if is_git:
-            subprocess.run(["git", "fetch", "-q", "origin", branch], cwd=str(pkg_root))
-            behind = subprocess.run(["git", "rev-list", "--count", f"HEAD..origin/{branch}"],
-                                    cwd=str(pkg_root), capture_output=True, text=True).stdout.strip()
-            _print(f"{behind} commit(s) behind origin/{branch}" if behind not in ("", "0")
-                   else "up to date.")
+            shallow = subprocess.run(
+                ["git", "rev-parse", "--is-shallow-repository"],
+                cwd=str(pkg_root),
+                capture_output=True,
+                text=True,
+            ).stdout.strip().lower() == "true"
+            fetch_cmd = ["git", "fetch", "-q"]
+            if shallow:
+                fetch_cmd += ["--depth", "1"]
+            subprocess.run([*fetch_cmd, "origin", branch], cwd=str(pkg_root))
+            if shallow:
+                head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(pkg_root),
+                                      capture_output=True, text=True).stdout.strip()
+                remote = subprocess.run(["git", "rev-parse", f"origin/{branch}"], cwd=str(pkg_root),
+                                        capture_output=True, text=True).stdout.strip()
+                _print("up to date." if head and remote and head == remote
+                       else f"update available on origin/{branch} (shallow checkout; commit count unavailable).")
+            else:
+                behind = subprocess.run(["git", "rev-list", "--count", f"HEAD..origin/{branch}"],
+                                        cwd=str(pkg_root), capture_output=True, text=True).stdout.strip()
+                _print(f"{behind} commit(s) behind origin/{branch}" if behind not in ("", "0")
+                       else "up to date.")
         else:
             _print("git/pip install — run `aegis update` to reinstall from "
                    "git+https://github.com/Alien0013/aegis.git")

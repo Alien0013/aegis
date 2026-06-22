@@ -83,6 +83,7 @@ SLASH_COMMANDS = (
     SlashCommand("/reasoning", "model control", "set reasoning visibility or effort", "/reasoning off|none|summary|live|..."),
     SlashCommand("/fast", "model control", "toggle priority/fast mode", "/fast [on|off|status]"),
     SlashCommand("/busy", "model control", "set busy input behavior", "/busy queue|steer|interrupt"),
+    SlashCommand("/timestamps", "display", "toggle terminal timestamps", "/timestamps on|off|status"),
     SlashCommand("/goal", "goals", "set a standing goal and start it", "/goal <objective>"),
     SlashCommand("/subgoal", "goals", "set a nested standing goal", "/subgoal <objective>"),
     SlashCommand("/background", "agents", "launch a background agent task", "/background <prompt>"),
@@ -1579,6 +1580,27 @@ def handle_slash(
             _out(f"reasoning effort → {value}", style="green")
         else:
             _out("usage: /reasoning off|none|summary|live|minimal|low|medium|high|xhigh")
+    elif name == "/timestamps":
+        value = (arg or "status").strip().lower()
+        if value in {"", "status"}:
+            state = "on" if agent.config.get("display.timestamps", False) else "off"
+            _out(f"timestamps: {state}")
+        elif value in {"on", "true", "1", "yes"}:
+            agent.config.data.setdefault("display", {})["timestamps"] = True
+            try:
+                agent.config.save()
+            except Exception:  # noqa: BLE001
+                pass
+            _out("timestamps → on", style="green")
+        elif value in {"off", "false", "0", "no"}:
+            agent.config.data.setdefault("display", {})["timestamps"] = False
+            try:
+                agent.config.save()
+            except Exception:  # noqa: BLE001
+                pass
+            _out("timestamps → off", style="green")
+        else:
+            _out("usage: /timestamps on|off|status")
     elif name == "/fast":
         value = (arg or "status").strip().lower()
         controls = session_runtime_controls(agent.session)

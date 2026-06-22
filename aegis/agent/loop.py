@@ -150,6 +150,30 @@ def _agent_request_max_tokens(agent) -> int:
     return value if value > 0 else 0
 
 
+def _agent_output_reservation_tokens(agent) -> int:
+    requested = _agent_request_max_tokens(agent)
+    if requested > 0:
+        return requested
+    try:
+        value = int(getattr(getattr(agent, "provider", None), "max_tokens", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+    return value if value > 0 else 0
+
+
+def _engine_should_compress(engine, messages, context_length: int, overhead_tokens: int, agent) -> bool:
+    max_output_tokens = _agent_output_reservation_tokens(agent)
+    try:
+        return bool(engine.should_compress(
+            messages,
+            context_length,
+            overhead_tokens,
+            max_output_tokens=max_output_tokens,
+        ))
+    except TypeError:
+        return bool(engine.should_compress(messages, context_length, overhead_tokens))
+
+
 def _inherit_child_session_meta(parent, child) -> None:
     meta = getattr(parent, "meta", {}) or {}
     child_meta = getattr(child, "meta", None)
@@ -1056,7 +1080,7 @@ def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
         engine.threshold_fraction() if hasattr(engine, "threshold_fraction")
         else comp.get("threshold")
     )   # for the record's reason text; the engine applies it
-    if not engine.should_compress(session.messages, agent.provider.context_length, schema_tokens):
+    if not _engine_should_compress(engine, session.messages, agent.provider.context_length, schema_tokens, agent):
         return session
     lock_session = session
     acquired, holder = _acquire_compression_lock(agent, lock_session, emit)
@@ -1099,7 +1123,7 @@ def _maybe_compact(agent, session, schema_tokens: int, budget, emit):
     after_tok = compaction.estimated_tokens(compressed)
     # If we're STILL over the threshold after compacting, the preserved tail is the floor —
     # further compaction can't help, so don't retry this turn (avoids per-iteration thrash).
-    still_over = engine.should_compress(compressed, agent.provider.context_length, schema_tokens)
+    still_over = _engine_should_compress(engine, compressed, agent.provider.context_length, schema_tokens, agent)
     from ..constants import COMPACT_THRESHOLD
     from ..util import now_iso
     pct = int((COMPACT_THRESHOLD if threshold is None else threshold) * 100)

@@ -101,6 +101,7 @@ class MattermostAdapter(BasePlatformAdapter):
     renders_tables = False
     transport = "http_webhook"
     max_message_length = 16000
+    splits_long_messages = True
     supports_threads = True
     supports_media = True
     supports_reactions = True

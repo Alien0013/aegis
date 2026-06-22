@@ -106,6 +106,7 @@ class TelegramAdapter(BasePlatformAdapter):
     renders_tables = False
     transport = "long_poll"
     max_message_length = 4096
+    splits_long_messages = True
     supports_threads = True
     supports_media = True
     supports_reactions = True

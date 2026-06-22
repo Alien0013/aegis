@@ -32,6 +32,13 @@ from .util import estimate_tokens, now_iso
 
 logger = logging.getLogger(__name__)
 
+
+def _redact_approval_prompt(prompt: str | None) -> str:
+    """Redact credentials before approval prompts enter API-visible state."""
+    from .redact import redact_secrets
+
+    return redact_secrets(str(prompt or ""))
+
 _MAX_BODY_BYTES = 10 * 1024 * 1024
 _DEFAULT_MAX_STORED_RESPONSES = 100
 _DEFAULT_RESPONSE_AUTO_TRUNCATION_MESSAGES = 100
@@ -5626,6 +5633,7 @@ def make_handler(config: Config):
             approval_grants: dict[str, str] = {}
 
             def approver(question: str) -> bool | str:
+                safe_question = _redact_approval_prompt(question)
                 remembered_choice = approval_grants.get(question)
                 if remembered_choice in {"session", "always"}:
                     run_snapshot = None
@@ -5633,7 +5641,7 @@ def make_handler(config: Config):
                         self._append_run_event_locked(run_id, "approval.reused", {
                             "approved": True,
                             "choice": remembered_choice,
-                            "prompt": question,
+                            "prompt": safe_question,
                         })
                         rec = active_runs.get(run_id)
                         run_snapshot = dict(rec) if rec is not None else None
@@ -5645,7 +5653,7 @@ def make_handler(config: Config):
                 pending = {
                     "id": approval_id,
                     "run_id": run_id,
-                    "prompt": question,
+                    "prompt": safe_question,
                     "answered": False,
                     "approved": False,
                     "event": event,
@@ -5656,7 +5664,7 @@ def make_handler(config: Config):
                     approvals[approval_id] = pending
                     self._append_run_event_locked(run_id, "approval.request", {
                         "approval_id": approval_id,
-                        "prompt": question,
+                        "prompt": safe_question,
                         "status": "pending",
                     })
                     rec = active_runs.get(run_id)
@@ -5678,7 +5686,7 @@ def make_handler(config: Config):
                             "approved": False,
                             "choice": "timeout",
                             "timeout": True,
-                            "prompt": question,
+                            "prompt": safe_question,
                         })
                         rec = active_runs.get(run_id)
                         run_snapshot = dict(rec) if rec is not None else None
