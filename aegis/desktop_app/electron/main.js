@@ -801,6 +801,7 @@ function initAutoUpdate(manual) {
   }
   if (!autoUpdaterConfigured) {
     autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = false;
     autoUpdater.allowPrerelease = false;
     autoUpdater.allowDowngrade = false;
     autoUpdater.removeAllListeners();

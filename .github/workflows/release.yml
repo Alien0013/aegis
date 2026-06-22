@@ -108,3 +108,108 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: desktop/release/*
+
+  desktop-windows:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+      - name: Stage desktop backend venv
+        shell: pwsh
+        run: |
+          python -m venv desktop/build/ci-backend
+          desktop/build/ci-backend/Scripts/python -m pip install --upgrade pip
+          desktop/build/ci-backend/Scripts/python -m pip install .
+          $script = @'
+          @echo off
+          "%~dp0python.exe" -m aegis.cli.main %*
+          '@
+          Set-Content -Path desktop/build/ci-backend/Scripts/aegis.cmd -Value $script
+      - name: Build Windows desktop artifacts
+        working-directory: desktop
+        env:
+          AEGIS_RELEASE: "1"
+          AEGIS_ALLOW_UNSIGNED_DESKTOP_RELEASE: "1"
+          AEGIS_DESKTOP_BACKEND_SOURCE: build/ci-backend
+          AEGIS_DESKTOP_TARGETS: win
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run dist:win
+      - name: Upload desktop workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-desktop-windows
+          path: desktop/release/*
+      - name: Upload desktop artifacts to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: desktop/release/*
+
+  desktop-macos:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+      - name: Stage desktop backend venv
+        run: |
+          python -m venv desktop/build/ci-backend
+          desktop/build/ci-backend/bin/python -m pip install --upgrade pip
+          desktop/build/ci-backend/bin/python -m pip install .
+          cat > desktop/build/ci-backend/bin/aegis <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          exec "$DIR/python" -m aegis.cli.main "$@"
+          SH
+          chmod +x desktop/build/ci-backend/bin/aegis
+      - name: Build macOS desktop artifacts
+        working-directory: desktop
+        env:
+          AEGIS_RELEASE: "1"
+          AEGIS_ALLOW_UNSIGNED_DESKTOP_RELEASE: "1"
+          AEGIS_DESKTOP_BACKEND_SOURCE: build/ci-backend
+          AEGIS_DESKTOP_TARGETS: mac
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run dist:mac
+      - name: Upload desktop workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-desktop-macos
+          path: desktop/release/*
+      - name: Upload desktop artifacts to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: desktop/release/*

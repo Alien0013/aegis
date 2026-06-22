@@ -89,6 +89,7 @@ test("auto-updater setup is idempotent and bounded", () => {
   requireSnippet('setUpdaterStatus("error", { error: message });');
   requireSnippet("autoUpdater.allowPrerelease = false");
   requireSnippet("autoUpdater.allowDowngrade = false");
+  requireSnippet("autoUpdater.autoInstallOnAppQuit = false");
   requireSnippet('if (updateCheckManual) notify("AEGIS update failed", message);');
   requireSnippet('if (id === "check_updates")');
   requireSnippet("status: initAutoUpdate(true)");

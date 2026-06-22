@@ -464,19 +464,25 @@ def test_desktop_builder_config_matches_release_parity():
     assert "rpm" in package["scripts"]["dist:linux"]
 
 
-def test_release_workflow_builds_linux_desktop_artifacts():
+def test_release_workflow_builds_desktop_artifacts_for_all_packaged_targets():
     root = Path(__file__).resolve().parents[1]
     workflow = (root / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
     assert "desktop-linux:" in workflow
+    assert "desktop-windows:" in workflow
+    assert "desktop-macos:" in workflow
     assert "cache-dependency-path: desktop/package-lock.json" in workflow
     assert "working-directory: desktop" in workflow
     assert "run: npm ci" in workflow
     assert "run: npm run dist:linux" in workflow
+    assert "run: npm run dist:win" in workflow
+    assert "run: npm run dist:mac" in workflow
     assert 'AEGIS_RELEASE: "1"' in workflow
     assert "python -m venv desktop/build/ci-backend" in workflow
+    assert "desktop/build/ci-backend/Scripts/python -m pip install ." in workflow
     assert "AEGIS_DESKTOP_BACKEND_SOURCE: build/ci-backend" in workflow
     assert "AEGIS_ALLOW_EXTERNAL_DESKTOP_BACKEND" not in workflow
+    assert 'AEGIS_ALLOW_UNSIGNED_DESKTOP_RELEASE: "1"' in workflow
     assert "GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in workflow
     assert "desktop/release/*" in workflow
     assert "softprops/action-gh-release@v2" in workflow

@@ -109,6 +109,9 @@ function releaseUpdateEligibility({
     }
     const backend = backendManifest.payload;
     if (!backend.staged) {
+      if (backend.externalBackend || backend.mode === "external") {
+        return { ok: false, reason: "external-backend desktop releases are not auto-update eligible" };
+      }
       return { ok: false, reason: "packaged backend was not staged for this release" };
     }
   }

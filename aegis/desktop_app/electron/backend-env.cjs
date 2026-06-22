@@ -228,7 +228,7 @@ function candidateAegisCommands(options = {}) {
   const pathMod = _pathFor(platform);
   const home = resolveAegisHome({ ...options, platform, env, homedir });
   const candidates = [];
-  const packaged = Boolean(options.packaged || options.resourcesPath || options.appPath);
+  const packaged = Boolean(options.packaged);
   const explicit = _envValue("AEGIS_BIN", { ...options, env, platform });
   if (explicit && !packaged) candidates.push(explicit);
   if (packaged) {
@@ -308,7 +308,9 @@ function resolveAegisCommand(options = {}) {
 
 function backendEnvironment(baseEnv = process.env, options = {}) {
   const platform = options.platform || process.platform;
-  const packagedPathEntries = packagedBackendPathEntries({ ...options, platform });
+  const packagedPathEntries = options.packaged
+    ? packagedBackendPathEntries({ ...options, platform })
+    : [];
   const env = normalizePathEnv(_withWindowsUserPath(baseEnv, { ...options, platform }), {
     ...options,
     platform,

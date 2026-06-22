@@ -370,7 +370,7 @@ test("releaseUpdateEligibility rejects dev, dirty, stale, and mismatched install
         payload: { schemaVersion: 1, staged: false, mode: "external", externalBackend: true },
       },
     }).reason,
-    /backend was not staged/,
+    /external-backend desktop releases are not auto-update eligible/,
   );
   assert.equal(
     releaseUpdateEligibility({

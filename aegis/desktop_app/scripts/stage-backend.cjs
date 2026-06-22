@@ -3,12 +3,14 @@
 const fs = require("node:fs");
 const crypto = require("node:crypto");
 const path = require("node:path");
+const { execFileSync } = require("node:child_process");
 const {
   inferTargetPlatforms,
   isReleaseBuild,
 } = require("./write-build-stamp.cjs");
 
 const BACKEND_MANIFEST_SCHEMA_VERSION = 1;
+const DEFAULT_PROBE_TIMEOUT_MS = 2500;
 const WIN_EXTENSIONS = new Set([".exe", ".cmd", ".bat"]);
 const RELATIVE_COMMANDS = [
   path.join("bin", "aegis"),
@@ -43,6 +45,90 @@ function _knownCommandsIn(root) {
       try { return fs.existsSync(candidate) && fs.statSync(candidate).isFile(); } catch { return false; }
     })
     .map((candidate) => path.relative(root, candidate).replace(/\\/g, "/"));
+}
+
+function _isInside(root, target) {
+  const relative = path.relative(root, target);
+  return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+function _validateDirectorySymlinks(root) {
+  const realRoot = fs.realpathSync(root);
+  const visit = (dir) => {
+    for (const name of fs.readdirSync(dir).sort()) {
+      const candidate = path.join(dir, name);
+      const rel = path.relative(root, candidate).replace(/\\/g, "/");
+      const stat = fs.lstatSync(candidate);
+      if (stat.isSymbolicLink()) {
+        let realTarget;
+        try {
+          realTarget = fs.realpathSync(candidate);
+        } catch {
+          throw new Error(`desktop backend source contains a broken symlink: ${rel}`);
+        }
+        if (!_isInside(realRoot, realTarget)) {
+          throw new Error(`desktop backend source contains an unsafe symlink outside the source tree: ${rel}`);
+        }
+        continue;
+      }
+      if (stat.isDirectory()) visit(candidate);
+    }
+  };
+  visit(root);
+}
+
+function _materializeSymlinks(root) {
+  const visit = (dir) => {
+    for (const name of fs.readdirSync(dir).sort()) {
+      const candidate = path.join(dir, name);
+      const stat = fs.lstatSync(candidate);
+      if (stat.isSymbolicLink()) {
+        const realTarget = fs.realpathSync(candidate);
+        const targetStat = fs.statSync(candidate);
+        fs.unlinkSync(candidate);
+        if (targetStat.isDirectory()) {
+          fs.cpSync(realTarget, candidate, { recursive: true, dereference: true });
+          visit(candidate);
+        } else if (targetStat.isFile()) {
+          fs.copyFileSync(realTarget, candidate);
+        }
+        continue;
+      }
+      if (stat.isDirectory()) visit(candidate);
+    }
+  };
+  visit(root);
+}
+
+function _hostCanRunTarget(rel, platform) {
+  const clean = String(rel || "").replace(/\\/g, "/");
+  if (platform === "win32") {
+    return clean.startsWith("Scripts/") && WIN_EXTENSIONS.has(path.extname(clean).toLowerCase());
+  }
+  return clean === "aegis" || clean === "bin/aegis";
+}
+
+function _probeStagedCommand(command, rel, { env, platform, probeCommand, probeTimeoutMs } = {}) {
+  if (!_hostCanRunTarget(rel, platform)) return { rel, skipped: true, reason: `not runnable on ${platform}` };
+  if (typeof probeCommand === "function") {
+    if (!probeCommand(command, rel)) throw new Error(`staged backend command failed version probe: ${rel}`);
+    return { rel, skipped: false };
+  }
+  try {
+    execFileSync(command, ["--version"], {
+      env,
+      stdio: "ignore",
+      timeout: probeTimeoutMs || DEFAULT_PROBE_TIMEOUT_MS,
+      windowsHide: true,
+    });
+    return { rel, skipped: false };
+  } catch (err) {
+    throw new Error(`staged backend command failed version probe: ${rel}: ${err.message}`);
+  }
+}
+
+function _probeStagedCommands(backendDir, relCommands, options = {}) {
+  return relCommands.map((rel) => _probeStagedCommand(path.join(backendDir, rel), rel, options));
 }
 
 function _markExecutable(target) {
@@ -138,6 +224,8 @@ function stageBackend({
   env = process.env,
   platform = process.platform,
   now = () => new Date(),
+  probeCommand = null,
+  probeTimeoutMs = DEFAULT_PROBE_TIMEOUT_MS,
 } = {}) {
   const source = String(_sourceFromEnv(env) || "").trim();
   const sourcePath = source ? path.resolve(source) : "";
@@ -187,8 +275,16 @@ function stageBackend({
         `desktop backend directory must contain one of: ${RELATIVE_COMMANDS.join(", ")}`,
       );
     }
-    fs.cpSync(sourcePath, paths.backendDir, { recursive: true });
+    _validateDirectorySymlinks(sourcePath);
+    fs.cpSync(sourcePath, paths.backendDir, { recursive: true, dereference: true });
+    _materializeSymlinks(paths.backendDir);
     for (const command of commands) _markExecutable(path.join(paths.backendDir, command));
+    manifest.commandProbes = _probeStagedCommands(paths.backendDir, commands, {
+      env,
+      platform,
+      probeCommand,
+      probeTimeoutMs,
+    });
     manifest.staged = true;
     manifest.mode = "directory";
     manifest.targets = commands;
@@ -229,6 +325,12 @@ function stageBackend({
   manifest.staged = true;
   manifest.mode = "file";
   manifest.targets = targets.map((target) => _relativeFromBackend(paths.backendDir, target));
+  manifest.commandProbes = _probeStagedCommands(paths.backendDir, manifest.targets, {
+    env,
+    platform,
+    probeCommand,
+    probeTimeoutMs,
+  });
   _summarizeStagedBackend(manifest, paths.backendDir);
   _writeJson(paths.manifestPath, manifest);
   return { manifest, ...paths };

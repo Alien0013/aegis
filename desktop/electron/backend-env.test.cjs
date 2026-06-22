@@ -78,6 +78,34 @@ test("packaged resource backend wins over inherited AEGIS_BIN", () => {
   );
 });
 
+test("source mode ignores packaged paths even when app paths are present", () => {
+  const resourcesPath = "/opt/AEGIS/resources";
+  const appPath = "/home/alien/aegis/desktop";
+  const bundled = path.posix.join(resourcesPath, "backend", "bin", "aegis");
+  const explicit = "/tmp/dev/aegis";
+  const env = { AEGIS_BIN: explicit, PATH: bundled };
+
+  assert.equal(
+    aegisCommand({
+      platform: "linux",
+      packaged: false,
+      resourcesPath,
+      appPath,
+      env,
+      exists: (p) => p === explicit || p === bundled,
+      probeCommand: (p) => p === explicit || p === bundled,
+    }),
+    explicit,
+  );
+  const resolvedEnv = backendEnvironment(env, {
+    platform: "linux",
+    packaged: false,
+    resourcesPath,
+    appPath,
+  });
+  assert(!resolvedEnv.PATH.split(":").includes(path.posix.dirname(bundled)));
+});
+
 test("uses desktop launcher bin after packaged candidates", () => {
   const resourcesPath = "/opt/AEGIS/resources";
   const launcher = "/usr/local/bin/aegis";
