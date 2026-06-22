@@ -621,6 +621,8 @@ def test_platform_helper_command_caps_and_utf16_chunks():
         "SLACK_IDEMPOTENCY_STORE_PATH",
     ]
     assert platform_metadata("tg")["supports_interactive_prompts"] is True
+    assert "TELEGRAM_ALLOWED_TOPICS" in platform_metadata("tg")["optional_env"]
+    assert "TELEGRAM_MEDIA_GROUP_COALESCE_SECONDS" in platform_metadata("tg")["optional_env"]
     assert "TELEGRAM_CALLBACK_TTL_SECONDS" in platform_metadata("tg")["optional_env"]
     assert "TELEGRAM_RATE_LIMIT_PER_MINUTE" in platform_metadata("tg")["optional_env"]
     assert "TELEGRAM_IDEMPOTENCY_PERSIST" in platform_metadata("tg")["optional_env"]
@@ -708,12 +710,15 @@ def test_adapter_metadata_for_core_platforms(monkeypatch):
 
     assert TelegramAdapter("token").metadata["transport"] == "long_poll"
     assert "TELEGRAM_ALLOWED_CHATS" in TelegramAdapter("token").metadata["optional_env"]
+    assert "TELEGRAM_ALLOWED_TOPICS" in TelegramAdapter("token").metadata["optional_env"]
+    assert "TELEGRAM_MEDIA_GROUP_COALESCE_SECONDS" in TelegramAdapter("token").metadata["optional_env"]
     assert "TELEGRAM_REGISTER_COMMANDS" in TelegramAdapter("token").metadata["optional_env"]
     assert "TELEGRAM_CALLBACK_TTL_SECONDS" in TelegramAdapter("token").metadata["optional_env"]
     assert "TELEGRAM_RATE_LIMIT_PER_MINUTE" in TelegramAdapter("token").metadata["optional_env"]
     assert "TELEGRAM_IDEMPOTENCY_CACHE_MAX" in TelegramAdapter("token").metadata["optional_env"]
     assert "TELEGRAM_IDEMPOTENCY_PERSIST" in TelegramAdapter("token").metadata["optional_env"]
     assert TelegramAdapter("token").metadata["security"]["group_trigger_mode"] == "all"
+    assert TelegramAdapter("token").metadata["security"]["allow_general_topic"] is True
     assert TelegramAdapter("token").metadata["security"]["register_commands"] is True
     assert TelegramAdapter("token").metadata["security"]["callback_ttl_seconds"] == 3600
     assert TelegramAdapter("token").metadata["security"]["callback_ttl_env"] == "TELEGRAM_CALLBACK_TTL_SECONDS"
@@ -1779,6 +1784,94 @@ def test_telegram_adapter_enforces_chat_filters_and_group_addressing(monkeypatch
         ("sendMessage", {"chat_id": "42", "text": "fallback reply", "message_thread_id": "gone"}),
         ("sendMessage", {"chat_id": "42", "text": "fallback reply"}),
     ]
+
+
+def test_telegram_adapter_filters_supergroup_topics(monkeypatch):
+    from aegis.gateway.channels import TelegramAdapter
+
+    monkeypatch.setenv("TELEGRAM_ALLOWED_TOPICS", "77,general")
+    monkeypatch.setenv("TELEGRAM_IGNORED_TOPICS", "88")
+    monkeypatch.setenv("TELEGRAM_ALLOW_GENERAL_TOPIC", "1")
+    adapter = TelegramAdapter("token")
+    base = {
+        "chat": {"id": 42, "type": "supergroup"},
+        "text": "/status",
+        "from": {"id": 7, "username": "ada"},
+    }
+
+    assert adapter._message_allowed({
+        **base,
+        "message_thread_id": 77,
+        "is_topic_message": True,
+    }, "/status") is True
+    assert adapter._message_allowed({
+        **base,
+        "message_thread_id": 88,
+        "is_topic_message": True,
+    }, "/status") is False
+    assert adapter._message_allowed(base, "/status") is True
+
+    monkeypatch.setenv("TELEGRAM_ALLOW_GENERAL_TOPIC", "0")
+    blocked_general = TelegramAdapter("token")
+    assert blocked_general._message_allowed(base, "/status") is False
+    assert blocked_general.metadata["security"]["allowed_topics_configured"] is True
+    assert blocked_general.metadata["security"]["ignored_topics_configured"] is True
+    assert blocked_general.metadata["security"]["allow_general_topic"] is False
+
+
+def test_telegram_adapter_coalesces_media_group_updates(monkeypatch):
+    from aegis.gateway.channels import TelegramAdapter
+
+    for name in (
+        "TELEGRAM_ALLOWED_USERS",
+        "TELEGRAM_ALLOWED_CHATS",
+        "TELEGRAM_IGNORED_CHATS",
+        "TELEGRAM_ALLOWED_CHAT_TYPES",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("TELEGRAM_MEDIA_GROUP_COALESCE_SECONDS", "0.02")
+    adapter = TelegramAdapter("token")
+    seen = []
+    adapter._submit_inbound = lambda ev, *, raw_text=None: seen.append((ev, raw_text)) or None
+
+    base = {
+        "date": 123456,
+        "chat": {"id": 42, "type": "private"},
+        "from": {"id": 7, "username": "ada"},
+        "media_group_id": "album-1",
+    }
+
+    first = {
+        "update_id": 701,
+        "message": {
+            **base,
+            "message_id": 1,
+            "caption": "release photos",
+            "photo": [{"file_id": "photo-1", "width": 800, "height": 600, "file_size": 1000}],
+        },
+    }
+    second = {
+        "update_id": 702,
+        "message": {
+            **base,
+            "message_id": 2,
+            "document": {"file_id": "doc-1", "file_name": "brief.pdf", "mime_type": "application/pdf"},
+        },
+    }
+
+    assert adapter._handle_update(first) is True
+    assert adapter._handle_update(second) is True
+    assert seen == []
+    _wait_for(lambda: len(seen) == 1)
+
+    ev, raw_text = seen[0]
+    assert raw_text == "release photos"
+    assert ev.text == "release photos"
+    assert ev.chat_id == "42"
+    assert ev.metadata["media_group_id"] == "album-1"
+    assert ev.metadata["media_group_size"] == 2
+    assert [row["kind"] for row in ev.attachments] == ["photo", "document"]
+    assert {row["media_group_id"] for row in ev.attachments} == {"album-1"}
 
 
 def test_telegram_adapter_builds_inbound_attachment_rows(monkeypatch):

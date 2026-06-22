@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -47,6 +48,14 @@ def _env_int(name: str, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return value if value > 0 else default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        value = float(os.environ.get(name, str(default)) or default)
+    except (TypeError, ValueError):
+        return default
+    return value if value >= 0 else default
 
 
 _TELEGRAM_ALLOWED_UPDATES = json.dumps([
@@ -119,6 +128,9 @@ class TelegramAdapter(BasePlatformAdapter):
         self.allowed = _csv_set(os.environ.get("TELEGRAM_ALLOWED_USERS", ""))
         self.allowed_chats = _csv_set(os.environ.get("TELEGRAM_ALLOWED_CHATS", ""))
         self.ignored_chats = _csv_set(os.environ.get("TELEGRAM_IGNORED_CHATS", ""))
+        self.allowed_topics = _csv_set(os.environ.get("TELEGRAM_ALLOWED_TOPICS", ""))
+        self.ignored_topics = _csv_set(os.environ.get("TELEGRAM_IGNORED_TOPICS", ""))
+        self.allow_general_topic = _env_bool("TELEGRAM_ALLOW_GENERAL_TOPIC", True)
         self.allowed_chat_types = _csv_set(os.environ.get("TELEGRAM_ALLOWED_CHAT_TYPES", ""))
         self.group_trigger_mode = os.environ.get("TELEGRAM_GROUP_TRIGGER_MODE", "all").strip().lower() or "all"
         self.bot_username = os.environ.get("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@") or None
@@ -145,6 +157,9 @@ class TelegramAdapter(BasePlatformAdapter):
         self._rate_limiter = FixedWindowRateLimiter(limit=self.rate_limit_per_minute, window_seconds=60)
         self._callback_payloads: dict[str, str] = {}
         self._callback_payload_meta: dict[str, dict] = {}
+        self.media_group_coalesce_seconds = _env_float("TELEGRAM_MEDIA_GROUP_COALESCE_SECONDS", 0.75)
+        self._media_group_lock = threading.RLock()
+        self._media_groups: dict[str, dict] = {}
         self._base = f"https://api.telegram.org/bot{self.token}"
 
     @property
@@ -155,6 +170,9 @@ class TelegramAdapter(BasePlatformAdapter):
             "allowed_users_configured": bool(self.allowed),
             "allowed_chats_configured": bool(self.allowed_chats),
             "ignored_chats_configured": bool(self.ignored_chats),
+            "allowed_topics_configured": bool(self.allowed_topics),
+            "ignored_topics_configured": bool(self.ignored_topics),
+            "allow_general_topic": self.allow_general_topic,
             "allowed_chat_types": sorted(self.allowed_chat_types or []),
             "group_trigger_mode": self.group_trigger_mode,
             "bot_username_configured": bool(self.bot_username),
@@ -165,6 +183,7 @@ class TelegramAdapter(BasePlatformAdapter):
             "command_language_code_configured": bool(self.command_language_code),
             "callback_ttl_env": "TELEGRAM_CALLBACK_TTL_SECONDS",
             "callback_ttl_seconds": self.callback_ttl_seconds,
+            "media_group_coalesce_seconds": self.media_group_coalesce_seconds,
             "idempotency_env": [
                 "TELEGRAM_IDEMPOTENCY_TTL_SECONDS",
                 "TELEGRAM_IDEMPOTENCY_CACHE_MAX",
@@ -271,10 +290,13 @@ class TelegramAdapter(BasePlatformAdapter):
                 metadata={
                     "chat_type": msg.get("chat", {}).get("type"),
                     "message_thread_id": thread_id,
+                    "media_group_id": str(msg.get("media_group_id") or "").strip(),
                     "source": source,
                     "delivery_id": delivery_id or "",
                 },
             )
+            if self._buffer_media_group_event(ev, raw_text=raw_text):
+                return True
             self._submit_inbound(ev, raw_text=raw_text)
             return True
         except Exception:
@@ -574,6 +596,11 @@ class TelegramAdapter(BasePlatformAdapter):
             if row:
                 rows.append(row)
         rows.extend(self._structured_attachments_from_message(msg))
+        media_group_id = str(msg.get("media_group_id") or "").strip()
+        if media_group_id:
+            for index, row in enumerate(rows, start=1):
+                row["media_group_id"] = media_group_id
+                row["media_group_index"] = index
         return rows
 
     def _telegram_file_attachment(
@@ -759,6 +786,8 @@ class TelegramAdapter(BasePlatformAdapter):
         chat_type = str(chat.get("type", "") or "")
         if self.allowed_chat_types and chat_type not in self.allowed_chat_types:
             return False
+        if not self._topic_allowed(msg):
+            return False
         if chat_type not in {"group", "supergroup"}:
             return True
         mode = self.group_trigger_mode
@@ -775,6 +804,74 @@ class TelegramAdapter(BasePlatformAdapter):
                 or self._is_reply_to_bot(msg.get("reply_to_message") or {})
             )
         return True
+
+    def _topic_allowed(self, msg: dict) -> bool:
+        chat = msg.get("chat", {}) or {}
+        chat_type = str(chat.get("type", "") or "")
+        if chat_type != "supergroup":
+            return True
+        thread_id = self._message_thread_id(msg)
+        topic_key = thread_id or "general"
+        ignored = self.ignored_topics or set()
+        if "*" in ignored or topic_key in ignored or (not thread_id and "0" in ignored):
+            return False
+        if not thread_id and not self.allow_general_topic:
+            return False
+        allowed = self.allowed_topics or set()
+        if not allowed or "*" in allowed:
+            return True
+        if not thread_id:
+            return "general" in allowed or "0" in allowed
+        return thread_id in allowed
+
+    def _buffer_media_group_event(self, ev: MessageEvent, *, raw_text: str = "") -> bool:
+        group_id = str((ev.metadata or {}).get("media_group_id") or "").strip()
+        if not group_id or not ev.attachments:
+            return False
+        delay = float(getattr(self, "media_group_coalesce_seconds", 0.0) or 0.0)
+        if delay <= 0:
+            return False
+        key = f"{ev.chat_id}:{group_id}"
+        with self._media_group_lock:
+            record = self._media_groups.get(key)
+            if record is None:
+                timer = threading.Timer(delay, self._flush_media_group, args=(key,))
+                timer.daemon = True
+                record = {
+                    "event": ev,
+                    "attachments": [],
+                    "texts": [],
+                    "raw_texts": [],
+                    "timer": timer,
+                }
+                self._media_groups[key] = record
+                timer.start()
+            record["attachments"].extend(dict(row) for row in ev.attachments)
+            text = str(ev.text or "").strip()
+            if text and not text.startswith("["):
+                record["texts"].append(text)
+            raw = str(raw_text or "").strip()
+            if raw:
+                record["raw_texts"].append(raw)
+        return True
+
+    def _flush_media_group(self, key: str) -> None:
+        with self._media_group_lock:
+            record = self._media_groups.pop(key, None)
+        if not record:
+            return
+        ev = record["event"]
+        attachments = list(record.get("attachments") or [])
+        texts = [str(item).strip() for item in record.get("texts") or [] if str(item).strip()]
+        raw_texts = [str(item).strip() for item in record.get("raw_texts") or [] if str(item).strip()]
+        ev.attachments = attachments
+        ev.metadata["media_group_size"] = len(attachments)
+        if texts:
+            ev.text = "\n".join(dict.fromkeys(texts))
+        else:
+            ev.text = self._attachment_reference_text(attachments)
+        raw_text = "\n".join(dict.fromkeys(raw_texts))
+        self._submit_inbound(ev, raw_text=raw_text)
 
     def _bot_mention_pattern(self):
         if not self.bot_username:
