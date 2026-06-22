@@ -59,13 +59,16 @@ class DefaultContextEngine:
         max_output_tokens: int | None = None,
     ) -> bool:
         from . import compaction
-        return compaction.should_compress(
-            messages,
-            context_length,
-            overhead_tokens,
-            self._threshold,
-            max_output_tokens=max_output_tokens,
-        )
+        try:
+            return compaction.should_compress(
+                messages,
+                context_length,
+                overhead_tokens,
+                self._threshold,
+                max_output_tokens=max_output_tokens,
+            )
+        except TypeError:
+            return compaction.should_compress(messages, context_length, overhead_tokens, self._threshold)
 
     def threshold_fraction(self) -> float | None:
         return self._threshold

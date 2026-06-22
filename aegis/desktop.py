@@ -23,6 +23,7 @@ DESKTOP_FILES = (
     "electron/desktop-settings.cjs", "electron/desktop-settings.test.cjs",
     "electron/desktop-status.cjs", "electron/desktop-status.test.cjs",
     "electron/updater-status.cjs", "electron/updater-status.test.cjs",
+    "electron/gateway-update-coordination.cjs", "electron/gateway-update-coordination.test.cjs",
     "electron/preload.js", "electron/preload-app.js", "electron/boot.html",
     "scripts/before-pack.cjs", "scripts/before-pack.test.cjs",
     "scripts/desktop-copy-drift.test.cjs",
