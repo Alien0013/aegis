@@ -1223,12 +1223,14 @@ def _chat_event_row(event: dict) -> dict:
         "id": str(event.get("id") or ""),
         "name": str(event.get("name") or event.get("tool_name") or ""),
         "summary": str(event.get("summary") or event.get("message") or event.get("reason") or ""),
+        "preview": str(event.get("preview") or ""),
         "status": "error" if event.get("is_error") else str(event.get("status") or ""),
     }
     if etype in ("assistant_delta", "reasoning_delta", "assistant_message"):
         row["text"] = str(event.get("text") or "")
     elif etype == "tool_start":
         args = event.get("args") if isinstance(event.get("args"), dict) else {}
+        row["args"] = args
         row["target"] = _tool_target(args)
     elif etype == "tool_result":
         row["target"] = str(event.get("preview") or event.get("summary") or "")[:240]

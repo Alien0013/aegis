@@ -360,6 +360,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "enabled": True,
         "user_profile_enabled": True,
         "provider": "",              # "" builtin only; or "mem0" | "jsonl"
+        "mem0": {
+            "host": "",              # self-hosted mem0 API; env fallback MEM0_HOST
+            "user_id": "aegis",
+            "agent_id": "aegis",
+            "api_key_env": "MEM0_API_KEY",
+            "timeout": 20,
+        },
         "memory_char_limit": 2200,   # whole-store budget for MEMORY.md
         "user_char_limit": 1375,     # whole-store budget for USER.md
         "refresh": "frozen",         # frozen/never = keep prompt fixed until explicit rebuild

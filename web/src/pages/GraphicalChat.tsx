@@ -11,6 +11,7 @@ import { desktop, isDesktop } from "../lib/desktop";
 import { Icon } from "../components/icons";
 import { Mark } from "../components/Mark";
 import { Markdown } from "../components/Markdown";
+import { ToolCall, type ToolEntry } from "../components/ToolCall";
 
 const SUGGESTIONS = [
   "Summarize this repository's structure",
@@ -19,12 +20,15 @@ const SUGGESTIONS = [
   "Find and explain the entry point",
 ];
 
-interface ToolEvent {
+type ToolStatus = ToolEntry["status"];
+
+interface ToolEvent extends ToolEntry {
   id: string;
   name: string;
   target: string;
-  status: string; // running | ok | error
+  status: ToolStatus;
   kind?: string; // tool | subagent
+  diff?: string;
 }
 
 interface Turn {
@@ -108,6 +112,51 @@ function presetKey(provider: string, model: string): string {
 function normalizeReasoning(value: unknown): ReasoningLevel | "" {
   const v = String(value || "").trim().toLowerCase();
   return (REASONING_LEVELS as readonly string[]).includes(v) ? (v as ReasoningLevel) : "";
+}
+
+function normalizeToolStatus(value: unknown, fallback: ToolStatus = "ok"): ToolStatus {
+  const text = String(value || "").trim().toLowerCase();
+  if (text === "running" || text === "ok" || text === "error") return text;
+  if (text === "failed" || text === "fail") return "error";
+  return fallback;
+}
+
+function renderToolArgs(value: unknown): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return "";
+  }
+}
+
+function isDiffLike(text: string): boolean {
+  return /^(diff --git|@@ |[+-]{3}\s|[+-][^\n])/m.test(text);
+}
+
+function diffPreviewFromArgs(name: string, args: unknown): string {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return "";
+  const row = args as Record<string, unknown>;
+  const toolName = name.toLowerCase();
+  const patch = String(row.patch || row.diff || "");
+  if ((toolName.includes("patch") || toolName.includes("apply")) && isDiffLike(patch)) return patch;
+  if (toolName === "edit_file" || toolName.includes("edit")) {
+    const path = String(row.path || row.file_path || "file");
+    const oldText = String(row.old_string || "");
+    const newText = String(row.new_string || "");
+    if (oldText || newText) {
+      const oldLines = oldText.split("\n").slice(0, 80);
+      const newLines = newText.split("\n").slice(0, 80);
+      return [
+        `--- ${path}`,
+        `+++ ${path}`,
+        "@@ requested replacement @@",
+        ...oldLines.map((line) => `-${line}`),
+        ...newLines.map((line) => `+${line}`),
+      ].join("\n");
+    }
+  }
+  return "";
 }
 
 function loadModelPresets(): Record<string, ModelPreset> {
@@ -482,11 +531,24 @@ export function GraphicalChat({
           const delta = String(ev.text || "");
           patchLast((turn) => ({ ...turn, reasoning: (turn.reasoning || "") + delta }));
         } else if (et === "tool_start") {
+          const name = String(ev.name || "tool");
+          const argsDiff = diffPreviewFromArgs(name, ev.args);
           patchLast((turn) => ({
             ...turn,
             tools: [
               ...(turn.tools || []),
-              { id: String(ev.id || ev.name), name: String(ev.name || "tool"), target: String(ev.target || ""), status: "running", kind: "tool" },
+              {
+                id: String(ev.id || ev.name),
+                name,
+                target: String(ev.target || ""),
+                args: renderToolArgs(ev.args),
+                preview: argsDiff || String(ev.preview || ""),
+                summary: String(ev.summary || ""),
+                diff: argsDiff,
+                status: "running",
+                startedAt: Date.now(),
+                kind: "tool",
+              },
             ],
           }));
         } else if (et === "tool_result") {
@@ -494,19 +556,38 @@ export function GraphicalChat({
             ...turn,
             tools: (turn.tools || []).map((x) =>
               x.id === String(ev.id || ev.name)
-                ? { ...x, status: String(ev.status || "ok"), target: String(ev.target || x.target) }
+                ? {
+                    ...x,
+                    status: normalizeToolStatus(ev.status, "ok"),
+                    target: String(ev.target || x.target),
+                    preview: String(ev.preview || x.diff || x.preview || ""),
+                    summary: String(ev.summary || x.summary || ""),
+                    error: normalizeToolStatus(ev.status, "ok") === "error" ? String(ev.summary || ev.preview || x.error || "") : x.error,
+                    completedAt: Date.now(),
+                  }
                 : x,
             ),
           }));
         } else if (et === "subagent_start") {
           patchLast((turn) => ({
             ...turn,
-            tools: [...(turn.tools || []), { id: String(ev.id || ev.task), name: `subagent: ${String(ev.agent_type || "")}`, target: String(ev.task || ""), status: "running", kind: "subagent" }],
+            tools: [...(turn.tools || []), {
+              id: String(ev.id || ev.task),
+              name: `subagent: ${String(ev.agent_type || "")}`,
+              target: String(ev.task || ""),
+              status: "running",
+              startedAt: Date.now(),
+              kind: "subagent",
+            }],
           }));
         } else if (et === "subagent_done") {
           patchLast((turn) => ({
             ...turn,
-            tools: (turn.tools || []).map((x) => (x.id === String(ev.id || ev.task) ? { ...x, status: String(ev.status || "ok") } : x)),
+            tools: (turn.tools || []).map((x) => (x.id === String(ev.id || ev.task) ? {
+              ...x,
+              status: normalizeToolStatus(ev.status, "ok"),
+              completedAt: Date.now(),
+            } : x)),
           }));
         } else if (et === "subagent_text") {
           const id = String(ev.subagent_id || ev.id || ev.task || "subagent");
@@ -516,9 +597,20 @@ export function GraphicalChat({
             const idx = tools.findIndex((x) => x.id === id);
             if (idx >= 0) {
               const target = `${tools[idx].target || ""}${delta}`.slice(-900);
-              tools[idx] = { ...tools[idx], target, status: String(ev.status || tools[idx].status || "running") };
+              tools[idx] = {
+                ...tools[idx],
+                target,
+                status: normalizeToolStatus(ev.status, tools[idx].status || "running"),
+              };
             } else {
-              tools.push({ id, name: `subagent: ${String(ev.agent_type || "")}`, target: delta.slice(-900), status: "running", kind: "subagent" });
+              tools.push({
+                id,
+                name: `subagent: ${String(ev.agent_type || "")}`,
+                target: delta.slice(-900),
+                status: "running",
+                startedAt: Date.now(),
+                kind: "subagent",
+              });
             }
             return { ...turn, tools };
           });
@@ -692,22 +784,6 @@ export function GraphicalChat({
   );
 }
 
-function ToolCard({ ev }: { ev: ToolEvent }) {
-  const color =
-    ev.status === "error" ? "text-danger" : ev.status === "running" ? "text-warning" : "text-success";
-  const dot =
-    ev.status === "error" ? "bg-danger" : ev.status === "running" ? "bg-warning animate-pulse" : "bg-success";
-  return (
-    <div className="flex items-start gap-2 rounded-[var(--radius)] border border-border bg-surface-2/60 px-2.5 py-1.5 text-xs">
-      <span className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
-      <div className="min-w-0 flex-1">
-        <span className={`font-mono font-medium ${color}`}>{ev.name}</span>
-        {ev.target && <span className="ml-2 truncate text-faint">{ev.target}</span>}
-      </div>
-    </div>
-  );
-}
-
 function Bubble({ turn, streaming }: { turn: Turn; streaming: boolean }) {
   if (turn.role === "user") {
     return (
@@ -727,8 +803,8 @@ function Bubble({ turn, streaming }: { turn: Turn; streaming: boolean }) {
         </details>
       )}
       {(turn.tools?.length ?? 0) > 0 && (
-        <div className="mb-2 space-y-1">
-          {turn.tools!.map((ev, i) => <ToolCard key={`${ev.id}-${i}`} ev={ev} />)}
+        <div className="mb-2 space-y-1.5">
+          {turn.tools!.map((ev, i) => <ToolCall key={`${ev.id}-${i}`} tool={ev} />)}
         </div>
       )}
       {turn.text ? (

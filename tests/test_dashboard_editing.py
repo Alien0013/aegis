@@ -43,6 +43,15 @@ def test_chat_event_row_carries_text_and_tool_id():
     start = _chat_event_row({"type": "tool_start", "id": "c1", "name": "bash",
                              "args": {"command": "ls -la"}})
     assert start["id"] == "c1" and start["target"] == "ls -la"
+    assert start["args"] == {"command": "ls -la"}
+    patch = "*** Begin Patch\n*** Update File: app.py\n@@\n-print('old')\n+print('new')\n*** End Patch"
+    patch_start = _chat_event_row({"type": "tool_start", "id": "p1", "name": "apply_patch",
+                                   "args": {"patch": patch}})
+    assert patch_start["args"]["patch"] == patch
+    edit_start = _chat_event_row({"type": "tool_start", "id": "e1", "name": "edit_file",
+                                  "args": {"path": "app.py", "old_string": "old", "new_string": "new"}})
+    assert edit_start["args"]["old_string"] == "old"
+    assert edit_start["args"]["new_string"] == "new"
     single = _chat_event_row({"type": "tool_start", "id": "s1", "name": "spawn_subagent",
                               "args": {"task": "audit the API adapter"}})
     assert single["target"] == "audit the API adapter"
@@ -55,6 +64,7 @@ def test_chat_event_row_carries_text_and_tool_id():
     assert hermes_batch["target"] == "2 tasks: inspect gateway | verify cron"
     res = _chat_event_row({"type": "tool_result", "id": "c1", "name": "bash", "preview": "ok"})
     assert res["id"] == "c1" and res["status"] == "ok" and res["target"] == "ok"
+    assert res["preview"] == "ok"
     err = _chat_event_row({"type": "tool_result", "id": "c2", "is_error": True})
     assert err["status"] == "error"
     it = _chat_event_row({"type": "iteration", "n": 2, "max": 30})

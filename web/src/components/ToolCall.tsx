@@ -14,6 +14,7 @@ export interface ToolEntry {
   args?: string;
   preview?: string;
   summary?: string;
+  diff?: string;
   error?: string;
   status: "running" | "ok" | "error";
   startedAt: number;
@@ -38,10 +39,27 @@ function fmtElapsed(ms: number): string {
 function colorizeDiff(diff: string) {
   return diff.split("\n").map((line, i) => {
     let cls = "text-dim";
-    if (line.startsWith("+") && !line.startsWith("+++")) cls = "text-success";
-    else if (line.startsWith("-") && !line.startsWith("---")) cls = "text-danger";
-    else if (line.startsWith("@@")) cls = "text-primary";
-    return <div key={i} className={cls}>{line || " "}</div>;
+    let prefix = "";
+    if (line.startsWith("diff --git") || line.startsWith("+++ ") || line.startsWith("--- ")) {
+      cls = "bg-surface-2 px-2 py-1 text-text";
+    } else if (line.startsWith("+")) {
+      cls = "bg-success/10 px-2 text-success";
+      prefix = "+";
+    } else if (line.startsWith("-")) {
+      cls = "bg-danger/10 px-2 text-danger";
+      prefix = "-";
+    } else if (line.startsWith("@@")) {
+      cls = "bg-primary/10 px-2 py-0.5 text-primary";
+    } else {
+      cls = "px-2 text-dim";
+      prefix = " ";
+    }
+    return (
+      <div key={i} className={cls}>
+        {prefix && <span className="mr-2 select-none text-faint">{prefix}</span>}
+        {prefix ? line.slice(1) || " " : line || " "}
+      </div>
+    );
   });
 }
 
@@ -54,9 +72,39 @@ function Section({ label, children, mono = true }: { label: string; children: Re
   );
 }
 
+function looksLikeDiff(value: string): boolean {
+  return /^(diff --git|@@ |[+-]{3}\s|[+-][^\n])/m.test(value);
+}
+
+function FileDiffPanel({ diff }: { diff: string }) {
+  const lines = diff.split("\n");
+  const files = lines.filter((line) => line.startsWith("diff --git ")).length;
+  const adds = lines.filter((line) => line.startsWith("+") && !line.startsWith("+++")).length;
+  const dels = lines.filter((line) => line.startsWith("-") && !line.startsWith("---")).length;
+  return (
+    <div className="overflow-hidden rounded-[var(--radius)] border border-border bg-bg">
+      <div className="flex flex-wrap items-center gap-2 border-b border-border bg-surface-2 px-2 py-1.5 font-sans text-[11px] text-faint">
+        <span className="font-medium text-text">{files ? `${files} file${files === 1 ? "" : "s"}` : "Diff preview"}</span>
+        <span className="text-success">+{adds}</span>
+        <span className="text-danger">-{dels}</span>
+      </div>
+      <pre className="scroll-thin max-h-80 overflow-auto py-1 font-mono text-[12px] leading-5">
+        {colorizeDiff(diff)}
+      </pre>
+    </div>
+  );
+}
+
 export function ToolCall({ tool }: { tool: ToolEntry }) {
   const [override, setOverride] = useState<boolean | null>(null);
-  const open = override ?? tool.status === "error";
+  const diffText = [tool.diff || "", tool.summary || "", tool.preview || ""].find(looksLikeDiff) || "";
+  const isDiff = !!diffText && (
+    tool.name.includes("edit")
+    || tool.name.includes("patch")
+    || tool.name.includes("write")
+    || looksLikeDiff(diffText)
+  );
+  const open = override ?? (tool.status === "error" || isDiff);
 
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -67,7 +115,6 @@ export function ToolCall({ tool }: { tool: ToolEntry }) {
 
   const elapsed = tool.startedAt > 0
     ? fmtElapsed((tool.completedAt ?? now) - tool.startedAt) : null;
-  const isDiff = !!tool.summary && /^(@@|[+-])/m.test(tool.summary) && tool.name.includes("edit");
   const hasBody = !!(tool.args || tool.preview || tool.summary || tool.error);
 
   return (
@@ -96,10 +143,20 @@ export function ToolCall({ tool }: { tool: ToolEntry }) {
       {open && hasBody && (
         <div className="space-y-2 border-t border-border/60 px-3 py-2 text-xs">
           {tool.args && <Section label="args">{tool.args}</Section>}
-          {tool.preview && tool.status === "running" && <Section label="stream">{tool.preview}</Section>}
-          {tool.summary && (isDiff
-            ? <Section label="diff"><pre className="overflow-x-auto leading-snug">{colorizeDiff(tool.summary)}</pre></Section>
-            : <Section label="result">{tool.summary}</Section>)}
+          {isDiff
+            ? (
+                <>
+                  <Section label="diff" mono={false}><FileDiffPanel diff={diffText} /></Section>
+                  {tool.summary && tool.summary !== diffText && <Section label="result">{tool.summary}</Section>}
+                  {tool.preview && tool.preview !== diffText && <Section label="preview">{tool.preview}</Section>}
+                </>
+              )
+            : (
+                <>
+                  {tool.preview && <Section label={tool.status === "running" ? "stream" : "preview"}>{tool.preview}</Section>}
+                  {tool.summary && <Section label="result">{tool.summary}</Section>}
+                </>
+              )}
           {tool.error && <Section label="error"><span className="text-danger">{tool.error}</span></Section>}
         </div>
       )}

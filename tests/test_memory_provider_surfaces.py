@@ -105,6 +105,104 @@ def test_jsonl_provider_uses_config_and_exposes_local_tools():
     assert recent.data["provider"] == "jsonl"
 
 
+def test_mem0_schema_status_supports_host_mode_without_mem0ai(monkeypatch):
+    from aegis.memory_providers import (
+        memory_provider_config_schema,
+        memory_provider_metadata,
+        memory_provider_status,
+    )
+
+    cfg = _cfg()
+    cfg.data["memory"]["provider"] = "mem0"
+    cfg.data["memory"]["mem0"] = {"host": "http://mem0.local", "user_id": "u1", "agent_id": "a1"}
+    monkeypatch.setattr("aegis.memory_providers.importlib.util.find_spec", lambda _name: None)
+
+    meta = memory_provider_metadata("mem0")
+    schema = memory_provider_config_schema("mem0")
+    status = memory_provider_status("mem0", cfg)
+
+    assert "mem0_search" in meta["tool_names"]
+    assert "mem0_update" in meta["tool_names"]
+    assert "memory.mem0.host" in schema["properties"]
+    assert status["ready"] is True
+    assert status["dependency"]["required"] is False
+    assert status["dependency"]["mode"] == "host"
+    assert status["config"]["memory.mem0.host"] == "http://mem0.local"
+
+
+def test_mem0_host_provider_crud_tools_call_rest_endpoints(monkeypatch):
+    from aegis.memory_providers import build_memory_provider
+    from aegis.tools.base import ToolContext
+    from aegis.types import Message
+
+    cfg = _cfg()
+    cfg.data["memory"]["provider"] = "mem0"
+    cfg.data["memory"]["mem0"] = {
+        "host": "http://mem0.local/",
+        "user_id": "user-1",
+        "agent_id": "agent-1",
+        "timeout": 7,
+    }
+    monkeypatch.setenv("MEM0_API_KEY", "secret-key")
+    calls = []
+
+    class Response:
+        text = ""
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    def fake_request(method, url, json=None, headers=None, timeout=None):
+        calls.append({"method": method, "url": url, "json": json, "headers": headers, "timeout": timeout})
+        if url.endswith("/search"):
+            return Response({"results": [{"id": "m1", "memory": "ship parser fix"}]})
+        return Response({"ok": True})
+
+    monkeypatch.setattr("httpx.request", fake_request)
+
+    provider = build_memory_provider("mem0", cfg)
+    tools = {tool.name: tool for tool in provider.tools()}
+
+    assert {"memory_provider_recall", "mem0_search", "mem0_add", "mem0_update", "mem0_delete"} <= set(tools)
+    search = tools["mem0_search"].run({"query": "parser", "limit": 3}, ToolContext(config=cfg))
+    add = tools["mem0_add"].run({"text": "remember alpha"}, ToolContext(config=cfg))
+    update = tools["mem0_update"].run({"memory_id": "m1", "text": "remember beta"}, ToolContext(config=cfg))
+    delete = tools["mem0_delete"].run({"memory_id": "m1"}, ToolContext(config=cfg))
+    provider.sync_turn([Message.user("question"), Message.assistant("answer")])
+
+    assert not search.is_error and "ship parser fix" in search.content
+    assert not add.is_error and not update.is_error and not delete.is_error
+    assert calls[0] == {
+        "method": "POST",
+        "url": "http://mem0.local/search",
+        "json": {"query": "parser", "filters": {"user_id": "user-1"}, "top_k": 3},
+        "headers": {"X-API-Key": "secret-key"},
+        "timeout": 7,
+    }
+    assert calls[1]["method"] == "POST"
+    assert calls[1]["url"] == "http://mem0.local/memories"
+    assert calls[1]["json"] == {
+        "messages": [{"role": "user", "content": "remember alpha"}],
+        "user_id": "user-1",
+        "agent_id": "agent-1",
+        "infer": False,
+    }
+    assert calls[2]["method"] == "PUT"
+    assert calls[2]["url"] == "http://mem0.local/memories/m1"
+    assert calls[2]["json"] == {"text": "remember beta"}
+    assert calls[3]["method"] == "DELETE"
+    assert calls[3]["url"] == "http://mem0.local/memories/m1"
+    assert calls[4]["method"] == "POST"
+    assert calls[4]["json"]["infer"] is True
+    assert calls[4]["json"]["messages"][-1] == {"role": "assistant", "content": "answer"}
+
+
 def test_http_provider_recall_tool_is_mockable_and_fail_soft(monkeypatch):
     from aegis.memory_providers import build_memory_provider
     from aegis.tools.base import ToolContext

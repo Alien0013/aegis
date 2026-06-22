@@ -157,11 +157,11 @@ _PROVIDER_SPECS: dict[str, MemoryProviderSpec] = {
     "mem0": MemoryProviderSpec(
         name="mem0",
         display_name="mem0",
-        kind="sdk",
-        description="Semantic/vector memory through the optional mem0ai SDK.",
+        kind="sdk/http",
+        description="Semantic/vector memory through the optional mem0ai SDK or a self-hosted mem0 HTTP API.",
         package="mem0ai",
         import_name="mem0",
-        optional_env_vars=("OPENAI_API_KEY", "MEM0_API_KEY"),
+        optional_env_vars=("MEM0_HOST", "MEM0_API_KEY", "OPENAI_API_KEY", "MEM0_USER_ID", "MEM0_AGENT_ID"),
         config_schema={
             "memory.provider": {
                 "type": "string",
@@ -173,13 +173,45 @@ _PROVIDER_SPECS: dict[str, MemoryProviderSpec] = {
                 "default": "aegis",
                 "description": "User identifier passed to mem0 add/search calls.",
             },
+            "memory.mem0.agent_id": {
+                "type": "string",
+                "default": "aegis",
+                "description": "Agent identifier passed to mem0 host-mode add calls.",
+            },
+            "memory.mem0.host": {
+                "type": "string",
+                "required": False,
+                "description": "Optional mem0 OSS/API host. Also read from MEM0_HOST.",
+            },
+            "memory.mem0.api_key_env": {
+                "type": "string",
+                "default": "MEM0_API_KEY",
+                "required": False,
+                "description": "Environment variable containing the mem0 API key.",
+            },
+            "memory.mem0.timeout": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 20,
+                "required": False,
+                "description": "HTTP timeout in seconds for mem0 host mode.",
+            },
         },
         setup_steps=(
             "Install the optional package: pip install mem0ai.",
             "Set memory.provider to mem0.",
+            "Configure MEM0_API_KEY for hosted mem0, or memory.mem0.host/MEM0_HOST for a self-hosted mem0 API.",
             "Configure any embedding/model keys required by your mem0 setup.",
         ),
-        tool_names=("memory_provider_status", "memory_provider_setup", "memory_provider_recall"),
+        tool_names=(
+            "memory_provider_status",
+            "memory_provider_setup",
+            "memory_provider_recall",
+            "mem0_search",
+            "mem0_add",
+            "mem0_update",
+            "mem0_delete",
+        ),
     ),
     "honcho": MemoryProviderSpec(
         name="honcho",
@@ -316,6 +348,32 @@ def _dependency_state(spec: MemoryProviderSpec) -> dict[str, Any]:
     }
 
 
+def _mem0_host(config) -> str:
+    if config is None:
+        return os.environ.get("MEM0_HOST", "").strip().rstrip("/")
+    return str(config.get("memory.mem0.host", "") or os.environ.get("MEM0_HOST", "")).strip().rstrip("/")
+
+
+def _mem0_user_id(config) -> str:
+    return str(os.environ.get("MEM0_USER_ID") or (config.get("memory.mem0.user_id", "aegis") if config else "aegis") or "aegis")
+
+
+def _mem0_agent_id(config) -> str:
+    return str(os.environ.get("MEM0_AGENT_ID") or (config.get("memory.mem0.agent_id", "aegis") if config else "aegis") or "aegis")
+
+
+def _mem0_api_key_env(config) -> str:
+    value = config.get("memory.mem0.api_key_env", "MEM0_API_KEY") if config else "MEM0_API_KEY"
+    return str(value or "MEM0_API_KEY")
+
+
+def _mem0_timeout(config) -> int:
+    try:
+        return max(1, int(config.get("memory.mem0.timeout", 20) if config else 20))
+    except (TypeError, ValueError):
+        return 20
+
+
 def _redacted_config(config, spec: MemoryProviderSpec) -> dict[str, Any]:
     if config is None:
         return {}
@@ -350,6 +408,14 @@ def memory_provider_status(name: str, config=None) -> dict[str, Any]:
         }
 
     dependency = _dependency_state(spec)
+    if spec.name == "mem0" and _mem0_host(config):
+        dependency = {
+            "required": False,
+            "package": spec.package,
+            "import_name": spec.import_name,
+            "installed": True,
+            "mode": "host",
+        }
     env_required = _env_state(spec.env_vars)
     env_any = _env_state(spec.env_any)
     env_optional = _env_state(spec.optional_env_vars)
@@ -367,6 +433,12 @@ def memory_provider_status(name: str, config=None) -> dict[str, Any]:
         prefix = f"memory.{name}"
         if not (config.get(f"{prefix}.add_url") or config.get(f"{prefix}.search_url")):
             problems.append(f"configure {prefix}.search_url or {prefix}.add_url")
+    if spec.name == "mem0":
+        host = _mem0_host(config)
+        if host:
+            dependency["mode"] = "host"
+        elif dependency.get("installed"):
+            dependency["mode"] = "sdk"
 
     selected = _normalize_provider_name(config.get("memory.provider", "")) if config else ""
     ready = not problems
@@ -535,6 +607,178 @@ class _ProviderRecallTool(Tool):
             display=f"recalled memory from {getattr(self.provider, 'name', 'provider')}",
             data={"provider": getattr(self.provider, "name", ""), "query": query},
         )
+
+
+class _ProviderAddTool(Tool):
+    name = "memory_provider_add"
+    description = "Add one provider-backed memory item."
+    parameters = {
+        "type": "object",
+        "properties": {
+            "text": {"type": "string", "description": "Memory text to add."},
+        },
+        "required": ["text"],
+        "additionalProperties": False,
+    }
+    toolset = "core"
+    groups = ["network"]
+
+    def __init__(self, provider):
+        self.provider = provider
+
+    def available(self) -> tuple[bool, str]:
+        return (True, "") if callable(getattr(self.provider, "add_memory", None)) else (False, "provider cannot add memories")
+
+    def schema(self) -> dict[str, Any]:
+        return {"name": self.name, "description": self.description, "parameters": self.parameters}
+
+    def run(self, args: dict[str, Any], ctx):
+        from .tools.base import ToolResult
+
+        text = str(args.get("text") or "").strip()
+        if not text:
+            return ToolResult.error("text is required")
+        try:
+            data = self.provider.add_memory(text)
+        except Exception as exc:  # noqa: BLE001
+            return ToolResult.error(f"memory add failed: {exc}")
+        return ToolResult.ok("memory added", display="memory added", data={"provider": self.provider.name, "result": data})
+
+
+class _ProviderUpdateTool(Tool):
+    name = "memory_provider_update"
+    description = "Update one provider-backed memory item by id."
+    parameters = {
+        "type": "object",
+        "properties": {
+            "memory_id": {"type": "string", "description": "Provider memory id."},
+            "text": {"type": "string", "description": "Replacement memory text."},
+        },
+        "required": ["memory_id", "text"],
+        "additionalProperties": False,
+    }
+    toolset = "core"
+    groups = ["network"]
+
+    def __init__(self, provider):
+        self.provider = provider
+
+    def available(self) -> tuple[bool, str]:
+        return (True, "") if callable(getattr(self.provider, "update_memory", None)) else (False, "provider cannot update memories")
+
+    def schema(self) -> dict[str, Any]:
+        return {"name": self.name, "description": self.description, "parameters": self.parameters}
+
+    def run(self, args: dict[str, Any], ctx):
+        from .tools.base import ToolResult
+
+        memory_id = str(args.get("memory_id") or "").strip()
+        text = str(args.get("text") or "").strip()
+        if not memory_id or not text:
+            return ToolResult.error("memory_id and text are required")
+        try:
+            data = self.provider.update_memory(memory_id, text)
+        except Exception as exc:  # noqa: BLE001
+            return ToolResult.error(f"memory update failed: {exc}")
+        return ToolResult.ok("memory updated", display="memory updated", data={"provider": self.provider.name, "result": data})
+
+
+class _ProviderDeleteTool(Tool):
+    name = "memory_provider_delete"
+    description = "Delete one provider-backed memory item by id."
+    parameters = {
+        "type": "object",
+        "properties": {
+            "memory_id": {"type": "string", "description": "Provider memory id."},
+        },
+        "required": ["memory_id"],
+        "additionalProperties": False,
+    }
+    toolset = "core"
+    groups = ["network"]
+
+    def __init__(self, provider):
+        self.provider = provider
+
+    def available(self) -> tuple[bool, str]:
+        return (True, "") if callable(getattr(self.provider, "delete_memory", None)) else (False, "provider cannot delete memories")
+
+    def schema(self) -> dict[str, Any]:
+        return {"name": self.name, "description": self.description, "parameters": self.parameters}
+
+    def run(self, args: dict[str, Any], ctx):
+        from .tools.base import ToolResult
+
+        memory_id = str(args.get("memory_id") or "").strip()
+        if not memory_id:
+            return ToolResult.error("memory_id is required")
+        try:
+            data = self.provider.delete_memory(memory_id)
+        except Exception as exc:  # noqa: BLE001
+            return ToolResult.error(f"memory delete failed: {exc}")
+        return ToolResult.ok("memory deleted", display="memory deleted", data={"provider": self.provider.name, "result": data})
+
+
+class _Mem0SearchTool(Tool):
+    name = "mem0_search"
+    description = "Search mem0 memory for relevant items."
+    parameters = {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Search query."},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 8},
+        },
+        "required": ["query"],
+        "additionalProperties": False,
+    }
+    toolset = "core"
+    groups = ["network"]
+
+    def __init__(self, provider):
+        self.provider = provider
+
+    def available(self) -> tuple[bool, str]:
+        return True, ""
+
+    def schema(self) -> dict[str, Any]:
+        return {"name": self.name, "description": self.description, "parameters": self.parameters}
+
+    def run(self, args: dict[str, Any], ctx):
+        from .tools.base import ToolResult
+
+        query = str(args.get("query") or "").strip()
+        if not query:
+            return ToolResult.error("query is required")
+        try:
+            limit = max(1, min(50, int(args.get("limit", 8) or 8)))
+        except (TypeError, ValueError):
+            limit = 8
+        try:
+            items = list(self.provider._search_items(query, limit))
+        except Exception as exc:  # noqa: BLE001
+            return ToolResult.error(f"mem0 search failed: {exc}")
+        texts = [self.provider._item_text(item) for item in items]
+        body = "\n".join(f"- {text}" for text in texts if text) or "(empty)"
+        return ToolResult.ok(
+            body,
+            display=f"{len(items)} mem0 result(s)",
+            data={"provider": "mem0", "query": query, "results": items},
+        )
+
+
+class _Mem0AddTool(_ProviderAddTool):
+    name = "mem0_add"
+    description = "Add one mem0 memory item."
+
+
+class _Mem0UpdateTool(_ProviderUpdateTool):
+    name = "mem0_update"
+    description = "Update one mem0 memory item by id."
+
+
+class _Mem0DeleteTool(_ProviderDeleteTool):
+    name = "mem0_delete"
+    description = "Delete one mem0 memory item by id."
 
 
 class _JSONLRecentTool(Tool):
@@ -748,21 +992,29 @@ class JSONLMemoryProvider(ProviderSurfaceMixin, MemoryProvider):
 
 
 class Mem0Provider(ProviderSurfaceMixin, MemoryProvider):
-    """Vector memory via the `mem0ai` package (optional dependency)."""
+    """Vector memory via the `mem0ai` package or a self-hosted mem0 HTTP API."""
 
     name = "mem0"
 
-    def __init__(self, user_id: str = "aegis", config=None):
-        try:
-            from mem0 import Memory
-        except ImportError as e:  # noqa: BLE001
-            raise RuntimeError("mem0 provider needs `pip install mem0ai`") from e
+    def __init__(self, user_id: str = "aegis", agent_id: str = "aegis",
+                 host: str = "", api_key_env: str = "MEM0_API_KEY",
+                 timeout: int = 20, config=None):
         self.config = config
         self.user_id = user_id
-        try:
-            self._mem = Memory()
-        except Exception as e:  # noqa: BLE001
-            raise RuntimeError("mem0 provider could not initialize; check mem0 configuration") from e
+        self.agent_id = agent_id
+        self.host = str(host or "").strip().rstrip("/")
+        self.api_key_env = api_key_env or "MEM0_API_KEY"
+        self.timeout = timeout
+        self._mem = None
+        if not self.host:
+            try:
+                from mem0 import Memory
+            except ImportError as e:  # noqa: BLE001
+                raise RuntimeError("mem0 provider needs `pip install mem0ai` or memory.mem0.host/MEM0_HOST") from e
+            try:
+                self._mem = Memory()
+            except Exception as e:  # noqa: BLE001
+                raise RuntimeError("mem0 provider could not initialize; check mem0 configuration") from e
         self._last_query = ""
 
     @staticmethod
@@ -771,10 +1023,80 @@ class Mem0Provider(ProviderSurfaceMixin, MemoryProvider):
             return str(item.get("memory") or item.get("text") or "")
         return str(item or "")
 
-    def _search(self, query: str, limit: int = 8) -> list[str]:
-        results = self._mem.search(query or "recent context", user_id=self.user_id, limit=limit)
+    def _headers(self) -> dict[str, str]:
+        key = os.environ.get(self.api_key_env, "").strip()
+        return {"X-API-Key": key} if key else {}
+
+    def _url(self, path: str) -> str:
+        return f"{self.host}/{path.lstrip('/')}"
+
+    def _request(self, method: str, path: str, *, json_body: dict[str, Any] | None = None):
+        import httpx
+
+        response = httpx.request(
+            method,
+            self._url(path),
+            json=json_body,
+            headers=self._headers(),
+            timeout=self.timeout,
+        )
+        raise_for_status = getattr(response, "raise_for_status", None)
+        if callable(raise_for_status):
+            raise_for_status()
+        try:
+            return response.json()
+        except Exception:  # noqa: BLE001
+            return getattr(response, "text", "")
+
+    def _search_items(self, query: str, limit: int = 8):
+        query = query or "recent context"
+        if self.host:
+            results = self._request("POST", "/search", json_body={
+                "query": query,
+                "filters": {"user_id": self.user_id},
+                "top_k": limit,
+            })
+        else:
+            results = self._mem.search(query, user_id=self.user_id, limit=limit)
         items = results.get("results", results) if isinstance(results, dict) else results
+        return items or []
+
+    def _search(self, query: str, limit: int = 8) -> list[str]:
+        items = self._search_items(query, limit)
         return [text for text in (self._item_text(r) for r in (items or [])) if text]
+
+    def add_memory(self, text: str):
+        payload = {
+            "messages": [{"role": "user", "content": text}],
+            "user_id": self.user_id,
+            "agent_id": self.agent_id,
+            "infer": False,
+        }
+        if self.host:
+            return self._request("POST", "/memories", json_body=payload)
+        return self._mem.add(payload["messages"], user_id=self.user_id)
+
+    def update_memory(self, memory_id: str, text: str):
+        if self.host:
+            return self._request("PUT", f"/memories/{memory_id}", json_body={"text": text})
+        updater = getattr(self._mem, "update", None) or getattr(self._mem, "update_memory", None)
+        if not callable(updater):
+            raise RuntimeError("mem0 SDK client does not expose update")
+        try:
+            return updater(memory_id=memory_id, data=text)
+        except TypeError:
+            return updater(memory_id, text)
+
+    def delete_memory(self, memory_id: str):
+        if self.host:
+            return self._request("DELETE", f"/memories/{memory_id}")
+        deleter = getattr(self._mem, "delete", None) or getattr(self._mem, "delete_memory", None)
+        if not callable(deleter):
+            raise RuntimeError("mem0 SDK client does not expose delete")
+        try:
+            return deleter(memory_id=memory_id)
+        except TypeError:
+            return deleter(memory_id)
 
     def system_prompt_block(self) -> str:
         try:
@@ -792,7 +1114,13 @@ class Mem0Provider(ProviderSurfaceMixin, MemoryProvider):
             return ""
 
     def _provider_tools(self) -> list:
-        return [_ProviderRecallTool(self, network=True)]
+        return [
+            _ProviderRecallTool(self, network=True),
+            _Mem0SearchTool(self),
+            _Mem0AddTool(self),
+            _Mem0UpdateTool(self),
+            _Mem0DeleteTool(self),
+        ]
 
     def sync_turn(self, messages) -> None:
         try:
@@ -800,7 +1128,15 @@ class Mem0Provider(ProviderSurfaceMixin, MemoryProvider):
             wire = [{"role": m.role, "content": m.content} for m in messages[-6:]
                     if m.role in ("user", "assistant") and m.content]
             if wire:
-                self._mem.add(wire, user_id=self.user_id)
+                if self.host:
+                    self._request("POST", "/memories", json_body={
+                        "messages": wire,
+                        "user_id": self.user_id,
+                        "agent_id": self.agent_id,
+                        "infer": True,
+                    })
+                else:
+                    self._mem.add(wire, user_id=self.user_id)
         except Exception:  # noqa: BLE001
             pass
 
@@ -1026,7 +1362,11 @@ def build_memory_provider(name: str, config) -> MemoryProvider | None:
     if name == "mem0":
         try:
             return Mem0Provider(
-                user_id=config.get("memory.mem0.user_id", "aegis") or "aegis",
+                user_id=_mem0_user_id(config),
+                agent_id=_mem0_agent_id(config),
+                host=_mem0_host(config),
+                api_key_env=_mem0_api_key_env(config),
+                timeout=_mem0_timeout(config),
                 config=config,
             )
         except RuntimeError as e:

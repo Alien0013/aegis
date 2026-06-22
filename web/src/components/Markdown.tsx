@@ -8,6 +8,7 @@
 import type { ReactNode } from "react";
 
 const INLINE = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*\n]+\*|_[^_\n]+_)|(\[[^\]]+\]\([^)]+\))/g;
+const LANGUAGE_ID = /^[a-z0-9_+.-]+$/i;
 
 function inline(text: string, key: string): ReactNode[] {
   const out: ReactNode[] = [];
@@ -112,11 +113,17 @@ export function Markdown({ text }: { text: string }) {
       {parts.map((part, pi) => {
         if (part.startsWith("```")) {
           const lang = /^```([^\n]*)/.exec(part)?.[1]?.trim() || "";
+          const safeLang = LANGUAGE_ID.test(lang) ? lang : "";
           const body = part.replace(/^```[^\n]*\n?/, "").replace(/\n?```$/, "");
           return (
             <pre key={pi} className="scroll-thin overflow-x-auto rounded-[var(--radius)] border border-border bg-surface-2 p-3">
-              {lang && <div className="mb-1.5 select-none text-[10px] uppercase tracking-wide text-faint">{lang}</div>}
-              <code className="font-mono text-[12.5px] leading-relaxed text-text">{body}</code>
+              {safeLang && <div className="mb-1.5 select-none text-[10px] uppercase tracking-wide text-faint">{safeLang}</div>}
+              <code
+                className={`font-mono text-[12.5px] leading-relaxed text-text${safeLang ? ` language-${safeLang}` : ""}`}
+                data-language={safeLang || undefined}
+              >
+                {body}
+              </code>
             </pre>
           );
         }
