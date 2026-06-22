@@ -30,6 +30,9 @@ def test_cli_parser_exposes_upgrade_commands():
     assert parser.parse_args(["config", "show"]).action == "show"
     assert parser.parse_args(["config", "edit", "--secrets"]).secrets is True
     assert parser.parse_args(["config", "setup"]).action == "setup"
+    assert parser.parse_args(["setup", "tools"]).section == "tools"
+    assert parser.parse_args(["setup", "gateway", "--non-interactive"]).section == "gateway"
+    assert parser.parse_args(["onboard", "terminal", "--exec-mode", "smart"]).exec_mode == "smart"
     assert parser.parse_args(["config", "reset", "model.default"]).action == "reset"
     assert parser.parse_args(["config", "set", "model.typo", "x", "--force"]).force is True
     cfg_setup = parser.parse_args([

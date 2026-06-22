@@ -237,10 +237,32 @@ def cmd_auth(args, config: Config) -> int:
 # setup wizard
 # --------------------------------------------------------------------------- #
 def cmd_setup(args, config: Config) -> int:
-    from ..onboarding import run_onboarding, run_onboarding_noninteractive
+    from ..onboarding import (
+        run_onboarding,
+        run_onboarding_noninteractive,
+        run_setup_section,
+        run_setup_section_noninteractive,
+    )
 
+    section = str(getattr(args, "section", "") or "").strip().lower()
     if getattr(args, "json", False) and not getattr(args, "non_interactive", False):
         return _die("--json requires --non-interactive")
+    if section and getattr(args, "non_interactive", False):
+        return run_setup_section_noninteractive(
+            config,
+            section,
+            accept_risk=getattr(args, "accept_risk", False),
+            json_output=getattr(args, "json", False),
+            provider=getattr(args, "provider", None),
+            auth=getattr(args, "auth", "skip"),
+            model=getattr(args, "model", None),
+            web=getattr(args, "web", "auto"),
+            toolsets=getattr(args, "toolsets", None),
+            channels=getattr(args, "channels", None),
+            exec_mode=getattr(args, "exec_mode", "ask"),
+            services=getattr(args, "install_services", False)
+            and not getattr(args, "no_services", False),
+        )
     if getattr(args, "non_interactive", False):
         return run_onboarding_noninteractive(
             config,
@@ -255,6 +277,15 @@ def cmd_setup(args, config: Config) -> int:
             exec_mode=getattr(args, "exec_mode", "ask"),
             services=getattr(args, "install_services", False)
             and not getattr(args, "no_services", False),
+        )
+    if section:
+        return run_setup_section(
+            config,
+            section,
+            quick=getattr(args, "quick", False),
+            advanced=getattr(args, "advanced", False),
+            probe=not getattr(args, "no_probe", False),
+            services=not getattr(args, "no_services", False),
         )
 
     return run_onboarding(
@@ -1326,6 +1357,10 @@ def cmd_config(args, config: Config) -> int:
             "aegis config reset <key>",
             "aegis config doctor",
             "aegis config setup",
+            "aegis setup model",
+            "aegis setup terminal",
+            "aegis setup tools",
+            "aegis setup gateway",
             "aegis setup",
         ]
         if getattr(args, "json", False):
@@ -1486,6 +1521,10 @@ def cmd_config(args, config: Config) -> int:
         _print("  aegis config reset <key>          # Reset a config key or section to defaults")
         _print("  aegis config doctor               # Validate config and provider credentials")
         _print("  aegis config setup                # Run setup wizard from config")
+        _print("  aegis setup model                 # Configure provider/model")
+        _print("  aegis setup terminal              # Configure execution approval")
+        _print("  aegis setup tools                 # Configure model-visible toolsets")
+        _print("  aegis setup gateway               # Configure messaging channels")
         _print("  aegis setup                       # Run setup wizard")
         return 0
 
@@ -1535,6 +1574,10 @@ def cmd_config(args, config: Config) -> int:
     if args.action in ("summary", "show", "status", "view"):
         return show_summary()
     if args.action == "setup":
+        if getattr(args, "key", None):
+            if getattr(args, "value", None):
+                return _die("usage: aegis config setup [section] [setup flags]")
+            setattr(args, "section", str(args.key))
         return cmd_setup(args, config)
     if args.action == "edit":
         import shutil
@@ -2220,6 +2263,9 @@ def _die(msg: str) -> int:
     return 1
 
 
+_SETUP_SECTIONS = ("model", "terminal", "tools", "gateway", "agent", "web", "memory", "dashboard", "services")
+
+
 def _add_onboard_automation_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--non-interactive", "--noninteractive", action="store_true",
                         help="configure without prompts")
@@ -2238,7 +2284,10 @@ def _add_onboard_automation_args(parser: argparse.ArgumentParser) -> None:
                         help="install dashboard/gateway services in noninteractive mode")
 
 
-def _add_setup_args(parser: argparse.ArgumentParser) -> None:
+def _add_setup_args(parser: argparse.ArgumentParser, *, include_section: bool = False) -> None:
+    if include_section:
+        parser.add_argument("section", nargs="?", choices=_SETUP_SECTIONS,
+                            help="configure one section instead of running the full wizard")
     parser.add_argument("--quick", action="store_true", help="apply fast local defaults")
     parser.add_argument("--advanced", action="store_true", help="show advanced setup choices")
     parser.add_argument("--no-probe", action="store_true", help="skip provider connection test")
@@ -2297,11 +2346,11 @@ def build_parser() -> argparse.ArgumentParser:
     a.set_defaults(func=cmd_auth)
 
     s = sub.add_parser("setup", help="interactive setup wizard")
-    _add_setup_args(s)
+    _add_setup_args(s, include_section=True)
     s.set_defaults(func=cmd_setup)
 
     ob = sub.add_parser("onboard", help="interactive setup wizard (alias of setup)")
-    _add_setup_args(ob)
+    _add_setup_args(ob, include_section=True)
     ob.set_defaults(func=cmd_setup)
 
     up = sub.add_parser("update", help="update AEGIS to the latest version")

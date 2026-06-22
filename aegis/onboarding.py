@@ -199,6 +199,7 @@ MODEL_PRESETS: dict[str, list[tuple[str, str]]] = {
 VALID_WEB_BACKENDS = {"auto", "duckduckgo", "brave", "tavily", "serper", "skip"}
 VALID_TOOLSETS = {"core", "browser", "computer", "voice", "lsp", "mcp", "all"}
 VALID_CHANNELS = {"cli", "telegram", "discord", "slack", "signal", "matrix", "email", "webhook", "ntfy"}
+SETUP_SECTIONS = ("model", "terminal", "tools", "gateway", "agent", "web", "memory", "dashboard", "services")
 
 
 @dataclass
@@ -426,6 +427,242 @@ def run_onboarding_noninteractive(
         output_func(f"Dashboard: {data['dashboard_url']}")
         output_func("Next: aegis status && aegis")
     return 0 if not state.errors else 1
+
+
+def run_setup_section(
+    config: Config,
+    section: str,
+    *,
+    quick: bool = False,
+    advanced: bool = False,
+    probe: bool = True,
+    services: bool = True,
+    input_func: Input = input,
+    secret_func: Input | None = None,
+    output_func: Output = print,
+) -> int:
+    secret_func = secret_func or _secret
+    section = (section or "").strip().lower()
+    state = OnboardingState(channels=[], services=[], workspace_files=[], service_errors=[], errors=[])
+    out = output_func
+    if section not in SETUP_SECTIONS:
+        out(f"error: unknown setup section: {section}")
+        return 2
+
+    _banner(out)
+    _config_location(out)
+    global _STEP
+    previous_step = _STEP
+    _STEP = _Stepper(1)
+    try:
+        if section == "model":
+            if not _configure_model(config, state, advanced, probe, input_func, secret_func, out):
+                return 1
+        elif section == "terminal":
+            _configure_terminal(config, state, advanced, input_func, out)
+        elif section == "tools":
+            _configure_agent_surface(config, state, advanced, input_func, out)
+        elif section == "gateway":
+            _configure_channels(config, state, advanced, input_func, secret_func, out)
+        elif section == "agent":
+            _configure_agent_surface(config, state, advanced, input_func, out)
+            _seed_workspace(state, out)
+            _configure_dashboard(config, state, out)
+        elif section == "web":
+            _configure_web(config, state, advanced, input_func, secret_func, out)
+        elif section == "memory":
+            _configure_memory(config, state, True, input_func, out)
+        elif section == "dashboard":
+            _hdr(out, "Dashboard")
+            _configure_dashboard(config, state, out)
+            out(f"✓ dashboard ready: {state.dashboard_url}")
+        elif section == "services":
+            _configure_services(config, state, advanced, input_func, out)
+    finally:
+        _STEP = previous_step
+
+    config.save()
+    data = _section_summary_data(config, state, section, ok=not state.errors)
+    out(f"✓ setup {section} complete.")
+    if data.get("dashboard_url"):
+        out(f"Dashboard: {data['dashboard_url']}")
+    return 0 if not state.errors else 1
+
+
+def run_setup_section_noninteractive(
+    config: Config,
+    section: str,
+    *,
+    accept_risk: bool = False,
+    json_output: bool = False,
+    provider: str | None = None,
+    auth: str = "skip",
+    model: str | None = None,
+    web: str = "auto",
+    toolsets: str | None = None,
+    channels: str | None = None,
+    exec_mode: str = "ask",
+    services: bool = False,
+    output_func: Output = print,
+) -> int:
+    section = (section or "").strip().lower()
+    state = OnboardingState(channels=[], services=[], workspace_files=[], service_errors=[], errors=[])
+
+    def fail(message: str, code: int = 2) -> int:
+        state.errors.append(message)
+        data = _section_summary_data(config, state, section, ok=False)
+        if json_output:
+            output_func(json.dumps(data, indent=2))
+        else:
+            output_func(f"error: {message}")
+        return code
+
+    if section not in SETUP_SECTIONS:
+        return fail(f"unknown setup section: {section}")
+    if not accept_risk:
+        return fail(f"noninteractive setup {section} requires --accept-risk")
+    if exec_mode not in {"ask", "auto", "allowlist", "deny", "full", "smart"}:
+        return fail(f"unknown exec mode: {exec_mode}")
+
+    if section in {"model", "agent"} and (section == "model" or provider or model or auth != "skip"):
+        ok, message, provider_name, chosen_model, auth_method = _apply_noninteractive_model(
+            config,
+            provider=provider,
+            auth=auth,
+            model=model,
+        )
+        if not ok:
+            return fail(message)
+        state.provider = provider_name
+        state.model = chosen_model
+        state.auth_method = auth_method
+
+    if section in {"terminal", "agent"}:
+        config.set("tools.exec_mode", exec_mode)
+
+    if section in {"tools", "agent"}:
+        selected_toolsets = _parse_csv(toolsets) if toolsets else _recommended_toolsets()
+        if "core" not in selected_toolsets:
+            selected_toolsets.insert(0, "core")
+        unknown_toolsets = sorted(set(selected_toolsets) - VALID_TOOLSETS)
+        if unknown_toolsets:
+            return fail("unknown toolset(s): " + ", ".join(unknown_toolsets))
+        config.set("tools.toolsets", selected_toolsets)
+        _populate_surface_state(config, state)
+
+    if section in {"gateway", "agent"}:
+        selected_channels = _parse_csv(channels)
+        unknown_channels = sorted(set(selected_channels) - VALID_CHANNELS)
+        if unknown_channels:
+            return fail("unknown channel(s): " + ", ".join(unknown_channels))
+        config.data.setdefault("gateway", {})["channels"] = selected_channels
+        state.channels = selected_channels
+
+    if section in {"web", "agent"}:
+        if web not in VALID_WEB_BACKENDS:
+            return fail(f"unknown web backend: {web}")
+        if web == "skip":
+            state.web_backend = "skip"
+        else:
+            config.set("web.search_backend", web)
+            state.web_backend = web
+
+    if section in {"agent"}:
+        _seed_workspace(state, lambda _msg: None)
+        _configure_dashboard(config, state, lambda _msg: None)
+
+    if section == "dashboard":
+        _configure_dashboard(config, state, lambda _msg: None)
+
+    if section == "memory":
+        config.data.setdefault("memory", {})
+
+    if section == "services" or (section == "agent" and services):
+        if services:
+            _install_services_noninteractive(config, state)
+
+    config.save()
+    data = _section_summary_data(config, state, section, ok=not state.errors)
+    if json_output:
+        output_func(json.dumps(data, indent=2))
+    else:
+        output_func(f"✓ setup {section} complete.")
+        output_func(f"Config: {data['paths']['config']}")
+        if data.get("dashboard_url"):
+            output_func(f"Dashboard: {data['dashboard_url']}")
+    return 0 if not state.errors else 1
+
+
+def _apply_noninteractive_model(
+    config: Config,
+    *,
+    provider: str | None,
+    auth: str,
+    model: str | None,
+) -> tuple[bool, str, str, str, str]:
+    if auth == "oauth":
+        return (
+            False,
+            "OAuth requires an interactive browser login; use --auth codex, --auth api-key, or --auth skip",
+            "",
+            "",
+            auth,
+        )
+    if auth not in {"skip", "api-key", "local", "codex"}:
+        return False, f"unknown auth method: {auth}", "", "", auth
+    provider_name = provider or config.get("model.provider", "anthropic")
+    if provider_name == "openai" and auth == "codex":
+        provider_name = "codex"
+    spec = registry.get_spec(provider_name)
+    if not spec:
+        return False, f"unknown provider: {provider_name}", "", "", auth
+    if auth == "local" and spec.auth_scheme != "none":
+        return False, f"provider {provider_name} is not a local/no-auth provider", "", "", auth
+    if auth == "codex":
+        if spec.auth_scheme == "codex-cli":
+            ok, detail = _codex_login_status()
+            if not ok:
+                return False, f"Codex CLI auth is not ready: {detail}", "", "", auth
+        elif spec.auth_scheme == "codex-backend":
+            from .providers.auth import CodexBackendAuth
+            if not CodexBackendAuth().available():
+                return (
+                    False,
+                    "Codex auth is not ready: run `codex login` or use --auth api-key/skip",
+                    "",
+                    "",
+                    auth,
+                )
+        elif spec.oauth and spec.oauth.provider == "openai-codex":
+            from .providers.auth import AuthStore, OAuthAuth
+            oauth = OAuthAuth(spec.oauth, AuthStore())
+            if not oauth.available():
+                return (
+                    False,
+                    "Codex OAuth auth is not ready: run `aegis auth login openai-codex` "
+                    "or use --auth api-key/skip",
+                    "",
+                    "",
+                    auth,
+                )
+        else:
+            return False, f"provider {provider_name} does not use Codex subscription auth", "", "", auth
+    if auth == "api-key":
+        if not spec.env_vars:
+            return False, f"provider {provider_name} does not use API-key auth", "", "", auth
+        if not any(os.environ.get(env) for env in spec.env_vars):
+            return (
+                False,
+                "API-key onboarding requires an existing environment variable: "
+                + ", ".join(spec.env_vars),
+                "",
+                "",
+                auth,
+            )
+    chosen_model = model or spec.default_model
+    config.set("model.provider", provider_name)
+    config.set("model.default", chosen_model)
+    return True, "", provider_name, chosen_model, auth
 
 
 def _secret(prompt: str) -> str:
@@ -997,6 +1234,39 @@ def _configure_web(
         out(f"✓ web search profile: {backend}")
 
 
+def _configure_terminal(
+    config: Config,
+    state: OnboardingState,
+    advanced: bool,
+    input_func: Input,
+    out: Output,
+) -> None:
+    _hdr(out, "Terminal")
+    current = str(config.get("tools.exec_mode", "ask") or "ask")
+    options = [
+        ("ask", "Ask before tool execution"),
+        ("smart", "Auto-approve low-risk tools, ask on risky ones"),
+        ("allowlist", "Auto-approve allowlisted tools only"),
+        ("auto", "Auto-approve common tools"),
+        ("deny", "Deny tool execution"),
+    ]
+    if advanced:
+        options.append(("full", "Full auto-approval for trusted local use"))
+    default = next((idx for idx, (value, _label) in enumerate(options) if value == current), 0)
+    mode = _choose(
+        "Tool execution mode:",
+        options,
+        default=default,
+        input_func=input_func,
+        output_func=out,
+    )
+    if mode not in {"ask", "auto", "allowlist", "deny", "full", "smart"}:
+        out("! unknown exec mode; using ask")
+        mode = "ask"
+    config.set("tools.exec_mode", mode)
+    out(f"✓ terminal exec mode: {mode}")
+
+
 def _recommended_toolsets() -> list[str]:
     toolsets = ["core"]
     if importlib.util.find_spec("playwright"):
@@ -1303,6 +1573,21 @@ def _summary_data(config: Config, state: OnboardingState, *, ok: bool = True) ->
         "errors": state.errors or [],
         "next_commands": ["aegis ui", "aegis", "aegis status", "aegis doctor"],
     }
+
+
+def _section_summary_data(config: Config, state: OnboardingState, section: str, *, ok: bool = True) -> dict:
+    data = _summary_data(config, state, ok=ok)
+    data["object"] = "aegis.setup.section"
+    data["section"] = section
+    data["terminal"] = {
+        "exec_mode": config.get("tools.exec_mode"),
+        "backend": config.get("tools.terminal_backend"),
+        "timeout_seconds": config.get("tools.terminal_lifetime_seconds"),
+    }
+    data["gateway"] = {
+        "channels": list(config.get("gateway.channels", []) or []),
+    }
+    return data
 
 
 def _summary(config: Config, state: OnboardingState, out: Output) -> None:

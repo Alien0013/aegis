@@ -325,6 +325,116 @@ def test_config_setup_runs_noninteractive_onboarding(capsys):
     assert cfg.get("model.default") == "gpt-5.5"
 
 
+def test_setup_section_tools_noninteractive_json(capsys):
+    import json
+
+    from aegis.cli.main import main
+    from aegis.config import Config
+
+    rc = main([
+        "setup",
+        "tools",
+        "--non-interactive",
+        "--accept-risk",
+        "--json",
+        "--toolsets",
+        "core,mcp",
+    ])
+
+    assert rc == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["object"] == "aegis.setup.section"
+    assert data["section"] == "tools"
+    assert data["surface"]["toolsets"] == ["core", "mcp"]
+    assert Config.load().get("tools.toolsets") == ["core", "mcp"]
+
+
+def test_setup_section_gateway_noninteractive_json(capsys):
+    import json
+
+    from aegis.cli.main import main
+    from aegis.config import Config
+
+    rc = main([
+        "setup",
+        "gateway",
+        "--non-interactive",
+        "--accept-risk",
+        "--json",
+        "--channels",
+        "telegram,discord",
+    ])
+
+    assert rc == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["section"] == "gateway"
+    assert data["integrations"] == ["telegram", "discord"]
+    assert data["gateway"]["channels"] == ["telegram", "discord"]
+    assert Config.load().get("gateway.channels") == ["telegram", "discord"]
+
+
+def test_config_setup_section_terminal_noninteractive_json(capsys):
+    import json
+
+    from aegis.cli.main import main
+    from aegis.config import Config
+
+    rc = main([
+        "config",
+        "setup",
+        "terminal",
+        "--non-interactive",
+        "--accept-risk",
+        "--json",
+        "--exec-mode",
+        "smart",
+    ])
+
+    assert rc == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["section"] == "terminal"
+    assert data["terminal"]["exec_mode"] == "smart"
+    assert Config.load().get("tools.exec_mode") == "smart"
+
+
+def test_setup_section_model_noninteractive_json(capsys):
+    import json
+
+    from aegis.cli.main import main
+    from aegis.config import Config
+
+    rc = main([
+        "setup",
+        "model",
+        "--non-interactive",
+        "--accept-risk",
+        "--json",
+        "--provider",
+        "openai",
+        "--auth",
+        "skip",
+        "--model",
+        "gpt-5.5",
+    ])
+
+    assert rc == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["section"] == "model"
+    assert data["model"]["provider"] == "openai"
+    assert data["model"]["model"] == "gpt-5.5"
+    assert Config.load().get("model.provider") == "openai"
+    assert Config.load().get("model.default") == "gpt-5.5"
+
+
+def test_setup_section_noninteractive_requires_risk_ack(capsys):
+    from aegis.cli.main import main
+
+    rc = main(["setup", "tools", "--non-interactive", "--json"])
+
+    assert rc == 2
+    assert "accept-risk" in capsys.readouterr().out
+
+
 def test_noninteractive_onboarding_requires_risk_ack(capsys):
     from aegis.cli.main import main
 
