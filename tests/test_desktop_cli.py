@@ -438,11 +438,17 @@ def test_desktop_builder_config_matches_release_parity():
     assert build["executableName"] == "AEGIS"
     assert build["electronVersion"] == "33.4.11"
     assert package["devDependencies"]["electron"] == build["electronVersion"]
+    assert package["devDependencies"]["@electron/notarize"] == "2.5.0"
     assert build["protocols"] == [{"name": "AEGIS Protocol", "schemes": ["aegis"]}]
     assert build["beforeBuild"] == "scripts/before-build.cjs"
+    assert build["afterSign"] == "scripts/notarize-mac.cjs"
+    assert build["mac"]["hardenedRuntime"] is True
+    assert build["mac"]["gatekeeperAssess"] is False
     assert "electron/api-proxy.cjs" in desktop.DESKTOP_FILES
     assert "electron/api-proxy.test.cjs" in desktop.DESKTOP_FILES
     assert "scripts/write-build-stamp.cjs" in desktop.DESKTOP_FILES
+    assert "scripts/notarize-mac.cjs" in desktop.DESKTOP_FILES
+    assert "scripts/notarize-mac.test.cjs" in desktop.DESKTOP_FILES
     assert "scripts/stage-backend.cjs" in desktop.DESKTOP_FILES
     assert "electron/desktop-status.cjs" in desktop.DESKTOP_FILES
     assert "electron/updater-status.cjs" in desktop.DESKTOP_FILES
@@ -482,7 +488,14 @@ def test_release_workflow_builds_desktop_artifacts_for_all_packaged_targets():
     assert "desktop/build/ci-backend/Scripts/python -m pip install ." in workflow
     assert "AEGIS_DESKTOP_BACKEND_SOURCE: build/ci-backend" in workflow
     assert "AEGIS_ALLOW_EXTERNAL_DESKTOP_BACKEND" not in workflow
-    assert 'AEGIS_ALLOW_UNSIGNED_DESKTOP_RELEASE: "1"' in workflow
+    assert "Select Windows signing policy" in workflow
+    assert "Select macOS signing and notarization policy" in workflow
+    assert "AEGIS_ALLOW_UNSIGNED_DESKTOP_RELEASE=1" in workflow
+    assert "CSC_IDENTITY_AUTO_DISCOVERY=false" in workflow
+    assert "DESKTOP_WINDOWS_CSC_LINK" in workflow
+    assert "DESKTOP_MAC_CSC_LINK" in workflow
+    assert "APPLE_APP_SPECIFIC_PASSWORD" in workflow
+    assert "APPLE_API_ISSUER" in workflow
     assert "GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in workflow
     assert "desktop/release/*" in workflow
     assert "softprops/action-gh-release@v2" in workflow

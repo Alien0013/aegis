@@ -99,6 +99,9 @@ class DiscordAdapter(BasePlatformAdapter):
             "allowed_roles_configured": bool(self.allowed_roles),
             "allowed_guilds_configured": bool(self.allowed_guilds),
             "ignored_guilds_configured": bool(self.ignored_guilds),
+            "allowed_channels_configured": bool(_csv_set(os.environ.get("DISCORD_ALLOWED_CHANNELS", ""))),
+            "ignored_channels_configured": bool(_csv_set(os.environ.get("DISCORD_IGNORED_CHANNELS", ""))),
+            "bot_policy": os.environ.get("DISCORD_ALLOW_BOTS", "none").strip().lower() or "none",
             "trigger_mode": self.trigger_mode,
             "idempotency_env": [
                 "DISCORD_IDEMPOTENCY_TTL_SECONDS",

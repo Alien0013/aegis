@@ -28,7 +28,8 @@ DESKTOP_FILES = (
     "scripts/before-pack.cjs", "scripts/before-pack.test.cjs",
     "scripts/desktop-copy-drift.test.cjs",
     "scripts/before-build.cjs", "scripts/write-build-stamp.cjs",
-    "scripts/write-build-stamp.test.cjs", "scripts/stage-backend.cjs",
+    "scripts/write-build-stamp.test.cjs", "scripts/notarize-mac.cjs",
+    "scripts/notarize-mac.test.cjs", "scripts/stage-backend.cjs",
     "scripts/stage-backend.test.cjs",
     "build/icon.png", "build/icon.ico",
 )

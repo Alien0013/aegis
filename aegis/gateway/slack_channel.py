@@ -46,6 +46,34 @@ def _env_bool(name: str, default: bool) -> bool:
     return default
 
 
+_SLACK_NOTIFY_TOKEN_RE = re.compile(
+    r"<(?:@[A-Z0-9][A-Z0-9._-]*(?:\|[^>]*)?|#[A-Z0-9][A-Z0-9._-]*(?:\|[^>]*)?|"
+    r"!(?:channel|here|everyone|subteam\^[^>]+))>",
+    re.IGNORECASE,
+)
+
+
+def _escape_slack_notify_tokens(text: str) -> str:
+    def repl(match: re.Match[str]) -> str:
+        return match.group(0).replace("<", "&lt;").replace(">", "&gt;")
+
+    return _SLACK_NOTIFY_TOKEN_RE.sub(repl, str(text or ""))
+
+
+def _sanitize_slack_blocks(value):
+    if isinstance(value, list):
+        return [_sanitize_slack_blocks(item) for item in value]
+    if isinstance(value, dict):
+        sanitized = {}
+        for key, item in value.items():
+            if key in {"text", "title", "alt_text"} and isinstance(item, str):
+                sanitized[key] = _escape_slack_notify_tokens(item)
+            else:
+                sanitized[key] = _sanitize_slack_blocks(item)
+        return sanitized
+    return value
+
+
 class SlackAdapter(BasePlatformAdapter):
     name = "slack"
     renders_tables = False
@@ -568,7 +596,7 @@ class SlackAdapter(BasePlatformAdapter):
         if thread_ts:
             kwargs["thread_ts"] = thread_ts
         for chunk in chunk_text_by_units(text, limit=39000):
-            client.chat_postMessage(text=chunk, **kwargs)
+            client.chat_postMessage(text=_escape_slack_notify_tokens(chunk), **kwargs)
 
     def send_media(
         self,
@@ -596,7 +624,7 @@ class SlackAdapter(BasePlatformAdapter):
                 channel=chat_id,
                 file=str(media_path),
                 title=title,
-                initial_comment=caption or None,
+                initial_comment=_escape_slack_notify_tokens(caption) if caption else None,
                 **thread_kwargs,
             )
             return
@@ -608,7 +636,7 @@ class SlackAdapter(BasePlatformAdapter):
             file=str(media_path),
             filename=title,
             title=title,
-            initial_comment=caption or None,
+            initial_comment=_escape_slack_notify_tokens(caption) if caption else None,
             **thread_kwargs,
         )
 
@@ -676,8 +704,8 @@ class SlackAdapter(BasePlatformAdapter):
             raise RuntimeError("slack client is not started")
         client.chat_postMessage(
             channel=chat_id,
-            text=text,
-            blocks=blocks,
+            text=_escape_slack_notify_tokens(text),
+            blocks=_sanitize_slack_blocks(blocks),
             **self._thread_kwargs(metadata),
         )
 

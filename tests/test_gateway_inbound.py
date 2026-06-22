@@ -1274,9 +1274,15 @@ def test_discord_app_commands_respect_security_filters(monkeypatch):
 
     monkeypatch.setenv("DISCORD_ALLOWED_GUILDS", "G1")
     monkeypatch.setenv("DISCORD_ALLOWED_CHANNELS", "C1")
+    monkeypatch.setenv("DISCORD_IGNORED_CHANNELS", "C9")
     monkeypatch.setenv("DISCORD_ALLOWED_USERS", "U1")
+    monkeypatch.setenv("DISCORD_ALLOW_BOTS", "mentions")
 
     adapter = DiscordAdapter("token")
+    security = adapter.metadata["security"]
+    assert security["allowed_channels_configured"] is True
+    assert security["ignored_channels_configured"] is True
+    assert security["bot_policy"] == "mentions"
     seen = []
     adapter._submit_inbound = lambda ev, *, raw_text=None: seen.append((ev, raw_text)) or None
     deferred = []
@@ -3049,6 +3055,12 @@ def test_slack_adapter_enforces_workspace_filters_and_strips_mentions(monkeypatc
     ]
     posts.clear()
 
+    adapter.send("C1", "notify <!channel> <@U123> <#C2|ops>")
+    assert posts == [
+        {"channel": "C1", "text": "notify &lt;!channel&gt; &lt;@U123&gt; &lt;#C2|ops&gt;"},
+    ]
+    posts.clear()
+
     adapter.send_clarify("C1", "Pick a deploy lane?", ["stable", "canary"], metadata={"thread_ts": "171.1"})
     assert posts == [{
         "channel": "C1",
@@ -3075,6 +3087,13 @@ def test_slack_adapter_enforces_workspace_filters_and_strips_mentions(monkeypatc
             },
         ],
     }]
+    posts.clear()
+
+    adapter.send_clarify("C1", "Pick <!here>?", ["<@U123>"])
+    assert posts[0]["text"] == "Pick &lt;!here&gt;?"
+    assert posts[0]["blocks"][0]["text"]["text"] == "Pick &lt;!here&gt;?"
+    assert posts[0]["blocks"][1]["elements"][0]["text"]["text"] == "&lt;@U123&gt;"
+    assert posts[0]["blocks"][1]["elements"][0]["value"] == "<@U123>"
     posts.clear()
 
     adapter.send_exec_approval("C1", "Run deploy?", metadata={"thread_id": "171.1"})
@@ -3128,17 +3147,17 @@ def test_slack_adapter_enforces_workspace_filters_and_strips_mentions(monkeypatc
 
     media_path = tmp_path / "report.txt"
     media_path.write_text("hello", encoding="utf-8")
-    adapter.send_media("C1", str(media_path), caption="report", metadata={"thread_ts": "171.1"})
+    adapter.send_media("C1", str(media_path), caption="report <!channel>", metadata={"thread_ts": "171.1"})
     assert uploads == [("v2", {
         "channel": "C1",
         "file": str(media_path),
         "title": "report.txt",
-        "initial_comment": "report",
+        "initial_comment": "report &lt;!channel&gt;",
         "thread_ts": "171.1",
     })]
 
-    adapter.send_media("C1", str(tmp_path / "missing.txt"), caption="lost")
-    assert posts == [{"channel": "C1", "text": f"lost\n(file not found: {tmp_path / 'missing.txt'})"}]
+    adapter.send_media("C1", str(tmp_path / "missing.txt"), caption="lost <@U1>")
+    assert posts == [{"channel": "C1", "text": f"lost &lt;@U1&gt;\n(file not found: {tmp_path / 'missing.txt'})"}]
 
 
 def test_slack_adapter_handles_native_slash_commands(monkeypatch):
@@ -3466,6 +3485,7 @@ def test_gateway_webhook_channel_normalizes_event_body():
 
     assert ev.platform == "telegram"
     assert ev.chat_id == "42"
+    assert ev.user_id == "7"
     assert ev.thread_id == "9"
     assert ev.message_id == "m1"
     assert ev.attachments == [{"type": "image"}]
@@ -3483,6 +3503,8 @@ def test_gateway_webhook_channel_accepts_whatsapp_bridge_aliases():
     })
     assert defaulted.platform == "whatsapp"
     assert defaulted.chat_id == "12025550123@s.whatsapp.net"
+    assert defaulted.user_id == "12025550123@s.whatsapp.net"
+    assert defaulted.metadata["identity_fallback"] == "chat_id"
     assert defaulted.metadata["remote_jid"] == "12025550123@s.whatsapp.net"
 
     ev = WebhookChannel()._event_from_body({
@@ -3858,6 +3880,18 @@ def test_gateway_webhook_channel_prefix_insecure_auth_override(monkeypatch):
 def test_gateway_webhook_channel_can_disable_unsigned_loopback(monkeypatch):
     from aegis.gateway.webhook_channel import WebhookChannel
 
+    monkeypatch.delenv("WEBHOOK_CHANNEL_ALLOW_UNSIGNED_LOOPBACK", raising=False)
+    adapter = WebhookChannel()
+    assert adapter.allow_unsigned_loopback is False
+    assert adapter.metadata["security"]["loopback_unsigned_allowed"] is False
+    assert adapter._auth_allowed({}, b"{}", "127.0.0.1") is False
+
+    monkeypatch.setenv("WEBHOOK_CHANNEL_ALLOW_UNSIGNED_LOOPBACK", "1")
+    loopback = WebhookChannel()
+    assert loopback.allow_unsigned_loopback is True
+    assert loopback._auth_allowed({}, b"{}", "127.0.0.1") is True
+    assert loopback._auth_allowed({}, b"{}", "203.0.113.9") is False
+
     monkeypatch.setenv("WEBHOOK_CHANNEL_ALLOW_UNSIGNED_LOOPBACK", "0")
     adapter = WebhookChannel()
 
@@ -3911,6 +3945,7 @@ def test_gateway_webhook_channel_handler_only_accepts_in_path(monkeypatch):
     from aegis.gateway.webhook_channel import WebhookChannel
 
     monkeypatch.delenv("WEBHOOK_CHANNEL_SECRET", raising=False)
+    monkeypatch.setenv("WEBHOOK_CHANNEL_ALLOW_UNSIGNED_LOOPBACK", "1")
     adapter = WebhookChannel()
     adapter._init_inbound_queue(lambda ev: f"reply:{ev.text}")
     server = ThreadingHTTPServer(("127.0.0.1", 0), adapter._make_handler())

@@ -1346,6 +1346,19 @@ def cmd_config(args, config: Config) -> int:
         ):
             desktop_state = "packaged"
         timezone = config.get("timezone") or os.environ.get("TZ") or time.tzname[0] or "(server-local)"
+        setup_descriptions = {
+            "model": "Configure provider/model",
+            "terminal": "Configure execution approval",
+            "tools": "Configure model-visible toolsets",
+            "gateway": "Configure messaging channels",
+            "agent": "Configure agent behavior",
+            "web": "Configure web/browser tools",
+            "memory": "Configure memory backends",
+            "dashboard": "Configure dashboard services",
+            "services": "Install/start services",
+        }
+        setup_commands = [f"aegis setup {section}" for section in _SETUP_SECTIONS]
+        config_setup_commands = [f"aegis config setup {section}" for section in _SETUP_SECTIONS]
         commands = [
             "aegis config view",
             "aegis config status",
@@ -1357,10 +1370,8 @@ def cmd_config(args, config: Config) -> int:
             "aegis config reset <key>",
             "aegis config doctor",
             "aegis config setup",
-            "aegis setup model",
-            "aegis setup terminal",
-            "aegis setup tools",
-            "aegis setup gateway",
+            *config_setup_commands,
+            *setup_commands,
             "aegis setup",
         ]
         if getattr(args, "json", False):
@@ -1521,10 +1532,12 @@ def cmd_config(args, config: Config) -> int:
         _print("  aegis config reset <key>          # Reset a config key or section to defaults")
         _print("  aegis config doctor               # Validate config and provider credentials")
         _print("  aegis config setup                # Run setup wizard from config")
-        _print("  aegis setup model                 # Configure provider/model")
-        _print("  aegis setup terminal              # Configure execution approval")
-        _print("  aegis setup tools                 # Configure model-visible toolsets")
-        _print("  aegis setup gateway               # Configure messaging channels")
+        for section in _SETUP_SECTIONS:
+            note = setup_descriptions.get(section, f"Configure {section}")
+            _print(f"  aegis config setup {section:<9} # {note}")
+        for section in _SETUP_SECTIONS:
+            note = setup_descriptions.get(section, f"Configure {section}")
+            _print(f"  aegis setup {section:<16} # {note}")
         _print("  aegis setup                       # Run setup wizard")
         return 0
 

@@ -60,13 +60,21 @@ function hasPublishTarget(packageJson) {
 }
 
 function hasMacSigningMaterial(env) {
-  return Boolean(
-    env.CSC_LINK ||
-    env.CSC_NAME ||
-    env.APPLE_ID ||
-    env.APPLE_API_KEY ||
-    env.APPLE_API_KEY_ID
+  return Boolean(env.CSC_LINK || env.CSC_NAME);
+}
+
+function hasMacNotarizationMaterial(env) {
+  const appleIdFlow = Boolean(
+    env.APPLE_ID &&
+    (env.APPLE_APP_SPECIFIC_PASSWORD || env.APPLE_ID_PASSWORD) &&
+    (env.APPLE_TEAM_ID || env.APPLE_ID_TEAM_ID)
   );
+  const apiKeyFlow = Boolean(
+    (env.APPLE_API_KEY || env.APPLE_API_KEY_PATH) &&
+    (env.APPLE_API_KEY_ID || env.APPLE_API_KEYID) &&
+    (env.APPLE_API_ISSUER || env.APPLE_API_ISSUER_ID)
+  );
+  return appleIdFlow || apiKeyFlow;
 }
 
 function releaseBuildFailures({
@@ -98,8 +106,13 @@ function releaseBuildFailures({
     failures.push("Windows release builds cannot set build.win.signAndEditExecutable=false");
   }
 
-  if (targets.has("darwin") && !hasMacSigningMaterial(env) && !envFlag(env, "AEGIS_ALLOW_UNSIGNED_DESKTOP_RELEASE")) {
-    failures.push("macOS release builds need signing/notarization credentials or AEGIS_ALLOW_UNSIGNED_DESKTOP_RELEASE=1");
+  if (targets.has("darwin") && !envFlag(env, "AEGIS_ALLOW_UNSIGNED_DESKTOP_RELEASE")) {
+    if (!hasMacSigningMaterial(env)) {
+      failures.push("macOS release builds need CSC_LINK/CSC_NAME signing material or AEGIS_ALLOW_UNSIGNED_DESKTOP_RELEASE=1");
+    }
+    if (!hasMacNotarizationMaterial(env)) {
+      failures.push("macOS release builds need Apple notarization credentials or AEGIS_ALLOW_UNSIGNED_DESKTOP_RELEASE=1");
+    }
   }
 
   return failures;

@@ -2432,6 +2432,10 @@ def test_responses_input_tokens_counts_previous_response_context(monkeypatch, tm
             "previous_response_id": response_id,
             "tools": [{"type": "function", "function": {"name": "lookup"}}],
         })
+        continued_status, continued_data = _request(port, "POST", "/v1/responses/input_tokens", {
+            "model": "served-model",
+            "previous_response_id": response_id,
+        })
         missing_status, missing_data = _request(port, "POST", "/v1/responses/input_tokens", {
             "input": "missing",
             "previous_response_id": "resp_missing",
@@ -2446,6 +2450,8 @@ def test_responses_input_tokens_counts_previous_response_context(monkeypatch, tm
     assert json.loads(simple_data)["object"] == "response.input_tokens"
     assert json.loads(simple_data)["input_tokens"] > 0
     assert json.loads(chained_data)["input_tokens"] > json.loads(simple_data)["input_tokens"]
+    assert continued_status == 200
+    assert json.loads(continued_data)["input_tokens"] > json.loads(simple_data)["input_tokens"]
     assert missing_status == 404
     assert "Previous response not found" in json.loads(missing_data)["error"]
 
@@ -2477,6 +2483,9 @@ def test_responses_compact_returns_chainable_compaction(monkeypatch, tmp_path):
             "previous_response_id": compact_id,
         })
         chained_id = json.loads(chained_data)["id"]
+        continued_compact_status, continued_compact_data = _request(port, "POST", "/v1/responses/compact", {
+            "previous_response_id": compact_id,
+        })
         items_status, items_data = _request(
             port,
             "GET",
@@ -2500,6 +2509,10 @@ def test_responses_compact_returns_chainable_compaction(monkeypatch, tmp_path):
     assert json.loads(get_data)["id"] == compact_id
     assert chained_status == 200
     assert json.loads(chained_data)["previous_response_id"] == compact_id
+    assert continued_compact_status == 200
+    continued_compact = json.loads(continued_compact_data)
+    assert continued_compact["previous_response_id"] == compact_id
+    assert continued_compact["usage"]["input_tokens"] > 0
     chained_history = _FakeRunner.calls[0]["history"]
     assert any("Compaction summary:" in message.content for message in chained_history)
     summary_text = next(message.content for message in chained_history if "Compaction summary:" in message.content)
@@ -3580,13 +3593,15 @@ def test_responses_stream_sse_has_openai_event_shape(monkeypatch, tmp_path):
     assert status == 200
     events = _sse_events(data)
     names = [name for name, _payload in events]
-    assert names[:5] == [
+    assert names[:6] == [
         "response.created",
         "response.in_progress",
         "aegis.event",
         "response.output_item.added",
+        "response.content_part.added",
         "response.output_text.delta",
     ]
+    assert "response.content_part.done" in names
     assert "response.output_text.done" in names
     assert "response.output_item.done" in names
     assert names[-2:] == ["response.completed", "done"]
@@ -3594,11 +3609,18 @@ def test_responses_stream_sse_has_openai_event_shape(monkeypatch, tmp_path):
     assert [p["sequence_number"] for p in payloads] == list(range(len(payloads)))
     delta = next(payload for name, payload in events if name == "response.output_text.delta")
     done = next(payload for name, payload in events if name == "response.output_text.done")
+    part_added = next(payload for name, payload in events if name == "response.content_part.added")
+    part_done = next(payload for name, payload in events if name == "response.content_part.done")
     assert delta["output_index"] == 0
     assert delta["content_index"] == 0
     assert delta["item_id"].startswith("msg_")
     assert done["text"] == "hello"
     assert done["item_id"] == delta["item_id"]
+    assert part_added["item_id"] == delta["item_id"]
+    assert part_added["content_index"] == 0
+    assert part_added["part"] == {"type": "output_text", "text": ""}
+    assert part_done["item_id"] == delta["item_id"]
+    assert part_done["part"] == {"type": "output_text", "text": "hello"}
     created = next(payload for name, payload in events if name == "response.created")
     in_progress = next(payload for name, payload in events if name == "response.in_progress")
     completed = next(payload for name, payload in events if name == "response.completed")

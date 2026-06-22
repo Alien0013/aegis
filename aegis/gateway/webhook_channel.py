@@ -388,7 +388,7 @@ class WebhookChannel(BasePlatformAdapter):
         self.outbound_secret = _channel_env(env_prefix, "OUTBOUND_SECRET", self.secret)
         self.outbound_max_chars = _channel_env_int(env_prefix, "OUTBOUND_MAX_CHARS", self.max_message_length)
         self.max_body_bytes = _channel_env_int(env_prefix, "MAX_BYTES", MAX_CHANNEL_WEBHOOK_BYTES)
-        self.allow_unsigned_loopback = _channel_env_bool(env_prefix, "ALLOW_UNSIGNED_LOOPBACK", True)
+        self.allow_unsigned_loopback = _channel_env_bool(env_prefix, "ALLOW_UNSIGNED_LOOPBACK", False)
         self.allowed_platforms = self._normalized_platform_set(
             _channel_env_with_fallback(env_prefix, "ALLOWED_PLATFORMS")
         )
@@ -734,6 +734,9 @@ class WebhookChannel(BasePlatformAdapter):
         )
         if salvaged_metadata and (not metadata or platform == "whatsapp"):
             metadata = {**salvaged_metadata, **metadata}
+        if not user_id and chat_id and chat_id != "unknown":
+            user_id = chat_id
+            metadata.setdefault("identity_fallback", "chat_id")
         if interactive_text:
             metadata.setdefault("source", "interactive_response")
             prompt_id = _first_string(body, (

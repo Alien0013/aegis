@@ -115,6 +115,10 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
+    env:
+      CSC_LINK: ${{ secrets.DESKTOP_WINDOWS_CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.DESKTOP_WINDOWS_CSC_KEY_PASSWORD }}
+      CSC_NAME: ${{ secrets.DESKTOP_WINDOWS_CSC_NAME }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -139,14 +143,22 @@ jobs:
           "%~dp0python.exe" -m aegis.cli.main %*
           '@
           Set-Content -Path desktop/build/ci-backend/Scripts/aegis.cmd -Value $script
+      - name: Select Windows signing policy
+        shell: pwsh
+        run: |
+          if ($env:CSC_LINK -or $env:CSC_NAME) {
+            "AEGIS_ALLOW_UNSIGNED_DESKTOP_RELEASE=" >> $env:GITHUB_ENV
+            "CSC_IDENTITY_AUTO_DISCOVERY=" >> $env:GITHUB_ENV
+          } else {
+            "AEGIS_ALLOW_UNSIGNED_DESKTOP_RELEASE=1" >> $env:GITHUB_ENV
+            "CSC_IDENTITY_AUTO_DISCOVERY=false" >> $env:GITHUB_ENV
+          }
       - name: Build Windows desktop artifacts
         working-directory: desktop
         env:
           AEGIS_RELEASE: "1"
-          AEGIS_ALLOW_UNSIGNED_DESKTOP_RELEASE: "1"
           AEGIS_DESKTOP_BACKEND_SOURCE: build/ci-backend
           AEGIS_DESKTOP_TARGETS: win
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run dist:win
@@ -167,6 +179,16 @@ jobs:
     runs-on: macos-latest
     permissions:
       contents: write
+    env:
+      CSC_LINK: ${{ secrets.DESKTOP_MAC_CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.DESKTOP_MAC_CSC_KEY_PASSWORD }}
+      CSC_NAME: ${{ secrets.DESKTOP_MAC_CSC_NAME }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -192,14 +214,26 @@ jobs:
           exec "$DIR/python" -m aegis.cli.main "$@"
           SH
           chmod +x desktop/build/ci-backend/bin/aegis
+      - name: Select macOS signing and notarization policy
+        run: |
+          has_signing=0
+          has_notary=0
+          if [ -n "${CSC_LINK}${CSC_NAME}" ]; then has_signing=1; fi
+          if [ -n "${APPLE_ID}" ] && [ -n "${APPLE_APP_SPECIFIC_PASSWORD}" ] && [ -n "${APPLE_TEAM_ID}" ]; then has_notary=1; fi
+          if [ -n "${APPLE_API_KEY}" ] && [ -n "${APPLE_API_KEY_ID}" ] && [ -n "${APPLE_API_ISSUER}" ]; then has_notary=1; fi
+          if [ "$has_signing" = "1" ] && [ "$has_notary" = "1" ]; then
+            echo "AEGIS_ALLOW_UNSIGNED_DESKTOP_RELEASE=" >> "$GITHUB_ENV"
+            echo "CSC_IDENTITY_AUTO_DISCOVERY=" >> "$GITHUB_ENV"
+          else
+            echo "AEGIS_ALLOW_UNSIGNED_DESKTOP_RELEASE=1" >> "$GITHUB_ENV"
+            echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
+          fi
       - name: Build macOS desktop artifacts
         working-directory: desktop
         env:
           AEGIS_RELEASE: "1"
-          AEGIS_ALLOW_UNSIGNED_DESKTOP_RELEASE: "1"
           AEGIS_DESKTOP_BACKEND_SOURCE: build/ci-backend
           AEGIS_DESKTOP_TARGETS: mac
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run dist:mac

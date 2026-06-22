@@ -4297,6 +4297,8 @@ def make_handler(config: Config):
 
                     if response_agent is not None:
                         self._aegis_on_disconnect = cancel_response_agent
+                        if getattr(self, "_aegis_disconnect_pending", False):
+                            cancel_response_agent()
                     run_kwargs: dict[str, Any] = {
                         "model": model,
                         "provider_name": provider_name,
@@ -4529,14 +4531,17 @@ def make_handler(config: Config):
             }, None
 
         def _post_response_input_tokens(self, body: dict[str, Any]) -> None:
-            validation_error = _responses_input_validation_error(body)
-            if validation_error is not None:
-                return self._json(400, validation_error)
             context, error = self._response_request_context(body)
             if error is not None:
                 code, payload = error
                 return self._json(code, payload)
             assert context is not None
+            validation_error = _responses_input_validation_error(
+                body,
+                allow_omitted=context["previous_state"] is not None,
+            )
+            if validation_error is not None:
+                return self._json(400, validation_error)
             input_items = _stored_response_input_items(
                 context["messages"],
                 context["instructions"],
@@ -4548,14 +4553,17 @@ def make_handler(config: Config):
             })
 
         def _post_response_compact(self, body: dict[str, Any]) -> None:
-            validation_error = _responses_input_validation_error(body)
-            if validation_error is not None:
-                return self._json(400, validation_error)
             context, error = self._response_request_context(body)
             if error is not None:
                 code, payload = error
                 return self._json(code, payload)
             assert context is not None
+            validation_error = _responses_input_validation_error(
+                body,
+                allow_omitted=context["previous_state"] is not None,
+            )
+            if validation_error is not None:
+                return self._json(400, validation_error)
 
             input_items = _stored_response_input_items(
                 context["messages"],
@@ -4707,6 +4715,7 @@ def make_handler(config: Config):
                 sequence = 0
                 message_item_id = new_id("msg")
                 message_opened = False
+                content_part_opened = False
                 message_output_index: int | None = None
                 next_output_index = 0
                 text_parts: list[str] = []
@@ -4751,6 +4760,13 @@ def make_handler(config: Config):
                                 if str(part.get("type") or "") != "output_text":
                                     continue
                                 text = str(part.get("text") or "")
+                                send_event("response.content_part.added", {
+                                    "response_id": cached_response_id,
+                                    "item_id": item_id,
+                                    "output_index": output_index,
+                                    "content_index": content_index,
+                                    "part": {"type": "output_text", "text": ""},
+                                })
                                 if text:
                                     send_event("response.output_text.delta", {
                                         "response_id": cached_response_id,
@@ -4767,6 +4783,13 @@ def make_handler(config: Config):
                                     "content_index": content_index,
                                     "text": text,
                                     "logprobs": [],
+                                })
+                                send_event("response.content_part.done", {
+                                    "response_id": cached_response_id,
+                                    "item_id": item_id,
+                                    "output_index": output_index,
+                                    "content_index": content_index,
+                                    "part": {"type": "output_text", "text": text},
                                 })
                         send_event("response.output_item.done", {
                             "output_index": output_index,
@@ -4821,6 +4844,22 @@ def make_handler(config: Config):
                             "role": "assistant",
                             "content": [],
                         },
+                    })
+
+                def open_message_content_part() -> bool:
+                    nonlocal content_part_opened
+                    if content_part_opened:
+                        return True
+                    if not open_message_item():
+                        return False
+                    content_part_opened = True
+                    out_index = message_output_index if message_output_index is not None else 0
+                    return send_event("response.content_part.added", {
+                        "response_id": response_id,
+                        "item_id": message_item_id,
+                        "output_index": out_index,
+                        "content_index": 0,
+                        "part": {"type": "output_text", "text": ""},
                     })
 
                 def emit_tool_start(e: dict[str, Any]) -> None:
@@ -4956,6 +4995,8 @@ def make_handler(config: Config):
                     start_response_cancel_watchdog()
 
                 self._aegis_on_disconnect = cancel_on_disconnect
+                if getattr(self, "_aegis_disconnect_pending", False):
+                    cancel_on_disconnect()
                 created_response = {
                     "id": response_id,
                     "object": "response",
@@ -5011,7 +5052,7 @@ def make_handler(config: Config):
                         delta = str(e.get("text") or "")
                         if not delta:
                             return
-                        if not open_message_item():
+                        if not open_message_content_part():
                             return
                         text_parts.append(delta)
                         send_event("response.output_text.delta", {
@@ -5216,8 +5257,8 @@ def make_handler(config: Config):
                     else:
                         response = self._mark_response_cancelled(response, cancel_reason)
                 elif final_text or message_opened:
-                    if not message_opened:
-                        open_message_item()
+                    if not content_part_opened:
+                        open_message_content_part()
                     out_index = message_output_index if message_output_index is not None else 0
                     send_event("response.output_text.done", {
                         "response_id": response_id,
@@ -5226,6 +5267,13 @@ def make_handler(config: Config):
                         "content_index": 0,
                         "text": final_text,
                         "logprobs": [],
+                    })
+                    send_event("response.content_part.done", {
+                        "response_id": response_id,
+                        "item_id": message_item_id,
+                        "output_index": out_index,
+                        "content_index": 0,
+                        "part": {"type": "output_text", "text": final_text},
                     })
                     send_event("response.output_item.done", {
                         "output_index": out_index,
@@ -5327,6 +5375,8 @@ def make_handler(config: Config):
                         store_response=store_response,
                     )
                 self._aegis_on_disconnect = cancel_on_disconnect
+                if getattr(self, "_aegis_disconnect_pending", False):
+                    cancel_on_disconnect()
                 try:
                     response_session, response_agent = self._prepare_response_agent(
                         response_id,
@@ -5627,6 +5677,8 @@ def make_handler(config: Config):
 
             if response_agent is not None:
                 self._aegis_on_disconnect = cancel_response_agent
+                if getattr(self, "_aegis_disconnect_pending", False):
+                    cancel_response_agent()
             run_kwargs: dict[str, Any] = {
                 "session": session,
                 "model": body.get("model"),
@@ -6036,7 +6088,8 @@ def make_app(config: Config) -> web.Application:
             payload = bytes(data)
             if not payload:
                 return 0
-            self._buffer.extend(payload)
+            if not self._streaming.is_set():
+                self._buffer.extend(payload)
             ack: concurrent.futures.Future[int] | None = None
             if self._streaming.is_set():
                 ack = concurrent.futures.Future()
@@ -6097,6 +6150,7 @@ def make_app(config: Config) -> web.Application:
         adapter._aegis_headers: list[tuple[str, str]] = []
         adapter._aegis_headers_sent = False
         adapter._aegis_on_disconnect = None
+        adapter._aegis_disconnect_pending = False
         disconnect_notified = False
 
         def notify_disconnect() -> None:
@@ -6104,6 +6158,7 @@ def make_app(config: Config) -> web.Application:
             if disconnect_notified:
                 return
             disconnect_notified = True
+            adapter._aegis_disconnect_pending = True
             adapter.wfile.close()
             callback = getattr(adapter, "_aegis_on_disconnect", None)
             if callable(callback):

@@ -123,6 +123,45 @@ test("release guard allows explicit unsigned Windows override", () => {
   assert.deepEqual(failures, []);
 });
 
+test("release guard requires mac signing and notarization unless explicitly unsigned", () => {
+  const base = {
+    AEGIS_RELEASE: "1",
+    GITHUB_SHA: "b".repeat(40),
+    GH_TOKEN: "token",
+  };
+  const missing = releaseBuildFailures({
+    env: base,
+    packageJson: packageJson(),
+    stamp: { source: "ci", dirty: false },
+    targetPlatforms: ["darwin"],
+  });
+  assert(missing.some((message) => message.includes("CSC_LINK/CSC_NAME")));
+  assert(missing.some((message) => message.includes("Apple notarization credentials")));
+
+  const signed = releaseBuildFailures({
+    env: {
+      ...base,
+      CSC_LINK: "base64-p12",
+      CSC_KEY_PASSWORD: "password",
+      APPLE_ID: "dev@example.com",
+      APPLE_APP_SPECIFIC_PASSWORD: "app-pass",
+      APPLE_TEAM_ID: "TEAM123",
+    },
+    packageJson: packageJson(),
+    stamp: { source: "ci", dirty: false },
+    targetPlatforms: ["darwin"],
+  });
+  assert.deepEqual(signed, []);
+
+  const unsigned = releaseBuildFailures({
+    env: { ...base, AEGIS_ALLOW_UNSIGNED_DESKTOP_RELEASE: "1" },
+    packageJson: packageJson(),
+    stamp: { source: "ci", dirty: false },
+    targetPlatforms: ["darwin"],
+  });
+  assert.deepEqual(unsigned, []);
+});
+
 test("release guard allows stamped Linux GitHub release builds", () => {
   const failures = releaseBuildFailures({
     env: {
