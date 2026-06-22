@@ -26,6 +26,7 @@ import time
 import base64
 import binascii
 import ipaddress
+import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -79,7 +80,12 @@ class WebhookStore:
         return hooks
 
     def _save(self, hooks: list[dict]) -> None:
-        atomic_write(_webhooks_path(), json.dumps(hooks, indent=2))
+        path = _webhooks_path()
+        atomic_write(path, json.dumps(hooks, indent=2))
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
 
     def list(self) -> list[Webhook]:
         return [Webhook(**h) for h in self._load()]
@@ -600,6 +606,14 @@ def _delivery_id(name: str, headers, body: bytes | None = None) -> str:
     return ""
 
 
+def _webhook_session_id(name: str, delivery_id: str) -> str:
+    name_part = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in str(name or "hook"))
+    if delivery_id:
+        digest = hashlib.sha256(str(delivery_id).encode("utf-8")).hexdigest()[:24]
+        return f"webhook:{name_part}:{digest}"
+    return f"webhook:{name_part}:{uuid.uuid4().hex[:24]}"
+
+
 # --------------------------------------------------------------------------- #
 # server
 # --------------------------------------------------------------------------- #
@@ -680,13 +694,14 @@ def make_handler(config, store: WebhookStore):
             platform, _, chat_id = first_target.partition(":")
             from .platforms import normalize_platform_name
             platform = normalize_platform_name(platform, default=str(platform or "").strip().lower())
+            session_id = _webhook_session_id(name, delivery_id)
             try:
                 result = runner.run_prompt(
                     prompt,
-                    session_id=f"webhook:{name}",
+                    session_id=session_id,
                     title=f"webhook {name}",
                     surface="webhook",
-                    meta={"webhook": name},
+                    meta={"webhook": name, "delivery_id": delivery_id},
                     platform=platform if platform and chat_id else None,
                     chat_id=chat_id if platform and chat_id else None,
                 )

@@ -2985,8 +2985,11 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
     assert hub_row["api_mount"]["status"] == "mounted"
     assert hub_row["can_remove"] is True
     assert hub_row["can_update_git"] is True
-    assert "jsonl" in hub_body["providers"]["memory_options"]
-    assert "default" in hub_body["providers"]["context_options"]
+    memory_options = hub_body["providers"]["memory_options"]
+    context_options = hub_body["providers"]["context_options"]
+    assert any(row["name"] == "jsonl" for row in memory_options)
+    assert next(row for row in memory_options if row["name"] == "jsonl")["description"]
+    assert any(row["name"] == "default" for row in context_options)
     assert hub_body["orphan_dashboard_plugins"] == []
 
     rescan = asyncio.run(_request(app, "POST", "/api/dashboard/plugins/rescan", headers=headers))

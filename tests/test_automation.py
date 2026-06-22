@@ -190,6 +190,47 @@ def test_webhook_delivers_to_outbox_and_honors_silent(monkeypatch, tmp_path):
     assert len(DeliveryQueue().due()) == before          # silent -> no delivery
 
 
+def test_webhook_delivery_ids_get_isolated_sessions(monkeypatch, tmp_path):
+    cfg, store, make_handler = _webhook_server(monkeypatch, tmp_path)
+    calls: list[dict] = []
+
+    class Runner:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def run_prompt(self, _prompt, **kwargs):
+            calls.append(kwargs)
+            return type("R", (), {"text": "ok"})()
+
+    monkeypatch.setattr("aegis.surface.SurfaceRunner", Runner)
+    store.add("ci", "go")
+    srv, port = _serve(make_handler, cfg, store)
+    try:
+        assert _post(port, "/hook/ci", b'{"action":"one"}', {"Idempotency-Key": "one"})[0] == 200
+        assert _post(port, "/hook/ci", b'{"action":"two"}', {"Idempotency-Key": "two"})[0] == 200
+    finally:
+        srv.shutdown()
+
+    session_ids = [call["session_id"] for call in calls]
+    assert len(session_ids) == 2
+    assert session_ids[0].startswith("webhook:ci:")
+    assert session_ids[1].startswith("webhook:ci:")
+    assert session_ids[0] != session_ids[1]
+    assert calls[0]["meta"]["delivery_id"] == "ci:idempotency-key:one"
+    assert calls[1]["meta"]["delivery_id"] == "ci:idempotency-key:two"
+
+
+def test_webhook_store_writes_private_subscription_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis import config as cfg
+    from aegis.webhook import WebhookStore
+
+    WebhookStore().add("ci", "go", secret="secret")
+
+    mode = cfg.sub("webhooks.json").stat().st_mode & 0o777
+    assert mode == 0o600
+
+
 def test_webhook_prepends_skills(monkeypatch, tmp_path):
     cfg, store, make_handler = _webhook_server(monkeypatch, tmp_path)
     from aegis import config as cfg_paths

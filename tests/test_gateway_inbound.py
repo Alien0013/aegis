@@ -1625,7 +1625,19 @@ def test_telegram_adapter_enforces_chat_filters_and_group_addressing(monkeypatch
     base = {"chat": {"id": 42, "type": "supergroup"}, "text": "hello", "from": {"id": 7}}
     assert adapter._message_allowed(base, "hello") is False
     assert adapter._message_allowed({**base, "text": "@aegis_bot hello"}, "@aegis_bot hello") is True
+    assert adapter._message_allowed({**base, "text": "hello @aegis_bot."}, "hello @aegis_bot.") is True
     assert adapter._message_allowed({**base, "text": "@aegis_bot_backup hello"}, "@aegis_bot_backup hello") is False
+    assert adapter._message_allowed({**base, "text": "not@aegis_bot"}, "not@aegis_bot") is False
+    assert adapter._message_allowed({
+        **base,
+        "text": "mail foo@aegis_bot.example",
+    }, "mail foo@aegis_bot.example") is False
+    entity_text = "👋 @aegis_bot hi"
+    assert adapter._message_allowed({
+        **base,
+        "text": entity_text,
+        "entities": [{"type": "mention", "offset": 3, "length": 10}],
+    }, entity_text) is True
     assert adapter._message_allowed({**base, "text": "/status"}, "/status") is True
     assert adapter._message_allowed({
         **base,
@@ -1633,6 +1645,8 @@ def test_telegram_adapter_enforces_chat_filters_and_group_addressing(monkeypatch
     }, "hello") is True
     assert adapter._message_allowed({**base, "chat": {"id": 99, "type": "supergroup"}}, "/status") is False
     assert adapter._message_allowed({**base, "chat": {"id": 43, "type": "supergroup"}}, "/status") is False
+    assert adapter._strip_own_addressing("mail foo@aegis_bot.example") == "mail foo@aegis_bot.example"
+    assert adapter._strip_own_addressing("@aegis_bot hello") == "hello"
     assert adapter._message_allowed({**base, "chat": {"id": 42, "type": "group"}}, "/status") is False
 
     topic_msg = {

@@ -2451,7 +2451,21 @@ def _dashboard_plugin_hub(config: Config) -> dict[str, Any]:
             "user_hidden": bool(aliases & hidden),
         })
     memory_options = [
-        str(row.get("name") or "") for row in memory_provider_catalog(config) if row.get("name")
+        {
+            "name": str(row.get("name") or ""),
+            "description": str(row.get("description") or row.get("display_name") or ""),
+        }
+        for row in memory_provider_catalog(config)
+        if row.get("name")
+    ]
+    context_options = [
+        {
+            "name": str(name),
+            "description": str(getattr(engine, "__doc__", "") or "").strip().splitlines()[0]
+            if str(getattr(engine, "__doc__", "") or "").strip()
+            else "",
+        }
+        for name, engine in sorted(_ENGINES.items())
     ]
     return {
         "ok": True,
@@ -2463,7 +2477,7 @@ def _dashboard_plugin_hub(config: Config) -> dict[str, Any]:
             "memory_provider": str(config.get("memory.provider", "") or ""),
             "memory_options": memory_options,
             "context_engine": str(config.get("agent.context_engine", "default") or "default"),
-            "context_options": sorted(_ENGINES.keys()),
+            "context_options": context_options,
         },
         "safe_mode": payload.get("safe_mode", False),
         "loaded": payload.get("loaded", []),

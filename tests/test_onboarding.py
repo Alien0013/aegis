@@ -577,6 +577,97 @@ def test_dialogs_can_be_enabled(monkeypatch):
     assert _can_use_dialogs(input, print)
 
 
+def test_gateway_setup_validates_telegram_token_and_home_channel(monkeypatch):
+    import os
+
+    from aegis.config import Config
+    from aegis.onboarding import OnboardingState, _configure_channels
+
+    for key in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_USERS", "TELEGRAM_HOME_CHANNEL"):
+        monkeypatch.delenv(key, raising=False)
+    cfg = Config.load()
+    answers = iter([
+        "telegram",
+        " 7 , @ada ",
+        "y",
+    ])
+    secrets = iter([
+        "bad-token",
+        "123456789:ABCdefGHI-jklMNOpqrSTUvwxYZ123456",
+    ])
+    out: list[str] = []
+    state = OnboardingState()
+
+    _configure_channels(
+        cfg,
+        state,
+        advanced=False,
+        input_func=lambda _prompt: next(answers),
+        secret_func=lambda _prompt: next(secrets),
+        out=out.append,
+    )
+
+    assert "Invalid Telegram token format" in "\n".join(out)
+    assert os.environ["TELEGRAM_BOT_TOKEN"] == "123456789:ABCdefGHI-jklMNOpqrSTUvwxYZ123456"
+    assert os.environ["TELEGRAM_ALLOWED_USERS"] == "7,@ada"
+    assert os.environ["TELEGRAM_HOME_CHANNEL"] == "7"
+    assert state.channels == ["telegram"]
+    assert Config.load().get("gateway.channels") == ["telegram"]
+
+
+def test_gateway_setup_collects_advanced_discord_and_slack_fields(monkeypatch):
+    import os
+
+    from aegis.config import Config
+    from aegis.onboarding import OnboardingState, _configure_channels
+
+    for key in (
+        "DISCORD_BOT_TOKEN",
+        "DISCORD_ALLOWED_USERS",
+        "DISCORD_ALLOWED_CHANNELS",
+        "DISCORD_HOME_CHANNEL",
+        "SLACK_BOT_TOKEN",
+        "SLACK_APP_TOKEN",
+        "SLACK_ALLOWED_USERS",
+        "SLACK_ALLOWED_CHANNELS",
+        "SLACK_HOME_CHANNEL",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    cfg = Config.load()
+    answers = iter([
+        "discord,slack",
+        "U1, U2",
+        "C1",
+        "y",
+        "U9",
+        "",
+        "n",
+        "C-home",
+    ])
+    secrets = iter(["discord-token", "xoxb-token", "xapp-token"])
+    state = OnboardingState()
+
+    _configure_channels(
+        cfg,
+        state,
+        advanced=True,
+        input_func=lambda _prompt: next(answers),
+        secret_func=lambda _prompt: next(secrets),
+        out=lambda _msg: None,
+    )
+
+    assert state.channels == ["discord", "slack"]
+    assert Config.load().get("gateway.channels") == ["discord", "slack"]
+    assert os.environ["DISCORD_BOT_TOKEN"] == "discord-token"
+    assert os.environ["DISCORD_ALLOWED_USERS"] == "U1,U2"
+    assert os.environ["DISCORD_ALLOWED_CHANNELS"] == "C1"
+    assert os.environ["DISCORD_HOME_CHANNEL"] == "C1"
+    assert os.environ["SLACK_BOT_TOKEN"] == "xoxb-token"
+    assert os.environ["SLACK_APP_TOKEN"] == "xapp-token"
+    assert os.environ["SLACK_ALLOWED_USERS"] == "U9"
+    assert os.environ["SLACK_HOME_CHANNEL"] == "C-home"
+
+
 def test_onboarding_picks_free_dashboard_port(monkeypatch):
     from aegis.config import Config
     from aegis.onboarding import OnboardingState, _configure_dashboard

@@ -515,9 +515,9 @@ class TelegramAdapter(BasePlatformAdapter):
         return str(msg.get("text") or msg.get("caption") or "")
 
     def _strip_own_addressing(self, text: str) -> str:
-        if not self.bot_username:
+        pattern = self._bot_mention_pattern()
+        if pattern is None:
             return str(text or "").strip()
-        pattern = re.compile(rf"@{re.escape(self.bot_username)}\b", re.IGNORECASE)
         return pattern.sub("", str(text or "")).strip()
 
     def _event_text(self, msg: dict, normalized_text: str, *, attachments: list[dict] | None = None) -> str:
@@ -771,16 +771,58 @@ class TelegramAdapter(BasePlatformAdapter):
         if mode in {"addressed", "mention", "mentions", "reply", "replies"}:
             return (
                 text.lstrip().startswith("/")
-                or self._mentions_bot(raw_text)
+                or self._mentions_bot(msg, raw_text)
                 or self._is_reply_to_bot(msg.get("reply_to_message") or {})
             )
         return True
 
-    def _mentions_bot(self, text: str) -> bool:
+    def _bot_mention_pattern(self):
+        if not self.bot_username:
+            return None
+        return re.compile(
+            rf"(?<![A-Za-z0-9_])@{re.escape(self.bot_username)}"
+            r"(?![A-Za-z0-9_]|\.[A-Za-z0-9]|-)",
+            re.IGNORECASE,
+        )
+
+    def _entity_text(self, text: str, entity: dict) -> str:
+        try:
+            offset = int(entity.get("offset") or 0)
+            length = int(entity.get("length") or 0)
+        except (TypeError, ValueError):
+            return ""
+        if length <= 0:
+            return ""
+        encoded = str(text or "").encode("utf-16-le")
+        start = max(0, offset * 2)
+        end = max(start, start + length * 2)
+        try:
+            return encoded[start:end].decode("utf-16-le")
+        except UnicodeDecodeError:
+            return ""
+
+    def _mentions_bot(self, msg: dict, text: str) -> bool:
         if not self.bot_username:
             return False
-        pattern = re.compile(rf"@{re.escape(self.bot_username)}\b", re.IGNORECASE)
-        return bool(pattern.search(str(text or "")))
+        expected = self.bot_username.lower().lstrip("@")
+        for key in ("entities", "caption_entities"):
+            entities = msg.get(key)
+            if not isinstance(entities, list):
+                continue
+            for entity in entities:
+                if not isinstance(entity, dict):
+                    continue
+                entity_type = str(entity.get("type") or "")
+                if entity_type == "mention":
+                    mention = self._entity_text(text, entity).strip().lstrip("@").lower()
+                    if mention == expected:
+                        return True
+                elif entity_type == "text_mention" and self.bot_id:
+                    user = entity.get("user") if isinstance(entity.get("user"), dict) else {}
+                    if str(user.get("id") or "").strip() == str(self.bot_id):
+                        return True
+        pattern = self._bot_mention_pattern()
+        return bool(pattern and pattern.search(str(text or "")))
 
     def _is_reply_to_bot(self, reply_to: dict) -> bool:
         if not isinstance(reply_to, dict):

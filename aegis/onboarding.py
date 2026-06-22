@@ -7,6 +7,7 @@ import getpass
 import importlib.util
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -200,6 +201,7 @@ VALID_WEB_BACKENDS = {"auto", "duckduckgo", "brave", "tavily", "serper", "skip"}
 VALID_TOOLSETS = {"core", "browser", "computer", "voice", "lsp", "mcp", "all"}
 VALID_CHANNELS = {"cli", "telegram", "discord", "slack", "signal", "matrix", "email", "webhook", "ntfy"}
 SETUP_SECTIONS = ("model", "terminal", "tools", "gateway", "agent", "web", "memory", "dashboard", "services")
+_TELEGRAM_BOT_TOKEN_RE = re.compile(r"^\d+:[A-Za-z0-9_-]{30,}$")
 
 
 @dataclass
@@ -1371,6 +1373,52 @@ def _populate_surface_state(config: Config, state: OnboardingState):
     return tools, skills, plugins
 
 
+def _clean_csv(value: str) -> str:
+    return ",".join(part.strip() for part in str(value or "").split(",") if part.strip())
+
+
+def _valid_telegram_bot_token(token: str) -> bool:
+    return bool(_TELEGRAM_BOT_TOKEN_RE.fullmatch(str(token or "").strip()))
+
+
+def _prompt_secret_value(
+    env_name: str,
+    secret_func: Input,
+    out: Output,
+    *,
+    validator: Callable[[str], bool] | None = None,
+    invalid_message: str = "invalid value",
+) -> str:
+    while True:
+        value = secret_func(f"🔑 Enter {env_name}: ").strip()
+        if not value:
+            return ""
+        if validator is not None and not validator(value):
+            out(f"! {invalid_message}")
+            continue
+        return value
+
+
+def _configure_home_channel(
+    config: Config,
+    platform: str,
+    default_value: str,
+    input_func: Input,
+    out: Output,
+) -> None:
+    env_name = f"{platform.upper()}_HOME_CHANNEL"
+    if default_value:
+        use_default = _confirm(f"Use {default_value} as {platform} home channel?", True, input_func, out)
+        if use_default:
+            config.set(env_name, default_value)
+            out(f"✓ {platform} home channel set.")
+            return
+    value = _ask(f"{platform.title()} home channel ID (optional)", "", input_func).strip()
+    if value:
+        config.set(env_name, value)
+        out(f"✓ {platform} home channel set.")
+
+
 def _configure_channels(
     config: Config,
     state: OnboardingState,
@@ -1392,23 +1440,69 @@ def _configure_channels(
     )
     channels: list[str] = []
     if "telegram" in selected:
-        token = secret_func("🔑 Enter TELEGRAM_BOT_TOKEN: ").strip()
+        token = _prompt_secret_value(
+            "TELEGRAM_BOT_TOKEN",
+            secret_func,
+            out,
+            validator=_valid_telegram_bot_token,
+            invalid_message=(
+                "Invalid Telegram token format. Expected "
+                "<numeric_id>:<alphanumeric_hash> from @BotFather."
+            ),
+        )
         if token:
             config.set("TELEGRAM_BOT_TOKEN", token)
             channels.append("telegram")
-            allowed = _ask("Allowlisted Telegram user id or @username", "", input_func)
+            allowed = _clean_csv(_ask("Allowed Telegram user IDs or @usernames", "", input_func))
             if allowed:
                 config.set("TELEGRAM_ALLOWED_USERS", allowed)
                 out("✓ Telegram allowlist enabled.")
+                first_allowed = allowed.split(",", 1)[0].strip()
             else:
                 out("! No allowlist set; unknown users will use pairing mode.")
+                first_allowed = ""
+            _configure_home_channel(config, "telegram", first_allowed, input_func, out)
     if advanced:
-        for channel, env_name in (("discord", "DISCORD_BOT_TOKEN"), ("slack", "SLACK_BOT_TOKEN")):
-            if channel in selected:
-                token = secret_func(f"🔑 Enter {env_name}: ").strip()
-                if token:
-                    config.set(env_name, token)
-                    channels.append(channel)
+        if "discord" in selected:
+            token = _prompt_secret_value("DISCORD_BOT_TOKEN", secret_func, out)
+            if token:
+                config.set("DISCORD_BOT_TOKEN", token)
+                channels.append("discord")
+                allowed_users = _clean_csv(_ask("Allowed Discord user IDs (optional)", "", input_func))
+                if allowed_users:
+                    config.set("DISCORD_ALLOWED_USERS", allowed_users)
+                    out("✓ Discord allowlist enabled.")
+                allowed_channels = _clean_csv(_ask("Allowed Discord channel IDs (optional)", "", input_func))
+                if allowed_channels:
+                    config.set("DISCORD_ALLOWED_CHANNELS", allowed_channels)
+                _configure_home_channel(
+                    config,
+                    "discord",
+                    (allowed_channels or allowed_users).split(",", 1)[0].strip(),
+                    input_func,
+                    out,
+                )
+        if "slack" in selected:
+            bot_token = _prompt_secret_value("SLACK_BOT_TOKEN", secret_func, out)
+            app_token = _prompt_secret_value("SLACK_APP_TOKEN", secret_func, out) if bot_token else ""
+            if bot_token and app_token:
+                config.set("SLACK_BOT_TOKEN", bot_token)
+                config.set("SLACK_APP_TOKEN", app_token)
+                channels.append("slack")
+                allowed_users = _clean_csv(_ask("Allowed Slack member IDs (optional)", "", input_func))
+                if allowed_users:
+                    config.set("SLACK_ALLOWED_USERS", allowed_users)
+                    out("✓ Slack allowlist enabled.")
+                allowed_channels = _clean_csv(_ask("Allowed Slack channel IDs (optional)", "", input_func))
+                if allowed_channels:
+                    config.set("SLACK_ALLOWED_CHANNELS", allowed_channels)
+                _configure_home_channel(
+                    config,
+                    "slack",
+                    (allowed_channels or allowed_users).split(",", 1)[0].strip(),
+                    input_func,
+                    out,
+                )
     state.channels = channels
     config.data.setdefault("gateway", {})["channels"] = channels
     config.save()
