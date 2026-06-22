@@ -1,3 +1,4 @@
+import * as React from "react";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { api, TOKEN } from "../lib/api";
@@ -72,6 +73,10 @@ export interface PluginRenderContext {
   assetBase: string;
   apiBase: string;
   token: string;
+  sdk: DashboardPluginSdk;
+  authedFetch: PluginFetch;
+  fetchJSON: PluginFetchJSON;
+  createWebSocket: PluginWebSocketFactory;
 }
 
 export type PluginRenderer = (element: HTMLElement, context: PluginRenderContext) => void | (() => void);
@@ -91,6 +96,25 @@ export interface DashboardPluginRegistration {
   name: string;
   routes?: DashboardPluginRoute[];
   slots?: Record<string, PluginRenderer | PluginRenderer[]>;
+}
+
+export type PluginFetch = (path: string, init?: RequestInit) => Promise<Response>;
+export type PluginFetchJSON = <T = unknown>(path: string, init?: RequestInit) => Promise<T>;
+export type PluginWebSocketFactory = (path: string, protocols?: string | string[]) => WebSocket;
+
+export interface DashboardPluginSdk {
+  sdkVersion: string;
+  React: typeof React;
+  register: (plugin: DashboardPluginRegistration) => void;
+  registerSlot: (pluginName: string, slotName: string, render: PluginRenderer) => void;
+  reload: () => void;
+  api: typeof api;
+  authedFetch: PluginFetch;
+  fetch: PluginFetch;
+  fetchJSON: PluginFetchJSON;
+  createWebSocket: PluginWebSocketFactory;
+  webSocket: PluginWebSocketFactory;
+  token: string;
 }
 
 type HostState = {
@@ -123,6 +147,7 @@ export interface PluginClientStatus {
 const registrations = new Map<string, RegisteredPlugin>();
 const pluginStatuses = new Map<string, PluginClientStatus>();
 const listeners = new Set<() => void>();
+const DASHBOARD_PLUGIN_SDK_VERSION = "0.1.0";
 
 function normalizePath(path: string | undefined, fallback: string): string {
   const raw = (path || fallback || "").trim();
@@ -222,28 +247,80 @@ function pruneRegistrations(manifests: DashboardPluginManifest[]): boolean {
 
 const noopReload = () => {};
 
-function pluginFetch(path: string, init: RequestInit = {}): Promise<Response> {
+function pluginUrl(path: string): string {
   const raw = String(path || "");
-  const url = raw.startsWith("/") ? raw : `/api/${raw.replace(/^api\//, "")}`;
+  if (/^(https?|wss?):\/\//i.test(raw)) return raw;
+  return raw.startsWith("/") ? raw : `/api/${raw.replace(/^api\//, "")}`;
+}
+
+function isSameHost(url: string): boolean {
+  try {
+    return new URL(url, window.location.href).host === window.location.host;
+  } catch {
+    return true;
+  }
+}
+
+function pluginFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const url = pluginUrl(path);
   const headers = new Headers(init.headers || {});
-  if (TOKEN && !headers.has("X-Aegis-Token")) headers.set("X-Aegis-Token", TOKEN);
+  if (TOKEN && isSameHost(url) && !headers.has("X-Aegis-Token")) headers.set("X-Aegis-Token", TOKEN);
   return window.fetch(url, { ...init, headers });
+}
+
+async function pluginFetchJSON<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await pluginFetch(path, init);
+  const contentType = response.headers.get("content-type") || "";
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(text.slice(0, 300) || `${path}: ${response.status}`);
+  }
+  if (!text || response.status === 204) return undefined as T;
+  return (contentType.includes("application/json") ? JSON.parse(text) : text) as T;
+}
+
+function pluginWebSocket(path: string, protocols?: string | string[]): WebSocket {
+  const url = new URL(pluginUrl(path), window.location.href);
+  if (url.protocol === "http:") url.protocol = "ws:";
+  else if (url.protocol === "https:") url.protocol = "wss:";
+  if (TOKEN && url.host === window.location.host && !url.searchParams.has("token")) {
+    url.searchParams.set("token", TOKEN);
+  }
+  return new WebSocket(url.toString(), protocols);
+}
+
+const dashboardPluginSdk: DashboardPluginSdk = {
+  sdkVersion: DASHBOARD_PLUGIN_SDK_VERSION,
+  React,
+  register,
+  registerSlot,
+  reload: noopReload,
+  api,
+  authedFetch: pluginFetch,
+  fetch: pluginFetch,
+  fetchJSON: pluginFetchJSON,
+  createWebSocket: pluginWebSocket,
+  webSocket: pluginWebSocket,
+  token: TOKEN,
+};
+
+function getDashboardPluginSdk(reload?: () => void): DashboardPluginSdk {
+  if (reload) dashboardPluginSdk.reload = reload;
+  return dashboardPluginSdk;
 }
 
 function ensureGlobalHost(reload: () => void = noopReload) {
   const existing = window.__AEGIS_PLUGINS__;
+  const sdk = getDashboardPluginSdk(reload);
   const host = {
     ...(existing || {}),
-    register,
-    registerSlot,
-    reload,
-    api,
-    fetch: pluginFetch,
-    token: TOKEN,
+    ...sdk,
+    sdk,
   };
   window.__AEGIS_PLUGINS__ = host;
+  window.__AEGIS_PLUGIN_SDK__ = sdk;
   window.__HERMES_PLUGINS__ = host;
-  window.__HERMES_PLUGIN_SDK__ = host;
+  window.__HERMES_PLUGIN_SDK__ = sdk;
 }
 
 function assetUrl(manifest: DashboardPluginManifest, rel: string | undefined): string {
@@ -503,6 +580,10 @@ function PluginMount({
       assetBase: manifest?.base_path || `/dashboard-plugins/${name}`,
       apiBase: `/api/plugins/${name}`,
       token: TOKEN,
+      sdk: getDashboardPluginSdk(),
+      authedFetch: pluginFetch,
+      fetchJSON: pluginFetchJSON,
+      createWebSocket: pluginWebSocket,
     });
     return typeof cleanup === "function" ? cleanup : undefined;
   }, [manifest, name, render]);
@@ -546,20 +627,17 @@ export function PluginRoutePage({ route }: { route: DashboardPluginRoute }) {
   );
 }
 
-interface DashboardPluginGlobal {
-  register?: (plugin: DashboardPluginRegistration) => void;
-  registerSlot?: (pluginName: string, slotName: string, render: PluginRenderer) => void;
+interface DashboardPluginGlobal extends Partial<DashboardPluginSdk> {
+  sdk?: DashboardPluginSdk;
   reload?: () => void;
-  api?: typeof api;
-  fetch?: typeof pluginFetch;
-  token?: string;
   [key: string]: unknown;
 }
 
 declare global {
   interface Window {
     __AEGIS_PLUGINS__?: DashboardPluginGlobal;
+    __AEGIS_PLUGIN_SDK__?: DashboardPluginSdk;
     __HERMES_PLUGINS__?: DashboardPluginGlobal;
-    __HERMES_PLUGIN_SDK__?: DashboardPluginGlobal;
+    __HERMES_PLUGIN_SDK__?: DashboardPluginSdk;
   }
 }
