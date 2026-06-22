@@ -1869,7 +1869,7 @@ def cmd_sessions(args, config: Config) -> int:
 # --------------------------------------------------------------------------- #
 def cmd_gateway(args, config: Config) -> int:
     action = getattr(args, "action", None)
-    if action in ("install", "uninstall", "status"):
+    if action in ("install", "uninstall", "status", "start", "stop", "restart"):
         from ..gateway.service import cmd_gateway_service
         chans = args.channels or ",".join(config.get("gateway.channels", []) or []) or "telegram"
         return cmd_gateway_service(action, chans)
@@ -2733,8 +2733,8 @@ def build_parser() -> argparse.ArgumentParser:
     se.set_defaults(func=cmd_sessions)
 
     g = sub.add_parser("gateway", help="run the multi-channel gateway")
-    g.add_argument("action", nargs="?", choices=["run", "install", "uninstall", "status"],
-                   default="run", help="run, or install/uninstall/status as an OS service")
+    g.add_argument("action", nargs="?", choices=["run", "install", "uninstall", "status", "start", "stop", "restart"],
+                   default="run", help="run, or install/control an OS service")
     g.add_argument("--channels", help="comma list: cli,telegram (default cli)")
     g.set_defaults(func=cmd_gateway)
 

@@ -71,8 +71,12 @@ test("auto-updater setup is idempotent and bounded", () => {
   requireSnippet("autoUpdaterConfigured");
   requireSnippet("updateCheckInFlight");
   requireSnippet("let updaterStatus = initialUpdaterStatus();");
+  requireSnippet("pauseGatewayForUpdate");
+  requireSnippet("resumeGatewayAfterUpdate");
   requireSnippet("function setUpdaterStatus");
   requireSnippet("function installDownloadedUpdate");
+  requireSnippet("const gatewayPause = pauseGatewayForUpdate({");
+  requireSnippet("const gatewayResume = resumeGatewayAfterUpdate({");
   requireSnippet("descriptor.desktop.updater = { ...updaterStatus };");
   requireSnippet("releaseUpdateEligibility");
   requireSnippet("appVersion: app.getVersion()");

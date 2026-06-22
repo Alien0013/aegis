@@ -4,6 +4,7 @@ so it starts on boot and restarts on crash. Falls back to a clear message on uns
 
 from __future__ import annotations
 
+import os
 import platform
 import shutil
 import subprocess
@@ -11,6 +12,8 @@ from pathlib import Path
 
 _SYSTEMD_UNIT = "aegis-gateway.service"
 _LAUNCHD_LABEL = "com.aegis.gateway"
+_WINDOWS_TASK = "AEGIS_Gateway"
+_WINDOWS_STARTUP_SCRIPT = "aegis-gateway.cmd"
 
 
 def _aegis_bin() -> str:
@@ -23,6 +26,73 @@ def _systemd_path() -> Path:
 
 def _launchd_path() -> Path:
     return Path.home() / "Library" / "LaunchAgents" / f"{_LAUNCHD_LABEL}.plist"
+
+
+def _windows_startup_path() -> Path:
+    appdata = os.environ.get("APPDATA")
+    base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
+    return base / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / _WINDOWS_STARTUP_SCRIPT
+
+
+def _gateway_command(channels: str) -> list[str]:
+    return [_aegis_bin(), "gateway", "--channels", channels]
+
+
+def _windows_task_installed() -> bool:
+    r = subprocess.run(
+        ["schtasks", "/Query", "/TN", _WINDOWS_TASK],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return r.returncode == 0
+
+
+def _windows_autostart_installed() -> bool:
+    return _windows_task_installed() or _windows_startup_path().exists()
+
+
+def _windows_gateway_pid() -> int | None:
+    """Best-effort PID lookup for a running Windows gateway process."""
+    queries = [
+        [
+            "wmic",
+            "process",
+            "where",
+            "CommandLine like '%aegis%gateway%'",
+            "get",
+            "ProcessId,CommandLine",
+            "/FORMAT:LIST",
+        ],
+        [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            "Get-CimInstance Win32_Process | "
+            "Where-Object { $_.CommandLine -match 'aegis' -and $_.CommandLine -match 'gateway' } | "
+            "Select-Object -First 1 -ExpandProperty ProcessId",
+        ],
+    ]
+    for argv in queries:
+        try:
+            r = subprocess.run(argv, capture_output=True, text=True, timeout=5, check=False)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if r.returncode != 0:
+            continue
+        for line in (r.stdout or "").splitlines():
+            text = line.strip()
+            if not text:
+                continue
+            if text.lower().startswith("processid="):
+                text = text.split("=", 1)[1].strip()
+            try:
+                pid = int(text)
+            except ValueError:
+                continue
+            if pid > 0:
+                return pid
+    return None
 
 
 def _systemd_main_pid() -> int | None:
@@ -89,6 +159,27 @@ def install(channels: str = "telegram") -> str:
         subprocess.run(["launchctl", "load", str(p)], check=False)
         return (f"installed launchd agent → {p}\n"
                 f"  manage: launchctl unload|load {p}")
+    if system == "Windows":
+        command = subprocess.list2cmdline(_gateway_command(channels))
+        task = subprocess.run(
+            ["schtasks", "/Create", "/SC", "ONLOGON", "/TN", _WINDOWS_TASK, "/TR", command, "/F"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if task.returncode == 0:
+            subprocess.run(["schtasks", "/Run", "/TN", _WINDOWS_TASK], check=False)
+            return (f"installed Windows Scheduled Task → {_WINDOWS_TASK}\n"
+                    f"  manage: schtasks /Query|/Run|/End /TN {_WINDOWS_TASK}")
+        p = _windows_startup_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(f"@echo off\r\nstart \"AEGIS Gateway\" {command}\r\n", encoding="utf-8")
+        try:
+            subprocess.Popen(["cmd", "/c", str(p)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError:
+            pass
+        return (f"installed Windows Startup fallback → {p}\n"
+                "  Scheduled Task creation failed; the gateway will start on next login.")
     return f"service install isn't supported on {system}; run `aegis gateway` directly or use your own supervisor."
 
 
@@ -108,6 +199,14 @@ def uninstall() -> str:
         if p.exists():
             p.unlink()
         return "removed launchd agent."
+    if system == "Windows":
+        _mark_planned_stop(_windows_gateway_pid())
+        subprocess.run(["schtasks", "/End", "/TN", _WINDOWS_TASK], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["schtasks", "/Delete", "/TN", _WINDOWS_TASK, "/F"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        p = _windows_startup_path()
+        if p.exists():
+            p.unlink()
+        return "removed Windows gateway autostart."
     return f"nothing to remove on {system}."
 
 
@@ -120,7 +219,51 @@ def status() -> str:
     if system == "Darwin":
         installed = _launchd_path().exists()
         return f"launchd: {'loaded' if installed else 'not installed'}"
+    if system == "Windows":
+        pid = _windows_gateway_pid()
+        installed = _windows_autostart_installed()
+        if pid:
+            return f"windows: running pid {pid}"
+        return f"windows: {'installed' if installed else 'not installed'}"
     return f"no service manager on {system}."
+
+
+def start(channels: str = "telegram") -> bool:
+    system = platform.system()
+    if system == "Linux" and _systemd_path().exists():
+        return subprocess.run(["systemctl", "--user", "start", _SYSTEMD_UNIT], check=False).returncode == 0
+    if system == "Darwin" and _launchd_path().exists():
+        return subprocess.run(["launchctl", "load", str(_launchd_path())], check=False).returncode == 0
+    if system == "Windows":
+        if _windows_task_installed():
+            return subprocess.run(["schtasks", "/Run", "/TN", _WINDOWS_TASK], check=False).returncode == 0
+        p = _windows_startup_path()
+        if p.exists():
+            try:
+                subprocess.Popen(["cmd", "/c", str(p)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return True
+            except OSError:
+                return False
+    return False
+
+
+def stop() -> bool:
+    system = platform.system()
+    if system == "Linux" and _systemd_path().exists():
+        _mark_planned_stop(_systemd_main_pid())
+        return subprocess.run(["systemctl", "--user", "stop", _SYSTEMD_UNIT], check=False).returncode == 0
+    if system == "Darwin" and _launchd_path().exists():
+        return subprocess.run(["launchctl", "unload", str(_launchd_path())], check=False, stderr=subprocess.DEVNULL).returncode == 0
+    if system == "Windows":
+        pid = _windows_gateway_pid()
+        _mark_planned_stop(pid)
+        handled = False
+        if _windows_task_installed():
+            handled = subprocess.run(["schtasks", "/End", "/TN", _WINDOWS_TASK], check=False).returncode == 0
+        if pid:
+            handled = subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], check=False).returncode == 0 or handled
+        return handled
+    return False
 
 
 def restart() -> bool:
@@ -134,13 +277,23 @@ def restart() -> bool:
         p = str(_launchd_path())
         subprocess.run(["launchctl", "unload", p], check=False, stderr=subprocess.DEVNULL)
         return subprocess.run(["launchctl", "load", p], check=False).returncode == 0
+    if system == "Windows" and _windows_autostart_installed():
+        stop()
+        return start()
     return False
 
 
 def cmd_gateway_service(action: str, channels: str = "telegram") -> int:
-    fn = {"install": lambda: install(channels), "uninstall": uninstall, "status": status}.get(action)
+    fn = {
+        "install": lambda: install(channels),
+        "uninstall": uninstall,
+        "status": status,
+        "start": lambda: "started gateway service" if start(channels) else "gateway service is not installed",
+        "stop": lambda: "stopped gateway service" if stop() else "gateway service is not running",
+        "restart": lambda: "restarted gateway service" if restart() else "gateway service is not installed",
+    }.get(action)
     if not fn:
-        print("usage: aegis gateway install|uninstall|status [--channels ...]")
+        print("usage: aegis gateway install|uninstall|status|start|stop|restart [--channels ...]")
         return 1
     print(fn())
     return 0

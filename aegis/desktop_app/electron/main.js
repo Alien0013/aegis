@@ -9,7 +9,7 @@ const {
   app, BrowserWindow, Menu, Tray, Notification, shell, clipboard, ipcMain,
   nativeTheme, globalShortcut, powerMonitor, dialog,
 } = require("electron");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 const net = require("net");
 const http = require("http");
 const https = require("https");
@@ -46,6 +46,10 @@ const {
   initialUpdaterStatus,
   transitionUpdaterStatus,
 } = require("./updater-status.cjs");
+const {
+  pauseGatewayForUpdate,
+  resumeGatewayAfterUpdate,
+} = require("./gateway-update-coordination.cjs");
 
 // Chromium checks the Linux setuid sandbox before main.js runs, so launch.js
 // puts --no-sandbox on argv; mirror it here so child processes inherit it.
@@ -847,10 +851,23 @@ function installDownloadedUpdate() {
     const message = "No downloaded update is ready to install.";
     return { ok: false, error: message, status: { ...updaterStatus } };
   }
+  const descriptor = connectionDescriptor();
+  const gatewayPause = pauseGatewayForUpdate({
+    platform: process.platform,
+    mode: descriptor.mode,
+    userData: app.getPath("userData"),
+    command: backendCommand,
+    spawnSync,
+  });
+  if (!gatewayPause.ok) {
+    const message = gatewayPause.error || "Gateway could not be paused for update.";
+    log(`update install paused: ${message}`);
+    return { ok: false, error: message, gateway: gatewayPause, status: { ...updaterStatus } };
+  }
   setUpdaterStatus("installing", { version: updaterStatus.version });
   quitting = true;
   autoUpdater.quitAndInstall();
-  return { ok: true, status: { ...updaterStatus } };
+  return { ok: true, gateway: gatewayPause, status: { ...updaterStatus } };
 }
 
 /* ---------- boot sequence ---------- */
@@ -859,6 +876,15 @@ async function run() {
   boot({ pct: 12, message: "Starting AEGIS backend…" });
   try {
     await startBackend();
+    const gatewayResume = resumeGatewayAfterUpdate({
+      platform: process.platform,
+      mode: connectionDescriptor().mode,
+      userData: app.getPath("userData"),
+      command: backendCommand,
+      spawnSync,
+    });
+    if (gatewayResume.resumed) log("gateway service resumed after update");
+    else if (!gatewayResume.ok) log(`gateway service resume after update failed: ${gatewayResume.error}`);
     boot({ pct: 30, message: "Waiting for the agent to come online…" });
     const readyAnnouncement = await waitForBackendReadyAnnouncement(2500);
     await probe(`${backendBaseUrl()}/api/health`, readyAnnouncement ? 20 : 70, (done, total) =>
