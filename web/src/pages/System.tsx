@@ -21,6 +21,7 @@ export function System() {
   const [savingProjectDir, setSavingProjectDir] = useState(false);
   const [savingRemote, setSavingRemote] = useState(false);
   const [checkingUpdates, setCheckingUpdates] = useState(false);
+  const [installingUpdate, setInstallingUpdate] = useState(false);
   const [repairBusy, setRepairBusy] = useState("");
 
   function applyDesktopSnapshot(connection?: DesktopConnection | null, updater?: DesktopUpdaterStatus | null) {
@@ -56,6 +57,22 @@ export function System() {
   }, []);
 
   const updater = desktopConnection?.desktop?.updater;
+  const updateEligibility = desktopConnection?.desktop?.updateEligibility;
+  const updateDisabledReason = updateEligibility?.ok === false
+    ? updateEligibility.reason
+    : updater?.stage === "disabled"
+      ? updater.message || updater.error
+      : "";
+  const updateInstallReason = updateEligibility?.ok === false
+    ? updateEligibility.reason
+    : updater?.installable
+      ? ""
+      : updater?.stage
+        ? `No downloaded update is ready (${updater.stage})`
+        : "No downloaded update is ready";
+  const updateProgress = updater?.downloadProgress?.percent != null
+    ? `${Math.round(updater.downloadProgress.percent)}%`
+    : "";
   const repairActions = desktopConnection?.desktop?.repair?.actions || [];
 
   useEffect(() => {
@@ -85,6 +102,26 @@ export function System() {
       applyDesktopSnapshot(connection, updater);
     } finally {
       setCheckingUpdates(false);
+    }
+  }
+
+  async function installDesktopUpdate() {
+    if (!desktop?.installUpdate) return;
+    setInstallingUpdate(true);
+    try {
+      const result = await desktop.installUpdate();
+      if (result.status) applyDesktopSnapshot(null, result.status);
+      if (!result.ok) {
+        toast(result.error || "No downloaded update is ready to install", "err");
+        return;
+      }
+      const connection = await desktop.getConnection?.();
+      applyDesktopSnapshot(connection, result.status);
+      toast("Installing downloaded update");
+    } catch (e) {
+      toast(String(e), "err");
+    } finally {
+      setInstallingUpdate(false);
     }
   }
 
@@ -196,9 +233,28 @@ export function System() {
               title="Desktop backend"
               actions={
                 desktop?.checkForUpdates ? (
-                  <Button sm icon="refresh" disabled={checkingUpdates || updater?.checking} onClick={checkDesktopUpdates}>
-                    Check for updates
-                  </Button>
+                  <div className="flex flex-wrap gap-2">
+                    <Button sm icon="refresh" disabled={checkingUpdates || updater?.checking} onClick={checkDesktopUpdates}>
+                      Check for updates
+                    </Button>
+                    {desktop?.installUpdate && (
+                      <Button
+                        sm
+                        icon="download"
+                        variant="primary"
+                        disabled={
+                          installingUpdate
+                          || updater?.installing
+                          || !updater?.installable
+                          || updateEligibility?.ok === false
+                        }
+                        onClick={installDesktopUpdate}
+                        title={updateInstallReason}
+                      >
+                        Install update
+                      </Button>
+                    )}
+                  </div>
                 ) : undefined
               }
             >
@@ -209,6 +265,10 @@ export function System() {
                 <Row k="Updater" v={updater?.stage} />
                 <Row k="Update note" v={updater?.message || updater?.error} />
                 <Row k="Update version" v={updater?.version} />
+                <Row k="Update progress" v={updateProgress} />
+                <Row k="Installable" v={updater?.installable ? "yes" : updateInstallReason} />
+                <Row k="Installing" v={updater?.installing || installingUpdate ? "yes" : ""} />
+                <Row k="Update disabled" v={updateDisabledReason} />
                 <Row k="Last checked" v={updater?.lastCheckedAt ? ago(updater.lastCheckedAt) : ""} />
                 <Row k="PID" v={desktopConnection?.backend?.pid ? String(desktopConnection.backend.pid) : ""} />
                 <Row k="Port" v={desktopConnection?.backend?.port ? String(desktopConnection.backend.port) : ""} />

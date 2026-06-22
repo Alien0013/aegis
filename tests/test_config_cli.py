@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 import yaml
 
 
@@ -314,3 +315,18 @@ def test_config_json_redacts_secret_values(monkeypatch, capsys):
     data = json.loads(capsys.readouterr().out)
     assert data["source"] == ".env"
     assert data["value"] == "[REDACTED]"
+
+
+def test_config_env_writer_rejects_denylisted_names(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis import config as cfg
+    from aegis.cli.main import main
+
+    with pytest.raises(ValueError, match="writer denylist"):
+        cfg.set_env_var("PATH", "/tmp/bin")
+
+    assert main(["config", "set", "PATH", "/tmp/bin", "--json"]) == 1
+    data = json.loads(capsys.readouterr().out)
+    assert data["ok"] is False
+    assert "writer denylist" in data["error"]
+    assert not cfg.env_path().exists()

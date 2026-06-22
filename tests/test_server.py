@@ -3883,6 +3883,8 @@ def test_responses_aiohttp_stream_disconnect_cancels_live_agent(monkeypatch, tmp
                     data_line = await asyncio.wait_for(resp.content.readline(), timeout=1)
                     assert event_line == b"event: response.created\n"
                     assert data_line.startswith(b"data: ")
+                    created = json.loads(data_line.decode().removeprefix("data: ").strip())
+                    response_id = created["response"]["id"]
                     assert await asyncio.to_thread(_BlockingResponsesRunner.started.wait, 1)
                     resp.close()
                     deadline = time.monotonic() + 2
@@ -3891,14 +3893,30 @@ def test_responses_aiohttp_stream_disconnect_cancels_live_agent(monkeypatch, tmp
                             _BlockingResponsesRunner.agents
                             and _BlockingResponsesRunner.agents[0].cancel_event.is_set()
                         ):
-                            return True
+                            break
                         await asyncio.sleep(0.05)
-                    return False
+                    else:
+                        return {}
+                    _BlockingResponsesRunner.release.set()
+                    deadline = time.monotonic() + 2
+                    while time.monotonic() < deadline:
+                        async with session.get(
+                            f"http://127.0.0.1:{port}/v1/responses/{response_id}",
+                        ) as get_resp:
+                            if get_resp.status == 200:
+                                snapshot = await get_resp.json()
+                                if snapshot.get("status") == "incomplete":
+                                    return snapshot
+                        await asyncio.sleep(0.05)
+                    return {}
         finally:
             _BlockingResponsesRunner.release.set()
             await runner.cleanup()
 
-    assert asyncio.run(exercise()) is True
+    snapshot = asyncio.run(exercise())
+    assert snapshot["status"] == "incomplete"
+    assert snapshot["incomplete_details"]["reason"] == "client_disconnected"
+    assert snapshot["metadata"]["incomplete_reason"] == "SSE client disconnected"
 
 
 def test_responses_disconnect_drops_late_stream_result(monkeypatch, tmp_path):
@@ -3961,8 +3979,16 @@ def test_responses_nonstream_disconnect_cancels_agent(monkeypatch, tmp_path):
 
     _LateAccessStreamingRunner.reset()
     monkeypatch.setattr(server, "SurfaceRunner", _LateAccessStreamingRunner)
+    original_new_id = server.new_id
 
-    async def exercise() -> bool:
+    def fake_new_id(prefix: str):
+        if prefix == "resp":
+            return "resp_nonstream_disconnect"
+        return original_new_id(prefix)
+
+    monkeypatch.setattr(server, "new_id", fake_new_id)
+
+    async def exercise() -> dict:
         from aiohttp import ClientSession, web
 
         app = server.make_app(Config.load())
@@ -3995,14 +4021,30 @@ def test_responses_nonstream_disconnect_cancels_agent(monkeypatch, tmp_path):
                         _LateAccessStreamingRunner.agents
                         and _LateAccessStreamingRunner.agents[0].cancel_event.is_set()
                     ):
-                        return True
+                        break
                     await asyncio.sleep(0.05)
-                return False
+                else:
+                    return {}
+                _LateAccessStreamingRunner.release.set()
+                deadline = time.monotonic() + 2
+                while time.monotonic() < deadline:
+                    async with session.get(
+                        f"http://127.0.0.1:{port}/v1/responses/resp_nonstream_disconnect",
+                    ) as get_resp:
+                        if get_resp.status == 200:
+                            snapshot = await get_resp.json()
+                            if snapshot.get("status") == "incomplete":
+                                return snapshot
+                    await asyncio.sleep(0.05)
+                return {}
         finally:
             _LateAccessStreamingRunner.release.set()
             await runner.cleanup()
 
-    assert asyncio.run(exercise()) is True
+    snapshot = asyncio.run(exercise())
+    assert snapshot["status"] == "incomplete"
+    assert snapshot["incomplete_details"]["reason"] == "client_disconnected"
+    assert snapshot["metadata"]["incomplete_reason"] == "HTTP client disconnected"
     assert not _LateAccessResult.accessed.is_set()
 
 
@@ -4104,6 +4146,39 @@ def test_responses_stream_failure_persists_failed_snapshot(monkeypatch, tmp_path
     assert stored["status"] == "failed"
     assert stored["output_text"] == "partial"
     assert stored["error"]["message"] == "RuntimeError: boom"
+
+
+def test_responses_startup_recovers_stale_in_progress_snapshot(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    config = Config.load()
+    store = server.ResponseStore(config)
+    store.put({
+        "id": "resp_stale_startup",
+        "object": "response",
+        "created_at": int(time.time()),
+        "status": "in_progress",
+        "model": "served-model",
+        "output": [],
+        "output_text": "",
+        "metadata": {"session_id": "serve:stale-response"},
+        "incomplete_details": None,
+        "error": None,
+    }, {
+        "conversation_history": [{"role": "user", "content": "stale"}],
+        "input_items": [],
+        "instructions": None,
+        "session_id": "serve:stale-response",
+    })
+
+    server.make_handler(config)
+
+    recovered = server.ResponseStore(config).get("resp_stale_startup")
+    assert recovered["status"] == "incomplete"
+    assert recovered["incomplete_details"]["reason"] == "server_restarted"
+    assert recovered["metadata"]["incomplete_reason"].startswith("AEGIS API server restarted")
 
 
 def test_responses_stream_maps_tools_to_function_call_items(monkeypatch, tmp_path):

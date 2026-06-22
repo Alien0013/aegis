@@ -7,22 +7,16 @@ value out-of-band, stores it in ~/.aegis/.env, and returns only status metadata.
 from __future__ import annotations
 
 import getpass
-import re
 import sys
 from typing import Any
 
 from . import config as cfg
-from .config import set_env_var
+from .config import set_env_var, validate_env_var_name
 from .redact import redact_secrets
-
-_ENV_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
 def validate_secret_key(key: str) -> str:
-    key = str(key or "").strip()
-    if not _ENV_KEY_RE.match(key):
-        raise ValueError("secret key must be an uppercase env var name like TELEGRAM_BOT_TOKEN")
-    return key
+    return validate_env_var_name(key)
 
 
 def store_secret_value(key: str, value: str) -> dict[str, Any]:

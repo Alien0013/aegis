@@ -1457,6 +1457,37 @@ def _response_object(
     }
 
 
+def _response_incomplete_reason(reason: str) -> str:
+    text = str(reason or "").strip()
+    lower = text.lower()
+    if "disconnect" in lower or "broken pipe" in lower or "connection reset" in lower:
+        return "client_disconnected"
+    if "restart" in lower or "server start" in lower:
+        return "server_restarted"
+    if "cancel" in lower or "interrupt" in lower:
+        return "cancelled"
+    return text or "incomplete"
+
+
+def _mark_response_incomplete_payload(response: dict[str, Any], reason: str) -> dict[str, Any]:
+    incomplete = dict(response)
+    incomplete["status"] = "incomplete"
+    incomplete["error"] = None
+    incomplete["incomplete_details"] = incomplete.get("incomplete_details") or {
+        "reason": _response_incomplete_reason(reason),
+    }
+    metadata = incomplete.get("metadata") if isinstance(incomplete.get("metadata"), dict) else {}
+    metadata = dict(metadata)
+    metadata["incomplete_reason"] = reason
+    metadata["incomplete_at"] = int(time.time())
+    incomplete["metadata"] = metadata
+    return incomplete
+
+
+def _response_cancel_is_disconnect(reason: str) -> bool:
+    return _response_incomplete_reason(reason) == "client_disconnected"
+
+
 def _response_input_item_to_message(item: Any) -> Message:
     if _is_function_call_input_item(item):
         return _function_call_message(item)
@@ -2678,6 +2709,30 @@ class ResponseStore:
             "statuses": statuses,
         }
 
+    def recover_stale_in_progress(self, reason: str) -> int:
+        stale: list[dict[str, Any]] = []
+        with self._lock, self._connect() as db:
+            self._configure_db(db)
+            rows = db.execute("SELECT body FROM responses WHERE status = ?", ("in_progress",)).fetchall()
+        for row in rows:
+            try:
+                body = json.loads(row[0])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(body, dict):
+                continue
+            state = self._normalize_state(body)
+            response = state.get("response")
+            if not isinstance(response, dict) or str(response.get("status") or "") != "in_progress":
+                continue
+            state["response"] = _mark_response_incomplete_payload(response, reason)
+            stale.append(state)
+        for state in stale:
+            response = state.get("response")
+            if isinstance(response, dict):
+                self.put(response, state)
+        return len(stale)
+
 
 class IdempotencyCache:
     """Small in-process LRU cache for OpenAI-style Idempotency-Key replays."""
@@ -2799,6 +2854,12 @@ def make_handler(config: Config):
         ttl_seconds=float(config.get("server.idempotency_ttl_seconds", 300) or 300),
     )
     _recover_stale_api_runs()
+    recovered_responses = response_store.recover_stale_in_progress(
+        "AEGIS API server restarted before this response completed."
+    )
+    if recovered_responses:
+        suffix = "" if recovered_responses == 1 else "s"
+        print(f"  ! recovered {recovered_responses} stale API response{suffix}")
     active_runs: dict[str, dict[str, Any]] = {}
     active_responses: dict[str, dict[str, Any]] = {}
     approvals: dict[str, dict[str, Any]] = {}
@@ -3220,6 +3281,9 @@ def make_handler(config: Config):
             metadata["cancelled_at"] = int(time.time())
             cancelled["metadata"] = metadata
             return cancelled
+
+        def _mark_response_incomplete(self, response: dict[str, Any], reason: str) -> dict[str, Any]:
+            return _mark_response_incomplete_payload(response, reason)
 
         def _register_response_locked(
             self,
@@ -5023,17 +5087,17 @@ def make_handler(config: Config):
                     result = runner.run_prompt(last_user, **run_kwargs)
                     if disconnect_cancelled or getattr(self.wfile, "closed", False):
                         text = "".join(text_parts)
-                        cancelled_metadata = dict(metadata)
-                        if response_session is not None and not cancelled_metadata.get("session_id"):
-                            cancelled_metadata["session_id"] = getattr(response_session, "id", "")
-                        cancelled = _response_object(
+                        incomplete_metadata = dict(metadata)
+                        if response_session is not None and not incomplete_metadata.get("session_id"):
+                            incomplete_metadata["session_id"] = getattr(response_session, "id", "")
+                        incomplete = _response_object(
                             response_id,
                             None,
-                            status="cancelled",
-                            metadata_extra=cancelled_metadata,
+                            status="incomplete",
+                            metadata_extra=incomplete_metadata,
                             parallel_tool_calls=parallel_tool_calls,
                         )
-                        cancelled.update({
+                        incomplete.update({
                             "model": model or config.get("model.default", ""),
                             "output": list(streamed_output_items) + (_response_output(text) if text else []),
                             "output_text": text,
@@ -5042,14 +5106,14 @@ def make_handler(config: Config):
                             "conversation": conversation or None,
                             "store": store_response,
                         })
-                        _attach_response_include(cancelled, include_values)
-                        cancelled = self._mark_response_cancelled(cancelled, "SSE client disconnected")
+                        _attach_response_include(incomplete, include_values)
+                        incomplete = self._mark_response_incomplete(incomplete, "SSE client disconnected")
                         if store_response:
                             history_snapshot = list(state_history)
                             history_snapshot.append(last_user)
                             if text:
                                 history_snapshot.append(Message.assistant(text))
-                            response_store.put(cancelled, {
+                            response_store.put(incomplete, {
                                 "conversation_history": _history_payload(history_snapshot),
                                 "input_items": _stored_response_input_items(
                                     state_history + [last_user],
@@ -5057,21 +5121,22 @@ def make_handler(config: Config):
                                     previous_state=previous_state,
                                 ),
                                 "instructions": instructions,
-                                "session_id": cancelled.get("metadata", {}).get("session_id") or session_id,
+                                "session_id": incomplete.get("metadata", {}).get("session_id") or session_id,
                                 "conversation": conversation,
                             })
                             if conversation:
                                 response_store.set_conversation(conversation, response_id)
-                        finish_stream_idempotency(cancelled)
-                        self._finish_response(response_id, cancelled)
+                        finish_stream_idempotency(incomplete)
+                        self._finish_response(response_id, incomplete)
                         return
                 except Exception as exc:  # noqa: BLE001
                     text = "".join(text_parts)
                     cancelled, cancel_reason = self._response_cancel_requested(response_id)
+                    disconnect_cancelled_response = cancelled and _response_cancel_is_disconnect(cancel_reason)
                     failed = _response_object(
                         response_id,
                         None,
-                        status="cancelled" if cancelled else "failed",
+                        status="incomplete" if disconnect_cancelled_response else "cancelled" if cancelled else "failed",
                         metadata_extra=metadata,
                         parallel_tool_calls=parallel_tool_calls,
                     )
@@ -5089,7 +5154,9 @@ def make_handler(config: Config):
                         "store": store_response,
                     })
                     _attach_response_include(failed, include_values)
-                    if cancelled:
+                    if disconnect_cancelled_response:
+                        failed = self._mark_response_incomplete(failed, cancel_reason)
+                    elif cancelled:
                         failed = self._mark_response_cancelled(failed, cancel_reason)
                     if store_response:
                         history_snapshot = list(state_history)
@@ -5110,7 +5177,9 @@ def make_handler(config: Config):
                         if conversation:
                             response_store.set_conversation(conversation, response_id)
                     finish_stream_idempotency(failed)
-                    if cancelled:
+                    if disconnect_cancelled_response:
+                        send_event("response.incomplete", {"response": failed})
+                    elif cancelled:
                         send_event("response.cancelled", {"response": failed})
                     else:
                         send_event("response.failed", {"response": failed, "error": failed["error"]})
@@ -5122,10 +5191,11 @@ def make_handler(config: Config):
                     return
 
                 cancelled, cancel_reason = self._response_cancel_requested(response_id)
+                disconnect_cancelled_response = cancelled and _response_cancel_is_disconnect(cancel_reason)
                 response = _response_object(
                     response_id,
                     result,
-                    status="cancelled" if cancelled else "completed",
+                    status="incomplete" if disconnect_cancelled_response else "cancelled" if cancelled else "completed",
                     metadata_extra=metadata,
                     parallel_tool_calls=parallel_tool_calls,
                 )
@@ -5141,7 +5211,10 @@ def make_handler(config: Config):
                     final_text = "".join(text_parts)
                     response["output_text"] = final_text
                     response["output"] = list(streamed_output_items) + (_response_output(final_text) if final_text else [])
-                    response = self._mark_response_cancelled(response, cancel_reason)
+                    if disconnect_cancelled_response:
+                        response = self._mark_response_incomplete(response, cancel_reason)
+                    else:
+                        response = self._mark_response_cancelled(response, cancel_reason)
                 elif final_text or message_opened:
                     if not message_opened:
                         open_message_item()
@@ -5165,7 +5238,9 @@ def make_handler(config: Config):
                         },
                     })
                 persist_stream_response(response, result)
-                if cancelled:
+                if disconnect_cancelled_response:
+                    send_event("response.incomplete", {"response": response})
+                elif cancelled:
                     send_event("response.cancelled", {"response": response})
                 else:
                     send_event("response.completed", {
@@ -5204,8 +5279,14 @@ def make_handler(config: Config):
                     if disconnect_cancelled:
                         return
                     disconnect_cancelled = True
+                    incomplete = self._mark_response_incomplete(pending_response, "HTTP client disconnected")
                     with state_lock:
-                        self._request_cancel_response_locked(response_id, "HTTP client disconnected")
+                        rec = self._request_cancel_response_locked(response_id, "HTTP client disconnected")
+                        if rec is not None:
+                            rec["response"] = dict(incomplete)
+                            rec["status"] = "incomplete"
+                    if store_response:
+                        response_store.put(incomplete, pending_state)
                     start_response_cancel_watchdog()
 
                 pending_response = {
@@ -5295,6 +5376,9 @@ def make_handler(config: Config):
                         })
                     result = runner.run_prompt(last_user, **run_kwargs)
                     if disconnect_cancelled:
+                        response = self._mark_response_incomplete(pending_response, "HTTP client disconnected")
+                        if store_response:
+                            response_store.put(response, pending_state)
                         raise BrokenPipeError("HTTP client disconnected")
                     cancelled, cancel_reason = self._response_cancel_requested(response_id)
                     response = _response_object(

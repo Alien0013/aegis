@@ -774,6 +774,17 @@ def test_fastapi_env_rejects_invalid_keys_and_values(tmp_path, monkeypatch):
     assert bad_key.json()["ok"] is False
     assert "uppercase env var name" in bad_key.json()["error"]
 
+    denylisted = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/env",
+        json={"key": "PATH", "value": "/tmp/bin"},
+        headers=headers,
+    ))
+    assert denylisted.status_code == 400
+    assert denylisted.json()["ok"] is False
+    assert "writer denylist" in denylisted.json()["error"]
+
     empty = asyncio.run(_request(
         app,
         "POST",

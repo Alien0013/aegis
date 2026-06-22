@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import contextvars
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,19 @@ import yaml
 from .util import atomic_write, ensure_dir, read_text
 
 DEFAULT_CONTEXT_FILE_MAX_CHARS = 20_000
+_ENV_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+_ENV_VAR_NAME_DENYLIST: frozenset[str] = frozenset({
+    "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "LD_DEBUG",
+    "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH",
+    "DYLD_FALLBACK_LIBRARY_PATH", "DYLD_FALLBACK_FRAMEWORK_PATH",
+    "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONUSERBASE",
+    "PYTHONEXECUTABLE", "PYTHONNOUSERSITE",
+    "NODE_OPTIONS", "NODE_PATH",
+    "PATH", "SHELL", "BROWSER", "EDITOR", "VISUAL", "PAGER",
+    "GIT_SSH_COMMAND", "GIT_EXEC_PATH", "GIT_SHELL",
+    "AEGIS_HOME", "AEGIS_PROFILE", "AEGIS_CONFIG", "AEGIS_ENV", "AEGIS_BIN",
+    "AEGIS_DESKTOP_DIR",
+})
 
 # --- module-level profile override (set by CLI) ----------------------------
 _PROFILE: str | None = None
@@ -276,6 +290,25 @@ def _dump_config_delta(
 
 
 # --- .env handling ----------------------------------------------------------
+def reject_denylisted_env_var(key: str) -> None:
+    if key in _ENV_VAR_NAME_DENYLIST:
+        raise ValueError(
+            f"Environment variable {key!r} is on the writer denylist. "
+            "Names that influence subprocess execution (LD_PRELOAD, PYTHONPATH, "
+            "PATH, EDITOR, ...) or AEGIS runtime location (AEGIS_HOME, "
+            "AEGIS_PROFILE, ...) cannot be persisted via the env writer. "
+            "If you really need this, edit the .env file directly."
+        )
+
+
+def validate_env_var_name(key: str) -> str:
+    key = str(key or "").strip()
+    if not _ENV_KEY_RE.match(key):
+        raise ValueError("secret key must be an uppercase env var name like TELEGRAM_BOT_TOKEN")
+    reject_denylisted_env_var(key)
+    return key
+
+
 def load_env() -> dict[str, str]:
     """Parse .env and inject into os.environ (without clobbering existing keys)."""
     path = env_path()
@@ -296,6 +329,7 @@ def load_env() -> dict[str, str]:
 
 def set_env_var(key: str, value: str) -> None:
     """Persist a secret into .env (creating/updating the line) and the live env."""
+    key = validate_env_var_name(key)
     path = env_path()
     lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
     out, found = [], False

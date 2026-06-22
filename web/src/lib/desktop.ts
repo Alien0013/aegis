@@ -65,8 +65,23 @@ export interface DesktopUpdaterStatus {
   error?: string;
   version?: string;
   checking?: boolean;
+  installable?: boolean;
+  installing?: boolean;
   lastCheckedAt?: string;
   updatedAt?: string;
+  downloadProgress?: {
+    percent?: number;
+    transferred?: number;
+    total?: number;
+    bytesPerSecond?: number;
+  };
+}
+
+export interface DesktopInstallUpdateResult {
+  ok?: boolean;
+  error?: string;
+  gateway?: unknown;
+  status?: DesktopUpdaterStatus;
 }
 
 export interface DesktopBridge {
@@ -91,6 +106,7 @@ export interface DesktopBridge {
   chooseProjectDir?(): Promise<{ ok?: boolean; cancelled?: boolean; settings?: DesktopSettings }>;
   checkForUpdates?(): Promise<DesktopUpdaterStatus>;
   getUpdateStatus?(): Promise<DesktopUpdaterStatus>;
+  installUpdate?(): Promise<DesktopInstallUpdateResult>;
   api?<T = unknown>(request: { method?: string; path: string; body?: unknown }): Promise<T>;
 }
 
