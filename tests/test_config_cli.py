@@ -9,6 +9,8 @@ import yaml
 def test_config_summary_is_readable_ascii_and_redacts_secret(monkeypatch, capsys):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-secret-value")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "telegram-secret")
+    monkeypatch.delenv("AEGIS_UNICODE", raising=False)
+    monkeypatch.delenv("AEGIS_ASCII", raising=False)
 
     from aegis import config as cfg
     from aegis.cli.main import main
@@ -45,6 +47,21 @@ def test_config_summary_is_readable_ascii_and_redacts_secret(monkeypatch, capsys
     assert main(["config", "view"]) == 0
     out = capsys.readouterr().out
     assert "AEGIS Configuration" in out
+
+
+def test_config_summary_can_use_unicode_terminal_skin(monkeypatch, capsys):
+    monkeypatch.setenv("AEGIS_UNICODE", "1")
+    monkeypatch.delenv("AEGIS_ASCII", raising=False)
+
+    from aegis.cli.main import main
+
+    assert main(["config"]) == 0
+
+    out = capsys.readouterr().out
+    assert "╭" in out
+    assert "◇ Paths" in out
+    assert "◇ Commands" in out
+    assert "== Paths ==" not in out
 
 
 def test_config_status_json_is_machine_readable_and_redacted(monkeypatch, capsys):

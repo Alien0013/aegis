@@ -22,6 +22,41 @@ def _print(s: str = "") -> None:
     print(s)
 
 
+def _env_enabled(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _terminal_unicode_enabled() -> bool:
+    if _env_enabled("AEGIS_ASCII"):
+        return False
+    forced = os.environ.get("AEGIS_UNICODE")
+    if forced is not None:
+        return forced.strip().lower() in {"1", "true", "yes", "on"}
+    if os.environ.get("TERM", "").strip().lower() == "dumb":
+        return False
+    if not getattr(sys.stdout, "isatty", lambda: False)():
+        return False
+    encoding = (getattr(sys.stdout, "encoding", "") or "").lower()
+    return "utf" in encoding
+
+
+def _terminal_title(title: str, *, width: int = 64, unicode: bool = False) -> str:
+    title = str(title or "").strip()
+    if not unicode:
+        return "+" + "-" * (width - 2) + "+\n|" + title.center(width - 2) + "|\n+" + "-" * (width - 2) + "+"
+    inner = width - 2
+    label = f" {title} "
+    if len(label) >= inner:
+        return f"╭{label[:inner]}╮"
+    left = (inner - len(label)) // 2
+    right = inner - len(label) - left
+    return f"╭{'─' * left}{label}{'─' * right}╮"
+
+
+def _terminal_section(title: str, *, unicode: bool = False) -> str:
+    return f"◇ {title}" if unicode else f"== {title} =="
+
+
 # --------------------------------------------------------------------------- #
 # chat / interactive
 # --------------------------------------------------------------------------- #
@@ -1447,13 +1482,10 @@ def cmd_config(args, config: Config) -> int:
             }
             _print(json.dumps(payload, indent=2, sort_keys=True))
             return 0
-        title = "AEGIS Configuration"
-        width = 64
-        _print("+" + "-" * (width - 2) + "+")
-        _print("|" + title.center(width - 2) + "|")
-        _print("+" + "-" * (width - 2) + "+")
+        unicode_ui = _terminal_unicode_enabled()
+        _print(_terminal_title("AEGIS Configuration", unicode=unicode_ui))
         _print()
-        _print("== Paths ==")
+        _print(_terminal_section("Paths", unicode=unicode_ui))
         _print(f"  Config:       {cfg.config_path()}")
         _print(f"  Secrets:      {cfg.env_path()}")
         _print(f"  Home:         {cfg.get_home()}")
@@ -1461,7 +1493,7 @@ def cmd_config(args, config: Config) -> int:
         _print(f"  Profile:      {active_profile}")
         _print(f"  Install:      {Path(__file__).resolve().parents[2]}")
         _print()
-        _print("== Services ==")
+        _print(_terminal_section("Services", unicode=unicode_ui))
         _print(f"  API adapter:  http://{server_host}:{server_port}")
         _print(f"  Dashboard:    http://{dashboard_host}:{dashboard_port}")
         _print(f"  Frontend:     {config.get('dashboard.frontend')}")
@@ -1469,11 +1501,11 @@ def cmd_config(args, config: Config) -> int:
         _print(f"  Dashboard auth: {'configured' if config.get('server.dashboard_token') else 'not configured'}")
         _print(f"  Desktop:      {desktop_state} ({desktop_dir})")
         _print()
-        _print("== API Keys ==")
+        _print(_terminal_section("API Keys", unicode=unicode_ui))
         for label, names in api_keys:
             _print(f"  {label:<17} {configured_env(*names)}")
         _print()
-        _print("== Model ==")
+        _print(_terminal_section("Model", unicode=unicode_ui))
         _print(f"  Active:  {model_view}")
         _print(f"  Provider: {config.get('model.provider')}")
         _print(f"  Model:    {config.get('model.default')}")
@@ -1481,7 +1513,7 @@ def cmd_config(args, config: Config) -> int:
             _print(f"  Base URL: {config.get('model.base_url')}")
         _print(f"  Max turns: {config.get('agent.max_iterations')}")
         _print()
-        _print("== Display ==")
+        _print(_terminal_section("Display", unicode=unicode_ui))
         _print(f"  Personality: {config.get('agent.personality', 'none') or 'none'}")
         _print(f"  Reasoning:   {config.get('display.reasoning', 'off') or 'off'}")
         _print(f"  Model effort: {config.get('agent.reasoning_effort', 'off') or 'off'}")
@@ -1493,7 +1525,7 @@ def cmd_config(args, config: Config) -> int:
         if platforms:
             _print(f"  Platforms:   {', '.join(sorted(platforms))}")
         _print()
-        _print("== Terminal ==")
+        _print(_terminal_section("Terminal", unicode=unicode_ui))
         _print(f"  Backend:     {config.get('tools.terminal_backend')}")
         _print(f"  Exec mode:   {config.get('tools.exec_mode')}")
         _print(f"  Subagents:   {config.get('tools.subagent_terminal_backend') or '(inherit)'}")
@@ -1501,27 +1533,27 @@ def cmd_config(args, config: Config) -> int:
         _print(f"  Working dir: {Path.cwd()}")
         _print(f"  Timeout:     {config.get('tools.terminal_lifetime_seconds')}s")
         _print()
-        _print("== Timezone ==")
+        _print(_terminal_section("Timezone", unicode=unicode_ui))
         _print(f"  Timezone:    {timezone}")
         _print()
-        _print("== Context Compression ==")
+        _print(_terminal_section("Context Compression", unicode=unicode_ui))
         _print("  Enabled:        yes")
         _print(f"  Threshold:      {int(float(compression.get('threshold', 0.5) or 0.5) * 100)}%")
         _print(f"  Target ratio:   {int(float(compression.get('tail_fraction', 0.25) or 0.25) * 100)}% preserved")
         _print(f"  Protect last:   {compression.get('preserve_last', 20)} messages")
         _print(f"  Protect first:  {compression.get('preserve_first', 3)} messages")
         _print()
-        _print("== Messaging Platforms ==")
+        _print(_terminal_section("Messaging Platforms", unicode=unicode_ui))
         for platform, detail in platform_details.items():
             label = str(detail.get("display_name") or platform)
             _print(f"  {label + ':':<11} {platform_statuses.get(platform, 'not configured')}")
         _print()
-        _print("== Validation ==")
+        _print(_terminal_section("Validation", unicode=unicode_ui))
         _print(f"  Config YAML:  {'ok' if not file_errors else str(len(file_errors)) + ' error(s)'}")
         _print(f"  Value types:  {'ok' if not type_errors else str(len(type_errors)) + ' error(s)'}")
         _print(f"  Secrets file: {'present' if cfg.env_path().exists() else 'not present'}")
         _print()
-        _print("== Commands ==")
+        _print(_terminal_section("Commands", unicode=unicode_ui))
         _print("  aegis config view                 # Show this configuration screen")
         _print("  aegis config status               # Show this configuration screen")
         _print("  aegis config paths                # Show config/secrets/home/install paths")
