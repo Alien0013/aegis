@@ -220,6 +220,38 @@ def test_webhook_delivery_ids_get_isolated_sessions(monkeypatch, tmp_path):
     assert calls[1]["meta"]["delivery_id"] == "ci:idempotency-key:two"
 
 
+def test_webhook_deliver_only_enqueues_rendered_payload_without_agent(monkeypatch, tmp_path):
+    from aegis.gateway.queue import DeliveryQueue
+
+    cfg, store, make_handler = _webhook_server(monkeypatch, tmp_path)
+
+    class Runner:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def run_prompt(self, *_args, **_kwargs):
+            raise AssertionError("deliver-only webhooks must not run the agent")
+
+    monkeypatch.setattr("aegis.surface.SurfaceRunner", Runner)
+    store.add("direct", "event {action}", deliver="telegram:42", deliver_only=True)
+    srv, port = _serve(make_handler, cfg, store)
+    try:
+        status, response = _post(port, "/hook/direct", b'{"action":"opened"}')
+    finally:
+        srv.shutdown()
+
+    assert status == 200
+    assert response["ok"] is True
+    assert response["deliver_only"] is True
+    assert response["delivered"] == 1
+    assert response["reply"] == "event opened"
+    rows = DeliveryQueue().due()
+    assert len(rows) == 1
+    assert rows[0]["platform"] == "telegram"
+    assert rows[0]["chat_id"] == "42"
+    assert rows[0]["text"] == "event opened"
+
+
 def test_webhook_store_writes_private_subscription_file(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     from aegis import config as cfg
@@ -259,16 +291,19 @@ def test_webhook_store_normalizes_malformed_rows(monkeypatch, tmp_path):
 
     cfg.sub("webhooks.json").write_text(json.dumps([
         {"name": "ci", "prompt": "go", "events": "push,pull_request", "skills": ["github", 7]},
+        {"name": "direct", "prompt": "ship", "deliver_only": "true"},
         {"name": "missing-prompt"},
         "bad-row",
     ]))
 
     hooks = WebhookStore().list()
 
-    assert len(hooks) == 1
-    assert hooks[0].name == "ci"
-    assert hooks[0].events == ["push", "pull_request"]
-    assert hooks[0].skills == ["github", "7"]
+    assert len(hooks) == 2
+    by_name = {hook.name: hook for hook in hooks}
+    assert by_name["ci"].events == ["push", "pull_request"]
+    assert by_name["ci"].skills == ["github", "7"]
+    assert by_name["ci"].deliver_only is False
+    assert by_name["direct"].deliver_only is True
 
 
 def test_webhook_rejects_oversized_content_length(monkeypatch, tmp_path):

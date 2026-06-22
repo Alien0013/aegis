@@ -519,13 +519,23 @@ class DiscordAdapter(BasePlatformAdapter):
         return not allowed or "*" in allowed or bool(channel_ids & allowed)
 
     def _author_allowed(self, message) -> bool:  # noqa: ANN001
-        return self._author_identity_allowed(getattr(message, "author", None))
+        return self._author_identity_allowed(
+            getattr(message, "author", None),
+            guild=getattr(message, "guild", None),
+        )
 
-    def _author_identity_allowed(self, user) -> bool:  # noqa: ANN001
+    def _author_identity_allowed(self, user, *, guild=None) -> bool:  # noqa: ANN001
         if self.allowed and str(getattr(user, "id", "") or "") in self.allowed:
             return True
         if self.allowed_roles:
+            guild_id = str(getattr(guild, "id", "") or "").strip()
+            if not guild_id and not _env_bool("DISCORD_ALLOW_ROLE_AUTH_IN_DMS", False):
+                return False
             roles = getattr(user, "roles", None) or []
+            member_guild = getattr(user, "guild", None)
+            member_guild_id = str(getattr(member_guild, "id", "") or "").strip()
+            if guild_id and member_guild_id and member_guild_id != guild_id:
+                return False
             role_ids = {str(getattr(role, "id", "") or "") for role in roles}
             if role_ids & self.allowed_roles:
                 return True
@@ -543,7 +553,7 @@ class DiscordAdapter(BasePlatformAdapter):
             mode = os.environ.get("DISCORD_ALLOW_BOTS", "none").strip().lower()
             if mode not in {"all", "true", "1", "yes"}:
                 return False
-        return self._author_identity_allowed(user)
+        return self._author_identity_allowed(user, guild=guild)
 
     def _trigger_allowed(self, message, client) -> bool:  # noqa: ANN001
         if not getattr(message, "guild", None):

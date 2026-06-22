@@ -169,8 +169,58 @@ class SlackAdapter(BasePlatformAdapter):
             return f"message:{channel}:{ts}"
         return ""
 
+    def _block_text_fragments(self, value) -> list[str]:  # noqa: ANN001
+        if isinstance(value, str):
+            return [value] if value.strip() else []
+        if isinstance(value, list):
+            fragments: list[str] = []
+            for item in value:
+                fragments.extend(self._block_text_fragments(item))
+            return fragments
+        if not isinstance(value, dict):
+            return []
+        kind = str(value.get("type") or "")
+        if kind in {"user", "usergroup"} and value.get("user_id"):
+            return [f"<@{value.get('user_id')}>"]
+        if kind == "channel" and value.get("channel_id"):
+            return [f"<#{value.get('channel_id')}>"]
+        if kind == "link":
+            return [str(value.get("text") or value.get("url") or "").strip()]
+        if kind == "emoji" and value.get("name"):
+            return [f":{value.get('name')}:"]
+        if kind == "broadcast" and value.get("range"):
+            return [f"<!{value.get('range')}>"]
+        text = value.get("text")
+        if isinstance(text, str):
+            return [text] if text.strip() else []
+        fragments = []
+        if isinstance(text, dict):
+            fragments.extend(self._block_text_fragments(text))
+        for key in ("elements", "fields", "blocks", "accessory"):
+            fragments.extend(self._block_text_fragments(value.get(key)))
+        return fragments
+
+    def _text_from_blocks(self, event: dict) -> str:
+        fragments = self._block_text_fragments(event.get("blocks"))
+        clean: list[str] = []
+        seen: set[str] = set()
+        for fragment in fragments:
+            text = re.sub(r"\s+", " ", str(fragment or "").strip())
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            clean.append(text)
+        return "\n".join(clean)[:8000]
+
+    def _message_text_from_event(self, event: dict) -> str:
+        raw_text = str(event.get("text") or "").strip()
+        block_text = self._text_from_blocks(event)
+        if raw_text and block_text and block_text not in raw_text:
+            return f"{raw_text}\n{block_text}"
+        return raw_text or block_text
+
     def _handle_message_event(self, event: dict) -> MessageEvent | None:
-        raw_text = event.get("text", "")
+        raw_text = self._message_text_from_event(event)
         if not self._event_allowed(event, raw_text):
             return None
         delivery_id = self._delivery_id_from_event(event)

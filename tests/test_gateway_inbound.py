@@ -979,6 +979,37 @@ def test_discord_adapter_enforces_guild_filters_and_trigger_mode(monkeypatch):
     assert adapter._attachment_reference_text(rows) == "[audio/ogg attached: voice.ogg]"
 
 
+def test_discord_role_allowlist_is_scoped_to_active_guild(monkeypatch):
+    from aegis.gateway.discord_channel import DiscordAdapter
+
+    class Obj:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    for key in (
+        "DISCORD_ALLOWED_USERS",
+        "DISCORD_ALLOWED_ROLES",
+        "DISCORD_ALLOW_ROLE_AUTH_IN_DMS",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("DISCORD_ALLOWED_ROLES", "R1")
+    adapter = DiscordAdapter("token")
+    role = Obj(id="R1")
+    member = Obj(id="U1", roles=[role], guild=Obj(id="G1"), bot=False)
+
+    assert adapter._author_allowed(Obj(author=member, guild=Obj(id="G1"))) is True
+    assert adapter._author_allowed(Obj(author=member, guild=Obj(id="G2"))) is False
+    assert adapter._author_allowed(Obj(author=member, guild=None)) is False
+
+    monkeypatch.setenv("DISCORD_ALLOW_ROLE_AUTH_IN_DMS", "1")
+    dm_adapter = DiscordAdapter("token")
+    assert dm_adapter._author_allowed(Obj(author=member, guild=None)) is True
+
+    monkeypatch.setenv("DISCORD_ALLOWED_USERS", "U1")
+    user_adapter = DiscordAdapter("token")
+    assert user_adapter._author_allowed(Obj(author=Obj(id="U1", roles=[], bot=False), guild=None)) is True
+
+
 def test_discord_adapter_registers_and_handles_app_commands(monkeypatch):
     import asyncio
     import inspect
@@ -3279,6 +3310,51 @@ def test_slack_adapter_dedupes_message_events_and_ignores_self_echoes(monkeypatc
     retried = adapter._handle_message_event(failing)
     assert retried is seen[-1][0]
     assert retried.metadata["delivery_id"] == "client_msg:client-2"
+
+
+def test_slack_adapter_extracts_rich_block_text(monkeypatch):
+    from aegis.gateway.slack_channel import SlackAdapter
+
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
+    monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
+    monkeypatch.setenv("SLACK_BOT_USER_ID", "UBOT")
+
+    adapter = SlackAdapter()
+    seen = []
+    adapter._submit_inbound = lambda ev, *, raw_text=None: seen.append((ev, raw_text)) or None
+    event = {
+        "channel": "C1",
+        "channel_type": "channel",
+        "team": "T1",
+        "user": "U1",
+        "text": "",
+        "client_msg_id": "client-blocks",
+        "ts": "172.1",
+        "blocks": [
+            {
+                "type": "rich_text",
+                "elements": [{
+                    "type": "rich_text_section",
+                    "elements": [
+                        {"type": "text", "text": "Quoted deploy note"},
+                        {"type": "user", "user_id": "U2"},
+                    ],
+                }],
+            },
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": "fallback *mrkdwn*"},
+            },
+        ],
+    }
+
+    ev = adapter._handle_message_event(event)
+
+    assert ev is seen[0][0]
+    assert "Quoted deploy note" in ev.text
+    assert "<@U2>" in ev.text
+    assert "fallback *mrkdwn*" in ev.text
+    assert seen[0][1] == ev.text
 
 
 def test_gateway_webhook_channel_normalizes_event_body():

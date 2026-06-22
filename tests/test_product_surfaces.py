@@ -35,6 +35,7 @@ def test_cli_parser_exposes_upgrade_commands():
     assert parser.parse_args(["onboard", "terminal", "--exec-mode", "smart"]).exec_mode == "smart"
     assert parser.parse_args(["config", "reset", "model.default"]).action == "reset"
     assert parser.parse_args(["config", "set", "model.typo", "x", "--force"]).force is True
+    assert parser.parse_args(["webhook", "add", "ci", "go", "--deliver-only"]).deliver_only is True
     cfg_setup = parser.parse_args([
         "config",
         "setup",

@@ -2438,6 +2438,7 @@ def build_parser() -> argparse.ArgumentParser:
     wh.add_argument("--host")
     wh.add_argument("--port", type=int)
     wh.add_argument("--deliver", help="comma-sep platform:chat_id targets, e.g. telegram:42")
+    wh.add_argument("--deliver-only", action="store_true", help="deliver rendered payload without running the agent")
     wh.add_argument("--events", help="comma-sep X-GitHub-Event allowlist, e.g. pull_request,push")
     wh.add_argument("--skills", help="comma-sep skills to load before running")
     wh.set_defaults(func=_webhook.cmd_webhook)

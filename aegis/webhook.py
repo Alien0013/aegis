@@ -55,6 +55,7 @@ class Webhook:
     prompt: str
     secret: str = ""
     deliver: str = ""                                  # comma-sep "platform:chat_id" delivery targets
+    deliver_only: bool = False                         # deliver rendered payload without running the agent
     events: list[str] = field(default_factory=list)    # X-GitHub-Event allowlist (empty = all)
     skills: list[str] = field(default_factory=list)    # skills to load before running
 
@@ -97,10 +98,11 @@ class WebhookStore:
         return None
 
     def add(self, name: str, prompt: str, secret: str = "", deliver: str = "",
-            events: list[str] | None = None, skills: list[str] | None = None) -> Webhook:
+            events: list[str] | None = None, skills: list[str] | None = None,
+            deliver_only: bool = False) -> Webhook:
         """Add or replace the subscription named ``name``."""
         hook = Webhook(name=name, prompt=prompt, secret=secret, deliver=deliver,
-                       events=events or [], skills=skills or [])
+                       deliver_only=bool(deliver_only), events=events or [], skills=skills or [])
         hooks = [h for h in self._load() if h["name"] != name]
         hooks.append(hook.__dict__)
         self._save(hooks)
@@ -121,6 +123,12 @@ def _list_of_strings(value) -> list[str]:
     return []
 
 
+def _as_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _normalize_hook_record(item) -> dict | None:
     if not isinstance(item, dict):
         return None
@@ -133,6 +141,7 @@ def _normalize_hook_record(item) -> dict | None:
         "prompt": prompt,
         "secret": str(item.get("secret") or ""),
         "deliver": str(item.get("deliver") or ""),
+        "deliver_only": _as_bool(item.get("deliver_only")),
         "events": _list_of_strings(item.get("events")),
         "skills": _list_of_strings(item.get("skills")),
     }
@@ -684,12 +693,21 @@ def make_handler(config, store: WebhookStore):
                     return self._json(200, {"ok": True, "duplicate": True})
 
             from .automation import build_prompt, delivery_targets, enqueue_delivery, is_silent
-            prompt = build_prompt(
-                render_prompt(hook.prompt, name, body),
-                skills=hook.skills,
-                config=config,
-            )
+            rendered = render_prompt(hook.prompt, name, body)
             targets = delivery_targets(hook.deliver)
+            if hook.deliver_only:
+                delivered = 0
+                if hook.deliver and not is_silent(rendered):
+                    for target in targets:
+                        enqueue_delivery(target, rendered)
+                        delivered += 1
+                return self._json(200, {
+                    "ok": True,
+                    "reply": rendered,
+                    "deliver_only": True,
+                    "delivered": delivered,
+                })
+            prompt = build_prompt(rendered, skills=hook.skills, config=config)
             first_target = targets[0] if targets else ""
             platform, _, chat_id = first_target.partition(":")
             from .platforms import normalize_platform_name
@@ -750,15 +768,19 @@ def cmd_webhook(args, config) -> int:
             prompt = " ".join(prompt)
         if not name or not prompt:
             print('usage: aegis webhook add <name> "<prompt>" [--secret S] '
-                  '[--deliver telegram:ID] [--events pull_request,push] [--skills github-review]')
+                  '[--deliver telegram:ID] [--deliver-only] [--events pull_request,push] '
+                  '[--skills github-review]')
             return 2
         events = [e.strip() for e in (getattr(args, "events", "") or "").split(",") if e.strip()]
         skills = [s.strip() for s in (getattr(args, "skills", "") or "").split(",") if s.strip()]
         hook = store.add(name, prompt, getattr(args, "secret", "") or "",
-                         deliver=getattr(args, "deliver", "") or "", events=events, skills=skills)
+                         deliver=getattr(args, "deliver", "") or "", events=events, skills=skills,
+                         deliver_only=getattr(args, "deliver_only", False))
         bits = ["(signed)"] if hook.secret else []
         if hook.deliver:
             bits.append(f"→{hook.deliver}")
+        if hook.deliver_only:
+            bits.append("deliver-only")
         if hook.events:
             bits.append(f"events={','.join(hook.events)}")
         if hook.skills:
@@ -789,5 +811,6 @@ def cmd_webhook(args, config) -> int:
         return 0
     for h in hooks:
         lock = "🔒" if h.secret else "  "
-        print(f"  {lock} {h.name:<16} {truncate(h.prompt, 60)}")
+        flags = " deliver-only" if h.deliver_only else ""
+        print(f"  {lock} {h.name:<16} {truncate(h.prompt, 60)}{flags}")
     return 0
