@@ -2642,6 +2642,10 @@ def test_hermes_style_plugin_yaml_metadata_category_key_and_safe_mode(tmp_path, 
         "  - webhook\n"
         "providers:\n"
         "  - langfuse-provider\n"
+        "dashboard_auth:\n"
+        "  - langfuse-oauth\n"
+        "setup_hooks:\n"
+        "  - langfuse-setup\n"
         "permissions:\n"
         "  - network\n",
         encoding="utf-8",
@@ -2652,7 +2656,9 @@ def test_hermes_style_plugin_yaml_metadata_category_key_and_safe_mode(tmp_path, 
         "        name='trace_export'\n"
         "    api.register_tool(T())\n"
         "    api.register_hook('post_llm_call', lambda **kwargs: None)\n"
-        "    api.register_middleware('tool_request', lambda payload, next_call, agent=None: next_call(payload))\n",
+        "    api.register_middleware('tool_request', lambda payload, next_call, agent=None: next_call(payload))\n"
+        "    api.register_dashboard_auth_provider('langfuse-oauth', object())\n"
+        "    api.register_setup_hook('langfuse-setup', lambda config=None: {'ok': True})\n",
         encoding="utf-8",
     )
 
@@ -2666,6 +2672,8 @@ def test_hermes_style_plugin_yaml_metadata_category_key_and_safe_mode(tmp_path, 
     assert manifest.provides_middleware == ["tool_request"]
     assert manifest.provides_channels == ["webhook"]
     assert manifest.provides_providers == ["langfuse-provider"]
+    assert manifest.provides_dashboard_auth == ["langfuse-oauth"]
+    assert manifest.setup_hooks == ["langfuse-setup"]
     assert manifest.permissions == ["network"]
 
     api = plugins.load_plugins(config=cfg)
@@ -2677,17 +2685,25 @@ def test_hermes_style_plugin_yaml_metadata_category_key_and_safe_mode(tmp_path, 
     assert row["tool_names"] == ["trace_export"]
     assert row["hook_names"] == ["post_llm_call"]
     assert row["middleware_kinds"] == ["tool_request"]
+    assert row["dashboard_auth_names"] == ["langfuse-oauth"]
+    assert row["setup_hook_names"] == ["langfuse-setup"]
     assert row["declared_contributions"]["tools"] == ["trace_export"]
     assert row["runtime_contributions"]["tools"] == ["trace_export"]
     assert row["contribution_drift"]["channels"]["missing"] == ["webhook"]
     assert row["contribution_drift"]["providers"]["missing"] == ["langfuse-provider"]
+    assert "dashboard_auth" not in row["contribution_drift"]
+    assert "setup_hooks" not in row["contribution_drift"]
     assert row["missing_env"] == ["LANGFUSE_PUBLIC_KEY"]
     assert row["auth_required"] is True
     assert row["auth_command"] == "aegis secret set LANGFUSE_PUBLIC_KEY <value>"
     assert row["provides_middleware"] == ["tool_request"]
     assert row["provides_channels"] == ["webhook"]
     assert row["provides_providers"] == ["langfuse-provider"]
+    assert row["provides_dashboard_auth"] == ["langfuse-oauth"]
+    assert row["setup_hooks"] == ["langfuse-setup"]
     assert row["permissions"] == ["network"]
+    assert sorted(plugins.dashboard_auth_providers(cfg, api)) == ["langfuse-oauth"]
+    assert sorted(plugins.setup_hooks(cfg, api)) == ["langfuse-setup"]
 
     assert plugins.disable("observability/langfuse", cfg) is True
     assert plugins.load_plugins(config=cfg).tools == []

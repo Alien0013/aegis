@@ -276,6 +276,76 @@ def _status_panel(snapshot: dict[str, Any]) -> Panel:
     return Panel(_kv_table(rows), title="Status", border_style="bright_green")
 
 
+def _status_strip(snapshot: dict[str, Any]) -> Panel:
+    active = (snapshot.get("provider") or {}).get("active") or {}
+    config = snapshot.get("config") or {}
+    background = snapshot.get("background") or {}
+    bg_tasks = background.get("tasks") or []
+    processes = snapshot.get("processes") or []
+    live = [
+        f"profile {config.get('profile') or 'default'}",
+        f"model {active.get('model') or '-'}",
+        f"runs {len(snapshot.get('active_runs') or [])}",
+        f"subagents {sum(1 for task in bg_tasks if task.get('status') == 'running')}",
+        f"processes {sum(1 for proc in processes if not proc.get('exited') and proc.get('status') != 'exited')}",
+        f"busy {_busy_mode(config.get('busy_mode'))}",
+    ]
+    if config.get("tool_progress"):
+        live.append(f"tools {config.get('tool_progress')}")
+    return Panel("  •  ".join(live), border_style="bright_cyan", padding=(0, 1))
+
+
+def _live_work_panel(snapshot: dict[str, Any]) -> Panel:
+    table = Table(expand=True)
+    table.add_column("Kind", no_wrap=True)
+    table.add_column("ID", no_wrap=True)
+    table.add_column("Status", no_wrap=True)
+    table.add_column("Elapsed", no_wrap=True)
+    table.add_column("Detail", overflow="fold")
+    now = datetime.now(timezone.utc).timestamp()
+    added = 0
+    for run in snapshot.get("active_runs") or []:
+        started = _parse_time(run.get("started_at"))
+        table.add_row(
+            "run",
+            _clip(run.get("id"), 18),
+            _clip(run.get("status") or "running", 12),
+            _duration(now - started) if started else "",
+            _clip(run.get("title") or run.get("prompt_preview") or "", 78),
+        )
+        added += 1
+    for task in (snapshot.get("background") or {}).get("tasks") or []:
+        started = float(task.get("started_at") or task.get("created_at") or 0)
+        elapsed = _duration(time.time() - started) if started else ""
+        status = str(task.get("status") or "")
+        style = "red" if status == "error" else "green" if status == "done" else ""
+        table.add_row(
+            "subagent",
+            _clip(task.get("id"), 18),
+            Text(status or "running", style=style),
+            elapsed,
+            _clip(task.get("prompt") or task.get("result_preview") or task.get("parent_session_id") or "", 78),
+        )
+        added += 1
+    for proc in snapshot.get("processes") or []:
+        status = str(proc.get("status") or ("exited" if proc.get("exited") else "running"))
+        if status == "exited" and added >= 8:
+            continue
+        elapsed = _duration(float(proc.get("uptime_seconds") or 0))
+        detail = proc.get("command") or proc.get("output_preview") or proc.get("cwd") or ""
+        table.add_row(
+            "process",
+            _clip(proc.get("session_id"), 18),
+            status,
+            elapsed,
+            _clip(detail, 78),
+        )
+        added += 1
+    if not added:
+        table.add_row("idle", "-", "-", "-", "No live runs, subagents, or background processes")
+    return Panel(table, title="Live Work", border_style="bright_magenta")
+
+
 def _config_panel(snapshot: dict[str, Any]) -> Panel:
     config = snapshot.get("config") or {}
     rows = [
@@ -401,7 +471,9 @@ def build_renderable(snapshot: dict[str, Any]) -> Group:
     footer = Panel("  ".join(footer_items), title="Actions", border_style="dim")
     return Group(
         Panel.fit("[bold]AEGIS Terminal Cockpit[/bold]", border_style="cyan"),
+        _status_strip(snapshot),
         _status_panel(snapshot),
+        _live_work_panel(snapshot),
         top,
         middle,
         lower,

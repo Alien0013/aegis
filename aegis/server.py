@@ -1,7 +1,7 @@
 """OpenAI-compatible HTTP server: expose AEGIS as a /v1/chat/completions backend.
 
 Lets any OpenAI-client tool point at AEGIS. Optional bearer auth via
-``server.api_key`` in config or the ``AEGIS_SERVER_KEY`` env var.
+``server.api_key`` in config or the ``AEGIS_SERVER_KEY``/``API_SERVER_KEY`` env vars.
 """
 
 from __future__ import annotations
@@ -213,6 +213,15 @@ def _coerce_request_bool(value: Any, default: bool = False) -> bool:
     if text in {"0", "false", "no", "n", "off", ""}:
         return False
     return default
+
+
+def _server_api_key(config: Config) -> str | None:
+    value = (
+        config.get("server.api_key")
+        or os.environ.get("AEGIS_SERVER_KEY")
+        or os.environ.get("API_SERVER_KEY")
+    )
+    return str(value) if value else None
 
 
 def _request_service_tier(body: dict[str, Any], metadata: dict[str, Any] | None = None) -> str:
@@ -1359,6 +1368,11 @@ def _session_payload(session) -> dict[str, Any]:
     }
 
 
+def _session_messages_payload(session) -> list[dict[str, Any]]:
+    messages = getattr(session, "messages", []) or []
+    return [_message_payload(m, i) for i, m in enumerate(messages)]
+
+
 def _tool_result_text(event: dict[str, Any]) -> str:
     for key in ("preview", "summary"):
         value = event.get(key)
@@ -2060,6 +2074,23 @@ def _capabilities(config: Config) -> dict[str, Any]:
         {"name": "session_checks", "path": "/api/session-checks", "methods": ["GET", "POST"]},
         {"name": "session_checks.repair", "path": "/api/session-checks/repair", "methods": ["POST"]},
     ]
+    endpoint_routes = {row["name"]: dict(row) for row in endpoint_descriptors}
+    endpoints: dict[str, bool] = {
+        "chat_completions": True,
+        "responses": True,
+        "models": True,
+        "sessions": True,
+        "runs": True,
+        "streaming": True,
+        "health": True,
+        "skills": True,
+        "toolsets": True,
+        "jobs": True,
+    }
+    for row in endpoint_descriptors:
+        name = str(row.get("name") or "")
+        if name:
+            endpoints.setdefault(name, True)
     return {
         "object": "hermes.api_server.capabilities",
         "legacy_object": "capabilities",
@@ -2067,7 +2098,7 @@ def _capabilities(config: Config) -> dict[str, Any]:
         "transport": "aiohttp",
         "auth": {
             "type": "bearer",
-            "required": bool(config.get("server.api_key") or os.environ.get("AEGIS_SERVER_KEY")),
+            "required": bool(_server_api_key(config)),
         },
         "limits": {
             "max_body_bytes": _MAX_BODY_BYTES,
@@ -2075,18 +2106,9 @@ def _capabilities(config: Config) -> dict[str, Any]:
             "run_events_timeout_seconds": float(config.get("server.run_events_timeout_seconds", 3600) or 3600),
             "responses_auto_truncation_messages": _responses_auto_truncation_limit(config),
         },
-        "endpoints": {
-            "chat_completions": True,
-            "responses": True,
-            "models": True,
-            "sessions": True,
-            "runs": True,
-            "streaming": True,
-            "health": True,
-            "skills": True,
-            "toolsets": True,
-            "jobs": True,
-        },
+        "endpoints": endpoints,
+        "routes": endpoint_routes,
+        "endpoint_routes": endpoint_routes,
         "endpoint_descriptors": endpoint_descriptors,
         "features": {
             "tools": True,
@@ -2851,7 +2873,7 @@ class IdempotencyCache:
 
 
 def make_handler(config: Config):
-    api_key = config.get("server.api_key") or os.environ.get("AEGIS_SERVER_KEY")
+    api_key = _server_api_key(config)
     runner = SurfaceRunner(config, include_mcp=True)
     response_store = ResponseStore(config)
     idempotency_cache = IdempotencyCache(
@@ -3873,7 +3895,14 @@ def make_handler(config: Config):
                 limit = max(1, min(limit, 1000))
                 offset = max(0, int((query.get("offset") or ["0"])[0] or 0))
                 include_internal = _coerce_request_bool((query.get("include_internal") or [None])[0], False)
-                rows = SessionStore().list(min(offset + limit + 1, 2000), include_internal=include_internal)
+                include_children = _coerce_request_bool((query.get("include_children") or [None])[0], True)
+                source = str((query.get("source") or [""])[0] or "").strip()
+                rows = SessionStore().list(
+                    min(offset + limit + 1, 2000),
+                    include_internal=include_internal,
+                    source=source or None,
+                    include_children=include_children,
+                )
                 page = rows[offset:offset + limit]
                 return self._json(200, {
                     "ok": True,
@@ -3884,6 +3913,8 @@ def make_handler(config: Config):
                     "offset": offset,
                     "has_more": len(rows) > offset + limit,
                     "include_internal": include_internal,
+                    "include_children": include_children,
+                    "source": source or None,
                 })
             if path.startswith("/api/sessions/") and path.endswith("/messages"):
                 session_id = path.split("/")[-2]
@@ -4017,6 +4048,12 @@ def make_handler(config: Config):
                     session.title = str(body.get("title") or session.title)
                 if isinstance(body.get("meta"), dict):
                     session.meta.update(body["meta"])
+                if "end_reason" in body:
+                    reason = str(body.get("end_reason") or "").strip()
+                    if reason:
+                        session.meta["end_reason"] = reason
+                    else:
+                        session.meta.pop("end_reason", None)
                 if isinstance(body.get("todos"), list):
                     session.todos = body["todos"]
                 store.save(session)
@@ -5624,12 +5661,14 @@ def make_handler(config: Config):
                     "message_id": message_id,
                 }):
                     return
+                pending_tool_calls: dict[str, dict[str, Any]] = {}
 
                 def emit(ev: dict[str, Any]) -> None:
                     if stream_closed:
                         cancel_stream_agent()
                         return
-                    if ev.get("type") == "assistant_delta":
+                    event_type = ev.get("type")
+                    if event_type == "assistant_delta":
                         delta = str(ev.get("text") or "")
                         if delta:
                             if not send_event("assistant.delta", {
@@ -5637,6 +5676,65 @@ def make_handler(config: Config):
                                 "delta": delta,
                             }):
                                 cancel_stream_agent()
+                        return
+                    if event_type == "tool_start":
+                        call_id = str(ev.get("id") or ev.get("tool_call_id") or new_id("call"))
+                        name = str(ev.get("name") or ev.get("tool_name") or "")
+                        args = ev.get("args", ev.get("arguments", {}))
+                        tool_call = {
+                            "id": call_id,
+                            "name": name,
+                            "status": "running",
+                            "arguments": args if args is not None else {},
+                            "summary": str(ev.get("summary") or ""),
+                        }
+                        pending_tool_calls[call_id] = tool_call
+                        if not send_event("tool.started", {
+                            "message_id": message_id,
+                            "tool_call": tool_call,
+                            "tool": tool_call,
+                            "event": _event_metadata(ev),
+                        }):
+                            cancel_stream_agent()
+                        return
+                    if event_type == "tool_result":
+                        call_id = str(ev.get("id") or ev.get("tool_call_id") or "")
+                        pending = pending_tool_calls.pop(call_id, None) if call_id else None
+                        name = str(
+                            ev.get("name")
+                            or ev.get("tool_name")
+                            or (pending or {}).get("name")
+                            or ""
+                        )
+                        status = "failed" if ev.get("is_error") else "completed"
+                        result_text = _tool_result_text(ev)
+                        tool_call = {
+                            "id": call_id or str((pending or {}).get("id") or new_id("call")),
+                            "name": name,
+                            "status": status,
+                            "result": result_text,
+                            "summary": str(ev.get("summary") or result_text),
+                        }
+                        event_name = "tool.failed" if status == "failed" else "tool.completed"
+                        if not send_event(event_name, {
+                            "message_id": message_id,
+                            "tool_call": tool_call,
+                            "tool": tool_call,
+                            "result": result_text,
+                            "event": _event_metadata(ev),
+                        }):
+                            cancel_stream_agent()
+                        return
+                    if event_type in {"tool_progress", "tool_delta"}:
+                        call_id = str(ev.get("id") or ev.get("tool_call_id") or "")
+                        payload = {
+                            "message_id": message_id,
+                            "tool_call_id": call_id,
+                            "delta": str(ev.get("delta") or ev.get("text") or ev.get("summary") or ""),
+                            "event": _event_metadata(ev),
+                        }
+                        if not send_event("tool.progress", payload):
+                            cancel_stream_agent()
                         return
                     meta = _event_metadata(ev)
                     if meta:
@@ -5683,6 +5781,7 @@ def make_handler(config: Config):
                     "message_id": message_id,
                     "completed": True,
                     "usage": _usage(getattr(result, "usage", None) or getattr(result, "agent", None)),
+                    "messages": _session_messages_payload(getattr(result, "session", None)),
                 })
                 send_event("done", {
                     **completed_common,

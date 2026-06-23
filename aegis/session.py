@@ -495,16 +495,36 @@ class SessionStore:
             row = c.execute("SELECT * FROM sessions ORDER BY updated_at DESC LIMIT 1").fetchone()
             return Session.from_row(row) if row else None
 
-    def list(self, limit: int = 50, *, include_internal: bool = False) -> list[dict]:
+    def list(
+        self,
+        limit: int = 50,
+        *,
+        include_internal: bool = False,
+        source: str | None = None,
+        include_children: bool = True,
+    ) -> list[dict]:
         """Recent sessions, newest first. Internal forked sessions (memory/skill review,
         curator) are hidden by default so the user-facing list shows real conversations
         only; pass ``include_internal=True`` to see everything."""
-        where = "" if include_internal else "WHERE COALESCE(source,'') NOT IN ('internal','review','curator')"
+        filters: list[str] = []
+        params: list[Any] = []
+        source_name = str(source or "").strip().lower()
+        if source_name and source_name not in {"all", "*"}:
+            if source_name in {"user", "default", "public"}:
+                filters.append("COALESCE(source,'')=''")
+            else:
+                filters.append("COALESCE(source,'')=?")
+                params.append(source_name)
+        elif not include_internal:
+            filters.append("COALESCE(source,'') NOT IN ('internal','review','curator')")
+        if not include_children:
+            filters.append("(parent_id IS NULL OR parent_id='')")
+        where = f"WHERE {' AND '.join(filters)}" if filters else ""
         with self._conn() as c:
             rows = c.execute(
-                "SELECT id, title, created_at, updated_at, parent_id, profile "
+                "SELECT id, title, created_at, updated_at, parent_id, profile, source "
                 f"FROM sessions {where} ORDER BY updated_at DESC LIMIT ?",
-                (limit,),
+                (*params, limit),
             ).fetchall()
             return [dict(r) for r in rows]
 

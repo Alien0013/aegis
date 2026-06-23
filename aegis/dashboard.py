@@ -2515,10 +2515,10 @@ def _cron_run_history(job_id: str, limit: int = 5) -> list[dict]:
     return out
 
 
-def _dashboard_cron_jobs() -> list[dict]:
+def _dashboard_cron_jobs(profile: str | None = None) -> list[dict]:
     from .cron import CronStore, _latest_job_output
     rows = []
-    for job in CronStore().list():
+    for job in CronStore(profile=profile).list():
         history = _cron_run_history(job.id)
         rows.append({
             "id": job.id,

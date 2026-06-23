@@ -26,12 +26,16 @@ _NO_MCP_SENTINEL = "no_mcp"
 _CRON_CLAIM_STALE_SECONDS = 6 * 60 * 60
 
 
-def _cron_path():
+def _cron_path(profile: str | None = None):
+    if profile is not None:
+        home = cfg.profile_home(profile)
+        home.mkdir(parents=True, exist_ok=True)
+        return home / "cron.json"
     return cfg.sub("cron.json")
 
 
 @contextmanager
-def _jobs_file_lock():
+def _jobs_file_lock(profile: str | None = None):
     """Cross-process lock for cron.json load-modify-save transactions."""
     depth = int(getattr(_JOBS_LOCK_STATE, "depth", 0) or 0)
     if depth:
@@ -44,7 +48,7 @@ def _jobs_file_lock():
     with _JOBS_LOCK:
         _JOBS_LOCK_STATE.depth = 1
         try:
-            path = _cron_path()
+            path = _cron_path(profile)
             path.parent.mkdir(parents=True, exist_ok=True)
             with file_lock(path):
                 yield
@@ -94,15 +98,16 @@ def notify_scheduler_changed(reason: str, job_id: str = "", *, source: str = "cr
     return event
 
 
-def _backup_corrupt_jobs(raw: str) -> Path | None:
+def _backup_corrupt_jobs(raw: str, profile: str | None = None) -> Path | None:
     if not raw:
         return None
     digest = hashlib.sha256(raw.encode("utf-8", "surrogatepass")).hexdigest()[:12]
-    pattern = f"{_cron_path().name}.corrupt.*.{digest}.bak"
-    for existing in _cron_path().parent.glob(pattern):
+    path = _cron_path(profile)
+    pattern = f"{path.name}.corrupt.*.{digest}.bak"
+    for existing in path.parent.glob(pattern):
         return existing
     stamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    target = _cron_path().with_name(f"{_cron_path().name}.corrupt.{stamp}.{digest}.bak")
+    target = path.with_name(f"{path.name}.corrupt.{stamp}.{digest}.bak")
     try:
         _atomic_write_cron(target, raw)
         return target
@@ -814,9 +819,11 @@ def preview_job(config, job: CronJob | str, *, store: "CronStore | None" = None,
 
 
 class CronStore:
-    @staticmethod
-    def _load_unlocked() -> list[dict]:
-        raw = read_text(_cron_path())
+    def __init__(self, profile: str | None = None):
+        self.profile = cfg.profile_name(profile) if profile is not None else None
+
+    def _load_unlocked(self) -> list[dict]:
+        raw = read_text(_cron_path(self.profile))
         if not raw.strip():
             return []
         repaired = False
@@ -827,18 +834,18 @@ class CronStore:
                 loaded = json.loads(raw, strict=False)
                 repaired = True
             except (json.JSONDecodeError, TypeError) as exc:
-                backup = _backup_corrupt_jobs(raw)
+                backup = _backup_corrupt_jobs(raw, self.profile)
                 suffix = f"; backup saved to {backup}" if backup else ""
                 raise CronStoreCorruptError(f"cron.json is corrupted and unrepairable{suffix}") from exc
         except TypeError as exc:
-            backup = _backup_corrupt_jobs(raw)
+            backup = _backup_corrupt_jobs(raw, self.profile)
             suffix = f"; backup saved to {backup}" if backup else ""
             raise CronStoreCorruptError(f"cron.json is unreadable{suffix}") from exc
         if isinstance(loaded, dict):
             loaded = loaded.get("jobs", [])
             repaired = True
         if not isinstance(loaded, list):
-            backup = _backup_corrupt_jobs(raw)
+            backup = _backup_corrupt_jobs(raw, self.profile)
             suffix = f"; backup saved to {backup}" if backup else ""
             raise CronStoreCorruptError(
                 f"cron.json is corrupted: expected a list or jobs object, got {type(loaded).__name__}{suffix}"
@@ -850,25 +857,24 @@ class CronStore:
             if normalized is not None:
                 jobs.append(normalized)
         if repaired:
-            CronStore._save_unlocked(jobs)
+            self._save_unlocked(jobs)
         return jobs
 
-    @staticmethod
-    def _save_unlocked(jobs: list[dict]) -> None:
+    def _save_unlocked(self, jobs: list[dict]) -> None:
         seen: set[str] = set()
         normalized = [
             job for index, item in enumerate(jobs)
             if (job := _normalize_job_record(item, index=index, seen=seen)) is not None
         ]
         text = json.dumps(normalized, indent=2)
-        _atomic_write_cron(_cron_path(), text + ("\n" if not text.endswith("\n") else ""))
+        _atomic_write_cron(_cron_path(self.profile), text + ("\n" if not text.endswith("\n") else ""))
 
     def _load(self) -> list[dict]:
-        with _jobs_file_lock():
+        with _jobs_file_lock(self.profile):
             return self._load_unlocked()
 
     def _save(self, jobs: list[dict]) -> None:
-        with _jobs_file_lock():
+        with _jobs_file_lock(self.profile):
             self._save_unlocked(jobs)
 
     def list(self) -> list[CronJob]:
@@ -905,7 +911,7 @@ class CronStore:
                       enabled_toolsets=list(enabled_toolsets or []),
                       workdir=_normalize_workdir(workdir),
                       max_runs=max(0, int(max_runs or 0)))
-        with _jobs_file_lock():
+        with _jobs_file_lock(self.profile):
             jobs = self._load_unlocked()
             jobs.append(job.__dict__)
             self._save_unlocked(jobs)
@@ -913,7 +919,7 @@ class CronStore:
         return job
 
     def remove(self, job_id: str) -> bool:
-        with _jobs_file_lock():
+        with _jobs_file_lock(self.profile):
             jobs = self._load_unlocked()
             index = _find_unique_job_index(jobs, job_id)
             if index is None:
@@ -925,7 +931,7 @@ class CronStore:
         return True
 
     def set_enabled(self, job_id: str, enabled: bool) -> bool:
-        with _jobs_file_lock():
+        with _jobs_file_lock(self.profile):
             jobs = self._load_unlocked()
             index = _find_unique_job_index(jobs, job_id)
             if index is None:
@@ -966,7 +972,7 @@ class CronStore:
         limit = max(1, int(limit or 1))
         owner = str(owner or "cron.fire")[:120]
         claimed: list[CronJob] = []
-        with _jobs_file_lock():
+        with _jobs_file_lock(self.profile):
             jobs = self._load_unlocked()
             for index, raw in enumerate(jobs):
                 job = CronJob(**_normalize_job_record(raw, index=index))
@@ -996,7 +1002,7 @@ class CronStore:
         after hitting ``max_runs``. Keeps the cron store from accumulating dead jobs —
         the cron-side of the lifecycle cleanup the curator runs for skills/sessions.
         Returns the ids pruned (or that would be, when ``dry_run``)."""
-        with _jobs_file_lock():
+        with _jobs_file_lock(self.profile):
             jobs = self._load_unlocked()
             spent: list[str] = []
             for j in jobs:
@@ -1014,7 +1020,7 @@ class CronStore:
         return [s for s in spent if s]
 
     def update(self, job_id: str, **updates) -> CronJob | None:
-        with _jobs_file_lock():
+        with _jobs_file_lock(self.profile):
             jobs = self._load_unlocked()
             index = _find_unique_job_index(jobs, job_id)
             if index is None:
@@ -1056,7 +1062,7 @@ class CronStore:
         return updated
 
     def mark_run(self, job_id: str, when: float) -> None:
-        with _jobs_file_lock():
+        with _jobs_file_lock(self.profile):
             jobs = self._load_unlocked()
             index = _find_unique_job_index(jobs, job_id)
             if index is not None:
@@ -1075,7 +1081,7 @@ class CronStore:
             self._save_unlocked(jobs)
 
     def mark_running(self, job_id: str, *, owner: str = "local_tick", token: str = "") -> None:
-        with _jobs_file_lock():
+        with _jobs_file_lock(self.profile):
             jobs = self._load_unlocked()
             index = _find_unique_job_index(jobs, job_id)
             if index is not None:
@@ -1090,7 +1096,7 @@ class CronStore:
                    reply: str = "", keep: int = 10) -> None:
         """Persist a typed run outcome: last_run, state, last_error, next_run, and a capped
         ``runs`` history (newest last)."""
-        with _jobs_file_lock():
+        with _jobs_file_lock(self.profile):
             jobs = self._load_unlocked()
             index = _find_unique_job_index(jobs, job_id)
             if index is not None:

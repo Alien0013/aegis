@@ -33,6 +33,26 @@ interface DesktopStatus {
   provider_error?: string;
   version?: string;
 }
+interface ActivityPayload {
+  active?: ActivityRow[];
+  recent?: ActivityRow[];
+}
+interface ActivityRow {
+  id: string;
+  title?: string;
+  prompt_preview?: string;
+  status?: string;
+  phase?: string;
+  surface?: string;
+  active_tool?: string;
+  last_tool?: string;
+  subagents_active?: number;
+  subagents_done?: number;
+  elapsed_ms?: number;
+  active_elapsed_ms?: number;
+  updated_at?: string;
+  started_at?: string;
+}
 
 export function DesktopShell() {
   const [params] = useSearchParams();
@@ -296,9 +316,16 @@ function DesktopOpsRail({
   onNavigate: (path: string) => void;
   onOpenAgents: () => void;
 }) {
+  const activity = useApi<ActivityPayload>("activity");
   const activeSession = sessions.find((session) => session.id === activeId);
   const gateway = status?.gateway_state || (status?.gateway_running ? "running" : "offline");
   const recent = sessions.filter((session) => session.id !== activeId).slice(0, 5);
+  const activeWork = activity.data?.active || [];
+  const activeSubagents = activeWork.reduce((total, row) => total + Number(row.subagents_active || 0), 0);
+  useEffect(() => {
+    const timer = window.setInterval(activity.reload, 1800);
+    return () => window.clearInterval(timer);
+  }, [activity.reload]);
   return (
     <aside className="hidden w-[310px] shrink-0 flex-col border-l border-border bg-surface/38 2xl:flex">
       <div className="border-b border-border px-4 py-3">
@@ -310,7 +337,9 @@ function DesktopOpsRail({
           <Badge tone={ready ? "success" : "danger"}>{ready ? "ready" : "attention"}</Badge>
         </div>
         <div className="mt-3 grid grid-cols-2 gap-2">
-          <ShellMetric label="active" value={String(status?.active_sessions ?? 0)} />
+          <ShellMetric label="sessions" value={String(status?.active_sessions ?? 0)} />
+          <ShellMetric label="runs" value={String(activeWork.length)} />
+          <ShellMetric label="subagents" value={String(activeSubagents)} />
           <ShellMetric label="tools" value={String(status?.tools ?? "-")} />
           <ShellMetric label="skills" value={String(status?.skills ?? "-")} />
           <ShellMetric label="version" value={status?.version ? `v${status.version}` : "-"} />
@@ -331,6 +360,30 @@ function DesktopOpsRail({
             {compact(status.provider_error, 140)}
           </div>
         )}
+      </div>
+
+      <div className="border-b border-border px-4 py-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="font-mono text-[10px] uppercase tracking-wide text-faint">Live Work</div>
+          <div className="flex items-center gap-2">
+            <button onClick={activity.reload} className="text-faint transition hover:text-primary" title="Refresh live work">
+              <Icon name="refresh" size={13} />
+            </button>
+            <button onClick={onOpenAgents} className="text-faint transition hover:text-primary" title="Open live agents">
+              <Icon name="external" size={13} />
+            </button>
+          </div>
+        </div>
+        <div className="mt-2 space-y-2">
+          {activeWork.slice(0, 4).map((row) => (
+            <LiveWorkItem key={row.id} row={row} />
+          ))}
+          {!activeWork.length && (
+            <div className="rounded-[var(--radius)] border border-border bg-surface-2/45 px-3 py-2 text-xs text-faint">
+              No active turns. Long-running runs and background subagents will appear here.
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="border-b border-border px-4 py-3">
@@ -377,6 +430,28 @@ function DesktopOpsRail({
         <ShellNavButton icon="logs" label="Logs" onClick={() => onNavigate("/logs")} />
       </div>
     </aside>
+  );
+}
+
+function LiveWorkItem({ row }: { row: ActivityRow }) {
+  const bad = ["error", "failed", "cancelled"].includes(String(row.status || "").toLowerCase());
+  const title = row.title || row.prompt_preview || row.active_tool || row.last_tool || row.id;
+  const elapsed = row.elapsed_ms ? `${Math.max(1, Math.round(row.elapsed_ms / 1000))}s` : "";
+  return (
+    <div className={`rounded-[var(--radius)] border px-3 py-2 text-xs ${bad ? "border-danger/35 bg-danger/10" : "border-border bg-surface-2/55"}`}>
+      <div className="flex items-center gap-2">
+        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${bad ? "bg-danger" : "bg-info"}`} />
+        <span className="min-w-0 flex-1 truncate font-medium text-text">{compact(title, 52)}</span>
+        <Badge status={row.status || "running"}>{row.status || "running"}</Badge>
+      </div>
+      <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-faint">
+        {row.surface && <span>{row.surface}</span>}
+        {row.phase && <span>{row.phase}</span>}
+        {row.active_tool && <span>tool {row.active_tool}</span>}
+        {row.subagents_active ? <span>{row.subagents_active} sub</span> : null}
+        {elapsed && <span>{elapsed}</span>}
+      </div>
+    </div>
   );
 }
 

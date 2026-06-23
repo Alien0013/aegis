@@ -35,7 +35,10 @@ def test_tui_renders_dashboard_sections(monkeypatch, tmp_path):
     output = buffer.getvalue()
 
     assert "AEGIS Terminal Cockpit" in output
+    assert "profile default" in output
     assert "Status" in output
+    assert "Live Work" in output
+    assert "No live runs" in output
     assert "active runs" in output
     assert "background" in output
     assert "Model" in output

@@ -608,6 +608,68 @@ def test_gateway_generation_guard_blocks_late_save_after_reset(tmp_path, monkeyp
     assert r.store.load(key).messages == []
 
 
+def test_gateway_proxy_url_delegates_platform_turn_to_chat_completions(tmp_path, monkeypatch):
+    import httpx
+    import aegis.gateway.runner as rmod
+
+    r = _runner(tmp_path, monkeypatch)
+    r.config.data.setdefault("model", {})["provider"] = "no-such-provider"
+    r.config.data.setdefault("gateway", {})["proxy_url"] = "https://proxy.test/v1"
+    r.config.data.setdefault("gateway", {})["proxy_key"] = "proxy-secret"
+    r.config.data.setdefault("gateway", {})["proxy_model"] = "proxy-model"
+    seen = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": "proxied reply"}}]}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            seen["timeout"] = kwargs.get("timeout")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def post(self, url, *, json, headers):
+            seen["url"] = url
+            seen["json"] = json
+            seen["headers"] = headers
+            return FakeResponse()
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    monkeypatch.setattr(
+        rmod.Agent,
+        "create",
+        staticmethod(lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("local agent created"))),
+    )
+    monkeypatch.setattr(
+        r._surface_runner,
+        "run_prompt",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("local runner called")),
+    )
+
+    out = r.dispatch(_ev("use proxy"))
+    key = r._key(_ev("use proxy"))
+    loaded = r.store.load(key)
+
+    assert out == "proxied reply"
+    assert seen["url"] == "https://proxy.test/v1/chat/completions"
+    assert seen["headers"]["Authorization"] == "Bearer proxy-secret"
+    assert seen["headers"]["X-Hermes-Session-Id"] == key
+    assert seen["json"]["model"] == "proxy-model"
+    assert seen["json"]["messages"][-1]["role"] == "user"
+    assert seen["json"]["messages"][-1]["content"].startswith("use proxy")
+    assert loaded.messages[-2].content.startswith("use proxy")
+    assert loaded.messages[-1].content == "proxied reply"
+    assert loaded.meta["last_gateway_proxy"]["model"] == "proxy-model"
+
+
 def test_gateway_refreshes_session_on_message_count_drift_without_newer_timestamp(tmp_path, monkeypatch):
     from aegis.types import Message
 

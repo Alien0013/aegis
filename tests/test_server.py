@@ -1275,6 +1275,8 @@ def test_server_health_capabilities_and_body_limit(monkeypatch, tmp_path):
     assert caps["limits"]["responses_auto_truncation_messages"] == 100
     assert caps["endpoints"]["responses"] is True
     assert caps["endpoints"]["jobs"] is True
+    assert caps["endpoints"]["responses.retrieve"] is True
+    assert caps["routes"]["runs.approval"]["path"] == "/v1/runs/{run_id}/approval"
     routes = {row["name"]: row for row in caps["endpoint_descriptors"]}
     assert routes["models.retrieve"]["path"] == "/v1/models/{model_id}"
     assert routes["responses"]["path"] == "/v1/responses"
@@ -1299,6 +1301,31 @@ def test_server_health_capabilities_and_body_limit(monkeypatch, tmp_path):
     assert caps["features"]["session_key_header"] == "X-Hermes-Session-Key"
     assert too_large_status == 413
     assert json.loads(too_large_data)["error"] == "request body too large"
+
+
+def test_server_accepts_hermes_api_server_key_alias(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    monkeypatch.setenv("API_SERVER_KEY", "alias-secret")
+    import aegis.server as server
+    from aegis.config import Config
+
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        unauthorized_status, unauthorized_data = _request(port, "GET", "/v1/capabilities")
+        authorized_status, authorized_data = _request(
+            port,
+            "GET",
+            "/v1/capabilities",
+            headers={"Authorization": "Bearer alias-secret"},
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert unauthorized_status == 401
+    assert json.loads(unauthorized_data)["error"] == "unauthorized"
+    assert authorized_status == 200
+    assert json.loads(authorized_data)["auth"]["required"] is True
 
 
 def test_server_health_skills_toolsets_and_cors_options(monkeypatch, tmp_path):
@@ -4799,6 +4826,52 @@ def test_server_session_crud_fork_and_chat(monkeypatch, tmp_path):
     assert json.loads(delete_data)["ok"] is True
 
 
+def test_server_session_list_filters_and_end_reason(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+    from aegis.session import Session, SessionStore
+
+    store = SessionStore()
+    store.save(Session(id="sess-root", title="Root"))
+    store.save(Session(id="sess-child", title="Child", parent_id="sess-root"))
+    store.save(Session(id="sess-internal", title="Review", meta={"review": True}))
+
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        filtered_status, filtered_data = _request(
+            port,
+            "GET",
+            "/api/sessions?include_internal=true&include_children=false",
+        )
+        internal_status, internal_data = _request(
+            port,
+            "GET",
+            "/api/sessions?source=internal&include_internal=true",
+        )
+        patch_status, patch_data = _request(
+            port,
+            "PATCH",
+            "/api/sessions/sess-root",
+            {"end_reason": "completed"},
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert filtered_status == 200
+    filtered = json.loads(filtered_data)
+    assert filtered["include_children"] is False
+    assert {row["id"] for row in filtered["data"]} == {"sess-root", "sess-internal"}
+    assert all(row["id"] != "sess-child" for row in filtered["data"])
+    assert internal_status == 200
+    internal = json.loads(internal_data)
+    assert [row["id"] for row in internal["data"]] == ["sess-internal"]
+    assert internal["data"][0]["source"] == "internal"
+    assert patch_status == 200
+    assert json.loads(patch_data)["session"]["meta"]["end_reason"] == "completed"
+
+
 def test_server_session_create_and_fork_honor_hermes_fields(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
@@ -4973,6 +5046,7 @@ def test_server_session_chat_stream_uses_sse_cors_headers(monkeypatch, tmp_path)
     names = [name for name, _payload in events]
     assert names[:2] == ["run.started", "message.started"]
     assert "assistant.delta" in names
+    assert "tool.started" in names
     assert names[-3:] == ["run.completed", "done", "done"]
     assert events[-1] == ("done", "[DONE]")
     started = events[0][1]
@@ -4981,6 +5055,10 @@ def test_server_session_chat_stream_uses_sse_cors_headers(monkeypatch, tmp_path)
     assert started["user_message"]["content"] == "reply"
     assert completed["content"] == "hello"
     assert completed["trace_id"] == "trace_http"
+    tool_started = next(payload for name, payload in events if name == "tool.started")
+    run_completed = next(payload for name, payload in events if name == "run.completed")
+    assert tool_started["tool_call"]["name"] == "read_file"
+    assert run_completed["messages"] == []
     assert _FakeRunner.calls[0]["meta"]["runtime_controls"]["reasoning_effort"] == "high"
     assert _FakeRunner.calls[0]["max_tokens"] == 55
 

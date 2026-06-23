@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import tempfile
 from pathlib import Path
@@ -28,6 +29,17 @@ _SLACK_ATTACHMENT_HOST_SUFFIXES = (
     ".slack-edge.com",
 )
 _MAX_TRANSCRIBED_ATTACHMENT_BYTES = 25 * 1024 * 1024
+
+
+def _gateway_proxy_chat_url(url: str) -> str:
+    base = str(url or "").strip().rstrip("/")
+    if not base:
+        return ""
+    if base.endswith("/v1/chat/completions"):
+        return base
+    if base.endswith("/v1"):
+        return f"{base}/chat/completions"
+    return f"{base}/v1/chat/completions"
 
 
 def _sync_control_session(proxy, session: Session, reply: str) -> str:
@@ -475,6 +487,115 @@ class GatewayRunner:
             return True
         except Exception:  # noqa: BLE001
             return False
+
+    def _gateway_proxy_config(self) -> dict[str, str]:
+        api_server_cfg = self.config.get("gateway.api_server", {}) or {}
+        if not isinstance(api_server_cfg, dict):
+            api_server_cfg = {}
+        url = (
+            os.environ.get("GATEWAY_PROXY_URL")
+            or self.config.get("gateway.proxy_url")
+            or api_server_cfg.get("proxy_url")
+            or ""
+        )
+        key = (
+            os.environ.get("GATEWAY_PROXY_KEY")
+            or self.config.get("gateway.proxy_key")
+            or api_server_cfg.get("proxy_key")
+            or ""
+        )
+        model = (
+            os.environ.get("GATEWAY_PROXY_MODEL")
+            or self.config.get("gateway.proxy_model")
+            or api_server_cfg.get("proxy_model")
+            or self.config.get("model.default")
+            or ""
+        )
+        return {
+            "url": _gateway_proxy_chat_url(str(url or "")),
+            "key": str(key or ""),
+            "model": str(model or ""),
+        }
+
+    def _gateway_proxy_enabled(self) -> bool:
+        return bool(self._gateway_proxy_config().get("url"))
+
+    def _gateway_proxy_messages(self, session: Session, prompt_message: Message) -> list[dict[str, str]]:
+        messages: list[dict[str, str]] = []
+        for message in (session.messages or [])[-40:]:
+            role = str(getattr(message, "role", "") or "")
+            if role not in {"system", "user", "assistant"}:
+                continue
+            content = str(getattr(message, "content", "") or "")
+            if content:
+                messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": prompt_message.content})
+        return messages
+
+    def _run_gateway_proxy_turn(
+        self,
+        ev: MessageEvent,
+        key: str,
+        session: Session,
+        prompt_message: Message,
+        generation: int,
+    ) -> str:
+        import httpx
+
+        proxy = self._gateway_proxy_config()
+        if not proxy["url"]:
+            raise RuntimeError("gateway proxy URL is not configured")
+        headers = {
+            "Content-Type": "application/json",
+            "X-Hermes-Session-Id": key,
+            "X-AEGIS-Session-Id": key,
+        }
+        if proxy["key"]:
+            headers["Authorization"] = f"Bearer {proxy['key']}"
+        body = {
+            "model": proxy["model"] or self.config.get("model.default") or "default",
+            "messages": self._gateway_proxy_messages(session, prompt_message),
+            "stream": False,
+            "metadata": {
+                "surface": "gateway",
+                "platform": ev.platform,
+                "chat_id": ev.chat_id,
+                "user_id": ev.user_id or "",
+                "session_id": key,
+            },
+        }
+        timeout = float(self.config.get("gateway.proxy_timeout_seconds", 600) or 600)
+        with httpx.Client(timeout=timeout) as client:
+            response = client.post(proxy["url"], json=body, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+        text = ""
+        choices = data.get("choices") if isinstance(data, dict) else None
+        if isinstance(choices, list) and choices:
+            first = choices[0] if isinstance(choices[0], dict) else {}
+            message = first.get("message") if isinstance(first, dict) else {}
+            if isinstance(message, dict):
+                text = str(message.get("content") or "")
+            if not text:
+                text = str(first.get("text") or "")
+        if not text and isinstance(data, dict):
+            text = str(data.get("output_text") or data.get("text") or "")
+        if not text:
+            text = "Gateway proxy returned an empty response."
+        if generation != self._generation(key):
+            return ""
+        session.messages.append(prompt_message)
+        session.messages.append(Message.assistant(text))
+        session.meta["last_gateway_proxy"] = {
+            "url": proxy["url"],
+            "model": body["model"],
+            "updated_at": now_iso(),
+        }
+        self._remember_gateway_context(session, ev)
+        self._stamp_generation(key, session, generation)
+        self._sessions[key] = session
+        self.store.save(session)
+        return text
 
     def _mark_running_sessions_resume_pending(self, cause: str) -> int:
         reason = str(cause or "shutdown")
@@ -1176,6 +1297,33 @@ class GatewayRunner:
             # model's prompt prefix stays cached); rebuild if the session was reset.
             generation = self._generation(key)
             self._stamp_generation(key, session, generation)
+            if self._gateway_proxy_enabled():
+                try:
+                    resume_directive = self._resume_pending_directive(session)
+                    proxy_text = (resume_directive + text) if resume_directive else text
+                    prompt_message = _gateway_user_message(self.config, ev, proxy_text)
+                    from ..eventbus import BUS
+
+                    BUS.publish({"platform": ev.platform, "chat_id": ev.chat_id,
+                                 "type": "internal_message" if is_internal else "user_message",
+                                 "text": prompt_message.content})
+                    final_text = self._run_gateway_proxy_turn(ev, key, session, prompt_message, generation)
+                    if generation != self._generation(key):
+                        return ""
+                    from ..redact import redact_secrets
+                    from .replies import shape_reply
+
+                    reply = shape_reply(redact_secrets(final_text), api_calls=1)
+                    if self._clear_resume_pending(session):
+                        self._sessions[key] = session
+                        self.store.save(session)
+                    BUS.publish({"platform": ev.platform, "chat_id": ev.chat_id,
+                                 "type": "assistant_message", "text": reply})
+                    if not is_internal:
+                        self._drain_process_notifications()
+                    return reply
+                except Exception as e:  # noqa: BLE001
+                    return f"⚠ error: {type(e).__name__}: {e}"
             prof = _gateway_profile_for_platform(self.config, ev.platform)
             run_cfg = self.config
             if prof.get("personality"):       # isolated copy — must not leak across platforms

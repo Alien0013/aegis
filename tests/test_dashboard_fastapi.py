@@ -781,6 +781,10 @@ def test_fastapi_config_and_env_control_plane(tmp_path, monkeypatch):
     assert fields["agent.service_tier"]["enum"] == ["", "normal", "priority"]
     assert fields["display.tool_progress_grouping"]["enum"] == ["accumulate", "separate"]
     assert fields["display.memory_notifications"]["enum"] == ["off", "on", "verbose"]
+    assert fields["gateway.proxy_url"]["label"] == "Gateway proxy URL"
+    assert fields["gateway.proxy_key"]["group"] == "Gateway proxy"
+    assert fields["gateway.proxy_model"]["group"] == "Gateway proxy"
+    assert fields["gateway.proxy_timeout_seconds"]["type"] == "int"
 
     set_key = asyncio.run(_request(
         app,
@@ -1086,9 +1090,18 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     api_server = next(row for row in rows if row["id"] == "api_server")
     assert api_server["transport"] == "aiohttp"
     assert api_server["missing_env_vars"] == []
+    assert "API_SERVER_KEY" in api_server["optional_env_vars"]
+    assert "API_SERVER_API_KEY" in api_server["optional_env_vars"]
     assert "responses" in api_server["capabilities"]
     assert "jobs" in api_server["capabilities"]
     assert api_server["metadata"]["yaml_config"] == "gateway.api_server"
+    assert api_server["metadata"]["env_bridge"]["api_key"] == "API_SERVER_KEY"
+    assert api_server["metadata"]["env_bridge"]["api_key_legacy"] == "API_SERVER_API_KEY"
+    assert api_server["metadata"]["server_config_bridge"]["model_name"] == "model.default"
+    assert api_server["metadata"]["proxy_bridge"]["config"]["url"] == "gateway.proxy_url"
+    assert api_server["metadata"]["proxy_bridge"]["env"]["url"] == "GATEWAY_PROXY_URL"
+    assert api_server["metadata"]["security"]["api_key_env"] == "API_SERVER_KEY"
+    assert api_server["metadata"]["security"]["api_key_legacy_env"] == "API_SERVER_API_KEY"
     assert "health_probe" in api_server["metadata"]["setup_hooks"]
     telegram = next(row for row in rows if row["id"] == "telegram")
     assert telegram["name"] == "Telegram"
@@ -1202,6 +1215,7 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     assert "idempotency" in webhook["capabilities"]
     assert "interactive_prompts" in webhook["capabilities"]
     assert "thread" in webhook["delivery_modes"]
+    assert webhook["metadata"]["sender_hooks"] == ["outbound_webhook"]
     assert "X-Webhook-Signature" in webhook["metadata"]["security"]["signature_schemes"]
     whatsapp = next(row for row in rows if row["id"] == "whatsapp")
     assert whatsapp["transport"] == "http_bridge"
@@ -1213,6 +1227,9 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     assert "interactive_prompts" in whatsapp["capabilities"]
     assert "whatsapp_nested_media" in whatsapp["metadata"]["bridge_capabilities"]
     assert "interactive_prompts" in whatsapp["metadata"]["bridge_capabilities"]
+    assert whatsapp["metadata"]["setup_hooks"] == ["env_bridge", "health_probe"]
+    assert whatsapp["metadata"]["cron_delivery_hooks"] == ["deliver_target"]
+    assert whatsapp["metadata"]["sender_hooks"] == ["outbound_webhook"]
     assert whatsapp["metadata"]["security"]["bridge"] == "webhook"
     whatsapp_cloud = next(row for row in rows if row["id"] == "whatsapp_cloud")
     assert whatsapp_cloud["transport"] == "http_bridge"
@@ -1232,7 +1249,11 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     reg_whatsapp = next(row for row in registry.json()["registry"] if row["id"] == "whatsapp")
     assert reg_whatsapp["metadata"]["transport"] == "http_bridge"
     reg_api_server = next(row for row in registry.json()["registry"] if row["id"] == "api_server")
-    assert reg_api_server["metadata"]["sender_hooks"] == ["responses_stream", "run_events"]
+    assert reg_api_server["metadata"]["sender_hooks"] == [
+        "responses_stream",
+        "run_events",
+        "gateway_proxy_chat_completions",
+    ]
     slack_detail = asyncio.run(_request(app, "GET", "/api/platforms/sl", headers=headers))
     assert slack_detail.status_code == 200
     assert slack_detail.json()["platform"]["id"] == "slack"
@@ -1339,7 +1360,9 @@ def test_fastapi_plugin_platform_appears_in_registry(tmp_path, monkeypatch):
         "        check_fn=lambda: True, required_env=['PLUGCHAT_TOKEN'],\n"
         "        optional_env=['PLUGCHAT_ROOM'], install_hint='install plugchat',\n"
         "        transport='websocket', auth_type='bot_token', capabilities=['thread'],\n"
-        "        delivery_modes=['channel'])\n",
+        "        delivery_modes=['channel'], setup_hooks=['plug_setup'],\n"
+        "        cron_delivery_hooks=['plug_deliver'], sender_hooks=['plug_send'],\n"
+        "        yaml_config='plugins.plugchat')\n",
         encoding="utf-8",
     )
 
@@ -1354,6 +1377,10 @@ def test_fastapi_plugin_platform_appears_in_registry(tmp_path, monkeypatch):
     assert row["required_env_vars"] == ["PLUGCHAT_TOKEN"]
     assert row["optional_env_vars"] == ["PLUGCHAT_ROOM"]
     assert row["metadata"]["install_hint"] == "install plugchat"
+    assert row["metadata"]["setup_hooks"] == ["plug_setup"]
+    assert row["metadata"]["cron_delivery_hooks"] == ["plug_deliver"]
+    assert row["metadata"]["sender_hooks"] == ["plug_send"]
+    assert row["metadata"]["yaml_config"] == "plugins.plugchat"
     assert detail.status_code == 200
     assert detail.json()["platform"]["id"] == "plugchat"
     assert "plugchat" in plugins.json()["platform_names"]
@@ -3220,9 +3247,13 @@ def test_fastapi_dashboard_plugin_yaml_manifest_normalized_tab_and_dashboard_api
         "tools": [],
         "channels": [],
         "providers": [],
+        "dashboard_auth": [],
+        "setup_hooks": [],
         "hooks": [],
         "middleware": [],
     }
+    assert "dashboard_auth_options" in hub_body["providers"]
+    assert "setup_hooks" in hub_body["providers"]
     assert hub_row["has_dashboard_manifest"] is True
     assert hub_row["dashboard_manifest"]["name"] == "pulse-panel"
     assert hub_row["dashboard_route"]["path"] == "/overview"
@@ -4254,6 +4285,73 @@ def test_fastapi_cron_job_routes_reject_invalid_ids(tmp_path, monkeypatch, caplo
     assert "aegis-dashboard-test" in logs
 
 
+def test_fastapi_cron_blueprints_and_profile_scope(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    blueprints = asyncio.run(_request(app, "GET", "/api/cron/blueprints", headers=headers))
+    assert blueprints.status_code == 200
+    assert any(row["id"] == "daily_digest" for row in blueprints.json()["blueprints"])
+
+    created = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/cron/blueprints/instantiate",
+        json={
+            "blueprint_id": "daily_digest",
+            "profile": "research",
+            "variables": {"topic": "AEGIS"},
+            "schedule": "every 3h",
+            "toolsets": ["core", "web"],
+        },
+        headers=headers,
+    ))
+    assert created.status_code == 200
+    body = created.json()
+    assert body["ok"] is True
+    assert body["blueprint_id"] == "daily_digest"
+    assert body["profile"] == "research"
+    assert body["job"]["prompt"].startswith("Write a concise daily digest for AEGIS")
+    assert body["job"]["schedule"] == "every 3h"
+    assert body["job"]["enabled_toolsets"] == ["core", "web"]
+
+    default_jobs = asyncio.run(_request(app, "GET", "/api/cron/jobs", headers=headers))
+    research_jobs = asyncio.run(_request(app, "GET", "/api/cron/jobs?profile=research", headers=headers))
+    all_jobs = asyncio.run(_request(app, "GET", "/api/jobs?profile=all", headers=headers))
+
+    assert default_jobs.status_code == 200
+    assert not any(row["id"] == body["id"] for row in default_jobs.json()["jobs"])
+    assert research_jobs.status_code == 200
+    assert [row["id"] for row in research_jobs.json()["jobs"]] == [body["id"]]
+    assert research_jobs.json()["jobs"][0]["profile"] == "research"
+    assert all_jobs.status_code == 200
+    assert any(row["name"] == "research" and row["count"] == 1 for row in all_jobs.json()["profiles"])
+    assert any(row["id"] == body["id"] and row["profile"] == "research" for row in all_jobs.json()["jobs"])
+
+    from aegis.cron import CronStore
+
+    CronStore(profile="research").update(body["id"], schedule="every 3h")
+    fire = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/cron/fire?profile=research",
+        json={"dry_run": True},
+        headers=headers,
+    ))
+    assert fire.status_code == 200
+    assert fire.json()["profile"] == "research"
+    assert any(row["id"] == body["id"] for row in fire.json()["due"])
+
+    runs = asyncio.run(_request(app, "GET", f"/api/cron/jobs/{body['id']}/runs?profile=research", headers=headers))
+    assert runs.status_code == 200
+    assert runs.json()["profile"] == "research"
+    assert runs.json()["id"] == body["id"]
+
+    runs_alias = asyncio.run(_request(app, "GET", f"/api/jobs/{body['id']}/runs?profile=research", headers=headers))
+    assert runs_alias.status_code == 200
+    assert runs_alias.json()["id"] == body["id"]
+
+
 def test_fastapi_gateway_control_plane(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
     headers = {"X-Aegis-Token": "t"}
@@ -4300,6 +4398,34 @@ def test_fastapi_gateway_control_plane(tmp_path, monkeypatch):
     ))
     assert set_channels.status_code == 200
     assert set_channels.json()["gateway"]["channels"] == ["telegram", "discord"]
+
+    alias_channels = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/gateway/channels",
+        json={"channels": "api-server,sl"},
+        headers=headers,
+    ))
+    assert alias_channels.status_code == 200
+    assert alias_channels.json()["gateway"]["channels"] == ["api_server", "slack"]
+
+    api_alias = asyncio.run(_request(
+        app,
+        "PATCH",
+        "/api/gateway/channels/api-server",
+        json={"enabled": True},
+        headers=headers,
+    ))
+    assert api_alias.status_code == 200
+    assert api_alias.json()["channel"]["id"] == "api_server"
+
+    import aegis.doctor as doctor
+
+    monkeypatch.setitem(doctor.CHANNEL_PROBES, "slack", lambda: (True, "slack ready"))
+    slack_probe = asyncio.run(_request(app, "POST", "/api/gateway/channels/sl/probe", headers=headers))
+    assert slack_probe.status_code == 200
+    assert slack_probe.json()["channel"] == "slack"
+    assert slack_probe.json()["detail"] == "slack ready"
 
     status = asyncio.run(_request(app, "GET", "/api/gateway/status", headers=headers))
     assert status.status_code == 200

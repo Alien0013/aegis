@@ -663,11 +663,18 @@ def test_platform_helper_command_caps_and_utf16_chunks():
     assert api_meta["transport"] == "aiohttp"
     assert "API_SERVER_MAX_CONCURRENT_RUNS" in api_meta["optional_env"]
     assert api_meta["security"]["gateway_config"] == "gateway.api_server"
+    assert api_meta["env_bridge"]["api_key"] == "API_SERVER_KEY"
+    assert api_meta["env_bridge"]["api_key_legacy"] == "API_SERVER_API_KEY"
+    assert api_meta["server_config_bridge"]["model_name"] == "model.default"
+    assert api_meta["sender_hooks"] == ["responses_stream", "run_events", "gateway_proxy_chat_completions"]
     cloud_meta = platform_metadata("whatsapp-cloud")
     assert cloud_meta["id"] == "whatsapp_cloud"
     assert cloud_meta["transport"] == "http_bridge"
     assert "WHATSAPP_CLOUD_CHANNEL_SECRET" in cloud_meta["optional_env"]
     assert "interactive_prompts" in cloud_meta["bridge_capabilities"]
+    assert cloud_meta["setup_hooks"] == ["env_bridge", "health_probe"]
+    assert cloud_meta["cron_delivery_hooks"] == ["deliver_target"]
+    assert cloud_meta["sender_hooks"] == ["outbound_webhook"]
 
 
 def test_api_server_gateway_adapter_metadata_and_lifecycle(tmp_path, monkeypatch):

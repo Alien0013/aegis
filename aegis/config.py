@@ -648,7 +648,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "enabled": False,                 # run OpenAI-compatible API under `aegis gateway`
             "host": "127.0.0.1",
             "port": 8790,
-            "api_key": None,                  # falls back to server.api_key / AEGIS_SERVER_KEY
+            "api_key": None,                  # falls back to server.api_key / API_SERVER_KEY / AEGIS_SERVER_KEY
             "model_name": "",                 # optional gateway-specific model.default override
             "cors_origins": [],               # mirrors server.cors_origins at runtime
             "max_concurrent_runs": 8,
@@ -663,6 +663,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "cron_interval": 60,
         "show_learning": True,                # append a 'remembered/learned' footer to replies
         "busy_mode": "queue",                 # message-while-busy: queue | steer | interrupt
+        "proxy_url": "",                      # optional OpenAI-compatible gateway proxy URL
+        "proxy_key": "",                      # optional bearer for gateway.proxy_url
+        "proxy_model": "",                    # optional model override for gateway proxy
+        "proxy_timeout_seconds": 600,          # HTTP timeout for gateway proxy turns
         "admins": [],                         # user ids/@handles with full command access
                                               #   (empty = single-user; everyone is admin)
         "user_commands": [],                  # extra slash commands non-admins may run

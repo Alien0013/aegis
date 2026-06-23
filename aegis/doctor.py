@@ -37,6 +37,7 @@ CHANNEL_ENV_HINTS = {
         "API_SERVER_ENABLED",
         "API_SERVER_HOST",
         "API_SERVER_PORT",
+        "API_SERVER_KEY",
         "API_SERVER_API_KEY",
         "AEGIS_SERVER_KEY",
     ),
@@ -278,7 +279,13 @@ def probe_api_server() -> tuple[bool, str]:
     host = os.environ.get("API_SERVER_HOST") or api_cfg.get("host") or config.get("server.host", "127.0.0.1")
     port = os.environ.get("API_SERVER_PORT") or api_cfg.get("port") or config.get("server.port", 8790)
     url = f"http://{host}:{int(port or 8790)}/v1/health"
-    api_key = os.environ.get("API_SERVER_API_KEY") or api_cfg.get("api_key") or config.get("server.api_key") or os.environ.get("AEGIS_SERVER_KEY")
+    api_key = (
+        os.environ.get("API_SERVER_KEY")
+        or os.environ.get("API_SERVER_API_KEY")
+        or api_cfg.get("api_key")
+        or config.get("server.api_key")
+        or os.environ.get("AEGIS_SERVER_KEY")
+    )
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     try:
         r = _get(url, headers=headers)

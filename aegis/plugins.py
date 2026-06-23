@@ -44,6 +44,8 @@ class PluginAPI:
         self.channels: dict = {}
         self.platforms: dict[str, dict[str, Any]] = {}
         self.providers: list[str] = []
+        self.dashboard_auth_providers: list[str] = []
+        self.setup_hooks: list[str] = []
         self.files: list[Path] = []
         self.errors: list[tuple[Path, str]] = []
         self._current_plugin: Path | None = None
@@ -117,6 +119,10 @@ class PluginAPI:
             "capabilities": list(entry_kwargs.get("capabilities") or []),
             "bridge_capabilities": list(entry_kwargs.get("bridge_capabilities") or []),
             "delivery_modes": list(entry_kwargs.get("delivery_modes") or []),
+            "setup_hooks": list(entry_kwargs.get("setup_hooks") or []),
+            "cron_delivery_hooks": list(entry_kwargs.get("cron_delivery_hooks") or []),
+            "sender_hooks": list(entry_kwargs.get("sender_hooks") or []),
+            "yaml_config": str(entry_kwargs.get("yaml_config") or ""),
             "security": dict(entry_kwargs.get("security") or {}),
             "pairing": bool(entry_kwargs.get("pairing", False)),
             "install_hint": install_hint,
@@ -138,6 +144,32 @@ class PluginAPI:
         self.providers.append(name)
         if self._current_plugin is not None:
             _PLUGIN_PROVIDERS.setdefault(self._current_plugin, []).append(name)
+
+    def register_dashboard_auth_provider(self, name: str, provider: Any | None = None) -> None:
+        """Register a dashboard-auth provider contribution for setup/observability surfaces.
+
+        Dashboard authentication remains owned by the FastAPI backend; this hook lets
+        plugins advertise an auth provider and expose a Python object the dashboard can
+        discover without importing arbitrary plugin internals.
+        """
+        clean = str(name or "").strip()
+        if not clean:
+            raise ValueError("dashboard auth provider name is required")
+        self.dashboard_auth_providers.append(clean)
+        if provider is not None:
+            _DASHBOARD_AUTH_PROVIDERS[clean] = provider
+        if self._current_plugin is not None:
+            _PLUGIN_DASHBOARD_AUTH.setdefault(self._current_plugin, []).append(clean)
+
+    def register_setup_hook(self, name: str, fn) -> None:
+        """Register a plugin setup hook descriptor used by dashboard/install flows."""
+        clean = str(name or "").strip()
+        if not clean:
+            raise ValueError("setup hook name is required")
+        _SETUP_HOOKS[clean] = fn
+        self.setup_hooks.append(clean)
+        if self._current_plugin is not None:
+            _PLUGIN_SETUP_HOOKS.setdefault(self._current_plugin, []).append(clean)
 
     def register_hook(self, event: str, fn) -> None:
         """Register an in-process Python hook.
@@ -178,12 +210,16 @@ _MIDDLEWARE: dict[str, list] = {}
 _PLUGIN_HOOKS: dict[Path, list[tuple[str, Any]]] = {}
 _PLUGIN_MIDDLEWARE: dict[Path, list[tuple[str, Any]]] = {}
 _PLUGIN_PROVIDERS: dict[Path, list[str]] = {}
+_PLUGIN_DASHBOARD_AUTH: dict[Path, list[str]] = {}
+_PLUGIN_SETUP_HOOKS: dict[Path, list[str]] = {}
 _PLUGIN_TOOLS: dict[Path, list[str]] = {}
 _PLUGIN_CHANNELS: dict[Path, list[str]] = {}
 _PLUGIN_PLATFORMS: dict[Path, list[str]] = {}
 _PLUGIN_PLATFORM_METADATA: dict[str, dict[str, Any]] = {}
 _PLUGIN_MODULES: dict[Path, str] = {}
 _PLUGIN_LOADS: dict[Path, dict[str, Any]] = {}
+_DASHBOARD_AUTH_PROVIDERS: dict[str, Any] = {}
+_SETUP_HOOKS: dict[str, Any] = {}
 
 
 MANIFEST_NAMES = ("plugin.yaml", "plugin.yml", "aegis-plugin.json", "plugin.json")
@@ -236,6 +272,8 @@ class PluginManifest:
     provides_middleware: list[str] = field(default_factory=list)
     provides_channels: list[str] = field(default_factory=list)
     provides_providers: list[str] = field(default_factory=list)
+    provides_dashboard_auth: list[str] = field(default_factory=list)
+    setup_hooks: list[str] = field(default_factory=list)
     permissions: list[str] = field(default_factory=list)
     enabled: bool = True
     installed_from: str = ""
@@ -265,6 +303,8 @@ class PluginManifest:
             "provides_middleware": self.provides_middleware,
             "provides_channels": self.provides_channels,
             "provides_providers": self.provides_providers,
+            "provides_dashboard_auth": self.provides_dashboard_auth,
+            "setup_hooks": self.setup_hooks,
             "permissions": self.permissions,
             "enabled": self.enabled,
             "installed_from": self.installed_from,
@@ -848,6 +888,22 @@ def _read_manifest(path: Path, config=None, *, base: Path | None = None,
             nested="providers",
             aliases=("provider", "models", "model_providers"),
         ),
+        provides_dashboard_auth=_manifest_contribution_names(
+            data,
+            "provides_dashboard_auth",
+            "dashboard_auth",
+            "auth_providers",
+            nested="dashboard_auth",
+            aliases=("dashboard_auth_providers", "auth", "auth_providers"),
+        ),
+        setup_hooks=_manifest_contribution_names(
+            data,
+            "setup_hooks",
+            "provides_setup_hooks",
+            nested="setup_hooks",
+            aliases=("setup", "install_hooks", "provider_setup_hooks"),
+            key_hints=("name", "hook", "key", "id"),
+        ),
         permissions=_string_list(data.get("permissions")),
         enabled=_manifest_enabled(name, key or name, config),
         installed_from=str(metadata.get("installed_from") or ""),
@@ -924,6 +980,10 @@ def _clear_plugin_side_effects(path: Path) -> None:
             pass
     _PLUGIN_TOOLS.pop(path, None)
     _PLUGIN_CHANNELS.pop(path, None)
+    for name in _PLUGIN_DASHBOARD_AUTH.pop(path, []):
+        _DASHBOARD_AUTH_PROVIDERS.pop(name, None)
+    for name in _PLUGIN_SETUP_HOOKS.pop(path, []):
+        _SETUP_HOOKS.pop(name, None)
     for name in _PLUGIN_PLATFORMS.pop(path, []):
         _PLUGIN_PLATFORM_METADATA.pop(name, None)
     _PLUGIN_LOADS.pop(path, None)
@@ -1386,6 +1446,8 @@ def clear_runtime_cache() -> None:
     paths.update(_PLUGIN_HOOKS)
     paths.update(_PLUGIN_MIDDLEWARE)
     paths.update(_PLUGIN_PROVIDERS)
+    paths.update(_PLUGIN_DASHBOARD_AUTH)
+    paths.update(_PLUGIN_SETUP_HOOKS)
     paths.update(_PLUGIN_TOOLS)
     paths.update(_PLUGIN_CHANNELS)
     paths.update(_PLUGIN_PLATFORMS)
@@ -1400,6 +1462,8 @@ def _plugin_declared_contributions(manifest: PluginManifest) -> dict[str, list[s
         "tools": sorted(dict.fromkeys(manifest.provides_tools)),
         "channels": sorted(dict.fromkeys(manifest.provides_channels)),
         "providers": sorted(dict.fromkeys(manifest.provides_providers)),
+        "dashboard_auth": sorted(dict.fromkeys(manifest.provides_dashboard_auth)),
+        "setup_hooks": sorted(dict.fromkeys(manifest.setup_hooks)),
         "hooks": sorted(dict.fromkeys(manifest.provides_hooks)),
         "middleware": sorted(dict.fromkeys(manifest.provides_middleware)),
     }
@@ -1407,11 +1471,21 @@ def _plugin_declared_contributions(manifest: PluginManifest) -> dict[str, list[s
 
 def _plugin_runtime_contributions(entrypoint: Path | None) -> dict[str, list[str]]:
     if entrypoint is None:
-        return {"tools": [], "channels": [], "providers": [], "hooks": [], "middleware": []}
+        return {
+            "tools": [],
+            "channels": [],
+            "providers": [],
+            "dashboard_auth": [],
+            "setup_hooks": [],
+            "hooks": [],
+            "middleware": [],
+        }
     return {
         "tools": sorted(dict.fromkeys(_PLUGIN_TOOLS.get(entrypoint, []))),
         "channels": sorted(dict.fromkeys(_PLUGIN_CHANNELS.get(entrypoint, []))),
         "providers": sorted(dict.fromkeys(_PLUGIN_PROVIDERS.get(entrypoint, []))),
+        "dashboard_auth": sorted(dict.fromkeys(_PLUGIN_DASHBOARD_AUTH.get(entrypoint, []))),
+        "setup_hooks": sorted(dict.fromkeys(_PLUGIN_SETUP_HOOKS.get(entrypoint, []))),
         "hooks": sorted(dict.fromkeys(event for event, _fn in _PLUGIN_HOOKS.get(entrypoint, []))),
         "middleware": sorted(dict.fromkeys(kind for kind, _fn in _PLUGIN_MIDDLEWARE.get(entrypoint, []))),
     }
@@ -1430,6 +1504,24 @@ def plugin_platforms(config=None, api: PluginAPI | None = None) -> list[dict[str
     if not rows:
         rows = [dict(row) for row in _PLUGIN_PLATFORM_METADATA.values()]
     return sorted(rows, key=lambda row: str(row.get("id") or ""))
+
+
+def dashboard_auth_providers(config=None, api: PluginAPI | None = None) -> dict[str, Any]:
+    if api is None:
+        api = load_plugins(quiet=True, config=config)
+    providers = dict(_DASHBOARD_AUTH_PROVIDERS)
+    for name in getattr(api, "dashboard_auth_providers", []) or []:
+        providers.setdefault(str(name), None)
+    return providers
+
+
+def setup_hooks(config=None, api: PluginAPI | None = None) -> dict[str, Any]:
+    if api is None:
+        api = load_plugins(quiet=True, config=config)
+    hooks = dict(_SETUP_HOOKS)
+    for name in getattr(api, "setup_hooks", []) or []:
+        hooks.setdefault(str(name), None)
+    return hooks
 
 
 def _plugin_contribution_drift(
@@ -1497,6 +1589,8 @@ def plugin_status(config=None, api: PluginAPI | None = None) -> list[dict[str, A
             "channel_names": runtime["channels"],
             "platform_names": _plugin_runtime_platforms(entrypoint),
             "provider_names": runtime["providers"],
+            "dashboard_auth_names": runtime["dashboard_auth"],
+            "setup_hook_names": runtime["setup_hooks"],
             "hook_names": runtime["hooks"],
             "middleware_kinds": runtime["middleware"],
         })
@@ -1504,6 +1598,8 @@ def plugin_status(config=None, api: PluginAPI | None = None) -> list[dict[str, A
         row["channels_registered"] = len(row["channel_names"])
         row["platforms_registered"] = len(row["platform_names"])
         row["providers_registered"] = len(row["provider_names"])
+        row["dashboard_auth_registered"] = len(row["dashboard_auth_names"])
+        row["setup_hooks_registered"] = len(row["setup_hook_names"])
         row["hooks_registered"] = len(row["hook_names"])
         row["middleware_registered"] = len(row["middleware_kinds"])
         rows.append(row)

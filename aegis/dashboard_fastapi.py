@@ -26,6 +26,7 @@ from typing import Annotated, Any
 from urllib.parse import parse_qs, urlsplit
 
 from . import __version__
+from . import config as cfg
 from .config import Config, CONFIG_FIELD_ENUMS, DEFAULT_CONFIG, _deep_merge, config_type_errors
 from .platforms import BRIDGE_PLATFORM_DEFINITIONS, normalize_platform_name
 
@@ -611,6 +612,30 @@ _CONFIG_FIELD_META: dict[str, dict[str, Any]] = {
         "label": "Require mention",
         "description": "Only answer in group channels when the bot is mentioned.",
         "group": "Gateway",
+    },
+    "gateway.proxy_url": {
+        "label": "Gateway proxy URL",
+        "description": "Forward platform turns to a remote OpenAI-compatible API server instead of running a local provider.",
+        "group": "Gateway proxy",
+        "restart": "gateway service",
+    },
+    "gateway.proxy_key": {
+        "label": "Gateway proxy key",
+        "description": "Bearer token used when gateway proxy mode calls the remote API server.",
+        "group": "Gateway proxy",
+        "restart": "gateway service",
+    },
+    "gateway.proxy_model": {
+        "label": "Gateway proxy model",
+        "description": "Optional model id sent to the remote API server in gateway proxy mode.",
+        "group": "Gateway proxy",
+        "restart": "gateway service",
+    },
+    "gateway.proxy_timeout_seconds": {
+        "label": "Gateway proxy timeout",
+        "description": "HTTP timeout for one proxied gateway turn.",
+        "group": "Gateway proxy",
+        "restart": "gateway service",
     },
     "gateway.api_server.enabled": {
         "label": "API server gateway",
@@ -1240,6 +1265,7 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
             "API_SERVER_ENABLED",
             "API_SERVER_HOST",
             "API_SERVER_PORT",
+            "API_SERVER_KEY",
             "API_SERVER_API_KEY",
             "API_SERVER_MODEL_NAME",
             "API_SERVER_CORS_ORIGINS",
@@ -1268,11 +1294,40 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
         "delivery_modes": ["http", "sse"],
         "setup_hooks": ["config", "health_probe"],
         "cron_delivery_hooks": ["api_jobs", "api_cron_fire"],
-        "sender_hooks": ["responses_stream", "run_events"],
+        "sender_hooks": ["responses_stream", "run_events", "gateway_proxy_chat_completions"],
         "yaml_config": "gateway.api_server",
+        "server_config_bridge": {
+            "api_key": "server.api_key",
+            "cors_origins": "server.cors_origins",
+            "max_concurrent_runs": "server.max_concurrent_runs",
+            "model_name": "model.default",
+        },
+        "env_bridge": {
+            "host": "API_SERVER_HOST",
+            "port": "API_SERVER_PORT",
+            "api_key": "API_SERVER_KEY",
+            "api_key_legacy": "API_SERVER_API_KEY",
+            "model_name": "API_SERVER_MODEL_NAME",
+            "cors_origins": "API_SERVER_CORS_ORIGINS",
+            "max_concurrent_runs": "API_SERVER_MAX_CONCURRENT_RUNS",
+        },
+        "proxy_bridge": {
+            "config": {
+                "url": "gateway.proxy_url",
+                "key": "gateway.proxy_key",
+                "model": "gateway.proxy_model",
+                "timeout_seconds": "gateway.proxy_timeout_seconds",
+            },
+            "env": {
+                "url": "GATEWAY_PROXY_URL",
+                "key": "GATEWAY_PROXY_KEY",
+                "model": "GATEWAY_PROXY_MODEL",
+            },
+        },
         "security": {
             "local_only_recommended": True,
-            "api_key_env": "API_SERVER_API_KEY",
+            "api_key_env": "API_SERVER_KEY",
+            "api_key_legacy_env": "API_SERVER_API_KEY",
             "cors_env": "API_SERVER_CORS_ORIGINS",
             "config_path": "gateway.api_server",
         },
@@ -1565,6 +1620,10 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
             "signature_verification",
         ],
         "delivery_modes": ["webhook", "thread"],
+        "setup_hooks": ["env_bridge", "health_probe"],
+        "cron_delivery_hooks": ["deliver_target"],
+        "sender_hooks": ["outbound_webhook"],
+        "yaml_config": "gateway.profiles.webhook",
         "security": {
             "local_only_recommended": True,
             "loopback_unsigned_allowed": True,
@@ -1625,6 +1684,10 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
         ],
         "bridge_capabilities": ["whatsapp_bridge_aliases", "whatsapp_nested_media", "interactive_prompts"],
         "delivery_modes": ["chat", "group", "thread", "webhook"],
+        "setup_hooks": ["env_bridge", "health_probe"],
+        "cron_delivery_hooks": ["deliver_target"],
+        "sender_hooks": ["outbound_webhook"],
+        "yaml_config": "gateway.profiles.whatsapp",
         "security": {
             "local_only_recommended": True,
             "loopback_unsigned_allowed": True,
@@ -1785,10 +1848,25 @@ def _platform_configurable_env(item: dict[str, Any]) -> set[str]:
     return set(_platform_required_env(item)) | set(_platform_optional_env(item))
 
 
+def _canonical_channel_list(channels: Any) -> list[str]:
+    out: list[str] = []
+    for item in channels or []:
+        raw = str(item).strip()
+        if not raw:
+            continue
+        try:
+            safe = _normalize_platform_id(raw)
+        except ValueError:
+            safe = raw
+        if safe not in out:
+            out.append(safe)
+    return out
+
+
 def _gateway_channel_payload(config: Config, channel: str | None = None) -> dict:
     from .doctor import CHANNEL_PROBES
 
-    enabled = set(config.get("gateway.channels", []) or [])
+    enabled = set(_canonical_channel_list(config.get("gateway.channels", []) or []))
     profiles = config.get("gateway.profiles", {}) or {}
     rows = []
     for item in _channel_catalog(config):
@@ -1808,7 +1886,8 @@ def _gateway_channel_payload(config: Config, channel: str | None = None) -> dict
         })
         rows.append(row)
     if channel:
-        match = next((row for row in rows if row["id"] == channel), None)
+        safe = _normalize_platform_id(channel)
+        match = next((row for row in rows if row["id"] == safe), None)
         return {"ok": bool(match), "channel": match}
     return {
         "channels": rows,
@@ -1818,10 +1897,10 @@ def _gateway_channel_payload(config: Config, channel: str | None = None) -> dict
 
 
 def _set_gateway_channel(config: Config, channel: str, body: dict) -> dict:
-    channel = _safe_resource_name(channel, "channel").lower()
+    channel = _normalize_platform_id(channel)
     if channel not in _channel_catalog_map(config):
         return {"ok": False, "error": "unknown channel", "channel": channel}
-    channels = set(config.get("gateway.channels", []) or [])
+    channels = set(_canonical_channel_list(config.get("gateway.channels", []) or []))
     if "enabled" in body:
         if bool(body.get("enabled")):
             channels.add(channel)
@@ -1876,6 +1955,9 @@ def _messaging_platform_metadata(item: dict[str, Any]) -> dict[str, Any]:
         "cron_delivery_hooks": list(item.get("cron_delivery_hooks", []) or []),
         "sender_hooks": list(item.get("sender_hooks", []) or []),
         "yaml_config": item.get("yaml_config", ""),
+        "server_config_bridge": copy.deepcopy(item.get("server_config_bridge", {}) or {}),
+        "env_bridge": copy.deepcopy(item.get("env_bridge", {}) or {}),
+        "proxy_bridge": copy.deepcopy(item.get("proxy_bridge", {}) or {}),
         "install_hint": item.get("install_hint", ""),
         "plugin": item.get("plugin", ""),
         "plugin_path": item.get("plugin_path", ""),
@@ -2560,6 +2642,7 @@ def _dashboard_plugin_hub(config: Config) -> dict[str, Any]:
     from . import config as config_paths
     from .agent.context_engine import _ENGINES
     from .memory_providers import memory_provider_catalog
+    from .plugins import dashboard_auth_providers, setup_hooks
 
     payload = _plugins_payload(config)
     dashboard_plugins = _dashboard_plugins_payload(config, include_hidden=True)
@@ -2692,6 +2775,24 @@ def _dashboard_plugin_hub(config: Config) -> dict[str, Any]:
         }
         for name, engine in sorted(_ENGINES.items())
     ]
+    dashboard_auth_options = [
+        {
+            "name": str(name),
+            "description": str(getattr(provider, "__doc__", "") or "").strip().splitlines()[0]
+            if provider is not None and str(getattr(provider, "__doc__", "") or "").strip()
+            else "",
+        }
+        for name, provider in sorted(dashboard_auth_providers(config).items())
+    ]
+    setup_hook_options = [
+        {
+            "name": str(name),
+            "description": str(getattr(hook, "__doc__", "") or "").strip().splitlines()[0]
+            if hook is not None and str(getattr(hook, "__doc__", "") or "").strip()
+            else "",
+        }
+        for name, hook in sorted(setup_hooks(config).items())
+    ]
     return {
         "ok": True,
         "plugins": rows,
@@ -2703,6 +2804,8 @@ def _dashboard_plugin_hub(config: Config) -> dict[str, Any]:
             "memory_options": memory_options,
             "context_engine": str(config.get("agent.context_engine", "default") or "default"),
             "context_options": context_options,
+            "dashboard_auth_options": dashboard_auth_options,
+            "setup_hooks": setup_hook_options,
         },
         "safe_mode": payload.get("safe_mode", False),
         "loaded": payload.get("loaded", []),
@@ -3914,9 +4017,10 @@ def _delete_sessions(ids: Any) -> dict:
     return {"ok": True, "removed": removed, "missing": missing, "count": len(removed)}
 
 
-def _cron_job_detail(job_id: str) -> dict:
-    for row in dash._dashboard_cron_jobs():
+def _cron_job_detail(job_id: str, profile: str | None = None) -> dict:
+    for row in dash._dashboard_cron_jobs(profile=profile):
         if row["id"] == job_id or row["id"].startswith(job_id):
+            row["profile"] = _cron_profile_label(profile)
             return {"found": True, "job": row}
     return {"found": False, "id": job_id, "error": "cron job not found"}
 
@@ -3982,17 +4086,135 @@ def _validate_cron_context_refs(store: Any, refs: list[str]) -> str:
     return ""
 
 
-def _cron_jobs_response() -> JSONResponse:
-    jobs = dash._dashboard_cron_jobs()
-    return JSONResponse({"jobs": jobs, "data": jobs})
+_CRON_BLUEPRINTS: list[dict[str, Any]] = [
+    {
+        "id": "daily_digest",
+        "name": "Daily digest",
+        "description": "Summarize recent work and send a short daily update.",
+        "schedule": "every 24h",
+        "prompt": "Write a concise daily digest for {topic}. Include blockers and next actions.",
+        "deliver": "local",
+        "skills": [],
+        "enabled_toolsets": ["core"],
+    },
+    {
+        "id": "weekly_review",
+        "name": "Weekly review",
+        "description": "Review progress, decisions, risks, and useful follow-up work.",
+        "schedule": "every 7d",
+        "prompt": "Review this week's progress for {topic}. Highlight wins, risks, and next priorities.",
+        "deliver": "local",
+        "skills": [],
+        "enabled_toolsets": ["core"],
+    },
+    {
+        "id": "health_watch",
+        "name": "Health watch",
+        "description": "Run a periodic operational health check.",
+        "schedule": "every 6h",
+        "prompt": "Check the health of {topic}. Report failures, stale work, and suggested fixes.",
+        "deliver": "local",
+        "skills": [],
+        "enabled_toolsets": ["core"],
+    },
+]
 
 
-def _cron_job_create_response(config: Config, body: dict[str, Any]) -> JSONResponse:
+class _FormatVars(dict):
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
+
+
+def _cron_request_profile(request: Request | None = None, body: dict[str, Any] | None = None) -> str | None:
+    raw = None
+    if isinstance(body, dict):
+        raw = body.get("profile")
+    if raw in (None, "") and request is not None:
+        raw = request.query_params.get("profile")
+    if raw in (None, ""):
+        return None
+    return cfg.profile_name(str(raw))
+
+
+def _cron_profile_label(profile: str | None) -> str:
+    return cfg.profile_name(profile) or "default"
+
+
+def _cron_jobs_response(profile: str | None = None) -> JSONResponse:
+    if str(profile or "").strip().lower() == "all":
+        from . import profiles
+
+        rows: list[dict[str, Any]] = []
+        profile_rows: list[dict[str, Any]] = []
+        for info in profiles.list_profiles():
+            profile_name = cfg.profile_name(info.name)
+            label = _cron_profile_label(profile_name)
+            jobs = dash._dashboard_cron_jobs(profile=profile_name)
+            for job in jobs:
+                job["profile"] = label
+            rows.extend(jobs)
+            profile_rows.append({"name": label, "jobs": jobs, "count": len(jobs)})
+        return JSONResponse({"profile": "all", "profiles": profile_rows, "jobs": rows, "data": rows})
+    normalized = _cron_request_profile(body={"profile": profile}) if profile is not None else None
+    jobs = dash._dashboard_cron_jobs(profile=normalized)
+    label = _cron_profile_label(normalized)
+    for job in jobs:
+        job["profile"] = label
+    return JSONResponse({"profile": label, "jobs": jobs, "data": jobs})
+
+
+def _cron_blueprints_response() -> JSONResponse:
+    return JSONResponse({"ok": True, "blueprints": _CRON_BLUEPRINTS, "data": _CRON_BLUEPRINTS})
+
+
+def _render_cron_blueprint_value(value: Any, variables: dict[str, Any]) -> Any:
+    if isinstance(value, str):
+        return value.format_map(_FormatVars({key: str(val) for key, val in variables.items()}))
+    if isinstance(value, list):
+        return [_render_cron_blueprint_value(item, variables) for item in value]
+    if isinstance(value, dict):
+        return {key: _render_cron_blueprint_value(val, variables) for key, val in value.items()}
+    return value
+
+
+def _cron_blueprint_instantiate_response(config: Config, body: dict[str, Any]) -> JSONResponse:
+    blueprint_id = str(body.get("blueprint_id") or body.get("id") or body.get("blueprint") or "").strip()
+    blueprint = next((row for row in _CRON_BLUEPRINTS if row["id"] == blueprint_id), None)
+    if blueprint is None:
+        return JSONResponse({"ok": False, "error": "cron blueprint not found", "id": blueprint_id}, status_code=404)
+    variables = body.get("variables") if isinstance(body.get("variables"), dict) else {}
+    payload = {
+        key: _render_cron_blueprint_value(value, variables)
+        for key, value in blueprint.items()
+        if key not in {"id", "description"}
+    }
+    payload["name"] = str(body.get("name") or payload.get("name") or blueprint["name"])
+    overrides = body.get("overrides") if isinstance(body.get("overrides"), dict) else {}
+    payload.update(overrides)
+    for key in (
+        "schedule", "prompt", "channel", "deliver", "skills", "enabled_toolsets",
+        "toolsets", "model", "workdir", "no_agent", "script", "max_runs", "profile",
+    ):
+        if key in body:
+            if key == "toolsets":
+                payload["enabled_toolsets"] = body[key]
+            else:
+                payload[key] = body[key]
+    response = _cron_job_create_response(config, payload, profile=_cron_request_profile(body=payload))
+    if response.status_code < 400:
+        data = json.loads(response.body.decode("utf-8"))
+        data["blueprint_id"] = blueprint_id
+        data["blueprint"] = blueprint
+        return JSONResponse(data, status_code=response.status_code)
+    return response
+
+
+def _cron_job_create_response(config: Config, body: dict[str, Any], profile: str | None = None) -> JSONResponse:
     if not body.get("schedule") or not body.get("prompt"):
         return JSONResponse({"ok": False, "error": "schedule and prompt are required"}, status_code=400)
     from .cron import CronStore, _scan_cron_prompt
 
-    store = CronStore()
+    store = CronStore(profile=profile)
     skills = body.get("skills") or []
     if isinstance(skills, str):
         skills = [s.strip() for s in skills.split(",") if s.strip()]
@@ -4021,16 +4243,22 @@ def _cron_job_create_response(config: Config, body: dict[str, Any]) -> JSONRespo
         )
     except ValueError as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
-    return JSONResponse({"ok": True, "id": job.id, "job": _cron_job_detail(job.id)["job"]})
+    return JSONResponse({"ok": True, "id": job.id, "profile": _cron_profile_label(profile),
+                         "job": _cron_job_detail(job.id, profile=profile)["job"]})
 
 
-def _cron_job_patch_response(job_id: str, body: dict[str, Any], request: Request | None = None) -> JSONResponse:
+def _cron_job_patch_response(
+    job_id: str,
+    body: dict[str, Any],
+    request: Request | None = None,
+    profile: str | None = None,
+) -> JSONResponse:
     from .cron import CronStore, _scan_cron_prompt
 
     invalid = _cron_job_invalid_id_response(job_id, request)
     if invalid is not None:
         return invalid
-    store = CronStore()
+    store = CronStore(profile=profile)
     updates = {key: body[key] for key in (
         "schedule", "prompt", "name", "channel", "enabled", "script", "skills", "context_from", "deliver",
         "no_agent", "max_runs", "model", "enabled_toolsets", "workdir",
@@ -4054,56 +4282,84 @@ def _cron_job_patch_response(job_id: str, body: dict[str, Any], request: Request
         return JSONResponse({"ok": False, "error": str(exc), "id": job_id}, status_code=400)
     if job is None:
         return JSONResponse({"ok": False, "error": "cron job not found", "id": job_id}, status_code=404)
-    return JSONResponse({"ok": True, "id": job.id, "job": _cron_job_detail(job.id)["job"]})
+    return JSONResponse({"ok": True, "id": job.id, "profile": _cron_profile_label(profile),
+                         "job": _cron_job_detail(job.id, profile=profile)["job"]})
 
 
-def _cron_job_put_response(job_id: str, body: dict[str, Any], request: Request | None = None) -> JSONResponse:
+def _cron_job_put_response(
+    job_id: str,
+    body: dict[str, Any],
+    request: Request | None = None,
+    profile: str | None = None,
+) -> JSONResponse:
     updates = body.get("updates", body) if isinstance(body, dict) else {}
     if not isinstance(updates, dict):
         return JSONResponse({"ok": False, "error": "updates must be an object"}, status_code=400)
-    return _cron_job_patch_response(job_id, updates, request)
+    return _cron_job_patch_response(job_id, updates, request, profile=profile)
 
 
-def _cron_job_delete_response(job_id: str, request: Request | None = None) -> JSONResponse:
+def _cron_job_delete_response(
+    job_id: str,
+    request: Request | None = None,
+    profile: str | None = None,
+) -> JSONResponse:
     from .cron import CronStore
 
     invalid = _cron_job_invalid_id_response(job_id, request)
     if invalid is not None:
         return invalid
-    ok = CronStore().remove(job_id)
+    ok = CronStore(profile=profile).remove(job_id)
     return JSONResponse({"ok": ok, "id": job_id}, status_code=200 if ok else 404)
 
 
-def _cron_job_enabled_response(job_id: str, enabled: bool, request: Request | None = None) -> JSONResponse:
+def _cron_job_enabled_response(
+    job_id: str,
+    enabled: bool,
+    request: Request | None = None,
+    profile: str | None = None,
+) -> JSONResponse:
     from .cron import CronStore
 
     invalid = _cron_job_invalid_id_response(job_id, request)
     if invalid is not None:
         return invalid
-    ok = CronStore().set_enabled(job_id, enabled)
+    ok = CronStore(profile=profile).set_enabled(job_id, enabled)
     if not ok:
         return JSONResponse({"ok": False, "error": "cron job not found", "id": job_id}, status_code=404)
-    detail = _cron_job_detail(job_id)
-    return JSONResponse({"ok": True, "id": job_id, "paused": not enabled, "job": detail["job"]})
+    detail = _cron_job_detail(job_id, profile=profile)
+    return JSONResponse({"ok": True, "id": job_id, "profile": _cron_profile_label(profile),
+                         "paused": not enabled, "job": detail["job"]})
 
 
-def _cron_job_run_response(config: Config, job_id: str, request: Request | None = None) -> JSONResponse:
+def _cron_job_run_response(
+    config: Config,
+    job_id: str,
+    request: Request | None = None,
+    profile: str | None = None,
+) -> JSONResponse:
     from .cron import CronStore, build_delivery_sink, run_job
 
     invalid = _cron_job_invalid_id_response(job_id, request)
     if invalid is not None:
         return invalid
-    store = CronStore()
+    store = CronStore(profile=profile)
     if store.get(job_id) is None:
         return JSONResponse({"ok": False, "error": "cron job not found", "id": job_id}, status_code=404)
     sink = build_delivery_sink(config, verbose=False)
     return JSONResponse(run_job(config, job_id, sink=sink, store=store, verbose=False))
 
 
-def _cron_fire_response(config: Config, body: dict[str, Any] | None = None) -> JSONResponse:
-    from .cron import build_delivery_sink, fire_due_jobs
+def _cron_fire_response(
+    config: Config,
+    body: dict[str, Any] | None = None,
+    profile: str | None = None,
+) -> JSONResponse:
+    from .cron import CronStore, build_delivery_sink, fire_due_jobs
 
     payload = body if isinstance(body, dict) else {}
+    normalized_profile = profile
+    if normalized_profile is None:
+        normalized_profile = _cron_request_profile(body=payload)
     try:
         limit = max(1, min(100, int(str(payload.get("limit") or 25))))
     except (TypeError, ValueError):
@@ -4115,28 +4371,40 @@ def _cron_fire_response(config: Config, body: dict[str, Any] | None = None) -> J
     result = fire_due_jobs(
         config,
         sink=build_delivery_sink(config, verbose=False),
+        store=CronStore(profile=normalized_profile),
         limit=limit,
         owner=str(payload.get("owner") or "dashboard.api"),
         dry_run=_coerce_dashboard_bool(payload.get("dry_run"), False),
         verbose=False,
         stale_after=stale_after,
     )
+    result["profile"] = _cron_profile_label(normalized_profile)
     return JSONResponse(result)
 
 
-def _cron_job_preview_response(config: Config, job_id: str, request: Request | None = None) -> JSONResponse:
+def _cron_job_preview_response(
+    config: Config,
+    job_id: str,
+    request: Request | None = None,
+    profile: str | None = None,
+) -> JSONResponse:
     from .cron import CronStore, preview_job
 
     invalid = _cron_job_invalid_id_response(job_id, request)
     if invalid is not None:
         return invalid
-    store = CronStore()
+    store = CronStore(profile=profile)
     result = preview_job(config, job_id, store=store)
     status = 200 if result.get("found") else 404
     return JSONResponse(result, status_code=status)
 
 
-def _cron_job_runs_response(job_id: str, query: dict[str, list[str]], request: Request | None = None) -> JSONResponse:
+def _cron_job_runs_response(
+    job_id: str,
+    query: dict[str, list[str]],
+    request: Request | None = None,
+    profile: str | None = None,
+) -> JSONResponse:
     invalid = _cron_job_invalid_id_response(job_id, request)
     if invalid is not None:
         return invalid
@@ -4144,11 +4412,17 @@ def _cron_job_runs_response(job_id: str, query: dict[str, list[str]], request: R
         limit = max(1, min(100, int(str(query.get("limit", ["20"])[0] or "20"))))
     except (TypeError, ValueError):
         limit = 20
-    detail = _cron_job_detail(job_id)
+    detail = _cron_job_detail(job_id, profile=profile)
     if not detail.get("found"):
         return JSONResponse({"ok": False, "error": "cron job not found", "id": job_id}, status_code=404)
     history = list((detail.get("job") or {}).get("history") or [])[:limit]
-    return JSONResponse({"ok": True, "id": (detail.get("job") or {}).get("id", job_id), "limit": limit, "runs": history})
+    return JSONResponse({
+        "ok": True,
+        "id": (detail.get("job") or {}).get("id", job_id),
+        "profile": _cron_profile_label(profile),
+        "limit": limit,
+        "runs": history,
+    })
 
 
 def _cron_delivery_targets(config: Config) -> dict[str, Any]:
@@ -4191,7 +4465,7 @@ def _gateway_status(config: Config) -> dict:
     except Exception:  # noqa: BLE001
         outbox_stats = {}
         pending = 0
-    channels = list(config.get("gateway.channels", []) or [])
+    channels = _canonical_channel_list(config.get("gateway.channels", []) or [])
     provider = str(config.get("model.provider") or "")
     model = str(config.get("model.default") or "")
     provider_error = ""
@@ -4506,9 +4780,10 @@ def _model_set_payload(config: Config, body: dict[str, Any]) -> dict[str, Any]:
 def _gateway_probe(body: dict[str, Any]) -> dict:
     from .doctor import CHANNEL_PROBES
 
-    channel = str(body.get("channel") or "").strip().lower()
-    if not channel:
+    raw_channel = str(body.get("channel") or "").strip()
+    if not raw_channel:
         return {"ok": False, "error": "channel is required"}
+    channel = _normalize_platform_id(raw_channel)
     probe = CHANNEL_PROBES.get(channel)
     if probe is None:
         return {"ok": False, "channel": channel, "detail": "no live probe for this channel yet"}
@@ -7220,13 +7495,28 @@ def create_app(config: Config) -> FastAPI:
     @app.get("/api/cron/jobs")
     async def api_cron_jobs(request: Request) -> JSONResponse:
         _require_request(request, config)
-        return _cron_jobs_response()
+        return _cron_jobs_response(request.query_params.get("profile"))
+
+    @app.get("/api/cron/blueprints")
+    async def api_cron_blueprints(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return _cron_blueprints_response()
+
+    @app.post("/api/cron/blueprints/instantiate")
+    async def api_cron_blueprint_instantiate(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "body must be an object"}, status_code=400)
+        if "profile" not in body and request.query_params.get("profile"):
+            body["profile"] = request.query_params.get("profile")
+        return _cron_blueprint_instantiate_response(config, body)
 
     @app.post("/api/cron/jobs")
     async def api_cron_job_create(request: Request) -> JSONResponse:
         _require_request(request, config)
         body = await request.json()
-        return _cron_job_create_response(config, body)
+        return _cron_job_create_response(config, body, profile=_cron_request_profile(request, body))
 
     @app.post("/api/cron/fire")
     async def api_cron_fire(request: Request) -> JSONResponse:
@@ -7235,7 +7525,8 @@ def create_app(config: Config) -> FastAPI:
             body = await request.json()
         except Exception:  # noqa: BLE001
             body = {}
-        return _cron_fire_response(config, body if isinstance(body, dict) else {})
+        payload = body if isinstance(body, dict) else {}
+        return _cron_fire_response(config, payload, profile=_cron_request_profile(request, payload))
 
     @app.get("/api/cron/delivery-targets")
     async def api_cron_delivery_targets(request: Request) -> JSONResponse:
@@ -7248,71 +7539,91 @@ def create_app(config: Config) -> FastAPI:
         invalid = _cron_job_invalid_id_response(job_id, request)
         if invalid is not None:
             return invalid
-        detail = _cron_job_detail(job_id)
+        detail = _cron_job_detail(job_id, profile=_cron_request_profile(request))
         return JSONResponse(detail, status_code=200 if detail.get("found") else 404)
 
     @app.patch("/api/cron/jobs/{job_id}")
     async def api_cron_job_patch(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
         body = await request.json()
-        return _cron_job_patch_response(job_id, body, request)
+        return _cron_job_patch_response(job_id, body, request, profile=_cron_request_profile(request, body))
 
     @app.put("/api/cron/jobs/{job_id}")
     async def api_cron_job_put(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
         body = await request.json()
-        return _cron_job_put_response(job_id, body if isinstance(body, dict) else {}, request)
+        return _cron_job_put_response(
+            job_id,
+            body if isinstance(body, dict) else {},
+            request,
+            profile=_cron_request_profile(request, body if isinstance(body, dict) else {}),
+        )
 
     @app.delete("/api/cron/jobs/{job_id}")
     async def api_cron_job_delete(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        return _cron_job_delete_response(job_id, request)
+        return _cron_job_delete_response(job_id, request, profile=_cron_request_profile(request))
 
     @app.get("/api/cron/jobs/{job_id}/runs")
     async def api_cron_job_runs(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        return _cron_job_runs_response(job_id, _query_dict(request), request)
+        return _cron_job_runs_response(job_id, _query_dict(request), request, profile=_cron_request_profile(request))
 
     @app.get("/api/cron/jobs/{job_id}/preview")
     async def api_cron_job_preview(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        return _cron_job_preview_response(config, job_id, request)
+        return _cron_job_preview_response(config, job_id, request, profile=_cron_request_profile(request))
 
     @app.post("/api/cron/jobs/{job_id}/dry-run")
     async def api_cron_job_dry_run(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        return _cron_job_preview_response(config, job_id, request)
+        return _cron_job_preview_response(config, job_id, request, profile=_cron_request_profile(request))
 
     @app.post("/api/cron/jobs/{job_id}/run")
     async def api_cron_job_run(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        return _cron_job_run_response(config, job_id, request)
+        return _cron_job_run_response(config, job_id, request, profile=_cron_request_profile(request))
 
     @app.post("/api/cron/jobs/{job_id}/trigger")
     async def api_cron_job_trigger(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        return _cron_job_run_response(config, job_id, request)
+        return _cron_job_run_response(config, job_id, request, profile=_cron_request_profile(request))
 
     @app.post("/api/cron/jobs/{job_id}/pause")
     async def api_cron_job_pause(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        return _cron_job_enabled_response(job_id, False, request)
+        return _cron_job_enabled_response(job_id, False, request, profile=_cron_request_profile(request))
 
     @app.post("/api/cron/jobs/{job_id}/resume")
     async def api_cron_job_resume(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        return _cron_job_enabled_response(job_id, True, request)
+        return _cron_job_enabled_response(job_id, True, request, profile=_cron_request_profile(request))
 
     @app.get("/api/jobs")
     async def api_jobs(request: Request) -> JSONResponse:
         _require_request(request, config)
-        return _cron_jobs_response()
+        return _cron_jobs_response(request.query_params.get("profile"))
+
+    @app.get("/api/jobs/blueprints")
+    async def api_jobs_blueprints(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return _cron_blueprints_response()
+
+    @app.post("/api/jobs/blueprints/instantiate")
+    async def api_jobs_blueprint_instantiate(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        if not isinstance(body, dict):
+            return JSONResponse({"ok": False, "error": "body must be an object"}, status_code=400)
+        if "profile" not in body and request.query_params.get("profile"):
+            body["profile"] = request.query_params.get("profile")
+        return _cron_blueprint_instantiate_response(config, body)
 
     @app.post("/api/jobs")
     async def api_job_create(request: Request) -> JSONResponse:
         _require_request(request, config)
         body = await request.json()
-        return _cron_job_create_response(config, body)
+        return _cron_job_create_response(config, body, profile=_cron_request_profile(request, body))
 
     @app.post("/api/jobs/fire")
     async def api_jobs_fire(request: Request) -> JSONResponse:
@@ -7321,7 +7632,8 @@ def create_app(config: Config) -> FastAPI:
             body = await request.json()
         except Exception:  # noqa: BLE001
             body = {}
-        return _cron_fire_response(config, body if isinstance(body, dict) else {})
+        payload = body if isinstance(body, dict) else {}
+        return _cron_fire_response(config, payload, profile=_cron_request_profile(request, payload))
 
     @app.get("/api/jobs/{job_id}")
     async def api_job_detail(job_id: str, request: Request) -> JSONResponse:
@@ -7329,49 +7641,54 @@ def create_app(config: Config) -> FastAPI:
         invalid = _cron_job_invalid_id_response(job_id, request)
         if invalid is not None:
             return invalid
-        detail = _cron_job_detail(job_id)
+        detail = _cron_job_detail(job_id, profile=_cron_request_profile(request))
         return JSONResponse(detail, status_code=200 if detail.get("found") else 404)
 
     @app.patch("/api/jobs/{job_id}")
     async def api_job_patch(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
         body = await request.json()
-        return _cron_job_patch_response(job_id, body, request)
+        return _cron_job_patch_response(job_id, body, request, profile=_cron_request_profile(request, body))
 
     @app.delete("/api/jobs/{job_id}")
     async def api_job_delete(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        return _cron_job_delete_response(job_id, request)
+        return _cron_job_delete_response(job_id, request, profile=_cron_request_profile(request))
 
     @app.post("/api/jobs/{job_id}/pause")
     async def api_job_pause(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        return _cron_job_enabled_response(job_id, False, request)
+        return _cron_job_enabled_response(job_id, False, request, profile=_cron_request_profile(request))
 
     @app.post("/api/jobs/{job_id}/resume")
     async def api_job_resume(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        return _cron_job_enabled_response(job_id, True, request)
+        return _cron_job_enabled_response(job_id, True, request, profile=_cron_request_profile(request))
 
     @app.get("/api/jobs/{job_id}/preview")
     async def api_job_preview(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        return _cron_job_preview_response(config, job_id, request)
+        return _cron_job_preview_response(config, job_id, request, profile=_cron_request_profile(request))
 
     @app.post("/api/jobs/{job_id}/dry-run")
     async def api_job_dry_run(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        return _cron_job_preview_response(config, job_id, request)
+        return _cron_job_preview_response(config, job_id, request, profile=_cron_request_profile(request))
+
+    @app.get("/api/jobs/{job_id}/runs")
+    async def api_job_runs(job_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return _cron_job_runs_response(job_id, _query_dict(request), request, profile=_cron_request_profile(request))
 
     @app.post("/api/jobs/{job_id}/run")
     async def api_job_run(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        return _cron_job_run_response(config, job_id, request)
+        return _cron_job_run_response(config, job_id, request, profile=_cron_request_profile(request))
 
     @app.post("/api/jobs/{job_id}/trigger")
     async def api_job_trigger(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        return _cron_job_run_response(config, job_id, request)
+        return _cron_job_run_response(config, job_id, request, profile=_cron_request_profile(request))
 
     @app.get("/api/cron/service")
     async def api_cron_service_get(request: Request) -> JSONResponse:
@@ -7491,8 +7808,7 @@ def create_app(config: Config) -> FastAPI:
     @app.get("/api/gateway/channels/{channel}")
     async def api_gateway_channel_get(channel: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        safe = _safe_resource_name(channel, "channel").lower()
-        payload = _gateway_channel_payload(config, safe)
+        payload = _gateway_channel_payload(config, channel)
         return JSONResponse(payload, status_code=200 if payload.get("ok") else 404)
 
     @app.patch("/api/gateway/channels/{channel}")
@@ -7505,7 +7821,7 @@ def create_app(config: Config) -> FastAPI:
     @app.post("/api/gateway/channels/{channel}/probe")
     async def api_gateway_channel_probe(channel: str, request: Request) -> JSONResponse:
         _require_request(request, config)
-        safe = _safe_resource_name(channel, "channel").lower()
+        safe = _normalize_platform_id(channel)
         if safe not in _channel_catalog_map(config):
             return JSONResponse({"ok": False, "error": "unknown channel", "channel": safe}, status_code=404)
         return JSONResponse(_gateway_probe({"channel": safe}))
@@ -7519,7 +7835,22 @@ def create_app(config: Config) -> FastAPI:
             channels = [c.strip() for c in channels.split(",") if c.strip()]
         if not isinstance(channels, list):
             return JSONResponse({"ok": False, "error": "channels must be a list or comma string"}, status_code=400)
-        config.data.setdefault("gateway", {})["channels"] = [str(c).strip() for c in channels if str(c).strip()]
+        catalog = _channel_catalog_map(config)
+        canonical: list[str] = []
+        unknown: list[str] = []
+        for item in channels:
+            raw = str(item).strip()
+            if not raw:
+                continue
+            safe = _normalize_platform_id(raw)
+            if safe not in catalog:
+                unknown.append(raw)
+                continue
+            if safe not in canonical:
+                canonical.append(safe)
+        if unknown:
+            return JSONResponse({"ok": False, "error": "unknown channel", "channels": unknown}, status_code=400)
+        config.data.setdefault("gateway", {})["channels"] = canonical
         config.save()
         return JSONResponse({"ok": True, "gateway": _gateway_status(config)})
 

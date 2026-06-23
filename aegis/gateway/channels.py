@@ -154,7 +154,13 @@ class ApiServerChannel(BasePlatformAdapter):
             server["port"] = int(port or 8790)
         except (TypeError, ValueError):
             server["port"] = 8790
-        api_key = os.environ.get("API_SERVER_API_KEY") or api_cfg.get("api_key") or config.get("server.api_key")
+        api_key = (
+            os.environ.get("API_SERVER_KEY")
+            or os.environ.get("API_SERVER_API_KEY")
+            or api_cfg.get("api_key")
+            or config.get("server.api_key")
+            or os.environ.get("AEGIS_SERVER_KEY")
+        )
         if api_key:
             server["api_key"] = api_key
         model_name = os.environ.get("API_SERVER_MODEL_NAME") or api_cfg.get("model_name")
@@ -190,13 +196,19 @@ class ApiServerChannel(BasePlatformAdapter):
             "env_bridge": {
                 "host": "API_SERVER_HOST",
                 "port": "API_SERVER_PORT",
-                "api_key": "API_SERVER_API_KEY",
+                "api_key": "API_SERVER_KEY",
+                "api_key_legacy": "API_SERVER_API_KEY",
                 "model_name": "API_SERVER_MODEL_NAME",
                 "cors_origins": "API_SERVER_CORS_ORIGINS",
                 "max_concurrent_runs": "API_SERVER_MAX_CONCURRENT_RUNS",
             },
             "cors_origins": _csv_list(api_cfg.get("cors_origins")),
-            "auth_required": bool(self._config.get("server.api_key") or os.environ.get("AEGIS_SERVER_KEY")),
+            "auth_required": bool(
+                self._config.get("server.api_key")
+                or os.environ.get("API_SERVER_KEY")
+                or os.environ.get("API_SERVER_API_KEY")
+                or os.environ.get("AEGIS_SERVER_KEY")
+            ),
         })
         return data
 
