@@ -71,3 +71,29 @@ def test_dashboard_tools_marks_off_state():
     row = next(r for r in payload["tools"] if r["name"] == name)
     assert row["off"] is True and row["enabled"] is False
     assert name in payload["disabled"]
+
+
+def test_dashboard_tool_schema_validation_payload():
+    payload = dash._dashboard_tool_schema_validation(Config.load())
+    assert payload["ok"] is True
+    assert payload["valid"] == payload["total"]
+    assert payload["issues"] == []
+
+
+def test_dashboard_permission_dry_run_reports_policy_visibility_and_redacts_args():
+    cfg = Config.load()
+    cfg.data["tools"]["exec_mode"] = "ask"
+    cfg.data["tools"]["toolsets"] = ["core"]
+    cfg.data["tools"]["disabled"] = ["bash"]
+
+    result = dash._dashboard_tool_permission_dry_run(
+        {"tool": "bash", "args": {"command": "echo hi", "api_key": "sk-1234567890abcdef"}},
+        cfg,
+    )
+
+    assert result["ok"] is True
+    assert result["explanation"]["decision"] == "prompt"
+    assert result["visibility"]["off"] is True
+    assert result["visibility"]["enabled"] is False
+    assert result["args"]["api_key"] == "[REDACTED]"
+    assert result["authorize_without_approver"]["allowed"] is False

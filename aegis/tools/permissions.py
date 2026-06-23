@@ -130,6 +130,62 @@ class PermissionEngine:
             for seg in segments
         )
 
+    def explain(self, tool: Tool, args: dict | None = None, *, scan: bool = True) -> dict:
+        """Return a structured, side-effect-free permission decision explanation.
+
+        This mirrors ``check``/``authorize`` up to the point where a real user
+        prompt or smart-model classification would be needed. It is safe for
+        dashboard dry-runs and docs because it never calls the approver and never
+        mutates the session allowlist.
+        """
+        args = args or {}
+        groups = list(tool.groups or [])
+        deny_groups = sorted(self.deny_groups)
+        blocked = is_hardline_blocked(args)
+        allowlist_match = self._matches_allowlist(tool, args)
+        scan_reason = self._scan(args) if scan else None
+        decision = self.check(tool, args, ToolContext(config=self.config))
+        if scan_reason and decision == Decision.ALLOW:
+            decision = Decision.PROMPT
+
+        reasons: list[str] = []
+        if not groups:
+            reasons.append("tool has no danger groups")
+        if blocked:
+            reasons.append("catastrophic command matched hardline blocklist")
+        denied_groups = sorted(set(groups) & set(deny_groups))
+        if denied_groups:
+            reasons.append("tool group denied by configuration: " + ", ".join(denied_groups))
+        if allowlist_match:
+            reasons.append("command/tool matched allowlist")
+        if scan_reason:
+            reasons.append("security scan flagged input: " + scan_reason)
+        if decision == Decision.ALLOW and not reasons:
+            reasons.append(f"mode {self.mode.value} allows grouped tools")
+        elif decision == Decision.DENY and not reasons:
+            reasons.append(f"mode {self.mode.value} denies this tool")
+        elif decision == Decision.PROMPT and not reasons:
+            reasons.append(f"mode {self.mode.value} requires approval")
+
+        return {
+            "tool": tool.name,
+            "target": self._target(tool, args),
+            "decision": decision.value,
+            "allowed": decision == Decision.ALLOW,
+            "requires_prompt": decision == Decision.PROMPT,
+            "mode": self.mode.value,
+            "groups": groups,
+            "deny_groups": deny_groups,
+            "denied_groups": denied_groups,
+            "allowlist": list(self.allowlist),
+            "allowlist_match": allowlist_match,
+            "hardline_blocked": bool(blocked),
+            "hardline_match": blocked or "",
+            "security_scan": {"flagged": bool(scan_reason), "reason": scan_reason or ""},
+            "reasons": reasons,
+            "prompt": self._format_prompt(tool, args) if decision == Decision.PROMPT else "",
+        }
+
     def allow_always(self, tool: Tool, args: dict) -> None:
         """Remember this tool/command so ``ask`` mode stops re-prompting for it this session."""
         if not hasattr(self, "_runtime_allow"):

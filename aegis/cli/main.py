@@ -667,6 +667,20 @@ def cmd_tools(args, config: Config) -> int:
         return cmd_tools_status(args, config)
     reg = default_registry()
     if getattr(args, "action", None) == "doctor":
+        from ..tools.schema_validation import validate_tool_registry
+
+        validation = validate_tool_registry(reg.all())
+        _print("Tool schema validation:")
+        _print(
+            f"  {'✓' if validation.ok else '✗'} "
+            f"{validation.valid}/{validation.total} valid"
+            + (f" · {validation.warnings} warning(s)" if validation.warnings else "")
+        )
+        for issue in validation.issues[:12]:
+            _print(f"  {issue.severity.upper():<7} {issue.tool:<18} {issue.path}: {issue.message}")
+        if len(validation.issues) > 12:
+            _print(f"  … {len(validation.issues) - 12} more schema issue(s)")
+        _print("")
         _print("Tool availability:")
         unusable = 0
         for t in reg.all():
@@ -677,7 +691,7 @@ def cmd_tools(args, config: Config) -> int:
                 unusable += 1
                 _print(f"  ✗ {t.name:<16} {t.toolset:<9} {reason}")
         _print(f"\n{len(reg.all()) - unusable}/{len(reg.all())} tools usable in this environment.")
-        return 1 if unusable else 0
+        return 1 if unusable or not validation.ok else 0
     inv = tool_inventory(config)
     enabled = set(inv.enabled_names)
     _print(f"enabled toolsets: {', '.join(inv.toolsets)}")

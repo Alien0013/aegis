@@ -299,6 +299,68 @@ def _dashboard_toolset_toggle(body: dict, config: Config) -> dict:
     return {"ok": True, "toolset": name, "enabled": enable, "toolsets": toolsets}
 
 
+def _dashboard_tool_schema_validation(config: Config) -> dict:
+    from .tools.registry import default_registry
+    from .tools.schema_validation import validate_tool_registry
+
+    reg = default_registry()
+    result = validate_tool_registry(reg.all()).to_dict()
+    disabled = set(config.get("tools.disabled", []) or [])
+    result["disabled"] = sorted(disabled)
+    return result
+
+
+def _dashboard_tool_permission_dry_run(body: dict, config: Config) -> dict:
+    from .redact import redact_secret_values
+    from .tools.base import ToolContext
+    from .tools.permissions import PermissionEngine
+    from .tools.registry import default_registry
+
+    name = str(body.get("tool") or body.get("name") or "").strip()
+    if not name:
+        return {"ok": False, "error": "tool name required"}
+    tool = default_registry().get(name)
+    if tool is None:
+        return {"ok": False, "error": f"unknown tool: {name}"}
+    args = body.get("args", {})
+    if isinstance(args, str):
+        try:
+            args = json.loads(args) if args.strip() else {}
+        except json.JSONDecodeError as exc:
+            return {"ok": False, "error": f"args must be JSON object: {exc.msg}"}
+    if not isinstance(args, dict):
+        return {"ok": False, "error": "args must be a JSON object"}
+    engine = PermissionEngine(config)
+    explanation = engine.explain(tool, args)
+    available, reason = tool.available()
+    tools_payload = _dashboard_tools(config)
+    visibility = next((row for row in tools_payload["tools"] if row.get("name") == name), {})
+    authorized, auth_reason = engine.authorize(
+        tool,
+        args,
+        ToolContext(config=config, approver=None),
+    )
+    return {
+        "ok": True,
+        "tool": name,
+        "args": _jsonable(redact_secret_values(args)),
+        "available": bool(available),
+        "unavailable_reason": "" if available else str(reason),
+        "visibility": {
+            "enabled": bool(visibility.get("enabled", False)),
+            "toolset_active": bool(visibility.get("toolset_active", False)),
+            "off": bool(visibility.get("off", False)),
+            "available": bool(visibility.get("available", available)),
+            "toolset": str(visibility.get("toolset") or tool.toolset),
+        },
+        "authorize_without_approver": {
+            "allowed": bool(authorized),
+            "reason": auth_reason,
+        },
+        "explanation": _jsonable(explanation),
+    }
+
+
 def _dashboard_api_adapter_status(config: Config) -> dict:
     """Expose the Hermes-compatible API adapter's operational contract."""
     payload: dict[str, Any] = {

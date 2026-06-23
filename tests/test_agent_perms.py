@@ -336,6 +336,25 @@ def test_perms_hardline_even_in_full():
     assert not ok and "hardline" in reason.lower()
 
 
+def test_permission_explain_is_structured_and_non_prompting():
+    from aegis.tools.builtin import BashTool, ReadFileTool
+
+    safe = _eng("deny").explain(ReadFileTool(), {"path": "README.md"})
+    assert safe["decision"] == "allow"
+    assert safe["allowed"] is True
+    assert "no danger groups" in safe["reasons"][0]
+
+    denied = _eng("full", deny_groups=["runtime"]).explain(BashTool(), {"command": "ls"})
+    assert denied["decision"] == "deny"
+    assert denied["denied_groups"] == ["runtime"]
+    assert any("runtime" in reason for reason in denied["reasons"])
+
+    prompt = _eng("ask").explain(BashTool(), {"command": "ls"})
+    assert prompt["decision"] == "prompt"
+    assert prompt["requires_prompt"] is True
+    assert prompt["prompt"].startswith("Allow bash")
+
+
 # --- marketplace / checkpoints / cron --------------------------------------
 def test_marketplace_local_install_and_scan(tmp_path):
     from aegis import marketplace

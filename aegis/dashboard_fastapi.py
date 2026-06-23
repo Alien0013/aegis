@@ -4895,6 +4895,8 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
         return _skills_payload(config)
     if path == "/api/tools":
         return dash._dashboard_tools(config)["tools"]
+    if path == "/api/tools/validation":
+        return dash._dashboard_tool_schema_validation(config)
     if path == "/api/tools/toolsets":
         return dash._dashboard_toolsets(config)
     if path == "/api/skills/bundles":
@@ -5096,6 +5098,8 @@ def _api_post(
         if body.get("toolset") is not None:
             return dash._dashboard_toolset_toggle(body, config)
         return dash._dashboard_tool_toggle(body, config)
+    if path == "/api/tools/permission-dry-run":
+        return dash._dashboard_tool_permission_dry_run(body, config)
     if path == "/api/skills/bundles":
         from .skill_bundles import save_bundle
 
@@ -6211,6 +6215,24 @@ def create_app(config: Config) -> FastAPI:
     async def api_toolsets(request: Request) -> JSONResponse:
         _require_request(request, config)
         return JSONResponse(dash._dashboard_toolsets(config))
+
+    @app.get("/api/tools/validation")
+    async def api_tools_validation(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(dash._dashboard_tool_schema_validation(config))
+
+    @app.post("/api/tools/permission-dry-run")
+    async def api_tools_permission_dry_run(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        raw = await request.body()
+        try:
+            body = json.loads(raw) if raw else {}
+        except ValueError:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        result = dash._dashboard_tool_permission_dry_run(body, config)
+        return JSONResponse(result, status_code=200 if result.get("ok") else 400)
 
     @app.put("/api/tools/toolsets/{name}")
     async def api_toolset_toggle(name: str, request: Request) -> JSONResponse:

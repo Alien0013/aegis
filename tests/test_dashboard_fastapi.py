@@ -146,6 +146,32 @@ def test_fastapi_dashboard_auth_and_cookie(tmp_path, monkeypatch):
     assert "jobs" in body["api_adapter"]["stores"]
 
 
+def test_fastapi_tools_validation_and_permission_dry_run(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    validation = asyncio.run(_request(app, "GET", "/api/tools/validation", headers=headers))
+    assert validation.status_code == 200
+    validation_body = validation.json()
+    assert validation_body["ok"] is True
+    assert validation_body["total"] >= 40
+
+    dry_run = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/tools/permission-dry-run",
+        headers=headers,
+        json={"tool": "bash", "args": {"command": "ls", "token": "sk-1234567890abcdef"}},
+    ))
+    assert dry_run.status_code == 200
+    body = dry_run.json()
+    assert body["ok"] is True
+    assert body["tool"] == "bash"
+    assert body["args"]["token"] == "[REDACTED]"
+    assert body["explanation"]["decision"] in {"allow", "deny", "prompt"}
+    assert "visibility" in body
+
+
 def test_fastapi_basic_login_session_and_logout(tmp_path, monkeypatch):
     app = _basic_app(tmp_path, monkeypatch)
 
