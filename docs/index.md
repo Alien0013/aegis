@@ -77,14 +77,18 @@ examples aligned with `python -m aegis.cli.main --help`.
 
 AEGIS already has the local runtime, terminal, dashboard, desktop shell, API,
 SDK, MCP, gateway, automation, tracing, eval, memory, and skills surfaces in the
-repo. The remaining parity work is mostly product hardening:
+repo. The browser dashboard is now session-first, with `/dashboard` as the
+overview and `/command-center` as a compact sessions/system/usage overlay.
+The remaining parity work is mostly product hardening:
 
-- Dashboard cockpit pages for trace timelines, prompt/context audit, provider
+- Dashboard explainability for trace timelines, prompt/context audit, provider
   capability probes, fuller tool provenance, background jobs, cron dry-runs,
   and gateway backpressure metrics.
-- Desktop release proof: packaged smoke artifacts, crash history/repair UX,
-  artifact hashes/SBOM, and signed/notarized release evidence when credentials
-  are actually configured.
+- Deeper native desktop and full-screen TUI polish: session switching HUDs,
+  status bars, model picker overlays, crash history/repair UX, and packaged
+  smoke artifact proof.
+- Release proof: artifact hashes/SBOM and signed/notarized release evidence
+  when credentials are actually configured.
 - Generated command and API references so docs cannot drift from the parser.
 - API/SDK contract fixtures for streaming, cancellation, auth, run events,
   responses-style behavior, MCP, and eval replay.

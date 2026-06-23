@@ -48,9 +48,11 @@ local files directly.
 | Evals/Kanban/Plugins/Review | `evals`/`eval`, `kanban`, `plugins`, `review` | respective `_dashboard_*` | eval/kanban/plugin stores | `aegis evals` etc. | read + gated writes |
 
 ## Status vs. the cockpit spec
-**Already real (not dummy):** all 26 pages above flow through `/api/*` to real stores; chat
-streams (SSE); terminal is a real PTY; config is validated + atomic; secrets are redacted + 0600;
-per-tool and per-toolset toggles write config; system operations run curator/backup/reset/update.
+**Already real (not dummy):** all pages above flow through `/api/*` to real stores; the browser
+surface opens on Sessions, `/dashboard` is the compact overview, and `/command-center` is the
+sessions/system/usage ops overlay; chat streams (SSE); terminal is a real PTY; config is validated
+and atomic; secrets are redacted + 0600; per-tool and per-toolset toggles write config; system
+operations run curator/backup/reset/update.
 
 **Genuine remaining gaps** (tracked, incremental):
 - Config: raw-YAML get/put mode, backup-before-save, reset-section-to-defaults, import/export.

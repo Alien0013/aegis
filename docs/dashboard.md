@@ -6,9 +6,11 @@ aegis ui --no-open --port 9119
 ```
 
 The dashboard is a local React + Vite + TypeScript control panel served by a
-FastAPI backend. The built bundle lives in `aegis/static/web_dist/`, so an
-installed AEGIS package does not need Node to open the dashboard. Frontend
-development happens in `web/`.
+FastAPI backend. It opens on `/sessions` so the first screen is resumable work,
+not a dense admin wall. `/dashboard` is the calmer overview, and
+`/command-center` is the compact sessions/system/usage ops overlay. The built
+bundle lives in `aegis/static/web_dist/`, so an installed AEGIS package does not
+need Node to open the dashboard. Frontend development happens in `web/`.
 
 The dashboard uses the same token-gated JSON/SSE API as the other surfaces.
 Chat turns run through `SurfaceRunner`, so dashboard sessions, tools,
@@ -19,10 +21,10 @@ desktop, SDK, API, gateway, cron, and webhook paths.
 
 | Group | Pages |
 | --- | --- |
-| Workspace | Dashboard, Chat, Terminal, Sessions |
+| Workspace | Sessions, Chat, Terminal, Overview |
 | Agent | Models, Tools, Skills, Memory, Persona, Schedules, Kanban |
 | Integrations | MCP, Channels, Webhooks, Pairing, Accounts, Plugins, Env |
-| System | Analytics, Files, Logs, Profiles, Docs, System, Config |
+| System | Command Center, Analytics, Files, Logs, Profiles, Docs, System, Config |
 
 The Chat/Terminal surface streams assistant output and tool activity while a
 turn is running. Tool rows include arguments, status, duration, result preview,

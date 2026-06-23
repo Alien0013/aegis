@@ -15,10 +15,10 @@ export const NAV: NavGroup[] = [
   {
     label: "Workspace",
     items: [
-      { path: "/dashboard", label: "Dashboard", icon: "overview" },
+      { path: "/sessions", label: "Sessions", icon: "sessions" },
       { path: "/chat", label: "Chat", icon: "chat" },
       { path: "/terminal", label: "Terminal", icon: "terminal" },
-      { path: "/sessions", label: "Sessions", icon: "sessions" },
+      { path: "/dashboard", label: "Overview", icon: "overview" },
     ],
   },
   {
@@ -48,6 +48,7 @@ export const NAV: NavGroup[] = [
   {
     label: "System",
     items: [
+      { path: "/command-center", label: "Command Center", icon: "command" },
       { path: "/analytics", label: "Analytics", icon: "analytics" },
       { path: "/files", label: "Files", icon: "files" },
       { path: "/logs", label: "Logs", icon: "logs" },

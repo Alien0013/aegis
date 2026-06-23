@@ -354,7 +354,7 @@ function DesktopOpsRail({
         <ShellNavButton icon="chat" label="Chat" onClick={onNew} />
         <ShellNavButton icon="terminal" label="Terminal" onClick={() => onNavigate("/chat")} />
         <ShellNavButton icon="logs" label="Logs" onClick={() => onNavigate("/logs")} />
-        <ShellNavButton icon="system" label="Panel" onClick={() => onNavigate("/dashboard")} />
+        <ShellNavButton icon="command" label="Ops" onClick={() => onNavigate("/command-center")} />
       </div>
     </aside>
   );
