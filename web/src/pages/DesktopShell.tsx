@@ -11,7 +11,7 @@ import { Icon } from "../components/icons";
 import { Mark } from "../components/Mark";
 import { ThemeSwitcher } from "../components/ThemeSwitcher";
 import { openCommandPalette } from "../components/CommandPalette";
-import { Toaster } from "../components/ui";
+import { Badge, Toaster } from "../components/ui";
 import { ago, compact } from "../lib/format";
 import { GraphicalChat } from "./GraphicalChat";
 
@@ -21,6 +21,17 @@ interface SessionRow {
   updated_at?: string;
   message_count?: number;
 }
+interface DesktopStatus {
+  active_sessions?: number;
+  gateway_running?: boolean;
+  gateway_state?: string;
+  provider?: string;
+  model?: string;
+  tools?: number;
+  skills?: number;
+  provider_error?: string;
+  version?: string;
+}
 
 export function DesktopShell() {
   const [params] = useSearchParams();
@@ -28,14 +39,17 @@ export function DesktopShell() {
   const activeId = params.get("id") || "";
   const { data, reload } = useApi<SessionRow[]>("sessions");
   const cfg = useApi<Record<string, unknown>>("config");
+  const status = useApi<DesktopStatus>("status");
   const model = String(cfg.data?.["model.default"] ?? "");
   const provider = String(cfg.data?.["model.provider"] ?? "");
   const [runtime, setRuntime] = useState({ model: "", provider: "" });
   const [chatResetToken, setChatResetToken] = useState(0);
   const [sessionHudOpen, setSessionHudOpen] = useState(false);
-  const shownModel = runtime.model || model;
-  const shownProvider = runtime.provider || provider;
+  const shownModel = runtime.model || status.data?.model || model;
+  const shownProvider = runtime.provider || status.data?.provider || provider;
   const sessions = (data || []).slice(0, 50);
+  const gateway = status.data?.gateway_state || (status.data?.gateway_running ? "running" : "offline");
+  const ready = !status.error && !status.data?.provider_error;
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeId),
@@ -152,54 +166,80 @@ export function DesktopShell() {
         </div>
       </aside>
 
-      <main className="flex min-w-0 flex-1 flex-col">
-        <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-bg/80 px-3 backdrop-blur">
-          <button
-            onClick={() => setSessionHudOpen(true)}
-            className="flex min-w-0 flex-1 items-center gap-2 rounded-[var(--radius)] px-2 py-1.5 text-left text-xs text-dim transition hover:bg-surface-2/60 hover:text-text"
-            title={activeSession?.title || activeId || "Current session"}
-          >
-            <Icon name="sessions" size={14} className="shrink-0 text-primary" />
-            <span className="truncate">{activeSession?.title || activeId || "New session"}</span>
-            {activeSession?.message_count ? (
-              <span className="shrink-0 text-faint">{activeSession.message_count} msg</span>
-            ) : null}
-          </button>
-          {shownModel && (
-            <div className="hidden min-w-0 max-w-[42%] items-center gap-2 rounded-[var(--radius)] border border-border bg-surface/70 px-2 py-1.5 text-xs text-dim sm:flex">
-              <Icon name="models" size={13} className="shrink-0 text-primary" />
-              <span className="truncate">{shownProvider ? `${shownProvider} / ${shownModel}` : shownModel}</span>
+      <main className="flex min-w-0 flex-1">
+        <section className="flex min-w-0 flex-1 flex-col">
+          <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-bg/80 px-3 backdrop-blur">
+            <button
+              onClick={() => setSessionHudOpen(true)}
+              className="flex min-w-0 flex-1 items-center gap-2 rounded-[var(--radius)] px-2 py-1.5 text-left text-xs text-dim transition hover:bg-surface-2/60 hover:text-text"
+              title={activeSession?.title || activeId || "Current session"}
+            >
+              <Icon name="sessions" size={14} className="shrink-0 text-primary" />
+              <span className="truncate">{activeSession?.title || activeId || "New session"}</span>
+              {activeSession?.message_count ? (
+                <span className="shrink-0 text-faint">{activeSession.message_count} msg</span>
+              ) : null}
+            </button>
+            <div className="hidden items-center gap-1.5 rounded-[var(--radius)] border border-border bg-surface/70 px-2 py-1.5 text-[11px] text-dim lg:flex">
+              <span className={ready ? "h-1.5 w-1.5 rounded-full bg-success" : "h-1.5 w-1.5 rounded-full bg-danger"} />
+              <span className="truncate">{gateway}</span>
             </div>
-          )}
-          <button
-            onClick={openCommandPalette}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius)] border border-border text-faint transition hover:border-border-2 hover:text-text"
-            title="Command palette"
-            aria-label="Command palette"
-          >
-            <Icon name="command" size={14} />
-          </button>
-          <button
-            onClick={() => nav("/")}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius)] border border-border text-faint transition hover:border-border-2 hover:text-text"
-            title="Control panel"
-            aria-label="Control panel"
-          >
-            <Icon name="system" size={14} />
-          </button>
-        </div>
-        <div className="min-h-0 flex-1">
-          <GraphicalChat
-            sessionId={activeId}
-            resetToken={chatResetToken}
-            onRuntime={setRuntime}
-            onMissingSession={recoverMissingSession}
-            onSession={(id) => {
-              if (id && id !== activeId) nav(`/app?id=${encodeURIComponent(id)}`, { replace: true });
-              reload();
-            }}
-          />
-        </div>
+            {shownModel && (
+              <div className="hidden min-w-0 max-w-[42%] items-center gap-2 rounded-[var(--radius)] border border-border bg-surface/70 px-2 py-1.5 text-xs text-dim sm:flex">
+                <Icon name="models" size={13} className="shrink-0 text-primary" />
+                <span className="truncate">{shownProvider ? `${shownProvider} / ${shownModel}` : shownModel}</span>
+              </div>
+            )}
+            <button
+              onClick={() => nav("/chat")}
+              className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius)] border border-border text-faint transition hover:border-border-2 hover:text-text md:flex"
+              title="Terminal"
+              aria-label="Terminal"
+            >
+              <Icon name="terminal" size={14} />
+            </button>
+            <button
+              onClick={openCommandPalette}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius)] border border-border text-faint transition hover:border-border-2 hover:text-text"
+              title="Command palette"
+              aria-label="Command palette"
+            >
+              <Icon name="command" size={14} />
+            </button>
+            <button
+              onClick={() => nav("/")}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius)] border border-border text-faint transition hover:border-border-2 hover:text-text"
+              title="Control panel"
+              aria-label="Control panel"
+            >
+              <Icon name="system" size={14} />
+            </button>
+          </div>
+          <div className="min-h-0 flex-1">
+            <GraphicalChat
+              sessionId={activeId}
+              resetToken={chatResetToken}
+              onRuntime={setRuntime}
+              onMissingSession={recoverMissingSession}
+              onSession={(id) => {
+                if (id && id !== activeId) nav(`/app?id=${encodeURIComponent(id)}`, { replace: true });
+                reload();
+                status.reload();
+              }}
+            />
+          </div>
+        </section>
+        <DesktopOpsRail
+          sessions={sessions}
+          activeId={activeId}
+          status={status.data || undefined}
+          model={shownModel}
+          provider={shownProvider}
+          ready={ready}
+          onOpen={open}
+          onNew={newChat}
+          onNavigate={(path) => nav(path)}
+        />
       </main>
       {sessionHudOpen && (
         <SessionSwitcherHud
@@ -212,6 +252,129 @@ export function DesktopShell() {
       )}
       <Toaster />
     </div>
+  );
+}
+
+function DesktopOpsRail({
+  sessions,
+  activeId,
+  status,
+  model,
+  provider,
+  ready,
+  onOpen,
+  onNew,
+  onNavigate,
+}: {
+  sessions: SessionRow[];
+  activeId: string;
+  status?: DesktopStatus;
+  model: string;
+  provider: string;
+  ready: boolean;
+  onOpen: (id: string) => void;
+  onNew: () => void;
+  onNavigate: (path: string) => void;
+}) {
+  const activeSession = sessions.find((session) => session.id === activeId);
+  const gateway = status?.gateway_state || (status?.gateway_running ? "running" : "offline");
+  const recent = sessions.filter((session) => session.id !== activeId).slice(0, 5);
+  return (
+    <aside className="hidden w-[310px] shrink-0 flex-col border-l border-border bg-surface/38 2xl:flex">
+      <div className="border-b border-border px-4 py-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="font-mono text-[10px] uppercase tracking-wide text-faint">Operations</div>
+            <div className="mt-1 truncate text-sm font-semibold text-text">{gateway}</div>
+          </div>
+          <Badge tone={ready ? "success" : "danger"}>{ready ? "ready" : "attention"}</Badge>
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <ShellMetric label="active" value={String(status?.active_sessions ?? 0)} />
+          <ShellMetric label="tools" value={String(status?.tools ?? "-")} />
+          <ShellMetric label="skills" value={String(status?.skills ?? "-")} />
+          <ShellMetric label="version" value={status?.version ? `v${status.version}` : "-"} />
+        </div>
+      </div>
+
+      <div className="border-b border-border px-4 py-3">
+        <div className="font-mono text-[10px] uppercase tracking-wide text-faint">Runtime</div>
+        <div className="mt-2 flex items-start gap-2">
+          <Icon name="models" size={15} className="mt-0.5 shrink-0 text-primary" />
+          <div className="min-w-0">
+            <div className="truncate text-sm font-medium text-text">{model || "model unavailable"}</div>
+            <div className="truncate text-xs text-faint">{provider || "provider not configured"}</div>
+          </div>
+        </div>
+        {status?.provider_error && (
+          <div className="mt-3 rounded-[var(--radius)] border border-danger/35 bg-danger/10 p-2 text-xs text-danger">
+            {compact(status.provider_error, 140)}
+          </div>
+        )}
+      </div>
+
+      <div className="border-b border-border px-4 py-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="font-mono text-[10px] uppercase tracking-wide text-faint">Now</div>
+          <button onClick={onNew} className="text-faint transition hover:text-primary" title="New chat">
+            <Icon name="plus" size={14} />
+          </button>
+        </div>
+        <button
+          onClick={() => activeId ? onOpen(activeId) : onNew()}
+          className="mt-2 w-full rounded-[var(--radius)] border border-border bg-surface-2/55 px-3 py-2 text-left transition hover:border-border-2"
+        >
+          <div className="truncate text-sm font-medium text-text">{activeSession?.title || activeId || "New session"}</div>
+          <div className="mt-0.5 text-xs text-faint">
+            {activeSession?.message_count ? `${activeSession.message_count} msg` : "ready for input"}
+            {activeSession?.updated_at ? ` / ${ago(activeSession.updated_at)}` : ""}
+          </div>
+        </button>
+      </div>
+
+      <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
+        <div className="px-4 pb-1 pt-3 font-mono text-[10px] uppercase tracking-wide text-faint">Recent</div>
+        {recent.map((session) => (
+          <button
+            key={session.id}
+            onClick={() => onOpen(session.id)}
+            className="flex w-full items-center justify-between gap-3 border-b border-border/70 px-4 py-2.5 text-left transition hover:bg-surface-2/55"
+          >
+            <span className="min-w-0">
+              <span className="block truncate text-sm text-text">{compact(session.title || session.id, 34)}</span>
+              <span className="block text-[11px] text-faint">{session.message_count || 0} msg</span>
+            </span>
+            <span className="shrink-0 text-[11px] text-faint">{ago(session.updated_at)}</span>
+          </button>
+        ))}
+        {!recent.length && <div className="px-4 py-6 text-sm text-faint">No other sessions yet.</div>}
+      </div>
+
+      <div className="grid grid-cols-4 gap-px border-t border-border bg-border p-px">
+        <ShellNavButton icon="chat" label="Chat" onClick={onNew} />
+        <ShellNavButton icon="terminal" label="Terminal" onClick={() => onNavigate("/chat")} />
+        <ShellNavButton icon="logs" label="Logs" onClick={() => onNavigate("/logs")} />
+        <ShellNavButton icon="system" label="Panel" onClick={() => onNavigate("/dashboard")} />
+      </div>
+    </aside>
+  );
+}
+
+function ShellMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 rounded-[var(--radius)] border border-border bg-surface-2/55 px-2 py-1.5">
+      <div className="truncate font-mono text-sm font-semibold text-text">{value}</div>
+      <div className="truncate text-[10px] uppercase tracking-wide text-faint">{label}</div>
+    </div>
+  );
+}
+
+function ShellNavButton({ icon, label, onClick }: { icon: string; label: string; onClick: () => void }) {
+  return (
+    <button onClick={onClick} className="flex min-h-12 flex-col items-center justify-center gap-1 bg-surface px-1 text-faint transition hover:bg-surface-2 hover:text-text" title={label}>
+      <Icon name={icon} size={15} />
+      <span className="text-[10px]">{label}</span>
+    </button>
   );
 }
 

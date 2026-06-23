@@ -1261,12 +1261,13 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
             "sessions",
             "approvals",
             "jobs",
+            "cron_fire",
             "sse",
             "cors",
         ],
         "delivery_modes": ["http", "sse"],
         "setup_hooks": ["config", "health_probe"],
-        "cron_delivery_hooks": ["api_jobs"],
+        "cron_delivery_hooks": ["api_jobs", "api_cron_fire"],
         "sender_hooks": ["responses_stream", "run_events"],
         "yaml_config": "gateway.api_server",
         "security": {
@@ -4099,6 +4100,30 @@ def _cron_job_run_response(config: Config, job_id: str, request: Request | None 
     return JSONResponse(run_job(config, job_id, sink=sink, store=store, verbose=False))
 
 
+def _cron_fire_response(config: Config, body: dict[str, Any] | None = None) -> JSONResponse:
+    from .cron import build_delivery_sink, fire_due_jobs
+
+    payload = body if isinstance(body, dict) else {}
+    try:
+        limit = max(1, min(100, int(str(payload.get("limit") or 25))))
+    except (TypeError, ValueError):
+        limit = 25
+    try:
+        stale_after = float(payload.get("stale_after") or payload.get("stale_seconds") or 21600)
+    except (TypeError, ValueError):
+        stale_after = 21600.0
+    result = fire_due_jobs(
+        config,
+        sink=build_delivery_sink(config, verbose=False),
+        limit=limit,
+        owner=str(payload.get("owner") or "dashboard.api"),
+        dry_run=_coerce_dashboard_bool(payload.get("dry_run"), False),
+        verbose=False,
+        stale_after=stale_after,
+    )
+    return JSONResponse(result)
+
+
 def _cron_job_preview_response(config: Config, job_id: str, request: Request | None = None) -> JSONResponse:
     from .cron import CronStore, preview_job
 
@@ -5105,6 +5130,11 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
         return _recommended_default_payload(config, query)
     if path == "/api/model/auxiliary":
         return _auxiliary_model_payload(config)
+    if path in {"/api/project/facts", "/api/coding/project-facts"}:
+        from .agent.coding_context import project_facts_for
+
+        cwd = str((query.get("cwd") or [""])[0] or "")
+        return {"ok": True, "facts": project_facts_for(cwd or None)}
     if path in {"/api/credentials/pools", "/api/credential-pools"}:
         return _credential_pools_payload(config)
     if path.startswith("/api/credentials/pools/"):
@@ -5405,6 +5435,9 @@ def _api_post(
                              daemon=True).start()
             return {"ok": True, "started": True}
         return {"error": "bad kanban request"}
+    if path in {"/api/cron/fire", "/api/jobs/fire"}:
+        response = _cron_fire_response(config, body)
+        return json.loads(response.body.decode("utf-8"))
     if path == "/api/cron":
         from .cron import CronStore, _scan_cron_prompt, build_delivery_sink, run_job
 
@@ -5446,6 +5479,9 @@ def _api_post(
         if act in {"run", "run_now"} and body.get("id"):
             sink = build_delivery_sink(config, verbose=False)
             return run_job(config, str(body["id"]), sink=sink, store=cs, verbose=False)
+        if act in {"fire", "fire_due", "run_due"}:
+            response = _cron_fire_response(config, body)
+            return json.loads(response.body.decode("utf-8"))
         return {"error": "bad cron request"}
     if path == "/api/config":
         key, val = body.get("key"), body.get("value")
@@ -5463,6 +5499,24 @@ def _api_post(
         return dash._update_check()
     if path == "/api/model/set":
         return _model_set_payload(config, body)
+    if path in {"/api/llm/oneshot", "/api/agent/oneshot"}:
+        from .agent.oneshot import run_oneshot
+
+        try:
+            text = run_oneshot(
+                config=config,
+                instructions=str(body.get("instructions") or ""),
+                user_input=str(body.get("input") or body.get("user_input") or ""),
+                template=str(body.get("template") or "") or None,
+                variables=body.get("variables") if isinstance(body.get("variables"), dict) else {},
+                task=str(body.get("task") or "title_generation"),
+                max_tokens=int(body.get("max_tokens") or 1024),
+            )
+        except (KeyError, ValueError) as exc:
+            return {"ok": False, "error": str(exc)}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"one-shot generation failed: {exc}"}
+        return {"ok": True, "text": text}
     if path == "/api/providers/test":
         return _provider_probe(config, body)
     if path == "/api/keys":
@@ -7147,6 +7201,15 @@ def create_app(config: Config) -> FastAPI:
         body = await request.json()
         return _cron_job_create_response(config, body)
 
+    @app.post("/api/cron/fire")
+    async def api_cron_fire(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            body = {}
+        return _cron_fire_response(config, body if isinstance(body, dict) else {})
+
     @app.get("/api/cron/delivery-targets")
     async def api_cron_delivery_targets(request: Request) -> JSONResponse:
         _require_request(request, config)
@@ -7223,6 +7286,15 @@ def create_app(config: Config) -> FastAPI:
         _require_request(request, config)
         body = await request.json()
         return _cron_job_create_response(config, body)
+
+    @app.post("/api/jobs/fire")
+    async def api_jobs_fire(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            body = {}
+        return _cron_fire_response(config, body if isinstance(body, dict) else {})
 
     @app.get("/api/jobs/{job_id}")
     async def api_job_detail(job_id: str, request: Request) -> JSONResponse:
@@ -7595,6 +7667,17 @@ def create_app(config: Config) -> FastAPI:
     async def api_get(path: str, request: Request) -> JSONResponse:
         _require_request(request, config)
         return JSONResponse(_api_get(f"/api/{path}", _query_dict(request), config))
+
+    @app.post("/api/llm/oneshot")
+    @app.post("/api/agent/oneshot")
+    async def api_llm_oneshot(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            body = {}
+        result = _api_post("/api/llm/oneshot", body if isinstance(body, dict) else {}, config)
+        return JSONResponse(result, status_code=200 if result.get("ok") else 400)
 
     @app.post("/api/chat/stream")
     async def chat_stream(request: Request) -> StreamingResponse:

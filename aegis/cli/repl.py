@@ -84,7 +84,7 @@ SLASH_COMMANDS = (
     SlashCommand("/think", "model control", "set reasoning effort", "/think off|minimal|low|medium|high|xhigh"),
     SlashCommand("/reasoning", "model control", "set reasoning visibility or effort", "/reasoning off|none|summary|live|..."),
     SlashCommand("/fast", "model control", "toggle priority/fast mode", "/fast [on|off|status]"),
-    SlashCommand("/busy", "model control", "set busy input behavior", "/busy queue|steer|interrupt"),
+    SlashCommand("/busy", "model control", "show or set busy input behavior", "/busy [queue|steer|interrupt|status]"),
     SlashCommand("/timestamps", "display", "toggle terminal timestamps", "/timestamps on|off|status"),
     SlashCommand("/goal", "goals", "set a standing goal and start it", "/goal <objective>"),
     SlashCommand("/subgoal", "goals", "set a nested standing goal", "/subgoal <objective>"),
@@ -185,6 +185,31 @@ def _repl_unicode_enabled() -> bool:
 
 def _ui(glyph: str, fallback: str) -> str:
     return glyph if _repl_unicode_enabled() else fallback
+
+
+_BUSY_MODE_HINTS = {
+    "queue": "new input waits behind the active run",
+    "steer": "new input is sent as guidance to the active run",
+    "interrupt": "new input stops the active run and starts fresh",
+}
+_BUSY_MODE_SHORT = {
+    "queue": "queue input",
+    "steer": "steer run",
+    "interrupt": "interrupt run",
+}
+
+
+def _busy_mode(value: Any) -> str:
+    mode = str(value or "queue").strip().lower()
+    return mode if mode in _BUSY_MODE_HINTS else "queue"
+
+
+def _busy_mode_hint(value: Any) -> str:
+    return _BUSY_MODE_HINTS[_busy_mode(value)]
+
+
+def _busy_mode_short(value: Any) -> str:
+    return _BUSY_MODE_SHORT[_busy_mode(value)]
 
 
 # ANSI-Shadow "AEGIS" for the startup banner, drawn with the AEGIS desktop palette.
@@ -520,7 +545,7 @@ class Renderer:
             step = f" · step {self.status.iteration}" if self.status.iteration else ""
             self._emit(
                 f"  contacting {e.get('provider') or 'provider'} / {e.get('model') or 'model'}..."
-                f"{step}{reason}",
+                f"{step}{reason} · elapsed {self.status.elapsed_text()}",
                 style="bright_black",
             )
         elif t == "provider_end":
@@ -548,7 +573,8 @@ class Renderer:
             preview = _tool_preview(name, e.get("args", {}))
             gutter = f"  {_tool_icon(name)} {_tool_verb(name):<8}"
             if self._tool_progress_mode() != "off":
-                self._emit(f"{gutter} {preview}".rstrip(), style=TERM_AMBER)
+                elapsed = f" · elapsed {self.status.elapsed_text()}"
+                self._emit(f"{gutter} {preview}{elapsed}".rstrip(), style=TERM_AMBER)
         elif t == "tool_result":
             if self._tool_progress_mode() == "off":
                 return
@@ -634,6 +660,7 @@ class TerminalStatusState:
     compactions: int = 0
     active_provider: str = ""
     active_tool: str = ""
+    active_started_at: float = 0.0
     last_tool: str = ""
     compacting: bool = False
     budget_exhausted: bool = False
@@ -656,6 +683,7 @@ class TerminalStatusState:
             self.compactions = 0
             self.active_provider = ""
             self.active_tool = ""
+            self.active_started_at = 0.0
             self.last_tool = ""
             self.compacting = False
             self.budget_exhausted = False
@@ -664,6 +692,7 @@ class TerminalStatusState:
             self.phase = str(event.get("status") or "done")
             self.active_provider = ""
             self.active_tool = ""
+            self.active_started_at = 0.0
             self.compacting = False
         elif etype == "iteration":
             self.phase = "thinking"
@@ -675,12 +704,15 @@ class TerminalStatusState:
             provider = str(event.get("provider") or "provider")
             model = str(event.get("model") or "")
             self.active_provider = f"{provider}/{model}" if model else provider
+            self.active_started_at = time.monotonic()
             self.provider_calls += 1
         elif etype == "provider_end":
             self.active_provider = ""
+            self.active_started_at = 0.0
         elif etype == "tool_start":
             self.phase = "tool"
             self.active_tool = str(event.get("name") or "")
+            self.active_started_at = time.monotonic()
             self.last_tool = self.active_tool
             self.tool_calls += 1
         elif etype == "tool_result":
@@ -689,15 +721,18 @@ class TerminalStatusState:
             if bool(event.get("is_error")) or _result_is_failure(str(event.get("summary") or "")):
                 self.tool_errors += 1
             self.active_tool = ""
+            self.active_started_at = 0.0
         elif etype == "subagent_start":
             self.phase = "subagent"
             self.subagents_active += 1
             self.active_tool = f"subagent:{event.get('agent_type') or 'worker'}"
+            self.active_started_at = time.monotonic()
         elif etype == "subagent_done":
             self.phase = "subagent done"
             self.subagents_active = max(0, self.subagents_active - 1)
             self.subagents_done += 1
             self.active_tool = ""
+            self.active_started_at = 0.0
         elif etype == "compacting":
             self.phase = "compacting"
             self.compacting = True
@@ -714,6 +749,7 @@ class TerminalStatusState:
             elif etype == "error":
                 self.phase = "error"
             self.active_tool = ""
+            self.active_started_at = 0.0
             self.compacting = False
 
     def elapsed_ms(self) -> int:
@@ -733,7 +769,19 @@ class TerminalStatusState:
         minutes = int(seconds // 60)
         return f"{minutes}m{int(seconds % 60):02d}s"
 
-    def segment(self) -> str:
+    def active_elapsed_text(self) -> str:
+        if not self.active_started_at:
+            return ""
+        ms = int((time.monotonic() - self.active_started_at) * 1000)
+        if ms < 1000:
+            return f"{ms}ms"
+        seconds = ms / 1000
+        if seconds < 60:
+            return f"{seconds:.1f}s"
+        minutes = int(seconds // 60)
+        return f"{minutes}m{int(seconds % 60):02d}s"
+
+    def segment(self, *, busy_mode: Any = None) -> str:
         bits: list[str] = []
         if self.phase:
             bits.append(f"phase {self.phase}")
@@ -742,9 +790,13 @@ class TerminalStatusState:
         if self.iteration and self.max_iterations:
             bits.append(f"iter {self.iteration}/{self.max_iterations}")
         if self.active_provider:
-            bits.append(f"{_ui('◌ ', '')}provider {self.active_provider}")
+            active_elapsed = self.active_elapsed_text()
+            suffix = f" {active_elapsed}" if active_elapsed else ""
+            bits.append(f"{_ui('◌ ', '')}provider {self.active_provider}{suffix}")
         if self.active_tool:
-            bits.append(f"{_ui('▶ ', '')}tool {self.active_tool}")
+            active_elapsed = self.active_elapsed_text()
+            suffix = f" {active_elapsed}" if active_elapsed else ""
+            bits.append(f"{_ui('▶ ', '')}tool {self.active_tool}{suffix}")
         elif self.last_tool:
             bits.append(f"{_ui('✓ ', '')}last tool {self.last_tool}")
         if self.provider_calls:
@@ -763,7 +815,8 @@ class TerminalStatusState:
         if self.budget_exhausted:
             bits.append(f"{_ui('! ', '')}budget exhausted")
         if self.started_at and not self.duration_ms and self.elapsed_ms() > 30_000:
-            bits.append("long run: Ctrl-C stops; /steer is available on gateway/dashboard")
+            hint = _busy_mode_hint(busy_mode) if busy_mode else "queue/steer/interrupt available in gateway/dashboard"
+            bits.append(f"long run: Ctrl-C stops locally; {hint}")
         return _ui(" · ", " | ").join(bits)
 
 
@@ -904,8 +957,9 @@ def _status_line(agent: Agent, progress: TerminalStatusState | None = None) -> s
     suffix = ""
     sep = _ui(" │ ", " | ")
     brand = _ui("◆ AEGIS", "AEGIS")
-    if progress and progress.segment():
-        suffix += f"{sep}{progress.segment()}"
+    progress_segment = progress.segment(busy_mode=busy_mode) if progress else ""
+    if progress_segment:
+        suffix += f"{sep}{progress_segment}"
     if run_id:
         suffix += f"{sep}run {run_id[:12]}"
     if trace:
@@ -919,7 +973,7 @@ def _status_line(agent: Agent, progress: TerminalStatusState | None = None) -> s
         *( (spend,) if spend else () ),
         f"reasoning {reasoning}",
         f"perms {perms}",
-        f"busy {busy_mode}",
+        f"busy {_busy_mode_short(busy_mode)}",
     )) + suffix
 
 
@@ -959,7 +1013,7 @@ def _bottom_toolbar(agent: Agent):
         f"<style fg='{TERM_MUTED}'>ctx</style> <style fg='{TERM_GREEN}'>{escape(ctx_text)}</style>{escape(sep)}"
         f"<style fg='{TERM_MUTED}'>reasoning</style> <style fg='{TERM_TEXT}'>{escape(reasoning)}</style>{escape(sep)}"
         f"<style fg='{TERM_MUTED}'>perms</style> <style fg='{TERM_TEXT}'>{escape(perms)}</style>{escape(sep)}"
-        f"<style fg='{TERM_MUTED}'>busy</style> <style fg='{TERM_TEXT}'>{escape(busy_mode)}</style>{escape(sep)}"
+        f"<style fg='{TERM_MUTED}'>busy</style> <style fg='{TERM_TEXT}'>{escape(_busy_mode_short(busy_mode))}</style>{escape(sep)}"
         f"<style fg='{TERM_MUTED}'>session</style> <style fg='{TERM_TEXT}'>{escape(session_id[:12] or 'new')}</style> "
     )
 
@@ -1020,7 +1074,8 @@ def banner(agent: Agent) -> None:
         body.append(
             f"reasoning {agent.config.get('display.reasoning', 'summary')}/"
             f"{getattr(agent, 'reasoning', 'off')} · permissions "
-            f"{agent.config.get('tools.exec_mode', 'auto')}\n",
+            f"{agent.config.get('tools.exec_mode', 'auto')} · busy "
+            f"{_busy_mode_short(agent.config.get('gateway.busy_mode', 'queue'))}\n",
             style=f"{TERM_TEXT}",
         )
         body.append("  cwd      ", style=f"{TERM_MUTED}")
@@ -1037,6 +1092,8 @@ def banner(agent: Agent) -> None:
         body.append(" commands · ", style="dim")
         body.append("@file.py", style=f"bold {TERM_GREEN}")
         body.append(" attach a file · ", style="dim")
+        body.append("/busy", style=f"bold {TERM_GREEN}")
+        body.append(" queue/steer/interrupt · ", style="dim")
         body.append("/goal", style=f"bold {TERM_GREEN}")
         body.append(" run to completion · ", style="dim")
         body.append("/quit", style=f"bold {TERM_GREEN}")
@@ -1057,10 +1114,11 @@ def banner(agent: Agent) -> None:
                   f"({ctx['remaining']:,} left)")
         print(f"controls: reasoning {agent.config.get('display.reasoning', 'summary')}/"
               f"{getattr(agent, 'reasoning', 'off')} · permissions "
-              f"{agent.config.get('tools.exec_mode', 'auto')}")
+              f"{agent.config.get('tools.exec_mode', 'auto')} · busy "
+              f"{_busy_mode_short(agent.config.get('gateway.busy_mode', 'queue'))}")
         print(f"cwd: {agent.cwd}")
         print("Surfaces:  aegis ui (browser control panel) · aegis desktop (Electron app)")
-        print("Try: /help · @file · /goal · /ultracode · /context · /quit")
+        print("Try: /help · @file · /busy · /goal · /ultracode · /context · /quit")
         print("=" * 60)
 
 
@@ -1801,11 +1859,14 @@ def handle_slash(
             f"grouping {'on' if agent.config.get('display.tool_progress_grouping', True) else 'off'} · "
             f"footer {'on' if agent.config.get('display.status_footer', True) else 'off'}"
         )
+        busy_mode = _busy_mode(agent.config.get("gateway.busy_mode", "queue"))
+        _out(f"busy input: {busy_mode} - {_busy_mode_hint(busy_mode)}")
         _out(f"fast mode: {'priority' if getattr(agent, 'service_tier', '') == 'priority' else 'normal'}")
         _out(
             f"permissions: exec_mode {agent.config.get('tools.exec_mode')} · "
             f"toolsets {', '.join(agent.config.get('tools.toolsets', []) or []) or 'none'}"
         )
+        _out("config: aegis config status | aegis config edit | aegis config edit --secrets", style="bright_black")
         comps = agent.session.meta.get("compactions") or []
         if comps:
             saved = sum(c["tokens_before"] - c["tokens_after"] for c in comps)
@@ -1915,15 +1976,19 @@ def handle_slash(
         for line in _render_context(agent):
             _out(line)
     elif name == "/busy":
-        mode = arg or agent.config.get("gateway.busy_mode", "queue")
-        if mode not in ("queue", "steer", "interrupt"):
-            _out("usage: /busy queue|steer|interrupt")
+        value = (arg or "status").strip().lower()
+        if value in {"", "status"}:
+            mode = _busy_mode(agent.config.get("gateway.busy_mode", "queue"))
+            _out(f"busy input mode: {mode} - {_busy_mode_hint(mode)}")
+        elif value not in ("queue", "steer", "interrupt"):
+            _out("usage: /busy [queue|steer|interrupt|status]")
+            _out("modes: queue waits · steer guides the active run · interrupt stops and restarts")
         else:
-            agent.config.data.setdefault("gateway", {})["busy_mode"] = mode
-            remember_session_runtime(agent, busy_mode=mode)
+            agent.config.data.setdefault("gateway", {})["busy_mode"] = value
+            remember_session_runtime(agent, busy_mode=value)
             if store is not None:
                 store.save(agent.session)
-            _out(f"busy input mode → {mode}", style="green")
+            _out(f"busy input mode → {value} ({_busy_mode_hint(value)})", style="green")
     elif name == "/tools":
         for t in agent.registry.all():
             g = f" [{','.join(t.groups)}]" if t.groups else ""
@@ -2480,7 +2545,8 @@ def interactive(config: Config, *, model=None, provider_name=None,
                 run_terminal_turn(user, agent, runner, store, surface="repl", on_event=renderer)
             except KeyboardInterrupt:
                 agent.cancel()   # stop the loop at the next safe point; discard partial work
-                _out("\n  ⏹ interrupted — stopped this turn (your session is intact)", style="yellow")
+                _out(f"\n  {_ui('⏹', 'stop')} interrupted {_ui('—', '-')} stopped this turn "
+                     "(your session is intact)", style="yellow")
             store.save(agent.session)
             drain_process_notifications(
                 agent,

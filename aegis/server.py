@@ -2051,6 +2051,8 @@ def _capabilities(config: Config) -> dict[str, Any]:
         {"name": "runs.stop", "path": "/v1/runs/{run_id}/stop", "methods": ["POST"]},
         {"name": "runs.approval", "path": "/v1/runs/{run_id}/approval", "methods": ["GET", "POST"]},
         {"name": "jobs", "path": "/api/jobs", "methods": ["GET", "POST"]},
+        {"name": "jobs.fire", "path": "/api/jobs/fire", "methods": ["POST"]},
+        {"name": "cron.fire", "path": "/api/cron/fire", "methods": ["POST"]},
         {"name": "jobs.detail", "path": "/api/jobs/{job_id}", "methods": ["GET", "PATCH", "DELETE"]},
         {"name": "jobs.control", "path": "/api/jobs/{job_id}/{pause|resume|run|trigger}", "methods": ["POST"]},
         {"name": "sessions", "path": "/api/sessions", "methods": ["GET", "POST"]},
@@ -2167,6 +2169,9 @@ def _job_payload(job) -> dict[str, Any]:
         "next_run": job.next_run,
         "run_count": int(getattr(job, "run_count", 0) or 0),
         "max_runs": int(getattr(job, "max_runs", 0) or 0),
+        "claimed_at": float(getattr(job, "claimed_at", 0.0) or 0.0),
+        "claim_owner": getattr(job, "claim_owner", "") or "",
+        "claim_token": getattr(job, "claim_token", "") or "",
         "runs": list(getattr(job, "runs", []) or []),
     }
 
@@ -3501,6 +3506,28 @@ def make_handler(config: Config):
             sink = build_delivery_sink(config, verbose=False)
             return 200, run_job(config, job_id, sink=sink, store=store, verbose=False)
 
+        def _fire_due_jobs(self, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+            from .cron import build_delivery_sink, fire_due_jobs
+
+            try:
+                limit = max(1, min(100, int(str(body.get("limit") or 25))))
+            except (TypeError, ValueError):
+                limit = 25
+            try:
+                stale_after = float(body.get("stale_after") or body.get("stale_seconds") or 21600)
+            except (TypeError, ValueError):
+                stale_after = 21600.0
+            result = fire_due_jobs(
+                config,
+                sink=build_delivery_sink(config, verbose=False),
+                limit=limit,
+                owner=str(body.get("owner") or "api_server"),
+                dry_run=_coerce_request_bool(body.get("dry_run"), False),
+                verbose=False,
+                stale_after=stale_after,
+            )
+            return 200, result
+
         def _session_detail(self, session_id: str) -> tuple[int, dict[str, Any]]:
             from .session import SessionStore
 
@@ -3914,6 +3941,11 @@ def make_handler(config: Config):
             if path.startswith("/api/jobs/"):
                 code, payload = self._job_detail(path.rsplit("/", 1)[-1])
                 return self._json(code, payload)
+            if path in {"/api/project/facts", "/api/coding/project-facts"}:
+                from .agent.coding_context import project_facts_for
+
+                cwd = str((query.get("cwd") or [""])[0] or "")
+                return self._json(200, {"ok": True, "facts": project_facts_for(cwd or None)})
             return self._json(404, {"error": "not found"})
 
         def do_DELETE(self):  # noqa: N802
@@ -4171,6 +4203,27 @@ def make_handler(config: Config):
             if path == "/api/jobs":
                 code, payload = self._create_job(body)
                 return self._json(code, payload)
+            if path in {"/api/cron/fire", "/api/jobs/fire"}:
+                code, payload = self._fire_due_jobs(body)
+                return self._json(code, payload)
+            if path in {"/api/llm/oneshot", "/api/agent/oneshot"}:
+                from .agent.oneshot import run_oneshot
+
+                try:
+                    text = run_oneshot(
+                        config=config,
+                        instructions=str(body.get("instructions") or ""),
+                        user_input=str(body.get("input") or body.get("user_input") or ""),
+                        template=str(body.get("template") or "") or None,
+                        variables=body.get("variables") if isinstance(body.get("variables"), dict) else {},
+                        task=str(body.get("task") or "title_generation"),
+                        max_tokens=int(body.get("max_tokens") or 1024),
+                    )
+                except (KeyError, ValueError) as exc:
+                    return self._json(400, {"ok": False, "error": str(exc)})
+                except Exception as exc:  # noqa: BLE001
+                    return self._json(500, {"ok": False, "error": f"one-shot generation failed: {exc}"})
+                return self._json(200, {"ok": True, "text": text})
             if path.startswith("/api/jobs/") and path.endswith(("/run", "/trigger")):
                 job_id = path.split("/")[-2]
                 code, payload = self._run_job_now(job_id)

@@ -23,6 +23,7 @@ _JOBS_LOCK = threading.RLock()
 _JOBS_LOCK_STATE = threading.local()
 _CRON_BLOCKED_TOOLS = ("clarify", "send_message", "cronjob", "schedule_task")
 _NO_MCP_SENTINEL = "no_mcp"
+_CRON_CLAIM_STALE_SECONDS = 6 * 60 * 60
 
 
 def _cron_path():
@@ -163,6 +164,9 @@ class CronJob:
     runs: list = field(default_factory=list)          # recent run records (capped), newest last
     run_count: int = 0         # total times this job has fired
     max_runs: int = 0          # >0: retire (disable) the job after this many runs (AEGIS repeat.times)
+    claimed_at: float = 0.0    # external scheduler lease timestamp
+    claim_owner: str = ""      # scheduler/process that claimed the current run
+    claim_token: str = ""      # per-claim token for observability/debugging
 
 
 _VALID_STATES = {"idle", "running", "ok", "error"}
@@ -375,6 +379,9 @@ def _normalize_job_record(raw: dict, *, index: int = 0, seen: set[str] | None = 
         "runs": runs[-10:],
         "run_count": max(0, int(_coerce_float(raw.get("run_count"), 0.0))),
         "max_runs": max(0, int(_coerce_float(raw.get("max_runs"), 0.0))),
+        "claimed_at": _coerce_float(raw.get("claimed_at"), 0.0),
+        "claim_owner": _coerce_text(raw.get("claim_owner")).strip()[:120],
+        "claim_token": _coerce_text(raw.get("claim_token")).strip()[:120],
     }
 
 
@@ -629,6 +636,15 @@ def is_due(job: CronJob, now: float) -> bool:
     if (now - job.last_run) < 60:   # avoid double firing within a minute
         return False
     return _cron_matches(job.schedule, now)
+
+
+def _claim_is_fresh(job: CronJob, now: float, stale_after: float = _CRON_CLAIM_STALE_SECONDS) -> bool:
+    if job.state != "running":
+        return False
+    claimed_at = float(job.claimed_at or 0.0)
+    if claimed_at <= 0:
+        return False
+    return (now - claimed_at) < max(1.0, float(stale_after or _CRON_CLAIM_STALE_SECONDS))
 
 
 def _epoch_iso(value: float) -> str:
@@ -920,6 +936,60 @@ class CronStore:
         notify_scheduler_changed("job_resumed" if enabled else "job_paused", notify_job_id)
         return True
 
+    def due(self, *, limit: int = 25, now: float | None = None,
+            stale_after: float = _CRON_CLAIM_STALE_SECONDS) -> list[CronJob]:
+        """Return due jobs that are not currently held by a fresh scheduler lease."""
+
+        now = time.time() if now is None else float(now)
+        limit = max(1, int(limit or 1))
+        due_jobs: list[CronJob] = []
+        for job in self.list():
+            if _claim_is_fresh(job, now, stale_after):
+                continue
+            if is_due(job, now):
+                due_jobs.append(job)
+                if len(due_jobs) >= limit:
+                    break
+        return due_jobs
+
+    def claim_due(self, *, limit: int = 25, owner: str = "cron.fire",
+                  now: float | None = None,
+                  stale_after: float = _CRON_CLAIM_STALE_SECONDS) -> list[CronJob]:
+        """Atomically claim due jobs for an external or dashboard scheduler.
+
+        The claim is intentionally stored in ``cron.json`` before execution so
+        another process sees the job as running and skips it until the claim is
+        recorded or old enough to be considered abandoned.
+        """
+
+        now = time.time() if now is None else float(now)
+        limit = max(1, int(limit or 1))
+        owner = str(owner or "cron.fire")[:120]
+        claimed: list[CronJob] = []
+        with _jobs_file_lock():
+            jobs = self._load_unlocked()
+            for index, raw in enumerate(jobs):
+                job = CronJob(**_normalize_job_record(raw, index=index))
+                if _claim_is_fresh(job, now, stale_after):
+                    continue
+                if not is_due(job, now):
+                    continue
+                token = new_id("claim")
+                raw["state"] = "running"
+                raw["last_error"] = ""
+                raw["claimed_at"] = now
+                raw["claim_owner"] = owner
+                raw["claim_token"] = token
+                jobs[index] = raw
+                claimed.append(CronJob(**_normalize_job_record(raw, index=index)))
+                if len(claimed) >= limit:
+                    break
+            if claimed:
+                self._save_unlocked(jobs)
+        if claimed:
+            notify_scheduler_changed("jobs_claimed", ",".join(job.id for job in claimed), source=owner)
+        return claimed
+
     def prune_spent(self, *, dry_run: bool = True) -> list[str]:
         """Retire jobs that have run their course and can never fire again: fired
         one-shots (``run_at`` set, disabled, already run) and recurring jobs disabled
@@ -994,6 +1064,9 @@ class CronStore:
                 j["last_run"] = when
                 j["state"] = "ok"
                 j["last_error"] = ""
+                j["claimed_at"] = 0.0
+                j["claim_owner"] = ""
+                j["claim_token"] = ""
                 if j.get("run_at"):          # one-shot: done after it fires once
                     j["enabled"] = False
                     j["next_run"] = 0.0
@@ -1001,13 +1074,16 @@ class CronStore:
                     j["next_run"] = _compute_next_run(CronJob(**j), when)
             self._save_unlocked(jobs)
 
-    def mark_running(self, job_id: str) -> None:
+    def mark_running(self, job_id: str, *, owner: str = "local_tick", token: str = "") -> None:
         with _jobs_file_lock():
             jobs = self._load_unlocked()
             index = _find_unique_job_index(jobs, job_id)
             if index is not None:
                 jobs[index]["state"] = "running"
                 jobs[index]["last_error"] = ""
+                jobs[index]["claimed_at"] = time.time()
+                jobs[index]["claim_owner"] = str(owner or "local_tick")[:120]
+                jobs[index]["claim_token"] = str(token or new_id("claim"))[:120]
             self._save_unlocked(jobs)
 
     def record_run(self, job_id: str, when: float, *, ok: bool, error: str = "",
@@ -1022,6 +1098,9 @@ class CronStore:
                 j["last_run"] = when
                 j["state"] = "ok" if ok else "error"
                 j["last_error"] = "" if ok else (error or "unknown error")[:500]
+                j["claimed_at"] = 0.0
+                j["claim_owner"] = ""
+                j["claim_token"] = ""
                 j["run_count"] = int(j.get("run_count", 0)) + 1
                 max_runs = int(j.get("max_runs", 0) or 0)
                 if j.get("run_at"):              # one-shot is done after a single fire
@@ -1139,7 +1218,7 @@ def _merge_mcp_into_per_job_toolsets(per_job: list[str], config) -> list[str]:
 
 
 def run_job(config, job: CronJob | str, *, sink=None, store: "CronStore | None" = None,
-            runner=None, verbose: bool = True, mark: bool = True) -> dict:
+            runner=None, verbose: bool = True, mark: bool = True, record: bool = True) -> dict:
     """Run one cron job immediately using the same path as the scheduler."""
     store = store or CronStore()
     if isinstance(job, str):
@@ -1254,7 +1333,7 @@ def run_job(config, job: CronJob | str, *, sink=None, store: "CronStore | None" 
         if verbose:
             print(f"    cron error: {e}")
         out = {"ok": False, "job_id": job.id, "error": str(e), "targets": targets}
-    if mark:
+    if record:
         store.record_run(
             job.id,
             now,
@@ -1263,6 +1342,85 @@ def run_job(config, job: CronJob | str, *, sink=None, store: "CronStore | None" 
             reply=str(out.get("reply") or ""),
         )
     return out
+
+
+def fire_due_jobs(config, *, sink=None, store: "CronStore | None" = None,
+                  runner=None, limit: int = 25, owner: str = "cron.fire",
+                  dry_run: bool = False, verbose: bool = False,
+                  stale_after: float = _CRON_CLAIM_STALE_SECONDS) -> dict:
+    """Claim and run due cron jobs using the external-scheduler contract.
+
+    This is the Hermes-style managed scheduler path: it is safe to call from a
+    dashboard/API process because due jobs are leased in the shared cron store
+    before execution, and the global tick lock keeps it from overlapping the
+    built-in local ticker.
+    """
+
+    store = store or CronStore()
+    limit = max(1, min(int(limit or 1), 100))
+    owner = str(owner or "cron.fire")
+    with _tick_lock() as acquired:
+        if not acquired:
+            return {
+                "ok": True,
+                "object": "hermes.cron.fire_result",
+                "acquired": False,
+                "dry_run": bool(dry_run),
+                "owner": owner,
+                "claimed": 0,
+                "ran": 0,
+                "results": [],
+                "message": "cron tick already in progress",
+            }
+        now = time.time()
+        if dry_run:
+            due_jobs = store.due(limit=limit, now=now, stale_after=stale_after)
+            return {
+                "ok": True,
+                "object": "hermes.cron.fire_result",
+                "acquired": True,
+                "dry_run": True,
+                "owner": owner,
+                "claimed": 0,
+                "ran": 0,
+                "due": [
+                    {
+                        "id": job.id,
+                        "job_id": job.id,
+                        "name": job.name,
+                        "schedule": job.schedule,
+                        "next_run": job.next_run,
+                        "claimed_at": job.claimed_at,
+                        "claim_owner": job.claim_owner,
+                    }
+                    for job in due_jobs
+                ],
+                "results": [],
+            }
+        claimed_jobs = store.claim_due(limit=limit, owner=owner, now=now, stale_after=stale_after)
+        results = [
+            run_job(
+                config,
+                job,
+                sink=sink,
+                store=store,
+                runner=runner,
+                verbose=verbose,
+                mark=False,
+                record=True,
+            )
+            for job in claimed_jobs
+        ]
+        return {
+            "ok": all(bool(result.get("ok")) for result in results) if results else True,
+            "object": "hermes.cron.fire_result",
+            "acquired": True,
+            "dry_run": False,
+            "owner": owner,
+            "claimed": len(claimed_jobs),
+            "ran": len(results),
+            "results": results,
+        }
 
 
 def tick(config, sink=None, store: "CronStore | None" = None, verbose: bool = True,

@@ -83,6 +83,7 @@ def test_config_summary_prints_hermes_style_terminal_surface(monkeypatch, capsys
     assert "Model" in out and "Active:" in out and "Provider: openai" in out and "Model:    gpt-5.5" in out
     assert "Messaging Platforms" in out and "Telegram:   configured" in out
     assert "WhatsApp:" in out
+    assert "Input mode:" in out
     assert "== Validation ==" in out and "Config YAML:  ok" in out and "Value types:  ok" in out
     assert "aegis config status" in out
     assert "aegis config edit --secrets" in out
@@ -90,6 +91,7 @@ def test_config_summary_prints_hermes_style_terminal_surface(monkeypatch, capsys
     assert "aegis config reset <key>" in out
     assert "aegis config doctor" in out
     assert "aegis config setup" in out
+    assert "aegis tui" in out
 
 
 def test_tool_context_exposes_plugin_developer_helpers(tmp_path):
@@ -498,6 +500,7 @@ def test_terminal_status_line_surfaces_context_controls(monkeypatch):
     cfg = Config.load()
     cfg.data.setdefault("display", {})["reasoning"] = "live"
     cfg.data.setdefault("tools", {})["exec_mode"] = "ask"
+    cfg.data.setdefault("gateway", {})["busy_mode"] = "steer"
     session = Session.create()
     session.messages = [Message.user("hello " * 200)]
     agent = SimpleNamespace(
@@ -519,6 +522,7 @@ def test_terminal_status_line_surfaces_context_controls(monkeypatch):
     assert "tokens in 12 out 5" in line
     assert "reasoning live/high" in line
     assert "perms ask" in line
+    assert "busy steer run" in line
     assert " | " in line
 
     monkeypatch.delenv("AEGIS_ASCII", raising=False)
@@ -526,6 +530,27 @@ def test_terminal_status_line_surfaces_context_controls(monkeypatch):
     unicode_line = repl._status_line(agent)
     assert "◆ AEGIS" in unicode_line
     assert " │ " in unicode_line
+
+
+def test_terminal_busy_command_reports_mode_hints(monkeypatch):
+    from types import SimpleNamespace
+
+    from aegis.cli import repl
+    from aegis.config import Config
+    from aegis.session import Session
+
+    cfg = Config.load()
+    cfg.data.setdefault("gateway", {})["busy_mode"] = "queue"
+    agent = SimpleNamespace(config=cfg, session=Session.create())
+    lines = []
+    monkeypatch.setattr(repl, "_out", lambda text, style=None: lines.append(text))
+
+    assert repl.handle_slash("/busy status", agent) == ""
+    assert "queue - new input waits" in lines[-1]
+
+    assert repl.handle_slash("/busy steer", agent) == ""
+    assert "→ steer" in lines[-1]
+    assert "guidance" in lines[-1]
 
 
 def test_terminal_session_picker_resume_and_branch(monkeypatch):

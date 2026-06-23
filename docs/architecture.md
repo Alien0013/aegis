@@ -86,7 +86,7 @@ local/docker/ssh backends (fail-closed).
 
 ## Memory, skills, learning
 - **Memory** — file-backed `MEMORY.md`/`USER.md` + `history.jsonl`; pluggable
-  external backends (Honcho/Mem0/JSONL/HTTP).
+  external backends such as Mem0, JSONL, and HTTP adapters.
 - **Skills** — `SKILL.md` packages, progressive disclosure, tiered precedence, usage
   tracking. The agent can `create`/`improve` skills.
 - **Learning loop** (`learn.py`) — reviews a session, extracts redacted memory/skill

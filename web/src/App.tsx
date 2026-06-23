@@ -13,7 +13,7 @@ import { Icon } from "./components/icons";
 import { Loading, Toaster } from "./components/ui";
 import { NAV_ITEMS } from "./lib/nav";
 import { useApi } from "./lib/useApi";
-import { Overview } from "./pages/Overview";
+import { CommandCenter } from "./pages/CommandCenter";
 import { Sessions } from "./pages/Sessions";
 import { Models } from "./pages/Models";
 import { Memory } from "./pages/Memory";
@@ -135,8 +135,8 @@ function Routed({ full }: { full?: boolean }) {
       <ErrorBoundary key={loc.pathname}>
         <Suspense fallback={<Loading />}>
           <Routes>
-            <Route path="/" element={<Navigate to="/sessions" replace />} />
-            <Route path="/dashboard" element={routeElement("/dashboard", <Overview />)} />
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/dashboard" element={routeElement("/dashboard", <CommandCenter />)} />
             <Route path="/chat" element={routeElement("/chat", <Terminal />)} />
             <Route path="/terminal" element={routeElement("/terminal", <Terminal />)} />
             <Route path="/sessions" element={routeElement("/sessions", <Sessions />)} />

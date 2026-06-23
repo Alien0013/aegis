@@ -81,6 +81,10 @@ bundled skills:                  76
 docs markdown files:             18
 ```
 
+These counts are a dated audit snapshot, not current product badges. Rerun the
+inventory and verification commands before copying exact counts into release
+notes or the README.
+
 `pygount` language summary:
 
 ```text
@@ -159,6 +163,9 @@ Final result after installing `.venv` dependencies and fixing lint blockers:
 All checks passed!
 1474 passed in 241.06s (0:04:01)
 ```
+
+This was the result for the audited HEAD above. Treat it as historical evidence,
+not proof for a later release candidate.
 
 ### Desktop Electron suite
 
@@ -763,8 +770,8 @@ Strengths:
 
 Gaps:
 
-1. README test badge/claim says `973 passing`, but current collected and verified result is `1474 passed`. Update to avoid stale product claims.
-2. Roadmap says desktop app/dashboard/plugin SDK are out of scope, but repo now contains substantial desktop/dashboard/plugin systems. Roadmap is stale and should be rewritten.
+1. README/product docs should avoid exact test-count badges unless refreshed by the same verification run.
+2. Roadmap language must stay aligned with the substantial desktop/dashboard/plugin systems now in the repo.
 3. Docs should link the production harness plan and this audit.
 4. Release docs should include exact full verification matrix.
 5. Screenshots/assets should have drift checks or generated provenance.
@@ -843,13 +850,11 @@ AEGIS is not a toy harness. It already has:
 - broad CLI/dashboard/desktop/API/gateway/SDK/ACP/MCP surfaces,
 - 45 built-in tools,
 - 29 providers,
-- 76 bundled skills,
+- bundled skills surfaced by `aegis skills list`,
 - memory/learning/curator systems,
 - cron/kanban/spec/bench/self-improvement automation,
 - serious security controls,
-- 1,474 passing Python tests,
-- 87 passing desktop tests,
-- passing web and internals-site checks.
+- Python, desktop, web, and internals-site checks that should be rerun before release claims.
 
 The largest remaining gaps are not basic capability. They are:
 

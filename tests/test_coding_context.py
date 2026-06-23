@@ -6,7 +6,7 @@ from __future__ import annotations
 import subprocess
 from typing import Any, cast
 
-from aegis.agent.coding_context import coding_workspace_block, subdirectory_rule_hint
+from aegis.agent.coding_context import coding_workspace_block, project_facts_for, subdirectory_rule_hint
 from aegis.config import Config
 
 
@@ -46,9 +46,29 @@ def test_non_git_project_uses_marker_layout(tmp_path):
     assert "Repository snapshot" not in block
 
 
+def test_project_facts_reports_manifests_and_verify_commands(tmp_path):
+    (tmp_path / "package.json").write_text(
+        '{"scripts":{"test":"vitest","build":"vite build","start":"vite"}}',
+        encoding="utf-8",
+    )
+    (tmp_path / "pnpm-lock.yaml").write_text("", encoding="utf-8")
+    (tmp_path / "AGENTS.md").write_text("repo rules\n", encoding="utf-8")
+
+    facts = project_facts_for(tmp_path)
+
+    assert facts is not None
+    assert facts["root"] == str(tmp_path.resolve())
+    assert facts["package_manager"] == "pnpm"
+    assert "package.json" in facts["markers"]
+    assert {"name": "AGENTS.md", "path": str(tmp_path / "AGENTS.md")} in facts["context_files"]
+    assert "pnpm run test" in facts["verify_commands"]
+    assert "pnpm run build" in facts["verify_commands"]
+
+
 def test_non_code_dir_yields_nothing(tmp_path):
     (tmp_path / "notes.txt").write_text("hello")
     assert coding_workspace_block(tmp_path) == ""
+    assert project_facts_for(tmp_path) is None
 
 
 def test_disabled_by_config(tmp_path):

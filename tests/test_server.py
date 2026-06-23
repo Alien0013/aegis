@@ -6264,6 +6264,45 @@ def test_server_api_jobs_crud_pause_resume_and_run(monkeypatch, tmp_path):
     assert json.loads(delete_data)["ok"] is True
 
 
+def test_server_api_jobs_fire_due(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import aegis.server as server
+    from aegis.config import Config
+
+    def fake_run_job(config, job, **kwargs):
+        job_id = job if isinstance(job, str) else job.id
+        kwargs["store"].record_run(job_id, time.time(), ok=True, reply="ran")
+        return {"ok": True, "job_id": job_id, "reply": "ran"}
+
+    monkeypatch.setattr("aegis.cron.run_job", fake_run_job)
+    srv, port = _serve(server.make_handler(Config.load()))
+    try:
+        create_status, create_data = _request(port, "POST", "/api/jobs", {
+            "schedule": "every 1h",
+            "prompt": "check status",
+        })
+        job_id = json.loads(create_data)["id"]
+        fire_status, fire_data = _request(port, "POST", "/api/jobs/fire", {
+            "owner": "api-test",
+        })
+        second_status, second_data = _request(port, "POST", "/api/cron/fire", {
+            "owner": "api-test",
+        })
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert create_status == 201
+    assert fire_status == 200
+    fired = json.loads(fire_data)
+    assert fired["object"] == "hermes.cron.fire_result"
+    assert fired["claimed"] == 1
+    assert fired["ran"] == 1
+    assert fired["results"][0]["job_id"] == job_id
+    assert second_status == 200
+    assert json.loads(second_data)["claimed"] == 0
+
+
 def test_server_api_jobs_validation_errors_are_400(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server

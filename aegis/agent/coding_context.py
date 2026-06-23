@@ -14,8 +14,10 @@ cwd is not a code workspace, so non-coding sessions never see the block.
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
+from typing import Any
 
 from ..config import Config, Workspace, context_file_max_chars
 
@@ -24,11 +26,19 @@ _PROJECT_MARKERS = (
     "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt",
     "package.json", "tsconfig.json", "deno.json",
     "Cargo.toml", "go.mod", "pom.xml", "build.gradle", "build.gradle.kts",
-    "Gemfile", "composer.json", "CMakeLists.txt", "Makefile",
+    "Gemfile", "composer.json", "mix.exs", "pubspec.yaml",
+    "CMakeLists.txt", "Makefile", "Dockerfile", "AGENTS.md", "CLAUDE.md", ".cursorrules",
 )
 
 # Markers of a web frontend — when present, nudge the model to close the UI loop.
 _WEB_MARKERS = ("package.json", "tsconfig.json", "deno.json")
+_CONTEXT_FILES = ("AGENTS.md", "CLAUDE.md", ".cursorrules")
+_PY_LOCKFILES = (("uv.lock", "uv"), ("poetry.lock", "poetry"), ("Pipfile.lock", "pipenv"))
+_JS_LOCKFILES = (
+    ("pnpm-lock.yaml", "pnpm"), ("bun.lockb", "bun"), ("bun.lock", "bun"),
+    ("yarn.lock", "yarn"), ("package-lock.json", "npm"),
+)
+_VERIFY_TARGETS = ("test", "tests", "lint", "typecheck", "check", "build", "fmt", "format")
 
 _WEB_HINT = (
     "- For web/UI changes, close the loop with `web_verify` (headless browser): it loads the\n"
@@ -67,6 +77,136 @@ def _is_git_repo(cwd: Path) -> bool:
 
 def _detect_markers(cwd: Path) -> list[str]:
     return [m for m in _PROJECT_MARKERS if (cwd / m).exists()]
+
+
+def _project_root(cwd: Path) -> Path | None:
+    root = _git(cwd, "rev-parse", "--show-toplevel")
+    if root:
+        return Path(root)
+    current = cwd.resolve()
+    for directory in [current, *current.parents]:
+        if _detect_markers(directory):
+            return directory
+    return None
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    try:
+        raw = path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _package_manager(root: Path) -> str:
+    for filename, manager in _JS_LOCKFILES:
+        if (root / filename).exists():
+            return manager
+    for filename, manager in _PY_LOCKFILES:
+        if (root / filename).exists():
+            return manager
+    if (root / "package.json").exists():
+        return "npm"
+    if (root / "pyproject.toml").exists() or (root / "requirements.txt").exists():
+        return "python"
+    if (root / "Cargo.toml").exists():
+        return "cargo"
+    if (root / "go.mod").exists():
+        return "go"
+    if (root / "Makefile").exists():
+        return "make"
+    return ""
+
+
+def _makefile_targets(path: Path) -> list[str]:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    targets: list[str] = []
+    for line in text.splitlines():
+        if line.startswith(("\t", " ", ".", "#")) or ":" not in line:
+            continue
+        name = line.split(":", 1)[0].strip()
+        if name in _VERIFY_TARGETS and name not in targets:
+            targets.append(name)
+    return targets
+
+
+def _verify_commands(root: Path, manager: str) -> list[str]:
+    commands: list[str] = []
+    package = _read_json(root / "package.json")
+    scripts = package.get("scripts") if isinstance(package.get("scripts"), dict) else {}
+    for target in _VERIFY_TARGETS:
+        if target in scripts:
+            runner = "npm"
+            if manager in {"pnpm", "yarn", "bun"}:
+                runner = manager
+            commands.append(f"{runner} run {target}")
+    makefile = root / "Makefile"
+    if makefile.exists():
+        for target in _makefile_targets(makefile):
+            command = f"make {target}"
+            if command not in commands:
+                commands.append(command)
+    if (root / "pyproject.toml").exists() or (root / "requirements.txt").exists():
+        if (root / "tests").exists() and "pytest" not in commands:
+            commands.append("pytest")
+        if (root / "pyproject.toml").exists() and "python -m build" not in commands:
+            commands.append("python -m build")
+    if (root / "Cargo.toml").exists():
+        commands.extend(command for command in ("cargo test", "cargo check") if command not in commands)
+    if (root / "go.mod").exists():
+        commands.extend(command for command in ("go test ./...", "go vet ./...") if command not in commands)
+    return commands[:8]
+
+
+def project_facts_for(cwd: Path | str | None = None) -> dict[str, Any] | None:
+    """Structured project facts for dashboard/desktop/TUI surfaces.
+
+    Returns ``None`` when ``cwd`` is not inside a recognizable code workspace.
+    This mirrors the data baked into the coding-context prompt, but keeps UI
+    code from re-sniffing manifests or guessing verification commands.
+    """
+
+    base = Path(cwd or Path.cwd()).expanduser()
+    if not base.exists():
+        return None
+    if not base.is_dir():
+        base = base.parent
+    try:
+        root = _project_root(base)
+    except OSError:
+        root = None
+    if root is None:
+        return None
+    markers = _detect_markers(root)
+    manager = _package_manager(root)
+    branch = _git(root, "branch", "--show-current") or _git(root, "rev-parse", "--short", "HEAD")
+    status = _git(root, "status", "--porcelain")
+    context_files = [
+        {"name": name, "path": str(root / name)}
+        for name in _CONTEXT_FILES
+        if (root / name).is_file()
+    ]
+    manifests = [
+        {"name": name, "path": str(root / name)}
+        for name in markers
+        if (root / name).is_file()
+    ]
+    return {
+        "root": str(root),
+        "cwd": str(base.resolve()),
+        "is_git_repo": _is_git_repo(root),
+        "branch": branch,
+        "dirty_count": len(status.splitlines()) if status else 0,
+        "markers": markers,
+        "manifests": manifests,
+        "package_manager": manager,
+        "verify_commands": _verify_commands(root, manager),
+        "context_files": context_files,
+    }
 
 
 def _git_snapshot(cwd: Path, *, max_status: int = 12, max_commits: int = 5) -> str:

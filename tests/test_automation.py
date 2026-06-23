@@ -715,6 +715,65 @@ def test_cron_run_job_records_history(monkeypatch, tmp_path):
     assert dash["history"][0]["data"]["cron_job_id"] == job.id
 
 
+def test_cron_claim_due_prevents_double_claim(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.cron import CronStore
+
+    store = CronStore()
+    job = store.add("every 1s", "summarize")
+
+    first = store.claim_due(owner="worker-a")
+    second = store.claim_due(owner="worker-b")
+
+    assert [item.id for item in first] == [job.id]
+    assert second == []
+    saved = CronStore().get(job.id)
+    assert saved is not None
+    assert saved.state == "running"
+    assert saved.claim_owner == "worker-a"
+    assert saved.claimed_at > 0
+    assert saved.claim_token
+
+    store.record_run(job.id, time.time(), ok=True, reply="done")
+    saved = CronStore().get(job.id)
+    assert saved is not None
+    assert saved.state == "ok"
+    assert saved.claimed_at == 0
+    assert saved.claim_owner == ""
+    assert saved.claim_token == ""
+
+
+def test_cron_fire_due_jobs_claims_and_runs_once(monkeypatch, tmp_path):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.cron import CronStore, fire_due_jobs
+
+    _fake_cron_agent(monkeypatch, reply="here is the update")
+    store = CronStore()
+    job = store.add("every 1h", "summarize", deliver="telegram:1")
+    delivered = []
+
+    result = fire_due_jobs(
+        None,
+        store=store,
+        sink=lambda ch, txt: delivered.append((ch, txt)),
+        owner="test-scheduler",
+        verbose=False,
+    )
+    second = fire_due_jobs(None, store=store, owner="test-scheduler", verbose=False)
+
+    assert result["ok"] is True
+    assert result["object"] == "hermes.cron.fire_result"
+    assert result["claimed"] == 1
+    assert result["ran"] == 1
+    assert result["results"][0]["job_id"] == job.id
+    assert delivered == [("telegram:1", "here is the update")]
+    assert second["claimed"] == 0
+    saved = CronStore().get(job.id)
+    assert saved is not None
+    assert saved.last_run > 0
+    assert saved.claimed_at == 0
+
+
 def test_cron_job_runtime_overrides_model_toolsets_and_workdir(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     from aegis.cron import CronStore, run_job

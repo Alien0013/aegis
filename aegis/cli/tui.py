@@ -61,6 +61,23 @@ def _duration(seconds: float) -> str:
     return f"{hours}h {minutes}m"
 
 
+_BUSY_MODE_HINTS = {
+    "queue": "new input waits",
+    "steer": "new input guides active runs",
+    "interrupt": "new input stops active runs",
+}
+
+
+def _busy_mode(value: Any) -> str:
+    mode = str(value or "queue").strip().lower()
+    return mode if mode in _BUSY_MODE_HINTS else "queue"
+
+
+def _busy_mode_hint(value: Any) -> str:
+    mode = _busy_mode(value)
+    return f"{mode} - {_BUSY_MODE_HINTS[mode]}"
+
+
 def _dashboard_url(config: Config, *, redact: bool = False) -> str:
     host = config.get("server.dashboard_host", "127.0.0.1")
     port = int(config.get("server.dashboard_port", 9119))
@@ -72,6 +89,7 @@ def _dashboard_url(config: Config, *, redact: bool = False) -> str:
 
 def collect_snapshot(config: Config) -> dict[str, Any]:
     errors: list[str] = []
+    from .. import config as cfg
 
     def provider_report() -> dict[str, Any]:
         from ..providers import registry
@@ -166,6 +184,17 @@ def collect_snapshot(config: Config) -> dict[str, Any]:
         "services": _safe("services", errors, services, {}),
         "mcp_servers": dict(config.get("mcp.servers", {}) or {}),
         "channels": list(config.get("gateway.channels", []) or []),
+        "config": {
+            "profile": cfg.current_profile() or "default",
+            "config_path": str(cfg.config_path()),
+            "secrets_path": str(cfg.env_path()),
+            "reasoning": config.get("display.reasoning", "summary"),
+            "timestamps": bool(config.get("display.timestamps", False)),
+            "status_footer": bool(config.get("display.status_footer", True)),
+            "tool_progress": config.get("display.tool_progress", "compact"),
+            "busy_mode": _busy_mode(config.get("gateway.busy_mode", "queue")),
+            "exec_mode": config.get("tools.exec_mode", "auto"),
+        },
         "dashboard_url": _dashboard_url(config, redact=True),
         "errors": errors,
     }
@@ -238,7 +267,29 @@ def _status_panel(snapshot: dict[str, Any]) -> Panel:
         ("cron", f"{sum(1 for job in cron_jobs if job.get('enabled', True))}/{len(cron_jobs)} enabled"),
         ("sessions", f"{len(snapshot.get('sessions') or [])} recent"),
     ]
+    if active:
+        run = active[0]
+        started = _parse_time(run.get("started_at"))
+        elapsed = _duration(now - started) if started else "running"
+        label = run.get("title") or run.get("prompt_preview") or run.get("id")
+        rows.insert(1, ("active now", f"{elapsed} · {_clip(label, 42)}"))
     return Panel(_kv_table(rows), title="Status", border_style="bright_green")
+
+
+def _config_panel(snapshot: dict[str, Any]) -> Panel:
+    config = snapshot.get("config") or {}
+    rows = [
+        ("profile", config.get("profile") or "default"),
+        ("display", (
+            f"reasoning {config.get('reasoning')}; "
+            f"footer {'on' if config.get('status_footer') else 'off'}; "
+            f"tools {config.get('tool_progress')}"
+        )),
+        ("input", _busy_mode_hint(config.get("busy_mode"))),
+        ("exec", config.get("exec_mode") or "auto"),
+        ("edit", "e config / s secrets"),
+    ]
+    return Panel(_kv_table(rows), title="Config", border_style="bright_cyan")
 
 
 def _sessions_panel(snapshot: dict[str, Any]) -> Panel:
@@ -332,7 +383,11 @@ def _services_panel(snapshot: dict[str, Any]) -> Panel:
 
 
 def build_renderable(snapshot: dict[str, Any]) -> Group:
-    top = Columns([_model_panel(snapshot), _surface_panel(snapshot)], equal=True, expand=True)
+    top = Columns(
+        [_model_panel(snapshot), _surface_panel(snapshot), _config_panel(snapshot)],
+        equal=True,
+        expand=True,
+    )
     middle = Columns([_sessions_panel(snapshot), _runs_panel(snapshot)], equal=True, expand=True)
     lower = Columns([
         _cron_panel(snapshot),
@@ -340,7 +395,7 @@ def build_renderable(snapshot: dict[str, Any]) -> Group:
         _integrity_panel(snapshot),
         _services_panel(snapshot),
     ], expand=True)
-    footer_items = ["r refresh", "c chat", "d dashboard", "e config", "s secrets", "q quit"]
+    footer_items = ["r refresh", "c chat", "d dashboard", "e config/edit", "s secrets/edit", "q quit"]
     if snapshot.get("errors"):
         footer_items.append(f"{len(snapshot['errors'])} warning(s)")
     footer = Panel("  ".join(footer_items), title="Actions", border_style="dim")

@@ -44,8 +44,8 @@ curl -fsSL …/install.sh | bash  # detects Termux, installs into $PREFIX/bin
 
 ## Optional extras
 
-`.[browser]`, `.[computer]`, `.[discord]`, `.[slack]`, `.[matrix]`, `.[honcho]`,
-`.[mem0]`, `.[all]`. Core (providers, OAuth, MCP, marketplace, gateway, serve, learn,
-voice) needs no extras.
+`.[browser]`, `.[computer]`, `.[discord]`, `.[slack]`, `.[matrix]`,
+`.[mem0]`, `.[tokenizer]`, `.[all]`. Core (providers, OAuth, MCP, marketplace,
+gateway, serve, learn, voice) needs no extras.
 
 Keep current with `aegis update` (`--check`, `--branch`). Remove with `./uninstall.sh`.

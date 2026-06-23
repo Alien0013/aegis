@@ -57,6 +57,23 @@ def _terminal_section(title: str, *, unicode: bool = False) -> str:
     return f"◇ {title}" if unicode else f"== {title} =="
 
 
+_BUSY_MODE_HINTS = {
+    "queue": "new input waits behind the active run",
+    "steer": "new input is sent as guidance to the active run",
+    "interrupt": "new input stops the active run and starts fresh",
+}
+
+
+def _busy_mode(value: object) -> str:
+    mode = str(value or "queue").strip().lower()
+    return mode if mode in _BUSY_MODE_HINTS else "queue"
+
+
+def _busy_mode_status(value: object) -> str:
+    mode = _busy_mode(value)
+    return f"{mode} - {_BUSY_MODE_HINTS[mode]}"
+
+
 def _redact_string_values(value):
     if isinstance(value, str):
         return redact_secrets(value)
@@ -977,6 +994,7 @@ def cmd_status(args, config: Config) -> int:
     terminal = {
         "backend": config.get("tools.terminal_backend"),
         "exec_mode": config.get("tools.exec_mode"),
+        "busy_mode": _busy_mode(config.get("gateway.busy_mode", "queue")),
         "subagent_backend": config.get("tools.subagent_terminal_backend") or "(inherit)",
         "allow_local_fallback": bool(config.get("tools.allow_local_fallback")),
         "timeout_seconds": config.get("tools.terminal_lifetime_seconds"),
@@ -1050,6 +1068,10 @@ def cmd_status(args, config: Config) -> int:
         _print(f"  Error:     {report_error}")
     _print()
     _print(_terminal_section("Surface", unicode=unicode_ui))
+    _print(
+        f"  Inventory: tools: {tools.enabled_count}/{tools.total_count}, "
+        f"skills: {skills.available_count}, plugins: {plugins.files_count}"
+    )
     _print(f"  Toolsets:  {', '.join(tools.toolsets) or 'none'}")
     _print(f"  Tools:     {tools.enabled_count}/{tools.total_count} model-visible")
     _print(f"  Skills:    {skills.available_count} available ({skills.bundled_count} bundled)")
@@ -1071,9 +1093,11 @@ def cmd_status(args, config: Config) -> int:
     _print(_terminal_section("Terminal", unicode=unicode_ui))
     _print(f"  Backend:     {terminal['backend']}")
     _print(f"  Exec mode:   {terminal['exec_mode']}")
+    _print(f"  Input mode:  {_busy_mode_status(terminal['busy_mode'])}")
     _print(f"  Subagents:   {terminal['subagent_backend']}")
     _print(f"  Local fallback: {terminal['allow_local_fallback']}")
     _print(f"  Timeout:     {terminal['timeout_seconds']}s")
+    _print("  Config edit: aegis config edit | aegis config edit --secrets")
     _print()
     _print(_terminal_section("State", unicode=unicode_ui))
     if "sessions" in state:
@@ -1539,6 +1563,7 @@ def cmd_config(args, config: Config) -> int:
             "aegis config reset <key>",
             "aegis config doctor",
             "aegis config setup",
+            "aegis tui",
             *config_setup_commands,
             *setup_commands,
             "aegis setup",
@@ -1591,6 +1616,10 @@ def cmd_config(args, config: Config) -> int:
                 "terminal": {
                     "backend": config.get("tools.terminal_backend"),
                     "exec_mode": config.get("tools.exec_mode"),
+                    "busy_mode": _busy_mode(config.get("gateway.busy_mode", "queue")),
+                    "busy_mode_hint": _BUSY_MODE_HINTS[
+                        _busy_mode(config.get("gateway.busy_mode", "queue"))
+                    ],
                     "subagent_backend": config.get("tools.subagent_terminal_backend") or "(inherit)",
                     "allow_local_fallback": config.get("tools.allow_local_fallback"),
                     "working_dir": str(Path.cwd()),
@@ -1664,6 +1693,7 @@ def cmd_config(args, config: Config) -> int:
         _print(_terminal_section("Terminal", unicode=unicode_ui))
         _print(f"  Backend:     {config.get('tools.terminal_backend')}")
         _print(f"  Exec mode:   {config.get('tools.exec_mode')}")
+        _print(f"  Input mode:  {_busy_mode_status(config.get('gateway.busy_mode', 'queue'))}")
         _print(f"  Subagents:   {config.get('tools.subagent_terminal_backend') or '(inherit)'}")
         _print(f"  Local fallback: {config.get('tools.allow_local_fallback')}")
         _print(f"  Working dir: {Path.cwd()}")
@@ -1700,6 +1730,7 @@ def cmd_config(args, config: Config) -> int:
         _print("  aegis config reset <key>          # Reset a config key or section to defaults")
         _print("  aegis config doctor               # Validate config and provider credentials")
         _print("  aegis config setup                # Run setup wizard from config")
+        _print("  aegis tui                         # Open terminal cockpit with config/edit actions")
         for section in _SETUP_SECTIONS:
             note = setup_descriptions.get(section, f"Configure {section}")
             _print(f"  aegis config setup {section:<9} # {note}")

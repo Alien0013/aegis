@@ -39,12 +39,15 @@ def test_tui_renders_dashboard_sections(monkeypatch, tmp_path):
     assert "active runs" in output
     assert "background" in output
     assert "Model" in output
+    assert "Config" in output
+    assert "input" in output
     assert "Sessions" in output
     assert "Runs" in output
     assert "Cron" in output
     assert "Kanban" in output
     assert "Integrity" in output
     assert "e config" in output
+    assert "e config/edit" in output
     assert "s secrets" in output
     assert snapshot["dashboard_url"].startswith("http://")
     assert snapshot["cross_session"]["object"] == "hermes.cross_session_integrity_report"

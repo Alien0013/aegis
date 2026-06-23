@@ -1,8 +1,8 @@
 # AEGIS Feature Parity Matrix
 
-**Purpose:** make the production target explicit: every major reference-agent capability family should either already exist in AEGIS, have a verified partial implementation, or be listed as a concrete build gap with likely files to change.
+**Purpose:** make the production target explicit: every major Codex/Hermes-style capability family should either already exist in AEGIS, have a verified partial implementation, or be listed as a concrete build gap with likely files to change.
 
-**Boundary:** this matrix is for capability parity, not copied implementation. AEGIS must keep its own code, names, prompts, docs voice, security model, and product identity.
+**Boundary:** this matrix is for capability parity, not copied implementation. AEGIS must keep its own code, names, prompts, docs voice, security model, and product identity. Third-party user-modeling integrations outside the local AEGIS runtime are out of scope for this product-polish pass.
 
 Status legend:
 
@@ -40,7 +40,7 @@ Status legend:
 | Interactive terminal REPL | Present | `aegis/cli/repl.py` | Improve parity tests for slash command registry. |
 | One-shot CLI query | Present | `aegis/cli/main.py`, docs | Add strict JSON output contracts. |
 | Model/provider switching | Present | `aegis/cli/main.py`, provider registry | Add provider capability display. |
-| Tool management commands | Present | `aegis/cli/main.py`, tools registry | Add schema validation command. |
+| Tool management commands | Present | `aegis/cli/main.py`, tools registry, `aegis tools doctor` | Generate command docs from the parser. |
 | Skill management commands | Present | `aegis/skills.py`, `aegis/skill_manage.py` | Add mandatory skill quality gate. |
 | Memory commands | Present | `aegis/memory.py` | Add provider provenance status. |
 | Session browse/list/export | Present | `aegis/session.py`, CLI docs | Add richer source filtering and lineage. |
@@ -64,7 +64,7 @@ Status legend:
 | OAuth/API-key auth abstraction | Present | `aegis/providers/auth.py`, `aegis/credentials.py` | Add dashboard auth state per provider. |
 | Credential pools / rotation | Partial | credentials/provider audit suggests auth support | Focus audit and add tests if missing. |
 | Fallback providers | Present | `aegis/providers/fallback.py` | Surface fallback reason/cost/latency in traces. |
-| Provider capability matrix | Partial | basic metadata exists | Add explicit fields: tools, vision, reasoning, structured output, context, max output, cost. |
+| Provider capability matrix | Partial | `aegis/providers/registry.py`, `web/src/pages/Models.tsx` | Add stronger live probe UX and provider-specific fixtures. |
 | Cost/usage accounting | Partial | `aegis/usage_log.py`, trace data | Add budget governor integration and UI. |
 | Model discovery | Partial | registry discovery flags | Add provider-specific live discovery tests. |
 
@@ -86,10 +86,10 @@ Status legend:
 | LSP/code intelligence | Present | `aegis/tools/lsp.py` | Add editor/dashboard diagnostics view. |
 | Subagents/delegation | Present | `aegis/tools/agentic.py`, runtime docs | Add durable/orchestrator limits UI. |
 | Cron job tool | Present | `aegis/tools/cronjob_tool.py` | Add dry-run preview and next-fire endpoint. |
-| Permission cascade | Present | `aegis/tools/permissions.py` | Add `explain()` API + dashboard dry-run. |
+| Permission cascade | Present | `aegis/tools/permissions.py`, `aegis/dashboard.py`, `web/src/pages/Tools.tsx`, `tests/test_agent_perms.py` | Extend examples/docs to plugin and MCP tools. |
 | Destructive command hard blocks | Present | `aegis/tools/permissions.py`, `security_scan.py` | Add policy regression examples. |
-| Tool schema validation | Missing | not yet implemented as a gate | P1 next slice: validate every registered schema and add CI check. |
-| Tool provenance display | Missing | plugins/MCP provenance incomplete in UI | Add source/type/version fields to registry output. |
+| Tool schema validation | Present | `aegis/tools/schema_validation.py`, `aegis tools doctor`, dashboard schema health, `tests/test_tool_schema_validation.py` | Extend gate to plugin/MCP schemas in CI. |
+| Tool provenance display | Partial | tool registry and plugin UI expose some source data | Add source/type/version fields consistently to registry output. |
 
 ---
 
@@ -99,7 +99,7 @@ Status legend:
 |---|---:|---|---|
 | Persistent memory | Present | `aegis/memory.py`, `aegis/memory_providers.py` | Show provider/provenance in dashboard. |
 | Pluggable memory backends | Present | memory providers audit | Add conformance tests per backend. |
-| Skill loading | Present | `aegis/skills.py`, 76 bundled skills | Add usage telemetry UI. |
+| Skill loading | Present | `aegis/skills.py`, bundled skills, `aegis skills list` | Add usage telemetry UI. |
 | Skill create/edit/remove | Present | `aegis/skill_manage.py`, skill tools | Enforce quality gate before write/install. |
 | Bundled skills library | Present | `aegis/builtin_skills/**` | Resolve duplicate names and stale docs as needed. |
 | Skill hub/marketplace | Partial | `aegis/marketplace.py` | Add install preview and security scan report. |
@@ -135,10 +135,10 @@ Status legend:
 | Sessions page | Present | `web/src/pages/Sessions.tsx` | Add lineage graph. |
 | Models/providers page | Present | `web/src/pages/Models.tsx` | Add capability/probe/auth matrix. |
 | Memory page | Present | `web/src/pages/Memory.tsx` | Add provider sync/provenance. |
-| Tools page | Present | `web/src/pages/Tools.tsx` | Add schema validator and permission dry-run. |
+| Tools page | Present | `web/src/pages/Tools.tsx`, `/api/tools/validation`, `/api/tools/permission-dry-run` | Add fuller provenance and plugin/MCP schema coverage. |
 | Skills page | Present | `web/src/pages/Skills.tsx` | Add quality gate + curator flow. |
 | Cron page | Present | `web/src/pages/Cron.tsx` | Add dry-run/next-fire timeline. |
-| Gateway/channels/webhooks pages | Present | `web/src/pages/Channels.tsx`, `Webhooks.tsx` | Add queue/dead-letter operations view. |
+| Gateway/channels/webhooks pages | Present | `web/src/pages/Channels.tsx`, `Webhooks.tsx`, gateway outbox/dead-letter endpoints | Add backpressure metrics and live adapter recovery guidance. |
 | Config/files/logs/system pages | Present | routes detected | Add production health score. |
 | Analytics page | Present | route detected | Connect to cost/latency/governor metrics. |
 | Plugin route/slot host | Present | `web/src/plugins/host.tsx` | Add plugin provenance/security UI. |
@@ -173,7 +173,7 @@ Status legend:
 | Per-channel sessions | Present | gateway/session code | Add routing visualization. |
 | Gateway commands/status/restart | Present | gateway tests/docs | Add command registry generation. |
 | Queue/idempotency | Present | `aegis/gateway/queue.py` | Add backpressure metrics. |
-| Dead-letter store for failed delivery | Missing | not confirmed | P4: build failure records and dashboard. |
+| Dead-letter store for failed delivery | Present | `aegis/gateway/queue.py`, `aegis/dashboard_fastapi.py`, `web/src/pages/Channels.tsx`, `tests/test_gateway_queue_ops.py` | Add platform-specific retry playbooks and metrics. |
 | Webhook subscriptions | Present | `aegis/webhook.py`, docs | Add payload templating UI and replay. |
 | Handoff from CLI to gateway | Present | `aegis/handoff.py` | Add dashboard handoff history. |
 | Voice message STT/TTS through gateway | Partial | voice tools exist | Focus audit per adapter. |
@@ -262,15 +262,15 @@ Status legend:
 
 | Capability | AEGIS status | Evidence / likely files | Gap to close |
 |---|---:|---|---|
-| User quickstart | Present | `docs/quickstart.md` | Update after feature matrix lands. |
+| User quickstart | Present | `docs/quickstart.md` | Keep generated command examples in sync. |
 | CLI reference | Present | `docs/cli.md` | Generate from command registry where possible. |
 | Security docs | Present | `docs/security.md` | Add security report examples. |
-| Dashboard docs | Present/Partial | docs and README | Add trace/permission/provider pages after build. |
-| Desktop docs | Partial | README/docs | Add packaged lifecycle/troubleshooting. |
-| Provider docs | Present/Partial | docs and registry | Add capability matrix. |
+| Dashboard docs | Present/Partial | docs and README | Add trace, permission, provider, and dead-letter page details. |
+| Desktop docs | Partial | README/docs | Add packaged lifecycle and troubleshooting proof. |
+| Provider docs | Present/Partial | docs and registry | Add provider capability/probe matrix details. |
 | Gateway docs | Present/Partial | docs/gateway | Add platform contract table. |
 | Release docs | Present | `RELEASING.md` | Add full verification matrix and artifact hashes. |
-| Roadmap | Stale | current roadmap contradicts implemented desktop/dashboard scope | Rewrite roadmap from this matrix. |
+| Roadmap | Partial | README and this matrix now describe current product polish gaps | Keep refreshed after each production slice. |
 | Full audit doc | Present | `docs/full-repo-audit.md` | Keep updated after major slices. |
 | Production plan | Present | `docs/production-harness-plan.md` | Keep tied to this matrix. |
 
@@ -280,16 +280,16 @@ Status legend:
 
 Fastest high-impact path:
 
-1. **Tool schema validator** — gate all registered tools and plugin/MCP schemas.
-2. **Permission dry-run/explain API** — same policy path, structured allow/deny reasons.
-3. **Tools dashboard control panel** — schema health, provenance, permission simulator.
-4. **Provider capability matrix** — model auth/probe/capability/cost/latency status.
-5. **Trace timeline endpoint/UI** — prompt parts, provider calls, tool calls, retries, compaction, outputs.
-6. **Cron dry-run + gateway dead-letter store** — operational reliability.
-7. **Desktop lifecycle state machine** — production desktop observability.
-8. **Skill quality gate + curator approval UI** — safe long-term self-improvement.
-9. **Release gate + artifact provenance** — one command that proves the whole product.
-10. **Roadmap/docs rewrite** — make public claims match verified capabilities.
+1. **Trace timeline + prompt/context audit** — prompt parts, provider calls, tool calls, retries, compaction, outputs.
+2. **Provider capability/probe/auth matrix hardening** — live readiness, cost/latency, model capabilities, and failure reasons.
+3. **Tool provenance and plugin/MCP schema gate** — consistent source/type/version fields and CI validation beyond built-ins.
+4. **Cron dry-run, next-fire, and active jobs panel** — one operational view for scheduled and background work.
+5. **Desktop lifecycle state machine** — boot, backend, restart, crash history, repair actions, and packaged smoke verification.
+6. **Skill quality gate + curator approval UI** — safe long-term self-improvement with rollback preview.
+7. **API/SDK contract fixtures** — streaming, cancellation, auth, run events, MCP, eval replay, and responses-style behavior.
+8. **Gateway fake-adapter/live-test matrix** — adapter contract coverage plus explicit credentialed smoke steps.
+9. **Release provenance** — artifact hashes, SBOM, signing/notarization proof when credentials exist, and a single release gate.
+10. **Generated docs** — CLI/API/dashboard references generated from code where practical.
 
 ---
 

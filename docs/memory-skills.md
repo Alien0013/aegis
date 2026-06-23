@@ -19,14 +19,15 @@ Pluggable external backends layer on top of the built-in files:
 
 ```yaml
 memory:
-  provider: honcho     # "" | honcho | mem0 | jsonl | http (openviking/supermemory/…)
+  provider: mem0       # "" | mem0 | jsonl | http (openviking/supermemory/...)
 ```
 
 ## Skills
 
 `SKILL.md` packages with progressive disclosure (only descriptions cost tokens until a
 skill is loaded) and tiered precedence (workspace > personal > configured > bundled).
-24 ship by default.
+Run `aegis skills list` to see the bundled and installed skills in your current
+checkout.
 
 ```bash
 aegis skills                     # available skills
