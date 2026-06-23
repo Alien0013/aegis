@@ -25,6 +25,9 @@ test("renderer navigation stays inside the dashboard origin", () => {
   requireSnippet("function openExternalUrl");
   requireSnippet("function isInternalNavigationUrl");
   requireSnippet("function wireRendererWindow");
+  requireSnippet("function openAgentsWindow");
+  requireSnippet('ipcMain.handle("aegis:agents:openWindow"');
+  requireSnippet("Live Agents Window");
   requireSnippet("setWindowOpenHandler");
   requireSnippet("will-navigate");
   requireSnippet('["http:", "https:", "mailto:"]');
@@ -117,6 +120,7 @@ test("renderer diagnostics and logs bridge is bounded", () => {
   requireSnippet('ipcMain.handle("aegis:settings:chooseProjectDir"');
   requireSnippet("desktopProjectCwd({");
   assert.notEqual(preload.indexOf("getDiagnostics"), -1);
+  assert.notEqual(preload.indexOf("openAgentsWindow"), -1);
   assert.notEqual(preload.indexOf("runRepairAction"), -1);
   assert.notEqual(preload.indexOf("getRecentLogs: (limit)"), -1);
   assert.notEqual(preload.indexOf("getSettings"), -1);

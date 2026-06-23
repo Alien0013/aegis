@@ -13,6 +13,7 @@ import { ThemeSwitcher } from "../components/ThemeSwitcher";
 import { openCommandPalette } from "../components/CommandPalette";
 import { Badge, Toaster } from "../components/ui";
 import { ago, compact } from "../lib/format";
+import { desktop, isDesktop } from "../lib/desktop";
 import { GraphicalChat } from "./GraphicalChat";
 
 interface SessionRow {
@@ -70,6 +71,14 @@ export function DesktopShell() {
     setChatResetToken((value) => value + 1);
     reload();
   }, [nav, reload]);
+
+  const openAgents = useCallback(() => {
+    if (isDesktop && desktop?.openAgentsWindow) {
+      desktop.openAgentsWindow();
+      return;
+    }
+    nav("/agents");
+  }, [nav]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -207,6 +216,14 @@ export function DesktopShell() {
               <Icon name="command" size={14} />
             </button>
             <button
+              onClick={openAgents}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius)] border border-border text-faint transition hover:border-border-2 hover:text-text"
+              title={isDesktop ? "Open live agents window" : "Live agents"}
+              aria-label="Live agents"
+            >
+              <Icon name="agents" size={14} />
+            </button>
+            <button
               onClick={() => nav("/")}
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius)] border border-border text-faint transition hover:border-border-2 hover:text-text"
               title="Control panel"
@@ -239,6 +256,7 @@ export function DesktopShell() {
           onOpen={open}
           onNew={newChat}
           onNavigate={(path) => nav(path)}
+          onOpenAgents={openAgents}
         />
       </main>
       {sessionHudOpen && (
@@ -265,6 +283,7 @@ function DesktopOpsRail({
   onOpen,
   onNew,
   onNavigate,
+  onOpenAgents,
 }: {
   sessions: SessionRow[];
   activeId: string;
@@ -275,6 +294,7 @@ function DesktopOpsRail({
   onOpen: (id: string) => void;
   onNew: () => void;
   onNavigate: (path: string) => void;
+  onOpenAgents: () => void;
 }) {
   const activeSession = sessions.find((session) => session.id === activeId);
   const gateway = status?.gateway_state || (status?.gateway_running ? "running" : "offline");
@@ -352,9 +372,9 @@ function DesktopOpsRail({
 
       <div className="grid grid-cols-4 gap-px border-t border-border bg-border p-px">
         <ShellNavButton icon="chat" label="Chat" onClick={onNew} />
+        <ShellNavButton icon="agents" label="Agents" onClick={onOpenAgents} />
         <ShellNavButton icon="terminal" label="Terminal" onClick={() => onNavigate("/chat")} />
         <ShellNavButton icon="logs" label="Logs" onClick={() => onNavigate("/logs")} />
-        <ShellNavButton icon="command" label="Ops" onClick={() => onNavigate("/command-center")} />
       </div>
     </aside>
   );

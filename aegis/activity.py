@@ -42,6 +42,7 @@ class ActivityRecord:
     tool_errors: int = 0
     subagents_active: int = 0
     subagents_done: int = 0
+    subagents: dict[str, dict[str, Any]] = field(default_factory=dict)
     compactions: int = 0
     last_event: str = ""
     last_tool: str = ""
@@ -79,6 +80,14 @@ class ActivityRecord:
             "tool_errors": self.tool_errors,
             "subagents_active": self.subagents_active,
             "subagents_done": self.subagents_done,
+            "subagents": [
+                _subagent_row(row, now)
+                for row in sorted(
+                    self.subagents.values(),
+                    key=lambda item: float(item.get("updated_at") or 0.0),
+                    reverse=True,
+                )
+            ],
             "compactions": self.compactions,
             "last_event": self.last_event,
             "last_tool": self.last_tool,
@@ -186,16 +195,35 @@ class ActivityStore:
                 rec.active_tool_started_at = 0.0
             elif etype == "subagent_start":
                 rec.phase = "subagent"
-                rec.subagents_active += 1
+                child = _ensure_subagent(rec, event)
+                child["status"] = "running"
+                child["started_at"] = child.get("started_at") or rec.updated_at
+                child["updated_at"] = rec.updated_at
+                child["ended_at"] = 0.0
                 rec.active_tool = f"subagent:{event.get('agent_type') or 'worker'}"
                 rec.last_tool = rec.active_tool
                 rec.active_tool_started_at = time.time()
+                _refresh_subagent_counts(rec)
+            elif etype in {"subagent_text", "subagent_reasoning"}:
+                rec.phase = "subagent"
+                child = _ensure_subagent(rec, event)
+                child["status"] = child.get("status") or "running"
+                child["updated_at"] = rec.updated_at
+                key = "reasoning_preview" if etype == "subagent_reasoning" else "text_preview"
+                child[key] = _clip((str(child.get(key) or "") + str(event.get("text") or ""))[-480:], 480)
+                _refresh_subagent_counts(rec)
             elif etype == "subagent_done":
                 rec.phase = "subagent done"
-                rec.subagents_active = max(0, rec.subagents_active - 1)
-                rec.subagents_done += 1
-                rec.active_tool = ""
-                rec.active_tool_started_at = 0.0
+                child = _ensure_subagent(rec, event)
+                status = str(event.get("status") or "ok")
+                child["status"] = status
+                child["updated_at"] = rec.updated_at
+                child["ended_at"] = rec.updated_at
+                if event.get("text") or event.get("summary"):
+                    child["text_preview"] = _clip(str(event.get("text") or event.get("summary") or ""), 480)
+                if status == "error":
+                    child["error"] = str(event.get("error") or event.get("message") or child.get("error") or "")
+                _refresh_subagent_counts(rec)
             elif etype == "compacting":
                 rec.phase = "compacting"
             elif etype == "compacted":
@@ -234,6 +262,12 @@ class ActivityStore:
             rec.active_provider = ""
             rec.active_tool_started_at = 0.0
             rec.active_provider_started_at = 0.0
+            for child in rec.subagents.values():
+                if str(child.get("status") or "").lower() not in TERMINAL_STATES:
+                    child["status"] = "done" if rec.status == "ok" else rec.status
+                    child["updated_at"] = rec.updated_at
+                    child["ended_at"] = rec.updated_at
+            _refresh_subagent_counts(rec)
             out = rec.to_dict(rec.updated_at)
             self._completed.insert(0, rec)
             del self._completed[self.retain_completed:]
@@ -307,3 +341,70 @@ def _provider_label(provider: str, model: str) -> str:
     provider = str(provider or "")
     model = str(model or "")
     return f"{provider}/{model}" if provider and model else provider or model
+
+
+def _subagent_id(event: dict[str, Any]) -> str:
+    sid = str(event.get("subagent_id") or event.get("id") or event.get("task") or "").strip()
+    return sid or f"subagent-{abs(hash(str(event))) % 100000}"
+
+
+def _ensure_subagent(rec: ActivityRecord, event: dict[str, Any]) -> dict[str, Any]:
+    sid = _subagent_id(event)
+    now = rec.updated_at or time.time()
+    child = rec.subagents.get(sid)
+    if child is None:
+        child = {
+            "id": sid,
+            "agent_type": str(event.get("agent_type") or "worker"),
+            "task": _clip(str(event.get("task") or ""), 240),
+            "status": "running",
+            "started_at": now,
+            "updated_at": now,
+            "ended_at": 0.0,
+            "text_preview": "",
+            "reasoning_preview": "",
+            "error": "",
+        }
+        rec.subagents[sid] = child
+    else:
+        if event.get("agent_type"):
+            child["agent_type"] = str(event.get("agent_type") or child.get("agent_type") or "worker")
+        if event.get("task"):
+            child["task"] = _clip(str(event.get("task") or ""), 240)
+    return child
+
+
+def _refresh_subagent_counts(rec: ActivityRecord) -> None:
+    active = [
+        child
+        for child in rec.subagents.values()
+        if str(child.get("status") or "").lower() not in TERMINAL_STATES
+    ]
+    rec.subagents_active = len(active)
+    rec.subagents_done = len(rec.subagents) - len(active)
+    if active:
+        latest = max(active, key=lambda child: float(child.get("updated_at") or 0.0))
+        rec.active_tool = f"subagent:{latest.get('agent_type') or 'worker'}"
+        rec.active_tool_started_at = float(latest.get("started_at") or rec.active_tool_started_at or time.time())
+    elif rec.active_tool.startswith("subagent:"):
+        rec.active_tool = ""
+        rec.active_tool_started_at = 0.0
+
+
+def _subagent_row(row: dict[str, Any], now: float) -> dict[str, Any]:
+    started = float(row.get("started_at") or 0.0)
+    ended = float(row.get("ended_at") or 0.0)
+    updated = float(row.get("updated_at") or 0.0)
+    return {
+        "id": str(row.get("id") or ""),
+        "agent_type": str(row.get("agent_type") or "worker"),
+        "task": str(row.get("task") or ""),
+        "status": str(row.get("status") or "running"),
+        "text_preview": str(row.get("text_preview") or ""),
+        "reasoning_preview": str(row.get("reasoning_preview") or ""),
+        "error": str(row.get("error") or ""),
+        "started_at": _iso(started),
+        "updated_at": _iso(updated),
+        "ended_at": _iso(ended) if ended else "",
+        "elapsed_ms": int(max(0.0, (ended or now) - started) * 1000) if started else 0,
+    }

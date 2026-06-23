@@ -7,8 +7,9 @@ aegis ui --no-open --port 9119
 
 The dashboard is a local React + Vite + TypeScript control panel served by a
 FastAPI backend. It opens on `/sessions` so the first screen is resumable work,
-not a dense admin wall. `/dashboard` is the calmer overview, and
-`/command-center` is the compact sessions/system/usage ops overlay. The built
+not a dense admin wall. `/dashboard` is the calmer overview, `/agents` is the
+live monitor for running turns and subagents, and `/command-center` is the
+compact sessions/system/usage ops overlay. The built
 bundle lives in `aegis/static/web_dist/`, so an installed AEGIS package does not
 need Node to open the dashboard. Frontend development happens in `web/`.
 
@@ -21,7 +22,7 @@ desktop, SDK, API, gateway, cron, and webhook paths.
 
 | Group | Pages |
 | --- | --- |
-| Workspace | Sessions, Chat, Terminal, Overview |
+| Workspace | Sessions, Chat, Terminal, Live Agents, Overview |
 | Agent | Models, Tools, Skills, Memory, Persona, Schedules, Kanban |
 | Integrations | MCP, Channels, Webhooks, Pairing, Accounts, Plugins, Env |
 | System | Command Center, Analytics, Files, Logs, Profiles, Docs, System, Config |
@@ -33,10 +34,25 @@ to the run, trace, turn, and session. The Command Center and status APIs also
 expose live activity snapshots for running work: phase, active provider, active
 tool, subagent counts, iteration, elapsed time, and recent completed activity.
 
+The Live Agents page is the dedicated activity monitor. It shows active runs,
+child subagent cards, model/tool call totals, the current tool or provider, and
+recent completed activity. In a browser it can pop out to a second window; in
+the desktop app it opens as a native Live Agents window.
+
 The Tools page includes current schema health and a permission dry-run panel.
 The Channels page includes gateway outbox/dead-letter operations for failed
 deliveries. These are local control surfaces; live platform delivery still
 requires configured channel credentials and should be smoke-tested separately.
+
+## Setup Selection
+
+The setup wizard has a Tools & skills step. Run
+`aegis setup tools --advanced` to choose optional browser, computer, voice, LSP,
+and MCP toolsets and optionally restrict model-visible skills. Noninteractive
+setup can use `--toolsets` and `--skills` for the same config. It saves
+`tools.toolsets` and `skills.allowlist`, then reports model-visible tool counts,
+available skills, bundled skills, and plugin tool totals. The dashboard Tools
+and Skills pages reflect the same local configuration.
 
 ## Development
 
@@ -76,7 +92,8 @@ scripts/check_web_dist.sh
 
 `aegis desktop` launches an Electron shell around the same dashboard runtime.
 Electron starts the backend on a random free port with a random token and opens
-the chat-first desktop route.
+the chat-first desktop route. The desktop menu can also open `/agents` as a
+separate Live Agents window for monitoring long-running work beside chat.
 
 ```bash
 aegis desktop --doctor

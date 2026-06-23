@@ -322,6 +322,7 @@ def cmd_setup(args, config: Config) -> int:
             model=getattr(args, "model", None),
             web=getattr(args, "web", "auto"),
             toolsets=getattr(args, "toolsets", None),
+            skills=getattr(args, "skills", None),
             channels=getattr(args, "channels", None),
             exec_mode=getattr(args, "exec_mode", "ask"),
             services=getattr(args, "install_services", False)
@@ -337,6 +338,7 @@ def cmd_setup(args, config: Config) -> int:
             model=getattr(args, "model", None),
             web=getattr(args, "web", "auto"),
             toolsets=getattr(args, "toolsets", None),
+            skills=getattr(args, "skills", None),
             channels=getattr(args, "channels", None),
             exec_mode=getattr(args, "exec_mode", "ask"),
             services=getattr(args, "install_services", False)
@@ -2502,6 +2504,7 @@ def _add_onboard_automation_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--model", help="model id for noninteractive onboarding")
     parser.add_argument("--web", default="auto", help="web search backend, or skip")
     parser.add_argument("--toolsets", help="comma list, e.g. core,browser,lsp,mcp")
+    parser.add_argument("--skills", help="comma list of model-visible skills, or all")
     parser.add_argument("--channels", help="comma list, e.g. telegram,discord")
     parser.add_argument("--exec-mode", default="ask",
                         choices=["ask", "auto", "allowlist", "deny", "full", "smart"])

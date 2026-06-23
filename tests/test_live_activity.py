@@ -25,7 +25,21 @@ def test_live_activity_tracks_provider_tool_subagent_and_finish():
         activity.update(activity_id, {"type": "provider_end", "status": "ok"})
         activity.update(activity_id, {"type": "tool_start", "id": "tool_1", "name": "read_file"})
         activity.update(activity_id, {"type": "tool_result", "id": "tool_1", "name": "read_file"})
-        activity.update(activity_id, {"type": "subagent_start", "id": "sub_1", "agent_type": "review"})
+        activity.update(activity_id, {
+            "type": "subagent_start",
+            "id": "sub_1",
+            "agent_type": "review",
+            "task": "inspect the patch",
+        })
+        activity.update(activity_id, {"type": "subagent_text", "id": "sub_1", "text": "child says hello"})
+        activity.update(activity_id, {"type": "subagent_reasoning", "id": "sub_1", "text": "thinking"})
+        active_with_child = activity.current(activity_id)
+        assert active_with_child is not None
+        assert active_with_child["subagents_active"] == 1
+        assert active_with_child["subagents"][0]["id"] == "sub_1"
+        assert active_with_child["subagents"][0]["task"] == "inspect the patch"
+        assert active_with_child["subagents"][0]["text_preview"] == "child says hello"
+        assert active_with_child["subagents"][0]["reasoning_preview"] == "thinking"
         activity.update(activity_id, {"type": "subagent_done", "id": "sub_1", "agent_type": "review"})
 
         current = activity.current(activity_id)
@@ -37,7 +51,9 @@ def test_live_activity_tracks_provider_tool_subagent_and_finish():
         assert current["iteration"] == 2
         assert current["tool_calls"] == 1
         assert current["last_tool"] == "subagent:review"
+        assert current["subagents_active"] == 0
         assert current["subagents_done"] == 1
+        assert current["subagents"][0]["status"] == "ok"
 
         final = activity.finish(activity_id, status="ok")
         assert final is not None

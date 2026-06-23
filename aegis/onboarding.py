@@ -213,6 +213,7 @@ class OnboardingState:
     channels: list[str] | None = None
     workspace_files: list[str] | None = None
     toolsets: list[str] | None = None
+    skill_allowlist: list[str] | None = None
     enabled_tools: int = 0
     total_tools: int = 0
     available_skills: int = 0
@@ -315,6 +316,7 @@ def run_onboarding_noninteractive(
     model: str | None = None,
     web: str = "auto",
     toolsets: str | None = None,
+    skills: str | None = None,
     channels: str | None = None,
     exec_mode: str = "ask",
     services: bool = False,
@@ -388,6 +390,9 @@ def run_onboarding_noninteractive(
     unknown_toolsets = sorted(set(selected_toolsets) - VALID_TOOLSETS)
     if unknown_toolsets:
         return fail("unknown toolset(s): " + ", ".join(unknown_toolsets))
+    ok, message, selected_skills = _apply_skill_selection(config, _parse_csv(skills), explicit=skills is not None)
+    if not ok:
+        return fail(message)
     selected_channels = _parse_csv(channels)
     unknown_channels = sorted(set(selected_channels) - VALID_CHANNELS)
     if unknown_channels:
@@ -408,6 +413,7 @@ def run_onboarding_noninteractive(
         state.web_backend = web
 
     config.set("tools.toolsets", selected_toolsets)
+    state.skill_allowlist = selected_skills
 
     config.data.setdefault("gateway", {})["channels"] = selected_channels
     state.channels = selected_channels
@@ -502,6 +508,7 @@ def run_setup_section_noninteractive(
     model: str | None = None,
     web: str = "auto",
     toolsets: str | None = None,
+    skills: str | None = None,
     channels: str | None = None,
     exec_mode: str = "ask",
     services: bool = False,
@@ -550,6 +557,14 @@ def run_setup_section_noninteractive(
         if unknown_toolsets:
             return fail("unknown toolset(s): " + ", ".join(unknown_toolsets))
         config.set("tools.toolsets", selected_toolsets)
+        ok, message, selected_skills = _apply_skill_selection(
+            config,
+            _parse_csv(skills),
+            explicit=skills is not None,
+        )
+        if not ok:
+            return fail(message)
+        state.skill_allowlist = selected_skills
         _populate_surface_state(config, state)
 
     if section in {"gateway", "agent"}:
@@ -764,6 +779,53 @@ def _parse_csv(value: str | None) -> list[str]:
     if not value:
         return []
     return [part.strip() for part in value.split(",") if part.strip()]
+
+
+def _skill_options(config: Config) -> list[tuple[str, str]]:
+    from .skills import SkillsLoader, _skill_command_name
+
+    discovered = SkillsLoader(config).discover()
+    options: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for name, skill in sorted(discovered.items(), key=lambda item: _skill_command_name(item[0])):
+        key = _skill_command_name(name)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        desc = " ".join(str(skill.description or "").split())
+        label = f"{key} — {desc[:76]}" if desc else key
+        options.append((key, label))
+    return options
+
+
+def _apply_skill_selection(
+    config: Config,
+    selected: list[str],
+    *,
+    explicit: bool,
+) -> tuple[bool, str, list[str]]:
+    from .skills import _skill_command_name
+
+    if not explicit:
+        current = [_skill_command_name(s) for s in config.get("skills.allowlist", []) or [] if str(s).strip()]
+        return True, "", current
+
+    normalized = [_skill_command_name(s) for s in selected if str(s).strip()]
+    normalized = [s for s in normalized if s]
+    if not normalized or any(s in {"all", "*"} for s in normalized):
+        config.set("skills.allowlist", [])
+        return True, "", []
+
+    valid = {value for value, _label in _skill_options(config)}
+    unknown = sorted(set(normalized) - valid)
+    if unknown:
+        return False, "unknown skill(s): " + ", ".join(unknown), []
+
+    # Preserve the caller's order while dropping duplicates.
+    ordered = list(dict.fromkeys(normalized))
+    config.set("skills.allowlist", ordered)
+    config.set("skills.disabled", [])
+    return True, "", ordered
 
 
 def _multi_choose(
@@ -1343,6 +1405,43 @@ def _configure_agent_surface(
             toolsets = current
     config.set("tools.toolsets", toolsets)
 
+    if advanced:
+        current_skills = list(config.get("skills.allowlist", []) or [])
+        if _confirm(
+            "Restrict model-visible skills to a selected set?",
+            bool(current_skills),
+            input_func,
+            out,
+        ):
+            options = _skill_options(config)
+            if options:
+                selected_skills = _multi_choose(
+                    "Which skills should AEGIS expose to the model?",
+                    options,
+                    default_values=current_skills,
+                    input_func=input_func,
+                    output_func=out,
+                )
+                ok, message, selected = _apply_skill_selection(
+                    config,
+                    selected_skills,
+                    explicit=True,
+                )
+                if ok:
+                    state.skill_allowlist = selected
+                    if selected:
+                        out(f"✓ skill allowlist: {len(selected)} selected")
+                    else:
+                        out("✓ skill allowlist cleared; all skills are visible")
+                else:
+                    out(f"! {message}; leaving current skill policy unchanged")
+            else:
+                out("! no skills were discovered yet")
+        elif current_skills:
+            config.set("skills.allowlist", [])
+            state.skill_allowlist = []
+            out("✓ skill allowlist cleared; all skills are visible")
+
     tools, skills, plugins = _populate_surface_state(config, state)
     out(f"✓ enabled toolsets: {', '.join(tools.toolsets)}")
     out(f"✓ model-visible tools: {tools.enabled_count}/{tools.total_count}")
@@ -1363,6 +1462,7 @@ def _populate_surface_state(config: Config, state: OnboardingState):
     skills = skill_inventory(config)
     plugins = plugin_inventory()
     state.toolsets = tools.toolsets
+    state.skill_allowlist = list(config.get("skills.allowlist", []) or [])
     state.enabled_tools = tools.enabled_count
     state.total_tools = tools.total_count
     state.available_skills = skills.available_count
@@ -1653,6 +1753,7 @@ def _summary_data(config: Config, state: OnboardingState, *, ok: bool = True) ->
             "tools_total": state.total_tools,
             "skills_available": state.available_skills,
             "skills_bundled": state.bundled_skills,
+            "skills_allowlist": state.skill_allowlist or [],
             "plugin_files": state.plugin_files,
             "plugin_tools": state.plugin_tools,
             "plugin_errors": state.plugin_errors,

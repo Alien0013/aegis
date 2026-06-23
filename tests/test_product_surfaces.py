@@ -49,6 +49,8 @@ def test_cli_parser_exposes_upgrade_commands():
         "gpt-5.5",
         "--toolsets",
         "core,browser",
+        "--skills",
+        "web-research,summarize",
         "--install-services",
     ])
     assert cfg_setup.non_interactive is True
@@ -57,6 +59,7 @@ def test_cli_parser_exposes_upgrade_commands():
     assert cfg_setup.provider == "openai"
     assert cfg_setup.model == "gpt-5.5"
     assert cfg_setup.toolsets == "core,browser"
+    assert cfg_setup.skills == "web-research,summarize"
     assert cfg_setup.install_services is True
 
 

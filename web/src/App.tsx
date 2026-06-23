@@ -14,6 +14,7 @@ import { Loading, Toaster } from "./components/ui";
 import { NAV_ITEMS } from "./lib/nav";
 import { useApi } from "./lib/useApi";
 import { CommandCenter } from "./pages/CommandCenter";
+import { Agents } from "./pages/Agents";
 import { Overview } from "./pages/Overview";
 import { Sessions } from "./pages/Sessions";
 import { Models } from "./pages/Models";
@@ -139,6 +140,7 @@ function Routed({ full }: { full?: boolean }) {
             <Route path="/" element={<Navigate to="/sessions" replace />} />
             <Route path="/dashboard" element={routeElement("/dashboard", <Overview />)} />
             <Route path="/command-center" element={routeElement("/command-center", <CommandCenter />)} />
+            <Route path="/agents" element={routeElement("/agents", <Agents />)} />
             <Route path="/chat" element={routeElement("/chat", <Terminal />)} />
             <Route path="/terminal" element={routeElement("/terminal", <Terminal />)} />
             <Route path="/sessions" element={routeElement("/sessions", <Sessions />)} />

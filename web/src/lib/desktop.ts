@@ -93,6 +93,7 @@ export interface DesktopBridge {
   isMaximized(): Promise<boolean>;
   onMaximizeChange(cb: (maximized: boolean) => void): () => void;
   openExternal(url: string): void;
+  openAgentsWindow?(): Promise<{ ok?: boolean; route?: string }>;
   restartBackend(): void;
   runRepairAction?(action: string | DesktopRepairAction): Promise<DesktopRepairResult>;
   getConnection?(): Promise<DesktopConnection>;

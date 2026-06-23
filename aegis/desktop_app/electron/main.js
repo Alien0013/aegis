@@ -714,6 +714,11 @@ function openExtraWindow(p) {
   return w;
 }
 
+function openAgentsWindow() {
+  const w = openExtraWindow("/agents");
+  return { ok: Boolean(w), route: "/agents" };
+}
+
 function createTray() {
   if (tray) return;
   try {
@@ -723,6 +728,7 @@ function createTray() {
   const menu = Menu.buildFromTemplate([
     { label: "Show AEGIS", click: () => showMainWindow() },
     { label: "New Window", click: () => openExtraWindow("/app") },
+    { label: "Live Agents Window", click: () => openAgentsWindow() },
     { type: "separator" },
     { label: "Chat", click: () => { showMainWindow(); win && win.loadURL(route("/app")); } },
     { label: "Sessions", click: () => { showMainWindow(); win && win.loadURL(route("/sessions")); } },
@@ -957,6 +963,7 @@ function installMenu() {
       { label: "Settings", accelerator: "CmdOrCtrl+,", click: () => go("/config") },
       { type: "separator" },
       { label: "New Window", accelerator: "CmdOrCtrl+N", click: () => openExtraWindow("/app") },
+      { label: "Live Agents Window", accelerator: "CmdOrCtrl+Shift+L", click: () => openAgentsWindow() },
       { label: "Open in Browser", click: () => dashboardUrl && openExternalUrl(dashboardUrl) },
       { label: "Copy Dashboard URL", click: () => dashboardUrl && clipboard.writeText(dashboardUrl) },
       { label: "Restart Backend", click: () => restartFromScratch() },
@@ -969,6 +976,7 @@ function installMenu() {
       { label: "Overview", click: () => go("/") },
       { label: "Chat", click: () => go("/chat") },
       { label: "Sessions", click: () => go("/sessions") },
+      { label: "Live Agents", click: () => go("/agents") },
       { type: "separator" },
       { label: "Models", click: () => go("/models") },
       { label: "Tools", click: () => go("/tools") },
@@ -1013,6 +1021,7 @@ ipcMain.on("win:close", (e) => { const w = senderWindow(e); if (w) w.close(); })
 ipcMain.handle("win:isMaximized", (e) => !!(senderWindow(e) && senderWindow(e).isMaximized()));
 ipcMain.on("win:openExternal", (_e, url) => { openExternalUrl(url); });
 ipcMain.on("win:restartBackend", () => restartFromScratch());
+ipcMain.handle("aegis:agents:openWindow", () => openAgentsWindow());
 ipcMain.handle("aegis:connection", () => connectionDescriptor());
 ipcMain.handle("aegis:diagnostics", () => runtimeDiagnostics());
 ipcMain.handle("aegis:repair", (_e, action) => runDesktopRepairAction(action));

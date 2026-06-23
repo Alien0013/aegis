@@ -39,7 +39,7 @@ aegis ui         # local browser dashboard
 <p align="center"><img src="assets/terminal.png" alt="AEGIS terminal" width="860"></p>
 
 <p align="center"><img src="assets/dashboard.png" alt="AEGIS dashboard" width="860"><br>
-<sub>The local dashboard opens session-first and includes Chat, Terminal, Overview, Command Center, Models, Tools, Skills, Memory, Persona, Schedules, Kanban, MCP, Channels, Webhooks, Pairing, Accounts, Env, Plugins, Analytics, Files, Logs, Profiles, Docs, System, and Config pages.</sub></p>
+<sub>The local dashboard opens session-first and includes Chat, Terminal, Live Agents, Overview, Command Center, Models, Tools, Skills, Memory, Persona, Schedules, Kanban, MCP, Channels, Webhooks, Pairing, Accounts, Env, Plugins, Analytics, Files, Logs, Profiles, Docs, System, and Config pages.</sub></p>
 
 ## Quickstart
 
@@ -68,13 +68,19 @@ Use `aegis status`, `aegis tools list`, and `aegis skills list` for live counts
 from your current checkout and environment. Optional tools report missing
 dependencies instead of failing import.
 
+Run `aegis setup tools --advanced` to revise optional browser, computer, voice,
+LSP, and MCP toolsets. The setup step writes the model-visible toolset config
+and reports enabled tools, available skills, and plugin tool totals.
+Automation can pin the same policy with
+`aegis setup tools --non-interactive --accept-risk --toolsets core,mcp --skills web-research,summarize`.
+
 ## What AEGIS Does Now
 
 | Area | Current behavior |
 | --- | --- |
-| Shared runtime | CLI, dashboard, desktop, API, SDK, ACP, MCP, gateway, cron, webhooks, and background work enter through the same `SurfaceRunner` and `Agent.run` path. Live activity snapshots track phase, active model/tool/subagent state, and run breadcrumbs across surfaces. |
+| Shared runtime | CLI, dashboard, desktop, API, SDK, ACP, MCP, gateway, cron, webhooks, and background work enter through the same `SurfaceRunner` and `Agent.run` path. Live activity snapshots track phase, active model/tool/subagent state, child subagent cards, and run breadcrumbs across surfaces. |
 | Terminal agent | Interactive REPL with streaming, slash commands, queued/interruptible turns, long-run status footer, `@file`/`@diff`/`@url` context references, sessions, branching, checkpoints, diff, rollback, goals, traces, and usage. |
-| Dashboard | Token-gated FastAPI + React/Vite control panel that opens on sessions, keeps `/dashboard` as a calmer overview, and keeps `/command-center` as a compact sessions/system/usage ops overlay with live activity for long tasks. It also includes chat, terminal, models, tools, skills, memory, schedules, kanban, MCP, channels, webhooks, pairing, provider accounts, env/secrets, plugins, analytics, files, logs, profiles, docs, system, and config. |
+| Dashboard | Token-gated FastAPI + React/Vite control panel that opens on sessions, keeps `/dashboard` as a calmer overview, keeps `/agents` focused on running turns/subagents/tools, and keeps `/command-center` as a compact sessions/system/usage ops overlay. It also includes chat, terminal, models, tools, skills, memory, schedules, kanban, MCP, channels, webhooks, pairing, provider accounts, env/secrets, plugins, analytics, files, logs, profiles, docs, system, and config. |
 | Desktop | Electron app that launches/probes a local dashboard backend on a random port with a random token, shows boot/retry/log states, remembers window settings, and can run from source or package installers. |
 | Providers | Built-in registry for Anthropic, OpenAI, Codex-compatible paths, Google, OpenRouter, Groq, DeepSeek, Qwen/DashScope, xAI, Mistral, Together, Hugging Face, local OpenAI-compatible endpoints, Ollama, LM Studio, vLLM, and more. API-key auth is the default path; OAuth exists where implemented. |
 | Tools and permissions | File, patch, shell, process, web, browser, LSP, GitHub, code execution, image generation, subagents, model mixtures, cron/kanban, memory, skills, MCP/plugin tools, and local/cloud helpers all pass through a central registry and permission engine. |

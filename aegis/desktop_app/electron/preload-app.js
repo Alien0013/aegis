@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld("aegisDesktop", {
     return () => ipcRenderer.removeListener("win:maximized", h);
   },
   openExternal: (url) => ipcRenderer.send("win:openExternal", url),
+  openAgentsWindow: () => ipcRenderer.invoke("aegis:agents:openWindow"),
   restartBackend: () => ipcRenderer.send("win:restartBackend"),
   getConnection: () => ipcRenderer.invoke("aegis:connection"),
   getDiagnostics: () => ipcRenderer.invoke("aegis:diagnostics"),

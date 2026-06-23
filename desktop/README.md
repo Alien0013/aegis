@@ -2,7 +2,9 @@
 
 A native window around the AEGIS dashboard — double-click to run the whole
 harness, no terminal needed. It spawns the local `aegis dashboard` server on a
-random free port with a random token, then loads it.
+random free port with a random token, then loads it. The main window opens into
+the chat-first desktop shell, and Live Agents can be opened as a separate
+monitor window.
 
 ## Run from source
 ```bash
@@ -73,6 +75,7 @@ A structured Electron app under `electron/`:
   splash can call: boot status + retry/openLogs/quit).
 
 Extras: single-instance lock, **window size/position persistence**, native menu
-(`Cmd/Ctrl+1/2/3` → Home/Chat/Agents, `Cmd/Ctrl+,` → Settings, Restart Backend,
-Open Logs), and external links open in the system browser. Logs live at
+(`Cmd/Ctrl+1/2/3` → Chat/Sessions/Control Panel, `Cmd/Ctrl+Shift+L` → Live
+Agents Window, `Cmd/Ctrl+,` → Settings, Restart Backend, Open Logs), and
+external links open in the system browser. Logs live at
 `<userData>/desktop.log`.

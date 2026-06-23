@@ -349,6 +349,31 @@ def test_setup_section_tools_noninteractive_json(capsys):
     assert Config.load().get("tools.toolsets") == ["core", "mcp"]
 
 
+def test_setup_section_tools_noninteractive_can_select_skills(capsys):
+    import json
+
+    from aegis.cli.main import main
+    from aegis.config import Config
+
+    rc = main([
+        "setup",
+        "tools",
+        "--non-interactive",
+        "--accept-risk",
+        "--json",
+        "--toolsets",
+        "core",
+        "--skills",
+        "web-research,summarize",
+    ])
+
+    assert rc == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["surface"]["toolsets"] == ["core"]
+    assert data["surface"]["skills_allowlist"] == ["web-research", "summarize"]
+    assert Config.load().get("skills.allowlist") == ["web-research", "summarize"]
+
+
 def test_setup_section_gateway_noninteractive_json(capsys):
     import json
 

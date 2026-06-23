@@ -18,6 +18,7 @@ export const NAV: NavGroup[] = [
       { path: "/sessions", label: "Sessions", icon: "sessions" },
       { path: "/chat", label: "Chat", icon: "chat" },
       { path: "/terminal", label: "Terminal", icon: "terminal" },
+      { path: "/agents", label: "Live Agents", icon: "agents" },
       { path: "/dashboard", label: "Overview", icon: "overview" },
     ],
   },
