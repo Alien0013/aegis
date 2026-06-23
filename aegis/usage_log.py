@@ -69,6 +69,16 @@ def _price(model: str, config=None) -> tuple[float, float]:
     return (0.0, 0.0)
 
 
+def price_for_model(model: str, config=None) -> dict:
+    """Return dashboard/API friendly per-1M-token pricing metadata."""
+    input_price, output_price = _price(model, config)
+    return {
+        "input_per_million": float(input_price),
+        "output_per_million": float(output_price),
+        "known": bool(input_price or output_price),
+    }
+
+
 def cost_report(days: int = 30, config=None) -> dict:
     raw = read_text(_path())
     if not raw.strip():

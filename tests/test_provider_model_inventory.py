@@ -239,3 +239,29 @@ def test_dashboard_provider_probe_passes_base_url(monkeypatch):
         "model": "proxy-model",
         "base_url": "http://proxy.local/v1",
     }
+
+
+def test_provider_capability_matrix_exposes_limits_pricing_and_flags(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    from aegis.config import Config
+    from aegis.providers import registry
+
+    cfg = Config.load()
+    cfg.data["model"] = {"provider": "openai", "default": "gpt-5.5"}
+
+    matrix = registry.provider_capability_matrix(cfg, ["openai"])
+
+    assert matrix["ok"] is True
+    assert matrix["totals"]["providers"] == 1
+    row = matrix["providers"][0]
+    assert row["provider"] == "openai"
+    assert row["auth"]["available"] is True
+    assert row["probe"]["status"] == "ready"
+    assert row["limits"]["context"] >= 400_000
+    assert row["limits"]["max_output"] >= 8192
+    model = next(item for item in row["models"] if item["id"] == "gpt-5.5")
+    assert model["capabilities"]["tools"] is True
+    assert model["capabilities"]["reasoning"] is True
+    assert model["capabilities"]["structured_output"] is False
+    assert model["pricing"]["known"] is True

@@ -1620,6 +1620,7 @@ def _dashboard_models(config: Config) -> dict:
         "presets": {p: registry.picker_models_for(p, config) for p in provider_names},
         "preset_rows": {p: registry.picker_model_entries_for(p, config) for p in provider_names},
         "model_inventory": registry.model_inventory(config, provider_names),
+        "provider_matrix": registry.provider_capability_matrix(config, provider_names),
     })
     return report
 

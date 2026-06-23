@@ -3984,12 +3984,16 @@ def _provider_probe(config: Config, body: dict[str, Any]) -> dict:
         probe_config.data.setdefault("model", {})["default"] = model
     if base_url:
         probe_config.data.setdefault("model", {})["base_url"] = base_url
+    start = time.perf_counter()
     ok, detail = probe_provider(probe_config)
+    latency_ms = int((time.perf_counter() - start) * 1000)
     return {
         "ok": bool(ok),
         "provider": probe_config.get("model.provider"),
         "model": probe_config.get("model.default"),
         "detail": detail,
+        "latency_ms": latency_ms,
+        "tested_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -4707,6 +4711,10 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
         return dash._dashboard_models(config)
     if path == "/api/providers":
         return dash._dashboard_models(config)
+    if path == "/api/providers/matrix":
+        from .providers import registry
+
+        return registry.provider_capability_matrix(config)
     if path == "/api/model/info":
         return _model_info_payload(config)
     if path == "/api/model/options":
@@ -5632,6 +5640,13 @@ def create_app(config: Config) -> FastAPI:
     async def api_providers_get(request: Request) -> JSONResponse:
         _require_request(request, config)
         return JSONResponse(dash._dashboard_models(config))
+
+    @app.get("/api/providers/matrix")
+    async def api_providers_matrix(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from .providers import registry
+
+        return JSONResponse(registry.provider_capability_matrix(config))
 
     @app.post("/api/providers/probe")
     async def api_providers_probe(request: Request) -> JSONResponse:

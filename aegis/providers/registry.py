@@ -553,10 +553,13 @@ def known_model_entries_for(provider_name: str, config: cfg.Config | None = None
             "source": source,
             "api_mode": api_mode.value if isinstance(api_mode, ApiMode) else str(api_mode),
             "capabilities": capabilities,
+            "capability_flags": _normalized_capabilities(capabilities),
             "capability_summary": _capability_summary(capabilities),
         }
         if spec is not None:
             from .. import model_meta
+            from ..usage_log import price_for_model
+
             row["context_length"] = int(
                 model_meta.context_window(
                     mid,
@@ -565,6 +568,8 @@ def known_model_entries_for(provider_name: str, config: cfg.Config | None = None
                 )
                 or spec.context_length
             )
+            row["max_output_tokens"] = int(spec.max_tokens or 0)
+            row["pricing"] = price_for_model(mid, config)
         rows.append(row)
 
     if spec is not None:
@@ -1070,6 +1075,27 @@ def _capability_summary(capabilities: dict) -> str:
     return ", ".join(enabled) if enabled else "none"
 
 
+def _normalized_capabilities(capabilities: dict) -> dict:
+    """Stable provider-matrix capability names for dashboard/API consumers."""
+    return {
+        "tools": bool(capabilities.get("tool_calls")),
+        "tool_calls": bool(capabilities.get("tool_calls")),
+        "streaming": bool(capabilities.get("streaming")),
+        "vision": bool(capabilities.get("images")),
+        "images": bool(capabilities.get("images")),
+        "reasoning": bool(capabilities.get("reasoning_effort")),
+        "reasoning_effort": bool(capabilities.get("reasoning_effort")),
+        "reasoning_stream": bool(capabilities.get("reasoning_stream")),
+        "responses_state": bool(capabilities.get("response_state")),
+        "response_cancel": bool(capabilities.get("response_cancel")),
+        "dynamic_tools": bool(capabilities.get("dynamic_tools")),
+        "fast_mode": bool(capabilities.get("fast_mode")),
+        # AEGIS has schema-clean tool calls, but no dedicated provider response_format
+        # contract yet. Keep this explicit so the matrix does not overclaim.
+        "structured_output": False,
+    }
+
+
 def _resolved_spec_context_length(provider_name: str, spec: ProviderSpec) -> int:
     from .. import model_meta
     return int(
@@ -1097,9 +1123,11 @@ def _provider_status(provider: Provider, *, role: str, configured: dict | None =
         "api_mode": getattr(api_mode, "value", str(api_mode) if api_mode else ""),
         "base_url": getattr(provider, "base_url", ""),
         "context_length": int(getattr(provider, "context_length", 0) or 0),
+        "max_output_tokens": int(getattr(provider, "max_tokens", 0) or 0),
         "auth": _auth_status(getattr(provider, "auth", None)),
         "configured": configured or {},
         "capabilities": capabilities,
+        "capability_flags": _normalized_capabilities(capabilities),
         "capability_summary": _capability_summary(capabilities),
     }
 
@@ -1122,6 +1150,8 @@ def _spec_status(name: str, spec: ProviderSpec, *, origin: str) -> dict:
         "api_mode": spec.api_mode.value,
         "base_url": spec.base_url,
         "context_length": context_length,
+        "max_tokens": int(spec.max_tokens or 0),
+        "max_output_tokens": int(spec.max_tokens or 0),
         "auth_scheme": spec.auth_scheme,
         "auth_methods": _auth_methods_for_spec(spec),
         "env_vars": list(spec.env_vars),
@@ -1131,7 +1161,131 @@ def _spec_status(name: str, spec: ProviderSpec, *, origin: str) -> dict:
         "oauth_notes": _oauth_notes_for_spec(name),
         "auth": _auth_status(auth),
         "capabilities": capabilities,
+        "capability_flags": _normalized_capabilities(capabilities),
         "capability_summary": _capability_summary(capabilities),
+    }
+
+
+def provider_capability_matrix(config: cfg.Config, provider_names: list[str] | None = None) -> dict:
+    """Normalized provider/model capability matrix for API/dashboard surfaces.
+
+    This is intentionally passive: it reports configured auth readiness and known
+    model metadata, but it does not make live provider network calls. Use the
+    provider probe route for live reachability and latency.
+    """
+    report = provider_report(config)
+    active = report.get("active") if isinstance(report.get("active"), dict) else {}
+    active_provider = str(active.get("name") or report.get("provider") or "")
+    active_model = str(active.get("model") or report.get("model") or "")
+    allowed = set(provider_names or [])
+    catalog = [
+        row for row in (report.get("provider_catalog") or [])
+        if not allowed or str(row.get("name") or "") in allowed
+    ]
+    names = [str(row.get("name") or "") for row in catalog if row.get("name")]
+    inventory = model_inventory(config, names)
+    by_provider: dict[str, list[dict]] = {name: [] for name in names}
+    for row in inventory:
+        by_provider.setdefault(str(row.get("provider") or ""), []).append(row)
+
+    totals = {
+        "providers": 0,
+        "ready": 0,
+        "missing_auth": 0,
+        "models": 0,
+        "tools": 0,
+        "vision": 0,
+        "reasoning": 0,
+        "streaming": 0,
+        "known_pricing": 0,
+    }
+    provider_rows: list[dict] = []
+    for row in catalog:
+        name = str(row.get("name") or "")
+        auth = row.get("auth") if isinstance(row.get("auth"), dict) else {}
+        models = list(by_provider.get(name) or [])
+        if not models and row.get("default_model"):
+            from ..usage_log import price_for_model
+
+            capabilities = row.get("capabilities") if isinstance(row.get("capabilities"), dict) else {}
+            models = [{
+                "id": row.get("default_model"),
+                "provider": name,
+                "source": "default",
+                "api_mode": row.get("api_mode", ""),
+                "context_length": int(row.get("context_length") or 0),
+                "max_output_tokens": int(row.get("max_tokens") or 0),
+                "pricing": price_for_model(str(row.get("default_model") or ""), config),
+                "capabilities": capabilities,
+                "capability_flags": _normalized_capabilities(capabilities),
+                "capability_summary": _capability_summary(capabilities),
+            }]
+
+        normalized_models = []
+        for model_row in models:
+            caps = model_row.get("capability_flags") or _normalized_capabilities(model_row.get("capabilities") or {})
+            pricing = model_row.get("pricing") or {}
+            normalized_models.append({
+                "id": model_row.get("id", ""),
+                "source": model_row.get("source", ""),
+                "api_mode": model_row.get("api_mode") or row.get("api_mode", ""),
+                "context_length": int(model_row.get("context_length") or row.get("context_length") or 0),
+                "max_output_tokens": int(model_row.get("max_output_tokens") or row.get("max_tokens") or 0),
+                "pricing": pricing,
+                "capabilities": caps,
+                "capability_summary": model_row.get("capability_summary", ""),
+                "active": name == active_provider and str(model_row.get("id") or "") == active_model,
+            })
+            totals["models"] += 1
+            totals["tools"] += 1 if caps.get("tools") else 0
+            totals["vision"] += 1 if caps.get("vision") else 0
+            totals["reasoning"] += 1 if caps.get("reasoning") else 0
+            totals["streaming"] += 1 if caps.get("streaming") else 0
+            totals["known_pricing"] += 1 if pricing.get("known") else 0
+
+        ready = bool(auth.get("available")) or row.get("auth_scheme") == "none"
+        totals["providers"] += 1
+        totals["ready"] += 1 if ready else 0
+        totals["missing_auth"] += 0 if ready else 1
+        capabilities = row.get("capability_flags") or _normalized_capabilities(row.get("capabilities") or {})
+        provider_rows.append({
+            "provider": name,
+            "name": name,
+            "display_name": row.get("display_name") or name,
+            "origin": row.get("origin", ""),
+            "api_mode": row.get("api_mode", ""),
+            "base_url": row.get("base_url", ""),
+            "default_model": row.get("default_model", ""),
+            "active": name == active_provider,
+            "auth": {
+                "available": bool(auth.get("available")),
+                "description": auth.get("description", ""),
+                "scheme": row.get("auth_scheme", ""),
+                "methods": list(row.get("auth_methods") or []),
+                "env_vars": list(row.get("env_vars") or []),
+                "oauth": bool(row.get("oauth")),
+                "oauth_status": row.get("oauth_status", ""),
+            },
+            "probe": {
+                "status": "ready" if ready else "missing_auth",
+                "live": False,
+                "latency_ms": None,
+                "message": "configured for live probe" if ready else "provider auth is not configured",
+            },
+            "limits": {
+                "context": int(row.get("context_length") or 0),
+                "max_output": max((int(m.get("max_output_tokens") or 0) for m in normalized_models), default=0),
+            },
+            "capabilities": capabilities,
+            "capability_summary": row.get("capability_summary", ""),
+            "models": normalized_models,
+            "model_count": len(normalized_models),
+        })
+    return {
+        "ok": True,
+        "active": {"provider": active_provider, "model": active_model},
+        "totals": totals,
+        "providers": provider_rows,
     }
 
 

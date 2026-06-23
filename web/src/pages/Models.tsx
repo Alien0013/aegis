@@ -11,6 +11,7 @@ interface ModelsPayload {
   presets?: Record<string, string[]>;
   preset_rows?: Record<string, ModelRow[]>;
   provider_catalog?: ProviderRow[];
+  provider_matrix?: ProviderMatrix;
   active?: { context_length?: number; error?: string };
 }
 
@@ -28,6 +29,31 @@ interface ModelRow {
   capabilities?: Record<string, boolean | undefined>;
   capability_summary?: string;
   context_length?: number;
+}
+
+interface ProviderMatrix {
+  totals: {
+    providers: number; ready: number; missing_auth: number; models: number;
+    tools: number; vision: number; reasoning: number; streaming: number; known_pricing: number;
+  };
+  providers: ProviderMatrixRow[];
+}
+
+interface ProviderMatrixRow {
+  provider: string;
+  display_name?: string;
+  origin?: string;
+  api_mode?: string;
+  active?: boolean;
+  auth?: { available?: boolean; scheme?: string; methods?: string[]; oauth_status?: string };
+  probe?: { status?: string; latency_ms?: number | null; message?: string };
+  limits?: { context?: number; max_output?: number };
+  capabilities?: Record<string, boolean | undefined>;
+  models?: Array<{
+    id: string;
+    pricing?: { input_per_million?: number; output_per_million?: number; known?: boolean };
+  }>;
+  model_count?: number;
 }
 
 type Window = "7d" | "30d" | "90d";
@@ -72,6 +98,10 @@ export function Models() {
   const mainRows = (data?.preset_rows || {})[mainProvider] || [];
   const mainRow = mainRows.find((row) => row.id === mainModel);
   const mainCaps = mainRow?.capabilities || {};
+  const providerMatrix = data?.provider_matrix;
+  const activeMatrixRows = (providerMatrix?.providers || [])
+    .filter((row) => row.active || row.auth?.available || row.origin === "custom")
+    .slice(0, 8);
   const reasoningSupported = mainRow ? mainCaps.reasoning_effort !== false : true;
   const fastSupported = mainCaps.fast_mode === true;
   const reasoningDefault = String(configQ.data?.["agent.reasoning_effort"] ?? "medium").trim().toLowerCase();
@@ -231,6 +261,93 @@ export function Models() {
               { label: "window", value: window.toUpperCase() },
             ]} />
           </div>
+
+          {providerMatrix && (
+            <Card
+              title="Provider Matrix"
+              sub={`${providerMatrix.totals.ready}/${providerMatrix.totals.providers} ready · ${providerMatrix.totals.models} models`}
+              pad={false}
+            >
+              <div className="grid border-b border-border sm:grid-cols-4">
+                {[
+                  ["Tools", providerMatrix.totals.tools],
+                  ["Vision", providerMatrix.totals.vision],
+                  ["Reasoning", providerMatrix.totals.reasoning],
+                  ["Priced", providerMatrix.totals.known_pricing],
+                ].map(([label, value]) => (
+                  <div key={String(label)} className="border-border p-3 sm:border-r last:border-r-0">
+                    <div className="font-mono text-[10px] uppercase text-faint">{label}</div>
+                    <div className="font-mono text-lg font-semibold text-text">{String(value)}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[760px] text-left text-sm">
+                  <thead className="border-b border-border bg-surface-2/60 font-mono text-[10px] uppercase text-faint">
+                    <tr>
+                      <th className="px-3 py-2">Provider</th>
+                      <th className="px-3 py-2">Readiness</th>
+                      <th className="px-3 py-2">Caps</th>
+                      <th className="px-3 py-2">Limits</th>
+                      <th className="px-3 py-2">Pricing</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {activeMatrixRows.map((row) => {
+                      const caps = row.capabilities || {};
+                      const priced = (row.models || []).filter((model) => model.pricing?.known).length;
+                      const samplePrice = (row.models || []).find((model) => model.pricing?.known)?.pricing;
+                      return (
+                        <tr key={row.provider} className="border-b border-border last:border-b-0">
+                          <td className="px-3 py-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-mono font-semibold text-text">{row.display_name || row.provider}</span>
+                              {row.active && <Badge tone="primary">active</Badge>}
+                              {row.origin && <Badge tone="neutral">{row.origin}</Badge>}
+                            </div>
+                            <div className="mt-1 font-mono text-xs text-faint">{row.api_mode || "api"}</div>
+                          </td>
+                          <td className="px-3 py-3">
+                            <div className="flex flex-wrap gap-1.5">
+                              <Badge tone={row.auth?.available || row.probe?.status === "ready" ? "success" : "warning"}>
+                                {row.probe?.status || "unknown"}
+                              </Badge>
+                              {row.auth?.scheme && <Badge tone="neutral">{row.auth.scheme}</Badge>}
+                            </div>
+                          </td>
+                          <td className="px-3 py-3">
+                            <div className="flex flex-wrap gap-1.5">
+                              {caps.tools && <Badge tone="success">tools</Badge>}
+                              {caps.streaming && <Badge tone="info">stream</Badge>}
+                              {caps.vision && <Badge tone="info">vision</Badge>}
+                              {caps.reasoning && <Badge tone="warning">reasoning</Badge>}
+                              {caps.structured_output ? <Badge tone="primary">structured</Badge> : <Badge tone="neutral">no structured</Badge>}
+                            </div>
+                          </td>
+                          <td className="px-3 py-3 font-mono text-xs text-dim">
+                            <div>{row.limits?.context ? `${row.limits.context.toLocaleString()} ctx` : "ctx unknown"}</div>
+                            <div>{row.limits?.max_output ? `${row.limits.max_output.toLocaleString()} out` : "output unknown"}</div>
+                            <div>{row.model_count || 0} model{row.model_count === 1 ? "" : "s"}</div>
+                          </td>
+                          <td className="px-3 py-3 font-mono text-xs text-dim">
+                            {samplePrice ? (
+                              <>
+                                <div>${samplePrice.input_per_million}/M in</div>
+                                <div>${samplePrice.output_per_million}/M out</div>
+                                <div>{priced}/{row.model_count || 0} priced</div>
+                              </>
+                            ) : (
+                              <div>{priced}/{row.model_count || 0} priced</div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
 
           <div className="grid gap-[var(--gap)] md:grid-cols-2 xl:grid-cols-3">
             {modelRows.map((row, index) => {

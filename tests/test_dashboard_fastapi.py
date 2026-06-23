@@ -854,6 +854,14 @@ def test_fastapi_provider_and_gateway_control_plane_routes(tmp_path, monkeypatch
     body = providers.json()
     assert body["provider_catalog"]
     assert body["active"]
+    assert body["provider_matrix"]["totals"]["providers"] >= 1
+
+    matrix = asyncio.run(_request(app, "GET", "/api/providers/matrix", headers=headers))
+    assert matrix.status_code == 200
+    matrix_body = matrix.json()
+    assert matrix_body["ok"] is True
+    assert matrix_body["totals"]["models"] >= 1
+    assert any(row["capabilities"]["tools"] for row in matrix_body["providers"])
 
     import aegis.doctor as doctor
 
@@ -869,12 +877,13 @@ def test_fastapi_provider_and_gateway_control_plane_routes(tmp_path, monkeypatch
         headers=headers,
     ))
     assert probe.status_code == 200
-    assert probe.json() == {
-        "ok": True,
-        "provider": "openai",
-        "model": "gpt-test",
-        "detail": "openai/gpt-test ok",
-    }
+    probe_body = probe.json()
+    assert probe_body["ok"] is True
+    assert probe_body["provider"] == "openai"
+    assert probe_body["model"] == "gpt-test"
+    assert probe_body["detail"] == "openai/gpt-test ok"
+    assert isinstance(probe_body["latency_ms"], int)
+    assert probe_body["tested_at"]
 
     monkeypatch.setitem(doctor.CHANNEL_PROBES, "telegram", lambda: (True, "bot @aegis"))
     channel = asyncio.run(_request(
