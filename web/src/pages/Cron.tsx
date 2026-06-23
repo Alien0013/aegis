@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { useState } from "react";
-import { del, patch, post } from "../lib/api";
+import { api, del, patch, post } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { ago, compact, dateish } from "../lib/format";
 import { Badge, Button, Card, Empty, Field, Input, Loading, MetricStrip, PageHeader, Segmented, Toggle, toast } from "../components/ui";
@@ -33,6 +33,23 @@ interface Job {
 }
 interface JobsPayload { jobs?: Job[] }
 interface ServicePayload { service?: string; status?: string }
+interface CronPreview {
+  ok?: boolean;
+  job_id?: string;
+  mode?: string;
+  due?: boolean;
+  next_run?: number | string;
+  next_run_iso?: string;
+  targets?: string[];
+  model?: string;
+  enabled_toolsets?: string[];
+  resolved_toolsets?: string[];
+  disabled_tools?: string[];
+  cron_skip_memory?: boolean;
+  workdir?: { path?: string; exists?: boolean; is_dir?: boolean };
+  script?: { configured?: boolean; path?: string; resolved_path?: string; exists?: boolean; is_file?: boolean };
+  validation?: { ok?: boolean; errors?: string[]; warnings?: string[] };
+}
 interface FormState {
   id: string; name: string; schedule: string; prompt: string; skills: string;
   context_from: string; script: string; deliver: string; channel: string;
@@ -78,6 +95,7 @@ export function Cron() {
   const [form, setForm] = useState<FormState>(EMPTY);
   const [editorOpen, setEditorOpen] = useState(false);
   const [busy, setBusy] = useState("");
+  const [previews, setPreviews] = useState<Record<string, CronPreview>>({});
 
   const jobs = jobsQ.data?.jobs || [];
   const enabled = jobs.filter((job) => job.enabled).length;
@@ -133,6 +151,17 @@ export function Cron() {
       const r = await post<{ ok?: boolean; error?: string }>(`cron/jobs/${encodeURIComponent(job.id)}/run`, {});
       if (r.ok === false) toast(r.error || "Run failed", "err");
       else { toast("Run started"); jobsQ.reload(); }
+    } catch (e) { toast(String(e), "err"); }
+    finally { setBusy(""); }
+  }
+
+  async function preview(job: Job) {
+    setBusy(`preview:${job.id}`);
+    try {
+      const r = await api<CronPreview>(`cron/jobs/${encodeURIComponent(job.id)}/preview`);
+      setPreviews((prev) => ({ ...prev, [job.id]: r }));
+      if (r.ok === false) toast(r.validation?.errors?.[0] || "Preview has validation errors", "err");
+      else toast("Dry-run preview ready");
     } catch (e) { toast(String(e), "err"); }
     finally { setBusy(""); }
   }
@@ -220,8 +249,10 @@ export function Cron() {
                       busy={busy}
                       onToggle={toggle}
                       onRun={run}
+                      onPreview={preview}
                       onEdit={edit}
                       onRemove={remove}
+                      preview={previews[job.id]}
                     />
                   ))}
               </Card>
@@ -279,14 +310,18 @@ export function Cron() {
   );
 }
 
-function JobRow({ job, busy, onToggle, onRun, onEdit, onRemove }: {
+function JobRow({ job, busy, onToggle, onRun, onPreview, onEdit, onRemove, preview }: {
   job: Job;
   busy: string;
   onToggle: (job: Job) => void;
   onRun: (job: Job) => void;
+  onPreview: (job: Job) => void;
   onEdit: (job: Job) => void;
   onRemove: (job: Job) => void;
+  preview?: CronPreview;
 }) {
+  const previewErrors = preview?.validation?.errors || [];
+  const previewWarnings = preview?.validation?.warnings || [];
   return (
     <div className="border-b border-border px-[var(--pad)] py-3 last:border-0 hover:bg-surface-2/35">
       <div className="grid gap-3 md:grid-cols-[auto_minmax(0,1fr)_auto]">
@@ -333,9 +368,31 @@ function JobRow({ job, busy, onToggle, onRun, onEdit, onRemove }: {
               )}
             </div>
           )}
+          {preview && (
+            <div className="mt-3 border border-border bg-bg/55 p-3 text-xs">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge tone={preview.ok === false ? "danger" : "success"}>{preview.ok === false ? "preview blocked" : "preview ok"}</Badge>
+                <Mini>{preview.mode || "agent"}</Mini>
+                {preview.due && <Mini>due now</Mini>}
+                <Mini>next {dateish(preview.next_run || preview.next_run_iso) || "none"}</Mini>
+                {preview.cron_skip_memory && <Mini>memory off</Mini>}
+              </div>
+              <div className="mt-2 grid gap-2 md:grid-cols-2">
+                <PreviewLine label="targets" value={(preview.targets || []).join(", ") || "local only"} />
+                <PreviewLine label="model" value={preview.model || "default"} />
+                <PreviewLine label="toolsets" value={(preview.enabled_toolsets || []).join(", ") || "default"} />
+                <PreviewLine label="disabled" value={(preview.disabled_tools || []).join(", ") || "none"} />
+                <PreviewLine label="workdir" value={preview.workdir?.path ? `${preview.workdir.path} ${preview.workdir.exists && preview.workdir.is_dir ? "(ok)" : "(check)"}` : "default"} />
+                <PreviewLine label="script" value={preview.script?.configured ? `${preview.script.path} ${preview.script.exists && preview.script.is_file ? "(ok)" : "(check)"}` : "none"} />
+              </div>
+              {!!previewErrors.length && <div className="mt-2 text-danger">{previewErrors.join(" / ")}</div>}
+              {!!previewWarnings.length && <div className="mt-2 text-warning">{previewWarnings.join(" / ")}</div>}
+            </div>
+          )}
         </div>
         <div className="flex shrink-0 items-start gap-2">
           <button onClick={() => onEdit(job)} className="grid h-8 w-8 place-items-center border border-border text-faint hover:text-primary" title="Edit"><Icon name="config" size={15} /></button>
+          <button onClick={() => onPreview(job)} className="grid h-8 w-8 place-items-center border border-border text-faint hover:text-primary" title="Dry-run preview"><Icon name="activity" size={15} /></button>
           <button onClick={() => onRun(job)} className="grid h-8 w-8 place-items-center border border-border text-faint hover:text-primary" title="Run now"><Icon name="zap" size={15} /></button>
           <button onClick={() => onRemove(job)} className="grid h-8 w-8 place-items-center border border-border text-faint hover:text-danger" title="Delete"><Icon name="trash" size={15} /></button>
         </div>
@@ -416,6 +473,15 @@ function RuntimeLine({ label }: { label: string }) {
     <div className="flex justify-between gap-3 border-b border-border pb-1 last:border-0">
       <span className="font-mono text-faint">{label}</span>
       <span className="text-text">supported</span>
+    </div>
+  );
+}
+
+function PreviewLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex min-w-0 justify-between gap-3 border-b border-border/70 pb-1 last:border-0">
+      <span className="font-mono text-faint">{label}</span>
+      <span className="min-w-0 truncate text-right text-dim">{value}</span>
     </div>
   );
 }

@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
@@ -399,6 +400,30 @@ class Renderer:
             return "summary"
         return str(self.config.get("display.reasoning", "summary") or "summary")
 
+    def _tool_progress_mode(self) -> str:
+        if self.config is None:
+            return "compact"
+        value = self.config.get("display.tool_progress", "compact")
+        if isinstance(value, bool):
+            return "compact" if value else "off"
+        return str(value or "compact").strip().lower()
+
+    def _timestamps_enabled(self) -> bool:
+        return bool(self.config is not None and self.config.get("display.timestamps", False))
+
+    def _emit(self, text: str, style: str | None = None) -> None:
+        if self._timestamps_enabled():
+            text = f"[{time.strftime('%H:%M:%S')}] {text}"
+        _out(text, style=style)
+
+    def _tool_detail_line(self, event: dict) -> str:
+        pieces: list[str] = []
+        for key in ("preview", "classification", "artifact_ref"):
+            value = str(event.get(key) or "").strip()
+            if value:
+                pieces.append(f"{key.replace('_', ' ')} {_oneline(value, 72)}")
+        return " · ".join(pieces)
+
     def __call__(self, e: dict) -> None:
         self.status.update(e)
         t = e["type"]
@@ -423,7 +448,7 @@ class Renderer:
                 _raw("\x1b[2m" + text + "\x1b[0m")
             elif not getattr(self, "_thinking_summary", False):
                 self._thinking_summary = True
-                _out("  thinking…", style="bright_black")
+                self._emit("  thinking…", style="bright_black")
             return
         if getattr(self, "_thinking", False):
             self._thinking = False
@@ -437,8 +462,8 @@ class Renderer:
                 getattr(self, "_thinking_summary", False):
             self._thinking_summary = False
             if self._thinking_chars:
-                _out(f"  thinking complete ({self._thinking_chars:,} chars captured; "
-                     "use /reasoning live to stream)", style="bright_black")
+                self._emit(f"  thinking complete ({self._thinking_chars:,} chars captured; "
+                           "use /reasoning live to stream)", style="bright_black")
                 self._thinking_chars = 0
         if t == "assistant_delta":
             self._streaming = True
@@ -456,7 +481,7 @@ class Renderer:
             reason = ""
             if self._reasoning_mode() == "live" and self._provider_reasoning not in {"", "off", "none"}:
                 reason = f" · reasoning live/{self._provider_reasoning}"
-            _out(
+            self._emit(
                 f"  contacting {e.get('provider') or 'provider'} / {e.get('model') or 'model'}...{reason}",
                 style="bright_black",
             )
@@ -468,7 +493,7 @@ class Renderer:
                 and self._provider_reasoning not in {"", "off", "none"}
                 and not self._provider_reasoning_chars
             ):
-                _out(
+                self._emit(
                     "  reasoning live requested, but this provider emitted no reasoning stream.",
                     style="bright_black",
                 )
@@ -476,7 +501,7 @@ class Renderer:
                 return
             if e.get("status") == "error" or ms >= 1500:
                 style = "red" if e.get("status") == "error" else "bright_black"
-                _out(
+                self._emit(
                     f"  provider {e.get('status') or 'done'} in {ms / 1000:.1f}s",
                     style=style,
                 )
@@ -484,48 +509,56 @@ class Renderer:
             name = e["name"]
             preview = _tool_preview(name, e.get("args", {}))
             gutter = f"  {_tool_icon(name)} {_tool_verb(name):<8}"
-            _out(f"{gutter} {preview}".rstrip(), style=TERM_AMBER)
+            if self._tool_progress_mode() != "off":
+                self._emit(f"{gutter} {preview}".rstrip(), style=TERM_AMBER)
         elif t == "tool_result":
+            if self._tool_progress_mode() == "off":
+                return
             ms = int(e.get("duration_ms") or 0)
             secs = f"  {ms / 1000:.1f}s" if ms else ""
             summary = _oneline(e.get("summary") or "", 76)
             failure = e.get("is_error") or _result_is_failure(summary)
             if failure:
-                _out(f"    {_ui('✗', 'x')} {summary}{secs}", style="red")
+                self._emit(f"    {_ui('✗', 'x')} {summary}{secs}", style="red")
             elif e.get("name") == "memory":
-                _out(f"    {_ui('◆', 'mem')} {summary}{secs}", style=TERM_AMBER)
+                self._emit(f"    {_ui('◆', 'mem')} {summary}{secs}", style=TERM_AMBER)
             elif e.get("name") == "skill":
-                _out(f"    {_ui('▣', 'skill')} {summary}{secs}", style=TERM_AMBER)
+                self._emit(f"    {_ui('▣', 'skill')} {summary}{secs}", style=TERM_AMBER)
             else:
-                _out(f"    {_ui('✓', 'ok')} {summary}{secs}", style=TERM_GREEN)
+                self._emit(f"    {_ui('✓', 'ok')} {summary}{secs}", style=TERM_GREEN)
+            detail = self._tool_detail_line(e) if self._tool_progress_mode() == "detailed" else ""
+            if detail:
+                self._emit(f"      {detail}", style="bright_black")
         elif t == "ultracode_continue":
-            _out(f"  {_ui('↻', '...')} ultracode: {e.get('remaining', '?')} todo(s) left — continuing "
-                 f"(push {e.get('n', '')}/{12})", style=TERM_CYAN)
+            self._emit(f"  {_ui('↻', '...')} ultracode: {e.get('remaining', '?')} todo(s) left — continuing "
+                       f"(push {e.get('n', '')}/{12})", style=TERM_CYAN)
         elif t == "compacting":
-            _out(f"  {_ui('⋯', '...')} context filling up — compacting older turns to free room …", style="yellow")
+            self._emit(f"  {_ui('⋯', '...')} context filling up — compacting older turns to free room …",
+                       style="yellow")
         elif t == "compacted":
             before = int(e.get("tokens_before") or 0)
             after = int(e.get("tokens_after") or 0)
             if before and after and before > after:
                 freed = before - after
                 pct = int(100 * freed / before)
-                _out(f"  {_ui('✓', 'ok')} compacted — freed {_fmt_token_count(freed)} tokens "
-                     f"({_fmt_token_count(after)} kept, {pct}% lighter)", style=TERM_GREEN)
+                self._emit(f"  {_ui('✓', 'ok')} compacted — freed {_fmt_token_count(freed)} tokens "
+                           f"({_fmt_token_count(after)} kept, {pct}% lighter)", style=TERM_GREEN)
             else:
-                _out(f"  {_ui('✓', 'ok')} compacted context", style=TERM_GREEN)
+                self._emit(f"  {_ui('✓', 'ok')} compacted context", style=TERM_GREEN)
         elif t == "compaction_aborted":
-            _out(f"  {_ui('⚠', '!')} compaction couldn't shrink further — {e.get('error') or 'tail is the floor'}",
-                 style="yellow")
+            self._emit(f"  {_ui('⚠', '!')} compaction couldn't shrink further — "
+                       f"{e.get('error') or 'tail is the floor'}", style="yellow")
         elif t == "budget_exhausted":
-            _out(f"  {_ui('⋯', '...')} step limit reached; summarizing progress so far …", style="yellow")
+            self._emit(f"  {_ui('⋯', '...')} step limit reached; summarizing progress so far …", style="yellow")
         elif t == "review_started":
-            _out(f"  {_ui('◆', 'mem')} reflecting on this session ({e.get('kind', '')})…", style="bright_black")
+            self._emit(f"  {_ui('◆', 'mem')} reflecting on this session ({e.get('kind', '')})…",
+                       style="bright_black")
         elif t == "review_done":
             acts = e.get("actions") or []
             if acts:
-                _out(f"  {_ui('◆', 'mem')} learned & saved: " + "; ".join(acts), style="magenta")
+                self._emit(f"  {_ui('◆', 'mem')} learned & saved: " + "; ".join(acts), style="magenta")
         elif t == "error":
-            _out(f"  {_ui('✖', 'x')} {e['message']}", style="red")
+            self._emit(f"  {_ui('✖', 'x')} {e['message']}", style="red")
         elif t == "final":
             if self._streaming:
                 _raw("\n")
@@ -1562,6 +1595,12 @@ def handle_slash(
         _out(
             f"reasoning: display {agent.config.get('display.reasoning', 'summary')} · "
             f"effort {getattr(agent, 'reasoning', 'off')}"
+        )
+        _out(
+            f"display: timestamps {'on' if agent.config.get('display.timestamps', False) else 'off'} · "
+            f"tool progress {agent.config.get('display.tool_progress', 'compact')} · "
+            f"grouping {'on' if agent.config.get('display.tool_progress_grouping', True) else 'off'} · "
+            f"footer {'on' if agent.config.get('display.status_footer', True) else 'off'}"
         )
         _out(f"fast mode: {'priority' if getattr(agent, 'service_tier', '') == 'priority' else 'normal'}")
         _out(

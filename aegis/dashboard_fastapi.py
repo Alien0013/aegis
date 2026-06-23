@@ -3875,6 +3875,18 @@ def _cron_job_run_response(config: Config, job_id: str, request: Request | None 
     return JSONResponse(run_job(config, job_id, sink=sink, store=store, verbose=False))
 
 
+def _cron_job_preview_response(config: Config, job_id: str, request: Request | None = None) -> JSONResponse:
+    from .cron import CronStore, preview_job
+
+    invalid = _cron_job_invalid_id_response(job_id, request)
+    if invalid is not None:
+        return invalid
+    store = CronStore()
+    result = preview_job(config, job_id, store=store)
+    status = 200 if result.get("found") else 404
+    return JSONResponse(result, status_code=status)
+
+
 def _cron_job_runs_response(job_id: str, query: dict[str, list[str]], request: Request | None = None) -> JSONResponse:
     invalid = _cron_job_invalid_id_response(job_id, request)
     if invalid is not None:
@@ -3924,8 +3936,11 @@ def _gateway_status(config: Config) -> dict:
     from .gateway.queue import DeliveryQueue
 
     try:
-        pending = DeliveryQueue().pending_count()
+        queue = DeliveryQueue()
+        outbox_stats = queue.stats()
+        pending = int(outbox_stats.get("pending") or 0)
     except Exception:  # noqa: BLE001
+        outbox_stats = {}
         pending = 0
     channels = list(config.get("gateway.channels", []) or [])
     provider = str(config.get("model.provider") or "")
@@ -3967,8 +3982,48 @@ def _gateway_status(config: Config) -> dict:
         "mention_triggers": list(config.get("gateway.mention_triggers", []) or []),
         "admins": list(config.get("gateway.admins", []) or []),
         "queue_pending": pending,
+        "outbox": outbox_stats,
         "service": gateway_service_status(),
     }
+
+
+def _gateway_outbox_payload(status: str = "", limit: int = 50) -> dict[str, Any]:
+    from .gateway.queue import DeliveryQueue
+
+    queue = DeliveryQueue()
+    rows = queue.list_messages(status=status or None, limit=limit)
+    return {
+        "ok": True,
+        "status": status or "",
+        "limit": limit,
+        "stats": queue.stats(),
+        "messages": rows,
+        "dead_letters": queue.dead_letters(limit=limit) if not status or status == "failed" else [],
+    }
+
+
+def _gateway_dead_letter_payload(limit: int = 50) -> dict[str, Any]:
+    from .gateway.queue import DeliveryQueue
+
+    queue = DeliveryQueue()
+    rows = queue.dead_letters(limit=limit)
+    return {"ok": True, "limit": limit, "stats": queue.stats(), "dead_letters": rows, "messages": rows}
+
+
+def _gateway_outbox_action(message_id: int, action: str) -> tuple[dict[str, Any], int]:
+    from .gateway.queue import DeliveryQueue
+
+    queue = DeliveryQueue()
+    if action == "retry":
+        result = queue.retry(message_id)
+    elif action == "discard":
+        result = queue.discard(message_id)
+    else:
+        result = {"ok": False, "id": message_id, "error": f"unknown outbox action: {action}"}
+    status = 200 if result.get("ok") else 404 if result.get("error") == "not_found" else 400
+    if result.get("ok"):
+        result["stats"] = queue.stats()
+    return result, status
 
 
 def _provider_probe(config: Config, body: dict[str, Any]) -> dict:
@@ -6753,6 +6808,16 @@ def create_app(config: Config) -> FastAPI:
         _require_request(request, config)
         return _cron_job_runs_response(job_id, _query_dict(request), request)
 
+    @app.get("/api/cron/jobs/{job_id}/preview")
+    async def api_cron_job_preview(job_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return _cron_job_preview_response(config, job_id, request)
+
+    @app.post("/api/cron/jobs/{job_id}/dry-run")
+    async def api_cron_job_dry_run(job_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return _cron_job_preview_response(config, job_id, request)
+
     @app.post("/api/cron/jobs/{job_id}/run")
     async def api_cron_job_run(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
@@ -6814,6 +6879,16 @@ def create_app(config: Config) -> FastAPI:
         _require_request(request, config)
         return _cron_job_enabled_response(job_id, True, request)
 
+    @app.get("/api/jobs/{job_id}/preview")
+    async def api_job_preview(job_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return _cron_job_preview_response(config, job_id, request)
+
+    @app.post("/api/jobs/{job_id}/dry-run")
+    async def api_job_dry_run(job_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return _cron_job_preview_response(config, job_id, request)
+
     @app.post("/api/jobs/{job_id}/run")
     async def api_job_run(job_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
@@ -6855,6 +6930,49 @@ def create_app(config: Config) -> FastAPI:
     async def api_gateway_status(request: Request) -> JSONResponse:
         _require_request(request, config)
         return JSONResponse(_gateway_status(config))
+
+    @app.get("/api/gateway/outbox")
+    async def api_gateway_outbox(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        status = str(request.query_params.get("status") or "").strip().lower()
+        try:
+            limit = max(1, min(200, int(request.query_params.get("limit") or 50)))
+        except (TypeError, ValueError):
+            limit = 50
+        return JSONResponse(_gateway_outbox_payload(status=status, limit=limit))
+
+    @app.get("/api/gateway/dead-letter")
+    async def api_gateway_dead_letter(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        try:
+            limit = max(1, min(200, int(request.query_params.get("limit") or 50)))
+        except (TypeError, ValueError):
+            limit = 50
+        return JSONResponse(_gateway_dead_letter_payload(limit=limit))
+
+    @app.post("/api/gateway/outbox/{message_id}/retry")
+    async def api_gateway_outbox_retry(message_id: int, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        payload, status = _gateway_outbox_action(message_id, "retry")
+        return JSONResponse(payload, status_code=status)
+
+    @app.post("/api/gateway/outbox/{message_id}/discard")
+    async def api_gateway_outbox_discard(message_id: int, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        payload, status = _gateway_outbox_action(message_id, "discard")
+        return JSONResponse(payload, status_code=status)
+
+    @app.post("/api/gateway/dead-letter/{message_id}/retry")
+    async def api_gateway_dead_letter_retry(message_id: int, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        payload, status = _gateway_outbox_action(message_id, "retry")
+        return JSONResponse(payload, status_code=status)
+
+    @app.post("/api/gateway/dead-letter/{message_id}/discard")
+    async def api_gateway_dead_letter_discard(message_id: int, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        payload, status = _gateway_outbox_action(message_id, "discard")
+        return JSONResponse(payload, status_code=status)
 
     @app.get("/api/messaging/platforms")
     async def api_messaging_platforms(request: Request) -> JSONResponse:

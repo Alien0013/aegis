@@ -889,6 +889,43 @@ def test_terminal_timestamps_command_persists(monkeypatch):
     assert Config.load().get("display.timestamps") is False
 
 
+def test_terminal_status_shows_display_settings(monkeypatch):
+    from types import SimpleNamespace
+
+    from aegis.cli import repl
+    from aegis.config import Config
+    from aegis.session import Session
+    from aegis.types import Usage
+
+    cfg = Config.load()
+    cfg.data.setdefault("display", {})["timestamps"] = True
+    cfg.data["display"]["tool_progress"] = "detailed"
+    cfg.data["display"]["tool_progress_grouping"] = False
+    cfg.data["display"]["status_footer"] = False
+    session = Session.create()
+    agent = SimpleNamespace(
+        config=cfg,
+        provider=SimpleNamespace(describe=lambda: "fake / fake-model", context_length=128000),
+        session=session,
+        budget=SimpleNamespace(usage=Usage()),
+        reasoning="medium",
+        service_tier="priority",
+        _trace_context={},
+    )
+    lines: list[str] = []
+    monkeypatch.setattr(repl, "_out", lambda text="", style=None: lines.append(str(text)))
+
+    assert repl.handle_slash("/status", agent) == ""
+
+    assert any(
+        "display: timestamps on" in line
+        and "tool progress detailed" in line
+        and "grouping off" in line
+        and "footer off" in line
+        for line in lines
+    )
+
+
 def test_terminal_model_override_rejects_unknown_provider(monkeypatch, tmp_path):
     from aegis.agent.agent import Agent
     from aegis.cli import repl

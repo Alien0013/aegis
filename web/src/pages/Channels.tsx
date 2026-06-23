@@ -1,8 +1,9 @@
+import type { ReactNode } from "react";
 import { useState } from "react";
 import { useApi } from "../lib/useApi";
 import { patch, post, put } from "../lib/api";
 import { Badge, Button, Card, Empty, Field, Input, Loading, PageHeader, toast } from "../components/ui";
-import { titleCase } from "../lib/format";
+import { compact, dateish, titleCase } from "../lib/format";
 import { Icon } from "../components/icons";
 
 interface EnvField {
@@ -25,6 +26,23 @@ interface PlatformRow extends Omit<ChannelRow, "env_vars"> {
 }
 type CatalogPayload = { channels?: ChannelRow[]; catalog?: ChannelRow[]; enabled?: string[] } & Record<string, unknown>;
 type PlatformPayload = { platforms?: PlatformRow[] };
+interface OutboxMessage {
+  id: number;
+  platform?: string;
+  chat_id?: string;
+  thread_id?: string;
+  text?: string;
+  attempts?: number;
+  status?: string;
+  next_at?: number | string;
+  created_at?: number | string;
+  text_truncated?: boolean;
+}
+interface OutboxPayload {
+  stats?: Record<string, number> & { statuses?: Record<string, number> };
+  messages?: OutboxMessage[];
+  dead_letters?: OutboxMessage[];
+}
 
 function channelId(row: { id?: string; channel?: string; name?: string; label?: string }): string {
   return row.id || row.channel || row.name || (row.label || "").toLowerCase().replace(/\s+/g, "-");
@@ -40,7 +58,9 @@ export function Channels() {
   const { data, loading, error, reload } = useApi<CatalogPayload>("gateway/channels/catalog");
   const platforms = useApi<PlatformPayload>("messaging/platforms");
   const status = useApi<Record<string, unknown>>("gateway/status");
+  const outbox = useApi<OutboxPayload>("gateway/outbox?limit=12");
   const [configuring, setConfiguring] = useState<{ row: ChannelRow; platform?: PlatformRow } | null>(null);
+  const [outboxBusy, setOutboxBusy] = useState("");
 
   const rows: ChannelRow[] = (Array.isArray(data?.channels) ? data!.channels
     : Array.isArray(data?.catalog) ? data!.catalog : []) as ChannelRow[];
@@ -57,6 +77,19 @@ export function Channels() {
     try { await post("gateway/channels", { channels }); toast("Updated"); status.reload(); reload(); }
     catch (e) { toast(String(e), "err"); }
   }
+  async function outboxAction(message: OutboxMessage, action: "retry" | "discard") {
+    setOutboxBusy(`${action}:${message.id}`);
+    try {
+      const r = await post<{ ok?: boolean; error?: string }>(`gateway/outbox/${message.id}/${action}`, {});
+      if (r.ok === false) toast(r.error || `${titleCase(action)} failed`, "err");
+      else {
+        toast(action === "retry" ? "Queued for retry" : "Message discarded");
+        outbox.reload();
+        status.reload();
+      }
+    } catch (e) { toast(String(e), "err"); }
+    finally { setOutboxBusy(""); }
+  }
 
   return (
     <>
@@ -64,48 +97,58 @@ export function Channels() {
       {error && <Card><Empty icon="alert">Couldn't load - {error}</Empty></Card>}
       {loading && <Loading />}
       {data && (
-        <div className="grid gap-[var(--gap)] md:grid-cols-2 xl:grid-cols-3">
-          {!rows.length && <Card><Empty icon="channels">No channel catalog available.</Empty></Card>}
-          {rows.map((c) => {
-            const id = channelId(c);
-            const platform = platformRows.get(id);
-            const on = activeChannels.includes(id);
-            const configured = platform?.configured ?? c.configured ?? c.ready ?? false;
-            const optionalCount = platform?.optional_env_vars?.length || platform?.metadata?.optional_env?.length || 0;
-            return (
-              <Card key={id} pad={false}>
-                <div className="border-b border-border p-[var(--pad)]">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="font-mono text-base font-semibold text-text">{c.label || titleCase(id)}</div>
-                      <div className="truncate font-mono text-xs text-faint">{id}</div>
+        <div className="space-y-[var(--gap)]">
+          <div className="grid gap-[var(--gap)] md:grid-cols-2 xl:grid-cols-3">
+            {!rows.length && <Card><Empty icon="channels">No channel catalog available.</Empty></Card>}
+            {rows.map((c) => {
+              const id = channelId(c);
+              const platform = platformRows.get(id);
+              const on = activeChannels.includes(id);
+              const configured = platform?.configured ?? c.configured ?? c.ready ?? false;
+              const optionalCount = platform?.optional_env_vars?.length || platform?.metadata?.optional_env?.length || 0;
+              return (
+                <Card key={id} pad={false}>
+                  <div className="border-b border-border p-[var(--pad)]">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="font-mono text-base font-semibold text-text">{c.label || titleCase(id)}</div>
+                        <div className="truncate font-mono text-xs text-faint">{id}</div>
+                      </div>
+                      <Badge tone={on ? "success" : configured ? "info" : "neutral"}>{on ? "active" : configured ? "configured" : "needs token"}</Badge>
                     </div>
-                    <Badge tone={on ? "success" : configured ? "info" : "neutral"}>{on ? "active" : configured ? "configured" : "needs token"}</Badge>
                   </div>
-                </div>
-                <div className="space-y-3 p-[var(--pad)]">
-                  <div className="flex items-center gap-2 text-xs text-dim">
-                    <Icon name="channels" size={14} className={on ? "text-success" : "text-faint"} />
-                    {on ? "Delivery enabled for inbound and outbound messages." : "Enable this adapter when credentials are ready."}
-                  </div>
-                  {optionalCount > 0 && (
+                  <div className="space-y-3 p-[var(--pad)]">
                     <div className="flex items-center gap-2 text-xs text-dim">
-                      <Icon name="shield" size={14} className="text-faint" />
-                      {optionalCount} hardening control{optionalCount === 1 ? "" : "s"}
+                      <Icon name="channels" size={14} className={on ? "text-success" : "text-faint"} />
+                      {on ? "Delivery enabled for inbound and outbound messages." : "Enable this adapter when credentials are ready."}
                     </div>
-                  )}
-                  <div className="grid grid-cols-3 gap-2">
-                    <Button sm onClick={() => probe(id)}>Test</Button>
-                    <Button sm onClick={() => setConfiguring({ row: c, platform })}>Configure</Button>
-                    <Button sm variant={on ? "danger" : "primary"}
-                      onClick={() => setActive(on ? activeChannels.filter((x) => x !== id) : [...activeChannels, id])}>
-                      {on ? "Disable" : "Enable"}
-                    </Button>
+                    {optionalCount > 0 && (
+                      <div className="flex items-center gap-2 text-xs text-dim">
+                        <Icon name="shield" size={14} className="text-faint" />
+                        {optionalCount} hardening control{optionalCount === 1 ? "" : "s"}
+                      </div>
+                    )}
+                    <div className="grid grid-cols-3 gap-2">
+                      <Button sm onClick={() => probe(id)}>Test</Button>
+                      <Button sm onClick={() => setConfiguring({ row: c, platform })}>Configure</Button>
+                      <Button sm variant={on ? "danger" : "primary"}
+                        onClick={() => setActive(on ? activeChannels.filter((x) => x !== id) : [...activeChannels, id])}>
+                        {on ? "Disable" : "Enable"}
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              </Card>
-            );
-          })}
+                </Card>
+              );
+            })}
+          </div>
+          <OutboxPanel
+            payload={outbox.data}
+            loading={outbox.loading}
+            error={outbox.error}
+            busy={outboxBusy}
+            onReload={outbox.reload}
+            onAction={outboxAction}
+          />
         </div>
       )}
       {configuring && (
@@ -118,6 +161,70 @@ export function Channels() {
       )}
     </>
   );
+}
+
+function OutboxPanel({
+  payload,
+  loading,
+  error,
+  busy,
+  onReload,
+  onAction,
+}: {
+  payload: OutboxPayload | null;
+  loading: boolean;
+  error: string;
+  busy: string;
+  onReload: () => void;
+  onAction: (message: OutboxMessage, action: "retry" | "discard") => void;
+}) {
+  const stats = payload?.stats || {};
+  const rows = payload?.dead_letters?.length ? payload.dead_letters : payload?.messages || [];
+  return (
+    <Card pad={false}>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-[var(--pad)]">
+        <div>
+          <div className="font-mono text-base font-semibold text-text">Gateway Outbox</div>
+          <div className="text-xs text-faint">pending {stats.pending || 0} / failed {stats.failed || 0} / discarded {stats.discarded || 0}</div>
+        </div>
+        <Button sm icon="refresh" onClick={onReload}>Refresh</Button>
+      </div>
+      {error && <Empty icon="alert">Couldn't load outbox - {error}</Empty>}
+      {loading && <Loading />}
+      {!loading && !error && !rows.length && <Empty icon="check">No failed deliveries.</Empty>}
+      {!loading && !error && !!rows.length && (
+        <div className="divide-y divide-border">
+          {rows.map((message) => (
+            <div key={message.id} className="grid gap-3 p-[var(--pad)] lg:grid-cols-[minmax(0,1fr)_auto]">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge status={message.status || "pending"}>{message.status || "pending"}</Badge>
+                  <span className="font-mono text-xs text-primary">{message.platform || "gateway"}:{message.chat_id || "unknown"}</span>
+                  <span className="font-mono text-xs text-faint">#{message.id}</span>
+                  <span className="text-xs text-faint">{dateish(message.created_at)}</span>
+                </div>
+                <div className="mt-2 line-clamp-2 text-xs text-dim">{compact(message.text || "", 260)}</div>
+                <div className="mt-2 flex flex-wrap gap-1.5 text-[10px]">
+                  <Mini>attempts {message.attempts || 0}</Mini>
+                  {message.thread_id && <Mini>thread {compact(message.thread_id, 28)}</Mini>}
+                  {message.next_at && <Mini>next {dateish(message.next_at)}</Mini>}
+                  {message.text_truncated && <Mini>truncated</Mini>}
+                </div>
+              </div>
+              <div className="flex items-start gap-2">
+                <Button sm icon="refresh" disabled={busy === `retry:${message.id}`} onClick={() => onAction(message, "retry")}>Retry</Button>
+                <Button sm variant="danger" icon="trash" disabled={busy === `discard:${message.id}`} onClick={() => onAction(message, "discard")}>Discard</Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function Mini({ children }: { children: ReactNode }) {
+  return <span className="border border-border bg-surface-2 px-1.5 py-px font-mono text-faint">{children}</span>;
 }
 
 function ChannelConfig({

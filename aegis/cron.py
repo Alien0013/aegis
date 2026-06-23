@@ -607,6 +607,172 @@ def is_due(job: CronJob, now: float) -> bool:
     return _cron_matches(job.schedule, now)
 
 
+def _epoch_iso(value: float) -> str:
+    if not value:
+        return ""
+    try:
+        return datetime.fromtimestamp(float(value)).isoformat(timespec="seconds")
+    except (OSError, OverflowError, ValueError):
+        return ""
+
+
+def _schedule_preview(job: CronJob, now: float) -> dict:
+    interval = _interval_seconds(job.schedule)
+    cron_next = 0.0
+    if interval is None and not job.run_at:
+        cron_next = _next_cron_time(job.schedule, now)
+    computed = _compute_next_run(job, now)
+    due = is_due(job, now)
+    if due and (not computed or computed > now):
+        computed = now
+    valid = bool(job.run_at or interval is not None or cron_next)
+    return {
+        "schedule": job.schedule,
+        "valid": valid,
+        "kind": "one_shot" if job.run_at else ("interval" if interval is not None else ("cron" if cron_next else "unknown")),
+        "interval_seconds": interval or 0,
+        "next_run": computed,
+        "next_run_iso": _epoch_iso(computed),
+        "due": due,
+    }
+
+
+def _script_preview(job: CronJob) -> dict:
+    raw = (job.script or "").strip()
+    workdir = (job.workdir or "").strip()
+    resolved = ""
+    exists = False
+    is_file = False
+    if raw:
+        path = Path(raw).expanduser()
+        if not path.is_absolute() and workdir:
+            path = Path(workdir).expanduser() / path
+        try:
+            resolved_path = path.resolve()
+        except OSError:
+            resolved_path = path
+        resolved = str(resolved_path)
+        exists = resolved_path.exists()
+        is_file = resolved_path.is_file()
+    return {
+        "configured": bool(raw),
+        "path": raw,
+        "resolved_path": resolved,
+        "exists": exists,
+        "is_file": is_file,
+    }
+
+
+def preview_job(config, job: CronJob | str, *, store: "CronStore | None" = None,
+                now: float | None = None) -> dict:
+    """Return a side-effect-free operator preview for a cron job.
+
+    The scheduler should stay boringly deterministic, but dashboards and API
+    clients need to explain what will happen before a headless job runs:
+    next-fire timing, delivery targets, runtime overrides, missing context refs,
+    and prompt/script/workdir validation.
+    """
+    store = store or CronStore()
+    if isinstance(job, str):
+        found = store.get(job)
+        if found is None:
+            return {"ok": False, "found": False, "id": job, "error": f"cron job not found: {job}"}
+        job = found
+    now = time.time() if now is None else float(now)
+    from .automation import delivery_targets
+
+    errors: list[str] = []
+    warnings: list[str] = []
+    schedule = _schedule_preview(job, now)
+    if not schedule["valid"]:
+        errors.append("schedule is not a supported interval, one-shot, or 5-field cron expression")
+
+    prompt_error = _scan_cron_prompt(job.prompt)
+    if prompt_error:
+        errors.append(prompt_error)
+    if bool(job.no_agent) and not (job.script or "").strip():
+        errors.append("no_agent jobs require a script")
+
+    workdir = (job.workdir or "").strip()
+    workdir_exists = False
+    workdir_is_dir = False
+    if workdir:
+        path = Path(workdir).expanduser()
+        workdir_exists = path.exists()
+        workdir_is_dir = path.is_dir()
+        if not workdir_exists:
+            errors.append(f"workdir not found: {workdir}")
+        elif not workdir_is_dir:
+            errors.append(f"workdir is not a directory: {workdir}")
+
+    script = _script_preview(job)
+    if script["configured"] and not script["exists"]:
+        warnings.append(f"script not found: {script['path']}")
+    elif script["configured"] and not script["is_file"]:
+        warnings.append(f"script is not a file: {script['path']}")
+
+    context_refs = []
+    for ref in job.context_from or []:
+        source = store.resolve(ref)
+        row = {"ref": ref, "found": bool(source), "id": "", "name": "", "has_output": False}
+        if source is not None:
+            row.update({
+                "id": source.id,
+                "name": source.name or "",
+                "has_output": bool(_latest_job_output(source, limit=1)),
+            })
+        else:
+            warnings.append(f"context source not found: {ref}")
+        context_refs.append(row)
+
+    targets = delivery_targets(job.deliver) or ([job.channel] if job.channel else [])
+    run_config = _cron_run_config(config, job)
+    disabled_tools = run_config.get("tools.disabled", []) or []
+    if isinstance(disabled_tools, str):
+        disabled_tools = [disabled_tools]
+    run_count = int(getattr(job, "run_count", 0) or 0)
+    max_runs = int(getattr(job, "max_runs", 0) or 0)
+    return {
+        "ok": not errors,
+        "found": True,
+        "id": job.id,
+        "job_id": job.id,
+        "name": job.name or "",
+        "now": now,
+        "now_iso": _epoch_iso(now),
+        "enabled": bool(job.enabled),
+        "due": bool(schedule["due"]),
+        "schedule": schedule,
+        "next_run": schedule["next_run"],
+        "next_run_iso": schedule["next_run_iso"],
+        "mode": "script" if job.no_agent else "agent",
+        "targets": targets,
+        "deliver": job.deliver or "",
+        "channel": job.channel or "",
+        "model": job.model or "",
+        "enabled_toolsets": list(job.enabled_toolsets or []),
+        "resolved_toolsets": list(run_config.get("tools.toolsets", []) or []),
+        "disabled_tools": [str(item) for item in disabled_tools],
+        "cron_skip_memory": bool(run_config.get("memory.enabled", True)) is False,
+        "workdir": {
+            "path": workdir,
+            "exists": workdir_exists,
+            "is_dir": workdir_is_dir,
+        },
+        "script": script,
+        "skills": list(job.skills or []),
+        "context_from": context_refs,
+        "run_count": run_count,
+        "max_runs": max_runs,
+        "will_retire_after_next_run": bool(max_runs and run_count + 1 >= max_runs),
+        "validation": {
+            "ok": not errors,
+            "errors": errors,
+            "warnings": warnings,
+        },
+    }
+
+
 class CronStore:
     @staticmethod
     def _load_unlocked() -> list[dict]:

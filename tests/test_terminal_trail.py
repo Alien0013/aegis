@@ -58,3 +58,32 @@ def test_renderer_handles_full_event_stream(capsys, monkeypatch):
     monkeypatch.setenv("AEGIS_UNICODE", "1")
     r({"type": "tool_result", "name": "read_file", "summary": "read 12 lines", "duration_ms": 30})
     assert "✓ read 12 lines" in capsys.readouterr().out
+
+
+def test_renderer_timestamps_and_detailed_tool_progress(capsys, monkeypatch):
+    from aegis.config import Config
+
+    monkeypatch.setattr(repl, "_console", None)
+    monkeypatch.setenv("AEGIS_ASCII", "1")
+    monkeypatch.setattr(repl.time, "strftime", lambda _fmt: "12:34:56")
+    cfg = Config.load()
+    cfg.data.setdefault("display", {})["timestamps"] = True
+    cfg.data["display"]["tool_progress"] = "detailed"
+
+    r = Renderer(cfg)
+    r({
+        "type": "tool_result",
+        "name": "bash",
+        "summary": "ran ok",
+        "duration_ms": 10,
+        "preview": "pytest -q",
+        "classification": "success",
+        "artifact_ref": "logs/run.txt",
+    })
+
+    out = capsys.readouterr().out
+    assert "[12:34:56]" in out
+    assert "ok ran ok" in out
+    assert "preview pytest -q" in out
+    assert "classification success" in out
+    assert "artifact ref logs/run.txt" in out

@@ -581,8 +581,31 @@ def test_status_shows_state_section(capsys):
     from aegis.config import Config
     cmd_status(object(), Config.load())
     out = capsys.readouterr().out
-    for label in ("State", "sessions:", "trajectory:", "cost (30d):", "disk:", "home:"):
+    for label in ("AEGIS Status", "== State ==", "Sessions:", "Trajectory:", "Cost (30d):", "Disk:", "Home:"):
         assert label in out
+
+
+def test_status_json_is_machine_readable_and_redacted(capsys):
+    import json
+    from types import SimpleNamespace
+
+    from aegis.cli.main import cmd_status
+    from aegis.config import Config
+
+    cfg = Config.load()
+    cfg.data.setdefault("server", {})["dashboard_token"] = "plain-dashboard-token"
+    cfg.data.setdefault("display", {})["timestamps"] = True
+
+    cmd_status(SimpleNamespace(json=True), cfg)
+    out = capsys.readouterr().out
+    data = json.loads(out)
+
+    assert data["object"] == "aegis.status"
+    assert data["display"]["timestamps"] is True
+    assert "provider" in data["model"]
+    assert "toolsets" in data["surface"]
+    assert "exec_mode" in data["terminal"]
+    assert "plain-dashboard-token" not in out
 
 
 def test_status_redacts_dashboard_token(capsys):

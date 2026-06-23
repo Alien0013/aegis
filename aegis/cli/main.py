@@ -15,7 +15,7 @@ from pathlib import Path
 from .. import __version__
 from .. import config as cfg
 from ..config import Config
-from ..redact import redact_secret_values
+from ..redact import redact_secret_values, redact_secrets
 
 
 def _print(s: str = "") -> None:
@@ -55,6 +55,18 @@ def _terminal_title(title: str, *, width: int = 64, unicode: bool = False) -> st
 
 def _terminal_section(title: str, *, unicode: bool = False) -> str:
     return f"◇ {title}" if unicode else f"== {title} =="
+
+
+def _redact_string_values(value):
+    if isinstance(value, str):
+        return redact_secrets(value)
+    if isinstance(value, dict):
+        return {key: _redact_string_values(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_string_values(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_string_values(item) for item in value)
+    return value
 
 
 # --------------------------------------------------------------------------- #
@@ -892,62 +904,45 @@ def cmd_eval(args, config: Config) -> int:
 
 def cmd_status(args, config: Config) -> int:
     from .. import config as cfg
+    from ..providers.registry import provider_report
     from ..surface import plugin_inventory, skill_inventory, tool_inventory
 
-    _print(f"AEGIS v{__version__}")
-    _print(f"home:      {cfg.get_home()}")
-    _print(f"config:    {cfg.config_path()}")
-    _print(f"workspace: {cfg.sub('workspace')}")
-    _print("")
-    _print("Model")
-    _print(f"  provider: {config.get('model.provider')}")
-    _print(f"  model:    {config.get('model.default')}")
+    report_error = ""
     try:
-        from ..providers import build_provider
-        p = build_provider(config)
-        _print(f"  auth:     {p.auth.describe()} ({'ready' if p.auth.available() else 'missing'})")
-        _print(f"  api mode: {p.api_mode.value}")
-    except Exception as e:  # noqa: BLE001
-        _print(f"  error:    {e}")
+        provider = provider_report(config)
+    except Exception as exc:  # noqa: BLE001
+        provider = {"active": {}}
+        report_error = str(exc)
+    active = provider.get("active") if isinstance(provider.get("active"), dict) else {}
+    auth = active.get("auth") if isinstance(active.get("auth"), dict) else {}
 
     tools = tool_inventory(config)
     skills = skill_inventory(config)
     plugins = plugin_inventory()
     mcp_servers = config.get("mcp.servers", {}) or {}
     channels = list(config.get("gateway.channels", []) or [])
-    _print("")
-    _print("Surface")
-    _print(f"  toolsets: {', '.join(tools.toolsets)}")
-    _print(f"  tools:    {tools.enabled_count}/{tools.total_count} model-visible")
-    _print(f"  skills:   {skills.available_count} available ({skills.bundled_count} bundled)")
-    _print(f"  plugins:  {plugins.files_count} file(s), {len(plugins.tools)} tool(s), "
-           f"{len(plugins.channels)} channel(s), {len(plugins.providers)} provider(s)")
-    if plugins.errors:
-        _print(f"            {len(plugins.errors)} error(s); run `aegis plugins doctor`")
-    _print(f"  mcp:      {len(mcp_servers)} server(s)")
-    _print(f"  channels: {', '.join(channels) or 'none'}")
 
-    # --- State: where the data lives and how much there is ---
-    import os
-    _print("")
-    _print("State")
+    state: dict[str, object] = {}
     try:
         from ..session import SessionStore
-        _print(f"  sessions:   {len(SessionStore().list(limit=100000))}")
+        state["sessions"] = len(SessionStore().list(limit=100000))
     except Exception:  # noqa: BLE001
         pass
     mem = cfg.sub("memories", "MEMORY.md")
     if os.path.exists(mem):
-        _print(f"  memory:     {os.path.getsize(mem):,} bytes")
+        state["memory_bytes"] = os.path.getsize(mem)
     tp = config.get("trajectory.path", "trajectories.jsonl")
     tp = tp if os.path.isabs(tp) else cfg.sub(tp)
     n_traj = sum(1 for _ in open(tp, encoding="utf-8")) if os.path.exists(tp) else 0
-    _print(f"  trajectory: {'on' if config.get('trajectory.enabled', False) else 'off'} "
-           f"({n_traj} captured)")
+    state["trajectory"] = {
+        "enabled": bool(config.get("trajectory.enabled", False)),
+        "captured": n_traj,
+        "path": str(tp),
+    }
     try:
         from .. import usage_log
         r = usage_log.cost_report(30, config)
-        _print(f"  cost (30d): ~${r['total_cost_usd']:.4f} over {r['calls']} call(s)")
+        state["cost_30d"] = {"usd": float(r["total_cost_usd"]), "calls": int(r["calls"])}
     except Exception:  # noqa: BLE001
         pass
     try:
@@ -955,25 +950,150 @@ def cmd_status(args, config: Config) -> int:
         total = sum(os.path.getsize(os.path.join(dp, f))
                     for dp, _, fs in os.walk(home) for f in fs
                     if os.path.exists(os.path.join(dp, f)))
-        _print(f"  disk:       {total / 1024:.0f} KB in {home}")
+        state["disk_kb"] = int(total / 1024)
     except Exception:  # noqa: BLE001
         pass
 
-    _print("")
-    _print("Services")
+    services: dict[str, str] = {}
     try:
         from ..daemon import status as daemon_status
-        for unit, state in daemon_status().items():
-            _print(f"  {unit}: {state}")
-    except Exception as e:  # noqa: BLE001
-        _print(f"  unavailable: {e}")
+        services = {str(unit): str(state) for unit, state in daemon_status().items()}
+    except Exception as exc:  # noqa: BLE001
+        services = {"unavailable": str(exc)}
 
     host = config.get("server.dashboard_host", "127.0.0.1")
     port = int(config.get("server.dashboard_port", 9119))
     token = config.get("server.dashboard_token")
     url = f"http://{host}:{port}/" + ("?token=[REDACTED]" if token else "")
-    _print("")
-    _print("Dashboard")
+    display = {
+        "reasoning": config.get("display.reasoning", "off") or "off",
+        "timestamps": bool(config.get("display.timestamps", False)),
+        "status_footer": bool(config.get("display.status_footer", True)),
+        "tool_progress": config.get("display.tool_progress", True),
+        "tool_progress_grouping": bool(config.get("display.tool_progress_grouping", True)),
+        "memory_notifications": bool(config.get("display.memory_notifications", True)),
+        "theme": config.get("display.theme", "") or "(default)",
+    }
+    terminal = {
+        "backend": config.get("tools.terminal_backend"),
+        "exec_mode": config.get("tools.exec_mode"),
+        "subagent_backend": config.get("tools.subagent_terminal_backend") or "(inherit)",
+        "allow_local_fallback": bool(config.get("tools.allow_local_fallback")),
+        "timeout_seconds": config.get("tools.terminal_lifetime_seconds"),
+    }
+    surface = {
+        "toolsets": list(tools.toolsets),
+        "tools": {"enabled": tools.enabled_count, "total": tools.total_count},
+        "skills": {"available": skills.available_count, "bundled": skills.bundled_count},
+        "plugins": {
+            "files": plugins.files_count,
+            "tools": len(plugins.tools),
+            "channels": len(plugins.channels),
+            "providers": len(plugins.providers),
+            "errors": len(plugins.errors),
+        },
+        "mcp_servers": len(mcp_servers),
+        "channels": channels,
+    }
+    payload = {
+        "ok": not report_error,
+        "object": "aegis.status",
+        "version": __version__,
+        "paths": {
+            "home": str(cfg.get_home()),
+            "config": str(cfg.config_path()),
+            "workspace": str(cfg.sub("workspace")),
+        },
+        "model": {
+            "provider": active.get("name") or config.get("model.provider"),
+            "model": active.get("model") or config.get("model.default"),
+            "api_mode": active.get("api_mode") or "",
+            "base_url": active.get("base_url") or config.get("model.base_url") or "",
+            "context_length": active.get("context_length") or config.get("model.context_length") or 0,
+            "max_output_tokens": active.get("max_output_tokens") or 0,
+            "auth": auth,
+            "capability_summary": active.get("capability_summary") or "",
+            "capability_flags": active.get("capability_flags") or {},
+            "error": report_error,
+        },
+        "surface": surface,
+        "display": display,
+        "terminal": terminal,
+        "state": state,
+        "services": services,
+        "dashboard": {"url": url},
+    }
+    if getattr(args, "json", False):
+        safe_payload = _redact_string_values(payload)
+        _print(json.dumps(safe_payload, indent=2, sort_keys=True))
+        return 0
+
+    unicode_ui = _terminal_unicode_enabled()
+    _print(_terminal_title("AEGIS Status", unicode=unicode_ui))
+    _print()
+    _print(_terminal_section("Paths", unicode=unicode_ui))
+    _print(f"  Version:   {__version__}")
+    _print(f"  Home:      {cfg.get_home()}")
+    _print(f"  Config:    {cfg.config_path()}")
+    _print(f"  Workspace: {cfg.sub('workspace')}")
+    _print()
+    _print(_terminal_section("Model", unicode=unicode_ui))
+    _print(f"  Provider:  {payload['model']['provider']}")
+    _print(f"  Model:     {payload['model']['model']}")
+    _print(f"  Auth:      {auth.get('description', 'unknown')} ({'ready' if auth.get('available') else 'missing'})")
+    _print(f"  API mode:  {payload['model']['api_mode'] or 'unknown'}")
+    _print(f"  Context:   {payload['model']['context_length'] or 'unknown'}")
+    _print(f"  Output:    {payload['model']['max_output_tokens'] or 'unknown'}")
+    if payload["model"]["capability_summary"]:
+        _print(f"  Caps:      {payload['model']['capability_summary']}")
+    if report_error:
+        _print(f"  Error:     {report_error}")
+    _print()
+    _print(_terminal_section("Surface", unicode=unicode_ui))
+    _print(f"  Toolsets:  {', '.join(tools.toolsets) or 'none'}")
+    _print(f"  Tools:     {tools.enabled_count}/{tools.total_count} model-visible")
+    _print(f"  Skills:    {skills.available_count} available ({skills.bundled_count} bundled)")
+    _print(f"  Plugins:   {plugins.files_count} file(s), {len(plugins.tools)} tool(s), "
+           f"{len(plugins.channels)} channel(s), {len(plugins.providers)} provider(s)")
+    if plugins.errors:
+        _print(f"             {len(plugins.errors)} error(s); run `aegis plugins doctor`")
+    _print(f"  MCP:       {len(mcp_servers)} server(s)")
+    _print(f"  Channels:  {', '.join(channels) or 'none'}")
+    _print()
+    _print(_terminal_section("Display", unicode=unicode_ui))
+    _print(f"  Reasoning:   {display['reasoning']}")
+    _print(f"  Timestamps:  {display['timestamps']}")
+    _print(f"  Status line: {display['status_footer']}")
+    _print(f"  Tool progress: {display['tool_progress']}")
+    _print(f"  Tool grouping: {display['tool_progress_grouping']}")
+    _print(f"  Theme:       {display['theme']}")
+    _print()
+    _print(_terminal_section("Terminal", unicode=unicode_ui))
+    _print(f"  Backend:     {terminal['backend']}")
+    _print(f"  Exec mode:   {terminal['exec_mode']}")
+    _print(f"  Subagents:   {terminal['subagent_backend']}")
+    _print(f"  Local fallback: {terminal['allow_local_fallback']}")
+    _print(f"  Timeout:     {terminal['timeout_seconds']}s")
+    _print()
+    _print(_terminal_section("State", unicode=unicode_ui))
+    if "sessions" in state:
+        _print(f"  Sessions:   {state['sessions']}")
+    if "memory_bytes" in state:
+        _print(f"  Memory:     {state['memory_bytes']:,} bytes")
+    traj = state.get("trajectory", {})
+    if isinstance(traj, dict):
+        _print(f"  Trajectory: {'on' if traj.get('enabled') else 'off'} ({traj.get('captured', 0)} captured)")
+    cost = state.get("cost_30d", {})
+    if isinstance(cost, dict):
+        _print(f"  Cost (30d): ~${float(cost.get('usd', 0.0)):.4f} over {cost.get('calls', 0)} call(s)")
+    if "disk_kb" in state:
+        _print(f"  Disk:       {state['disk_kb']} KB in {cfg.get_home()}")
+    _print()
+    _print(_terminal_section("Services", unicode=unicode_ui))
+    for unit, service_state in services.items():
+        _print(f"  {unit}: {service_state}")
+    _print()
+    _print(_terminal_section("Dashboard", unicode=unicode_ui))
     _print(f"  {url}")
     return 0
 
@@ -1460,6 +1580,7 @@ def cmd_config(args, config: Config) -> int:
                     "personality": config.get("agent.personality", "none") or "none",
                     "reasoning": config.get("display.reasoning", "off") or "off",
                     "model_effort": config.get("agent.reasoning_effort", "off") or "off",
+                    "timestamps": config.get("display.timestamps", False),
                     "status_footer": config.get("display.status_footer", True),
                     "tool_progress": config.get("display.tool_progress", True),
                     "tool_progress_grouping": config.get("display.tool_progress_grouping", True),
@@ -1532,6 +1653,7 @@ def cmd_config(args, config: Config) -> int:
         _print(f"  Reasoning:   {config.get('display.reasoning', 'off') or 'off'}")
         _print(f"  Model effort: {config.get('agent.reasoning_effort', 'off') or 'off'}")
         _print(f"  Theme:       {config.get('display.theme') or '(default)'}")
+        _print(f"  Timestamps:  {config.get('display.timestamps', False)}")
         _print(f"  Status line: {config.get('display.status_footer', True)}")
         _print(f"  Tool progress: {config.get('display.tool_progress', True)}")
         _print(f"  Tool grouping: {config.get('display.tool_progress_grouping', True)}")
@@ -1636,7 +1758,7 @@ def cmd_config(args, config: Config) -> int:
         if getattr(args, "key", None):
             if getattr(args, "value", None):
                 return _die("usage: aegis config setup [section] [setup flags]")
-            setattr(args, "section", str(args.key))
+            args.section = str(args.key)
         return cmd_setup(args, config)
     if args.action == "edit":
         import shutil
@@ -2427,6 +2549,7 @@ def build_parser() -> argparse.ArgumentParser:
     un.set_defaults(func=cmd_uninstall)
 
     st = sub.add_parser("status", help="show install/auth/tools/skills/plugins/service status")
+    st.add_argument("--json", action="store_true", help="print machine-readable status")
     st.set_defaults(func=cmd_status)
 
     lg = sub.add_parser("logs", help="tail agent/desktop/errors/gateway/gui logs")

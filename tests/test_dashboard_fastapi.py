@@ -3932,6 +3932,26 @@ def test_fastapi_cron_control_plane(tmp_path, monkeypatch):
     assert delivery_targets.status_code == 200
     assert any(target["id"] == "local" for target in delivery_targets.json()["targets"])
 
+    preview = asyncio.run(_request(app, "GET", f"/api/cron/jobs/{job_id}/preview", headers=headers))
+    assert preview.status_code == 200
+    preview_body = preview.json()
+    assert preview_body["ok"] is True
+    assert preview_body["job_id"] == job_id
+    assert preview_body["mode"] == "agent"
+    assert preview_body["schedule"]["kind"] == "interval"
+    assert preview_body["schedule"]["interval_seconds"] == 7200
+    assert preview_body["targets"] == ["telegram:42"]
+    assert preview_body["model"] == "cron-model"
+    assert preview_body["enabled_toolsets"] == ["core", "web"]
+    assert preview_body["workdir"]["exists"] is True
+    assert preview_body["workdir"]["is_dir"] is True
+    assert preview_body["validation"]["ok"] is True
+
+    alias_preview = asyncio.run(_request(app, "POST", f"/api/jobs/{job_id}/dry-run", headers=headers))
+    assert alias_preview.status_code == 200
+    assert alias_preview.json()["job_id"] == job_id
+    assert alias_preview.json()["next_run_iso"]
+
     alias_create = asyncio.run(_request(
         app,
         "POST",
@@ -4065,6 +4085,8 @@ def test_fastapi_cron_job_routes_reject_invalid_ids(tmp_path, monkeypatch, caplo
         ("DELETE", "/api/cron/jobs/not-a-valid-hex!", {}),
         ("POST", "/api/jobs/not-a-valid-hex!/pause", {}),
         ("POST", "/api/jobs/not-a-valid-hex!/run", {}),
+        ("GET", "/api/jobs/not-a-valid-hex!/preview", {}),
+        ("POST", "/api/cron/jobs/not-a-valid-hex!/dry-run", {}),
         ("GET", "/api/cron/jobs/not-a-valid-hex!/runs", {}),
     ]
     results = [
@@ -4111,6 +4133,15 @@ def test_fastapi_gateway_control_plane(tmp_path, monkeypatch):
             }
         },
     )
+    from aegis.gateway.queue import DeliveryQueue
+
+    queue = DeliveryQueue()
+    queue.enqueue("telegram", "chat1", "boom sk-proj-" + ("A" * 32))
+    retry_id = queue.due()[0]["id"]
+    queue.mark_failed(retry_id, attempts=4, max_attempts=5)
+    queue.enqueue("discord", "chat2", "drop this")
+    discard_id = queue.due()[0]["id"]
+    queue.mark_failed(discard_id, attempts=4, max_attempts=5)
 
     set_channels = asyncio.run(_request(
         app,
@@ -4132,6 +4163,29 @@ def test_fastapi_gateway_control_plane(tmp_path, monkeypatch):
     assert status.json()["capabilities"]["fast_mode"] is True
     assert "reasoning_effort" in status.json()
     assert "service_tier" in status.json()
+    assert status.json()["outbox"]["failed"] == 2
+
+    outbox = asyncio.run(_request(app, "GET", "/api/gateway/outbox?status=failed", headers=headers))
+    assert outbox.status_code == 200
+    assert outbox.json()["stats"]["failed"] == 2
+    assert len(outbox.json()["messages"]) == 2
+    assert all(item["status"] == "failed" for item in outbox.json()["messages"])
+    assert "sk-proj" not in json.dumps(outbox.json()["messages"])
+
+    dead = asyncio.run(_request(app, "GET", "/api/gateway/dead-letter", headers=headers))
+    assert dead.status_code == 200
+    assert {item["id"] for item in dead.json()["dead_letters"]} == {retry_id, discard_id}
+
+    retry = asyncio.run(_request(app, "POST", f"/api/gateway/outbox/{retry_id}/retry", headers=headers))
+    assert retry.status_code == 200
+    assert retry.json()["ok"] is True
+    assert retry.json()["status"] == "pending"
+    assert retry.json()["attempts"] == 0
+
+    discard = asyncio.run(_request(app, "POST", f"/api/gateway/dead-letter/{discard_id}/discard", headers=headers))
+    assert discard.status_code == 200
+    assert discard.json()["ok"] is True
+    assert discard.json()["status"] == "discarded"
 
     install = asyncio.run(_request(
         app,

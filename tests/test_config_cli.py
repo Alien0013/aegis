@@ -76,6 +76,8 @@ def test_config_status_json_is_machine_readable_and_redacted(monkeypatch, capsys
         "model:\n"
         "  provider: openai\n"
         "  default: gpt-5.5\n"
+        "display:\n"
+        "  timestamps: true\n"
         "server:\n"
         "  api_key: server-secret\n"
         "gateway:\n"
@@ -102,6 +104,7 @@ def test_config_status_json_is_machine_readable_and_redacted(monkeypatch, capsys
     assert data["api_keys"]["Cerebras"]["env"] == ["CEREBRAS_API_KEY"]
     assert data["model"]["provider"] == "openai"
     assert data["model"]["default"] == "gpt-5.5"
+    assert data["display"]["timestamps"] is True
     assert data["terminal"]["exec_mode"] == "auto"
     assert data["terminal"]["subagent_backend"] == "(inherit)"
     assert data["terminal"]["allow_local_fallback"] is False
