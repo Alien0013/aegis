@@ -23,6 +23,7 @@ interface Status {
   gateway_running?: boolean;
   gateway_state?: string;
   toolsets?: string[];
+  activity?: { active?: ActivityRow[]; recent?: ActivityRow[]; active_count?: number; recent_count?: number };
 }
 
 interface SessionRow {
@@ -56,8 +57,34 @@ interface ToolRow {
   unavailable_reason?: string;
 }
 
+interface ActivityRow {
+  id: string;
+  surface?: string;
+  session_id?: string;
+  run_id?: string;
+  title?: string;
+  prompt_preview?: string;
+  provider?: string;
+  model?: string;
+  phase?: string;
+  status?: string;
+  iteration?: number;
+  max_iterations?: number;
+  active_tool?: string;
+  tool_calls?: number;
+  provider_calls?: number;
+  subagents_active?: number;
+  subagents_done?: number;
+  elapsed_ms?: number;
+  active_elapsed_ms?: number;
+  last_text_preview?: string;
+  last_error?: string;
+  updated_at?: string;
+}
+
 interface Cockpit {
   status?: Status;
+  activity?: { active?: ActivityRow[]; recent?: ActivityRow[]; active_count?: number; recent_count?: number };
   analytics?: { total_cost?: number; total_tokens?: number; balance?: unknown };
   sessions?: SessionRow[];
   runs?: { runs?: RunRow[]; summary?: { total?: number } };
@@ -110,6 +137,8 @@ export function CommandCenter() {
   const sessions = useMemo(() => [...(data?.sessions || [])].sort(byUpdated), [data?.sessions]);
   const runs = useMemo(() => [...(data?.runs?.runs || [])].sort(byRunTime), [data?.runs?.runs]);
   const activeRuns = runs.filter((run) => ACTIVE_STATUSES.has(statusKey(run.status)));
+  const activeActivity = data?.activity?.active || status.activity?.active || [];
+  const recentActivity = data?.activity?.recent || status.activity?.recent || [];
   const problemRuns = runs.filter((run) => run.error || BAD_STATUSES.has(statusKey(run.status)));
   const tools = data?.tools?.tools || [];
   const availableTools = tools.filter((tool) => tool.available).length;
@@ -160,13 +189,13 @@ export function CommandCenter() {
         <div className="flex flex-wrap gap-1.5">
           <Badge tone={ready ? "success" : "danger"}>{ready ? "ready" : "attention"}</Badge>
           <Badge tone={gateway === "running" ? "success" : "neutral"}>{gateway}</Badge>
-          <Badge tone={activeRuns.length ? "info" : "neutral"}>{activeRuns.length} active</Badge>
+          <Badge tone={activeActivity.length || activeRuns.length ? "info" : "neutral"}>{activeActivity.length || activeRuns.length} active</Badge>
         </div>
       </div>
 
       <MetricStrip items={[
         { label: "sessions", value: num(status.sessions ?? sessions.length), tone: "primary" },
-        { label: "active work", value: num(activeRuns.length), tone: activeRuns.length ? "info" : "success" },
+        { label: "active work", value: num(activeActivity.length || activeRuns.length), tone: activeActivity.length || activeRuns.length ? "info" : "success" },
         { label: "tools", value: `${num(availableTools || enabledTools || status.tools)}/${num(status.tools || tools.length)}`, tone: "info" },
         { label: "trace errors", value: num(data?.traces?.summary?.errors || problemRuns.length), tone: problemRuns.length ? "danger" : "neutral" },
       ]} />
@@ -179,9 +208,10 @@ export function CommandCenter() {
               {sessions.slice(0, 12).map((session) => <SessionLine key={session.id} session={session} />)}
             </Card>
             <div className="space-y-[var(--gap)]">
-              <Card title="Active Work" sub={`${activeRuns.length || runs.length} shown`} pad={false}>
-                {(activeRuns.length ? activeRuns : runs).slice(0, 8).map((run) => <RunLine key={run.id} run={run} />)}
-                {!runs.length && <Empty icon="activity">No running or recorded work yet.</Empty>}
+              <Card title="Active Work" sub={`${activeActivity.length || activeRuns.length || runs.length} shown`} pad={false}>
+                {activeActivity.slice(0, 8).map((item) => <ActivityLine key={item.id} item={item} />)}
+                {!activeActivity.length && (activeRuns.length ? activeRuns : runs).slice(0, 8).map((run) => <RunLine key={run.id} run={run} />)}
+                {!activeActivity.length && !runs.length && <Empty icon="activity">No running or recorded work yet.</Empty>}
               </Card>
               <Card title="Fast Paths">
                 <div className="grid grid-cols-2 gap-2">
@@ -276,7 +306,8 @@ export function CommandCenter() {
               </div>
             </Card>
             <Card title="Run History" sub={`${runs.length} recent runs`} pad={false}>
-              {!runs.length && <Empty icon="analytics">No run history yet.</Empty>}
+              {recentActivity.slice(0, 5).map((item) => <ActivityLine key={item.id} item={item} />)}
+              {!runs.length && !recentActivity.length && <Empty icon="analytics">No run history yet.</Empty>}
               {runs.slice(0, 14).map((run) => <RunLine key={run.id} run={run} detail />)}
             </Card>
             <Card title="Log Watch" sub={data?.logs?.path || "recent errors"} pad={false}>
@@ -358,6 +389,41 @@ function RunLine({ run, detail = false }: { run: RunRow; detail?: boolean }) {
   );
 }
 
+function ActivityLine({ item }: { item: ActivityRow }) {
+  const active = ACTIVE_STATUSES.has(statusKey(item.status)) || statusKey(item.status) === "running";
+  const bad = !!item.last_error || BAD_STATUSES.has(statusKey(item.status));
+  const to = item.session_id ? `/sessions?id=${encodeURIComponent(item.session_id)}` : "/analytics";
+  const primary = item.active_tool
+    ? `tool ${item.active_tool}`
+    : item.provider || item.model
+      ? [item.provider, item.model].filter(Boolean).join("/")
+      : item.phase || item.surface || "activity";
+  const detail = [
+    item.surface || "agent",
+    item.phase || item.status || "running",
+    item.iteration ? `step ${item.iteration}/${item.max_iterations || "?"}` : "",
+    formatMs(item.active_elapsed_ms || item.elapsed_ms || 0),
+  ].filter(Boolean).join(" / ");
+  return (
+    <Link
+      to={to}
+      className="grid grid-cols-[auto_minmax(0,1fr)_auto] gap-3 border-b border-border px-[var(--pad)] py-3 last:border-0 hover:bg-surface-2/60"
+    >
+      <span className={cn("mt-1 h-2.5 w-2.5 rounded-full", bad ? "bg-danger" : active ? "bg-info" : "bg-success")} />
+      <span className="min-w-0">
+        <span className="block truncate text-sm font-semibold text-text">{compact(item.title || item.prompt_preview || primary, 76)}</span>
+        <span className="mt-0.5 block truncate text-xs text-faint">{detail}</span>
+        {(item.last_text_preview || item.last_error) && (
+          <span className={cn("mt-1 block truncate text-xs", item.last_error ? "text-danger" : "text-dim")}>
+            {compact(item.last_error || item.last_text_preview, 150)}
+          </span>
+        )}
+      </span>
+      <Badge status={item.status || (active ? "running" : "done")}>{item.status || (active ? "running" : "done")}</Badge>
+    </Link>
+  );
+}
+
 function QuickLink({ to, icon, label }: { to: string; icon: string; label: string }) {
   return (
     <Link to={to} className="flex items-center gap-2 rounded-[var(--radius)] border border-border bg-surface-2 px-3 py-2 text-sm text-dim hover:text-text">
@@ -423,4 +489,14 @@ function elapsed(run: RunRow): string {
   const hours = minutes / 60;
   if (hours < 24) return `${hours.toFixed(hours < 10 ? 1 : 0)}h`;
   return `${Math.floor(hours / 24)}d`;
+}
+
+function formatMs(ms: number): string {
+  if (!ms) return "";
+  const seconds = Math.max(1, Math.floor(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = minutes / 60;
+  return `${hours.toFixed(hours < 10 ? 1 : 0)}h`;
 }

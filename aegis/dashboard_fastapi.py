@@ -4824,6 +4824,28 @@ def _find_dashboard_chat_agent(body: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def _dashboard_chat_activity(record: dict[str, Any]) -> dict[str, Any]:
+    session_id = str(record.get("session_id") or "")
+    run_id = ""
+    agent = record.get("agent")
+    try:
+        session = getattr(agent, "session", None)
+        run_id = str((getattr(session, "meta", {}) or {}).get("last_run_id") or "")
+    except Exception:  # noqa: BLE001
+        run_id = ""
+    try:
+        from .activity import snapshot
+
+        for row in snapshot(include_recent=False).get("active", []):
+            if session_id and row.get("session_id") == session_id:
+                return row
+            if run_id and row.get("run_id") == run_id:
+                return row
+    except Exception:  # noqa: BLE001
+        pass
+    return {}
+
+
 def _dashboard_chat_control_response(body: dict[str, Any]) -> JSONResponse:
     action = str(body.get("action") or "").strip().lower()
     if action in {"stop", "cancel"}:
@@ -4840,6 +4862,7 @@ def _dashboard_chat_control_response(body: dict[str, Any]) -> JSONResponse:
             "active": True,
             "session_id": record.get("session_id", ""),
             "started_at": record.get("started_at", 0),
+            "activity": _dashboard_chat_activity(record),
         })
     if action == "interrupt":
         _cancel_dashboard_stream_agent(agent)
@@ -5079,6 +5102,10 @@ def _ws_rpc_error(request_id: Any, code: int, message: str, *, is_jsonrpc: bool)
 def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
     if path == "/api/status":
         return dash._dashboard_status(config)
+    if path == "/api/activity":
+        from .activity import snapshot
+
+        return snapshot(include_recent=True)
     if path in {"/api/session-checks", "/api/cross-session/checks", "/api/harness/cross-session"}:
         from .session_checks import cross_session_integrity_report
 

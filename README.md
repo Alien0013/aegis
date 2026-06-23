@@ -72,9 +72,9 @@ dependencies instead of failing import.
 
 | Area | Current behavior |
 | --- | --- |
-| Shared runtime | CLI, dashboard, desktop, API, SDK, ACP, MCP, gateway, cron, webhooks, and background work enter through the same `SurfaceRunner` and `Agent.run` path. |
-| Terminal agent | Interactive REPL with streaming, slash commands, queued/interruptible turns, `@file`/`@diff`/`@url` context references, sessions, branching, checkpoints, diff, rollback, goals, traces, and usage. |
-| Dashboard | Token-gated FastAPI + React/Vite control panel that opens on sessions, keeps `/dashboard` as a calmer overview, and keeps `/command-center` as a compact sessions/system/usage ops overlay. It also includes chat, terminal, models, tools, skills, memory, schedules, kanban, MCP, channels, webhooks, pairing, provider accounts, env/secrets, plugins, analytics, files, logs, profiles, docs, system, and config. |
+| Shared runtime | CLI, dashboard, desktop, API, SDK, ACP, MCP, gateway, cron, webhooks, and background work enter through the same `SurfaceRunner` and `Agent.run` path. Live activity snapshots track phase, active model/tool/subagent state, and run breadcrumbs across surfaces. |
+| Terminal agent | Interactive REPL with streaming, slash commands, queued/interruptible turns, long-run status footer, `@file`/`@diff`/`@url` context references, sessions, branching, checkpoints, diff, rollback, goals, traces, and usage. |
+| Dashboard | Token-gated FastAPI + React/Vite control panel that opens on sessions, keeps `/dashboard` as a calmer overview, and keeps `/command-center` as a compact sessions/system/usage ops overlay with live activity for long tasks. It also includes chat, terminal, models, tools, skills, memory, schedules, kanban, MCP, channels, webhooks, pairing, provider accounts, env/secrets, plugins, analytics, files, logs, profiles, docs, system, and config. |
 | Desktop | Electron app that launches/probes a local dashboard backend on a random port with a random token, shows boot/retry/log states, remembers window settings, and can run from source or package installers. |
 | Providers | Built-in registry for Anthropic, OpenAI, Codex-compatible paths, Google, OpenRouter, Groq, DeepSeek, Qwen/DashScope, xAI, Mistral, Together, Hugging Face, local OpenAI-compatible endpoints, Ollama, LM Studio, vLLM, and more. API-key auth is the default path; OAuth exists where implemented. |
 | Tools and permissions | File, patch, shell, process, web, browser, LSP, GitHub, code execution, image generation, subagents, model mixtures, cron/kanban, memory, skills, MCP/plugin tools, and local/cloud helpers all pass through a central registry and permission engine. |
@@ -215,7 +215,7 @@ instead of landing users in an all-in-one admin cockpit.
 | --- | --- |
 | Dashboard cockpit | More trace explainability, prompt/context audit, provider capability/probe matrix hardening, fuller tool provenance, background job lifecycle, cron dry-run/next-fire views, and gateway backpressure metrics. |
 | Desktop release | Formal lifecycle state machine, packaged smoke artifact verification, crash history/repair UX, release artifact hashes/SBOM, and signed/notarized release evidence when credentials are available. |
-| Terminal polish | A richer stateful full-screen TUI, generated slash-command docs, richer busy/interrupt status across every surface, and stronger parity tests for goals, branching, checkpoints, and rollback. |
+| Terminal polish | A richer stateful full-screen TUI, generated slash-command docs, more visual REPL polish, and stronger parity tests for goals, branching, checkpoints, and rollback. |
 | API/SDK contracts | Endpoint contract fixtures for chat/completions, responses-style behavior, streaming metadata, auth, cancellation, run events, MCP, and eval replay. |
 | Gateway confidence | Fake-adapter contract tests for every channel and explicit live-test instructions for platform credentials. No live Telegram/Discord/Slack/etc. coverage is claimed here. |
 | Security and operations | Policy explanation API, network/file safety simulators, broader redaction coverage, release provenance, and one command that proves Python, web, desktop, docs, security, installer, and release checks. |

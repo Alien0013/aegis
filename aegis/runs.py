@@ -109,6 +109,20 @@ class RunStore:
             run["data"] = merged
         self.write(run)
 
+    def update_data(self, run_id: str, data: dict[str, Any], *, trace_id: str = "") -> None:
+        """Merge live metadata into a run without ending it."""
+        if not run_id or not data:
+            return
+        run = self.get(run_id)
+        if run is None:
+            return
+        if trace_id:
+            run["trace_id"] = trace_id
+        merged = dict(run.get("data") or {})
+        merged.update(data)
+        run["data"] = merged
+        self.write(run)
+
     def write(self, run: dict[str, Any]) -> None:
         row = {
             "id": run.get("id") or new_id("run"),

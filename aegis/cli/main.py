@@ -1178,6 +1178,7 @@ def _config_default_values() -> dict[str, object]:
 _CONFIG_SET_EXTENSION_ROOTS = {
     "auxiliary.approval",
     "auxiliary.architect",
+    "auxiliary.background_review",
     "auxiliary.compaction",
     "auxiliary.curator",
     "auxiliary.kanban_decomposer",

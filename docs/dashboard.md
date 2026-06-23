@@ -29,7 +29,9 @@ desktop, SDK, API, gateway, cron, and webhook paths.
 The Chat/Terminal surface streams assistant output and tool activity while a
 turn is running. Tool rows include arguments, status, duration, result preview,
 and error details when available. The final response includes breadcrumbs back
-to the run, trace, turn, and session.
+to the run, trace, turn, and session. The Command Center and status APIs also
+expose live activity snapshots for running work: phase, active provider, active
+tool, subagent counts, iteration, elapsed time, and recent completed activity.
 
 The Tools page includes current schema health and a permission dry-run panel.
 The Channels page includes gateway outbox/dead-letter operations for failed
@@ -96,6 +98,7 @@ not claimed unless the required credentials and release artifacts are present.
 Representative dashboard APIs:
 
 - `/api/status` - install, provider, tool, skill, plugin, gateway, and dashboard status.
+- `/api/activity` - active and recent live activity snapshots for long-running work.
 - `/api/chat` and `/api/chat/stream` - dashboard chat turns with run/session/trace metadata.
 - `/api/session?id=...` - transcript and session detail, including breadcrumbs and prompt metadata.
 - `/api/runs`, `/api/run?id=...`, `/api/traces`, `/api/evals` - durable run, trace, and eval views.

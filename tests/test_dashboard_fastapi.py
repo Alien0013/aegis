@@ -2199,6 +2199,7 @@ def test_fastapi_legacy_chat_fallback_uses_cancellable_json_path(tmp_path, monke
 
 def test_dashboard_chat_control_steers_and_interrupts_active_agent():
     import threading
+    from aegis import activity
     from aegis.dashboard_fastapi import (
         _dashboard_chat_control_response,
         _register_dashboard_chat_agent,
@@ -2214,8 +2215,27 @@ def test_dashboard_chat_control_steers_and_interrupts_active_agent():
     agent.steer = lambda text: steers.append(text) or True
     agent.cancel = lambda: agent.cancel_event.set()
 
+    activity.start(
+        "dash:control",
+        surface="dashboard",
+        session_id="dash:control",
+        run_id="run_control",
+        title="control",
+        provider="fake",
+        model="model-x",
+    )
+    activity.update("dash:control", {"type": "tool_start", "name": "read_file", "id": "tool_control"})
     _register_dashboard_chat_agent(agent, {"session_id": "dash:control"})
     try:
+        status = _dashboard_chat_control_response({
+            "action": "status",
+            "session_id": "dash:control",
+        })
+        assert status.status_code == 200
+        status_body = json.loads(status.body)
+        assert status_body["activity"]["phase"] == "tool"
+        assert status_body["activity"]["active_tool"] == "read_file"
+
         steer = _dashboard_chat_control_response({
             "action": "steer",
             "session_id": "dash:control",
@@ -2234,6 +2254,7 @@ def test_dashboard_chat_control_steers_and_interrupts_active_agent():
         assert agent.cancel_event.is_set()
     finally:
         _unregister_dashboard_chat_agent(agent, {"session_id": "dash:control"})
+        activity.finish("dash:control", status="cancelled")
 
     missing = _dashboard_chat_control_response({"action": "status", "session_id": "dash:control"})
     assert missing.status_code == 404

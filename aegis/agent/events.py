@@ -21,6 +21,8 @@ class EventType:
     BUDGET_EXHAUSTED = "budget_exhausted"  # {}
     CONTINUATION = "continuation"      # {n}      auto-continue after length cut
     ERROR = "error"                    # {message}
+    PROVIDER_START = "provider_start"  # {provider, model, stream, reasoning, service_tier}
+    PROVIDER_END = "provider_end"      # {provider, model, duration_ms, status}
 
     # --- tools ---
     TOOL_START = "tool_start"          # {id, name, args}
@@ -30,7 +32,7 @@ class EventType:
     COMPACTING = "compacting"          # {}
     COMPACTED = "compacted"            # {messages_before, messages_after, tokens_before, tokens_after, reason}
     SESSION_COMPRESS = "session:compress"  # {session_id, old_session_id, compression_count}
-    REVIEW_STARTED = "review_started"  # {kind: memory|skill|combined}
+    REVIEW_STARTED = "review_started"  # {kind: memory|skill|combined, aux_route?}
     REVIEW_DONE = "review_done"        # {kind, actions: [str]}
 
     # --- interactive ---

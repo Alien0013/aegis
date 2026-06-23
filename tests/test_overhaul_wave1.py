@@ -68,7 +68,7 @@ def test_config_has_overhaul_wave1_keys():
     assert c.get("prompt_caching.cache_ttl") == "5m"
     assert c.get("curator.llm_review") is True
     # per-task auxiliary slots exist (empty = inherit)
-    for slot in ("curator", "vision", "web_extract", "approval", "kanban_decomposer"):
+    for slot in ("curator", "background_review", "vision", "web_extract", "approval", "kanban_decomposer"):
         assert isinstance(c.get(f"auxiliary.{slot}"), dict)
 
 

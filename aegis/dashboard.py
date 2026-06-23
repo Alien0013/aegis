@@ -435,6 +435,12 @@ def _dashboard_status(config: Config) -> dict:
         provider_error = str(active_provider.get("error") or "")
     except Exception as exc:  # noqa: BLE001
         provider_error = f"{type(exc).__name__}: {exc}"
+    try:
+        from .activity import snapshot as activity_snapshot
+
+        activity = activity_snapshot(include_recent=True)
+    except Exception:  # noqa: BLE001
+        activity = {"active": [], "recent": [], "active_count": 0, "recent_count": 0}
     return {
         "version": __version__,
         "provider": config.get("model.provider"),
@@ -444,6 +450,8 @@ def _dashboard_status(config: Config) -> dict:
         "capabilities": _jsonable(active_provider.get("capabilities", {})),
         "api_adapter": _dashboard_api_adapter_status(config),
         "sessions": len(SessionStore().list(9999)),
+        "active_sessions": int(activity.get("active_count") or 0),
+        "activity": activity,
         "skills": len(SkillsLoader(config).available()),
         "tools": len(default_registry().all()),
         "exec_mode": config.get("tools.exec_mode"),
@@ -552,6 +560,7 @@ def _dashboard_memory_payload() -> dict:
 
 def _dashboard_cockpit(config: Config) -> dict:
     from . import ratelimit
+    from .activity import snapshot as activity_snapshot
     from .session import SessionStore
     from .usage_log import cost_report, daily_series
 
@@ -563,6 +572,7 @@ def _dashboard_cockpit(config: Config) -> dict:
     latest_session = _dashboard_session_detail(latest_id, config) if latest_id else {"found": False}
     return {
         "status": _dashboard_status(config),
+        "activity": _jsonable(activity_snapshot(include_recent=True)),
         "analytics": analytics,
         "sessions": sessions,
         "latest_session": latest_session,
@@ -1176,6 +1186,8 @@ def _dashboard_runs(query: dict) -> dict:
 
 
 def _dashboard_run_row(run: dict) -> dict:
+    data = run.get("data", {}) if isinstance(run.get("data", {}), dict) else {}
+    activity = data.get("activity") if isinstance(data.get("activity"), dict) else {}
     return {
         "id": run.get("id", ""),
         "kind": run.get("kind", ""),
@@ -1190,7 +1202,8 @@ def _dashboard_run_row(run: dict) -> dict:
         "summary": run.get("result_preview", ""),
         "preview": run.get("prompt_preview", ""),
         "error": run.get("error", ""),
-        "data": run.get("data", {}),
+        "activity": activity,
+        "data": data,
     }
 
 
@@ -1211,20 +1224,30 @@ def _latest_trace_id_for_session(config: Config | None, session_id: str) -> str:
 def _dashboard_agent_from_run(run: dict, config: Config | None = None) -> dict:
     row = _dashboard_run_row(run)
     data = row.get("data") if isinstance(row.get("data"), dict) else {}
+    activity = row.get("activity") if isinstance(row.get("activity"), dict) else {}
     trace_id = row.get("trace_id") or _latest_trace_id_for_session(config, row.get("session_id", ""))
     return {
         "id": row["id"],
         "kind": "active_run" if row.get("status") == "running" else "run",
         "type": row.get("surface") or row.get("kind") or "agent",
         "status": row.get("status") or "recorded",
+        "phase": activity.get("phase") or "",
         "task": row.get("title") or row.get("preview") or "",
         "preview": row.get("summary") or row.get("preview") or "",
         "run_id": row["id"],
         "session_id": row.get("session_id", ""),
-        "trace_id": trace_id,
+        "trace_id": activity.get("trace_id") or trace_id,
         "surface": row.get("surface", ""),
-        "model": data.get("model") or "",
-        "provider": data.get("provider") or "",
+        "model": activity.get("model") or data.get("model") or "",
+        "provider": activity.get("provider") or data.get("provider") or "",
+        "active_provider": activity.get("active_provider") or "",
+        "active_tool": activity.get("active_tool") or "",
+        "last_tool": activity.get("last_tool") or "",
+        "subagents_active": int(activity.get("subagents_active") or 0),
+        "subagents_done": int(activity.get("subagents_done") or 0),
+        "iteration": int(activity.get("iteration") or 0),
+        "max_iterations": int(activity.get("max_iterations") or 0),
+        "activity": activity,
         "started_at": row.get("started_at", ""),
         "updated_at": row.get("updated_at", ""),
     }
@@ -1293,6 +1316,8 @@ def _chat_event_row(event: dict) -> dict:
         "provider": str(event.get("provider") or ""),
         "model": str(event.get("model") or ""),
     }
+    if isinstance(event.get("activity"), dict):
+        row["activity"] = event["activity"]
     if etype in ("assistant_delta", "reasoning_delta", "assistant_message"):
         row["text"] = str(event.get("text") or "")
     elif etype == "tool_start":
@@ -1569,6 +1594,7 @@ def _dashboard_chat_stream(
                 "turn_id": result.turn_id,
                 "run_id": result.run_id,
                 "cwd": cwd,
+                "activity": getattr(result, "activity", {}) or {},
                 "events": [_chat_event_row(e) for e in events[-80:]],
             }
             _publish_dashboard_chat_event(
@@ -1587,6 +1613,7 @@ def _dashboard_chat_stream(
             "turn_id": result.turn_id,
             "run_id": result.run_id,
             "cwd": cwd,
+            "activity": getattr(result, "activity", {}) or {},
             "events": [_chat_event_row(e) for e in events[-80:]],
         }
         _publish_dashboard_chat_event(body, "chat_final", result=result, cwd=cwd)

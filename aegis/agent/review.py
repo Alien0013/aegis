@@ -173,26 +173,40 @@ def run_review(agent, kind: str, on_event=None) -> list[str]:
     """Run one forked review synchronously. ``kind`` ∈ {memory, skill, combined}."""
     from ..session import Session
     from .agent import Agent
+    from ..auxiliary import router_for
+
     prompt = {"memory": _MEMORY_PROMPT, "skill": _SKILL_PROMPT, "combined": _COMBINED_PROMPT}[kind]
     snapshot = _transcript(agent.session.messages)
     if not snapshot.strip():
         return []
+    review_route = router_for(agent).route("background_review")
+    review_provider = review_route.provider
     child_session = Session.create(
         title="[review]",
         parent_id=getattr(getattr(agent, "session", None), "id", ""),
     )
     child = Agent(
-        config=agent.config, provider=agent.provider, session=child_session,
+        config=agent.config, provider=review_provider, session=child_session,
         registry=_restricted_registry(), memory=_local_review_memory(agent, child_session.id),
         skills=agent.skills, cwd=agent.cwd,
     )
     child._no_review = True                                # never let a review fork its own review
+    child._background_review_aux_route = {
+        "purpose": review_route.purpose,
+        "source": review_route.source,
+        "provider": getattr(review_provider, "name", ""),
+        "model": getattr(review_provider, "model", ""),
+    }
     child.tool_context.approver = lambda *a, **k: False   # never block on input in a thread
     actions: list[str] = []
     action_details: list[dict[str, Any]] = []
     tool_args: dict[str, dict[str, Any]] = {}
     if on_event:
-        on_event({"type": "review_started", "kind": kind})
+        on_event({
+            "type": "review_started",
+            "kind": kind,
+            "aux_route": getattr(child, "_background_review_aux_route", {}),
+        })
 
     def _capture(ev):
         tool_id = str(ev.get("id") or "")

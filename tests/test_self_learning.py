@@ -47,6 +47,8 @@ def test_fallback_swaps_and_records_trigger():
 def test_event_contract_known_types():
     from aegis.agent.events import EventType, is_known
     assert is_known({"type": EventType.REVIEW_DONE})
+    assert is_known({"type": EventType.PROVIDER_START})
+    assert is_known({"type": EventType.PROVIDER_END})
     assert is_known({"type": "tool_result"})
     assert not is_known({"type": "made_up_event"})
 
@@ -145,6 +147,57 @@ def test_forked_review_writes_agent_created_skill(tmp_path):
                if row["data"].get("review_kind") == "skill")
     assert run["data"]["provider"] == "f"
     assert run["data"]["model"] == "m"
+
+
+def test_forked_review_uses_background_review_aux_route(tmp_path, monkeypatch):
+    from aegis.agent.agent import Agent
+    from aegis.agent import review
+    from aegis.config import Config
+    from aegis.session import Session
+    from aegis.types import LLMResponse, Message
+
+    class Provider:
+        context_length = 200_000
+        api_mode = None
+        auth = None
+
+        def __init__(self, name, model):
+            self.name = name
+            self.model = model
+            self.calls = []
+
+        def describe(self):
+            return self.name
+
+        def complete(self, messages, tools=None, **kwargs):
+            self.calls.append((messages, tools, kwargs))
+            return LLMResponse(text=f"{self.name} reviewed")
+
+    parent = Provider("main", "large")
+    aux = Provider("aux", "small")
+    build_calls = []
+
+    def fake_build_aux_provider(config, *, purpose=None, fallback_provider=None):
+        build_calls.append((purpose, fallback_provider))
+        return aux if purpose == "background_review" else fallback_provider
+
+    monkeypatch.setattr("aegis.providers.registry.build_aux_provider", fake_build_aux_provider)
+    cfg = Config.load()
+    cfg.data["tools"]["exec_mode"] = "full"
+    parent_session = Session.create("parent")
+    parent_session.messages = [Message.user("remember the flow"), Message.assistant("done")]
+    agent = Agent(config=cfg, provider=parent, session=parent_session, cwd=tmp_path)
+    events = []
+
+    review.run_review(agent, "memory", on_event=events.append)
+
+    assert build_calls and build_calls[0] == ("background_review", parent)
+    assert aux.calls
+    assert parent.calls == []
+    started = next(event for event in events if event["type"] == "review_started")
+    assert started["aux_route"]["purpose"] == "background_review"
+    assert started["aux_route"]["provider"] == "aux"
+    assert started["aux_route"]["model"] == "small"
 
 
 def test_forked_review_uses_local_memory_without_external_provider_side_effects(tmp_path):

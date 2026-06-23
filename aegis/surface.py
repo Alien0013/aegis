@@ -66,6 +66,7 @@ class SurfaceRun:
     trace_id: str = ""
     turn_id: str = ""
     run_id: str = ""
+    activity: dict[str, Any] = field(default_factory=dict)
     events: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -331,7 +332,8 @@ class SurfaceRunner:
                     result = self._run(agent, effective_prompt, session=session, platform=platform,
                                        chat_id=chat_id, stream=stream, on_event=on_event,
                                        run_id=run_id, include_wakeups=include_wakeups,
-                                       max_tokens=max_tokens)
+                                       max_tokens=max_tokens, title=title, surface=surface,
+                                       run_store=run_store)
             else:
                 agent = agent or self.make_agent(
                     session=session,
@@ -348,7 +350,8 @@ class SurfaceRunner:
                 result = self._run(agent, effective_prompt, session=session, platform=platform,
                                    chat_id=chat_id, stream=stream, on_event=on_event,
                                    run_id=run_id, include_wakeups=include_wakeups,
-                                   max_tokens=max_tokens)
+                                   max_tokens=max_tokens, title=title, surface=surface,
+                                   run_store=run_store)
         except Exception as exc:
             if run_store is not None and run_id:
                 try:
@@ -382,6 +385,7 @@ class SurfaceRunner:
                     data={
                         "turn_id": result.turn_id,
                         "event_count": len(result.events),
+                        "activity": result.activity,
                         **_effective_runtime_data(
                             self.config, result.session, result.agent, prefer_agent=True
                         ),
@@ -413,12 +417,16 @@ class SurfaceRunner:
         run_id: str = "",
         include_wakeups: bool = True,
         max_tokens: int | None = None,
+        title: str | None = None,
+        surface: str = "",
+        run_store: Any = None,
     ) -> SurfaceRun:
         _retarget_agent(agent, session=session)
         agent.platform = platform
         agent.chat_id = chat_id
         agent._surface_run_id = run_id
         task_id = _surface_task_id(session, run_id)
+        activity_id = run_id or task_id
         try:
             agent._terminal_task_id = task_id
             agent.tool_context.task_id = task_id
@@ -428,9 +436,55 @@ class SurfaceRunner:
             agent.stream = bool(stream)
 
         events: list[dict[str, Any]] = []
+        activity_status = "ok"
+        activity_error = ""
+        activity_state: dict[str, Any] = {}
+        try:
+            from . import activity
+
+            activity.start(
+                activity_id,
+                surface=str(surface or getattr(agent, "platform", "") or platform or "agent"),
+                session_id=getattr(session, "id", ""),
+                run_id=run_id,
+                title=title or getattr(session, "title", "") or "",
+                prompt_preview=_prompt_text(prompt),
+                provider=str(getattr(getattr(agent, "provider", None), "name", "") or ""),
+                model=str(getattr(getattr(agent, "provider", None), "model", "") or ""),
+            )
+        except Exception:  # noqa: BLE001
+            activity = None
 
         def emit(event: dict[str, Any]) -> None:
+            nonlocal activity_status, activity_error, activity_state
             events.append(dict(event))
+            etype = str(event.get("type") or "")
+            if etype == "error":
+                activity_status = "error"
+                activity_error = str(event.get("message") or "")
+            elif etype == "cancelled":
+                activity_status = "cancelled"
+            if activity is not None:
+                try:
+                    activity.update(activity_id, event)
+                    current_activity = activity.current(activity_id) or {}
+                    if current_activity:
+                        activity_state = current_activity
+                        if run_store is not None and run_id and _should_persist_activity_event(etype):
+                            try:
+                                run_store.update_data(
+                                    run_id,
+                                    {
+                                        "activity": current_activity,
+                                        "event_count": len(events),
+                                        "last_event_type": etype,
+                                    },
+                                    trace_id=str(current_activity.get("trace_id") or ""),
+                                )
+                            except Exception:  # noqa: BLE001
+                                pass
+                except Exception:  # noqa: BLE001
+                    pass
             if on_event is not None:
                 on_event(event)
 
@@ -445,6 +499,10 @@ class SurfaceRunner:
             elif hasattr(agent, "_request_max_tokens"):
                 delattr(agent, "_request_max_tokens")
             message = _agent_run(agent, prompt, emit)
+        except Exception as exc:
+            activity_status = "error"
+            activity_error = f"{type(exc).__name__}: {exc}"
+            raise
         finally:
             if hasattr(agent, "_request_max_tokens"):
                 delattr(agent, "_request_max_tokens")
@@ -452,6 +510,13 @@ class SurfaceRunner:
                 try:
                     if getattr(agent, "_skip_wakeups_once", False):
                         agent._skip_wakeups_once = False
+                except Exception:  # noqa: BLE001
+                    pass
+            if activity is not None:
+                try:
+                    final_activity = activity.finish(activity_id, status=activity_status, error=activity_error)
+                    if final_activity:
+                        activity_state = final_activity
                 except Exception:  # noqa: BLE001
                     pass
         trace_ctx = getattr(agent, "_trace_context", {}) or {}
@@ -463,6 +528,7 @@ class SurfaceRunner:
             usage=getattr(agent, "_last_turn_usage", None),
             trace_id=str(trace_ctx.get("trace_id", "")),
             turn_id=str(trace_ctx.get("turn_id", "")),
+            activity=activity_state,
             events=events,
         )
 
@@ -738,6 +804,24 @@ def _surface_task_id(session: Session | None, run_id: str = "") -> str:
                 return str(value)
     session_id = getattr(session, "id", "")
     return str(session_id or run_id or "default")
+
+
+def _should_persist_activity_event(etype: str) -> bool:
+    return etype in {
+        "iteration",
+        "provider_start",
+        "provider_end",
+        "tool_start",
+        "tool_result",
+        "subagent_start",
+        "subagent_done",
+        "compacting",
+        "compacted",
+        "budget_exhausted",
+        "cancelled",
+        "error",
+        "final",
+    }
 
 
 def _retarget_run_session(run_store: Any, run_id: str, session_id: str) -> None:

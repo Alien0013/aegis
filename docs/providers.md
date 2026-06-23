@@ -136,10 +136,16 @@ auxiliary:
     model: google/gemini-2.5-flash
   session_summary:
     model: gpt-5.4-mini
+  background_review:
+    provider: openrouter
+    model: google/gemini-2.5-flash
 ```
 
 Purpose overrides are optional. Supported keys are `provider`, `model`, and
-`context_length` under `auxiliary.compaction`, `auxiliary.session_summary`, and
-`auxiliary.trajectory_compression`. If no auxiliary route is configured, AEGIS
-uses the live main provider selected for that turn; if an auxiliary route fails
-to build, it falls back to that live provider.
+`context_length` under `auxiliary.compaction`, `auxiliary.session_summary`,
+`auxiliary.trajectory_compression`, and `auxiliary.background_review`.
+`background_review` is used by the self-learning/background-review pass so that
+reflection can run on a cheaper or isolated model without changing the active
+conversation model. If no auxiliary route is configured, AEGIS uses the live
+main provider selected for that turn; if an auxiliary route fails to build, it
+falls back to that live provider.

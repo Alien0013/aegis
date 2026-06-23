@@ -461,7 +461,7 @@ class SubagentTool(Tool):
             _register_terminal_backend_override(sid, terminal_backend)
             _register(sid, status="running", task=task[:80], type=atype,
                       role_prompt=role_prompt, terminal_backend=terminal_backend)
-            ctx.emit_event(type="subagent_start", id=sid, task=task[:80])
+            ctx.emit_event(type="subagent_start", id=sid, task=task[:80], agent_type=atype)
             child = None
             try:
                 allow_delegation = role == "orchestrator" and depth < max_depth
@@ -515,7 +515,16 @@ class SubagentTool(Tool):
                     trace_id=result.trace_id,
                     turn_id=result.turn_id,
                 )
-                ctx.emit_event(type="subagent_done", id=sid, status="done")
+                ctx.emit_event(
+                    type="subagent_done",
+                    id=sid,
+                    status="done",
+                    agent_type=atype,
+                    run_id=result.run_id,
+                    session_id=result.session.id,
+                    trace_id=result.trace_id,
+                    turn_id=result.turn_id,
+                )
                 _notify_delegation(parent, task, out)
                 return sid, out
             except Exception as e:  # noqa: BLE001 - isolate one child's failure
@@ -527,7 +536,7 @@ class SubagentTool(Tool):
                     except Exception:  # noqa: BLE001
                         pass
                 _clear_terminal_backend_override(sid)
-                ctx.emit_event(type="subagent_done", id=sid, status="error")
+                ctx.emit_event(type="subagent_done", id=sid, status="error", agent_type=atype)
                 out = f"[subagent error] {e}"
                 _notify_delegation(parent, task, out)
                 return sid, out

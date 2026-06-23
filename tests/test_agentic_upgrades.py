@@ -95,6 +95,13 @@ def test_subagent_relays_child_stream_events(tmp_path, monkeypatch):
     assert not result.is_error
     assert "child answer" in result.content
     relayed = [event for event in events if event["type"].startswith("subagent_")]
+    start = next(event for event in relayed if event["type"] == "subagent_start")
+    done = next(event for event in relayed if event["type"] == "subagent_done")
+    assert start["agent_type"] == "review"
+    assert done["agent_type"] == "review"
+    assert done["run_id"].startswith("run_")
+    assert done["session_id"].startswith("sess_")
+    assert "trace_id" in done and "turn_id" in done
     assert any(event["type"] == "subagent_text" and event["text"] == "partial answer" for event in relayed)
     assert any(event["type"] == "subagent_reasoning" and event["text"] == "thinking" for event in relayed)
     assert all(is_known(event) for event in relayed)

@@ -261,6 +261,105 @@ def test_surface_runner_retargets_run_after_session_switch(tmp_path):
     assert TraceStore.from_config(cfg).get_trace(result.trace_id)["session_id"] == child.id
 
 
+def test_surface_runner_publishes_live_activity_snapshot(tmp_path):
+    from types import SimpleNamespace
+
+    from aegis.activity import snapshot
+    from aegis.config import Config
+    from aegis.runs import RunStore
+    from aegis.session import Session
+    from aegis.surface import SurfaceRunner
+    from aegis.types import Message
+
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = False
+    session = Session.create("activity")
+    seen = []
+
+    class FakeAgent:
+        def __init__(self):
+            self.config = cfg
+            self.session = session
+            self.cwd = tmp_path
+            self.provider = SimpleNamespace(name="fake", model="model-x")
+            self.stream = False
+
+        def run(self, prompt, on_event=None):
+            on_event({"type": "iteration", "n": 1, "max": 4})
+            active = snapshot()["active"]
+            seen.append(active[0] if active else {})
+            on_event({"type": "provider_start", "provider": "fake", "model": "model-x", "stream": False})
+            on_event({"type": "tool_start", "id": "tool_1", "name": "read_file", "args": {"path": "README.md"}})
+            on_event({"type": "tool_result", "id": "tool_1", "name": "read_file", "summary": "ok", "is_error": False})
+            on_event({"type": "final", "text": "done"})
+            return Message.assistant(f"done:{prompt}")
+
+    result = SurfaceRunner(cfg, cwd=tmp_path, include_mcp=False).run_prompt(
+        "inspect", session=session, agent=FakeAgent(), surface="dashboard", title="Inspect"
+    )
+
+    assert result.text == "done:inspect"
+    assert seen and seen[0]["surface"] == "dashboard"
+    assert seen[0]["session_id"] == session.id
+    assert seen[0]["phase"] == "thinking"
+    assert seen[0]["iteration"] == 1
+    current = snapshot()
+    assert not [row for row in current["active"] if row.get("run_id") == result.run_id]
+    assert current["recent"][0]["status"] == "ok"
+    assert current["recent"][0]["tool_calls"] == 1
+    assert current["recent"][0]["provider"] == "fake"
+    assert current["recent"][0]["model"] == "model-x"
+    stored = RunStore().get(result.run_id)
+    assert stored["data"]["activity"]["status"] == "ok"
+    assert stored["data"]["activity"]["tool_calls"] == 1
+    assert stored["data"]["activity"]["last_tool"] == "read_file"
+    assert stored["data"]["event_count"] == 5
+
+
+def test_dashboard_run_rows_expose_persisted_activity():
+    from aegis.config import Config
+    from aegis.dashboard import _dashboard_agent_from_run, _dashboard_run_row
+
+    run = {
+        "id": "run_live",
+        "surface": "dashboard",
+        "kind": "dashboard",
+        "status": "running",
+        "title": "Audit",
+        "session_id": "sess_live",
+        "trace_id": "",
+        "started_at": "2026-01-01T00:00:00Z",
+        "data": {
+            "provider": "fallback",
+            "model": "fallback-model",
+            "activity": {
+                "phase": "tool",
+                "provider": "codex",
+                "model": "gpt-5.5",
+                "active_provider": "",
+                "active_tool": "exec_command",
+                "last_tool": "exec_command",
+                "subagents_active": 2,
+                "subagents_done": 1,
+                "iteration": 3,
+                "max_iterations": 20,
+                "trace_id": "trace_live",
+            },
+        },
+    }
+
+    row = _dashboard_run_row(run)
+    assert row["activity"]["phase"] == "tool"
+    agent = _dashboard_agent_from_run(run, Config.load())
+    assert agent["phase"] == "tool"
+    assert agent["provider"] == "codex"
+    assert agent["model"] == "gpt-5.5"
+    assert agent["active_tool"] == "exec_command"
+    assert agent["subagents_active"] == 2
+    assert agent["iteration"] == 3
+    assert agent["trace_id"] == "trace_live"
+
+
 def test_manual_compress_child_inherits_runtime_controls(monkeypatch, tmp_path):
     from aegis.agent.agent import Agent
     from aegis.agent import loop
