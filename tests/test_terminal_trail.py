@@ -87,3 +87,85 @@ def test_renderer_timestamps_and_detailed_tool_progress(capsys, monkeypatch):
     assert "preview pytest -q" in out
     assert "classification success" in out
     assert "artifact ref logs/run.txt" in out
+
+
+def test_renderer_turn_timeline_summarizes_long_runs(capsys, monkeypatch):
+    monkeypatch.setattr(repl, "_console", None)
+    monkeypatch.setenv("AEGIS_ASCII", "1")
+    r = Renderer(None)
+    for event in (
+        {"type": "terminal_turn_start", "session_id": "sess_123456789", "chars": 42},
+        {"type": "iteration", "n": 1, "max": 12},
+        {"type": "provider_start", "provider": "openai", "model": "gpt-test"},
+        {"type": "provider_end", "status": "ok", "duration_ms": 200},
+        {"type": "tool_start", "name": "bash", "args": {"command": "pytest -q"}},
+        {"type": "tool_result", "name": "bash", "summary": "Error: exit 1", "duration_ms": 30},
+        {"type": "empty_nudge", "n": 1},
+        {"type": "terminal_turn_end", "status": "ok", "duration_ms": 1234},
+    ):
+        r(event)
+
+    out = capsys.readouterr().out
+    assert "turn started" in out
+    assert "step 1/12" in out
+    assert "contacting openai / gpt-test" in out
+    assert "model returned empty output" in out
+    assert "turn ok" in out
+    assert "1.2s" in out
+    assert "1 model call(s)" in out
+    assert "1 tool(s)" in out
+    assert "1 error(s)" in out
+
+
+def test_run_terminal_turn_emits_turn_boundaries(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from aegis.cli.repl import run_terminal_turn
+    from aegis.config import Config
+    from aegis.session import Session, SessionStore
+    from aegis.types import Usage
+
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    cfg = Config.load()
+    cfg.data.setdefault("display", {})["status_footer"] = False
+    session = Session.create(title="terminal test")
+    store = SessionStore()
+    agent = SimpleNamespace(
+        config=cfg,
+        session=session,
+        tools_used=0,
+        budget=SimpleNamespace(usage=Usage()),
+        provider=SimpleNamespace(model="fake-model", context_length=128000),
+        reasoning="medium",
+        _trace_context={},
+    )
+    events: list[dict] = []
+
+    class FakeRunner:
+        def run_prompt(self, prompt, **kwargs):  # noqa: ANN001
+            kwargs["on_event"]({"type": "iteration", "n": 1, "max": 3})
+            return SimpleNamespace(
+                message=SimpleNamespace(content="done"),
+                run_id="run_fake",
+                trace_id="trace_fake",
+                turn_id="turn_fake",
+            )
+
+    message = run_terminal_turn(
+        "do the work",
+        agent,
+        FakeRunner(),
+        store,
+        surface="cli",
+        on_event=events.append,
+    )
+
+    assert message.content == "done"
+    assert [event["type"] for event in events] == [
+        "terminal_turn_start",
+        "iteration",
+        "terminal_turn_end",
+    ]
+    assert events[0]["chars"] == len("do the work")
+    assert events[-1]["status"] == "ok"
+    assert events[-1]["duration_ms"] >= 0

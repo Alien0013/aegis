@@ -424,9 +424,45 @@ class Renderer:
                 pieces.append(f"{key.replace('_', ' ')} {_oneline(value, 72)}")
         return " · ".join(pieces)
 
+    def _run_summary(self, event: dict) -> str:
+        duration_ms = int(event.get("duration_ms") or self.status.elapsed_ms())
+        bits = [
+            f"{duration_ms / 1000:.1f}s",
+            f"{self.status.provider_calls} model call(s)",
+            f"{self.status.tool_calls} tool(s)",
+        ]
+        if self.status.tool_errors:
+            bits.append(f"{self.status.tool_errors} error(s)")
+        if self.status.iteration:
+            bits.append(f"step {self.status.iteration}/{self.status.max_iterations or '?'}")
+        return " · ".join(bits)
+
     def __call__(self, e: dict) -> None:
         self.status.update(e)
         t = e["type"]
+        if t == "terminal_turn_start":
+            chars = int(e.get("chars") or 0)
+            sid = str(e.get("session_id") or "")
+            label = f" · session {sid[:12]}" if sid else ""
+            self._emit(f"  {_ui('◆', 'run')} turn started · {chars:,} chars{label}", style=TERM_CYAN)
+            return
+        if t == "terminal_turn_end":
+            status = str(e.get("status") or "ok")
+            style = "red" if status == "error" else TERM_GREEN
+            prefix = _ui("✗", "x") if status == "error" else _ui("✓", "ok")
+            suffix = f" · {e.get('error')}" if e.get("error") else ""
+            self._emit(f"  {prefix} turn {status} · {self._run_summary(e)}{suffix}", style=style)
+            return
+        if t == "iteration":
+            n = int(e.get("n") or 0)
+            total = int(e.get("max") or 0)
+            if n:
+                total_text = f"/{total}" if total else ""
+                self._emit(
+                    f"  {_ui('◇', 'step')} step {n}{total_text} · elapsed {self.status.elapsed_text()}",
+                    style="bright_black",
+                )
+            return
         if t == "reasoning_delta":
             mode = self._reasoning_mode()
             if mode == "off":
@@ -481,8 +517,10 @@ class Renderer:
             reason = ""
             if self._reasoning_mode() == "live" and self._provider_reasoning not in {"", "off", "none"}:
                 reason = f" · reasoning live/{self._provider_reasoning}"
+            step = f" · step {self.status.iteration}" if self.status.iteration else ""
             self._emit(
-                f"  contacting {e.get('provider') or 'provider'} / {e.get('model') or 'model'}...{reason}",
+                f"  contacting {e.get('provider') or 'provider'} / {e.get('model') or 'model'}..."
+                f"{step}{reason}",
                 style="bright_black",
             )
         elif t == "provider_end":
@@ -532,6 +570,22 @@ class Renderer:
         elif t == "ultracode_continue":
             self._emit(f"  {_ui('↻', '...')} ultracode: {e.get('remaining', '?')} todo(s) left — continuing "
                        f"(push {e.get('n', '')}/{12})", style=TERM_CYAN)
+        elif t == "continuation":
+            self._emit(f"  {_ui('↻', '...')} continuing response ({e.get('n', '?')})", style="bright_black")
+        elif t == "empty_nudge":
+            self._emit(f"  {_ui('↻', '...')} model returned empty output — nudging ({e.get('n', '?')})",
+                       style="yellow")
+        elif t == "empty_reuse":
+            self._emit(f"  {_ui('✓', 'ok')} reusing last non-empty assistant draft", style="bright_black")
+        elif t == "thinking_strip_retry":
+            self._emit("  provider returned thinking-only output — retrying with cleaner prompt", style="yellow")
+        elif t == "model_downshift":
+            self._emit(f"  {_ui('↘', 'down')} budget guard switched model to {e.get('model')}", style="yellow")
+        elif t == "budget_warning":
+            self._emit(f"  {_ui('⚠', '!')} {e.get('message') or 'budget warning'}", style="yellow")
+        elif t == "skill_loaded":
+            self._emit(f"  {_ui('▣', 'skill')} loaded skill {e.get('name') or e.get('skill') or ''}".rstrip(),
+                       style=TERM_AMBER)
         elif t == "compacting":
             self._emit(f"  {_ui('⋯', '...')} context filling up — compacting older turns to free room …",
                        style="yellow")
@@ -567,8 +621,14 @@ class Renderer:
 
 @dataclass
 class TerminalStatusState:
+    started_at: float = 0.0
+    duration_ms: int = 0
     iteration: int = 0
     max_iterations: int = 0
+    provider_calls: int = 0
+    tool_calls: int = 0
+    tool_errors: int = 0
+    active_provider: str = ""
     active_tool: str = ""
     last_tool: str = ""
     compacting: bool = False
@@ -578,15 +638,43 @@ class TerminalStatusState:
     def update(self, event: dict[str, Any]) -> None:
         etype = str(event.get("type") or "")
         self.last_event = etype
-        if etype == "iteration":
+        if etype == "terminal_turn_start":
+            self.started_at = time.monotonic()
+            self.duration_ms = 0
+            self.iteration = 0
+            self.max_iterations = 0
+            self.provider_calls = 0
+            self.tool_calls = 0
+            self.tool_errors = 0
+            self.active_provider = ""
+            self.active_tool = ""
+            self.last_tool = ""
+            self.compacting = False
+            self.budget_exhausted = False
+        elif etype == "terminal_turn_end":
+            self.duration_ms = int(event.get("duration_ms") or self.elapsed_ms())
+            self.active_provider = ""
+            self.active_tool = ""
+            self.compacting = False
+        elif etype == "iteration":
             self.iteration = int(event.get("n") or 0)
             self.max_iterations = int(event.get("max") or 0)
             self.compacting = False
+        elif etype == "provider_start":
+            provider = str(event.get("provider") or "provider")
+            model = str(event.get("model") or "")
+            self.active_provider = f"{provider}/{model}" if model else provider
+            self.provider_calls += 1
+        elif etype == "provider_end":
+            self.active_provider = ""
         elif etype == "tool_start":
             self.active_tool = str(event.get("name") or "")
             self.last_tool = self.active_tool
+            self.tool_calls += 1
         elif etype == "tool_result":
             self.last_tool = str(event.get("name") or self.last_tool)
+            if bool(event.get("is_error")) or _result_is_failure(str(event.get("summary") or "")):
+                self.tool_errors += 1
             self.active_tool = ""
         elif etype == "compacting":
             self.compacting = True
@@ -596,14 +684,42 @@ class TerminalStatusState:
             self.active_tool = ""
             self.compacting = False
 
+    def elapsed_ms(self) -> int:
+        if self.duration_ms:
+            return self.duration_ms
+        if not self.started_at:
+            return 0
+        return int((time.monotonic() - self.started_at) * 1000)
+
+    def elapsed_text(self) -> str:
+        ms = self.elapsed_ms()
+        if ms < 1000:
+            return f"{ms}ms"
+        seconds = ms / 1000
+        if seconds < 60:
+            return f"{seconds:.1f}s"
+        minutes = int(seconds // 60)
+        return f"{minutes}m{int(seconds % 60):02d}s"
+
     def segment(self) -> str:
         bits: list[str] = []
+        if self.started_at:
+            bits.append(f"elapsed {self.elapsed_text()}")
         if self.iteration and self.max_iterations:
             bits.append(f"iter {self.iteration}/{self.max_iterations}")
+        if self.active_provider:
+            bits.append(f"{_ui('◌ ', '')}provider {self.active_provider}")
         if self.active_tool:
             bits.append(f"{_ui('▶ ', '')}tool {self.active_tool}")
         elif self.last_tool:
             bits.append(f"{_ui('✓ ', '')}last tool {self.last_tool}")
+        if self.provider_calls:
+            bits.append(f"model calls {self.provider_calls}")
+        if self.tool_calls:
+            tool_text = f"tools {self.tool_calls}"
+            if self.tool_errors:
+                tool_text += f"/{self.tool_errors} err"
+            bits.append(tool_text)
         if self.compacting:
             bits.append(f"{_ui('◇ ', '')}compacting")
         if self.budget_exhausted:
@@ -1252,48 +1368,73 @@ def _run_terminal_turn_active_session(
     from ..firstrun import maybe_tip, profile_build_directive
     from .. import goals
 
+    started = time.monotonic()
+    run_status = "ok"
+    run_error = ""
+    on_event({
+        "type": "terminal_turn_start",
+        "surface": surface,
+        "session_id": getattr(agent.session, "id", ""),
+        "chars": len(text or ""),
+        "message_count": len(getattr(agent.session, "messages", []) or []),
+    })
     tools_before = getattr(agent, "tools_used", 0)
-    prompt = text + (profile_build_directive(agent.config) if add_profile_directive else "")
-    run = runner.run_prompt(
-        prompt,
-        session=agent.session,
-        agent=agent,
-        surface=surface,
-        platform="cli",
-        meta=meta,
-        on_event=on_event,
-        include_wakeups=include_wakeups,
-    )
-    _record_terminal_run(agent, run)
-
-    def run_continuation(prompt_text: str):
-        cont = runner.run_prompt(
-            prompt_text,
+    try:
+        prompt = text + (profile_build_directive(agent.config) if add_profile_directive else "")
+        run = runner.run_prompt(
+            prompt,
             session=agent.session,
             agent=agent,
             surface=surface,
             platform="cli",
-            meta={"goal_continuation": True, **(meta or {})},
+            meta=meta,
             on_event=on_event,
             include_wakeups=include_wakeups,
         )
-        _record_terminal_run(agent, cont)
+        _record_terminal_run(agent, run)
+
+        def run_continuation(prompt_text: str):
+            cont = runner.run_prompt(
+                prompt_text,
+                session=agent.session,
+                agent=agent,
+                surface=surface,
+                platform="cli",
+                meta={"goal_continuation": True, **(meta or {})},
+                on_event=on_event,
+                include_wakeups=include_wakeups,
+            )
+            _record_terminal_run(agent, cont)
+            store.save(agent.session)
+            return cont.message
+
+        if notify is None:
+            def notify(line):
+                _out(f"  {line}", style="magenta")
+        goals.run_loop(agent, run.message.content or "", notify, on_event, run_turn=run_continuation)
+
+        tools_this = getattr(agent, "tools_used", 0) - tools_before
+        trigger = ("many_tools" if tools_this >= 8 else
+                   "long_session" if len(agent.session.messages) >= 40 else None)
+        if trigger and (tip := maybe_tip(agent.config, trigger)):
+            notify(tip)
         store.save(agent.session)
-        return cont.message
-
-    if notify is None:
-        def notify(line):
-            _out(f"  {line}", style="magenta")
-    goals.run_loop(agent, run.message.content or "", notify, on_event, run_turn=run_continuation)
-
-    tools_this = getattr(agent, "tools_used", 0) - tools_before
-    trigger = ("many_tools" if tools_this >= 8 else
-               "long_session" if len(agent.session.messages) >= 40 else None)
-    if trigger and (tip := maybe_tip(agent.config, trigger)):
-        notify(tip)
-    store.save(agent.session)
-    _maybe_print_status_footer(agent, on_event)
-    return run.message
+        return run.message
+    except Exception as exc:
+        run_status = "error"
+        run_error = f"{type(exc).__name__}: {exc}"
+        raise
+    finally:
+        on_event({
+            "type": "terminal_turn_end",
+            "surface": surface,
+            "session_id": getattr(agent.session, "id", ""),
+            "status": run_status,
+            "error": run_error,
+            "duration_ms": int((time.monotonic() - started) * 1000),
+        })
+        if run_status == "ok":
+            _maybe_print_status_footer(agent, on_event)
 
 
 # --------------------------------------------------------------------------- #
