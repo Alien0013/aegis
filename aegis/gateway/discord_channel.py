@@ -679,8 +679,8 @@ class DiscordAdapter(BasePlatformAdapter):
                 raise
             try:
                 return await self._fetch_discord_channel(str(chat_id or ""))
-            except Exception:  # noqa: BLE001
-                raise exc
+            except Exception as fallback_exc:  # noqa: BLE001
+                raise exc from fallback_exc
 
     async def _fetch_discord_channel(self, channel_id: str):  # noqa: ANN001
         client = getattr(self, "_client", None)

@@ -36,3 +36,9 @@ web/*.tsbuildinfo
 desktop/node_modules/
 desktop/dist/
 desktop/release/
+
+# Next.js marketing site
+site-next/node_modules/
+site-next/.next/
+site-next/out/
+site-next/*.tsbuildinfo

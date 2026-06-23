@@ -17,7 +17,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from ..config import Config
+from ..config import Config, Workspace, context_file_max_chars
 
 # Files that mark a code project even when there's no git repository.
 _PROJECT_MARKERS = (
@@ -139,3 +139,82 @@ def coding_workspace_block(cwd: Path | str, config: Config | None = None) -> str
         body.append("- project files: " + ", ".join(markers))
         blocks.append("\n".join(body))
     return "\n\n".join(blocks)
+
+
+def _rule_target_dir(target: Path) -> Path:
+    """Best-effort directory for a path argument that may not exist yet."""
+    try:
+        if target.exists() and target.is_dir():
+            return target.resolve()
+    except OSError:
+        pass
+    return target.parent.resolve()
+
+
+def _dirs_between(root: Path, leaf: Path) -> list[Path]:
+    """Ancestor directories below root, broadest to nearest leaf."""
+    try:
+        leaf.relative_to(root)
+    except ValueError:
+        return []
+    dirs: list[Path] = []
+    cur = leaf
+    for _ in range(40):
+        if cur == root or cur == cur.parent:
+            break
+        dirs.append(cur)
+        cur = cur.parent
+    return list(reversed(dirs))
+
+
+def subdirectory_rule_hint(
+    cwd: Path | str,
+    target: Path | str,
+    config: Config | None = None,
+    *,
+    seen: set[str] | None = None,
+) -> str:
+    """Return cache-safe project-rule hints for a newly touched subdirectory.
+
+    The session system prompt is built once, so package-local rule files discovered
+    later via tool use must be delivered as tool-result context instead of forcing
+    a prompt rebuild. Only rule files below the original cwd are injected here; cwd
+    and broad parent rules are already handled by :class:`Workspace`.
+    """
+    if config is not None and not config.get("agent.subdir_hints", True):
+        return ""
+    try:
+        root = Path(cwd).expanduser().resolve()
+        leaf = _rule_target_dir(Path(target).expanduser())
+    except OSError:
+        return ""
+    if not root.is_dir():
+        return ""
+
+    workspace = Workspace(root, context_file_max_chars=context_file_max_chars(config))
+    blocks: list[str] = []
+    injected: list[str] = []
+    for directory in _dirs_between(root, leaf):
+        for name in Workspace.RULE_FILES:
+            path = directory / name
+            if not path.is_file():
+                continue
+            key = str(path.resolve())
+            if seen is not None and key in seen:
+                break
+            body = workspace._context_text(path, f"subdir:{name} ({directory})")
+            if body:
+                blocks.append(f"<!-- subdir:{name} ({directory}) -->\n{body}")
+                injected.append(key)
+            break
+
+    if not blocks:
+        return ""
+    if seen is not None:
+        seen.update(injected)
+    return (
+        "# Additional directory rules\n"
+        "AEGIS just touched a subdirectory with local project instructions. "
+        "Apply these rules for work inside that subtree.\n\n"
+        + "\n\n".join(blocks)
+    )

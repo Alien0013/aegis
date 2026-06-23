@@ -52,7 +52,7 @@ def expand_sweep(sweep: dict, base_args: dict, count: int, randomize_seed: bool)
         runs = []
         for combo in itertools.product(*values):
             ar = dict(base_args)
-            for k, v in zip(keys, combo):
+            for k, v in zip(keys, combo, strict=True):
                 ar[k] = v
             runs.append(ar)
         return runs

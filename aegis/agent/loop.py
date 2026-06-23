@@ -493,6 +493,47 @@ class ToolExecutor:
         except Exception:  # noqa: BLE001
             pass
 
+    @staticmethod
+    def _path_hint_targets(call: ToolCall) -> list[str]:
+        if call.name in {"read_file", "list_dir", "write_file", "edit_file"}:
+            path = call.arguments.get("path")
+            return [str(path or ".")]
+        if call.name == "apply_patch":
+            try:
+                from ..tools.extra_builtin import extract_patch_paths
+                return extract_patch_paths(call.arguments.get("patch", "") or "")
+            except Exception:  # noqa: BLE001
+                return []
+        return []
+
+    def _append_subdirectory_rule_hints(self, call: ToolCall, res: ToolResult) -> ToolResult:
+        if res.is_error or call.name not in _PATH_SCOPED_TOOLS:
+            return res
+        cfg = getattr(self.ctx, "config", None)
+        if cfg is not None and not cfg.get("agent.subdir_hints", True):
+            return res
+        session = getattr(self.ctx, "session", None)
+        meta = getattr(session, "meta", None)
+        seen = set((meta or {}).get("subdir_rule_hints_seen") or [])
+        hints: list[str] = []
+        try:
+            from .coding_context import subdirectory_rule_hint
+            for raw in self._path_hint_targets(call):
+                target = Path(raw).expanduser()
+                if not target.is_absolute():
+                    target = Path(self.ctx.cwd) / target
+                hint = subdirectory_rule_hint(self.ctx.cwd, target, cfg, seen=seen)
+                if hint:
+                    hints.append(hint)
+        except Exception:  # noqa: BLE001
+            return res
+        if not hints:
+            return res
+        if isinstance(meta, dict):
+            meta["subdir_rule_hints_seen"] = sorted(seen)
+        res.content = (res.content or "") + "\n\n" + "\n\n".join(hints)
+        return res
+
     def execute_one_raw(self, call: ToolCall) -> ToolResult:
         import time
         started = time.perf_counter()
@@ -569,6 +610,7 @@ class ToolExecutor:
             warn = self.guard.record(call.name, call.arguments, res.content, res.is_error)
             if warn:
                 res.content = (res.content or "") + "\n\n" + warn
+        res = self._append_subdirectory_rule_hints(call, res)
         duration_ms = int((time.perf_counter() - started) * 1000)
         artifact_ref = _artifact_ref(res.data)
         safe_summary = redact_secrets(res.summary)
@@ -1609,11 +1651,14 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                     "tools": schemas,
                     "kwargs": provider_kwargs,
                 },
-                lambda p: _provider_complete(
+                lambda p,
+                _wire_messages=wire_messages,
+                _schemas=schemas,
+                _provider_kwargs=provider_kwargs: _provider_complete(
                     p.get("provider", agent.provider),
-                    p.get("messages", wire_messages),
-                    tools=p.get("tools", schemas),
-                    **(p.get("kwargs", provider_kwargs) or {}),
+                    p.get("messages", _wire_messages),
+                    tools=p.get("tools", _schemas),
+                    **(p.get("kwargs", _provider_kwargs) or {}),
                 ),
                 agent,
             )

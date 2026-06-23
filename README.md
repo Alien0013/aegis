@@ -238,6 +238,7 @@ aegis/                  Python package
   builtin_skills/       bundled SKILL.md packages
   static/web_dist/      built dashboard served by aegis ui
 web/                    React + Vite dashboard source
+site-next/              Next.js internals marketing website
 desktop/                Electron shell
 docs/                   install, providers, tools, gateway, MCP, SDK, security, tracing/evals
 assets/                 README images and diagrams
@@ -257,6 +258,15 @@ tests/                  offline regression suite
 ```bash
 pip install -e ".[dev]"
 bash scripts/run_tests.sh
+```
+
+Next.js internals website:
+
+```bash
+cd site-next
+npm install
+npm run dev      # local marketing/internals site
+npm run check    # typecheck + production build
 ```
 
 The test runner strips real credentials, pins UTC, uses a throwaway `AEGIS_HOME`,

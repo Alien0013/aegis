@@ -177,6 +177,7 @@ class TestDuplicateDeduplication:
         params = schema["parameters"]
         # Both seeds present with disambiguated names
         seed_keys = [k for k in params if "seed" in k]
+        assert sorted(seed_keys) == ["seed_3", "seed_4"]
         # Symmetric: both renamed (no bare "seed")
         assert "seed" not in params
         assert "seed_3" in params and "seed_4" in params
