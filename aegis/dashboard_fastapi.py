@@ -4805,6 +4805,8 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
         return dash._dashboard_traces(query, config)
     if path == "/api/trace":
         return dash._dashboard_trace_detail(query, config)
+    if path in {"/api/trace/timeline", "/api/traces/timeline"}:
+        return dash._dashboard_trace_timeline(query, config)
     if path == "/api/runs":
         return dash._dashboard_runs(query)
     if path == "/api/run":
@@ -4880,9 +4882,11 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
         return {
             "messages": [{"role": m.role, "content": m.content}
                          for m in (session.messages if session else []) if m.content],
+            "title": detail.get("title", ""),
             "detail": detail,
             "runs": detail.get("runs", []),
             "traces": detail.get("traces", []),
+            "timeline": detail.get("timeline", {}),
             "links": detail.get("links", {}),
             "lineage": {
                 "parent": detail.get("parent"),

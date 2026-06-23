@@ -1840,6 +1840,8 @@ def test_fastapi_sessions_control_plane(tmp_path, monkeypatch):
     assert detail.status_code == 200
     assert detail.json()["found"] is True
     assert detail.json()["messages"][0]["content"] == "remember the typed route migration"
+    assert detail.json()["timeline"]["summary"]["total"] == 2
+    assert detail.json()["timeline"]["items"][0]["kind"] == "message"
 
     renamed = asyncio.run(_request(
         app,
@@ -1906,6 +1908,69 @@ def test_fastapi_sessions_control_plane(tmp_path, monkeypatch):
     deleted = asyncio.run(_request(app, "DELETE", f"/api/sessions/{session.id}", headers=headers))
     assert deleted.status_code == 200
     assert deleted.json()["ok"] is True
+
+
+def test_fastapi_trace_timeline_endpoint(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    from aegis.config import Config
+    from aegis.session import Session, SessionStore
+    from aegis.tracing import TraceStore
+    from aegis.types import Message
+
+    session = Session(id="sess_timeline", title="timeline session")
+    session.messages = [Message.user("trace me"), Message.assistant("done")]
+    SessionStore().save(session)
+    TraceStore.from_config(Config.load()).write_trace(
+        [
+            {
+                "span_id": "root",
+                "kind": "provider_call",
+                "status": "ok",
+                "provider": "openai",
+                "model": "gpt-5",
+                "started_at": "2026-01-01T00:00:00+00:00",
+                "ended_at": "2026-01-01T00:00:01+00:00",
+                "data": {"input_tokens": 8, "output_tokens": 3, "duration_ms": 1000},
+            },
+            {
+                "span_id": "tool",
+                "parent_span_id": "root",
+                "kind": "tool",
+                "status": "ok",
+                "tool_name": "bash",
+                "started_at": "2026-01-01T00:00:00.100000+00:00",
+                "ended_at": "2026-01-01T00:00:00.150000+00:00",
+                "data": {
+                    "args": {"command": "echo ok", "token": "sk-secret1234567890"},
+                    "preview": "ok",
+                    "duration_ms": 50,
+                },
+            },
+        ],
+        trace_id="trace_timeline",
+        session_id=session.id,
+    )
+
+    detail = asyncio.run(_request(app, "GET", "/api/trace?id=trace_timeline", headers=headers))
+    assert detail.status_code == 200
+    detail_body = detail.json()
+    assert detail_body["timeline"]["summary"]["provider_calls"] == 1
+    assert detail_body["timeline"]["summary"]["tools"] == 1
+    tool = detail_body["timeline"]["items"][1]
+    assert tool["label"] == "bash"
+    assert tool["preview"] == "echo ok"
+    assert tool["data"]["args"]["token"] == "[REDACTED]"
+
+    timeline = asyncio.run(_request(app, "GET", "/api/trace/timeline?id=trace_timeline", headers=headers))
+    assert timeline.status_code == 200
+    assert timeline.json()["found"] is True
+    assert [item["id"] for item in timeline.json()["items"]] == ["root", "tool"]
+
+    session_detail = asyncio.run(_request(app, "GET", f"/api/session?id={session.id}", headers=headers))
+    assert session_detail.status_code == 200
+    assert session_detail.json()["timeline"]["trace_id"] == "trace_timeline"
 
 
 def test_fastapi_dashboard_chat_stream_persists_session_and_run_across_app_recreate(tmp_path, monkeypatch):

@@ -1723,7 +1723,7 @@ def _dashboard_session_detail(session_id: str, config: Config | None = None) -> 
     children = store.children(sess.id)
     parent = store.load(sess.parent_id) if sess.parent_id else None
     linked = _dashboard_session_links(sess, config)
-    return {
+    detail = {
         "found": True,
         "id": sess.id,
         "kind": "session",
@@ -1746,6 +1746,18 @@ def _dashboard_session_detail(session_id: str, config: Config | None = None) -> 
         "todos": _jsonable(sess.todos),
         "meta": _jsonable(sess.meta),
     }
+    latest_trace_id = str((detail.get("links") or {}).get("latest_trace_id") or "")
+    timeline = {}
+    if latest_trace_id and latest_trace_id != sess.id:
+        try:
+            timeline = _dashboard_trace_timeline({"id": [latest_trace_id]}, config)
+        except Exception:  # noqa: BLE001
+            timeline = {}
+    if not timeline.get("found"):
+        spans = _session_span_rows(detail)
+        timeline = {"found": True, "id": sess.id, "source": "session", **_timeline_items(sess.id, spans)}
+    detail["timeline"] = _jsonable(timeline)
+    return detail
 
 
 def _dashboard_branch_session(session_id: str, *, title: str = "", reason: str = "dashboard") -> dict:
@@ -1811,6 +1823,138 @@ def _session_span_rows(session_detail: dict) -> list[dict]:
     return spans
 
 
+def _timeline_dt(value: str | None):
+    if not value:
+        return None
+    from datetime import datetime
+
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _timeline_ms(start: str | None, root) -> int:
+    current = _timeline_dt(start)
+    if current is None or root is None:
+        return 0
+    return max(0, int((current - root).total_seconds() * 1000))
+
+
+def _timeline_data(data) -> dict:
+    if not isinstance(data, dict):
+        return {}
+    try:
+        from .redact import redact_secret_values
+
+        return _jsonable(redact_secret_values(data))
+    except Exception:  # noqa: BLE001
+        return _jsonable(data)
+
+
+def _timeline_preview(kind: str, span: dict, data: dict) -> str:
+    if kind == "tool":
+        args = data.get("args") if isinstance(data.get("args"), dict) else {}
+        target = _tool_target(args)
+        if target:
+            return target
+    for key in ("preview", "summary", "error", "reason", "message", "content", "text"):
+        value = data.get(key)
+        if value:
+            return str(value)[:280]
+    if span.get("artifact_ref"):
+        return str(span.get("artifact_ref"))
+    return ""
+
+
+def _timeline_label(kind: str, span: dict, data: dict) -> str:
+    if kind in {"provider_call", "model"}:
+        bits = [str(span.get("provider") or "").strip(), str(span.get("model") or "").strip()]
+        label = " / ".join(bit for bit in bits if bit)
+        return label or "Provider call"
+    if kind == "tool":
+        return str(span.get("tool_name") or data.get("tool_name") or "Tool")
+    if kind in {"compaction", "compact"}:
+        before = data.get("messages_before")
+        after = data.get("messages_after")
+        return f"Compaction {before} to {after}" if before is not None and after is not None else "Compaction"
+    if kind == "message":
+        role = str(data.get("role") or span.get("role") or "message")
+        return f"{role} message"
+    if kind == "turn":
+        return "Agent turn"
+    return kind.replace("_", " ").title() or "Span"
+
+
+def _timeline_items(trace_id: str, spans: list[dict]) -> dict:
+    starts = [str(span.get("started_at") or "") for span in spans if span.get("started_at")]
+    root = _timeline_dt(min(starts)) if starts else None
+    parent_by_id = {str(span.get("span_id") or ""): str(span.get("parent_span_id") or "") for span in spans}
+    depth_cache: dict[str, int] = {}
+
+    def depth(span_id: str) -> int:
+        if not span_id:
+            return 0
+        if span_id in depth_cache:
+            return depth_cache[span_id]
+        seen: set[str] = set()
+        current = span_id
+        n = 0
+        while parent_by_id.get(current) and parent_by_id[current] not in seen:
+            seen.add(current)
+            current = parent_by_id[current]
+            n += 1
+            if n > 20:
+                break
+        depth_cache[span_id] = n
+        return n
+
+    items = []
+    for index, span in enumerate(spans):
+        kind = str(span.get("kind") or "span")
+        raw_data = span.get("data") if isinstance(span.get("data"), dict) else {}
+        data = _timeline_data(raw_data)
+        span_id = str(span.get("span_id") or f"span_{index}")
+        item = {
+            "index": index,
+            "id": span_id,
+            "trace_id": str(span.get("trace_id") or trace_id),
+            "parent_id": str(span.get("parent_span_id") or ""),
+            "depth": depth(span_id),
+            "kind": kind,
+            "label": _timeline_label(kind, span, data),
+            "status": str(span.get("status") or "ok"),
+            "started_at": str(span.get("started_at") or ""),
+            "ended_at": str(span.get("ended_at") or ""),
+            "offset_ms": _timeline_ms(span.get("started_at"), root),
+            "duration_ms": int(span.get("duration_ms") or span.get("latency_ms") or 0),
+            "latency_ms": int(span.get("latency_ms") or span.get("duration_ms") or 0),
+            "provider": str(span.get("provider") or ""),
+            "model": str(span.get("model") or ""),
+            "tool_name": str(span.get("tool_name") or data.get("tool_name") or ""),
+            "cost": float(span.get("cost") or 0),
+            "input_tokens": int(raw_data.get("input_tokens") or 0),
+            "output_tokens": int(raw_data.get("output_tokens") or 0),
+            "cache_read": int(span.get("cache_read") or raw_data.get("cache_read") or 0),
+            "cache_write": int(span.get("cache_write") or raw_data.get("cache_write") or 0),
+            "artifact_ref": str(span.get("artifact_ref") or ""),
+            "preview": _timeline_preview(kind, span, data),
+            "data": data,
+        }
+        items.append(item)
+    return {
+        "trace_id": trace_id,
+        "items": items,
+        "summary": {
+            "total": len(items),
+            "errors": sum(1 for item in items if item.get("status") in {"error", "failed", "failure"}),
+            "tools": sum(1 for item in items if item.get("kind") == "tool"),
+            "provider_calls": sum(1 for item in items if item.get("kind") in {"provider_call", "model"}),
+            "duration_ms": max((int(item.get("offset_ms", 0)) + int(item.get("duration_ms", 0)) for item in items), default=0),
+        },
+    }
+
+
 def _dashboard_trace_detail(query: dict, config: Config | None = None) -> dict:
     trace_id = ((query.get("id", [""])[0]) or "").strip()
     if not trace_id:
@@ -1841,6 +1985,7 @@ def _dashboard_trace_detail(query: dict, config: Config | None = None) -> dict:
                 "source": "aegis.tracing",
                 "trace": summary,
                 "spans": detail.get("spans", []),
+                "timeline": _timeline_items(trace_id, detail.get("spans", [])),
                 "replay": replay,
                 "grades": evaluation.get("grades", []),
                 "evaluation": evaluation,
@@ -1883,12 +2028,27 @@ def _dashboard_trace_detail(query: dict, config: Config | None = None) -> dict:
                 "cache_write": int(usage.get("cache_write", 0) or 0),
             },
             "spans": spans,
+            "timeline": _timeline_items(trace_id, spans),
             "messages": session.get("messages", []),
             "replay": replay,
             "grades": evaluation.get("grades", []),
             "evaluation": evaluation,
         }
     return {"found": False, "id": trace_id, "error": "trace not found"}
+
+
+def _dashboard_trace_timeline(query: dict, config: Config | None = None) -> dict:
+    detail = _dashboard_trace_detail(query, config)
+    if not detail.get("found"):
+        return {"found": False, "id": detail.get("id", ""), "error": detail.get("error", "trace not found")}
+    timeline = detail.get("timeline") if isinstance(detail.get("timeline"), dict) else {}
+    return {
+        "found": True,
+        "id": detail.get("id", ""),
+        "source": detail.get("source", ""),
+        "trace": detail.get("trace", {}),
+        **timeline,
+    }
 
 
 def _dashboard_run_detail(query: dict, config: Config | None = None) -> dict:

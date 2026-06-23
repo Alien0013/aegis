@@ -11,6 +11,23 @@ import { PluginSlot } from "../plugins/host";
 interface SessionRow { id: string; title?: string; updated_at?: string; message_count?: number; archived?: boolean; surface?: string; model?: string }
 interface SessionStats { session_count?: number; message_count?: number; empty_sessions?: number; archived_sessions?: number }
 interface GatewayStatus { channels?: string[]; active_sessions?: number; last_update?: string; gateway_running?: boolean; gateway_state?: string }
+interface TimelineItem {
+  id: string;
+  kind: string;
+  label: string;
+  status?: string;
+  depth?: number;
+  duration_ms?: number;
+  provider?: string;
+  model?: string;
+  tool_name?: string;
+  preview?: string;
+}
+interface SessionDetail {
+  messages?: RawMessage[];
+  title?: string;
+  timeline?: { items?: TimelineItem[]; summary?: { total?: number; errors?: number; tools?: number; provider_calls?: number } };
+}
 
 type Tab = "overview" | "history";
 
@@ -22,7 +39,7 @@ export function Sessions() {
   const [tab, setTab] = useState<Tab>("overview");
   const [q, setQ] = useState("");
   const [openId, setOpenId] = useState("");
-  const [detail, setDetail] = useState<{ messages?: RawMessage[]; title?: string } | null>(null);
+  const [detail, setDetail] = useState<SessionDetail | null>(null);
   const detailSeq = useRef(0);
 
   useEffect(() => {
@@ -51,7 +68,7 @@ export function Sessions() {
     setOpenId(id);
     setDetail(null);
     try {
-      const next = await api<{ messages?: RawMessage[]; title?: string }>(`session?id=${encodeURIComponent(id)}`);
+      const next = await api<SessionDetail>(`session?id=${encodeURIComponent(id)}`);
       if (seq === detailSeq.current) setDetail(next);
     }
     catch (e) { if (seq === detailSeq.current) toast(String(e), "err"); }
@@ -84,6 +101,7 @@ export function Sessions() {
   }
 
   const turns = detail ? cleanTranscript(detail.messages || []) : [];
+  const timeline = (detail?.timeline?.items || []).slice(0, 12);
 
   return (
     <>
@@ -194,6 +212,40 @@ export function Sessions() {
             </div>
             <div className="scroll-thin flex-1 space-y-3 overflow-y-auto p-4">
               {!detail && <Loading />}
+              {!!timeline.length && (
+                <div className="border border-border bg-surface-2/55 p-3">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <div className="font-mono text-xs font-semibold uppercase text-faint">Trace timeline</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      <Badge tone="neutral">{detail?.timeline?.summary?.total || timeline.length} events</Badge>
+                      {!!detail?.timeline?.summary?.errors && <Badge tone="danger">{detail.timeline.summary.errors} errors</Badge>}
+                      {!!detail?.timeline?.summary?.tools && <Badge tone="info">{detail.timeline.summary.tools} tools</Badge>}
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    {timeline.map((item) => (
+                      <div
+                        key={item.id}
+                        className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-2 border-l border-border pl-2 text-xs"
+                        style={{ marginLeft: `${Math.min(Number(item.depth || 0), 4) * 12}px` }}
+                      >
+                        <Badge tone={item.status === "error" ? "danger" : item.kind === "tool" ? "info" : item.kind === "message" ? "neutral" : "primary"}>
+                          {item.kind}
+                        </Badge>
+                        <div className="min-w-0">
+                          <div className="truncate font-mono text-text">{item.label}</div>
+                          {(item.preview || item.provider || item.model) && (
+                            <div className="truncate text-faint">
+                              {item.preview || [item.provider, item.model].filter(Boolean).join(" / ")}
+                            </div>
+                          )}
+                        </div>
+                        <div className="font-mono text-faint">{item.duration_ms || 0}ms</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               {detail && !turns.length && <Empty icon="chat">No conversation turns.</Empty>}
               {turns.map((t, i) => (
                 <div key={i} className={t.role === "user" ? "flex justify-end" : ""}>
