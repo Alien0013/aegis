@@ -374,6 +374,27 @@ def test_setup_section_tools_noninteractive_can_select_skills(capsys):
     assert Config.load().get("skills.allowlist") == ["web-research", "summarize"]
 
 
+def test_setup_section_tools_interactive_flags_select_surface(capsys):
+    from aegis.cli.main import main
+    from aegis.config import Config
+
+    rc = main([
+        "setup",
+        "tools",
+        "--toolsets",
+        "core,mcp",
+        "--skills",
+        "web-research,summarize",
+    ])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "installer-selected toolsets: core, mcp" in out
+    assert "installer-selected skills: 2 selected" in out
+    assert Config.load().get("tools.toolsets") == ["core", "mcp"]
+    assert Config.load().get("skills.allowlist") == ["web-research", "summarize"]
+
+
 def test_setup_section_gateway_noninteractive_json(capsys):
     import json
 

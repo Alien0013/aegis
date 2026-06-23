@@ -11,6 +11,8 @@ $RunOnboard = if ($env:AEGIS_ONBOARD -eq "0") { $false } else { $true }
 $NoPrompt   = $env:AEGIS_NO_PROMPT -eq "1"
 $Verify     = $env:AEGIS_VERIFY_INSTALL -eq "1"
 $OnboardArgs = if ($env:AEGIS_ONBOARD_ARGS) { $env:AEGIS_ONBOARD_ARGS } else { "" }
+$InstallToolsets = if ($env:AEGIS_TOOLSETS) { $env:AEGIS_TOOLSETS } else { "" }
+$InstallSkills = if ($env:AEGIS_SKILLS) { $env:AEGIS_SKILLS } else { "" }
 
 function Say($m){ Write-Host "▸ $m" -ForegroundColor Magenta }
 function Ok($m){ Write-Host "✓ $m" -ForegroundColor Green }
@@ -62,6 +64,8 @@ if ($RunOnboard -and (HasTty)) {
   Say "Starting first-run onboarding..."
   $args = @("setup")
   if ($OnboardArgs.Trim()) { $args += ($OnboardArgs.Trim() -split '\s+') }
+  if ($InstallToolsets.Trim()) { $args += @("--toolsets", $InstallToolsets.Trim()) }
+  if ($InstallSkills.Trim()) { $args += @("--skills", $InstallSkills.Trim()) }
   & $aegis @args
   if ($LASTEXITCODE -ne 0) { Warn "Onboarding did not finish. Run 'aegis setup' when ready." }
 }

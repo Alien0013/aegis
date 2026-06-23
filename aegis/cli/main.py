@@ -352,6 +352,8 @@ def cmd_setup(args, config: Config) -> int:
             advanced=getattr(args, "advanced", False),
             probe=not getattr(args, "no_probe", False),
             services=not getattr(args, "no_services", False),
+            toolsets=getattr(args, "toolsets", None),
+            skills=getattr(args, "skills", None),
         )
 
     return run_onboarding(
@@ -360,6 +362,8 @@ def cmd_setup(args, config: Config) -> int:
         advanced=getattr(args, "advanced", False),
         probe=not getattr(args, "no_probe", False),
         services=not getattr(args, "no_services", False),
+        toolsets=getattr(args, "toolsets", None),
+        skills=getattr(args, "skills", None),
     )
 
 

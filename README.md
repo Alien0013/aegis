@@ -36,6 +36,13 @@ aegis            # terminal agent
 aegis ui         # local browser dashboard
 ```
 
+Pick the first-run model-visible surface during install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- \
+  --toolsets core,browser,mcp --skills web-research,summarize
+```
+
 <p align="center"><img src="assets/terminal.png" alt="AEGIS terminal" width="860"></p>
 
 <p align="center"><img src="assets/dashboard.png" alt="AEGIS dashboard" width="860"><br>
@@ -73,6 +80,8 @@ LSP, and MCP toolsets. The setup step writes the model-visible toolset config
 and reports enabled tools, available skills, and plugin tool totals.
 Automation can pin the same policy with
 `aegis setup tools --non-interactive --accept-risk --toolsets core,mcp --skills web-research,summarize`.
+The one-line installer accepts the same first-run policy through `--toolsets`,
+`--skills`, `AEGIS_TOOLSETS`, and `AEGIS_SKILLS`.
 
 ## What AEGIS Does Now
 

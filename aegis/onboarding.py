@@ -234,6 +234,8 @@ def run_onboarding(
     advanced: bool = False,
     probe: bool = True,
     services: bool = True,
+    toolsets: str | None = None,
+    skills: str | None = None,
     input_func: Input = input,
     secret_func: Input | None = None,
     output_func: Output = print,
@@ -295,7 +297,16 @@ def run_onboarding(
         _refresh_model_metadata(out)
     _configure_web(config, state, advanced, input_func, secret_func, out)
     _configure_memory(config, state, advanced, input_func, out)
-    _configure_agent_surface(config, state, advanced, input_func, out)
+    if not _configure_agent_surface(
+        config,
+        state,
+        advanced,
+        input_func,
+        out,
+        selected_toolsets=toolsets,
+        selected_skills=skills,
+    ):
+        return 1
     _configure_channels(config, state, advanced, input_func, secret_func, out)
     _seed_workspace(state, out)
     _configure_dashboard(config, state, out)
@@ -445,6 +456,8 @@ def run_setup_section(
     advanced: bool = False,
     probe: bool = True,
     services: bool = True,
+    toolsets: str | None = None,
+    skills: str | None = None,
     input_func: Input = input,
     secret_func: Input | None = None,
     output_func: Output = print,
@@ -469,11 +482,29 @@ def run_setup_section(
         elif section == "terminal":
             _configure_terminal(config, state, advanced, input_func, out)
         elif section == "tools":
-            _configure_agent_surface(config, state, advanced, input_func, out)
+            if not _configure_agent_surface(
+                config,
+                state,
+                advanced,
+                input_func,
+                out,
+                selected_toolsets=toolsets,
+                selected_skills=skills,
+            ):
+                return 1
         elif section == "gateway":
             _configure_channels(config, state, advanced, input_func, secret_func, out)
         elif section == "agent":
-            _configure_agent_surface(config, state, advanced, input_func, out)
+            if not _configure_agent_surface(
+                config,
+                state,
+                advanced,
+                input_func,
+                out,
+                selected_toolsets=toolsets,
+                selected_skills=skills,
+            ):
+                return 1
             _seed_workspace(state, out)
             _configure_dashboard(config, state, out)
         elif section == "web":
@@ -779,6 +810,22 @@ def _parse_csv(value: str | None) -> list[str]:
     if not value:
         return []
     return [part.strip() for part in value.split(",") if part.strip()]
+
+
+def _normalize_toolset_selection(selected: list[str]) -> tuple[bool, str, list[str]]:
+    ordered: list[str] = []
+    for item in selected:
+        name = str(item or "").strip().lower()
+        if name and name not in ordered:
+            ordered.append(name)
+    if not ordered:
+        ordered = _recommended_toolsets()
+    if "core" not in ordered:
+        ordered.insert(0, "core")
+    unknown = sorted(set(ordered) - VALID_TOOLSETS)
+    if unknown:
+        return False, "unknown toolset(s): " + ", ".join(unknown), []
+    return True, "", ordered
 
 
 def _skill_options(config: Config) -> list[tuple[str, str]]:
@@ -1380,34 +1427,70 @@ def _configure_agent_surface(
     advanced: bool,
     input_func: Input,
     out: Output,
-) -> None:
+    *,
+    selected_toolsets: str | None = None,
+    selected_skills: str | None = None,
+) -> bool:
     _hdr(out, "Tools & skills")
     current = list(config.get("tools.toolsets", []) or ["core", "mcp"])
     recommended = _recommended_toolsets()
-    if advanced:
-        selected = _multi_choose(
-            "Which optional toolsets should AEGIS expose to the model?",
-            [
-                ("browser", "Browser automation (Playwright)"),
-                ("computer", "Computer control (screen/keyboard/mouse)"),
-                ("voice", "Voice and transcription tools"),
-                ("lsp", "Language-server code intelligence"),
-                ("mcp", "MCP server tools"),
-            ],
-            default_values=[t for t in current if t != "core"] or [t for t in recommended if t != "core"],
-            input_func=input_func,
-            output_func=out,
+    explicit_toolsets = selected_toolsets is not None
+    explicit_skills = selected_skills is not None
+    choose_surface = advanced or explicit_toolsets or explicit_skills
+    if not choose_surface and input_func is input:
+        choose_surface = _confirm(
+            "Choose tools/toolsets and skills now?",
+            True,
+            input_func,
+            out,
         )
-        toolsets = ["core"] + [t for t in ("browser", "computer", "voice", "lsp", "mcp") if t in selected]
+
+    if choose_surface:
+        if explicit_toolsets:
+            selected = _parse_csv(selected_toolsets)
+        else:
+            selected = _multi_choose(
+                "Which optional toolsets should AEGIS expose to the model?",
+                [
+                    ("browser", "Browser automation (Playwright)"),
+                    ("computer", "Computer control (screen/keyboard/mouse)"),
+                    ("voice", "Voice and transcription tools"),
+                    ("lsp", "Language-server code intelligence"),
+                    ("mcp", "MCP server tools"),
+                ],
+                default_values=[t for t in current if t != "core"] or [t for t in recommended if t != "core"],
+                input_func=input_func,
+                output_func=out,
+            )
+        ok, message, toolsets = _normalize_toolset_selection(selected)
+        if not ok:
+            out(f"! {message}")
+            return False
+        if explicit_toolsets:
+            out(f"✓ installer-selected toolsets: {', '.join(toolsets)}")
     else:
         toolsets = recommended
         if current and current != ["core", "mcp"]:
             toolsets = current
     config.set("tools.toolsets", toolsets)
 
-    if advanced:
+    if choose_surface:
         current_skills = list(config.get("skills.allowlist", []) or [])
-        if _confirm(
+        if explicit_skills:
+            ok, message, selected = _apply_skill_selection(
+                config,
+                _parse_csv(selected_skills),
+                explicit=True,
+            )
+            if not ok:
+                out(f"! {message}")
+                return False
+            state.skill_allowlist = selected
+            if selected:
+                out(f"✓ installer-selected skills: {len(selected)} selected")
+            else:
+                out("✓ skill allowlist cleared; all skills are visible")
+        elif _confirm(
             "Restrict model-visible skills to a selected set?",
             bool(current_skills),
             input_func,
@@ -1453,6 +1536,7 @@ def _configure_agent_surface(
     if plugins.errors:
         out(f"  plugin load errors: {len(plugins.errors)}; run `aegis plugins doctor`")
     out("  Use `aegis status`, `aegis tools`, `aegis skills`, and `aegis plugins` to inspect them.")
+    return True
 
 
 def _populate_surface_state(config: Config, state: OnboardingState):

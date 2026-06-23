@@ -17,12 +17,16 @@ prompts for headless automation with `--no-prompt` or `--non-interactive`; this
 still runs safe default onboarding and prints JSON. Skip onboarding entirely with
 `--skip-onboard` or `AEGIS_ONBOARD=0`. Use `--core` for a smaller CLI-only install, or
 `--skip-browser` to skip the Chromium download. Windows: `irm …/install.ps1 | iex`.
+First-run tool and skill policy can be chosen from the installer too:
+`--toolsets core,browser,lsp,mcp --skills web-research,summarize`, or with
+`AEGIS_TOOLSETS` / `AEGIS_SKILLS` for one-line automation.
 
 Everything in one go (browser, computer-use, Discord, Slack, Matrix, memory backends):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- --advanced
+curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- --toolsets core,browser,mcp --skills web-research,summarize
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- --verify
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- --core
 ```

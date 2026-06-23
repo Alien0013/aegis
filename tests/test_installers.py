@@ -26,6 +26,21 @@ def test_install_sh_help_mentions_onboarding_modes():
     assert "--no-prompt" in res.stdout
     assert "--non-interactive" in res.stdout
     assert "--skip-onboard" in res.stdout
+    assert "--toolsets" in res.stdout
+    assert "--skills" in res.stdout
+
+
+def test_installers_advertise_first_run_surface_selection():
+    sh = (ROOT / "install.sh").read_text(encoding="utf-8")
+    ps1 = (ROOT / "install.ps1").read_text(encoding="utf-8")
+    assert "AEGIS_TOOLSETS" in sh
+    assert "AEGIS_SKILLS" in sh
+    assert "--toolsets $INSTALL_TOOLSETS" in sh
+    assert "--skills $INSTALL_SKILLS" in sh
+    assert "AEGIS_TOOLSETS" in ps1
+    assert "AEGIS_SKILLS" in ps1
+    assert '"--toolsets", $InstallToolsets.Trim()' in ps1
+    assert '"--skills", $InstallSkills.Trim()' in ps1
 
 
 def test_install_sh_does_not_advertise_removed_tui():

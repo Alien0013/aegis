@@ -13,6 +13,8 @@
 #   AEGIS_ONBOARD      run onboarding     (default 1; set 0 to skip)
 #   AEGIS_NO_PROMPT    disable interactive prompts/onboarding (default 0)
 #   AEGIS_NONINTERACTIVE_ONBOARD run onboarding with safe defaults (default 0)
+#   AEGIS_TOOLSETS     comma list for first-run toolset selection (e.g. core,browser,mcp)
+#   AEGIS_SKILLS       comma list for first-run skill allowlist, or "all"
 #   AEGIS_VERIFY_INSTALL run `aegis doctor` after install (default 0)
 #   AEGIS_DRY_RUN      print the install plan without making changes (default 0)
 #   AEGIS_BRANCH       branch for the default GitHub source (default main)
@@ -45,6 +47,8 @@ BRANCH="${AEGIS_BRANCH:-main}"
 SKIP_BROWSER="${AEGIS_SKIP_BROWSER:-0}"
 PYTHON_OVERRIDE="${AEGIS_PYTHON:-}"
 ONBOARD_ARGS="${AEGIS_ONBOARD_ARGS:-}"
+INSTALL_TOOLSETS="${AEGIS_TOOLSETS:-}"
+INSTALL_SKILLS="${AEGIS_SKILLS:-}"
 STAGE=0
 TOTAL_STAGES=8
 BROWSER_STATUS="not selected"
@@ -78,6 +82,8 @@ print_plan() {
   kv "Source" "$SOURCE"
   kv "Extras" "${EXTRAS:-core only}"
   kv "Browser engine" "$(wants_browser && [ "$SKIP_BROWSER" != "1" ] && echo enabled || echo skipped)"
+  kv "First-run toolsets" "${INSTALL_TOOLSETS:-guided/default}"
+  kv "First-run skills" "${INSTALL_SKILLS:-guided/all visible}"
   kv "Data home" "$AEGIS_HOME_DIR"
   kv "Venv" "$INSTALL_DIR"
   kv "Launcher" "$BIN_DIR/$APP"
@@ -141,6 +147,8 @@ Options:
   --full                        Install the full curated extras set (default)
   --core, --minimal             Install only the core CLI
   --extras <names>              Install explicit extras, e.g. browser,discord
+  --toolsets <names>            First-run toolsets, e.g. core,browser,lsp,mcp
+  --skills <names|all>          First-run skill allowlist, or all
   --skip-browser, --no-browser  Skip Playwright Chromium download
   --verify                      Run 'aegis doctor' after install
   --dry-run                     Print the install plan without changing files
@@ -196,6 +204,12 @@ while [ $# -gt 0 ]; do
     --extras)
       [ $# -ge 2 ] || die "missing value for --extras"
       EXTRAS="$2"; shift 2 ;;
+    --toolsets)
+      [ $# -ge 2 ] || die "missing value for --toolsets"
+      INSTALL_TOOLSETS="$2"; shift 2 ;;
+    --skills)
+      [ $# -ge 2 ] || die "missing value for --skills"
+      INSTALL_SKILLS="$2"; shift 2 ;;
     --skip-browser|--no-browser)
       SKIP_BROWSER=1; shift ;;
     --verify)
@@ -361,6 +375,12 @@ stage "Running onboarding"
 if [ "$RUN_ONBOARD" != "0" ] && { has_tty || [ "$NONINTERACTIVE_ONBOARD" = "1" ]; }; then
   say "Starting first-run onboarding…"
   RUN_ARGS="$ONBOARD_ARGS"
+  if [ -n "$INSTALL_TOOLSETS" ]; then
+    RUN_ARGS="$RUN_ARGS --toolsets $INSTALL_TOOLSETS"
+  fi
+  if [ -n "$INSTALL_SKILLS" ]; then
+    RUN_ARGS="$RUN_ARGS --skills $INSTALL_SKILLS"
+  fi
   if [ "$NONINTERACTIVE_ONBOARD" = "1" ]; then
     RUN_ARGS="$RUN_ARGS --non-interactive --accept-risk --json"
   fi
