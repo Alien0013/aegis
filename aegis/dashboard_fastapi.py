@@ -27,7 +27,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from . import __version__
 from .config import Config, CONFIG_FIELD_ENUMS, DEFAULT_CONFIG, _deep_merge, config_type_errors
-from .platforms import normalize_platform_name
+from .platforms import BRIDGE_PLATFORM_DEFINITIONS, normalize_platform_name
 
 try:
     from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket
@@ -54,6 +54,8 @@ _DESKTOP_CRON_LOCK = threading.Lock()
 _DASHBOARD_READY_SENTINEL = "AEGIS_DASHBOARD_READY"
 _DASHBOARD_PLUGIN_API_MOUNT_STATUS: dict[str, dict[str, Any]] = {}
 _DASHBOARD_PLUGIN_API_MOUNT_LOCK = threading.Lock()
+_DASHBOARD_ACTIVE_CHAT_AGENTS: dict[str, dict[str, Any]] = {}
+_DASHBOARD_ACTIVE_CHAT_LOCK = threading.Lock()
 logger = logging.getLogger(__name__)
 
 
@@ -186,6 +188,64 @@ def _auth_configured(config: Config) -> bool:
     return bool(dash._dashboard_token(config) or _basic_auth_configured())
 
 
+def _dashboard_registration_enabled(config: Config) -> bool:
+    env = os.environ.get("AEGIS_DASHBOARD_ALLOW_REGISTRATION")
+    if env is not None:
+        return _coerce_dashboard_bool(env, False)
+    return _coerce_dashboard_bool(config.get("dashboard.auth.registration_enabled", True), True)
+
+
+def _dashboard_oauth_providers(config: Config) -> list[dict[str, Any]]:
+    raw = config.get("dashboard.auth.oauth_providers", []) or []
+    rows: list[dict[str, Any]] = []
+    if isinstance(raw, dict):
+        raw = [
+            {"id": key, **(value if isinstance(value, dict) else {"name": str(value)})}
+            for key, value in raw.items()
+        ]
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            provider_id = str(item.get("id") or item.get("name") or "").strip()
+            if not provider_id:
+                continue
+            client_id = str(item.get("client_id") or item.get("clientId") or "").strip()
+            authorize_url = str(item.get("authorize_url") or item.get("authorizeUrl") or "").strip()
+            token_url = str(item.get("token_url") or item.get("tokenUrl") or "").strip()
+            callback_path = str(item.get("callback_path") or item.get("callbackPath") or "/auth/oauth/callback").strip()
+            rows.append({
+                "id": provider_id,
+                "name": str(item.get("display_name") or item.get("label") or item.get("name") or provider_id),
+                "type": "oauth",
+                "enabled": _coerce_dashboard_bool(item.get("enabled"), True),
+                "available": bool(client_id and authorize_url),
+                "client_id_configured": bool(client_id),
+                "authorize_url_configured": bool(authorize_url),
+                "token_url_configured": bool(token_url),
+                "callback_path": callback_path,
+                "scopes": [str(scope) for scope in (item.get("scopes") or []) if str(scope).strip()],
+                "notes": str(item.get("notes") or ""),
+            })
+    env_provider = os.environ.get("AEGIS_DASHBOARD_OAUTH_PROVIDER", "").strip()
+    if env_provider and not any(row["id"] == env_provider for row in rows):
+        rows.append({
+            "id": env_provider,
+            "name": os.environ.get("AEGIS_DASHBOARD_OAUTH_NAME", env_provider),
+            "type": "oauth",
+            "enabled": True,
+            "available": bool(os.environ.get("AEGIS_DASHBOARD_OAUTH_CLIENT_ID")
+                              and os.environ.get("AEGIS_DASHBOARD_OAUTH_AUTHORIZE_URL")),
+            "client_id_configured": bool(os.environ.get("AEGIS_DASHBOARD_OAUTH_CLIENT_ID")),
+            "authorize_url_configured": bool(os.environ.get("AEGIS_DASHBOARD_OAUTH_AUTHORIZE_URL")),
+            "token_url_configured": bool(os.environ.get("AEGIS_DASHBOARD_OAUTH_TOKEN_URL")),
+            "callback_path": os.environ.get("AEGIS_DASHBOARD_OAUTH_CALLBACK_PATH", "/auth/oauth/callback"),
+            "scopes": [scope for scope in os.environ.get("AEGIS_DASHBOARD_OAUTH_SCOPES", "").split() if scope],
+            "notes": "configured from environment",
+        })
+    return rows
+
+
 def _auth_providers_payload(config: Config) -> dict[str, Any]:
     token_configured = bool(dash._dashboard_token(config))
     basic_configured = _basic_auth_configured()
@@ -212,7 +272,8 @@ def _auth_providers_payload(config: Config) -> dict[str, Any]:
             "session_cookie": _SESSION_COOKIE,
             "ttl_seconds": _SESSION_TTL_SECONDS,
         })
-    if not providers:
+    oauth_rows = [row for row in _dashboard_oauth_providers(config) if row.get("enabled")]
+    if not token_configured and not basic_configured:
         providers.append({
             "id": "loopback",
             "name": "Loopback local access",
@@ -220,6 +281,7 @@ def _auth_providers_payload(config: Config) -> dict[str, Any]:
             "enabled": not _remote_bind_requires_auth(config),
             "available": not _remote_bind_requires_auth(config),
         })
+    providers.extend(oauth_rows)
     return {
         "ok": True,
         "auth_required": _auth_configured(config) or _remote_bind_requires_auth(config),
@@ -229,6 +291,15 @@ def _auth_providers_payload(config: Config) -> dict[str, Any]:
         "ttl_seconds": _SESSION_TTL_SECONDS,
         "default_provider": providers[0]["id"] if providers else "",
         "login_url": "/login" if basic_configured else "",
+        "registration": {
+            "enabled": _dashboard_registration_enabled(config),
+            "loopback_only": True,
+            "url": "/api/auth/register",
+            "token_source": "env" if os.environ.get("AEGIS_DASHBOARD_TOKEN") else (
+                "config" if config.get("server.dashboard_token") else ""
+            ),
+        },
+        "oauth_providers": [row for row in providers if row.get("type") == "oauth"],
         "providers": providers,
     }
 
@@ -540,6 +611,48 @@ _CONFIG_FIELD_META: dict[str, dict[str, Any]] = {
         "label": "Require mention",
         "description": "Only answer in group channels when the bot is mentioned.",
         "group": "Gateway",
+    },
+    "gateway.api_server.enabled": {
+        "label": "API server gateway",
+        "description": "Run the OpenAI-compatible API as a supervised gateway platform.",
+        "group": "Gateway API server",
+        "restart": "gateway service",
+    },
+    "gateway.api_server.host": {
+        "label": "API server host",
+        "description": "Bind host for the gateway-hosted OpenAI-compatible API.",
+        "group": "Gateway API server",
+        "restart": "gateway service",
+    },
+    "gateway.api_server.port": {
+        "label": "API server port",
+        "description": "Bind port for the gateway-hosted OpenAI-compatible API.",
+        "group": "Gateway API server",
+        "restart": "gateway service",
+    },
+    "gateway.api_server.api_key": {
+        "label": "API server key",
+        "description": "Optional bearer key required by the gateway-hosted API.",
+        "group": "Gateway API server",
+        "restart": "gateway service",
+    },
+    "gateway.api_server.model_name": {
+        "label": "API model name",
+        "description": "Model id exposed through OpenAI-compatible API routes.",
+        "group": "Gateway API server",
+        "restart": "gateway service",
+    },
+    "gateway.api_server.cors_origins": {
+        "label": "API CORS origins",
+        "description": "Allowed browser origins for the gateway-hosted API.",
+        "group": "Gateway API server",
+        "restart": "gateway service",
+    },
+    "gateway.api_server.max_concurrent_runs": {
+        "label": "API concurrency",
+        "description": "Maximum concurrent API runs accepted by the gateway-hosted API.",
+        "group": "Gateway API server",
+        "restart": "gateway service",
     },
     "learn.background": {
         "label": "Background learning",
@@ -1120,6 +1233,50 @@ def _hook_test_payload(config: Config, body: dict[str, Any]) -> dict[str, Any]:
 
 _CHANNEL_CATALOG: list[dict[str, Any]] = [
     {
+        "id": "api_server",
+        "label": "API Server",
+        "env": [],
+        "optional_env": [
+            "API_SERVER_ENABLED",
+            "API_SERVER_HOST",
+            "API_SERVER_PORT",
+            "API_SERVER_API_KEY",
+            "API_SERVER_MODEL_NAME",
+            "API_SERVER_CORS_ORIGINS",
+            "API_SERVER_MAX_CONCURRENT_RUNS",
+        ],
+        "setup": "Run the OpenAI-compatible aiohttp API as a gateway platform.",
+        "pairing": False,
+        "adapter_class": "aegis.gateway.channels.ApiServerChannel",
+        "auth_type": "bearer_optional",
+        "transport": "aiohttp",
+        "capabilities": [
+            "openai_compatible_api",
+            "responses",
+            "chat_completions",
+            "models",
+            "skills",
+            "toolsets",
+            "runs",
+            "sessions",
+            "approvals",
+            "jobs",
+            "sse",
+            "cors",
+        ],
+        "delivery_modes": ["http", "sse"],
+        "setup_hooks": ["config", "health_probe"],
+        "cron_delivery_hooks": ["api_jobs"],
+        "sender_hooks": ["responses_stream", "run_events"],
+        "yaml_config": "gateway.api_server",
+        "security": {
+            "local_only_recommended": True,
+            "api_key_env": "API_SERVER_API_KEY",
+            "cors_env": "API_SERVER_CORS_ORIGINS",
+            "config_path": "gateway.api_server",
+        },
+    },
+    {
         "id": "telegram",
         "label": "Telegram",
         "env": ["TELEGRAM_BOT_TOKEN"],
@@ -1518,6 +1675,67 @@ _CHANNEL_CATALOG: list[dict[str, Any]] = [
 ]
 
 
+def _bridge_platform_catalog_rows() -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for platform_id, row in BRIDGE_PLATFORM_DEFINITIONS.items():
+        prefix = str(row["env_prefix"])
+        rows.append({
+            "id": platform_id,
+            "label": row["display_name"],
+            "env": [],
+            "optional_env": [
+                f"{prefix}_SECRET",
+                f"{prefix}_PORT",
+                f"{prefix}_MAX_BYTES",
+                f"{prefix}_RATE_LIMIT_PER_MINUTE",
+                f"{prefix}_IDEMPOTENCY_TTL_SECONDS",
+                f"{prefix}_IDEMPOTENCY_CACHE_MAX",
+                f"{prefix}_IDEMPOTENCY_PERSIST",
+                f"{prefix}_IDEMPOTENCY_STORE_PATH",
+                f"{prefix}_INSECURE_NO_AUTH",
+                f"{prefix}_ALLOW_UNSIGNED_LOOPBACK",
+                f"{prefix}_ALLOWED_PLATFORMS",
+                f"{prefix}_OUTBOUND_URL",
+                f"{prefix}_OUTBOUND_SECRET",
+                f"{prefix}_OUTBOUND_MAX_CHARS",
+            ],
+            "setup": row.get("setup", ""),
+            "pairing": False,
+            "adapter_class": "aegis.gateway.webhook_channel.WebhookChannel",
+            "auth_type": "local_http_bridge",
+            "transport": "http_bridge",
+            "capabilities": [
+                "text",
+                "threads",
+                "webhook_events",
+                "interactive_prompts",
+                "idempotency",
+                "rate_limit",
+                "signature_verification",
+            ],
+            "bridge_capabilities": ["webhook_events", "interactive_prompts", "idempotency", "rate_limit"],
+            "delivery_modes": list(row.get("delivery_modes", ["webhook"])),
+            "setup_hooks": ["env_bridge", "health_probe"],
+            "cron_delivery_hooks": ["deliver_target"],
+            "sender_hooks": ["outbound_webhook"],
+            "yaml_config": f"gateway.profiles.{platform_id}",
+            "security": {
+                "local_only_recommended": True,
+                "loopback_unsigned_allowed": True,
+                "secret_env": f"{prefix}_SECRET",
+                "rate_limit_env": f"{prefix}_RATE_LIMIT_PER_MINUTE",
+                "allowed_platforms_env": f"{prefix}_ALLOWED_PLATFORMS",
+                "idempotency_env": [
+                    f"{prefix}_IDEMPOTENCY_TTL_SECONDS",
+                    f"{prefix}_IDEMPOTENCY_CACHE_MAX",
+                    f"{prefix}_IDEMPOTENCY_PERSIST",
+                    f"{prefix}_IDEMPOTENCY_STORE_PATH",
+                ],
+            },
+        })
+    return rows
+
+
 def _plugin_platform_catalog(config: Config | None = None) -> list[dict[str, Any]]:
     try:
         from .plugins import load_plugins, plugin_platforms
@@ -1530,6 +1748,8 @@ def _plugin_platform_catalog(config: Config | None = None) -> list[dict[str, Any
 
 def _channel_catalog(config: Config | None = None) -> list[dict[str, Any]]:
     rows: dict[str, dict[str, Any]] = {str(row["id"]): dict(row) for row in _CHANNEL_CATALOG}
+    for row in _bridge_platform_catalog_rows():
+        rows[str(row["id"])] = row
     for item in _plugin_platform_catalog(config):
         platform_id = _normalize_platform_id(str(item.get("id") or item.get("name") or ""))
         if not platform_id:
@@ -1651,6 +1871,10 @@ def _messaging_platform_metadata(item: dict[str, Any]) -> dict[str, Any]:
         "bridge_capabilities": list(item.get("bridge_capabilities", []) or []),
         "delivery_modes": list(item.get("delivery_modes", []) or []),
         "security": copy.deepcopy(item.get("security", {}) or {}),
+        "setup_hooks": list(item.get("setup_hooks", []) or []),
+        "cron_delivery_hooks": list(item.get("cron_delivery_hooks", []) or []),
+        "sender_hooks": list(item.get("sender_hooks", []) or []),
+        "yaml_config": item.get("yaml_config", ""),
         "install_hint": item.get("install_hint", ""),
         "plugin": item.get("plugin", ""),
         "plugin_path": item.get("plugin_path", ""),
@@ -4515,6 +4739,101 @@ def _cancel_dashboard_stream_agent(agent: Any) -> None:
         pass
 
 
+def _dashboard_chat_agent_keys(agent: Any, body: dict[str, Any] | None = None) -> list[str]:
+    body = body or {}
+    session = getattr(agent, "session", None)
+    session_id = str(getattr(session, "id", "") or body.get("session_id") or "").strip()
+    trace_ctx = getattr(agent, "_trace_context", {}) or {}
+    run_id = str((getattr(session, "meta", {}) or {}).get("last_run_id") or trace_ctx.get("run_id") or "").strip()
+    keys = []
+    for prefix, value in (("session", session_id), ("run", run_id)):
+        if value:
+            keys.append(f"{prefix}:{value}")
+    return keys
+
+
+def _register_dashboard_chat_agent(agent: Any, body: dict[str, Any] | None = None) -> None:
+    keys = _dashboard_chat_agent_keys(agent, body)
+    if not keys:
+        return
+    session = getattr(agent, "session", None)
+    record = {
+        "agent": agent,
+        "session_id": str(getattr(session, "id", "") or (body or {}).get("session_id") or ""),
+        "started_at": time.time(),
+    }
+    with _DASHBOARD_ACTIVE_CHAT_LOCK:
+        for key in keys:
+            _DASHBOARD_ACTIVE_CHAT_AGENTS[key] = record
+
+
+def _unregister_dashboard_chat_agent(agent: Any, body: dict[str, Any] | None = None) -> None:
+    keys = set(_dashboard_chat_agent_keys(agent, body))
+    with _DASHBOARD_ACTIVE_CHAT_LOCK:
+        if keys:
+            for key in keys:
+                current = _DASHBOARD_ACTIVE_CHAT_AGENTS.get(key)
+                if current and current.get("agent") is agent:
+                    _DASHBOARD_ACTIVE_CHAT_AGENTS.pop(key, None)
+            return
+        for key, current in list(_DASHBOARD_ACTIVE_CHAT_AGENTS.items()):
+            if current.get("agent") is agent:
+                _DASHBOARD_ACTIVE_CHAT_AGENTS.pop(key, None)
+
+
+def _find_dashboard_chat_agent(body: dict[str, Any]) -> dict[str, Any] | None:
+    session_id = str(body.get("session_id") or "").strip()
+    run_id = str(body.get("run_id") or "").strip()
+    keys = []
+    if session_id:
+        keys.append(f"session:{session_id}")
+    if run_id:
+        keys.append(f"run:{run_id}")
+    with _DASHBOARD_ACTIVE_CHAT_LOCK:
+        for key in keys:
+            record = _DASHBOARD_ACTIVE_CHAT_AGENTS.get(key)
+            if record:
+                return dict(record)
+        if not keys and len(_DASHBOARD_ACTIVE_CHAT_AGENTS) == 1:
+            return dict(next(iter(_DASHBOARD_ACTIVE_CHAT_AGENTS.values())))
+    return None
+
+
+def _dashboard_chat_control_response(body: dict[str, Any]) -> JSONResponse:
+    action = str(body.get("action") or "").strip().lower()
+    if action in {"stop", "cancel"}:
+        action = "interrupt"
+    if action not in {"interrupt", "steer", "status"}:
+        return JSONResponse({"ok": False, "error": "action must be status, steer, or interrupt"}, status_code=400)
+    record = _find_dashboard_chat_agent(body)
+    if record is None:
+        return JSONResponse({"ok": False, "error": "no active dashboard chat agent found"}, status_code=404)
+    agent = record.get("agent")
+    if action == "status":
+        return JSONResponse({
+            "ok": True,
+            "active": True,
+            "session_id": record.get("session_id", ""),
+            "started_at": record.get("started_at", 0),
+        })
+    if action == "interrupt":
+        _cancel_dashboard_stream_agent(agent)
+        return JSONResponse({"ok": True, "action": "interrupt", "session_id": record.get("session_id", "")})
+    text = str(body.get("text") or body.get("message") or "").strip()
+    if not text:
+        return JSONResponse({"ok": False, "error": "text is required for steer"}, status_code=400)
+    steer = getattr(agent, "steer", None)
+    if not callable(steer):
+        return JSONResponse({"ok": False, "error": "active agent does not support steering"}, status_code=409)
+    accepted = bool(steer(text))
+    return JSONResponse({
+        "ok": accepted,
+        "action": "steer",
+        "session_id": record.get("session_id", ""),
+        "accepted": accepted,
+    }, status_code=200 if accepted else 409)
+
+
 def _dashboard_chat_streaming_response(body: dict, chat_runner, request: Request) -> StreamingResponse:
     events_q: queue.Queue[dict | object] = queue.Queue()
     sentinel = object()
@@ -4541,6 +4860,7 @@ def _dashboard_chat_streaming_response(body: dict, chat_runner, request: Request
 
     def on_agent(agent: Any) -> None:
         active["agent"] = agent
+        _register_dashboard_chat_agent(agent, body)
         if cancelled.is_set():
             _cancel_dashboard_stream_agent(agent)
             start_cancel_watchdog()
@@ -4562,6 +4882,9 @@ def _dashboard_chat_streaming_response(body: dict, chat_runner, request: Request
                 cancel_event=cancelled,
             )
         finally:
+            agent = active.get("agent")
+            if agent is not None:
+                _unregister_dashboard_chat_agent(agent, body)
             events_q.put(sentinel)
 
     thread = threading.Thread(target=worker, daemon=True)
@@ -4620,6 +4943,7 @@ async def _dashboard_chat_json_response(body: dict, chat_runner, request: Reques
 
     def on_agent(agent: Any) -> None:
         active["agent"] = agent
+        _register_dashboard_chat_agent(agent, body)
         if cancelled.is_set():
             _cancel_dashboard_stream_agent(agent)
             start_cancel_watchdog()
@@ -4653,6 +4977,9 @@ async def _dashboard_chat_json_response(body: dict, chat_runner, request: Reques
                 "events": [],
             })
         finally:
+            agent = active.get("agent")
+            if agent is not None:
+                _unregister_dashboard_chat_agent(agent, body)
             done.set()
 
     thread = threading.Thread(target=worker, daemon=True)
@@ -5498,6 +5825,54 @@ def create_app(config: Config) -> FastAPI:
         if not _request_peer_allowed(request, config):
             return JSONResponse({"ok": False, "error": "request rejected by dashboard host guard"}, status_code=403)
         return JSONResponse(_auth_providers_payload(config))
+
+    @app.post("/api/auth/register")
+    async def api_auth_register(request: Request) -> JSONResponse:
+        client_host = getattr(getattr(request, "client", None), "host", "") or ""
+        if not _is_loopback_host(client_host):
+            return JSONResponse({"ok": False, "error": "dashboard registration is loopback-only"}, status_code=403)
+        if not _dashboard_registration_enabled(config):
+            return JSONResponse({"ok": False, "error": "dashboard registration is disabled"}, status_code=403)
+        raw = await request.body()
+        try:
+            body = json.loads(raw) if raw else {}
+        except ValueError:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        rotate = _coerce_dashboard_bool(body.get("rotate"), False)
+        env_token = os.environ.get("AEGIS_DASHBOARD_TOKEN", "")
+        configured = dash._dashboard_token(config)
+        if configured and not _request_authorized(request, config):
+            return JSONResponse({"ok": False, "error": "dashboard registration requires current auth"}, status_code=401)
+        if env_token:
+            return JSONResponse({
+                "ok": True,
+                "created": False,
+                "token_configured": True,
+                "token_source": "env",
+                "warning": "AEGIS_DASHBOARD_TOKEN controls this running dashboard; persisted registration skipped.",
+            })
+        if configured and not rotate:
+            return JSONResponse({
+                "ok": True,
+                "created": False,
+                "token_configured": True,
+                "token_source": "config",
+            })
+        token = "aegis_tok_" + secrets.token_urlsafe(24)
+        config.data.setdefault("server", {})["dashboard_token"] = token
+        config.save()
+        response = JSONResponse({
+            "ok": True,
+            "created": True,
+            "token": token,
+            "token_configured": True,
+            "token_source": "config",
+            "auth": _auth_providers_payload(config),
+        })
+        response.set_cookie("aegis_dashboard_token", token, httponly=True, samesite="lax")
+        return response
 
     @app.get("/api/auth/me")
     async def api_auth_me(request: Request) -> JSONResponse:
@@ -7226,6 +7601,12 @@ def create_app(config: Config) -> FastAPI:
         _require_request(request, config)
         body = await request.json()
         return _dashboard_chat_streaming_response(body, chat_runner, request)
+
+    @app.post("/api/chat/control")
+    async def chat_control(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        return _dashboard_chat_control_response(body if isinstance(body, dict) else {})
 
     @app.post("/api/files/upload")
     async def upload_file(request: Request) -> JSONResponse:

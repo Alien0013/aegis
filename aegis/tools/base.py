@@ -75,6 +75,93 @@ class ToolContext:
         if self.emit:
             self.emit(event)
 
+    def dispatch_tool(self, name: str, arguments: dict[str, Any] | None = None, *,
+                      registry: Any = None, permissions: Any = None) -> ToolResult:
+        """Run another registered tool through the normal permission/middleware path.
+
+        Plugin tools use this as their Hermes-style ``ctx.dispatch_tool`` helper. It
+        intentionally reuses the current agent's registry and permission engine when
+        available so plugin dispatch cannot bypass the harness' tool policy.
+        """
+        from ..types import ToolCall, new_id
+        from .permissions import PermissionEngine
+        from .registry import default_registry
+
+        agent = self.agent
+        reg = registry or getattr(agent, "registry", None) or default_registry()
+        perms = permissions or getattr(agent, "permissions", None) or PermissionEngine(self.config)
+        call = ToolCall(new_id("plugin_tool"), str(name or ""), dict(arguments or {}))
+
+        def emit(event: dict[str, Any]) -> None:
+            self.emit_event(**event)
+
+        from ..agent.loop import ToolExecutor
+
+        return ToolExecutor(reg, perms, self, emit).execute_one_raw(call)
+
+    def inject_message(self, role: str, content: str, *, metadata: dict[str, Any] | None = None,
+                       persist: bool = True) -> dict[str, Any]:
+        """Append a message to the active session and optionally persist it.
+
+        This gives plugins a small, explicit equivalent of Hermes' message-injection
+        hook without exposing session internals as a stable API surface.
+        """
+        from ..types import Message
+
+        clean_role = str(role or "user").strip().lower()
+        if clean_role == "assistant":
+            message = Message.assistant(str(content or ""))
+        elif clean_role == "system":
+            message = Message.system(str(content or ""))
+        elif clean_role == "tool":
+            message = Message.tool("plugin_inject", "plugin", str(content or ""))
+        else:
+            clean_role = "user"
+            message = Message.user(str(content or ""))
+        if metadata:
+            message.meta.update(dict(metadata))
+        session = self.session
+        if session is None:
+            return message.to_dict()
+        session.messages.append(message)
+        if persist:
+            store = getattr(self.agent, "store", None)
+            save = getattr(store, "save", None)
+            if callable(save):
+                save(session)
+        self.emit_event(type="plugin_message_injected", role=clean_role, length=len(message.content or ""))
+        return message.to_dict()
+
+    def llm(self, prompt: str | list[Any], *, system: str = "", model: str | None = None,
+            reasoning: str | None = None, stream: bool = False,
+            on_delta: Callable[[str], None] | None = None):
+        """Call the configured provider from trusted plugin code.
+
+        Returns the normalized ``LLMResponse`` so plugins can inspect text, tool calls,
+        usage, and provider raw data when present.
+        """
+        from ..providers.fallback import build_with_fallbacks
+        from ..types import Message
+
+        provider = getattr(self.agent, "provider", None) or build_with_fallbacks(self.config, model=model)
+        if isinstance(prompt, list):
+            messages = list(prompt)
+        else:
+            messages = []
+            if system:
+                messages.append(Message.system(system))
+            messages.append(Message.user(str(prompt or "")))
+        effort = reasoning if reasoning is not None else getattr(self.agent, "reasoning", "off")
+        return provider.complete(
+            messages,
+            tools=None,
+            stream=stream,
+            on_delta=on_delta,
+            model=model,
+            reasoning=effort,
+            cwd=self.cwd,
+        )
+
 
 class Tool:
     """Base class. Subclasses set name/description/parameters and implement run()."""

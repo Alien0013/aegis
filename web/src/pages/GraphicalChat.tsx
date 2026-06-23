@@ -38,6 +38,27 @@ interface Turn {
   tools?: ToolEvent[];
 }
 
+type BusyAction = "queue" | "steer" | "interrupt";
+
+interface RunStatus {
+  phase: string;
+  startedAt: number;
+  sessionId?: string;
+  runId?: string;
+  traceId?: string;
+  turnId?: string;
+  iteration?: number;
+  maxIterations?: number;
+  providerCalls: number;
+  toolCalls: number;
+  toolErrors: number;
+  activeProvider?: string;
+  activeTool?: string;
+  lastTool?: string;
+  compactions: number;
+  note?: string;
+}
+
 interface BrowserManageResponse {
   connected?: boolean;
   url?: string;
@@ -200,6 +221,11 @@ export function GraphicalChat({
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [busyAction, setBusyAction] = useState<BusyAction>("queue");
+  const [queuedPrompts, setQueuedPrompts] = useState<string[]>([]);
+  const queuedRef = useRef<string[]>([]);
+  const [runStatus, setRunStatus] = useState<RunStatus | null>(null);
+  const [statusTick, setStatusTick] = useState(0);
   const [sid, setSid] = useState(sessionId || "");
   const [modelData, setModelData] = useState<ModelsPayload | null>(null);
   const [model, setModelState] = useState(() => stored(MODEL_KEY));
@@ -279,6 +305,12 @@ export function GraphicalChat({
     onRuntime?.({ model, provider });
   }, [model, onRuntime, provider]);
 
+  useEffect(() => {
+    if (!busy) return;
+    const id = window.setInterval(() => setStatusTick((value) => value + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [busy]);
+
   useEffect(() => () => {
     streamRef.current.token += 1;
     streamRef.current.controller?.abort();
@@ -302,6 +334,9 @@ export function GraphicalChat({
     setBusy(false);
     setSid(sessionId || "");
     setTurns([]);
+    setRunStatus(null);
+    queuedRef.current = [];
+    setQueuedPrompts([]);
     setRuntimeDirty(false);
     if (!sessionId) return;
     fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
@@ -420,6 +455,105 @@ export function GraphicalChat({
       return copy;
     });
 
+  const setQueue = (items: string[]) => {
+    queuedRef.current = items;
+    setQueuedPrompts(items);
+  };
+
+  const updateRunStatus = (updater: (current: RunStatus) => RunStatus) => {
+    setRunStatus((current) => updater(current || {
+      phase: "running",
+      startedAt: Date.now(),
+      sessionId: sid || undefined,
+      providerCalls: 0,
+      toolCalls: 0,
+      toolErrors: 0,
+      compactions: 0,
+    }));
+  };
+
+  const applyStreamFrameToStatus = (data: Record<string, unknown>) => {
+    const type = String(data.type || "");
+    if (type === "start") {
+      const session = String(data.session_id || sid || "");
+      setRunStatus({
+        phase: "starting",
+        startedAt: Date.now(),
+        sessionId: session || undefined,
+        providerCalls: 0,
+        toolCalls: 0,
+        toolErrors: 0,
+        compactions: 0,
+      });
+      return;
+    }
+    if (type === "final" || type === "cancelled" || type === "error") {
+      updateRunStatus((current) => ({
+        ...current,
+        phase: type === "final" ? "completed" : type,
+        sessionId: String(data.session_id || current.sessionId || "") || undefined,
+        runId: String(data.run_id || current.runId || "") || undefined,
+        traceId: String(data.trace_id || current.traceId || "") || undefined,
+        turnId: String(data.turn_id || current.turnId || "") || undefined,
+        activeProvider: "",
+        activeTool: "",
+      }));
+      return;
+    }
+    if (type !== "event") return;
+    const ev = (data.event || {}) as Record<string, unknown>;
+    const et = String(ev.type || "");
+    updateRunStatus((current) => {
+      const next: RunStatus = {
+        ...current,
+        runId: String(ev.run_id || current.runId || "") || undefined,
+        traceId: String(ev.trace_id || current.traceId || "") || undefined,
+        turnId: String(ev.turn_id || current.turnId || "") || undefined,
+      };
+      if (et === "iteration") {
+        next.phase = "thinking";
+        next.iteration = Number(ev.n || 0) || undefined;
+        next.maxIterations = Number(ev.max || 0) || undefined;
+      } else if (et === "provider_start") {
+        const p = String(ev.provider || "provider");
+        const m = String(ev.model || "");
+        next.phase = "model";
+        next.activeProvider = m ? `${p}/${m}` : p;
+        next.providerCalls += 1;
+      } else if (et === "provider_end") {
+        next.activeProvider = "";
+      } else if (et === "tool_start") {
+        next.phase = "tool";
+        next.activeTool = String(ev.name || "tool");
+        next.lastTool = next.activeTool;
+        next.toolCalls += 1;
+      } else if (et === "tool_result") {
+        next.phase = "tool result";
+        next.lastTool = String(ev.name || next.lastTool || "tool");
+        next.activeTool = "";
+        if (normalizeToolStatus(ev.status, "ok") === "error") next.toolErrors += 1;
+      } else if (et === "subagent_start") {
+        next.phase = "subagent";
+        next.activeTool = String(ev.agent_type || "subagent");
+        next.toolCalls += 1;
+      } else if (et === "subagent_done") {
+        next.phase = "subagent done";
+        next.activeTool = "";
+      } else if (et === "compacting" || et === "compacted") {
+        next.phase = et;
+        if (et === "compacted") next.compactions += 1;
+      } else if (et === "budget_exhausted") {
+        next.phase = "budget";
+        next.note = "step budget reached";
+      } else if (et === "assistant_delta" || et === "assistant_message") {
+        next.phase = "writing";
+      } else if (et === "error") {
+        next.phase = "error";
+      }
+      return next;
+    });
+  };
+
   const isBrowserSlash = (text: string) => {
     const raw = text.trim().toLowerCase();
     return raw === "/browser" || raw.startsWith("/browser ");
@@ -481,9 +615,57 @@ export function GraphicalChat({
     }
   };
 
-  const send = async () => {
-    const text = input.trim();
-    if (!text || busy) return;
+  const controlActiveRun = async (action: "steer" | "interrupt", text?: string) => {
+    await post("chat/control", {
+      action,
+      session_id: sid || undefined,
+      run_id: runStatus?.runId || undefined,
+      text,
+    });
+  };
+
+  const submitWhileBusy = async (text: string) => {
+    if (busyAction === "queue") {
+      setQueue([...queuedRef.current, text]);
+      setInput("");
+      updateRunStatus((current) => ({ ...current, note: `${queuedRef.current.length + 1} queued` }));
+      return;
+    }
+    if (busyAction === "steer") {
+      setInput("");
+      try {
+        await controlActiveRun("steer", text);
+        updateRunStatus((current) => ({ ...current, note: `steer: ${text.slice(0, 80)}` }));
+      } catch (e) {
+        updateRunStatus((current) => ({ ...current, note: `steer failed: ${e instanceof Error ? e.message : String(e)}` }));
+      }
+      return;
+    }
+    setInput("");
+    setQueue([text, ...queuedRef.current]);
+    try {
+      await controlActiveRun("interrupt", text);
+    } catch {
+      // Closing the stream still asks the backend to cancel through disconnect handling.
+    }
+    streamRef.current.token += 1;
+    streamRef.current.controller?.abort();
+    streamRef.current.controller = null;
+    setBusy(false);
+    patchLast((turn) => (
+      turn.role === "assistant" && !turn.text
+        ? { ...turn, text: "Interrupted. Starting the replacement prompt." }
+        : turn
+    ));
+    window.setTimeout(() => {
+      const next = queuedRef.current.shift();
+      setQueuedPrompts([...queuedRef.current]);
+      if (next) void sendText(next);
+    }, 0);
+  };
+
+  const sendText = async (text: string) => {
+    if (!text) return;
     if (isBrowserSlash(text)) {
       await runBrowserSlash(text);
       return;
@@ -503,6 +685,7 @@ export function GraphicalChat({
     try {
       await postStream("chat/stream", { message: text, session_id: sid || undefined, ...sendRuntime }, (data) => {
         if (!streamActive()) return;
+        applyStreamFrameToStatus(data as Record<string, unknown>);
         const type = String(data.type || "");
         if (type === "start") {
           const s = String(data.session_id || "");
@@ -625,12 +808,26 @@ export function GraphicalChat({
         streamRef.current.controller = null;
         setBusy(false);
         taRef.current?.focus();
+        const next = queuedRef.current.shift();
+        setQueuedPrompts([...queuedRef.current]);
+        if (next) window.setTimeout(() => void sendText(next), 0);
       }
     }
   };
 
+  const send = async () => {
+    const text = input.trim();
+    if (!text) return;
+    if (busy) {
+      await submitWhileBusy(text);
+      return;
+    }
+    await sendText(text);
+  };
+
   const stopStream = () => {
     if (!busy) return;
+    void controlActiveRun("interrupt").catch(() => {});
     streamRef.current.token += 1;
     streamRef.current.controller?.abort();
     streamRef.current.controller = null;
@@ -682,6 +879,15 @@ export function GraphicalChat({
 
       <div className="border-t border-border bg-surface/40 px-4 py-3 backdrop-blur">
         <div className="mx-auto w-full max-w-3xl">
+          <RunStatusBar
+            busy={busy}
+            action={busyAction}
+            setAction={setBusyAction}
+            queued={queuedPrompts.length}
+            status={runStatus}
+            sessionId={sid}
+            tick={statusTick}
+          />
           <div className="mb-2 flex flex-wrap items-center gap-2">
             <div className="flex min-h-9 max-w-full flex-wrap items-center gap-1.5 rounded-[var(--radius)] border border-border bg-surface px-2 py-1 text-xs text-dim">
               <Icon name="models" size={14} className="text-primary" />
@@ -755,7 +961,7 @@ export function GraphicalChat({
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={onKey}
               rows={1}
-              placeholder="Message AEGIS…  (Enter to send, Shift+Enter for newline)"
+              placeholder={busy ? "Queue, steer, or interrupt this run..." : "Message AEGIS...  (Enter to send, Shift+Enter for newline)"}
               className="scroll-thin max-h-40 min-h-[44px] flex-1 resize-none rounded-[var(--radius)] border border-border bg-surface px-3 py-2.5 text-sm text-text outline-none placeholder:text-faint focus:border-border-2"
             />
             {busy ? (
@@ -780,6 +986,88 @@ export function GraphicalChat({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function elapsedText(startedAt?: number, tick = 0): string {
+  void tick;
+  if (!startedAt) return "0s";
+  const seconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
+function RunStatusBar({
+  busy,
+  action,
+  setAction,
+  queued,
+  status,
+  sessionId,
+  tick,
+}: {
+  busy: boolean;
+  action: BusyAction;
+  setAction: (action: BusyAction) => void;
+  queued: number;
+  status: RunStatus | null;
+  sessionId: string;
+  tick: number;
+}) {
+  const elapsed = elapsedText(status?.startedAt, tick);
+  const longRunning = busy && status?.startedAt && Date.now() - status.startedAt > 30000;
+  const chips = [
+    status?.phase || (busy ? "running" : "ready"),
+    status?.iteration && status.maxIterations ? `iter ${status.iteration}/${status.maxIterations}` : "",
+    status?.activeProvider ? `model ${status.activeProvider}` : "",
+    status?.activeTool ? `tool ${status.activeTool}` : status?.lastTool ? `last ${status.lastTool}` : "",
+    status?.providerCalls ? `${status.providerCalls} model call${status.providerCalls === 1 ? "" : "s"}` : "",
+    status?.toolCalls ? `${status.toolCalls} tool${status.toolCalls === 1 ? "" : "s"}${status.toolErrors ? ` / ${status.toolErrors} err` : ""}` : "",
+    status?.compactions ? `${status.compactions} compression${status.compactions === 1 ? "" : "s"}` : "",
+    queued ? `${queued} queued` : "",
+  ].filter(Boolean);
+
+  return (
+    <div className="mb-2 rounded-[var(--radius)] border border-border bg-surface px-2.5 py-2 text-xs text-dim">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={`inline-flex items-center gap-1 font-medium ${busy ? "text-primary" : "text-faint"}`}>
+          <Icon name={busy ? "activity" : "check"} size={13} />
+          {busy ? elapsed : "idle"}
+        </span>
+        {chips.map((chip) => (
+          <span key={chip} className="rounded-[var(--radius)] bg-surface-2 px-2 py-0.5 text-[11px] text-dim">
+            {chip}
+          </span>
+        ))}
+        {status?.note && <span className="truncate text-[11px] text-faint">{status.note}</span>}
+        <span className="ml-auto truncate font-mono text-[11px] text-faint">
+          {status?.runId ? `run ${status.runId.slice(0, 12)} · ` : ""}
+          {sessionId ? `session ${sessionId.slice(0, 18)}` : "new session"}
+        </span>
+      </div>
+      {busy && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          {(["queue", "steer", "interrupt"] as BusyAction[]).map((mode) => (
+            <button
+              key={mode}
+              onClick={() => setAction(mode)}
+              className={`rounded-[var(--radius)] border px-2 py-1 text-[11px] capitalize transition ${
+                action === mode
+                  ? "border-primary/60 bg-primary/15 text-primary"
+                  : "border-border bg-bg text-faint hover:text-text"
+              }`}
+            >
+              {mode}
+            </button>
+          ))}
+          {longRunning && (
+            <span className="ml-1 text-[11px] text-warning">
+              Long run active: send guidance with steer, or interrupt with a replacement prompt.
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -16,6 +16,10 @@ MAX_TELEGRAM_COMMANDS = 30
 MAX_DISCORD_APP_COMMANDS = 100
 
 PLATFORM_ALIASES = {
+    "api": "api_server",
+    "api-server": "api_server",
+    "openai-api": "api_server",
+    "openai_compatible": "api_server",
     "tg": "telegram",
     "telegram-bot": "telegram",
     "telegram_bot": "telegram",
@@ -38,10 +42,129 @@ PLATFORM_ALIASES = {
     "whatsapp_web": "whatsapp",
     "whatsapp-web.js": "whatsapp",
     "baileys": "whatsapp",
+    "whatsapp-cloud": "whatsapp_cloud",
+    "ha": "homeassistant",
+    "home-assistant": "homeassistant",
+    "ding-talk": "dingtalk",
+    "msgraph": "msgraph_webhook",
+    "msgraph-webhook": "msgraph_webhook",
+}
+
+BRIDGE_PLATFORM_DEFINITIONS: dict[str, dict[str, Any]] = {
+    "whatsapp_cloud": {
+        "display_name": "WhatsApp Cloud",
+        "env_prefix": "WHATSAPP_CLOUD_CHANNEL",
+        "default_port": 18801,
+        "setup": "Connect Meta WhatsApp Cloud webhooks to the local bridge endpoint.",
+        "delivery_modes": ["phone", "template", "webhook"],
+    },
+    "homeassistant": {
+        "display_name": "Home Assistant",
+        "env_prefix": "HOMEASSISTANT_CHANNEL",
+        "default_port": 18802,
+        "setup": "Point Home Assistant automations or webhooks at the local bridge endpoint.",
+        "delivery_modes": ["webhook", "entity", "notification"],
+    },
+    "sms": {
+        "display_name": "SMS",
+        "env_prefix": "SMS_CHANNEL",
+        "default_port": 18803,
+        "setup": "Bridge Twilio, Telnyx, or another SMS provider into the local webhook endpoint.",
+        "delivery_modes": ["phone", "webhook"],
+    },
+    "dingtalk": {
+        "display_name": "DingTalk",
+        "env_prefix": "DINGTALK_CHANNEL",
+        "default_port": 18804,
+        "setup": "Configure DingTalk bot webhooks and callbacks through the local bridge.",
+        "delivery_modes": ["chat", "group", "webhook"],
+    },
+    "feishu": {
+        "display_name": "Feishu",
+        "env_prefix": "FEISHU_CHANNEL",
+        "default_port": 18805,
+        "setup": "Connect Feishu/Lark bot events to the local bridge endpoint.",
+        "delivery_modes": ["chat", "group", "webhook"],
+    },
+    "wecom": {
+        "display_name": "WeCom",
+        "env_prefix": "WECOM_CHANNEL",
+        "default_port": 18806,
+        "setup": "Connect WeCom callbacks to the local bridge endpoint.",
+        "delivery_modes": ["chat", "group", "webhook"],
+    },
+    "weixin": {
+        "display_name": "Weixin",
+        "env_prefix": "WEIXIN_CHANNEL",
+        "default_port": 18807,
+        "setup": "Connect Weixin public-account or bot callbacks to the local bridge.",
+        "delivery_modes": ["chat", "webhook"],
+    },
+    "bluebubbles": {
+        "display_name": "BlueBubbles",
+        "env_prefix": "BLUEBUBBLES_CHANNEL",
+        "default_port": 18808,
+        "setup": "Bridge BlueBubbles/iMessage webhooks through the local endpoint.",
+        "delivery_modes": ["chat", "group", "webhook"],
+    },
+    "qqbot": {
+        "display_name": "QQ Bot",
+        "env_prefix": "QQBOT_CHANNEL",
+        "default_port": 18809,
+        "setup": "Connect QQ bot events to the local bridge endpoint.",
+        "delivery_modes": ["chat", "group", "webhook"],
+    },
+    "yuanbao": {
+        "display_name": "Yuanbao",
+        "env_prefix": "YUANBAO_CHANNEL",
+        "default_port": 18810,
+        "setup": "Connect Yuanbao relay events through the local bridge endpoint.",
+        "delivery_modes": ["chat", "webhook"],
+    },
+    "relay": {
+        "display_name": "Relay",
+        "env_prefix": "RELAY_CHANNEL",
+        "default_port": 18811,
+        "setup": "Use the generic relay bridge for custom platform ingress and delivery.",
+        "delivery_modes": ["webhook", "relay"],
+    },
+    "msgraph_webhook": {
+        "display_name": "Microsoft Graph Webhook",
+        "env_prefix": "MSGRAPH_WEBHOOK_CHANNEL",
+        "default_port": 18812,
+        "setup": "Bridge Microsoft Graph webhook notifications into AEGIS.",
+        "delivery_modes": ["webhook", "mail", "teams"],
+    },
 }
 
 
 PLATFORM_METADATA: dict[str, dict[str, Any]] = {
+    "api_server": {
+        "display_name": "API Server",
+        "transport": "aiohttp",
+        "required_env": [],
+        "optional_env": [
+            "API_SERVER_ENABLED",
+            "API_SERVER_HOST",
+            "API_SERVER_PORT",
+            "API_SERVER_API_KEY",
+            "API_SERVER_MODEL_NAME",
+            "API_SERVER_CORS_ORIGINS",
+            "API_SERVER_MAX_CONCURRENT_RUNS",
+        ],
+        "max_message_length": None,
+        "message_length_units": "codepoints",
+        "supports_threads": True,
+        "supports_media": True,
+        "supports_interactive_prompts": True,
+        "typed_command_prefix": "/",
+        "security": {
+            "auth_type": "bearer_optional",
+            "api_key_env": "API_SERVER_API_KEY",
+            "cors_env": "API_SERVER_CORS_ORIGINS",
+            "gateway_config": "gateway.api_server",
+        },
+    },
     "telegram": {
         "display_name": "Telegram",
         "transport": "long_poll",
@@ -365,6 +488,57 @@ PLATFORM_METADATA: dict[str, dict[str, Any]] = {
         },
     },
 }
+
+for _platform_id, _bridge in BRIDGE_PLATFORM_DEFINITIONS.items():
+    _prefix = str(_bridge["env_prefix"])
+    PLATFORM_METADATA.setdefault(_platform_id, {
+        "display_name": _bridge["display_name"],
+        "transport": "http_bridge",
+        "required_env": [],
+        "optional_env": [
+            f"{_prefix}_SECRET",
+            f"{_prefix}_PORT",
+            f"{_prefix}_MAX_BYTES",
+            f"{_prefix}_RATE_LIMIT_PER_MINUTE",
+            f"{_prefix}_IDEMPOTENCY_TTL_SECONDS",
+            f"{_prefix}_IDEMPOTENCY_CACHE_MAX",
+            f"{_prefix}_IDEMPOTENCY_PERSIST",
+            f"{_prefix}_IDEMPOTENCY_STORE_PATH",
+            f"{_prefix}_INSECURE_NO_AUTH",
+            f"{_prefix}_ALLOW_UNSIGNED_LOOPBACK",
+            f"{_prefix}_ALLOWED_PLATFORMS",
+            f"{_prefix}_OUTBOUND_URL",
+            f"{_prefix}_OUTBOUND_SECRET",
+            f"{_prefix}_OUTBOUND_MAX_CHARS",
+        ],
+        "max_message_length": None,
+        "message_length_units": "codepoints",
+        "supports_threads": True,
+        "supports_media": True,
+        "supports_interactive_prompts": True,
+        "typed_command_prefix": "/",
+        "bridge_capabilities": ["webhook_events", "interactive_prompts", "idempotency", "rate_limit"],
+        "delivery_modes": list(_bridge.get("delivery_modes", ["webhook"])),
+        "setup": _bridge.get("setup", ""),
+        "security": {
+            "secret_env": f"{_prefix}_SECRET",
+            "rate_limit_env": f"{_prefix}_RATE_LIMIT_PER_MINUTE",
+            "allowed_platforms_env": f"{_prefix}_ALLOWED_PLATFORMS",
+            "signature_schemes": [
+                "X-Secret",
+                "X-Hub-Signature-256",
+                "X-Webhook-Signature",
+                "svix-signature",
+                "X-Gitlab-Token",
+            ],
+            "idempotency_env": [
+                f"{_prefix}_IDEMPOTENCY_TTL_SECONDS",
+                f"{_prefix}_IDEMPOTENCY_CACHE_MAX",
+                f"{_prefix}_IDEMPOTENCY_PERSIST",
+                f"{_prefix}_IDEMPOTENCY_STORE_PATH",
+            ],
+        },
+    })
 
 
 _SAFE_PLATFORM_RE = re.compile(r"[^a-z0-9_.-]+")

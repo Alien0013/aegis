@@ -623,11 +623,15 @@ class Renderer:
 class TerminalStatusState:
     started_at: float = 0.0
     duration_ms: int = 0
+    phase: str = ""
     iteration: int = 0
     max_iterations: int = 0
     provider_calls: int = 0
     tool_calls: int = 0
     tool_errors: int = 0
+    subagents_active: int = 0
+    subagents_done: int = 0
+    compactions: int = 0
     active_provider: str = ""
     active_tool: str = ""
     last_tool: str = ""
@@ -641,11 +645,15 @@ class TerminalStatusState:
         if etype == "terminal_turn_start":
             self.started_at = time.monotonic()
             self.duration_ms = 0
+            self.phase = "running"
             self.iteration = 0
             self.max_iterations = 0
             self.provider_calls = 0
             self.tool_calls = 0
             self.tool_errors = 0
+            self.subagents_active = 0
+            self.subagents_done = 0
+            self.compactions = 0
             self.active_provider = ""
             self.active_tool = ""
             self.last_tool = ""
@@ -653,14 +661,17 @@ class TerminalStatusState:
             self.budget_exhausted = False
         elif etype == "terminal_turn_end":
             self.duration_ms = int(event.get("duration_ms") or self.elapsed_ms())
+            self.phase = str(event.get("status") or "done")
             self.active_provider = ""
             self.active_tool = ""
             self.compacting = False
         elif etype == "iteration":
+            self.phase = "thinking"
             self.iteration = int(event.get("n") or 0)
             self.max_iterations = int(event.get("max") or 0)
             self.compacting = False
         elif etype == "provider_start":
+            self.phase = "model"
             provider = str(event.get("provider") or "provider")
             model = str(event.get("model") or "")
             self.active_provider = f"{provider}/{model}" if model else provider
@@ -668,19 +679,40 @@ class TerminalStatusState:
         elif etype == "provider_end":
             self.active_provider = ""
         elif etype == "tool_start":
+            self.phase = "tool"
             self.active_tool = str(event.get("name") or "")
             self.last_tool = self.active_tool
             self.tool_calls += 1
         elif etype == "tool_result":
+            self.phase = "tool result"
             self.last_tool = str(event.get("name") or self.last_tool)
             if bool(event.get("is_error")) or _result_is_failure(str(event.get("summary") or "")):
                 self.tool_errors += 1
             self.active_tool = ""
+        elif etype == "subagent_start":
+            self.phase = "subagent"
+            self.subagents_active += 1
+            self.active_tool = f"subagent:{event.get('agent_type') or 'worker'}"
+        elif etype == "subagent_done":
+            self.phase = "subagent done"
+            self.subagents_active = max(0, self.subagents_active - 1)
+            self.subagents_done += 1
+            self.active_tool = ""
         elif etype == "compacting":
+            self.phase = "compacting"
             self.compacting = True
+        elif etype == "compacted":
+            self.phase = "compacted"
+            self.compactions += 1
+            self.compacting = False
         elif etype == "budget_exhausted":
+            self.phase = "budget"
             self.budget_exhausted = True
         elif etype in {"assistant_message", "final", "error"}:
+            if etype == "assistant_message":
+                self.phase = "writing"
+            elif etype == "error":
+                self.phase = "error"
             self.active_tool = ""
             self.compacting = False
 
@@ -703,6 +735,8 @@ class TerminalStatusState:
 
     def segment(self) -> str:
         bits: list[str] = []
+        if self.phase:
+            bits.append(f"phase {self.phase}")
         if self.started_at:
             bits.append(f"elapsed {self.elapsed_text()}")
         if self.iteration and self.max_iterations:
@@ -720,10 +754,16 @@ class TerminalStatusState:
             if self.tool_errors:
                 tool_text += f"/{self.tool_errors} err"
             bits.append(tool_text)
+        if self.subagents_active or self.subagents_done:
+            bits.append(f"subagents {self.subagents_active} active/{self.subagents_done} done")
+        if self.compactions:
+            bits.append(f"compressions {self.compactions}")
         if self.compacting:
             bits.append(f"{_ui('◇ ', '')}compacting")
         if self.budget_exhausted:
             bits.append(f"{_ui('! ', '')}budget exhausted")
+        if self.started_at and not self.duration_ms and self.elapsed_ms() > 30_000:
+            bits.append("long run: Ctrl-C stops; /steer is available on gateway/dashboard")
         return _ui(" · ", " | ").join(bits)
 
 
@@ -846,7 +886,17 @@ def _status_line(agent: Agent, progress: TerminalStatusState | None = None) -> s
     run_id, trace, _turn = _run_refs(agent)
     reasoning = f"{agent.config.get('display.reasoning', 'summary')}/{getattr(agent, 'reasoning', 'off')}"
     perms = str(agent.config.get("tools.exec_mode", "auto") or "auto")
+    busy_mode = str(agent.config.get("gateway.busy_mode", "queue") or "queue")
     model = str(getattr(getattr(agent, "provider", None), "model", "") or "?")
+    session = getattr(agent, "session", None)
+    session_title = str(getattr(session, "title", "") or getattr(session, "id", "") or "")
+    spend = ""
+    try:
+        amount = float(agent.session_spend_estimate())
+        if amount > 0:
+            spend = f"cost ${amount:.4f}"
+    except Exception:  # noqa: BLE001
+        spend = ""
     if ctx["window"]:
         ctx_text = f"ctx {_fmt_token_count(ctx['used'])}/{_fmt_token_count(ctx['window'])} ({ctx['percent']}%)"
     else:
@@ -863,10 +913,13 @@ def _status_line(agent: Agent, progress: TerminalStatusState | None = None) -> s
     return sep.join((
         f"  {brand}",
         model,
+        f"session {session_title[:28] or '?'}",
         ctx_text,
         f"tokens in {input_tokens:,} out {output_tokens:,}",
+        *( (spend,) if spend else () ),
         f"reasoning {reasoning}",
         f"perms {perms}",
+        f"busy {busy_mode}",
     )) + suffix
 
 
@@ -889,6 +942,9 @@ def _bottom_toolbar(agent: Agent):
     ctx = _context_window(agent)
     reasoning = f"{agent.config.get('display.reasoning', 'summary')}/{getattr(agent, 'reasoning', 'off')}"
     perms = str(agent.config.get("tools.exec_mode", "auto") or "auto")
+    busy_mode = str(agent.config.get("gateway.busy_mode", "queue") or "queue")
+    session = getattr(agent, "session", None)
+    session_id = str(getattr(session, "id", "") or "")
     if ctx["window"]:
         pct = ctx["percent"]
         ctx_text = (f"{_ctx_bar(pct)} {pct}% "
@@ -902,7 +958,9 @@ def _bottom_toolbar(agent: Agent):
         f"<style fg='{TERM_TEXT}'>{escape(model)}</style>{escape(sep)}"
         f"<style fg='{TERM_MUTED}'>ctx</style> <style fg='{TERM_GREEN}'>{escape(ctx_text)}</style>{escape(sep)}"
         f"<style fg='{TERM_MUTED}'>reasoning</style> <style fg='{TERM_TEXT}'>{escape(reasoning)}</style>{escape(sep)}"
-        f"<style fg='{TERM_MUTED}'>perms</style> <style fg='{TERM_TEXT}'>{escape(perms)}</style> "
+        f"<style fg='{TERM_MUTED}'>perms</style> <style fg='{TERM_TEXT}'>{escape(perms)}</style>{escape(sep)}"
+        f"<style fg='{TERM_MUTED}'>busy</style> <style fg='{TERM_TEXT}'>{escape(busy_mode)}</style>{escape(sep)}"
+        f"<style fg='{TERM_MUTED}'>session</style> <style fg='{TERM_TEXT}'>{escape(session_id[:12] or 'new')}</style> "
     )
 
 

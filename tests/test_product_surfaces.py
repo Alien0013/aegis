@@ -92,6 +92,70 @@ def test_config_summary_prints_hermes_style_terminal_surface(monkeypatch, capsys
     assert "aegis config setup" in out
 
 
+def test_tool_context_exposes_plugin_developer_helpers(tmp_path):
+    from types import SimpleNamespace
+
+    from aegis.config import Config
+    from aegis.session import Session
+    from aegis.tools import Tool, ToolContext, ToolRegistry, ToolResult
+    from aegis.tools.permissions import PermissionEngine
+    from aegis.types import LLMResponse
+
+    class EchoTool(Tool):
+        name = "plugin_echo"
+        description = "echo text"
+        parameters = {
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+        }
+
+        def run(self, args, ctx):
+            return ToolResult.ok(f"echo:{args.get('text', '')}", data={"cwd": str(ctx.cwd)})
+
+    class FakePluginProvider:
+        name = "fake"
+        model = "fake-model"
+
+        def complete(self, messages, **kwargs):
+            assert kwargs["reasoning"] == "low"
+            assert messages[0].role == "system"
+            assert messages[-1].content == "hello model"
+            return LLMResponse(text="model:ok")
+
+    saved = []
+
+    class Store:
+        def save(self, session):
+            saved.append((session.id, len(session.messages)))
+
+    cfg = Config.load()
+    cfg.data["tools"]["exec_mode"] = "auto"
+    registry = ToolRegistry()
+    registry.register(EchoTool())
+    session = Session.create("plugin helpers")
+    events = []
+    agent = SimpleNamespace(
+        registry=registry,
+        permissions=PermissionEngine(cfg),
+        provider=FakePluginProvider(),
+        reasoning="low",
+        store=Store(),
+    )
+    ctx = ToolContext(cwd=tmp_path, config=cfg, session=session, agent=agent, emit=events.append)
+
+    dispatched = ctx.dispatch_tool("plugin_echo", {"text": "hi"})
+    injected = ctx.inject_message("assistant", "plugin note", metadata={"source": "plugin"})
+    response = ctx.llm("hello model", system="system prompt")
+
+    assert dispatched.content == "echo:hi"
+    assert any(event["type"] == "tool_start" and event["name"] == "plugin_echo" for event in events)
+    assert injected["role"] == "assistant"
+    assert session.messages[-1].content == "plugin note"
+    assert session.messages[-1].meta["source"] == "plugin"
+    assert saved == [(session.id, 1)]
+    assert response.text == "model:ok"
+
+
 def test_model_doctor_prints_resolver_report(capsys):
     from argparse import Namespace
 

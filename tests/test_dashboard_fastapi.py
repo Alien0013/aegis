@@ -236,6 +236,60 @@ def test_fastapi_basic_login_session_and_logout(tmp_path, monkeypatch):
     assert "aegis_dashboard_session" in logout.headers.get("set-cookie", "")
 
 
+def test_fastapi_dashboard_register_bootstrap_and_oauth_metadata(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    monkeypatch.delenv("AEGIS_DASHBOARD_TOKEN", raising=False)
+    monkeypatch.delenv("AEGIS_DASHBOARD_BASIC_AUTH_USERNAME", raising=False)
+    monkeypatch.delenv("AEGIS_DASHBOARD_BASIC_AUTH_PASSWORD", raising=False)
+    from aegis.config import Config
+    from aegis.dashboard_fastapi import create_app
+
+    cfg = Config.load()
+    cfg.data.setdefault("dashboard", {}).setdefault("auth", {})["oauth_providers"] = [
+        {
+            "id": "github",
+            "name": "GitHub",
+            "client_id": "client-id",
+            "authorize_url": "https://github.com/login/oauth/authorize",
+            "token_url": "https://github.com/login/oauth/access_token",
+            "scopes": ["read:user"],
+        }
+    ]
+    app = create_app(cfg)
+
+    providers = asyncio.run(_request(app, "GET", "/api/auth/providers"))
+    assert providers.status_code == 200
+    body = providers.json()
+    assert body["default_provider"] == "loopback"
+    assert body["registration"]["url"] == "/api/auth/register"
+    oauth = next(row for row in body["oauth_providers"] if row["id"] == "github")
+    assert oauth["available"] is True
+    assert oauth["client_id_configured"] is True
+    assert oauth["callback_path"] == "/auth/oauth/callback"
+
+    created = asyncio.run(_request(app, "POST", "/api/auth/register", json={"rotate": True}))
+    assert created.status_code == 200
+    created_body = created.json()
+    token = created_body["token"]
+    assert token.startswith("aegis_tok_")
+    assert created_body["token_source"] == "config"
+    assert "aegis_dashboard_token" in created.headers.get("set-cookie", "")
+
+    denied = asyncio.run(_request(app, "POST", "/api/auth/register", json={"rotate": True}))
+    assert denied.status_code == 401
+
+    rotated = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/auth/register",
+        json={"rotate": True},
+        headers={"X-Aegis-Token": token},
+    ))
+    assert rotated.status_code == 200
+    assert rotated.json()["token"].startswith("aegis_tok_")
+    assert rotated.json()["token"] != token
+
+
 def test_fastapi_remote_bind_fails_closed_without_auth(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     monkeypatch.delenv("AEGIS_DASHBOARD_TOKEN", raising=False)
@@ -1029,6 +1083,13 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     platforms = asyncio.run(_request(app, "GET", "/api/messaging/platforms", headers=headers))
     assert platforms.status_code == 200
     rows = platforms.json()["platforms"]
+    api_server = next(row for row in rows if row["id"] == "api_server")
+    assert api_server["transport"] == "aiohttp"
+    assert api_server["missing_env_vars"] == []
+    assert "responses" in api_server["capabilities"]
+    assert "jobs" in api_server["capabilities"]
+    assert api_server["metadata"]["yaml_config"] == "gateway.api_server"
+    assert "health_probe" in api_server["metadata"]["setup_hooks"]
     telegram = next(row for row in rows if row["id"] == "telegram")
     assert telegram["name"] == "Telegram"
     assert telegram["enabled"] is False
@@ -1153,6 +1214,13 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     assert "whatsapp_nested_media" in whatsapp["metadata"]["bridge_capabilities"]
     assert "interactive_prompts" in whatsapp["metadata"]["bridge_capabilities"]
     assert whatsapp["metadata"]["security"]["bridge"] == "webhook"
+    whatsapp_cloud = next(row for row in rows if row["id"] == "whatsapp_cloud")
+    assert whatsapp_cloud["transport"] == "http_bridge"
+    assert "WHATSAPP_CLOUD_CHANNEL_SECRET" in whatsapp_cloud["optional_env_vars"]
+    assert "deliver_target" in whatsapp_cloud["metadata"]["cron_delivery_hooks"]
+    msgraph = next(row for row in rows if row["id"] == "msgraph_webhook")
+    assert msgraph["name"] == "Microsoft Graph Webhook"
+    assert "MSGRAPH_WEBHOOK_CHANNEL_OUTBOUND_URL" in msgraph["optional_env_vars"]
 
     registry = asyncio.run(_request(app, "GET", "/api/platforms/registry", headers=headers))
     assert registry.status_code == 200
@@ -1163,12 +1231,17 @@ def test_fastapi_messaging_platform_aliases(tmp_path, monkeypatch):
     assert reg_mattermost["metadata"]["adapter_class"].endswith("MattermostAdapter")
     reg_whatsapp = next(row for row in registry.json()["registry"] if row["id"] == "whatsapp")
     assert reg_whatsapp["metadata"]["transport"] == "http_bridge"
+    reg_api_server = next(row for row in registry.json()["registry"] if row["id"] == "api_server")
+    assert reg_api_server["metadata"]["sender_hooks"] == ["responses_stream", "run_events"]
     slack_detail = asyncio.run(_request(app, "GET", "/api/platforms/sl", headers=headers))
     assert slack_detail.status_code == 200
     assert slack_detail.json()["platform"]["id"] == "slack"
     whatsapp_alias_detail = asyncio.run(_request(app, "GET", "/api/messaging/platforms/wa", headers=headers))
     assert whatsapp_alias_detail.status_code == 200
     assert whatsapp_alias_detail.json()["platform"]["id"] == "whatsapp"
+    api_alias_detail = asyncio.run(_request(app, "GET", "/api/platforms/api-server", headers=headers))
+    assert api_alias_detail.status_code == 200
+    assert api_alias_detail.json()["platform"]["id"] == "api_server"
     slack_update = asyncio.run(_request(
         app,
         "PUT",
@@ -1382,6 +1455,9 @@ def test_fastapi_typed_config_profile_gateway_and_plugin_routes(tmp_path, monkey
             "tools.exec_mode": "smart",
             "agent.compression.max_tool_tokens": 12000,
             "agent.service_tier": "priority",
+            "gateway.api_server.enabled": True,
+            "gateway.api_server.port": 8788,
+            "gateway.api_server.cors_origins": ["http://localhost:5173"],
         }},
         headers=headers,
     ))
@@ -1390,9 +1466,14 @@ def test_fastapi_typed_config_profile_gateway_and_plugin_routes(tmp_path, monkey
     assert body["ok"] is True
     assert body["changed"]["tools.exec_mode"] == "smart"
     assert body["changed"]["agent.service_tier"] == "priority"
+    assert body["changed"]["gateway.api_server.enabled"] is True
+    assert body["changed"]["gateway.api_server.port"] == 8788
+    assert body["changed"]["gateway.api_server.cors_origins"] == ["http://localhost:5173"]
     raw_config = asyncio.run(_request(app, "GET", "/api/config/raw", headers=headers)).json()["config"]
     assert raw_config["agent"]["compression"]["max_tool_tokens"] == 12000
     assert raw_config["agent"]["service_tier"] == "priority"
+    assert raw_config["gateway"]["api_server"]["enabled"] is True
+    assert raw_config["gateway"]["api_server"]["port"] == 8788
 
     bad_raw = copy.deepcopy(raw_config)
     bad_raw["agent"]["max_iterations"] = "not-number"
@@ -2114,6 +2195,48 @@ def test_fastapi_legacy_chat_fallback_uses_cancellable_json_path(tmp_path, monke
     assert "agent" in seen["run_kwargs"]
     assert "session" in seen["run_kwargs"]
     assert "session_id" not in seen["run_kwargs"]
+
+
+def test_dashboard_chat_control_steers_and_interrupts_active_agent():
+    import threading
+    from aegis.dashboard_fastapi import (
+        _dashboard_chat_control_response,
+        _register_dashboard_chat_agent,
+        _unregister_dashboard_chat_agent,
+    )
+    from aegis.session import Session
+
+    steers: list[str] = []
+    agent = types.SimpleNamespace(
+        session=Session(id="dash:control", title="control"),
+        cancel_event=threading.Event(),
+    )
+    agent.steer = lambda text: steers.append(text) or True
+    agent.cancel = lambda: agent.cancel_event.set()
+
+    _register_dashboard_chat_agent(agent, {"session_id": "dash:control"})
+    try:
+        steer = _dashboard_chat_control_response({
+            "action": "steer",
+            "session_id": "dash:control",
+            "text": "prefer a smaller patch",
+        })
+        assert steer.status_code == 200
+        assert json.loads(steer.body)["accepted"] is True
+        assert steers == ["prefer a smaller patch"]
+
+        interrupt = _dashboard_chat_control_response({
+            "action": "interrupt",
+            "session_id": "dash:control",
+        })
+        assert interrupt.status_code == 200
+        assert json.loads(interrupt.body)["ok"] is True
+        assert agent.cancel_event.is_set()
+    finally:
+        _unregister_dashboard_chat_agent(agent, {"session_id": "dash:control"})
+
+    missing = _dashboard_chat_control_response({"action": "status", "session_id": "dash:control"})
+    assert missing.status_code == 404
 
 
 def test_fastapi_dashboard_chat_stream_disconnect_cancels_live_agent():
@@ -3832,6 +3955,10 @@ def test_fastapi_cron_control_plane(tmp_path, monkeypatch):
     assert create.json()["job"]["model"] == "cron-model"
     assert create.json()["job"]["enabled_toolsets"] == ["core", "web"]
     assert create.json()["job"]["workdir"] == str(tmp_path.resolve())
+    notify_path = tmp_path / "cron" / "scheduler-notify.json"
+    notify = json.loads(notify_path.read_text(encoding="utf-8"))
+    assert notify["reason"] == "job_added"
+    assert notify["job_id"] == job_id
 
     bad_workdir = asyncio.run(_request(
         app,

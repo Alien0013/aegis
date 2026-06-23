@@ -12,6 +12,7 @@ import time
 import webbrowser
 from argparse import Namespace
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Any
 
 from rich.columns import Columns
@@ -34,6 +35,30 @@ def _safe(label: str, errors: list[str], fn: Callable[[], Any], default: Any) ->
 def _clip(value: Any, limit: int = 72) -> str:
     text = str(value or "").replace("\n", " ").strip()
     return text if len(text) <= limit else text[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _parse_time(value: Any) -> float:
+    if isinstance(value, (int, float)):
+        raw = float(value)
+        return raw / 1000.0 if raw > 1e12 else raw
+    text = str(value or "").strip()
+    if not text:
+        return 0.0
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def _duration(seconds: float) -> str:
+    seconds = max(0, int(seconds or 0))
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, sec = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m {sec}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes}m"
 
 
 def _dashboard_url(config: Config, *, redact: bool = False) -> str:
@@ -71,6 +96,26 @@ def collect_snapshot(config: Config) -> dict[str, Any]:
         from ..runs import RunStore
 
         return RunStore().list(limit=8)
+
+    def active_runs() -> list[dict[str, Any]]:
+        from ..runs import RunStore
+
+        return RunStore().list(limit=20, status="running")
+
+    def background() -> dict[str, Any]:
+        from ..background import get_manager
+
+        manager = get_manager()
+        tasks = manager.list()
+        return {
+            "tasks": tasks,
+            "capacity": manager.capacity(config),
+        }
+
+    def processes() -> list[dict[str, Any]]:
+        from ..tools.process_registry import process_registry
+
+        return process_registry.list_sessions()[:20]
 
     def cron_jobs() -> list[dict[str, Any]]:
         from ..cron import CronStore
@@ -112,6 +157,9 @@ def collect_snapshot(config: Config) -> dict[str, Any]:
         "surface": surface_data,
         "sessions": _safe("sessions", errors, sessions, []),
         "runs": _safe("runs", errors, runs, []),
+        "active_runs": _safe("active-runs", errors, active_runs, []),
+        "background": _safe("background", errors, background, {"tasks": [], "capacity": {}}),
+        "processes": _safe("processes", errors, processes, []),
         "cron": _safe("cron", errors, cron_jobs, []),
         "kanban": _safe("kanban", errors, kanban, {"stats": {}, "tasks": []}),
         "cross_session": _safe("cross-session", errors, cross_session, {}),
@@ -164,6 +212,33 @@ def _surface_panel(snapshot: dict[str, Any]) -> Panel:
         ("channels", ", ".join(snapshot.get("channels") or []) or "none"),
     ]
     return Panel(_kv_table(rows), title="Surface", border_style="green")
+
+
+def _status_panel(snapshot: dict[str, Any]) -> Panel:
+    active = snapshot.get("active_runs") or []
+    background = snapshot.get("background") or {}
+    bg_tasks = background.get("tasks") or []
+    capacity = background.get("capacity") or {}
+    processes = snapshot.get("processes") or []
+    cron_jobs = snapshot.get("cron") or []
+    running_bg = sum(1 for task in bg_tasks if task.get("status") == "running")
+    done_bg = sum(1 for task in bg_tasks if task.get("status") in {"done", "error"})
+    running_proc = sum(1 for proc in processes if not proc.get("exited"))
+    oldest = 0.0
+    now = datetime.now(timezone.utc).timestamp()
+    for run in active:
+        started = _parse_time(run.get("started_at"))
+        if started and (oldest == 0.0 or started < oldest):
+            oldest = started
+    oldest_age = _duration(now - oldest) if oldest else "none"
+    rows = [
+        ("active runs", f"{len(active)} (oldest {oldest_age})"),
+        ("background", f"{running_bg}/{capacity.get('max', '?')} running, {done_bg} retained"),
+        ("processes", f"{running_proc} running / {len(processes)} tracked"),
+        ("cron", f"{sum(1 for job in cron_jobs if job.get('enabled', True))}/{len(cron_jobs)} enabled"),
+        ("sessions", f"{len(snapshot.get('sessions') or [])} recent"),
+    ]
+    return Panel(_kv_table(rows), title="Status", border_style="bright_green")
 
 
 def _sessions_panel(snapshot: dict[str, Any]) -> Panel:
@@ -269,7 +344,14 @@ def build_renderable(snapshot: dict[str, Any]) -> Group:
     if snapshot.get("errors"):
         footer_items.append(f"{len(snapshot['errors'])} warning(s)")
     footer = Panel("  ".join(footer_items), title="Actions", border_style="dim")
-    return Group(Panel.fit("[bold]AEGIS Terminal Cockpit[/bold]", border_style="cyan"), top, middle, lower, footer)
+    return Group(
+        Panel.fit("[bold]AEGIS Terminal Cockpit[/bold]", border_style="cyan"),
+        _status_panel(snapshot),
+        top,
+        middle,
+        lower,
+        footer,
+    )
 
 
 def render_dashboard(config: Config, *, console: Console | None = None) -> dict[str, Any]:

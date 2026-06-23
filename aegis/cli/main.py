@@ -2093,9 +2093,16 @@ def cmd_sessions(args, config: Config) -> int:
 # --------------------------------------------------------------------------- #
 def cmd_gateway(args, config: Config) -> int:
     action = getattr(args, "action", None)
+    def configured_channels() -> list[str]:
+        channels = [str(ch).strip() for ch in (config.get("gateway.channels", []) or []) if str(ch).strip()]
+        api_enabled = bool(config.get("gateway.api_server.enabled", False)) or _env_enabled("API_SERVER_ENABLED")
+        if api_enabled and "api_server" not in {ch.lower() for ch in channels}:
+            channels.append("api_server")
+        return channels
+
     if action in ("install", "uninstall", "status", "start", "stop", "restart"):
         from ..gateway.service import cmd_gateway_service
-        chans = args.channels or ",".join(config.get("gateway.channels", []) or []) or "telegram"
+        chans = args.channels or ",".join(configured_channels()) or "telegram"
         return cmd_gateway_service(action, chans)
 
     from .._log import setup_logging
@@ -2104,7 +2111,7 @@ def cmd_gateway(args, config: Config) -> int:
 
     setup_logging(mode="gateway")
     runner = GatewayRunner(config)
-    configured = ",".join(config.get("gateway.channels", []) or [])
+    configured = ",".join(configured_channels())
     channels = (args.channels or configured or "cli").split(",")
     for ch in channels:
         try:

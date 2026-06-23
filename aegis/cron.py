@@ -69,6 +69,30 @@ def _atomic_write_cron(path: Path, text: str) -> None:
     _fsync_dir(path.parent)
 
 
+def scheduler_notify_path() -> Path:
+    return cfg.sub("cron", "scheduler-notify.json")
+
+
+def notify_scheduler_changed(reason: str, job_id: str = "", *, source: str = "cron_store") -> dict:
+    """Publish a small cross-process change marker for dashboard/API cron mutations."""
+
+    event = {
+        "ok": True,
+        "reason": str(reason or "changed"),
+        "job_id": str(job_id or ""),
+        "source": str(source or "cron_store"),
+        "changed_at": time.time(),
+    }
+    path = scheduler_notify_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(path, json.dumps(event, indent=2, sort_keys=True) + "\n")
+        _fsync_dir(path.parent)
+    except Exception as exc:  # noqa: BLE001
+        event.update({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+    return event
+
+
 def _backup_corrupt_jobs(raw: str) -> Path | None:
     if not raw:
         return None
@@ -869,6 +893,7 @@ class CronStore:
             jobs = self._load_unlocked()
             jobs.append(job.__dict__)
             self._save_unlocked(jobs)
+        notify_scheduler_changed("job_added", job.id)
         return job
 
     def remove(self, job_id: str) -> bool:
@@ -879,7 +904,9 @@ class CronStore:
                 return False
             del jobs[index]
             self._save_unlocked(jobs)
-            return True
+            notify_job_id = job_id
+        notify_scheduler_changed("job_removed", notify_job_id)
+        return True
 
     def set_enabled(self, job_id: str, enabled: bool) -> bool:
         with _jobs_file_lock():
@@ -889,7 +916,9 @@ class CronStore:
                 return False
             jobs[index]["enabled"] = enabled
             self._save_unlocked(jobs)
-            return True
+            notify_job_id = str(jobs[index].get("id") or job_id)
+        notify_scheduler_changed("job_resumed" if enabled else "job_paused", notify_job_id)
+        return True
 
     def prune_spent(self, *, dry_run: bool = True) -> list[str]:
         """Retire jobs that have run their course and can never fire again: fired
@@ -910,7 +939,9 @@ class CronStore:
                     spent.append(j.get("id", ""))
             if not dry_run and spent:
                 self._save_unlocked([j for j in jobs if j.get("id") not in spent])
-            return [s for s in spent if s]
+        if spent and not dry_run:
+            notify_scheduler_changed("jobs_pruned", ",".join(spent))
+        return [s for s in spent if s]
 
     def update(self, job_id: str, **updates) -> CronJob | None:
         with _jobs_file_lock():
@@ -950,7 +981,9 @@ class CronStore:
                 found["last_run"] = 0.0
                 found["next_run"] = 0.0
             self._save_unlocked(jobs)
-            return CronJob(**_normalize_job_record(found))
+            updated = CronJob(**_normalize_job_record(found))
+        notify_scheduler_changed("job_updated", updated.id)
+        return updated
 
     def mark_run(self, job_id: str, when: float) -> None:
         with _jobs_file_lock():

@@ -1287,6 +1287,11 @@ def _chat_event_row(event: dict) -> dict:
         "summary": str(event.get("summary") or event.get("message") or event.get("reason") or ""),
         "preview": str(event.get("preview") or ""),
         "status": "error" if event.get("is_error") else str(event.get("status") or ""),
+        "run_id": str(event.get("run_id") or ""),
+        "trace_id": str(event.get("trace_id") or ""),
+        "turn_id": str(event.get("turn_id") or ""),
+        "provider": str(event.get("provider") or ""),
+        "model": str(event.get("model") or ""),
     }
     if etype in ("assistant_delta", "reasoning_delta", "assistant_message"):
         row["text"] = str(event.get("text") or "")

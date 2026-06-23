@@ -95,6 +95,10 @@ class BasePlatformAdapter:
     def send(self, chat_id: str, text: str, *, metadata: dict | None = None) -> None:  # pragma: no cover - interface
         raise NotImplementedError
 
+    def stop(self) -> None:
+        """Best-effort shutdown hook for adapters with owned background resources."""
+        return None
+
     @property
     def metadata(self) -> dict:
         data = platform_metadata(self.name)

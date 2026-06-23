@@ -643,6 +643,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "gateway": {
         "channels": [],
+        "api_server": {
+            "enabled": False,                 # run OpenAI-compatible API under `aegis gateway`
+            "host": "127.0.0.1",
+            "port": 8790,
+            "api_key": None,                  # falls back to server.api_key / AEGIS_SERVER_KEY
+            "model_name": "",                 # optional gateway-specific model.default override
+            "cors_origins": [],               # mirrors server.cors_origins at runtime
+            "max_concurrent_runs": 8,
+        },
         "message_timestamps": {
             "enabled": False,          # opt-in timestamp prefixes in model-visible gateway context
         },
@@ -667,6 +676,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "dashboard": {
         "frontend": "static",         # static | packaged
         "cockpit": True,
+        "auth": {
+            "registration_enabled": True,      # loopback-only dashboard token bootstrap/rotation
+            "oauth_providers": [],             # [{id, name, client_id, authorize_url, token_url, callback_path}]
+        },
     },
     "goals": {
         "max_turns": 20,        # /goal auto-continuation budget before pausing

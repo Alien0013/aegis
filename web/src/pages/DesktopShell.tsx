@@ -4,7 +4,7 @@
 // chat app: a slim session rail on the left and the real AEGIS terminal filling the rest.
 // The Electron app opens straight into `#/app`; the full control panel stays one click away.
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useApi } from "../lib/useApi";
 import { Icon } from "../components/icons";
@@ -32,13 +32,22 @@ export function DesktopShell() {
   const provider = String(cfg.data?.["model.provider"] ?? "");
   const [runtime, setRuntime] = useState({ model: "", provider: "" });
   const [chatResetToken, setChatResetToken] = useState(0);
+  const [sessionHudOpen, setSessionHudOpen] = useState(false);
   const shownModel = runtime.model || model;
   const shownProvider = runtime.provider || provider;
   const sessions = (data || []).slice(0, 50);
 
-  const open = (id: string) => nav(`/app?id=${encodeURIComponent(id)}`);
+  const activeSession = useMemo(
+    () => sessions.find((session) => session.id === activeId),
+    [sessions, activeId],
+  );
+  const open = useCallback((id: string) => {
+    nav(`/app?id=${encodeURIComponent(id)}`);
+    setSessionHudOpen(false);
+  }, [nav]);
   const newChat = () => {
     nav("/app");
+    setSessionHudOpen(false);
     setChatResetToken((value) => value + 1);
     setTimeout(reload, 500);
   };
@@ -47,6 +56,20 @@ export function DesktopShell() {
     setChatResetToken((value) => value + 1);
     reload();
   }, [nav, reload]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase();
+      if ((event.ctrlKey || event.metaKey) && key === "j") {
+        event.preventDefault();
+        setSessionHudOpen((openNow) => !openNow);
+      } else if (event.key === "Escape") {
+        setSessionHudOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   return (
     <div className="flex h-full overflow-hidden bg-bg text-text">
@@ -60,6 +83,13 @@ export function DesktopShell() {
             className="ml-auto rounded-[var(--radius)] p-1.5 text-faint transition hover:bg-surface-2 hover:text-text"
           >
             <Icon name="search" size={15} />
+          </button>
+          <button
+            onClick={() => setSessionHudOpen(true)}
+            title="Sessions"
+            className="rounded-[var(--radius)] p-1.5 text-faint transition hover:bg-surface-2 hover:text-text"
+          >
+            <Icon name="sessions" size={15} />
           </button>
         </div>
 
@@ -122,19 +152,147 @@ export function DesktopShell() {
         </div>
       </aside>
 
-      <main className="min-w-0 flex-1">
-        <GraphicalChat
-          sessionId={activeId}
-          resetToken={chatResetToken}
-          onRuntime={setRuntime}
-          onMissingSession={recoverMissingSession}
-          onSession={(id) => {
-            if (id && id !== activeId) nav(`/app?id=${encodeURIComponent(id)}`, { replace: true });
-            reload();
-          }}
-        />
+      <main className="flex min-w-0 flex-1 flex-col">
+        <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-bg/80 px-3 backdrop-blur">
+          <button
+            onClick={() => setSessionHudOpen(true)}
+            className="flex min-w-0 flex-1 items-center gap-2 rounded-[var(--radius)] px-2 py-1.5 text-left text-xs text-dim transition hover:bg-surface-2/60 hover:text-text"
+            title={activeSession?.title || activeId || "Current session"}
+          >
+            <Icon name="sessions" size={14} className="shrink-0 text-primary" />
+            <span className="truncate">{activeSession?.title || activeId || "New session"}</span>
+            {activeSession?.message_count ? (
+              <span className="shrink-0 text-faint">{activeSession.message_count} msg</span>
+            ) : null}
+          </button>
+          {shownModel && (
+            <div className="hidden min-w-0 max-w-[42%] items-center gap-2 rounded-[var(--radius)] border border-border bg-surface/70 px-2 py-1.5 text-xs text-dim sm:flex">
+              <Icon name="models" size={13} className="shrink-0 text-primary" />
+              <span className="truncate">{shownProvider ? `${shownProvider} / ${shownModel}` : shownModel}</span>
+            </div>
+          )}
+          <button
+            onClick={openCommandPalette}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius)] border border-border text-faint transition hover:border-border-2 hover:text-text"
+            title="Command palette"
+            aria-label="Command palette"
+          >
+            <Icon name="command" size={14} />
+          </button>
+          <button
+            onClick={() => nav("/")}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius)] border border-border text-faint transition hover:border-border-2 hover:text-text"
+            title="Control panel"
+            aria-label="Control panel"
+          >
+            <Icon name="system" size={14} />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1">
+          <GraphicalChat
+            sessionId={activeId}
+            resetToken={chatResetToken}
+            onRuntime={setRuntime}
+            onMissingSession={recoverMissingSession}
+            onSession={(id) => {
+              if (id && id !== activeId) nav(`/app?id=${encodeURIComponent(id)}`, { replace: true });
+              reload();
+            }}
+          />
+        </div>
       </main>
+      {sessionHudOpen && (
+        <SessionSwitcherHud
+          sessions={sessions}
+          activeId={activeId}
+          onClose={() => setSessionHudOpen(false)}
+          onOpen={open}
+          onNew={newChat}
+        />
+      )}
       <Toaster />
+    </div>
+  );
+}
+
+function SessionSwitcherHud({
+  sessions,
+  activeId,
+  onClose,
+  onOpen,
+  onNew,
+}: {
+  sessions: SessionRow[];
+  activeId: string;
+  onClose: () => void;
+  onOpen: (id: string) => void;
+  onNew: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return sessions.slice(0, 20);
+    return sessions
+      .filter((session) => `${session.title || ""} ${session.id}`.toLowerCase().includes(needle))
+      .slice(0, 20);
+  }, [query, sessions]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/45 px-3 pt-[12vh] backdrop-blur-sm">
+      <button className="absolute inset-0 cursor-default" onClick={onClose} aria-label="Close sessions" />
+      <div className="relative flex w-full max-w-2xl flex-col overflow-hidden rounded-[var(--radius)] border border-border bg-bg shadow-2xl">
+        <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+          <Icon name="sessions" size={16} className="text-primary" />
+          <input
+            autoFocus
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Find session"
+            className="min-h-9 flex-1 bg-transparent text-sm text-text outline-none placeholder:text-faint"
+          />
+          <button
+            onClick={onNew}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius)] border border-border text-faint transition hover:border-border-2 hover:text-text"
+            title="New chat"
+            aria-label="New chat"
+          >
+            <Icon name="plus" size={14} />
+          </button>
+          <button
+            onClick={onClose}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius)] border border-border text-faint transition hover:border-border-2 hover:text-text"
+            title="Close"
+            aria-label="Close"
+          >
+            <Icon name="x" size={14} />
+          </button>
+        </div>
+        <div className="scroll-thin max-h-[56vh] overflow-y-auto p-2">
+          {filtered.length === 0 && (
+            <div className="px-3 py-10 text-center text-sm text-faint">No matching sessions</div>
+          )}
+          {filtered.map((session) => (
+            <button
+              key={session.id}
+              onClick={() => onOpen(session.id)}
+              className={`mb-1 grid w-full grid-cols-[1fr_auto] items-center gap-3 rounded-[var(--radius)] px-3 py-2.5 text-left transition ${
+                session.id === activeId
+                  ? "bg-surface-2 text-text"
+                  : "text-dim hover:bg-surface-2/60 hover:text-text"
+              }`}
+            >
+              <span className="min-w-0">
+                <span className="block truncate text-sm">{compact(session.title || session.id, 72)}</span>
+                <span className="mt-0.5 block truncate font-mono text-[11px] text-faint">{session.id}</span>
+              </span>
+              <span className="text-right text-[11px] text-faint">
+                <span className="block">{ago(session.updated_at)}</span>
+                {session.message_count ? <span className="block">{session.message_count} msg</span> : null}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

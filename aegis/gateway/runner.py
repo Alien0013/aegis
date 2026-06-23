@@ -1876,6 +1876,16 @@ class GatewayRunner:
             print("\nGateway stopped.")
         finally:
             planned_stop_watcher_stop.set()
+            for adapter in self.adapters:
+                try:
+                    adapter.stop()
+                except Exception:  # noqa: BLE001
+                    pass
+            for t in threads:
+                try:
+                    t.join(timeout=1.0)
+                except RuntimeError:
+                    pass
 
     def _on_shutdown_signal(self, signum, _frame) -> None:
         import signal

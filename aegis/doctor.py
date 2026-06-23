@@ -16,6 +16,7 @@ from pathlib import Path
 import httpx
 
 from .config import Config
+from .platforms import BRIDGE_PLATFORM_DEFINITIONS
 
 _TIMEOUT = 12.0
 
@@ -32,6 +33,13 @@ MAC_API_KEY_NOTARY_SECRETS = (
     ("APPLE_API_ISSUER", "APPLE_API_ISSUER_ID"),
 )
 CHANNEL_ENV_HINTS = {
+    "api_server": (
+        "API_SERVER_ENABLED",
+        "API_SERVER_HOST",
+        "API_SERVER_PORT",
+        "API_SERVER_API_KEY",
+        "AEGIS_SERVER_KEY",
+    ),
     "telegram": ("TELEGRAM_BOT_TOKEN",),
     "discord": ("DISCORD_BOT_TOKEN",),
     "slack": ("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"),
@@ -46,6 +54,15 @@ CHANNEL_ENV_HINTS = {
         "WHATSAPP_CHANNEL_INSECURE_NO_AUTH",
     ),
 }
+
+for _bridge_id, _bridge in BRIDGE_PLATFORM_DEFINITIONS.items():
+    _prefix = str(_bridge["env_prefix"])
+    CHANNEL_ENV_HINTS.setdefault(_bridge_id, (
+        f"{_prefix}_SECRET",
+        f"{_prefix}_ALLOW_UNSIGNED_LOOPBACK",
+        f"{_prefix}_INSECURE_NO_AUTH",
+        f"{_prefix}_OUTBOUND_URL",
+    ))
 
 
 def _secret_present(name: str, available: set[str] | None = None) -> bool:
@@ -253,13 +270,37 @@ def probe_whatsapp() -> tuple[bool, str]:
     return _probe_webhook_prefix("WHATSAPP_CHANNEL")
 
 
+def probe_api_server() -> tuple[bool, str]:
+    config = Config.load()
+    api_cfg = config.get("gateway.api_server", {}) or {}
+    if not isinstance(api_cfg, dict):
+        api_cfg = {}
+    host = os.environ.get("API_SERVER_HOST") or api_cfg.get("host") or config.get("server.host", "127.0.0.1")
+    port = os.environ.get("API_SERVER_PORT") or api_cfg.get("port") or config.get("server.port", 8790)
+    url = f"http://{host}:{int(port or 8790)}/v1/health"
+    api_key = os.environ.get("API_SERVER_API_KEY") or api_cfg.get("api_key") or config.get("server.api_key") or os.environ.get("AEGIS_SERVER_KEY")
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    try:
+        r = _get(url, headers=headers)
+    except Exception as exc:  # noqa: BLE001
+        return False, f"{url} unreachable: {type(exc).__name__}: {exc}"
+    if r.status_code == 200:
+        return True, f"{url} healthy"
+    return False, f"{url} failed (HTTP {r.status_code})"
+
+
 CHANNEL_PROBES = {
+    "api_server": probe_api_server,
     "telegram": probe_telegram,
     "discord": probe_discord,
     "slack": probe_slack,
     "webhook": probe_webhook,
     "whatsapp": probe_whatsapp,
 }
+
+for _bridge_id, _bridge in BRIDGE_PLATFORM_DEFINITIONS.items():
+    _prefix = str(_bridge["env_prefix"])
+    CHANNEL_PROBES.setdefault(_bridge_id, lambda prefix=_prefix: _probe_webhook_prefix(prefix))
 
 
 def _probe_channels(config: Config) -> list[str]:

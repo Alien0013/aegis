@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+import asyncio
 import hashlib
 import json
 import os
@@ -15,6 +17,7 @@ import httpx
 
 from .. import config as cfg
 from ..platforms import (
+    BRIDGE_PLATFORM_DEFINITIONS,
     MAX_TELEGRAM_COMMANDS,
     capped_command_menu,
     chunk_text_by_units,
@@ -25,6 +28,16 @@ from ..platforms import (
 from ..webhook import DeliveryIdCache, FixedWindowRateLimiter
 from .base import BasePlatformAdapter, Dispatch, MessageEvent
 from .idempotency import PersistentDeliveryIdStore
+
+
+def _csv_list(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if value in (None, ""):
+        return []
+    return [str(value).strip()]
 
 
 def _csv_set(value: str) -> set[str] | None:
@@ -103,6 +116,133 @@ class CLIChannel(BasePlatformAdapter):
 
     def send(self, chat_id: str, text: str) -> None:
         print(f"\naegis> {text}\n")
+
+
+class ApiServerChannel(BasePlatformAdapter):
+    """Run the OpenAI-compatible aiohttp adapter as a supervised gateway platform."""
+
+    name = "api_server"
+    transport = "aiohttp"
+    supports_threads = True
+    supports_media = True
+    supports_interactive_prompts = True
+
+    def __init__(self, config: cfg.Config | None = None):
+        self._base_config = config or cfg.Config.load()
+        self._config = self._runtime_config(self._base_config)
+        self.host = str(self._config.get("server.host", "127.0.0.1") or "127.0.0.1")
+        self.port = int(self._config.get("server.port", 8790) or 8790)
+        self.url = f"http://{self.host}:{self.port}/v1"
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._runner = None
+        self._site = None
+        self._started = threading.Event()
+
+    @staticmethod
+    def _gateway_api_config(config: cfg.Config) -> dict:
+        raw = config.get("gateway.api_server", {}) or {}
+        return raw if isinstance(raw, dict) else {}
+
+    def _runtime_config(self, config: cfg.Config) -> cfg.Config:
+        runtime = cfg.Config(copy.deepcopy(config.data))
+        api_cfg = self._gateway_api_config(runtime)
+        server = runtime.data.setdefault("server", {})
+        host = os.environ.get("API_SERVER_HOST") or api_cfg.get("host") or config.get("server.host", "127.0.0.1")
+        server["host"] = str(host or "127.0.0.1")
+        port = os.environ.get("API_SERVER_PORT") or api_cfg.get("port") or config.get("server.port", 8790)
+        try:
+            server["port"] = int(port or 8790)
+        except (TypeError, ValueError):
+            server["port"] = 8790
+        api_key = os.environ.get("API_SERVER_API_KEY") or api_cfg.get("api_key") or config.get("server.api_key")
+        if api_key:
+            server["api_key"] = api_key
+        model_name = os.environ.get("API_SERVER_MODEL_NAME") or api_cfg.get("model_name")
+        if model_name:
+            runtime.data.setdefault("model", {})["default"] = str(model_name)
+        cors_raw = os.environ.get("API_SERVER_CORS_ORIGINS")
+        cors_origins = _csv_list(cors_raw) if cors_raw is not None else _csv_list(api_cfg.get("cors_origins"))
+        if cors_origins:
+            server["cors_origins"] = cors_origins
+        max_runs = os.environ.get("API_SERVER_MAX_CONCURRENT_RUNS") or api_cfg.get("max_concurrent_runs")
+        if max_runs not in (None, ""):
+            try:
+                server["max_concurrent_runs"] = max(1, int(max_runs))
+            except (TypeError, ValueError):
+                server["max_concurrent_runs"] = int(config.get("server.max_concurrent_runs", 8) or 8)
+        return runtime
+
+    @property
+    def metadata(self) -> dict:
+        data = super().metadata
+        api_cfg = self._gateway_api_config(self._config)
+        data.update({
+            "url": self.url,
+            "host": self.host,
+            "port": self.port,
+            "config_path": "gateway.api_server",
+            "server_config_bridge": {
+                "api_key": "server.api_key",
+                "cors_origins": "server.cors_origins",
+                "max_concurrent_runs": "server.max_concurrent_runs",
+                "model_name": "model.default",
+            },
+            "env_bridge": {
+                "host": "API_SERVER_HOST",
+                "port": "API_SERVER_PORT",
+                "api_key": "API_SERVER_API_KEY",
+                "model_name": "API_SERVER_MODEL_NAME",
+                "cors_origins": "API_SERVER_CORS_ORIGINS",
+                "max_concurrent_runs": "API_SERVER_MAX_CONCURRENT_RUNS",
+            },
+            "cors_origins": _csv_list(api_cfg.get("cors_origins")),
+            "auth_required": bool(self._config.get("server.api_key") or os.environ.get("AEGIS_SERVER_KEY")),
+        })
+        return data
+
+    def start(self, dispatch: Dispatch) -> None:  # noqa: ARG002
+        from aiohttp import web
+        from ..server import make_app
+
+        print(f"[api_server channel] OpenAI-compatible API on {self.url}")
+        loop = asyncio.new_event_loop()
+        self._loop = loop
+        asyncio.set_event_loop(loop)
+
+        async def boot() -> None:
+            self._runner = web.AppRunner(make_app(self._config), access_log=None)
+            await self._runner.setup()
+            self._site = web.TCPSite(self._runner, host=self.host, port=self.port)
+            await self._site.start()
+            sockets = list(getattr(getattr(self._site, "_server", None), "sockets", None) or [])
+            if sockets:
+                sock_host, sock_port = sockets[0].getsockname()[:2]
+                self.host = str(sock_host or self.host)
+                self.port = int(sock_port or self.port)
+                self.url = f"http://{self.host}:{self.port}/v1"
+            self._started.set()
+
+        try:
+            loop.run_until_complete(boot())
+            loop.run_forever()
+        finally:
+            async def cleanup() -> None:
+                if self._runner is not None:
+                    await self._runner.cleanup()
+
+            try:
+                loop.run_until_complete(cleanup())
+            finally:
+                loop.close()
+                self._loop = None
+
+    def stop(self) -> None:
+        loop = self._loop
+        if loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(loop.stop)
+
+    def send(self, chat_id: str, text: str, *, metadata: dict | None = None) -> None:  # noqa: ARG002
+        raise RuntimeError("api_server is an inbound HTTP platform; use /v1 responses/chat routes instead.")
 
 
 class TelegramAdapter(BasePlatformAdapter):
@@ -1222,6 +1362,8 @@ def build_adapter(name: str) -> BasePlatformAdapter:
     name = normalize_platform_name(name, default=str(name or "").strip().lower())
     if name == "cli":
         return CLIChannel()
+    if name == "api_server":
+        return ApiServerChannel()
     if name == "telegram":
         return TelegramAdapter()
     if name == "discord":
@@ -1254,6 +1396,17 @@ def build_adapter(name: str) -> BasePlatformAdapter:
             default_port=18792,
             transport="http_bridge",
         )
+    if name in BRIDGE_PLATFORM_DEFINITIONS:
+        from .webhook_channel import WebhookChannel
+
+        row = BRIDGE_PLATFORM_DEFINITIONS[name]
+        return WebhookChannel(
+            name=name,
+            default_platform=name,
+            env_prefix=str(row["env_prefix"]),
+            default_port=int(row.get("default_port") or 18800),
+            transport="http_bridge",
+        )
     if name == "ntfy":
         from .ntfy_channel import NtfyAdapter
         return NtfyAdapter()
@@ -1271,5 +1424,7 @@ def build_adapter(name: str) -> BasePlatformAdapter:
             return adapter
     except Exception as exc:  # noqa: BLE001
         raise ValueError(f"Plugin channel '{name}' failed to load: {exc}") from exc
-    raise ValueError(f"Unknown channel '{name}'. Available: cli, telegram, discord, slack, "
-                     "signal, matrix, email, webhook, whatsapp, mattermost, ntfy, or a plugin channel.")
+    bridge_names = ", ".join(sorted(BRIDGE_PLATFORM_DEFINITIONS))
+    raise ValueError(f"Unknown channel '{name}'. Available: api_server, cli, telegram, discord, slack, "
+                     "signal, matrix, email, webhook, whatsapp, mattermost, ntfy, "
+                     f"{bridge_names}, or a plugin channel.")

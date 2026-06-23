@@ -658,6 +658,42 @@ def test_platform_helper_command_caps_and_utf16_chunks():
     assert "WEBHOOK_CHANNEL_ALLOW_UNSIGNED_LOOPBACK" in webhook_meta["optional_env"]
     assert "WEBHOOK_CHANNEL_IDEMPOTENCY_STORE_PATH" in webhook_meta["optional_env"]
     assert "X-Webhook-Signature" in webhook_meta["security"]["signature_schemes"]
+    api_meta = platform_metadata("api-server")
+    assert api_meta["id"] == "api_server"
+    assert api_meta["transport"] == "aiohttp"
+    assert "API_SERVER_MAX_CONCURRENT_RUNS" in api_meta["optional_env"]
+    assert api_meta["security"]["gateway_config"] == "gateway.api_server"
+    cloud_meta = platform_metadata("whatsapp-cloud")
+    assert cloud_meta["id"] == "whatsapp_cloud"
+    assert cloud_meta["transport"] == "http_bridge"
+    assert "WHATSAPP_CLOUD_CHANNEL_SECRET" in cloud_meta["optional_env"]
+    assert "interactive_prompts" in cloud_meta["bridge_capabilities"]
+
+
+def test_api_server_gateway_adapter_metadata_and_lifecycle(tmp_path, monkeypatch):
+    import httpx
+    from aegis.config import Config
+    from aegis.gateway.channels import ApiServerChannel, build_adapter
+
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    config = Config.load()
+    config.data.setdefault("gateway", {}).setdefault("api_server", {})["port"] = 0
+    adapter = ApiServerChannel(config)
+    assert build_adapter("api-server").name == "api_server"
+    assert adapter.metadata["config_path"] == "gateway.api_server"
+    assert adapter.metadata["transport"] == "aiohttp"
+
+    thread = threading.Thread(target=adapter.start, args=(lambda _ev: "",), daemon=True)
+    thread.start()
+    assert adapter._started.wait(5)
+    try:
+        response = httpx.get(f"http://{adapter.host}:{adapter.port}/v1/health", timeout=5)
+        assert response.status_code == 200
+        assert response.json()["ok"] is True
+    finally:
+        adapter.stop()
+        thread.join(5)
+    assert not thread.is_alive()
 
 
 def test_gateway_profile_lookup_normalizes_platform_aliases():

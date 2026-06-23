@@ -1,6 +1,7 @@
 """Shared platform adapter helpers."""
 
 from .helpers import (
+    BRIDGE_PLATFORM_DEFINITIONS,
     MAX_DISCORD_APP_COMMANDS,
     MAX_TELEGRAM_COMMANDS,
     PLATFORM_METADATA,
@@ -15,6 +16,7 @@ from .helpers import (
 )
 
 __all__ = [
+    "BRIDGE_PLATFORM_DEFINITIONS",
     "MAX_DISCORD_APP_COMMANDS",
     "MAX_TELEGRAM_COMMANDS",
     "PLATFORM_METADATA",
