@@ -111,6 +111,14 @@ def _as_str_list(value) -> list[str]:
     return []
 
 
+def _positive_int(value) -> int:
+    try:
+        out = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return out if out > 0 else 0
+
+
 def resolve_skill_relative_path(skill_dir: Path, rel: str) -> Path:
     candidate = Path(str(rel or ""))
     if candidate.is_absolute():
@@ -529,7 +537,30 @@ class SkillsLoader:
         skills = self.available()
         if not skills:
             return ""
-        lines = [s.metadata_summary() for s in sorted(skills, key=lambda s: s.name)]
+        total = len(skills)
+        limit = _positive_int(self.config.get("skills.index_limit", 0))
+        max_chars = _positive_int(self.config.get("skills.index_max_chars", 0))
+        selected = sorted(skills, key=lambda s: s.name)
+        clipped_by_limit = False
+        clipped_by_chars = False
+        if limit and len(selected) > limit:
+            selected = selected[:limit]
+            clipped_by_limit = True
+        lines: list[str] = []
+        used_chars = 0
+        for skill in selected:
+            line = skill.metadata_summary()
+            if max_chars and lines and used_chars + len(line) + 1 > max_chars:
+                clipped_by_chars = True
+                break
+            lines.append(line)
+            used_chars += len(line) + 1
+        hidden = max(0, total - len(lines))
+        if clipped_by_limit or clipped_by_chars:
+            lines.append(
+                f"- ... {hidden} more skill(s) hidden by skills.index_limit/index_max_chars; "
+                "call `skill` with action=list to inspect them."
+            )
         return ("# Available skills\n"
                 "Before acting, scan this list. If any skill is even partially relevant, "
                 "you MUST load it or rely on an AEGIS-preloaded skill body already present "

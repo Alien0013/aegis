@@ -1,15 +1,21 @@
 # Tools & Permissions
 
-45 registered tools cover files, search, shell, processes, web, HTTP, downloads,
+106 registered tools cover files, search, shell, processes, web, HTTP, downloads,
 browser automation, UI verification, computer control, image generation, speech,
 code execution, subagents, mixture-of-agents, LSP, GitHub, memory, skills, session
 recall, repo maps, semantic code search, cron jobs, dependency audit, agent state,
 cloud backends, and every connected MCP/plugin tool.
 
-On a bare install, 37 tools are model-visible by default through the `core` and
-`mcp` toolsets. Enable optional toolsets with `tools.toolsets` (`browser`,
-`computer`, `voice`, `vision`, `web`, `lsp`) when their dependencies and credentials
+On a bare install, AEGIS enables the `core` toolset but defers uncommon schemas,
+so a normal CLI turn ships about 22 live tool schemas instead of the whole
+registry. Enable optional toolsets with `tools.toolsets` (`browser`, `computer`,
+`voice`, `vision`, `web`, `lsp`, `mcp`) when their dependencies and credentials
 are configured.
+
+```bash
+aegis cost status
+aegis cost optimize   # repair older broad installs back to the lean CLI profile
+```
 
 `agent_state` exposes shared runtime state to every surface: current session,
 recent sessions, session branching, linked run/trace breadcrumbs, eval runs, and
@@ -24,7 +30,7 @@ and their full parameter schemas stay off the wire until the model activates one
 ```yaml
 tools:
   defer_schemas: true
-  deferred: [generate_image, cloud_image, computer, github, mixture_of_agents, …]
+  deferred: [source:alias, toolset:browser, toolset:mcp, generate_image, github, …]
 ```
 
 Deferred entries can be exact names or selectors:

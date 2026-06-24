@@ -31,6 +31,32 @@ import yaml
 from .util import atomic_write, ensure_dir, read_text
 
 DEFAULT_CONTEXT_FILE_MAX_CHARS = 20_000
+DEFAULT_TOOLSETS = ["core"]
+DEFAULT_DEFERRED_TOOL_SELECTORS = [
+    "source:alias",
+    "toolset:browser",
+    "toolset:computer",
+    "toolset:voice",
+    "toolset:vision",
+    "toolset:web",
+    "toolset:lsp",
+    "toolset:mcp",
+    "download",
+    "http_request",
+    "schedule_task",
+    "cronjob",
+    "dependency_audit",
+    "send_message",
+    "generate_image",
+    "mixture_of_agents",
+    "github",
+    "cloud_image",
+    "cloud_browser",
+    "repo_map",
+    "code_search",
+    "skill_manage",
+    "kanban",
+]
 _ENV_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 _ENV_VAR_NAME_DENYLIST: frozenset[str] = frozenset({
     "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "LD_DEBUG",
@@ -414,10 +440,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
                                      # still apply); set 'ask' to prompt on dangerous tools.
         "deny_groups": [],           # e.g. ["runtime", "automation"]
         "allowlist": [],             # shell command prefixes auto-approved
-        "toolsets": ["core", "mcp", "browser", "computer", "lsp", "web"],
-                                     # on by default: browser (Playwright), computer (OS
-                                     # screen/keyboard/mouse via pyautogui), lsp, web_extract.
-                                     # Each degrades gracefully if its host deps are absent.
+        "toolsets": list(DEFAULT_TOOLSETS),
+                                     # Cost-safe default: core tools only. Enable optional
+                                     # browser/computer/voice/web/lsp/mcp toolsets from setup,
+                                     # the dashboard, or `aegis config set tools.toolsets ...`.
         "terminal_backend": "local", # local | docker | ssh | singularity | modal | daytona
         "subagent_terminal_backend": "", # "" inherits terminal_backend; else backend for subagents
         "terminal_lifetime_seconds": 300, # idle task environments are cleaned after this long
@@ -440,10 +466,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "sensitive_write_allow": [], # absolute paths exempt from file-write safety gating
         "sensitive_read_allow": [],  # absolute paths exempt from secret-file read gating
         "defer_schemas": True,       # ship rarely-used tools name-only; tool_search loads them
-        "deferred": [                # schemas withheld until tool_search activates them
-            "generate_image", "cloud_image", "cloud_browser", "dependency_audit",
-            "transcribe", "speak", "download", "github", "mixture_of_agents",
-        ],
+        "deferred": list(DEFAULT_DEFERRED_TOOL_SELECTORS),
     },
     "providers": {
         "probe_timeout_seconds": 15,  # dashboard/provider probes are bounded and never use long chat timeouts
@@ -490,6 +513,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "auto_load_limit": 3,         # max matching skills to inject for one turn
         "auto_load_min_score": 6,     # deterministic relevance score threshold
         "auto_load_max_chars": 24000, # total chars of skill bodies attached to the prompt
+        "index_limit": 0,             # 0 = list every available skill in the system prompt
+        "index_max_chars": 0,         # 0 = unlimited; cost profiles can cap the skill index
     },
     "curator": {                     # background maintenance of agent-created skills
         "enabled": True,

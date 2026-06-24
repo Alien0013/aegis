@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import copy
 import getpass
-import importlib.util
 import json
 import os
 import re
@@ -1379,12 +1378,7 @@ def _configure_terminal(
 
 
 def _recommended_toolsets() -> list[str]:
-    toolsets = ["core"]
-    if importlib.util.find_spec("playwright"):
-        toolsets.append("browser")
-    toolsets.append("lsp")
-    toolsets.append("mcp")
-    return toolsets
+    return ["core"]
 
 
 def _refresh_model_metadata(out: Output) -> None:
@@ -1432,7 +1426,7 @@ def _configure_agent_surface(
     selected_skills: str | None = None,
 ) -> bool:
     _hdr(out, "Tools & skills")
-    current = list(config.get("tools.toolsets", []) or ["core", "mcp"])
+    current = list(config.get("tools.toolsets", []) or ["core"])
     recommended = _recommended_toolsets()
     explicit_toolsets = selected_toolsets is not None
     explicit_skills = selected_skills is not None

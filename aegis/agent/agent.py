@@ -218,6 +218,8 @@ class Agent:
 
         toolsets = list(self.config.get("tools.toolsets", ["core"]) or ["core"])
         enabled_tools = self.registry.available(toolsets, disabled=self.config.get("tools.disabled", []))
+        deferred_tools = self.deferred_tool_names(enabled_tools)
+        live_schema_count = len([tool for tool in enabled_tools if tool.name not in deferred_tools])
         recall_guidance = ""
         if any(tool.name == "session_search" for tool in enabled_tools):
             recall_guidance = (
@@ -233,7 +235,8 @@ class Agent:
             f"- auth: {auth_desc} ({auth_state})\n"
             f"- cwd: {self.cwd}\n"
             f"- toolsets: {', '.join(toolsets)}\n"
-            f"- model-visible tools: {len(enabled_tools)}/{len(self.registry.all())}\n"
+            f"- model-visible tools: {len(enabled_tools)}/{len(self.registry.all())} "
+            f"({live_schema_count} live schemas, {len(deferred_tools)} deferred)\n"
             "- For questions about whether you are using OAuth, API-key auth, or local auth, "
             "use the auth line above as ground truth.\n"
             "- For install, auth, tools, workspace, dashboard, daemon, or system-health checks, "

@@ -36,11 +36,12 @@ aegis            # terminal agent
 aegis ui         # local browser dashboard
 ```
 
-Pick the first-run model-visible surface during install:
+AEGIS starts with a cost-safe CLI tool surface. Opt into extra model-visible
+toolsets during install only when you need them:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- \
-  --toolsets core,browser,mcp --skills web-research,summarize
+  --toolsets core,browser --skills web-research,summarize
 ```
 
 <p align="center"><img src="assets/terminal.png" alt="AEGIS terminal" width="860"></p>
@@ -75,11 +76,15 @@ Use `aegis status`, `aegis tools list`, and `aegis skills list` for live counts
 from your current checkout and environment. Optional tools report missing
 dependencies instead of failing import.
 
+Run `aegis cost status` to inspect live tool-schema and skill-index token
+overhead. If an older install has an expensive broad surface, run
+`aegis cost optimize` to switch it back to the lean CLI profile.
+
 Run `aegis setup tools --advanced` to revise optional browser, computer, voice,
 LSP, and MCP toolsets. The setup step writes the model-visible toolset config
 and reports enabled tools, available skills, and plugin tool totals.
 Automation can pin the same policy with
-`aegis setup tools --non-interactive --accept-risk --toolsets core,mcp --skills web-research,summarize`.
+`aegis setup tools --non-interactive --accept-risk --toolsets core --skills web-research,summarize`.
 The one-line installer accepts the same first-run policy through `--toolsets`,
 `--skills`, `AEGIS_TOOLSETS`, and `AEGIS_SKILLS`.
 

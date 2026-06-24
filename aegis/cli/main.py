@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import importlib.metadata as importlib_metadata
 import json
 import os
@@ -779,6 +780,140 @@ def cmd_tools(args, config: Config) -> int:
         else:
             mark, tail = "–", ""
         _print(f"  {mark} {t.name:<14} {t.toolset:<8} {g:<22} {t.description.splitlines()[0]}{tail}")
+    return 0
+
+
+def _cost_surface_report(config: Config) -> dict[str, object]:
+    from ..agent.agent import _matches_deferred_selector
+    from ..skills import SkillsLoader
+    from ..tools.registry import default_registry
+    from ..util import estimate_tokens
+
+    reg = default_registry()
+    toolsets = list(config.get("tools.toolsets", []) or ["core"])
+    disabled = list(config.get("tools.disabled", []) or [])
+    available = reg.available(toolsets, disabled=disabled)
+    selectors = config.get("tools.deferred", []) or []
+    deferred: set[str] = set()
+    if config.get("tools.defer_schemas", True):
+        deferred = {
+            tool.name
+            for tool in available
+            if _matches_deferred_selector(tool, selectors)
+        } - {"tool_search"}
+    live = [tool for tool in available if tool.name not in deferred]
+    schema_tokens = estimate_tokens(json.dumps(reg.schemas(live), sort_keys=True))
+    skills_index = SkillsLoader(config, Path.cwd()).index_block()
+    skill_tokens = estimate_tokens(skills_index)
+    compression = config.get("agent.compression", {}) or {}
+    return {
+        "object": "aegis.cost.surface",
+        "toolsets": toolsets,
+        "available_tools": len(available),
+        "live_tool_schemas": len(live),
+        "deferred_tools": len(deferred),
+        "tool_schema_tokens_estimate": schema_tokens,
+        "skills_index_tokens_estimate": skill_tokens,
+        "skills_index_chars": len(skills_index),
+        "compression": {
+            "threshold": compression.get("threshold"),
+            "tail_fraction": compression.get("tail_fraction"),
+            "preserve_last": compression.get("preserve_last"),
+            "hard_message_limit": compression.get("hard_message_limit"),
+        },
+        "limits": {
+            "skills_auto_load_limit": config.get("skills.auto_load_limit"),
+            "skills_auto_load_max_chars": config.get("skills.auto_load_max_chars"),
+            "skills_index_max_chars": config.get("skills.index_max_chars"),
+        },
+    }
+
+
+def _apply_cost_safe_profile(config: Config) -> None:
+    from ..config import DEFAULT_DEFERRED_TOOL_SELECTORS, DEFAULT_TOOLSETS
+
+    tools = config.data.setdefault("tools", {})
+    tools["toolsets"] = list(DEFAULT_TOOLSETS)
+    tools["defer_schemas"] = True
+    tools["deferred"] = list(DEFAULT_DEFERRED_TOOL_SELECTORS)
+
+    agent = config.data.setdefault("agent", {})
+    compression = agent.setdefault("compression", {})
+    compression["threshold"] = 0.35
+    compression["tail_fraction"] = 0.15
+    compression["preserve_last"] = 12
+    compression["hard_message_limit"] = 120
+
+    skills = config.data.setdefault("skills", {})
+    skills["auto_load_limit"] = 1
+    skills["auto_load_max_chars"] = 8000
+    skills["index_max_chars"] = 6000
+
+
+def cmd_cost(args, config: Config) -> int:
+    action = getattr(args, "action", "status") or "status"
+    if action == "usage":
+        from ..usage_log import cmd_cost as usage_cmd_cost
+
+        return usage_cmd_cost(args, config)
+    before = _cost_surface_report(config)
+    if action == "status":
+        if getattr(args, "json", False):
+            _print(json.dumps(before, indent=2, sort_keys=True))
+            return 0
+        _print("AEGIS cost surface")
+        _print(f"  toolsets:              {', '.join(before['toolsets']) or 'none'}")
+        _print(f"  available tools:       {before['available_tools']}")
+        _print(f"  live tool schemas:     {before['live_tool_schemas']}")
+        _print(f"  deferred tools:        {before['deferred_tools']}")
+        _print(f"  tool schema tokens:    ~{before['tool_schema_tokens_estimate']:,}")
+        _print(f"  skills index tokens:   ~{before['skills_index_tokens_estimate']:,}")
+        comp = before["compression"]
+        assert isinstance(comp, dict)
+        _print(
+            "  compression:           "
+            f"threshold={comp.get('threshold')} tail={comp.get('tail_fraction')} "
+            f"preserve_last={comp.get('preserve_last')} hard_messages={comp.get('hard_message_limit')}"
+        )
+        _print("")
+        _print("Run `aegis cost optimize` to switch this profile to the cost-safe CLI surface.")
+        return 0
+    if action != "optimize":
+        return _die(f"unknown cost action: {action}")
+
+    target = Config(copy.deepcopy(config.data))
+    _apply_cost_safe_profile(target)
+    after = _cost_surface_report(target)
+    if not getattr(args, "dry_run", False):
+        config.data = target.data
+        config.save()
+    payload = {
+        "ok": True,
+        "object": "aegis.cost.optimize_result",
+        "dry_run": bool(getattr(args, "dry_run", False)),
+        "before": before,
+        "after": after,
+    }
+    if getattr(args, "json", False):
+        _print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+    verb = "would update" if getattr(args, "dry_run", False) else "updated"
+    _print(f"{verb} AEGIS cost profile")
+    _print(
+        f"  live tool schemas: {before['live_tool_schemas']} -> {after['live_tool_schemas']} "
+        f"(deferred {before['deferred_tools']} -> {after['deferred_tools']})"
+    )
+    _print(
+        f"  tool schema tokens: ~{before['tool_schema_tokens_estimate']:,} -> "
+        f"~{after['tool_schema_tokens_estimate']:,}"
+    )
+    _print(
+        f"  skills index tokens: ~{before['skills_index_tokens_estimate']:,} -> "
+        f"~{after['skills_index_tokens_estimate']:,}"
+    )
+    _print("  toolsets: " + ", ".join(after["toolsets"]))
+    _print("  compression: threshold=0.35, tail_fraction=0.15, preserve_last=12, hard_message_limit=120")
+    _print("Use `aegis setup tools --advanced` or the dashboard Tools page to re-enable optional toolsets.")
     return 0
 
 
@@ -2927,11 +3062,12 @@ def build_parser() -> argparse.ArgumentParser:
     ins.add_argument("--json", action="store_true")
     ins.set_defaults(func=_insights.cmd_insights)
 
-    from .. import usage_log as _usage_log
     co = sub.add_parser("cost", help="estimated spend by model (token-aware, cache-discounted)")
+    co.add_argument("action", nargs="?", choices=["usage", "status", "optimize"], default="usage")
     co.add_argument("--days", type=int, default=30)
     co.add_argument("--json", action="store_true")
-    co.set_defaults(func=_usage_log.cmd_cost)
+    co.add_argument("--dry-run", action="store_true", help="preview optimize without writing config")
+    co.set_defaults(func=cmd_cost)
 
     from .. import model_meta as _model_meta
     mo = sub.add_parser("models", help="show/refresh model metadata (context window from models.dev)")

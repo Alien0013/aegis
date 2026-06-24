@@ -41,6 +41,45 @@ def test_aegis_compat_top_level_commands_are_registered():
     assert expected <= choices
 
 
+def test_cost_status_reports_cost_surface(capsys):
+    from aegis.cli.main import main
+
+    assert main(["cost", "status", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+
+    assert data["object"] == "aegis.cost.surface"
+    assert data["toolsets"] == ["core"]
+    assert data["live_tool_schemas"] <= 30
+    assert data["deferred_tools"] >= 30
+
+
+def test_cost_optimize_rewrites_broad_tool_surface(capsys):
+    from aegis import config as cfg
+    from aegis.cli.main import main
+    from aegis.config import Config
+
+    cfg.config_path().parent.mkdir(parents=True, exist_ok=True)
+    cfg.config_path().write_text(
+        "tools:\n"
+        "  toolsets: [core, mcp, browser, computer, lsp, web]\n"
+        "  deferred: [generate_image, cloud_image]\n"
+        "agent:\n"
+        "  compression:\n"
+        "    threshold: 0.5\n",
+        encoding="utf-8",
+    )
+
+    assert main(["cost", "optimize", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+
+    assert data["object"] == "aegis.cost.optimize_result"
+    assert data["before"]["live_tool_schemas"] > data["after"]["live_tool_schemas"]
+    assert data["after"]["live_tool_schemas"] <= 30
+    assert data["after"]["compression"]["threshold"] == 0.35
+    assert Config.load().get("tools.toolsets") == ["core"]
+    assert Config.load().get("agent.compression.hard_message_limit") == 120
+
+
 def test_config_summary_is_readable_ascii_and_redacts_secret(monkeypatch, capsys):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test-secret-value")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "telegram-secret")

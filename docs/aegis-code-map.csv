@@ -5,7 +5,7 @@ aegis_path,subsystem,aegis_lines,reference_counterpart,reference_lines,match_rea
 .github/workflows/ci.yml,ci,44,.github/workflows/ci.yml,147,same basename,Keep if AEGIS-specific; add proof/visibility if user-facing.
 .github/workflows/release.yml,ci,282,CI release workflow + desktop artifact publishing,,Phase 13 release provenance workflow,"Run full release gate, generate/verify artifact hashes and SBOM, and upload provenance."
 CONTRIBUTING.md,repo-root,46,CONTRIBUTING.md,985,same basename,Keep if AEGIS-specific; add proof/visibility if user-facing.
-README.md,repo-root,248,project README/product claims,,Phase 13 release proof docs update,Keep product claims aligned with verified release provenance and credential-bound limits.
+README.md,repo-root,253,project README/product claims,,Phase 13 release proof docs update,Keep product claims aligned with verified release provenance and credential-bound limits.
 RELEASING.md,repo-root,101,release checklist/provenance docs,,Phase 13 release checklist update,"Document verification gate, artifact hashes, SBOM, packaged smoke, and unsigned override risk."
 ROADMAP.md,repo-root,91,,,no close reference path by simple scan,Decide if this remains AEGIS-specific or add parity equivalent/tests.
 SECURITY.md,repo-root,36,SECURITY.md,333,same basename,Keep if AEGIS-specific; add proof/visibility if user-facing.
@@ -16,7 +16,7 @@ aegis/ab.py,runtime-other,144,batch/benchmark/eval comparison workflows,,manual 
 aegis/acp.py,runtime-other,660,acp_adapter/* + aegis_cli/acp,,manual architecture map,"Align behavior contract, add parity tests, expose status in dashboard/docs."
 aegis/activity.py,runtime-other,410,,,no close reference path by simple scan,Decide if this remains AEGIS-specific or add parity equivalent/tests.
 aegis/agent/__init__.py,agent-core,6,agent/__init__.py,9,same module path after aegis/ strip,"Align behavior contract, add parity tests, expose status in dashboard/docs."
-aegis/agent/agent.py,agent-core,965,run_agent.py + agent/agent_init.py + agent/system_prompt.py,,manual architecture map,"Align behavior contract, add parity tests, expose status in dashboard/docs."
+aegis/agent/agent.py,agent-core,968,run_agent.py + agent/agent_init.py + agent/system_prompt.py,,manual architecture map,"Align behavior contract, add parity tests, expose status in dashboard/docs."
 aegis/agent/coding_context.py,agent-core,360,agent/coding_context.py,790,manual architecture map,"Align behavior contract, add parity tests, expose status in dashboard/docs."
 aegis/agent/compaction.py,agent-core,372,agent/context_compressor.py + agent/conversation_compression.py,,manual architecture map,"Align behavior contract, add parity tests, expose status in dashboard/docs."
 aegis/agent/context.py,agent-core,317,agent/system_prompt.py + agent/prompt_builder.py,,manual architecture map,"Align behavior contract, add parity tests, expose status in dashboard/docs."
@@ -339,11 +339,11 @@ aegis/builtin_skills/writing-plans/SKILL.md,skills-bundled,42,optional-skills/au
 aegis/builtin_skills/xlsx/SKILL.md,skills-bundled,58,optional-skills/autonomous-ai-agents/antigravity-cli/SKILL.md,242,same filename in AEGIS skills tree,Map to AEGIS bundled skill catalog; keep original if useful and validate metadata/security.
 aegis/checkpoints.py,runtime-other,158,tools/checkpoint_manager.py + aegis_cli/checkpoints.py,,manual architecture map,"Align behavior contract, add parity tests, expose status in dashboard/docs."
 aegis/cli/__init__.py,cli,1,agent/__init__.py,9,same basename,"Align behavior contract, add parity tests, expose status in dashboard/docs."
-aegis/cli/main.py,cli,3370,aegis_cli/main.py,13212,manual architecture map,"Align behavior contract, add parity tests, expose status in dashboard/docs."
+aegis/cli/main.py,cli,3506,aegis_cli/main.py,13212,manual architecture map,"Align behavior contract, add parity tests, expose status in dashboard/docs."
 aegis/cli/menu.py,cli,144,,,no close reference path by simple scan,Decide if this remains AEGIS-specific or add parity equivalent/tests.
 aegis/cli/repl.py,cli,2839,cli.py + aegis_cli/commands.py + aegis_cli/cli_commands_mixin.py,,manual architecture map,"Align behavior contract, add parity tests, expose status in dashboard/docs."
 aegis/cli/tui.py,cli,53,ui-tui/* + aegis_cli/main.py --tui,,manual architecture map,"Align behavior contract, add parity tests, expose status in dashboard/docs."
-aegis/config.py,runtime-other,1130,aegis_cli/config.py + aegis_constants.py,,manual architecture map,"Align behavior contract, add parity tests, expose status in dashboard/docs."
+aegis/config.py,runtime-other,1155,aegis_cli/config.py + aegis_constants.py,,manual architecture map,"Align behavior contract, add parity tests, expose status in dashboard/docs."
 aegis/constants.py,runtime-other,34,agent/pet/constants.py,168,same basename,"Align behavior contract, add parity tests, expose status in dashboard/docs."
 aegis/context_refs.py,runtime-other,513,,,no close reference path by simple scan,Decide if this remains AEGIS-specific or add parity equivalent/tests.
 aegis/credentials.py,runtime-other,181,agent/credential_persistence.py + aegis_cli/auth.py,,manual architecture map,"Align behavior contract, add parity tests, expose status in dashboard/docs."
@@ -439,7 +439,7 @@ aegis/memory.py,runtime-other,934,tools/memory_tool.py + agent/memory_manager.py
 aegis/memory_providers.py,runtime-other,1388,agent/memory_provider.py + plugins/memory/*,,manual architecture map,"Align behavior contract, add parity tests, expose status in dashboard/docs."
 aegis/model_meta.py,runtime-other,197,,,no close reference path by simple scan,Decide if this remains AEGIS-specific or add parity equivalent/tests.
 aegis/net_safety.py,runtime-other,188,tools/tirith_security.py + browser/web safety checks,,manual architecture map,"Align behavior contract, add parity tests, expose status in dashboard/docs."
-aegis/onboarding.py,runtime-other,1905,agent/onboarding.py + aegis_cli/setup.py,,manual architecture map,"Align behavior contract, add parity tests, expose status in dashboard/docs."
+aegis/onboarding.py,runtime-other,1899,agent/onboarding.py + aegis_cli/setup.py,,manual architecture map,"Align behavior contract, add parity tests, expose status in dashboard/docs."
 aegis/ops.py,runtime-other,224,,,no close reference path by simple scan,Decide if this remains AEGIS-specific or add parity equivalent/tests.
 aegis/platforms/__init__.py,runtime-other,31,agent/__init__.py,9,same basename,"Align behavior contract, add parity tests, expose status in dashboard/docs."
 aegis/platforms/helpers.py,runtime-other,757,gateway/platforms/helpers.py,279,same basename,"Align behavior contract, add parity tests, expose status in dashboard/docs."
@@ -472,7 +472,7 @@ aegis/session.py,runtime-other,1309,aegis_state.py + tools/session_search_tool.p
 aegis/session_checks.py,runtime-other,752,,,no close reference path by simple scan,Decide if this remains AEGIS-specific or add parity equivalent/tests.
 aegis/skill_bundles.py,runtime-other,122,agent/skill_bundles.py + aegis_cli/bundles.py,,manual architecture map,"Align behavior contract, add parity tests, expose status in dashboard/docs."
 aegis/skill_preprocessing.py,runtime-other,98,agent/skill_preprocessing.py,141,manual architecture map,"Align behavior contract, add parity tests, expose status in dashboard/docs."
-aegis/skills.py,runtime-other,801,tools/skills_tool.py + agent/skill_utils.py + agent/prompt_builder.py skills prompt,,manual architecture map,"Align behavior contract, add parity tests, expose status in dashboard/docs."
+aegis/skills.py,runtime-other,832,tools/skills_tool.py + agent/skill_utils.py + agent/prompt_builder.py skills prompt,,manual architecture map,"Align behavior contract, add parity tests, expose status in dashboard/docs."
 aegis/spec.py,runtime-other,207,,,no close reference path by simple scan,Decide if this remains AEGIS-specific or add parity equivalent/tests.
 aegis/static/dashboard.html,runtime-other,988,,,no close reference path by simple scan,Decide if this remains AEGIS-specific or add parity equivalent/tests.
 aegis/surface.py,runtime-other,1268,run_agent.py AIAgent entrypoints + gateway/session wrappers (no exact SurfaceRunner class),,manual architecture map,"Align behavior contract, add parity tests, expose status in dashboard/docs."
@@ -577,7 +577,7 @@ docs/feature-parity-matrix.md,docs,303,website/docs/*,,Phase 13 release provenan
 docs/full-repo-audit.md,docs,826,website/docs/*,,Phase 13 audit update,Refresh historical audit follow-up for completed lifecycle/security/release provenance work.
 docs/gateway.md,docs,87,docs/kanban/multi-gateway.md,40,fuzzy docs topic match,Generate or update docs from source so CLI/API/surface docs cannot drift.
 docs/index.md,docs,104,website/docs/integrations/index.md,110,Phase 13 docs index update,Link current release proof status and remaining credential-bound evidence.
-docs/install.md,docs,55,website/docs/getting-started/installation.md,158,fuzzy docs topic match,Generate or update docs from source so CLI/API/surface docs cannot drift.
+docs/install.md,docs,56,website/docs/getting-started/installation.md,158,fuzzy docs topic match,Generate or update docs from source so CLI/API/surface docs cannot drift.
 docs/mcp.md,docs,74,website/docs/guides/use-mcp-with-aegis.md,542,fuzzy docs topic match,Generate or update docs from source so CLI/API/surface docs cannot drift.
 docs/memory-skills.md,docs,74,website/docs/*,,write/generated docs parity needed,Generate or update docs from source so CLI/API/surface docs cannot drift.
 docs/plugins.md,docs,97,website/docs/user-guide/features/built-in-plugins.md,303,fuzzy docs topic match,Generate or update docs from source so CLI/API/surface docs cannot drift.
@@ -589,7 +589,7 @@ docs/security.md,docs,53,website/docs/user-guide/security.md,679,fuzzy docs topi
 docs/serve.md,docs,63,website/docs/user-guide/features/api-server.md,504,fuzzy docs topic match,Generate or update docs from source so CLI/API/surface docs cannot drift.
 docs/slash-commands.md,docs,101,website/docs/reference slash command pages,,Phase 5 generated slash reference added after baseline map,Generated from SLASH_COMMANDS; do not edit by hand.
 docs/tools-reference.md,docs,113,website/docs/reference tool pages,,Phase 5 generated tool reference added after baseline map,Generated from built-in tool registry metadata; do not edit by hand.
-docs/tools.md,docs,122,website/docs/developer-guide/adding-tools.md,212,fuzzy docs topic match,Generate or update docs from source so CLI/API/surface docs cannot drift.
+docs/tools.md,docs,128,website/docs/developer-guide/adding-tools.md,212,fuzzy docs topic match,Generate or update docs from source so CLI/API/surface docs cannot drift.
 docs/tracing-evals.md,docs,82,website/docs/*,,write/generated docs parity needed,Generate or update docs from source so CLI/API/surface docs cannot drift.
 examples/config.example.yaml,repo-root,43,,,no close reference path by simple scan,Decide if this remains AEGIS-specific or add parity equivalent/tests.
 examples/plugin_hello.py,repo-root,24,,,no close reference path by simple scan,Decide if this remains AEGIS-specific or add parity equivalent/tests.
@@ -629,7 +629,7 @@ tests/test_coding_context.py,tests,145,tests/agent/test_coding_context.py,481,sa
 tests/test_compaction_boundaries.py,tests,142,tests/*,,add/align behavior contract tests,Keep/add tests proving AEGIS-like behavior in AEGIS runtime.
 tests/test_compaction_curator_parity.py,tests,162,tests/*,,add/align behavior contract tests,Keep/add tests proving AEGIS-like behavior in AEGIS runtime.
 tests/test_compaction_quality.py,tests,241,tests/*,,add/align behavior contract tests,Keep/add tests proving AEGIS-like behavior in AEGIS runtime.
-tests/test_config_cli.py,tests,405,tests/*,,add/align behavior contract tests,Keep/add tests proving AEGIS-like behavior in AEGIS runtime.
+tests/test_config_cli.py,tests,444,tests/*,,add/align behavior contract tests,Keep/add tests proving AEGIS-like behavior in AEGIS runtime.
 tests/test_context_command.py,tests,48,tests/*,,add/align behavior contract tests,Keep/add tests proving AEGIS-like behavior in AEGIS runtime.
 tests/test_credential_pools.py,tests,73,tests/*,,add/align behavior contract tests,Keep/add tests proving AEGIS-like behavior in AEGIS runtime.
 tests/test_cronjob_tool.py,tests,343,tests/*,,add/align behavior contract tests,Keep/add tests proving AEGIS-like behavior in AEGIS runtime.
