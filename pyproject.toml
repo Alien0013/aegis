@@ -68,4 +68,5 @@ filterwarnings = [
 include = ["aegis*"]
 
 [tool.setuptools.package-data]
-aegis = ["builtin_skills/**/*", "desktop_app/**/*", "static/*", "static/web_dist/**/*"]
+aegis = ["builtin_skills/**/*", "desktop_app/**/*", "static/*", "static/web_dist/**/*",
+         "tui_ink/dist/*", "tui_ink/package.json"]

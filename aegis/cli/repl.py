@@ -172,6 +172,40 @@ def _prompt_session_supported() -> bool:
     return False
 
 
+class _FullscreenUnavailable(RuntimeError):
+    """Raised when the full-screen surface cannot start, so callers fall back to the
+    classic line REPL instead of crashing."""
+
+
+def _fullscreen_enabled(config: Config) -> bool:
+    """Whether to launch the full-screen terminal surface for an interactive session.
+
+    Gated on a real interactive TTY, prompt_toolkit availability, and the
+    ``display.fullscreen`` setting (default on). ``AEGIS_CLASSIC_TUI=1`` forces the
+    classic line REPL, mirroring the existing ``AEGIS_ASCII``-style escape hatches."""
+    if PromptSession is None:
+        return False
+    if _env_enabled("AEGIS_CLASSIC_TUI") or _env_enabled("AEGIS_NO_FULLSCREEN"):
+        return False
+    if os.environ.get("TERM", "").strip().lower() == "dumb":
+        return False
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return False
+    try:
+        if config is not None and not bool(config.get("display.fullscreen", True)):
+            return False
+    except Exception:  # noqa: BLE001
+        return True
+    # An already-running event loop (e.g. launched from an async host) means the
+    # synchronous Application.run() would clash — let the classic REPL handle it.
+    try:
+        import asyncio
+        asyncio.get_running_loop()
+        return False
+    except RuntimeError:
+        return True
+
+
 def _read_repl_input(ps, prompt: Any = "aegis > ") -> str:
     """Read one REPL line, falling back when prompt_toolkit cannot run safely.
 
@@ -2727,8 +2761,12 @@ def run_once(config: Config, prompt: str, *, model=None, provider_name=None,
     return result.text
 
 
-def interactive(config: Config, *, model=None, provider_name=None,
-                session: Session | None = None, store: SessionStore | None = None, auto=False) -> None:
+def build_terminal_agent(config: Config, *, model=None, provider_name=None,
+                         session: Session | None = None, store: SessionStore | None = None,
+                         auto: bool = False, approver=None, asker=None, secret_capture=None):
+    """Build the terminal runner + agent shared by the classic REPL and the full-screen
+    surface. Callers may inject their own approver/asker/secret_capture (the full-screen
+    surface routes those through its composer instead of blocking ``input()``)."""
     store = store or SessionStore()
     session = session or Session.create()
     runner = SurfaceRunner(config, store=store, include_mcp=True)
@@ -2736,12 +2774,118 @@ def interactive(config: Config, *, model=None, provider_name=None,
         session=session,
         model=model,
         provider_name=provider_name,
-        approver=make_approver(auto),
-        asker=make_asker(),
-        secret_capture=make_secret_capture(),
+        approver=approver if approver is not None else make_approver(auto),
+        asker=asker if asker is not None else make_asker(),
+        secret_capture=secret_capture if secret_capture is not None else make_secret_capture(),
         include_mcp=True,
     )
     store.save(agent.session)
+    return runner, agent
+
+
+def process_terminal_input(user: str, agent: Any, runner: SurfaceRunner, store: SessionStore,
+                           *, on_event: Callable[[dict], None], surface: str = "repl") -> str:
+    """Handle one line of terminal input — memory shortcut, special slash preprocessors,
+    slash dispatch, or a model turn — and persist the session. Returns ``"break"`` when the
+    loop should exit, else ``"handled"``. Shared so the classic REPL and the full-screen
+    surface behave identically."""
+    user = user.strip()
+    if not user:
+        return "handled"
+    if quick_memory(user, agent):    # '#' saves a memory instantly, no model turn
+        return "handled"
+    if user.startswith("/ultracode"):
+        uc_prompt = handle_ultracode_command(user, agent)
+        if not uc_prompt:
+            return "handled"
+        user = uc_prompt
+    elif user.startswith("/architect"):
+        arch_prompt = handle_architect_command(user, agent)
+        if not arch_prompt:
+            return "handled"
+        user = arch_prompt
+    elif user.startswith("/spec"):
+        spec_prompt = handle_spec_command(user, agent)
+        if not spec_prompt:
+            return "handled"
+        user = spec_prompt
+    elif user.startswith("/gstack"):
+        gs_prompt = handle_gstack_command(user)
+        if not gs_prompt:
+            return "handled"
+        user = gs_prompt
+    elif user.startswith(("/plan", "/proceed")):
+        plan_prompt = handle_plan_command(user, agent)
+        if not plan_prompt:
+            return "handled"
+        user = plan_prompt
+    elif user.startswith(("/goal", "/subgoal")):
+        goal_prompt = handle_goal_command(user, agent, store)
+        if not goal_prompt:
+            return "handled"
+        user = goal_prompt
+    elif user.startswith("/") and agent.skills and agent.skills.slash_invocation_exists(user):
+        pass                  # let Agent.run load /<skill-name> like a skill
+    elif user.startswith("/"):
+        if handle_slash(user, agent, runner=runner, store=store,
+                        surface=surface, on_event=on_event) == "break":
+            return "break"
+        if user.split(maxsplit=1)[0] in {
+            "/model", "/provider", "/think", "/reasoning", "/fast", "/busy",
+            "/resume", "/branch", "/new", "/compact", "/compress",
+        }:
+            _maybe_print_status_footer(agent, on_event)
+        return "handled"
+    try:
+        run_terminal_turn(user, agent, runner, store, surface=surface, on_event=on_event)
+    except KeyboardInterrupt:
+        agent.cancel()   # stop the loop at the next safe point; discard partial work
+        _out(f"\n  {_ui('⏹', 'stop')} interrupted {_ui('—', '-')} stopped this turn "
+             "(your session is intact)", style="yellow")
+    store.save(agent.session)
+    drain_process_notifications(
+        agent,
+        runner,
+        store,
+        surface=surface,
+        on_event=on_event,
+        notify=lambda line: _out(f"  {line}", style="magenta"),
+    )
+    return "handled"
+
+
+def interactive(config: Config, *, model=None, provider_name=None,
+                session: Session | None = None, store: SessionStore | None = None, auto=False) -> None:
+    if _fullscreen_enabled(config):
+        store = store or SessionStore()
+        session = session or Session.create()
+        # 1) literal Node/Ink terminal (the Hermes-style surface)
+        try:
+            from .tui_ink import launch_ink_tui
+            launch_ink_tui(config, model=model, provider_name=provider_name,
+                           session=session, store=store, auto=auto)
+            return
+        except _FullscreenUnavailable:
+            pass
+        except Exception as exc:  # noqa: BLE001 - never let the UI take down the CLI
+            _out(f"  Ink terminal failed ({exc}); trying fallback surface…", style="bright_black")
+        # 2) pure-Python full-screen surface (no Node required)
+        try:
+            from .fullscreen import run_fullscreen
+            run_fullscreen(config, model=model, provider_name=provider_name,
+                           session=session, store=store, auto=auto)
+            return
+        except _FullscreenUnavailable as exc:
+            _out(f"  full-screen UI unavailable ({exc}); using classic terminal.", style="bright_black")
+        except Exception as exc:  # noqa: BLE001 - fall through to the classic line REPL
+            _out(f"  full-screen UI failed ({exc}); using classic terminal.", style="bright_black")
+
+    store = store or SessionStore()
+    session = session or Session.create()
+    runner, agent = build_terminal_agent(
+        config, model=model, provider_name=provider_name,
+        session=session, store=store, auto=auto,
+    )
     banner(agent)
 
     ps = None
@@ -2770,70 +2914,9 @@ def interactive(config: Config, *, model=None, provider_name=None,
                     except Exception:  # noqa: BLE001
                         pass
                 break
-            user = user.strip()
-            if not user:
-                continue
-            if quick_memory(user, agent):    # '#' saves a memory instantly, no model turn
-                continue
-            if user.startswith("/ultracode"):
-                uc_prompt = handle_ultracode_command(user, agent)
-                if not uc_prompt:
-                    continue
-                user = uc_prompt   # run the full autonomous loop
-            elif user.startswith("/architect"):
-                arch_prompt = handle_architect_command(user, agent)
-                if not arch_prompt:
-                    continue
-                user = arch_prompt   # plan (strong model) then implement (this model)
-            elif user.startswith("/spec"):
-                spec_prompt = handle_spec_command(user, agent)
-                if not spec_prompt:
-                    continue
-                user = spec_prompt   # /spec implement -> execute the persisted spec
-            elif user.startswith("/gstack"):
-                gs_prompt = handle_gstack_command(user)
-                if not gs_prompt:
-                    continue
-                user = gs_prompt   # run the full think→…→reflect sprint in one turn
-            elif user.startswith(("/plan", "/proceed")):
-                plan_prompt = handle_plan_command(user, agent)
-                if not plan_prompt:
-                    continue
-                user = plan_prompt   # run the planning/execution turn
-            elif user.startswith(("/goal", "/subgoal")):
-                goal_prompt = handle_goal_command(user, agent, store)
-                if not goal_prompt:
-                    continue
-                user = goal_prompt   # run the new goal as this turn
-            elif user.startswith("/") and agent.skills and agent.skills.slash_invocation_exists(user):
-                pass                  # let Agent.run load /<skill-name> like AEGIS
-            elif user.startswith("/"):
-                renderer = Renderer(config)
-                if handle_slash(user, agent, runner=runner, store=store,
-                                surface="repl", on_event=renderer) == "break":
-                    break
-                if user.split(maxsplit=1)[0] in {
-                    "/model", "/provider", "/think", "/reasoning", "/fast", "/busy",
-                    "/resume", "/branch", "/new", "/compact", "/compress",
-                }:
-                    _maybe_print_status_footer(agent, renderer)
-                continue
-            try:
-                renderer = Renderer(config)
-                run_terminal_turn(user, agent, runner, store, surface="repl", on_event=renderer)
-            except KeyboardInterrupt:
-                agent.cancel()   # stop the loop at the next safe point; discard partial work
-                _out(f"\n  {_ui('⏹', 'stop')} interrupted {_ui('—', '-')} stopped this turn "
-                     "(your session is intact)", style="yellow")
-            store.save(agent.session)
-            drain_process_notifications(
-                agent,
-                runner,
-                store,
-                surface="repl",
-                on_event=renderer,
-                notify=lambda line: _out(f"  {line}", style="magenta"),
-            )
+            if process_terminal_input(user, agent, runner, store,
+                                      on_event=Renderer(config), surface="repl") == "break":
+                break
     finally:
         end = getattr(agent, "end_session", None)
         if callable(end):

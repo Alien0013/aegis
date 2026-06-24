@@ -42,3 +42,8 @@ site-next/node_modules/
 site-next/.next/
 site-next/out/
 site-next/*.tsbuildinfo
+
+# Ink terminal UI: ignore deps, but ship the prebuilt bundle so pip installs need no npm
+aegis/tui_ink/node_modules/
+!aegis/tui_ink/dist/
+!aegis/tui_ink/dist/**

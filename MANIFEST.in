@@ -3,6 +3,10 @@ recursive-include docs *
 recursive-include assets *
 recursive-include scripts *.py *.sh
 recursive-include aegis/desktop_app *
+recursive-include aegis/tui_ink/dist *
+include aegis/tui_ink/package.json aegis/tui_ink/tsconfig.json
+recursive-include aegis/tui_ink/src *
+recursive-exclude aegis/tui_ink/node_modules *
 recursive-include web *
 recursive-exclude web/node_modules *
 recursive-exclude web/dist *

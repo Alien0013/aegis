@@ -93,7 +93,7 @@ The one-line installer accepts the same first-run policy through `--toolsets`,
 | Area | Current behavior |
 | --- | --- |
 | Shared runtime | CLI, dashboard, desktop, API, SDK, ACP, MCP, gateway, cron, webhooks, and background work enter through the same `SurfaceRunner` and `Agent.run` path. Live activity snapshots track phase, active model/tool/subagent state, child subagent cards, and run breadcrumbs across surfaces. |
-| Terminal agent | Interactive REPL with streaming, slash commands, queued/interruptible turns, long-run status footer, `@file`/`@diff`/`@url` context references, sessions, branching, checkpoints, diff, rollback, goals, traces, and usage. |
+| Terminal agent | Running `aegis` on an interactive TTY opens a full-screen **Node/Ink** terminal UI — a persistent composer, live header/status bar (model, context meter, tokens, cost), streamed turns, tool cards, slash-command completion, and `^C` to interrupt — driven by an in-process Python WebSocket gateway (`aegis.tui_gateway`). The bundle ships prebuilt, so only `node` on PATH is needed at runtime; `AEGIS_CLASSIC_TUI=1` (or no Node) falls back to the pure-Python full-screen surface, then the classic line REPL. All surfaces share the same streaming, slash commands, queued/interruptible turns, `@file`/`@diff`/`@url` context references, sessions, branching, checkpoints, diff, rollback, goals, traces, and usage. |
 | Dashboard | Token-gated FastAPI + React/Vite control panel that opens on sessions, keeps `/dashboard` as a calmer overview, keeps `/agents` focused on running turns/subagents/tools, and keeps `/command-center` as a compact sessions/system/usage ops overlay. It also includes chat, terminal, models, tools, skills, memory, schedules, kanban, MCP, channels, webhooks, pairing, provider accounts, env/secrets, plugins, analytics, files, logs, profiles, docs, system, and config. |
 | Desktop | Electron app that launches/probes a local dashboard backend on a random port with a random token, shows boot/retry/log states, remembers window settings, and can run from source or package installers. |
 | Providers | Built-in registry for Anthropic, OpenAI, Codex-compatible paths, Google, OpenRouter, Groq, DeepSeek, Qwen/DashScope, xAI, Mistral, Together, Hugging Face, local OpenAI-compatible endpoints, Ollama, LM Studio, vLLM, and more. API-key auth is the default path; OAuth exists where implemented. The dashboard provider matrix shows auth readiness, redacted live probe status, fallback chains, context/output limits, pricing, and model capabilities. |
@@ -209,7 +209,9 @@ aegis/                  Python package
   gateway/              channel adapters, pairing, routing, delivery queue
   mcp/                  client and server support
   lsp/                  persistent language-server service
-  cli/                  parser, REPL, menus
+  cli/                  parser, REPL, menus, full-screen TUI launcher (tui_ink)
+  tui_gateway.py        local WebSocket gateway driving the Node/Ink terminal UI
+  tui_ink/              Node/Ink terminal UI (TypeScript → prebuilt dist/entry.js)
   builtin_skills/       bundled SKILL.md packages
   static/web_dist/      built dashboard served by aegis ui
 web/                    React + Vite dashboard source
