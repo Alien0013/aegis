@@ -84,6 +84,36 @@ def test_header_snapshot_shape():
     assert snap["brand"] == "AEGIS"
 
 
+def test_structured_emitter_forwards_known_events():
+    from aegis.tui_gateway import _StructuredEmitter
+
+    frames = []
+    emit = _StructuredEmitter(frames.append)
+    emit({"type": "assistant_delta", "text": "hello"})
+    emit({"type": "tool_start", "name": "bash", "preview": "ls"})
+    emit({"type": "tool_result", "name": "bash", "summary": "ok", "duration_ms": 12, "is_error": False})
+    emit({"type": "provider_start", "provider": "x"})  # not forwarded (status noise)
+    kinds = [f["event"]["type"] for f in frames]
+    assert kinds == ["assistant_delta", "tool_start", "tool_result"]
+    assert all(f["type"] == "event" for f in frames)
+    # forwarded frames keep only safe, JSON-serialisable fields
+    json.dumps(frames)
+
+
+def test_safe_event_stringifies_unknown_values():
+    from aegis.tui_gateway import _safe_event
+
+    class Weird:
+        def __str__(self):
+            return "weird-repr"
+
+    safe = _safe_event({"type": "tool_result", "name": Weird(), "duration_ms": 5, "extra": object()})
+    assert safe["name"] == "weird-repr"
+    assert safe["duration_ms"] == 5
+    assert "extra" not in safe  # only whitelisted keys survive
+    json.dumps(safe)
+
+
 def test_gateway_handshake_and_turn():
     """End-to-end: a websocket client completes the handshake and runs a no-LLM slash
     command through the gateway, receiving streamed output and a turn_done frame."""

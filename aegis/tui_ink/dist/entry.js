@@ -1374,7 +1374,7 @@ var require_react_development = __commonJS({
           var dispatcher = resolveDispatcher();
           return dispatcher.useState(initialState);
         }
-        function useReducer(reducer, initialArg, init) {
+        function useReducer2(reducer, initialArg, init) {
           var dispatcher = resolveDispatcher();
           return dispatcher.useReducer(reducer, initialArg, init);
         }
@@ -1398,7 +1398,7 @@ var require_react_development = __commonJS({
           var dispatcher = resolveDispatcher();
           return dispatcher.useCallback(callback, deps);
         }
-        function useMemo4(create2, deps) {
+        function useMemo3(create2, deps) {
           var dispatcher = resolveDispatcher();
           return dispatcher.useMemo(create2, deps);
         }
@@ -2170,8 +2170,8 @@ var require_react_development = __commonJS({
         exports.useImperativeHandle = useImperativeHandle;
         exports.useInsertionEffect = useInsertionEffect;
         exports.useLayoutEffect = useLayoutEffect2;
-        exports.useMemo = useMemo4;
-        exports.useReducer = useReducer;
+        exports.useMemo = useMemo3;
+        exports.useReducer = useReducer2;
         exports.useRef = useRef2;
         exports.useState = useState4;
         exports.useSyncExternalStore = useSyncExternalStore;
@@ -33523,25 +33523,6 @@ var getInstance = (stdout, createInstance) => {
 
 // node_modules/ink/build/components/Static.js
 var import_react11 = __toESM(require_react(), 1);
-function Static(props) {
-  const { items, children: render2, style: customStyle } = props;
-  const [index, setIndex] = (0, import_react11.useState)(0);
-  const itemsToRender = (0, import_react11.useMemo)(() => {
-    return items.slice(index);
-  }, [items, index]);
-  (0, import_react11.useLayoutEffect)(() => {
-    setIndex(items.length);
-  }, [items.length]);
-  const children = itemsToRender.map((item, itemIndex) => {
-    return render2(item, index + itemIndex);
-  });
-  const style = (0, import_react11.useMemo)(() => ({
-    position: "absolute",
-    flexDirection: "column",
-    ...customStyle
-  }), [customStyle]);
-  return import_react11.default.createElement("ink-box", { internal_static: true, style }, children);
-}
 
 // node_modules/ink/build/components/Transform.js
 var import_react12 = __toESM(require_react(), 1);
@@ -33821,6 +33802,8 @@ var use_app_default = useApp;
 
 // node_modules/ink/build/hooks/use-stdout.js
 var import_react18 = __toESM(require_react(), 1);
+var useStdout = () => (0, import_react18.useContext)(StdoutContext_default);
+var use_stdout_default = useStdout;
 
 // node_modules/ink/build/hooks/use-stderr.js
 var import_react19 = __toESM(require_react(), 1);
@@ -33927,43 +33910,295 @@ var import_jsx_runtime = __toESM(require_jsx_runtime(), 1);
 var AMBER = "#d6a15e";
 var GREEN = "#7ecf8f";
 var CYAN = "#6fb7d8";
+var RED = "#e96e6e";
 var MUTED = "#8f968f";
-var SPINNER = ["\u280B", "\u2819", "\u2839", "\u2838", "\u283C", "\u2834", "\u2826", "\u2827", "\u2807", "\u280F"];
+var PANEL = "#262a31";
+var ANSI_RE = /\x1b\[[0-9;]*m/g;
+var ICONS_UNI = {
+  bash: "$",
+  edit_file: "\u270E",
+  write_file: "\u270E",
+  apply_patch: "\u270E",
+  read_file: "\u25A4",
+  list_dir: "\u25A4",
+  glob: "\u25A4",
+  search: "\u2315",
+  code_search: "\u2315",
+  web_search: "\u2197",
+  web_fetch: "\u2197",
+  web_extract: "\u2197",
+  http_request: "\u2197",
+  browser: "\u25C8",
+  memory: "\u25C6",
+  skill: "\u25A3",
+  kanban: "\u25A6",
+  cronjob: "\u25F7",
+  schedule_task: "\u25F7",
+  spawn_subagent: "\u21B3",
+  todo_write: "\u2611",
+  generate_image: "\u25A9",
+  vision_analyze: "\u25C9",
+  execute_code: "\u2699"
+};
+var ICONS_ASCII = {
+  bash: "$",
+  edit_file: "*",
+  write_file: "*",
+  apply_patch: "*",
+  read_file: "-",
+  list_dir: "-",
+  glob: "-",
+  search: "?",
+  code_search: "?",
+  web_search: "@",
+  web_fetch: "@",
+  web_extract: "@",
+  http_request: "@",
+  browser: "#",
+  memory: "M",
+  skill: "S",
+  kanban: "K",
+  cronjob: "T",
+  schedule_task: "T",
+  spawn_subagent: ">",
+  todo_write: "x",
+  generate_image: "I",
+  vision_analyze: "V",
+  execute_code: "C"
+};
+var SPIN_UNI = ["\u280B", "\u2819", "\u2839", "\u2838", "\u283C", "\u2834", "\u2826", "\u2827", "\u2807", "\u280F"];
+var SPIN_ASCII = ["|", "/", "-", "\\"];
+function detectUnicode() {
+  const env3 = process.env;
+  if (/^(1|true|yes|on)$/i.test(env3.AEGIS_ASCII || "")) return false;
+  if (env3.AEGIS_UNICODE != null) return /^(1|true|yes|on)$/i.test(env3.AEGIS_UNICODE);
+  if ((env3.TERM || "").toLowerCase() === "dumb") return false;
+  const enc = (env3.LC_ALL || env3.LC_CTYPE || env3.LANG || "").toLowerCase();
+  if (/utf-?8/.test(enc)) return true;
+  return Boolean(process.stdout.isTTY);
+}
+var CLIENT_UNI = detectUnicode();
+function glyphs(uni) {
+  return {
+    icons: uni ? ICONS_UNI : ICONS_ASCII,
+    iconDefault: uni ? "\u25C7" : "*",
+    spinner: uni ? SPIN_UNI : SPIN_ASCII,
+    brand: uni ? "\u25C6 AEGIS" : "AEGIS",
+    arrow: uni ? "\u276F" : ">",
+    ok: uni ? "\u2713" : "ok",
+    bad: uni ? "\u2717" : "x",
+    barFull: uni ? "\u2588" : "#",
+    barEmpty: uni ? "\u2591" : "-",
+    sep: uni ? "\u2502" : "|",
+    dot: uni ? "\xB7" : "-",
+    cursor: uni ? "\u258B" : "_",
+    sub: uni ? "\u21B3" : ">",
+    cont: uni ? "\u21BB" : "~",
+    down: uni ? "\u2198" : "v",
+    up: uni ? "\u21E1" : "^"
+  };
+}
 function fmtTokens(n) {
   if (!n) return "0";
   if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
   if (n >= 1e3) return (n / 1e3).toFixed(1) + "k";
   return String(n);
 }
-function ctxBar(percent = 0, width = 10) {
-  const p = Math.max(0, Math.min(100, percent));
-  const filled = Math.round(p / 100 * width);
-  return "\u2588".repeat(filled) + "\u2591".repeat(width - filled);
+function ctxBar(p = 0, full = "\u2588", empty = "\u2591", w = 10) {
+  const v = Math.max(0, Math.min(100, p));
+  const f = Math.round(v / 100 * w);
+  return full.repeat(f) + empty.repeat(w - f);
 }
+function visibleWidth(s) {
+  return s.replace(ANSI_RE, "").length;
+}
+function estimateRows(m, cols) {
+  const wrap = (t) => t.split("\n").reduce((a, ln) => a + Math.max(1, Math.ceil(visibleWidth(ln) / Math.max(1, cols))), 0);
+  switch (m.kind) {
+    case "user":
+      return wrap(m.text);
+    case "assistant":
+      return wrap(m.text || " ");
+    case "output":
+      return wrap(m.text);
+    default:
+      return 1;
+  }
+}
+function lastIndex(ms, pred) {
+  for (let i = ms.length - 1; i >= 0; i--) if (pred(ms[i])) return i;
+  return -1;
+}
+function reduce(ms, a) {
+  if (a.t === "user") return [...ms, { kind: "user", text: a.text }];
+  if (a.t === "output") {
+    const next2 = [...ms];
+    for (const line of a.text.split("\n")) {
+      if (line.length) next2.push({ kind: "output", text: line });
+    }
+    return next2;
+  }
+  const e = a.e;
+  const next = [...ms];
+  const finalizeThinking = () => {
+    const ti = lastIndex(next, (m) => m.kind === "thinking" && !m.done);
+    if (ti >= 0) next[ti] = { ...next[ti], done: true };
+  };
+  switch (e.type) {
+    case "reasoning_delta": {
+      const ti = lastIndex(next, (m) => m.kind === "thinking" && !m.done);
+      if (ti >= 0) {
+        const cur = next[ti];
+        next[ti] = { ...cur, chars: cur.chars + String(e.text || "").length };
+      } else {
+        next.push({ kind: "thinking", chars: String(e.text || "").length, done: false });
+      }
+      return next;
+    }
+    case "assistant_delta": {
+      finalizeThinking();
+      const ai = lastIndex(next, (m) => m.kind === "assistant" && m.streaming);
+      if (ai >= 0) {
+        const cur = next[ai];
+        next[ai] = { ...cur, text: cur.text + String(e.text || "") };
+      } else {
+        next.push({ kind: "assistant", text: String(e.text || ""), streaming: true });
+      }
+      return next;
+    }
+    case "assistant_message": {
+      finalizeThinking();
+      const ai = lastIndex(next, (m) => m.kind === "assistant" && m.streaming);
+      if (ai >= 0) {
+        next[ai] = { ...next[ai], streaming: false };
+      } else if (e.text) {
+        next.push({ kind: "assistant", text: String(e.text), streaming: false });
+      }
+      return next;
+    }
+    case "tool_start": {
+      finalizeThinking();
+      next.push({
+        kind: "tool",
+        name: String(e.name || "tool"),
+        preview: String(e.preview || e.text || ""),
+        status: "running"
+      });
+      return next;
+    }
+    case "tool_result": {
+      const ti = lastIndex(next, (m) => m.kind === "tool" && m.status === "running" && m.name === e.name);
+      const idx = ti >= 0 ? ti : lastIndex(next, (m) => m.kind === "tool" && m.status === "running");
+      if (idx >= 0) {
+        const cur = next[idx];
+        next[idx] = {
+          ...cur,
+          status: e.is_error ? "error" : "ok",
+          ms: Number(e.duration_ms || 0),
+          summary: String(e.summary || "")
+        };
+      }
+      return next;
+    }
+    case "subagent_start":
+      next.push({
+        kind: "notice",
+        tone: "info",
+        text: `subagent ${String(e.agent_type || "agent")} - ${String(e.task || e.prompt || "")}`.trim()
+      });
+      return next;
+    case "subagent_done":
+      next.push({
+        kind: "notice",
+        tone: e.status === "error" ? "warn" : "good",
+        text: `subagent ${String(e.status || "done")}`
+      });
+      return next;
+    case "terminal_turn_end": {
+      finalizeThinking();
+      const ai = lastIndex(next, (m) => m.kind === "assistant" && m.streaming);
+      if (ai >= 0) next[ai] = { ...next[ai], streaming: false };
+      return next;
+    }
+    case "continuation":
+    case "empty_nudge":
+    case "thinking_strip_retry":
+    case "ultracode_continue":
+      next.push({ kind: "notice", tone: "info", text: String(e.type).replace(/_/g, " ") });
+      return next;
+    case "model_downshift":
+      next.push({ kind: "notice", tone: "warn", text: `budget guard switched model to ${String(e.model || "")}` });
+      return next;
+    case "budget_warning":
+      next.push({ kind: "notice", tone: "warn", text: `budget: ${String(e.text || e.summary || "warning")}` });
+      return next;
+    default:
+      return next;
+  }
+}
+var ToolCard = ({ m, g }) => {
+  const icon = g.icons[m.name] || g.iconDefault;
+  const secs = m.ms ? (m.ms / 1e3).toFixed(1) + "s" : "";
+  const pill = m.status === "running" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: AMBER, children: g.spinner[0] }) : m.status === "error" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: RED, children: `${g.bad} ${secs}` }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: GREEN, children: `${g.ok} ${secs}` });
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Box_default, { children: [
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: AMBER, children: `  ${icon} ` }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, bold: true, children: m.name }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { children: " " }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: m.preview.slice(0, 80) }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { children: "  " }),
+    pill,
+    m.summary && m.status !== "running" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `  ${m.summary.replace(ANSI_RE, "").slice(0, 60)}` }) : null
+  ] });
+};
+var MessageView = ({ m, g }) => {
+  switch (m.kind) {
+    case "user":
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: AMBER, bold: true, children: `${g.arrow} ${m.text}` });
+    case "assistant":
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Text, { children: [
+        m.text,
+        m.streaming ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: g.cursor }) : null
+      ] });
+    case "thinking":
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `  ${g.dot} thinking${m.done ? " complete" : "\u2026"} (${m.chars} chars)` });
+    case "tool":
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ToolCard, { m, g });
+    case "notice": {
+      const c = m.tone === "warn" ? AMBER : m.tone === "good" ? GREEN : CYAN;
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: c, children: `  ${g.dot} ${m.text}` });
+    }
+    case "output":
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { children: m.text });
+  }
+};
 var App2 = ({ url: url2, token: token2 }) => {
   const { exit } = use_app_default();
-  const [lines, setLines] = (0, import_react23.useState)([]);
-  const [partial, setPartial] = (0, import_react23.useState)("");
+  const { stdout } = use_stdout_default();
+  const [messages, dispatch] = (0, import_react23.useReducer)(reduce, []);
   const [header, setHeader] = (0, import_react23.useState)({});
   const [running, setRunning] = (0, import_react23.useState)(false);
   const [asking, setAsking] = (0, import_react23.useState)(null);
   const [value, setValue] = (0, import_react23.useState)("");
   const [tick, setTick] = (0, import_react23.useState)(0);
+  const [commands, setCommands] = (0, import_react23.useState)([]);
+  const [scroll, setScroll] = (0, import_react23.useState)(0);
+  const [size, setSize] = (0, import_react23.useState)({ cols: stdout.columns || 80, rows: stdout.rows || 24 });
   const [connected, setConnected] = (0, import_react23.useState)(false);
   const wsRef = (0, import_react23.useRef)(null);
-  const bufRef = (0, import_react23.useRef)("");
+  (0, import_react23.useEffect)(() => {
+    stdout.write("\x1B[?1049h\x1B[2J\x1B[H\x1B[?25l");
+    const onResize = () => setSize({ cols: stdout.columns || 80, rows: stdout.rows || 24 });
+    stdout.on("resize", onResize);
+    return () => {
+      stdout.off("resize", onResize);
+      stdout.write("\x1B[?25h\x1B[?1049l");
+    };
+  }, [stdout]);
   (0, import_react23.useEffect)(() => {
     if (!running) return;
     const id = setInterval(() => setTick((t) => t + 1), 90);
     return () => clearInterval(id);
   }, [running]);
-  const pushOutput = (text) => {
-    bufRef.current += text.replace(/\r/g, "");
-    const parts = bufRef.current.split("\n");
-    bufRef.current = parts.pop() ?? "";
-    if (parts.length) setLines((prev) => [...prev, ...parts]);
-    setPartial(bufRef.current);
-  };
   (0, import_react23.useEffect)(() => {
     const ws = new wrapper_default(url2);
     wsRef.current = ws;
@@ -33981,9 +34216,15 @@ var App2 = ({ url: url2, token: token2 }) => {
       switch (frame.type) {
         case "ready":
           setHeader(frame.header || {});
+          if (Array.isArray(frame.commands)) setCommands(frame.commands);
           break;
         case "output":
-          pushOutput(String(frame.text || ""));
+          dispatch({ t: "output", text: String(frame.text || "") });
+          setScroll(0);
+          break;
+        case "event":
+          dispatch({ t: "event", e: frame.event || {} });
+          setScroll(0);
           break;
         case "status":
           if (frame.header) setHeader(frame.header);
@@ -33993,36 +34234,42 @@ var App2 = ({ url: url2, token: token2 }) => {
           setAsking({ label: String(frame.label || "answer"), secret: Boolean(frame.secret) });
           setRunning(true);
           break;
-        case "turn_done":
-          if (bufRef.current) {
-            setLines((prev) => [...prev, bufRef.current]);
-            bufRef.current = "";
-            setPartial("");
-          }
-          break;
         case "exit":
           ws.close();
           break;
       }
     });
     ws.on("close", () => exit());
-    ws.on("error", (err) => {
-      pushOutput(`  gateway error: ${err.message}
-`);
-    });
+    ws.on("error", (err) => dispatch({ t: "output", text: `  gateway error: ${err.message}` }));
     return () => ws.close();
   }, []);
   use_input_default((input, key) => {
     if (key.ctrl && input === "c") {
-      if (running && !asking) {
-        wsRef.current?.send(JSON.stringify({ type: "interrupt" }));
-      } else {
-        exit();
-      }
+      if (running && !asking) wsRef.current?.send(JSON.stringify({ type: "interrupt" }));
+      else exit();
+      return;
+    }
+    if (key.pageUp) {
+      setScroll((s) => Math.min(messages.length - 1, s + 5));
+      return;
+    }
+    if (key.pageDown) {
+      setScroll((s) => Math.max(0, s - 5));
+      return;
+    }
+    if (key.escape) {
+      setScroll(0);
+      return;
+    }
+    if (key.tab && !running && !asking && value.startsWith("/")) {
+      const token3 = value.split(" ")[0];
+      const hit = commands.find((c) => c.name.startsWith(token3));
+      if (hit) setValue(hit.name + " ");
     }
   });
   const onSubmit = (text) => {
     setValue("");
+    setScroll(0);
     if (asking) {
       wsRef.current?.send(JSON.stringify({ type: "answer", value: text }));
       setAsking(null);
@@ -34030,33 +34277,60 @@ var App2 = ({ url: url2, token: token2 }) => {
     }
     if (running) return;
     if (!text.trim()) return;
+    dispatch({ t: "user", text });
     wsRef.current?.send(JSON.stringify({ type: "input", text }));
   };
-  const spinner = SPINNER[tick % SPINNER.length];
-  const ctxText = header.ctx_window ? `${ctxBar(header.ctx_percent)} ${header.ctx_percent}% (${fmtTokens(header.ctx_used)}/${fmtTokens(header.ctx_window)})` : fmtTokens(header.ctx_used);
-  const promptLabel = asking ? asking.label : `aegis \u276F`;
-  const statusLeft = running ? `${spinner} working\u2026  ^C to stop` : `\u25C6 AEGIS  ${header.model || "?"}`;
-  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Box_default, { flexDirection: "column", children: [
-    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Static, { items: lines, children: (line, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { children: line }, i) }),
-    partial ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { children: partial }) : null,
-    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box_default, { marginTop: 1, children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Text, { backgroundColor: "#262a31", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: running ? AMBER : MUTED, children: ` ${statusLeft} ` }),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: "\u2502 ctx " }),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: GREEN, children: ctxText }),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `  \u2502 ${fmtTokens(header.input_tokens)}\u2191 ${fmtTokens(header.output_tokens)}\u2193` }),
-      header.cost ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `  \u2502 $${(header.cost || 0).toFixed(4)}` }) : null,
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `  \u2502 ${header.reasoning || ""}  \u2502 ${header.perms || ""}  \u2502 ${header.busy || ""} ` })
-    ] }) }),
+  const bodyRows = Math.max(3, size.rows - 3);
+  const end = Math.max(0, messages.length - scroll);
+  let used = 0;
+  let start = end;
+  for (let i = end - 1; i >= 0; i--) {
+    used += estimateRows(messages[i], size.cols);
+    if (used > bodyRows) break;
+    start = i;
+  }
+  const visible = messages.slice(start, end);
+  const uni = CLIENT_UNI;
+  const g = glyphs(uni);
+  const spinner = g.spinner[tick % g.spinner.length];
+  const ctxText = header.ctx_window ? `${ctxBar(header.ctx_percent, g.barFull, g.barEmpty)} ${header.ctx_percent}% (${fmtTokens(header.ctx_used)}/${fmtTokens(header.ctx_window)})` : fmtTokens(header.ctx_used);
+  const scrolledUp = scroll > 0;
+  const sep = g.sep;
+  const slashMatches = !running && !asking && value.startsWith("/") ? commands.filter((c) => c.name.startsWith(value.split(" ")[0])).slice(0, 6) : [];
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Box_default, { flexDirection: "column", width: size.cols, height: size.rows, children: [
     /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Box_default, { children: [
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: asking?.secret ? CYAN : AMBER, bold: true, children: ` ${promptLabel} ` }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { backgroundColor: PANEL, color: AMBER, bold: true, children: ` ${g.brand} ` }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { backgroundColor: PANEL, color: MUTED, children: ` ${header.model || "?"} ` }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { backgroundColor: PANEL, color: MUTED, children: `${g.dot} ${(header.session_title || header.session_id || "").slice(0, 24)} ` }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { backgroundColor: PANEL, color: MUTED, children: `${g.dot} v${header.version || ""} ` })
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box_default, { flexDirection: "column", flexGrow: 1, overflow: "hidden", children: visible.map((m, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MessageView, { m, g }, start + i)) }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Box_default, { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { backgroundColor: PANEL, color: running ? AMBER : MUTED, children: running ? ` ${spinner} working\u2026 ^C stop ` : ` ready ` }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { backgroundColor: PANEL, color: MUTED, children: `${sep} ctx ` }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { backgroundColor: PANEL, color: GREEN, children: ctxText }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { backgroundColor: PANEL, color: MUTED, children: ` ${sep} ${fmtTokens(header.input_tokens)}\u2191 ${fmtTokens(header.output_tokens)}\u2193` }),
+      header.cost ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { backgroundColor: PANEL, color: MUTED, children: ` ${sep} $${(header.cost || 0).toFixed(4)}` }) : null,
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { backgroundColor: PANEL, color: MUTED, children: ` ${sep} ${header.reasoning || ""} ${sep} ${header.perms || ""} ` }),
+      scrolledUp ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { backgroundColor: PANEL, color: CYAN, children: `${sep} ${g.up} scrolled (Esc=bottom) ` }) : null
+    ] }),
+    slashMatches.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Box_default, { flexDirection: "column", children: [
+      slashMatches.map((c, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Box_default, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: i === 0 ? AMBER : MUTED, bold: i === 0, children: `  ${c.name}` }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `  ${c.summary}` })
+      ] }, c.name)),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `  ${g.dot} Tab to complete` })
+    ] }) : null,
+    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Box_default, { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: asking?.secret ? CYAN : AMBER, bold: true, children: ` ${asking ? asking.label : "aegis " + g.arrow} ` }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
         build_default,
         {
           value,
-          onChange: setValue,
+          onChange: (v) => setValue(v.replace(/\t/g, "")),
           onSubmit,
           mask: asking?.secret ? "*" : void 0,
-          placeholder: connected ? running && !asking ? "working\u2026 (^C to stop)" : "type a message or /command" : "connecting\u2026"
+          placeholder: connected ? running && !asking ? "working\u2026 (^C to stop)" : "message or /command \xB7 PgUp scroll" : "connecting\u2026"
         }
       )
     ] })

@@ -62,6 +62,51 @@ class _Sink:
         raise OSError("gateway sink has no fileno")
 
 
+_FORWARD_EVENTS = frozenset({
+    "terminal_turn_start", "terminal_turn_end", "iteration",
+    "assistant_delta", "assistant_message", "reasoning_delta",
+    "tool_start", "tool_result",
+    "subagent_start", "subagent_done", "subagent_text", "subagent_reasoning",
+    "continuation", "empty_nudge", "model_downshift", "budget_warning",
+    "ultracode_continue", "thinking_strip_retry",
+})
+
+_SAFE_KEYS = frozenset({
+    "type", "name", "text", "summary", "status", "error", "preview", "classification",
+    "duration_ms", "n", "max", "chars", "iteration", "id", "subagent_id", "agent_type",
+    "task", "prompt", "model", "remaining", "is_error", "session_id", "run_id",
+})
+
+
+def _safe_event(e: dict) -> dict:
+    """Project an agent event onto a small, JSON-safe shape for the Ink client."""
+    out: dict[str, Any] = {}
+    for key in _SAFE_KEYS:
+        if key not in e:
+            continue
+        val = e[key]
+        if isinstance(val, (str, int, float, bool)) or val is None:
+            out[key] = val
+        else:
+            out[key] = str(val)
+    return out
+
+
+class _StructuredEmitter:
+    """An ``on_event`` consumer that forwards agent events to the Ink client as structured
+    frames (no printing) so the front-end can render real components — tool cards, thinking,
+    message bubbles — instead of parsing ANSI. Residual ``_out``/``_raw`` output (slash
+    commands, banners, footers) is captured separately as ``output`` frames."""
+
+    def __init__(self, emit):
+        self._emit = emit
+
+    def __call__(self, e: dict) -> None:
+        t = e.get("type")
+        if t in _FORWARD_EVENTS:
+            self._emit({"type": "event", "event": _safe_event(e)})
+
+
 def header_snapshot(agent: Any) -> dict:
     """Structured runtime header for the Ink top/status bars (no ANSI — the client styles it)."""
     from .cli import repl
@@ -193,7 +238,7 @@ class TuiGateway:
         try:
             result = repl.process_terminal_input(
                 text, self._agent, self._runner, self.store,
-                on_event=repl.Renderer(self.config), surface="repl",
+                on_event=_StructuredEmitter(self._emit_threadsafe), surface="repl",
             )
         except Exception as exc:  # noqa: BLE001
             self._emit_threadsafe({"type": "output", "text": f"  error: {exc}\n"})
@@ -224,7 +269,9 @@ class TuiGateway:
 
         # banner into the pane, then ready
         from .cli import repl
-        await ws.send(json.dumps({"type": "ready", "header": header_snapshot(self._agent)}))
+        commands = [{"name": c.name, "summary": c.summary} for c in repl.SLASH_COMMANDS]
+        await ws.send(json.dumps({"type": "ready", "header": header_snapshot(self._agent),
+                                  "commands": commands}))
         try:
             banner_sink = _Sink(lambda s: self._emit_threadsafe({"type": "output", "text": s}))
             orig_stdout, orig_console = sys.stdout, repl._console
