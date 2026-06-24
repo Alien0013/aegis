@@ -4,6 +4,7 @@ import {
   pluginsApi,
   type DashboardPluginHubRow,
   type DashboardPluginsHub,
+  type ExtensionStatus,
   type PluginProviderOption,
 } from "../lib/api";
 import { useApi } from "../lib/useApi";
@@ -109,6 +110,7 @@ export function Plugins() {
 
   const rows = data?.plugins || [];
   const errors = data?.errors || [];
+  const extension = data?.extension_status;
   const enabledCount = rows.filter((row) => ["enabled", "loaded"].includes(rowStatus(row))).length;
   const dashboardCount = rows.filter((row) => row.has_dashboard_manifest).length;
 
@@ -185,6 +187,8 @@ export function Plugins() {
               { label: "Errors", value: errors.length, tone: errors.length ? "danger" : "neutral" },
             ]}
           />
+
+          {extension && <ExtensionContract status={extension} />}
 
           {!!errors.length && (
             <Card title="Load Errors">
@@ -300,6 +304,59 @@ export function Plugins() {
 
       <PluginSlot name="plugins:bottom" className="mt-[var(--gap)]" />
     </>
+  );
+}
+
+function ExtensionContract({ status }: { status: ExtensionStatus }) {
+  const pluginErrors = Number(status.plugins?.runtime_error_count || status.plugins?.error_count || 0);
+  const apiErrors = Number(status.plugins?.dashboard_api_error_count || 0);
+  const mcpMalformed = status.mcp?.malformed || [];
+  return (
+    <Card title="Extension Contract" sub="MCP, ACP, and plugin runtime safety state.">
+      <div className="grid gap-2 md:grid-cols-3">
+        <div className="rounded-[var(--radius)] border border-border p-3">
+          <div className="text-xs font-semibold uppercase text-faint">MCP</div>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            <Badge tone={status.mcp?.enabled === false ? "danger" : "success"}>
+              {status.mcp?.active_server_count || 0}/{status.mcp?.server_count || 0} active
+            </Badge>
+            <Badge tone="neutral">{status.mcp?.stdio_count || 0} stdio</Badge>
+            <Badge tone="info">{status.mcp?.http_count || 0} http</Badge>
+            {!!status.mcp?.filtered_server_count && <Badge tone="warning">{status.mcp.filtered_server_count} filtered</Badge>}
+            {!!mcpMalformed.length && <Badge tone="danger">{mcpMalformed.length} malformed</Badge>}
+          </div>
+        </div>
+        <div className="rounded-[var(--radius)] border border-border p-3">
+          <div className="text-xs font-semibold uppercase text-faint">Plugins</div>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            <Badge tone={status.plugins?.safe_mode ? "warning" : "success"}>
+              {status.plugins?.safe_mode ? "safe mode" : "runtime on"}
+            </Badge>
+            <Badge tone="neutral">{status.plugins?.manifest_count || 0} manifests</Badge>
+            <Badge tone="info">{status.plugins?.dashboard_api_route_count || 0} api routes</Badge>
+            {!!(pluginErrors + apiErrors) && <Badge tone="danger">{pluginErrors + apiErrors} errors</Badge>}
+          </div>
+          {!!status.plugins?.middleware_kinds?.length && (
+            <div className="mt-2 truncate text-[11px] text-faint">
+              middleware {status.plugins.middleware_kinds.join(", ")}
+            </div>
+          )}
+        </div>
+        <div className="rounded-[var(--radius)] border border-border p-3">
+          <div className="text-xs font-semibold uppercase text-faint">ACP</div>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            <Badge tone={status.acp?.enabled ? "success" : "danger"}>protocol {status.acp?.protocol_version || 0}</Badge>
+            <Badge tone={status.acp?.shared_trace_state ? "success" : "warning"}>trace state</Badge>
+            <Badge tone="neutral">{status.acp?.session_management?.length || 0} session ops</Badge>
+          </div>
+        </div>
+      </div>
+      {!!status.plugins?.manifest_errors?.length && (
+        <div className="mt-3 rounded-[var(--radius)] border border-danger/30 bg-danger/10 px-3 py-2 font-mono text-xs text-danger">
+          {status.plugins.manifest_errors[0].name}: {status.plugins.manifest_errors[0].errors?.[0]}
+        </div>
+      )}
+    </Card>
   );
 }
 

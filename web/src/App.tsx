@@ -19,6 +19,7 @@ import { Overview } from "./pages/Overview";
 import { Sessions } from "./pages/Sessions";
 import { Models } from "./pages/Models";
 import { Memory } from "./pages/Memory";
+import { PromptAudit } from "./pages/PromptAudit";
 import { Tools } from "./pages/Tools";
 import { Skills } from "./pages/Skills";
 import { Config } from "./pages/Config";
@@ -35,7 +36,9 @@ import { RuntimeProfileNew, RuntimeProfiles } from "./pages/RuntimeProfiles";
 import { Files } from "./pages/Files";
 import { Logs } from "./pages/Logs";
 import { System } from "./pages/System";
+import { Security } from "./pages/Security";
 import { Analytics } from "./pages/Analytics";
+import { TraceTimeline } from "./pages/TraceTimeline";
 import { Pairing } from "./pages/Pairing";
 import { Docs } from "./pages/Docs";
 import { Placeholder } from "./pages/Placeholder";
@@ -146,6 +149,7 @@ function Routed({ full }: { full?: boolean }) {
             <Route path="/sessions" element={routeElement("/sessions", <Sessions />)} />
             <Route path="/models" element={routeElement("/models", <Models />)} />
             <Route path="/memory" element={routeElement("/memory", <Memory />)} />
+            <Route path="/prompt-audit" element={routeElement("/prompt-audit", <PromptAudit />)} />
             <Route path="/tools" element={routeElement("/tools", <Tools />)} />
             <Route path="/skills" element={routeElement("/skills", <Skills />)} />
             <Route path="/config" element={routeElement("/config", <Config />)} />
@@ -165,7 +169,9 @@ function Routed({ full }: { full?: boolean }) {
             <Route path="/files" element={routeElement("/files", <Files />)} />
             <Route path="/logs" element={routeElement("/logs", <Logs />)} />
             <Route path="/system" element={routeElement("/system", <System />)} />
+            <Route path="/security" element={routeElement("/security", <Security />)} />
             <Route path="/analytics" element={routeElement("/analytics", <Analytics />)} />
+            <Route path="/traces" element={routeElement("/traces", <TraceTimeline />)} />
             <Route path="/docs" element={routeElement("/docs", <Docs />)} />
             {pluginRoutes.map((route) => (
               <Route key={`plugin-${route.plugin || route.path}-${route.path}`} path={route.path} element={<PluginRoutePage route={route} />} />

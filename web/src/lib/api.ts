@@ -195,6 +195,46 @@ export interface DashboardPluginHubRow {
   declared_contributions?: PluginContributionMap;
   runtime_contributions?: PluginContributionMap;
   contribution_drift?: PluginContributionDrift;
+  manifest_errors?: string[];
+}
+
+export interface ExtensionStatus {
+  ok?: boolean;
+  mcp?: {
+    enabled?: boolean;
+    server_count?: number;
+    active_server_count?: number;
+    stdio_count?: number;
+    http_count?: number;
+    malformed?: string[];
+    catalog_count?: number;
+    filtered_server_count?: number;
+    selected_tool_count?: number;
+  };
+  plugins?: {
+    safe_mode?: boolean;
+    manifest_count?: number;
+    loaded_count?: number;
+    error_count?: number;
+    runtime_error_count?: number;
+    dashboard_plugin_count?: number;
+    dashboard_api_route_count?: number;
+    dashboard_api_error_count?: number;
+    middleware_kinds?: string[];
+    hook_names?: string[];
+    enabled?: string[];
+    disabled?: string[];
+    allowlist?: string[];
+    manifest_errors?: Array<{ name: string; errors: string[] }>;
+  };
+  acp?: {
+    enabled?: boolean;
+    protocol_version?: number;
+    surface_runner?: string;
+    session_store?: string;
+    shared_trace_state?: boolean;
+    session_management?: string[];
+  };
 }
 
 export interface DashboardPluginsHub {
@@ -215,6 +255,7 @@ export interface DashboardPluginsHub {
   disabled?: string[];
   allowlist?: string[];
   safe_mode?: boolean;
+  extension_status?: ExtensionStatus;
 }
 
 function pluginPath(name: string): string {

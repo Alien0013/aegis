@@ -14,18 +14,21 @@ Hermes/Codex-style polish, see [feature-parity-matrix.md](feature-parity-matrix.
 | --- | --- |
 | Install AEGIS | [install.md](install.md) |
 | First terminal session | [quickstart.md](quickstart.md) |
-| Full CLI reference | [cli.md](cli.md) |
+| Full CLI reference | [cli.md](cli.md) and generated [cli-reference.md](cli-reference.md) |
+| Slash command reference | Generated [slash-commands.md](slash-commands.md) |
 | Browser dashboard | [dashboard.md](dashboard.md) |
 | Desktop app | [../desktop/README.md](../desktop/README.md) |
-| OpenAI-compatible API and JSON-RPC | [serve.md](serve.md) |
+| OpenAI-compatible API and JSON-RPC | [serve.md](serve.md) and generated [api-routes.md](api-routes.md) |
 | Python SDK | [sdk.md](sdk.md) |
 | Providers and auth | [providers.md](providers.md) |
-| Tools and permissions | [tools.md](tools.md) and [security.md](security.md) |
+| Tools and permissions | [tools.md](tools.md), generated [tools-reference.md](tools-reference.md), and [security.md](security.md) |
 | Memory, skills, and learning | [memory-skills.md](memory-skills.md) |
 | MCP | [mcp.md](mcp.md) |
 | Gateway and channels | [gateway.md](gateway.md) |
 | Tracing and evals | [tracing-evals.md](tracing-evals.md) |
 | Architecture | [architecture.md](architecture.md) |
+| Hermes parity ledger | `docs/hermes-parity-ledger.csv` checked by `scripts/check_hermes_parity_ledger.py` |
+| Generated reference drift | `scripts/generate_reference_docs.py --check` through `scripts/verify_all.sh` |
 
 ## Current Product Surfaces
 
@@ -53,6 +56,7 @@ python -m aegis.cli.main --help
 python -m aegis.cli.main status
 python -m aegis.cli.main tools list
 bash scripts/run_tests.sh
+bash scripts/verify_all.sh
 ```
 
 Frontend and desktop checks:
@@ -81,15 +85,19 @@ repo. The browser dashboard is now session-first, with `/dashboard` as the
 overview and `/command-center` as a compact sessions/system/usage overlay.
 The remaining parity work is mostly product hardening:
 
-- Dashboard explainability for trace timelines, prompt/context audit, provider
-  capability probes, fuller tool provenance, background jobs, cron dry-runs,
-  and gateway backpressure metrics.
-- Deeper native desktop and full-screen TUI polish: session switching HUDs,
-  status bars, model picker overlays, crash history/repair UX, and packaged
-  smoke artifact proof.
-- Release proof: artifact hashes/SBOM and signed/notarized release evidence
-  when credentials are actually configured.
-- Generated command and API references so docs cannot drift from the parser.
+- Dashboard explainability now covers trace timelines, prompt/context audit,
+  provider capability probes, tool provenance, background jobs, cron dry-runs,
+  security policy simulation, plugin inventory, and gateway delivery state.
+- Desktop lifecycle, crash history, repair actions, update state, and packaged
+  backend smoke/provenance are covered by the desktop tests and release gate.
+- Release proof now writes artifact hashes/SBOM; signed/notarized release
+  evidence is only claimed when credentials are actually configured.
+- Generated CLI, slash-command, API-route, and tool references are checked by
+  `scripts/generate_reference_docs.py --check`, so docs cannot drift from the
+  parser, registry, or FastAPI route table.
+- Repo-wide parity ledger coverage from `docs/hermes-code-map.csv` to
+  `docs/hermes-parity-ledger.csv`, checked by `aegis verify`; final mode
+  currently closes 950 rows with zero pending/partial rows.
 - API/SDK contract fixtures for streaming, cancellation, auth, run events,
   responses-style behavior, MCP, and eval replay.
 - Fake-adapter tests and explicit credentialed live-test instructions for

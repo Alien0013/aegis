@@ -445,6 +445,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "transcribe", "speak", "download", "github", "mixture_of_agents",
         ],
     },
+    "providers": {
+        "probe_timeout_seconds": 15,  # dashboard/provider probes are bounded and never use long chat timeouts
+        "probe_cache": {},            # provider -> last safe redacted probe result
+    },
     "auxiliary": {                   # small/cheap model for internal side-tasks
         "provider": "",              # "" = reuse main provider
         "model": "",
@@ -1082,6 +1086,9 @@ class Workspace:
             findings = []
         if findings:
             reason = findings[0].split(":", 1)[0]
+            _record_context_file_warning(
+                f"Context file {label} BLOCKED: potential prompt injection ({reason}). Content not loaded."
+            )
             return (f"[BLOCKED: {label} contained potential prompt injection "
                     f"({reason}). Content not loaded.]")
         return _truncate_context_file(

@@ -206,9 +206,14 @@ def probe_provider(config: Config) -> tuple[bool, str]:
         from .providers.fallback import build_with_fallbacks
         from .types import Message
         p = build_with_fallbacks(config)
+        try:
+            timeout = float(config.get("providers.probe_timeout_seconds", 15) or 15)
+        except (TypeError, ValueError):
+            timeout = 15.0
+        timeout = max(1.0, min(timeout, 30.0))
         t0 = time.monotonic()
         resp = p.complete([Message.user("Reply with the single word: ok")],
-                          tools=None, stream=False)
+                          tools=None, stream=False, timeout=timeout)
         ms = int((time.monotonic() - t0) * 1000)
         text = (resp.text or "").strip()[:40] or "(empty)"
         return True, f"{p.name}/{p.model} responded in {ms} ms: {text!r}"

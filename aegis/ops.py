@@ -7,8 +7,10 @@ import re
 import shutil
 import subprocess
 import zipfile
+from typing import Any
 
 from . import config as cfg
+from .redact import redact_secret_values, redact_secrets
 from .util import read_text
 
 
@@ -20,49 +22,123 @@ def _scan(text: str, command: bool = False) -> tuple[bool, str]:
         return False, ""
 
 
-def cmd_security_audit(args, config) -> int:
-    """`aegis security audit` — scan deps, MCP servers, plugins, and skills."""
-    print("# AEGIS security audit\n")
-    # 1. dependency vulnerabilities
-    if shutil.which("pip-audit"):
+def security_audit_report(config, *, include_dependencies: bool = True) -> dict[str, Any]:
+    """Return a redacted, machine-readable security audit report."""
+    findings: list[dict[str, Any]] = []
+    dependency: dict[str, Any] = {"available": False, "status": "skipped", "output": ""}
+    if include_dependencies and shutil.which("pip-audit"):
         r = subprocess.run(["pip-audit", "--format", "columns"], capture_output=True, text=True)
-        print("## dependencies (pip-audit)\n" + (r.stdout.strip() or r.stderr.strip() or "ok") + "\n")
-    else:
-        print("## dependencies: install `pip-audit` for CVE scanning\n")
+        output = redact_secrets((r.stdout.strip() or r.stderr.strip())[:20_000])
+        dependency = {
+            "available": True,
+            "status": "ok" if r.returncode == 0 else "findings",
+            "returncode": r.returncode,
+            "output": output,
+        }
+        if r.returncode != 0:
+            findings.append({
+                "surface": "dependencies",
+                "name": "pip-audit",
+                "severity": "warning",
+                "reason": "pip-audit reported dependency findings",
+            })
 
-    issues: list[str] = []
-    # 2. MCP server commands
     for name, spec in (config.get("mcp.servers", {}) or {}).items():
+        if not isinstance(spec, dict):
+            continue
         line = (str(spec.get("command", "")) + " " + " ".join(spec.get("args", []))).strip()
         sus, why = _scan(line, command=True)
         if sus:
-            issues.append(f"mcp/{name}: {why}")
-    # 3. plugins
+            findings.append({
+                "surface": "mcp",
+                "name": str(name),
+                "severity": "warning",
+                "reason": why,
+                "preview": redact_secrets(line[:500]),
+            })
+
     pdir = cfg.sub("plugins")
     if pdir.exists():
         for f in pdir.rglob("*.py"):
             sus, why = _scan(read_text(f))
             if sus:
-                issues.append(f"plugin/{f.name}: {why}")
-    # 4. installed skills (prompt-injection in SKILL.md)
-    for md in cfg.skills_dir().rglob("SKILL.md"):
-        sus, why = _scan(read_text(md))
-        if sus:
-            issues.append(f"skill/{md.parent.name}: {why}")
+                findings.append({
+                    "surface": "plugin",
+                    "name": f.name,
+                    "path": str(f),
+                    "severity": "warning",
+                    "reason": why,
+                })
 
-    print("## findings")
-    for i in issues:
-        print(f"  ! {i}")
-    if not issues:
-        print("  ✓ no suspicious MCP commands, plugins, or skills found")
-    if getattr(args, "fail_on", None) == "any" and issues:
+    skills_dir = cfg.skills_dir()
+    if skills_dir.exists():
+        for md in skills_dir.rglob("SKILL.md"):
+            sus, why = _scan(read_text(md))
+            if sus:
+                findings.append({
+                    "surface": "skill",
+                    "name": md.parent.name,
+                    "path": str(md),
+                    "severity": "warning",
+                    "reason": why,
+                })
+
+    critical = sum(1 for row in findings if row.get("severity") == "critical")
+    warning = sum(1 for row in findings if row.get("severity") == "warning")
+    return redact_secret_values({
+        "ok": critical == 0,
+        "summary": {
+            "findings": len(findings),
+            "critical": critical,
+            "warning": warning,
+        },
+        "dependency_audit": dependency,
+        "findings": findings,
+    })
+
+
+def _security_audit_markdown(report: dict[str, Any]) -> str:
+    lines = ["# AEGIS security audit", ""]
+    dep = report.get("dependency_audit") or {}
+    if dep.get("available"):
+        lines.extend([
+            "## dependencies (pip-audit)",
+            str(dep.get("output") or dep.get("status") or "ok"),
+            "",
+        ])
+    else:
+        lines.extend([
+            "## dependencies",
+            "install `pip-audit` for CVE scanning",
+            "",
+        ])
+    lines.append("## findings")
+    findings = report.get("findings") or []
+    if findings:
+        for item in findings:
+            lines.append(
+                f"- {item.get('severity', 'warning')}: {item.get('surface')}/{item.get('name')}: "
+                f"{item.get('reason', '')}"
+            )
+    else:
+        lines.append("- no suspicious MCP commands, plugins, or skills found")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def cmd_security_audit(args, config) -> int:
+    """`aegis security audit` — scan deps, MCP servers, plugins, and skills."""
+    report = security_audit_report(config)
+    if getattr(args, "json", False):
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        print(_security_audit_markdown(report), end="")
+    if getattr(args, "fail_on", None) == "any" and report.get("findings"):
         return 1
     return 0
 
 
 def cmd_debug(args, config) -> int:
     """`aegis debug share` — bundle redacted logs + config + doctor output into a zip."""
-    from .redact import redact_secret_values, redact_secrets
 
     def env_keys(text: str) -> str:
         rows: list[str] = []

@@ -34,8 +34,9 @@ interface ModelRow {
 interface ProviderMatrix {
   totals: {
     providers: number; ready: number; missing_auth: number; models: number;
-    tools: number; vision: number; reasoning: number; streaming: number; known_pricing: number;
+    tools: number; vision: number; audio: number; reasoning: number; streaming: number; known_pricing: number;
   };
+  fallback_chain?: Array<{ role?: string; provider?: string; model?: string; status?: string; reason?: string }>;
   providers: ProviderMatrixRow[];
 }
 
@@ -45,10 +46,13 @@ interface ProviderMatrixRow {
   origin?: string;
   api_mode?: string;
   active?: boolean;
-  auth?: { available?: boolean; scheme?: string; methods?: string[]; oauth_status?: string };
-  probe?: { status?: string; latency_ms?: number | null; message?: string };
+  auth?: { available?: boolean; scheme?: string; methods?: string[]; oauth_status?: string; credential_status?: string };
+  probe?: { status?: string; ok?: boolean; live?: boolean; latency_ms?: number | null; message?: string; tested_at?: string; timeout_seconds?: number };
   limits?: { context?: number; max_output?: number };
   capabilities?: Record<string, boolean | undefined>;
+  fallback_enabled?: boolean;
+  fallback_chain?: Array<{ role?: string; provider?: string; model?: string; status?: string; reason?: string }>;
+  last_error?: string;
   models?: Array<{
     id: string;
     pricing?: { input_per_million?: number; output_per_million?: number; known?: boolean };
@@ -99,9 +103,7 @@ export function Models() {
   const mainRow = mainRows.find((row) => row.id === mainModel);
   const mainCaps = mainRow?.capabilities || {};
   const providerMatrix = data?.provider_matrix;
-  const activeMatrixRows = (providerMatrix?.providers || [])
-    .filter((row) => row.active || row.auth?.available || row.origin === "custom")
-    .slice(0, 8);
+  const matrixRows = providerMatrix?.providers || [];
   const reasoningSupported = mainRow ? mainCaps.reasoning_effort !== false : true;
   const fastSupported = mainCaps.fast_mode === true;
   const reasoningDefault = String(configQ.data?.["agent.reasoning_effort"] ?? "medium").trim().toLowerCase();
@@ -145,6 +147,7 @@ export function Models() {
         base_url: baseUrl.trim(),
       });
       toast(r.ok ? `Reachable${r.latency_ms ? ` / ${r.latency_ms}ms` : ""}` : (r.error || "Unreachable"), r.ok ? "ok" : "err");
+      reload();
     } catch (e) { toast(String(e), "err"); }
     finally { setBusy(false); }
   }
@@ -268,10 +271,11 @@ export function Models() {
               sub={`${providerMatrix.totals.ready}/${providerMatrix.totals.providers} ready · ${providerMatrix.totals.models} models`}
               pad={false}
             >
-              <div className="grid border-b border-border sm:grid-cols-4">
+              <div className="grid border-b border-border sm:grid-cols-5">
                 {[
                   ["Tools", providerMatrix.totals.tools],
                   ["Vision", providerMatrix.totals.vision],
+                  ["Audio", providerMatrix.totals.audio],
                   ["Reasoning", providerMatrix.totals.reasoning],
                   ["Priced", providerMatrix.totals.known_pricing],
                 ].map(([label, value]) => (
@@ -293,10 +297,11 @@ export function Models() {
                     </tr>
                   </thead>
                   <tbody>
-                    {activeMatrixRows.map((row) => {
+                    {matrixRows.map((row) => {
                       const caps = row.capabilities || {};
                       const priced = (row.models || []).filter((model) => model.pricing?.known).length;
                       const samplePrice = (row.models || []).find((model) => model.pricing?.known)?.pricing;
+                      const fallbackChain = row.fallback_chain || [];
                       return (
                         <tr key={row.provider} className="border-b border-border last:border-b-0">
                           <td className="px-3 py-3">
@@ -313,13 +318,24 @@ export function Models() {
                                 {row.probe?.status || "unknown"}
                               </Badge>
                               {row.auth?.scheme && <Badge tone="neutral">{row.auth.scheme}</Badge>}
+                              {row.probe?.live && <Badge tone="info">{row.probe.latency_ms ?? "-"}ms</Badge>}
+                              {row.fallback_enabled && <Badge tone="primary">fallback</Badge>}
                             </div>
+                            <div className="mt-1 line-clamp-2 text-xs text-faint">
+                              {row.last_error || row.probe?.message || row.auth?.credential_status || ""}
+                            </div>
+                            {fallbackChain.length > 1 && (
+                              <div className="mt-1 font-mono text-[10px] text-faint">
+                                {fallbackChain.map((item) => item.provider).filter(Boolean).join(" -> ")}
+                              </div>
+                            )}
                           </td>
                           <td className="px-3 py-3">
                             <div className="flex flex-wrap gap-1.5">
                               {caps.tools && <Badge tone="success">tools</Badge>}
                               {caps.streaming && <Badge tone="info">stream</Badge>}
                               {caps.vision && <Badge tone="info">vision</Badge>}
+                              {caps.audio && <Badge tone="info">audio</Badge>}
                               {caps.reasoning && <Badge tone="warning">reasoning</Badge>}
                               {caps.structured_output ? <Badge tone="primary">structured</Badge> : <Badge tone="neutral">no structured</Badge>}
                             </div>

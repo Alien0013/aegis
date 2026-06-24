@@ -1,7 +1,8 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Badge, Button, Card, Empty, Loading, PageHeader } from "../components/ui";
 import { Icon } from "../components/icons";
+import { post } from "../lib/api";
 import { desktop, isDesktop } from "../lib/desktop";
 import { ago, compact, num } from "../lib/format";
 import { useApi } from "../lib/useApi";
@@ -64,18 +65,59 @@ interface ActivityPayload {
   recent_count?: number;
 }
 
+interface BackgroundJob {
+  id: string;
+  status?: string;
+  prompt?: string;
+  result_preview?: string;
+  error?: string;
+  run_id?: string;
+  parent_session_id?: string;
+  agent_type?: string;
+  retry_of?: string;
+  cancel_requested?: boolean;
+  started_at?: number;
+  finished_at?: number;
+}
+
+interface BackgroundPayload {
+  jobs?: BackgroundJob[];
+  active?: BackgroundJob[];
+  completed?: BackgroundJob[];
+  failed?: BackgroundJob[];
+  stats?: { total?: number; active?: number; completed?: number; failed?: number };
+  capacity?: { max?: number; running?: number; available?: number };
+}
+
 export function Agents() {
   const activity = useApi<ActivityPayload>("activity");
+  const background = useApi<BackgroundPayload>("background/jobs");
+  const [jobBusy, setJobBusy] = useState("");
   const active = activity.data?.active || [];
   const recent = activity.data?.recent || [];
+  const backgroundJobs = background.data?.jobs || [];
   const activeSubagents = active.reduce((total, row) => total + Number(row.subagents_active || 0), 0);
   const toolCalls = [...active, ...recent].reduce((total, row) => total + Number(row.tool_calls || 0), 0);
   const modelCalls = [...active, ...recent].reduce((total, row) => total + Number(row.provider_calls || 0), 0);
 
   useEffect(() => {
-    const timer = window.setInterval(activity.reload, 1500);
+    const timer = window.setInterval(() => {
+      activity.reload();
+      background.reload();
+    }, 1500);
     return () => window.clearInterval(timer);
-  }, [activity.reload]);
+  }, [activity.reload, background.reload]);
+
+  async function backgroundAction(job: BackgroundJob, action: "cancel" | "retry") {
+    setJobBusy(`${action}:${job.id}`);
+    try {
+      await post(`background/jobs/${encodeURIComponent(job.id)}/${action}`, {});
+      background.reload();
+      activity.reload();
+    } finally {
+      setJobBusy("");
+    }
+  }
 
   const separateWindow = () => {
     if (isDesktop && desktop?.openAgentsWindow) {
@@ -146,6 +188,14 @@ export function Agents() {
               <Mini label="recent" value={num(recent.length)} />
             </div>
           </Card>
+          <BackgroundJobsCard
+            payload={background.data ?? undefined}
+            jobs={backgroundJobs}
+            loading={background.loading}
+            error={background.error}
+            busy={jobBusy}
+            onAction={backgroundAction}
+          />
           <Card title="Shortcuts">
             <div className="grid gap-2">
               <LinkButton to="/app" icon="chat" label="Desktop chat" />
@@ -176,6 +226,78 @@ function Metric({ label, value, tone }: { label: string; value: string; tone: "p
           <div className="mt-1 text-[10px] uppercase tracking-wide text-faint">{label}</div>
         </div>
         <Badge tone={tone}>{label.split(" ")[0]}</Badge>
+      </div>
+    </Card>
+  );
+}
+
+function BackgroundJobsCard({
+  payload,
+  jobs,
+  loading,
+  error,
+  busy,
+  onAction,
+}: {
+  payload?: BackgroundPayload;
+  jobs: BackgroundJob[];
+  loading?: boolean;
+  error?: string;
+  busy: string;
+  onAction: (job: BackgroundJob, action: "cancel" | "retry") => void;
+}) {
+  const stats = payload?.stats || {};
+  const capacity = payload?.capacity || {};
+  const visible = jobs.slice(0, 6);
+  return (
+    <Card title="Background Jobs" sub={`${num(stats.active || 0)} active / ${num(stats.failed || 0)} failed`} pad={false}>
+      <div className="border-b border-border px-[var(--pad)] py-3">
+        <div className="grid grid-cols-3 gap-2">
+          <Mini label="running" value={num(capacity.running || 0)} />
+          <Mini label="free" value={num(capacity.available || 0)} />
+          <Mini label="max" value={num(capacity.max || 0)} />
+        </div>
+      </div>
+      {error && <Empty icon="alert">Could not load background jobs - {error}</Empty>}
+      {loading && !payload && <Loading />}
+      {!error && !visible.length && !loading && (
+        <Empty icon="agents">No retained background jobs.</Empty>
+      )}
+      <div className="grid gap-px bg-border">
+        {visible.map((job) => {
+          const status = String(job.status || "");
+          const running = status === "running" || status === "cancelling";
+          const retryable = !running;
+          const bad = status === "error" || status === "cancelled";
+          return (
+            <div key={job.id} className="bg-surface p-3 text-xs">
+              <div className="flex items-center gap-2">
+                <Icon name="agents" size={13} className={bad ? "text-danger" : running ? "text-info" : "text-success"} />
+                <span className="min-w-0 flex-1 truncate font-mono text-text">{job.agent_type || "worker"}</span>
+                <Badge status={status || "queued"}>{status || "queued"}</Badge>
+              </div>
+              <div className="mt-1 truncate text-dim">{compact(job.prompt || job.id, 120)}</div>
+              {(job.error || job.result_preview) && (
+                <div className={bad ? "mt-1 text-danger" : "mt-1 text-faint"}>
+                  {compact(job.error || job.result_preview || "", 160)}
+                </div>
+              )}
+              <div className="mt-3 flex gap-2">
+                {running && (
+                  <Button sm icon="x" variant="danger" disabled={busy === `cancel:${job.id}`} onClick={() => onAction(job, "cancel")}>
+                    Cancel
+                  </Button>
+                )}
+                {retryable && (
+                  <Button sm icon="refresh" disabled={busy === `retry:${job.id}`} onClick={() => onAction(job, "retry")}>
+                    Retry
+                  </Button>
+                )}
+                {job.run_id && <Link to="/analytics" className="px-2 py-1 text-faint hover:text-primary">trace</Link>}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </Card>
   );

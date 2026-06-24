@@ -908,6 +908,168 @@ class SessionStore:
             cur = next_child
         return cur
 
+    @staticmethod
+    def _lineage_origin(sess: Session) -> dict[str, Any]:
+        meta = sess.meta if isinstance(sess.meta, dict) else {}
+        kind = str(meta.get("creator_kind") or "").strip()
+        surface = str(meta.get("surface") or "").strip()
+        if meta.get("cron_job_id"):
+            kind = "cron"
+        elif meta.get("background_task_id"):
+            kind = "background"
+        elif meta.get("subagent_id"):
+            kind = "subagent"
+        elif meta.get("platform") or meta.get("gateway"):
+            kind = "gateway"
+        elif not kind and surface:
+            kind = surface
+        elif not kind:
+            kind = "local"
+        allowed = (
+            "surface",
+            "creator_kind",
+            "platform",
+            "gateway",
+            "chat_id",
+            "thread_id",
+            "user_id",
+            "message_id",
+            "cron_job_id",
+            "cron_schedule",
+            "background_task_id",
+            "subagent_id",
+            "agent_type",
+            "parent_session_id",
+            "parent_end_reason",
+            "lineage_root",
+            "lineage_depth",
+            "last_run_id",
+            "last_trace_id",
+            "trace_id",
+        )
+        fields = {key: _jsonable_meta_value(meta[key]) for key in allowed if key in meta}
+        fields["kind"] = kind
+        return fields
+
+    @classmethod
+    def _lineage_node(cls, sess: Session, *, depth: int = 0, relation: str = "") -> dict[str, Any]:
+        return {
+            "id": sess.id,
+            "title": sess.title,
+            "created_at": sess.created_at,
+            "updated_at": sess.updated_at,
+            "parent_id": sess.parent_id,
+            "profile": sess.profile,
+            "relation": relation,
+            "depth": depth,
+            "message_count": len([m for m in sess.messages if m.role != "system"]),
+            "origin": cls._lineage_origin(sess),
+        }
+
+    def lineage(self, sid: str) -> dict[str, Any]:
+        """Return a dashboard/API-friendly lineage graph for one session.
+
+        The graph is derived from existing ``parent_id`` rows and safe metadata,
+        so it works for old stores without a migration.
+        """
+        current = self._resolve_session(sid)
+        if current is None:
+            return {"found": False, "id": sid, "ok": False, "error": f"session_id not found: {sid}"}
+
+        with self._conn() as c:
+            rows = c.execute("SELECT * FROM sessions ORDER BY created_at, updated_at").fetchall()
+        sessions = {Session.from_row(row).id: Session.from_row(row) for row in rows}
+        sessions[current.id] = current
+        children_by_parent: dict[str, list[Session]] = {}
+        for sess in sessions.values():
+            if sess.parent_id:
+                children_by_parent.setdefault(sess.parent_id, []).append(sess)
+        for children in children_by_parent.values():
+            children.sort(key=lambda child: (child.created_at, child.updated_at, child.id))
+
+        warnings: list[dict[str, Any]] = []
+        ancestors_reversed: list[Session] = []
+        seen: set[str] = {current.id}
+        parent_id = current.parent_id
+        while parent_id:
+            parent = sessions.get(parent_id) or self.load(parent_id)
+            if parent is None:
+                warnings.append({
+                    "code": "missing_parent_session",
+                    "session_id": current.id,
+                    "parent_id": parent_id,
+                })
+                break
+            if parent.id in seen:
+                warnings.append({
+                    "code": "lineage_cycle",
+                    "session_id": current.id,
+                    "at": parent.id,
+                })
+                break
+            ancestors_reversed.append(parent)
+            seen.add(parent.id)
+            parent_id = parent.parent_id
+        ancestors = list(reversed(ancestors_reversed))
+        root = ancestors[0] if ancestors else current
+
+        descendants: list[dict[str, Any]] = []
+        edges: list[dict[str, str]] = []
+        visited_descendants: set[str] = {current.id}
+
+        def walk(parent: Session, depth: int) -> None:
+            for child in children_by_parent.get(parent.id, []):
+                edges.append({"from": parent.id, "to": child.id, "kind": "parent_child"})
+                if child.id in visited_descendants:
+                    warnings.append({
+                        "code": "lineage_cycle",
+                        "session_id": parent.id,
+                        "at": child.id,
+                    })
+                    continue
+                visited_descendants.add(child.id)
+                descendants.append(self._lineage_node(child, depth=depth, relation="descendant"))
+                walk(child, depth + 1)
+
+        walk(current, 1)
+        for parent, child in zip(ancestors, ancestors[1:] + [current], strict=False):
+            edges.append({"from": parent.id, "to": child.id, "kind": "parent_child"})
+
+        direct_children = [
+            self._lineage_node(child, depth=1, relation="child")
+            for child in children_by_parent.get(current.id, [])
+        ]
+        nodes = [
+            *[self._lineage_node(sess, depth=i - len(ancestors), relation="ancestor")
+              for i, sess in enumerate(ancestors)],
+            self._lineage_node(current, depth=0, relation="current"),
+            *descendants,
+        ]
+        return {
+            "found": True,
+            "ok": not warnings,
+            "id": current.id,
+            "root_id": root.id,
+            "current": self._lineage_node(current, depth=0, relation="current"),
+            "ancestors": [
+                self._lineage_node(sess, depth=i - len(ancestors), relation="ancestor")
+                for i, sess in enumerate(ancestors)
+            ],
+            "parent": self._lineage_node(ancestors[-1], depth=-1, relation="parent") if ancestors else None,
+            "children": direct_children,
+            "descendants": descendants,
+            "nodes": nodes,
+            "edges": edges,
+            "warnings": warnings,
+            "summary": {
+                "ancestor_count": len(ancestors),
+                "child_count": len(direct_children),
+                "descendant_count": len(descendants),
+                "edge_count": len(edges),
+                "warning_count": len(warnings),
+            },
+        }
+
     def browse_sessions(self, limit: int = 10, *, current_session_id: str | None = None) -> dict:
         """Browse shape: recent sessions without needing a query."""
         limit = max(1, min(int(limit or 10), 50))

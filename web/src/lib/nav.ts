@@ -26,6 +26,7 @@ export const NAV: NavGroup[] = [
     label: "Agent",
     items: [
       { path: "/models", label: "Models", icon: "models" },
+      { path: "/prompt-audit", label: "Prompt Audit", icon: "activity" },
       { path: "/tools", label: "Tools", icon: "tools" },
       { path: "/skills", label: "Skills", icon: "skills" },
       { path: "/memory", label: "Memory", icon: "memory" },
@@ -51,8 +52,10 @@ export const NAV: NavGroup[] = [
     items: [
       { path: "/command-center", label: "Command Center", icon: "command" },
       { path: "/analytics", label: "Analytics", icon: "analytics" },
+      { path: "/traces", label: "Traces", icon: "activity" },
       { path: "/files", label: "Files", icon: "files" },
       { path: "/logs", label: "Logs", icon: "logs" },
+      { path: "/security", label: "Security", icon: "shield" },
       { path: "/profiles", label: "Profiles", icon: "profiles" },
       { path: "/docs", label: "Docs", icon: "files" },
       { path: "/system", label: "System", icon: "system" },

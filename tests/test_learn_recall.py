@@ -220,6 +220,48 @@ def test_session_search_rebinds_row_anchor_to_child_lineage():
     assert "current session lineage" in active_reject["error"]
 
 
+def test_session_lineage_graph_exposes_origin_and_descendants():
+    from aegis.session import Session, SessionStore
+    from aegis.types import Message
+
+    store = SessionStore()
+    root = Session.create(title="lineage root")
+    root.messages = [Message.user("root work")]
+    root.meta["surface"] = "dashboard"
+    store.save(root)
+
+    gateway_child = Session.create(title="gateway child", parent_id=root.id)
+    gateway_child.messages = [Message.user("gateway work")]
+    gateway_child.meta.update({
+        "platform": "telegram",
+        "chat_id": "chat-1",
+        "message_id": "msg-1",
+    })
+    store.save(gateway_child)
+
+    cron_grandchild = Session.create(title="cron continuation", parent_id=gateway_child.id)
+    cron_grandchild.messages = [Message.assistant("cron done")]
+    cron_grandchild.meta.update({
+        "cron_job_id": "job-1",
+        "cron_schedule": "@daily",
+        "lineage_root": root.id,
+        "lineage_depth": 2,
+    })
+    store.save(cron_grandchild)
+
+    graph = store.lineage(gateway_child.id)
+
+    assert graph["found"] is True
+    assert graph["ok"] is True
+    assert graph["root_id"] == root.id
+    assert graph["parent"]["id"] == root.id
+    assert graph["current"]["id"] == gateway_child.id
+    assert graph["current"]["origin"]["kind"] == "gateway"
+    assert graph["children"][0]["id"] == cron_grandchild.id
+    assert graph["children"][0]["origin"]["kind"] == "cron"
+    assert {edge["from"] for edge in graph["edges"]} >= {root.id, gateway_child.id}
+
+
 def test_session_browse_projects_compression_tip_not_branch():
     from aegis.session import Session, SessionStore
     from aegis.tools.base import ToolContext

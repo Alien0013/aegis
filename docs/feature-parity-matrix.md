@@ -19,14 +19,14 @@ Status legend:
 |---|---:|---|---|
 | Shared runtime used by CLI/API/dashboard/gateway/automation | Present | `aegis/surface.py`, `aegis/agent/agent.py`, `aegis/agent/loop.py` | Keep all new surfaces entering through `SurfaceRunner` or thin wrappers. |
 | Tool-call loop with bounded iterations | Present | `aegis/agent/loop.py`, `tests/test_smoke.py` | Split loop into smaller modules after behavior is fully pinned. |
-| Streaming events | Present | `aegis/surface.py`, dashboard event APIs | Add end-to-end trace timeline UI. |
+| Streaming events | Present | `aegis/surface.py`, dashboard event APIs, trace timeline endpoints/page | Keep end-to-end streaming contract fixtures broad. |
 | Mid-turn cancellation/interrupt | Present | `aegis/agent/agent.py`, `aegis/agent/loop.py`, ACP/dashboard paths | Add clearer dashboard/user feedback for cancellation state. |
 | Mid-turn steering / queued input | Partial | runtime/session/gateway paths; audit found steering concepts | Verify every surface supports it consistently. |
-| Context compression | Present | `aegis/agent/compaction.py`, `aegis/agent/loop.py` | Show compression decisions in traces/UI. |
+| Context compression | Present | `aegis/agent/compaction.py`, `aegis/agent/loop.py`, session timeline | Keep compression boundary tests broad. |
 | Spill-to-disk for large tool outputs | Present | `aegis/agent/loop.py`, session metadata | Add UI links to spilled artifacts. |
 | Filesystem checkpoints / rollback | Present | agent loop + tests | Expose rollback status and diffs in dashboard. |
-| Session resume / branch / lineage | Partial | `aegis/session.py`, session lineage fields | Build lineage graph UI. |
-| Prompt-part hashing/audit | Partial | context builder/session metadata | Build prompt-part audit endpoint and UI. |
+| Session resume / branch / lineage | Partial | `aegis/session.py`, `/api/sessions/{id}/lineage`, `web/src/pages/Sessions.tsx`, `tests/test_session_checks.py` | Add deeper source filters and packaged/live session recovery proof. |
+| Prompt-part hashing/audit | Present | `aegis/agent/context.py`, `/api/sessions/{id}/prompt-audit`, `web/src/pages/PromptAudit.tsx` | Continue adding prompt-cache regression fixtures. |
 | Dynamic subdirectory rules | Present | `aegis/agent/coding_context.py`, `aegis/agent/loop.py`, `tests/test_coding_context.py` | Done for first production slice; monitor monorepo cases. |
 | Persistent goals across turns | Partial | `aegis/goals.py`, CLI docs | Verify gateway/dashboard support and tests. |
 | Background task execution | Partial | `aegis/background.py`, dashboard/process APIs | Add lifecycle UI and durable state. |
@@ -40,12 +40,12 @@ Status legend:
 | Interactive terminal REPL | Present | `aegis/cli/repl.py` | Improve parity tests for slash command registry. |
 | One-shot CLI query | Present | `aegis/cli/main.py`, docs | Add strict JSON output contracts. |
 | Model/provider switching | Present | `aegis/cli/main.py`, provider registry | Add provider capability display. |
-| Tool management commands | Present | `aegis/cli/main.py`, tools registry, `aegis tools doctor` | Generate command docs from the parser. |
-| Skill management commands | Present | `aegis/skills.py`, `aegis/skill_manage.py` | Add mandatory skill quality gate. |
+| Tool management commands | Present | `aegis/cli/main.py`, tools registry, `aegis tools doctor`, generated `docs/cli-reference.md` and `docs/tools-reference.md` | Keep generated docs drift-checked in `scripts/verify_all.sh`. |
+| Skill management commands | Present | `aegis/skills.py`, `aegis/skill_manage.py`, `/api/skills/manage` | Quality/provenance reports now expose frontmatter, prompt-injection, duplicate, support-file, and requirement checks; keep expanding write-time gates. |
 | Memory commands | Present | `aegis/memory.py` | Add provider provenance status. |
 | Session browse/list/export | Present | `aegis/session.py`, CLI docs | Add richer source filtering and lineage. |
 | Config setup/edit/status/doctor | Present | `aegis/config.py`, `aegis/doctor.py`, `aegis/onboarding.py` | Add migration/diff preview for config changes. |
-| Runtime slash commands | Partial | `aegis/cli/repl.py`, docs | Generate slash-command docs from registry to prevent drift. |
+| Runtime slash commands | Present | `aegis/cli/repl.py`, generated `docs/slash-commands.md`, `tests/test_generated_reference_docs.py` | Add more Hermes-like slash commands where product behavior needs them. |
 | Voice toggles | Partial | voice tools exist; CLI support needs focused audit | Verify exact REPL commands and gateway behavior. |
 | Snapshot/rollback commands | Partial | checkpoints exist | Add complete command docs/tests. |
 | Debug report command | Needs audit | ops/debug modules likely exist | Confirm implementation and add docs/tests if needed. |
@@ -60,11 +60,11 @@ Status legend:
 | OpenAI-compatible chat providers | Present | `aegis/providers/chat_completions.py` | Add conformance fixtures. |
 | Responses-style providers | Present | `aegis/providers/responses.py` | Add streaming/tool-call contract tests. |
 | Anthropic-style providers | Present | `aegis/providers/anthropic.py` | Add malformed response/retry tests. |
-| Local providers | Present | registry includes local/no-auth modes | Add live probe status UI. |
-| OAuth/API-key auth abstraction | Present | `aegis/providers/auth.py`, `aegis/credentials.py` | Add dashboard auth state per provider. |
+| Local providers | Present | registry includes local/no-auth modes | Live probe status is now cached and visible in the provider matrix. |
+| OAuth/API-key auth abstraction | Present | `aegis/providers/auth.py`, `aegis/credentials.py`, Accounts page | Dashboard auth state and credential status are visible per provider. |
 | Credential pools / rotation | Partial | credentials/provider audit suggests auth support | Focus audit and add tests if missing. |
-| Fallback providers | Present | `aegis/providers/fallback.py` | Surface fallback reason/cost/latency in traces. |
-| Provider capability matrix | Partial | `aegis/providers/registry.py`, `web/src/pages/Models.tsx` | Add stronger live probe UX and provider-specific fixtures. |
+| Fallback providers | Present | `aegis/providers/fallback.py`, provider matrix fallback chain | Trace attempts include fallback reasons; provider matrix now shows configured fallback chain. |
+| Provider capability matrix | Partial | `aegis/providers/registry.py`, `web/src/pages/Models.tsx`, `/api/providers/matrix` | Matrix shows auth/credential status, cached redacted probe result, last error, fallback chain, context/output limits, pricing flags, and tool/streaming/vision/audio/reasoning/responses-state capabilities. |
 | Cost/usage accounting | Partial | `aegis/usage_log.py`, trace data | Add budget governor integration and UI. |
 | Model discovery | Partial | registry discovery flags | Add provider-specific live discovery tests. |
 
@@ -87,7 +87,7 @@ Status legend:
 | Subagents/delegation | Present | `aegis/tools/agentic.py`, runtime docs | Add durable/orchestrator limits UI. |
 | Cron job tool | Present | `aegis/tools/cronjob_tool.py` | Add dry-run preview and next-fire endpoint. |
 | Permission cascade | Present | `aegis/tools/permissions.py`, `aegis/dashboard.py`, `web/src/pages/Tools.tsx`, `tests/test_agent_perms.py` | Extend examples/docs to plugin and MCP tools. |
-| Destructive command hard blocks | Present | `aegis/tools/permissions.py`, `security_scan.py` | Add policy regression examples. |
+| Destructive command hard blocks | Present | `aegis/tools/permissions.py`, `security_scan.py`, `/api/security/policy-simulate` | Policy simulator explains hardline, scanner, headless approval, and allowlist outcomes without executing. |
 | Tool schema validation | Present | `aegis/tools/schema_validation.py`, `aegis tools doctor`, dashboard schema health, `tests/test_tool_schema_validation.py` | Extend gate to plugin/MCP schemas in CI. |
 | Tool provenance display | Partial | tool registry and plugin UI expose some source data | Add source/type/version fields consistently to registry output. |
 
@@ -99,13 +99,13 @@ Status legend:
 |---|---:|---|---|
 | Persistent memory | Present | `aegis/memory.py`, `aegis/memory_providers.py` | Show provider/provenance in dashboard. |
 | Pluggable memory backends | Present | memory providers audit | Add conformance tests per backend. |
-| Skill loading | Present | `aegis/skills.py`, bundled skills, `aegis skills list` | Add usage telemetry UI. |
-| Skill create/edit/remove | Present | `aegis/skill_manage.py`, skill tools | Enforce quality gate before write/install. |
+| Skill loading | Present | `aegis/skills.py`, bundled skills, `aegis skills list`, `/api/skills/manage` | Usage/provenance and duplicate shadowing are dashboard/API-visible; keep broadening bundled-skill quality fixtures. |
+| Skill create/edit/remove | Present | `aegis/skill_manage.py`, skill tools, `/api/skills/manage` | Quality report previews unsafe support files, prompt-injection text, missing requirements, and bad frontmatter; enforce the same report before every write/install path. |
 | Bundled skills library | Present | `aegis/builtin_skills/**` | Resolve duplicate names and stale docs as needed. |
 | Skill hub/marketplace | Partial | `aegis/marketplace.py` | Add install preview and security scan report. |
 | Curator/lifecycle maintenance | Present | `aegis/curator.py` | Add dry-run/approval dashboard. |
 | Self-improvement loop | Present | `aegis/self_improve.py`, `aegis/learn.py` | Require stronger approval and rollback preview. |
-| Skill provenance | Partial | skills have metadata, but UI unclear | Add provenance dashboard and tests. |
+| Skill provenance | Present | `web/src/pages/Skills.tsx`, `/api/skills/manage`, `tests/test_dashboard_fastapi.py`, `tests/test_product_surfaces.py` | Skills page and API show origin, agent-created/curatable/pinned/protected/bundled/installed state, source, usage, duplicates, and quality findings. |
 | External coding skills from public repo | Done in assistant environment | assistant skill library has coding guidelines saved | Do not import process-skills into AEGIS unless product integration is explicitly requested. |
 
 ---
@@ -132,18 +132,18 @@ Status legend:
 | FastAPI dashboard backend | Present | `aegis/dashboard_fastapi.py`, 205 routes | Split into routers after behavior is pinned. |
 | React/Vite admin dashboard | Present | `web/src/App.tsx`, pages for sessions/models/tools/etc. | Add missing ops/control pages. |
 | Chat/PTY terminal in dashboard | Present | `web/src/pages/Chat.tsx` | Add connection diagnostics and reconnect history. |
-| Sessions page | Present | `web/src/pages/Sessions.tsx` | Add lineage graph. |
-| Models/providers page | Present | `web/src/pages/Models.tsx` | Add capability/probe/auth matrix. |
+| Sessions page | Present | `web/src/pages/Sessions.tsx`, `/api/sessions/{id}/lineage` | Lineage panel now shows roots, parents, current origin, children, descendants, and warnings. |
+| Models/providers page | Present | `web/src/pages/Models.tsx` | Full provider matrix shows readiness, cached live probe, fallback chain, limits, pricing, and capability badges. |
 | Memory page | Present | `web/src/pages/Memory.tsx` | Add provider sync/provenance. |
-| Tools page | Present | `web/src/pages/Tools.tsx`, `/api/tools/validation`, `/api/tools/permission-dry-run` | Add fuller provenance and plugin/MCP schema coverage. |
-| Skills page | Present | `web/src/pages/Skills.tsx` | Add quality gate + curator flow. |
+| Tools page | Present | `web/src/pages/Tools.tsx`, `/api/tools/inventory`, `/api/tools/validation`, `/api/tools/permission-dry-run` | Tool inventory now exposes source/provenance, schema hash, availability, required env/auth names, output limits, risk, registry rejections, and plugin/MCP metadata without secrets. |
+| Skills page | Present | `web/src/pages/Skills.tsx`, `/api/skills/manage` | Shows skill quality warnings, provenance badges, support-file counts, duplicate copies, and curatable/pinned state. |
 | Cron page | Present | `web/src/pages/Cron.tsx` | Add dry-run/next-fire timeline. |
 | Gateway/channels/webhooks pages | Present | `web/src/pages/Channels.tsx`, `Webhooks.tsx`, gateway outbox/dead-letter endpoints | Add backpressure metrics and live adapter recovery guidance. |
-| Config/files/logs/system pages | Present | routes detected | Add production health score. |
+| Config/files/logs/system/security pages | Present | routes detected, `web/src/pages/Security.tsx`, `/api/security/policy-simulate` | Security page simulates file, shell, network, tool, and workspace/profile-boundary policy with redacted inputs. |
 | Analytics page | Present | route detected | Connect to cost/latency/governor metrics. |
-| Plugin route/slot host | Present | `web/src/plugins/host.tsx` | Add plugin provenance/security UI. |
-| Trace timeline page | Missing | trace backend exists | P2/P3 high priority. |
-| Prompt/system-context audit page | Missing | prompt metadata exists | Build after trace timeline. |
+| Plugin route/slot host | Present | `web/src/plugins/host.tsx`, `/api/extensions/status`, `web/src/pages/Plugins.tsx` | Plugins page now shows safe mode, manifest/load errors, middleware/hooks, dashboard API route counts, and extension contract health. |
+| Trace timeline page | Present | `web/src/pages/TraceTimeline.tsx`, `/api/sessions/{id}/timeline`, `/api/runs/{id}/timeline` | Add richer filters and cross-links as trace depth grows. |
+| Prompt/system-context audit page | Present | `web/src/pages/PromptAudit.tsx`, `/api/sessions/{id}/prompt-audit` | Add prompt-cache diff views if needed. |
 
 ---
 
@@ -152,12 +152,12 @@ Status legend:
 | Capability | AEGIS status | Evidence / likely files | Gap to close |
 |---|---:|---|---|
 | Electron desktop shell | Present | `desktop/electron/main.js` | Continue mirror drift checks. |
-| Backend launch/probe/readiness | Present | `backend-ready.cjs`, `desktop-status.cjs` | Formal lifecycle enum. |
-| Remote dashboard mode | Present | desktop tests | Add UI state for remote/local. |
-| Packaged backend staging | Present | desktop scripts/tests | Add packaged smoke artifact verification. |
+| Backend launch/probe/readiness | Present | `backend-ready.cjs`, `desktop-lifecycle.cjs`, desktop tests | Keep lifecycle state and readiness probes covered by desktop tests. |
+| Remote dashboard mode | Present | desktop lifecycle/UI tests | Remote mode is reported as a first-class lifecycle state. |
+| Packaged backend staging | Present | desktop scripts/tests, backend manifest hashes | Release jobs stage/probe a backend and generate artifact provenance. |
 | Update eligibility/guards | Present | desktop tests | Add release artifact proof in CI. |
 | Secure navigation policy | Present | desktop tests | Keep regression tests. |
-| Crash/restart resilience | Partial | restart/splash lifecycle tests | Add persistent crash history and repair action. |
+| Crash/restart resilience | Present | `desktop-lifecycle.cjs`, restart/splash lifecycle tests | Crash history is bounded and surfaced to the desktop shell. |
 | Desktop settings | Present | desktop settings tests | Add in-app settings diagnostics. |
 | Signing/notarization guard | Present | desktop tests | Confirm CI secret-less behavior and docs. |
 
@@ -167,13 +167,13 @@ Status legend:
 
 | Capability | AEGIS status | Evidence / likely files | Gap to close |
 |---|---:|---|---|
-| Multi-platform gateway runner | Present | `aegis/gateway/runner.py` | Add unified adapter contract tests. |
-| Telegram/Discord/Slack/Signal/Matrix/email/etc. adapters | Partial/Present | `aegis/gateway/*_channel.py` | Confirm every adapter with fake integration tests. |
+| Multi-platform gateway runner | Present | `aegis/gateway/runner.py`, `tests/test_gateway_adapter_contract.py` | Keep fake contract coverage synced with platform registry. |
+| Telegram/Discord/Slack/Signal/Matrix/email/etc. adapters | Present/Partial | `aegis/gateway/*_channel.py`, fake contract matrix | Add credentialed live-smoke evidence per platform before claiming live coverage. |
 | Pairing/admin controls | Present | `aegis/gateway/pairing.py`, CLI/dashboard routes | Add dashboard approval flow polish. |
 | Per-channel sessions | Present | gateway/session code | Add routing visualization. |
 | Gateway commands/status/restart | Present | gateway tests/docs | Add command registry generation. |
-| Queue/idempotency | Present | `aegis/gateway/queue.py` | Add backpressure metrics. |
-| Dead-letter store for failed delivery | Present | `aegis/gateway/queue.py`, `aegis/dashboard_fastapi.py`, `web/src/pages/Channels.tsx`, `tests/test_gateway_queue_ops.py` | Add platform-specific retry playbooks and metrics. |
+| Queue/idempotency | Present | `aegis/gateway/queue.py`, `tests/test_gateway_adapter_contract.py` | Add deeper backpressure metrics. |
+| Dead-letter store for failed delivery | Present | `aegis/gateway/queue.py`, `aegis/dashboard_fastapi.py`, `web/src/pages/Channels.tsx`, `tests/test_gateway_queue_ops.py`, `tests/test_gateway_adapter_contract.py` | Add platform-specific retry playbooks and live-smoke logs. |
 | Webhook subscriptions | Present | `aegis/webhook.py`, docs | Add payload templating UI and replay. |
 | Handoff from CLI to gateway | Present | `aegis/handoff.py` | Add dashboard handoff history. |
 | Voice message STT/TTS through gateway | Partial | voice tools exist | Focus audit per adapter. |
@@ -184,15 +184,15 @@ Status legend:
 
 | Capability | AEGIS status | Evidence / likely files | Gap to close |
 |---|---:|---|---|
-| Durable cron scheduler | Present | `aegis/cron.py` | Add dry-run/next-fire preview. |
-| Cron with skills/model/toolsets/workdir/context chaining | Present/Partial | cron audit found rich fields | Add full docs/tests per field. |
+| Durable cron scheduler | Present | `aegis/cron.py`, `/api/cron/jobs/{id}/preview`, `/api/cron/fire` | Add more live scheduler smoke evidence. |
+| Cron with skills/model/toolsets/workdir/context chaining | Present/Partial | cron preview, run history, model/toolset/workdir fields | Add broader docs per field. |
 | Script-only scheduled jobs | Present/Partial | cron tool/source | Verify no-agent behavior and delivery semantics. |
 | Webhook-triggered agent runs | Present | webhook modules | Add replay/security UI. |
 | Kanban durable board | Present | `aegis/kanban.py`, `kanban_auto.py` | Add stuck-card and worker dashboard. |
 | Multi-agent worker dispatch | Present/Partial | kanban automation | Add lifecycle + failure limits UI. |
 | Self-improvement benchmarks | Present | `aegis/bench.py`, `self_improve.py` | Require explicit approvals and rollback. |
 | Ambient/watch mode | Present/Partial | `aegis/ambient.py` | Add status/stop UI and resource caps. |
-| Background jobs UI | Missing/Partial | background module exists | Build unified active jobs panel. |
+| Background jobs UI | Present/Partial | `aegis/background.py`, `/api/background/jobs`, `web/src/pages/Agents.tsx` | Add durable restart-persistent background storage if needed. |
 
 ---
 
@@ -200,11 +200,11 @@ Status legend:
 
 | Capability | AEGIS status | Evidence / likely files | Gap to close |
 |---|---:|---|---|
-| MCP client | Present | `aegis/mcp/client.py` | Add server health/provenance UI. |
-| MCP server | Present | `aegis/mcp/server.py` | Expose richer schemas and permission metadata. |
+| MCP client | Present | `aegis/mcp/client.py`, `/api/extensions/status`, `web/src/pages/Mcp.tsx` | MCP page shows stdio/HTTP servers, env/header provenance, include/exclude tool filters, selected/excluded counts, catalog, and live probe actions. |
+| MCP server | Present | `aegis/mcp/server.py`, `tests/test_product_surfaces.py` | MCP server uses full ToolContext, memory/provider tools, session-stop hooks, and visible inventory; keep expanding schema fixtures. |
 | JSON-RPC stdio | Present | `aegis/rpc.py` | Version all method schemas. |
 | Python SDK | Present | `aegis/sdk.py` | Add async API and typed exceptions. |
-| ACP/IDE integration | Present | `aegis/acp.py` | Add conformance fixtures and editor diff tests. |
+| ACP/IDE integration | Present | `aegis/acp.py`, `/api/extensions/status`, `tests/test_acp.py` | ACP routes through `SurfaceRunner`, shares SessionStore/trace metadata, supports session list/detail/search/fork/load, permission requests, cancel, and diff updates. |
 | OpenAI-compatible API server | Present | `aegis/server.py` | Ensure dependency install path is documented; add endpoint contract docs. |
 | API auth | Present | `aegis/server.py`, dashboard auth | Add probe/status UI. |
 | API model listing | Present | server tests passed | Keep contract tests current. |
@@ -217,11 +217,11 @@ Status legend:
 |---|---:|---|---|
 | Profile-aware config/home | Present | `aegis/config.py` | Add import/export profile commands if missing. |
 | Env/secrets separation | Present | config/credentials modules | Add redaction tests for every surface. |
-| Plugin loading | Present | `aegis/plugins.py` | Add plugin sandbox/provenance UI. |
+| Plugin loading | Present | `aegis/plugins.py`, `/api/extensions/status`, `web/src/pages/Plugins.tsx` | Plugin manifests, safe mode, middleware/hooks, dashboard auth/setup hooks, route mounts, manifest traversal errors, and contribution drift are API/UI-visible. |
 | Dashboard plugins | Present | `web/src/plugins/host.tsx` | Add version compatibility checks. |
 | Config migration | Partial | config/onboarding modules | Add migration dry-run. |
 | Installer scripts | Present | `install.sh`, `install.ps1`, uninstall scripts | Add installer CI smoke. |
-| Release scripts/workflows | Present | `.github/workflows/ci.yml`, `RELEASING.md` | Add full release gate and artifact hashes. |
+| Release scripts/workflows | Present | `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `scripts/verify_all.sh`, `RELEASING.md` | Keep release gate synced with parity phases. |
 | Update command/runtime update | Partial | desktop/update scripts | Focus audit and tests. |
 
 ---
@@ -231,15 +231,15 @@ Status legend:
 | Capability | AEGIS status | Evidence / likely files | Gap to close |
 |---|---:|---|---|
 | Secret redaction | Present | `aegis/redact.py`, tests likely | Expand to all event/log outputs. |
-| Prompt-injection scanning | Present | `aegis/security_scan.py` | Output JSON/Markdown reports. |
-| SSRF/network safety | Present | `aegis/net_safety.py` | Add dashboard policy simulator. |
+| Prompt-injection scanning | Present | `aegis/security_scan.py`, `aegis security audit --json`, `aegis security audit --markdown` | Scanner output is available as redacted Markdown and machine-readable JSON reports. |
+| SSRF/network safety | Present | `aegis/net_safety.py`, `/api/security/policy-simulate`, `web/src/pages/Security.tsx` | Dashboard simulator explains URL allow/deny decisions without fetching. |
 | Dangerous shell hard blocks | Present | `aegis/tools/permissions.py` | Keep denylist regression tests. |
 | File safety / sensitive path guards | Present | `aegis/tools/file_safety.py` | Add UI explanation. |
 | Approvals/manual smart policy | Present/Partial | permission engine | Verify smart policy behavior and docs. |
 | Gateway allowlists/admins | Present/Partial | gateway config/tests | Add dashboard guardrail checker. |
 | PII redaction | Needs audit | not confirmed in full pass | Add if required for messaging surfaces. |
-| Security report command | Missing/Partial | scanner exists | Build `aegis security audit --json --md`. |
-| Release provenance/SBOM | Missing | not confirmed | Add hashes/SBOM to release gate. |
+| Security report command | Present | `aegis/ops.py`, `aegis security audit --json`, `aegis security audit --markdown` | JSON/Markdown audit scans dependencies, MCP commands, plugins, and skills with redacted findings. |
+| Release provenance/SBOM | Present | `scripts/release_provenance.py`, release workflow | CI writes and verifies `SHA256SUMS`, `sbom.cdx.json`, and `release-summary.json` for artifacts. |
 
 ---
 
@@ -264,32 +264,28 @@ Status legend:
 |---|---:|---|---|
 | User quickstart | Present | `docs/quickstart.md` | Keep generated command examples in sync. |
 | CLI reference | Present | `docs/cli.md` | Generate from command registry where possible. |
-| Security docs | Present | `docs/security.md` | Add security report examples. |
-| Dashboard docs | Present/Partial | docs and README | Add trace, permission, provider, and dead-letter page details. |
-| Desktop docs | Partial | README/docs | Add packaged lifecycle and troubleshooting proof. |
-| Provider docs | Present/Partial | docs and registry | Add provider capability/probe matrix details. |
-| Gateway docs | Present/Partial | docs/gateway | Add platform contract table. |
-| Release docs | Present | `RELEASING.md` | Add full verification matrix and artifact hashes. |
-| Roadmap | Partial | README and this matrix now describe current product polish gaps | Keep refreshed after each production slice. |
+| Security docs | Present | `docs/security.md`, `docs/dashboard.md` | Dashboard docs include the policy simulator and security report surfaces. |
+| Dashboard docs | Present | docs and README | Trace, prompt audit, security, plugin, model, tool, session, and desktop lifecycle pages are documented; keep screenshots/prose refreshed after UI changes. |
+| Desktop docs | Present | README/docs | Packaged lifecycle, repair state, updater status, and troubleshooting proof are documented. |
+| Provider docs | Present | docs and registry | Provider capability/probe matrix details are surfaced; live-account smoke remains credential-bound. |
+| Gateway docs | Present | docs/gateway | Platform contract, fake-adapter testing, delivery observability, and live-smoke boundaries are documented. |
+| Release docs | Present | `RELEASING.md` | Keep credential-bound signing/notarization notes current. |
+| Full parity ledger | Present | `docs/hermes-code-map.csv`, `docs/hermes-parity-ledger.csv`, `scripts/check_hermes_parity_ledger.py --final` | Final mode is closed: 950 rows covered, 723 complete, 227 AEGIS-specific site rows justified, zero pending/partial. |
+| Roadmap | Present | README and this matrix now describe current credential-bound limits | Keep refreshed after each production slice. |
 | Full audit doc | Present | `docs/full-repo-audit.md` | Keep updated after major slices. |
 | Production plan | Present | `docs/production-harness-plan.md` | Keep tied to this matrix. |
 
 ---
 
-## 16. Immediate Build Order
+## 16. Current Verified State
 
-Fastest high-impact path:
+The implementation phases in `/home/alienai/AEGIS_to_Hermes_Full_Parity_Codex_MASTER.md`
+are closed against the local parity gate:
 
-1. **Trace timeline + prompt/context audit** — prompt parts, provider calls, tool calls, retries, compaction, outputs.
-2. **Provider capability/probe/auth matrix hardening** — live readiness, cost/latency, model capabilities, and failure reasons.
-3. **Tool provenance and plugin/MCP schema gate** — consistent source/type/version fields and CI validation beyond built-ins.
-4. **Cron dry-run, next-fire, and active jobs panel** — one operational view for scheduled and background work.
-5. **Desktop lifecycle state machine** — boot, backend, restart, crash history, repair actions, and packaged smoke verification.
-6. **Skill quality gate + curator approval UI** — safe long-term self-improvement with rollback preview.
-7. **API/SDK contract fixtures** — streaming, cancellation, auth, run events, MCP, eval replay, and responses-style behavior.
-8. **Gateway fake-adapter/live-test matrix** — adapter contract coverage plus explicit credentialed smoke steps.
-9. **Release provenance** — artifact hashes, SBOM, signing/notarization proof when credentials exist, and a single release gate.
-10. **Generated docs** — CLI/API/dashboard references generated from code where practical.
+1. Prompt audit, trace timeline, tool provenance, provider matrix, generated docs, sessions, gateway delivery observability, cron/background jobs, memory/skills governance, MCP/plugins, security simulator, dashboard/desktop lifecycle, and release provenance are implemented.
+2. `bash scripts/verify_all.sh` is the single local gate for ledger coverage, generated docs, Python tests, release provenance smoke, web typecheck/build, desktop tests, compileall, and `git diff --check`.
+3. `python scripts/check_hermes_parity_ledger.py --final` closes every code-map row: 950 total, 723 complete, 227 AEGIS-specific site rows justified, zero pending/partial.
+4. Remaining proof that cannot be produced locally is credential-bound: signed/notarized release artifacts and live Telegram/Slack/Discord/webhook account smoke runs.
 
 ---
 
@@ -297,8 +293,8 @@ Fastest high-impact path:
 
 AEGIS reaches the target when:
 
-1. Every row above is **Present** or deliberately marked **Won't build** with a reason.
-2. Python, desktop, web, site, docs, security, installer, and release checks pass from one command.
+1. Every row above is **Present** or deliberately marked **not-needed-aegis-specific** with a reason.
+2. Python, desktop, web, docs, security, installer, ledger, and release-provenance checks pass from one command.
 3. Every user-facing feature has a CLI command, dashboard/API status, tests, and docs.
 4. Every dangerous action has one policy path and a traceable explanation.
 5. Every background/remote/durable system has status, retry/failure records, and recovery instructions.

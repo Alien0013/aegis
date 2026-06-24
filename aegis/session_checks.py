@@ -94,12 +94,17 @@ def cross_session_integrity_report(
         if session is not None:
             sessions[sid] = session
 
+    children_by_parent: dict[str, list[str]] = {}
+    for child_id, child_session in sessions.items():
+        if child_session.parent_id:
+            children_by_parent.setdefault(child_session.parent_id, []).append(child_id)
+
     run_rows = runs.list(limit=run_limit)
     run_by_id = {str(row.get("id") or ""): row for row in run_rows if row.get("id")}
     now = datetime.now(timezone.utc)
 
     for sid, session in sessions.items():
-        if session.parent_id and store.load(session.parent_id) is None:
+        if session.parent_id and session.parent_id not in sessions and store.load(session.parent_id) is None:
             _issue(
                 issues,
                 code="missing_parent_session",
@@ -110,6 +115,117 @@ def cross_session_integrity_report(
             )
 
         meta = session.meta if isinstance(session.meta, dict) else {}
+        lineage_path: list[str] = []
+        lineage_seen: set[str] = set()
+        cur = sid
+        while cur:
+            if cur in lineage_seen:
+                _issue(
+                    issues,
+                    code="lineage_cycle",
+                    severity="error",
+                    session_id=sid,
+                    message="session parent links contain a cycle",
+                    details={"at": cur, "path": lineage_path},
+                )
+                break
+            lineage_seen.add(cur)
+            lineage_path.append(cur)
+            parent = sessions.get(cur)
+            if parent is None or not parent.parent_id:
+                break
+            if parent.parent_id not in sessions:
+                break
+            cur = parent.parent_id
+        expected_root = lineage_path[-1] if lineage_path else sid
+        expected_depth = max(0, len(lineage_path) - 1)
+        if meta.get("lineage_root"):
+            lineage_root = str(meta.get("lineage_root") or "")
+            if lineage_root not in sessions:
+                _issue(
+                    issues,
+                    code="malformed_lineage_root",
+                    severity="warning",
+                    session_id=sid,
+                    message="session lineage_root points at a missing session",
+                    details={"lineage_root": lineage_root},
+                )
+            elif lineage_root != expected_root:
+                _issue(
+                    issues,
+                    code="lineage_root_mismatch",
+                    severity="warning",
+                    session_id=sid,
+                    message="session lineage_root does not match parent_id root",
+                    details={"lineage_root": lineage_root, "expected_root": expected_root},
+                )
+        if "lineage_depth" in meta:
+            try:
+                lineage_depth = int(meta.get("lineage_depth"))
+                if lineage_depth < 0:
+                    raise ValueError("negative depth")
+            except (TypeError, ValueError):
+                _issue(
+                    issues,
+                    code="malformed_lineage_depth",
+                    severity="warning",
+                    session_id=sid,
+                    message="session lineage_depth is not a non-negative integer",
+                    details={"lineage_depth": meta.get("lineage_depth")},
+                )
+            else:
+                if lineage_depth != expected_depth:
+                    _issue(
+                        issues,
+                        code="lineage_depth_mismatch",
+                        severity="warning",
+                        session_id=sid,
+                        message="session lineage_depth does not match parent_id depth",
+                        details={"lineage_depth": lineage_depth, "expected_depth": expected_depth},
+                    )
+        if "child_sessions" in meta:
+            child_sessions = meta.get("child_sessions")
+            if not isinstance(child_sessions, list):
+                _issue(
+                    issues,
+                    code="malformed_child_sessions",
+                    severity="warning",
+                    session_id=sid,
+                    message="session child_sessions metadata is not a list",
+                )
+            else:
+                listed_children = {str(child_id) for child_id in child_sessions if child_id}
+                actual_children = set(children_by_parent.get(sid, []))
+                for child_id in sorted(listed_children):
+                    child = sessions.get(child_id)
+                    if child is None:
+                        _issue(
+                            issues,
+                            code="stale_child_session_backref",
+                            severity="warning",
+                            session_id=sid,
+                            message="session child_sessions metadata references a missing child",
+                            details={"child_id": child_id},
+                        )
+                    elif child.parent_id != sid:
+                        _issue(
+                            issues,
+                            code="stale_child_session_backref",
+                            severity="warning",
+                            session_id=sid,
+                            message="session child_sessions metadata references a session with another parent",
+                            details={"child_id": child_id, "actual_parent_id": child.parent_id},
+                        )
+                for child_id in sorted(actual_children - listed_children):
+                    _issue(
+                        issues,
+                        code="missing_child_session_backref",
+                        severity="warning",
+                        session_id=sid,
+                        message="session parent_id child is missing from child_sessions metadata",
+                        details={"child_id": child_id},
+                    )
+
         generation = meta.get(_GATEWAY_GENERATION_META)
         if generation is not None:
             try:
@@ -284,7 +400,20 @@ def cross_session_integrity_report(
         },
         {
             "id": "lineage",
-            "ok": not any(issue["code"] == "missing_parent_session" for issue in issues),
+            "ok": not any(
+                issue["code"] in {
+                    "missing_parent_session",
+                    "lineage_cycle",
+                    "malformed_lineage_root",
+                    "lineage_root_mismatch",
+                    "malformed_lineage_depth",
+                    "lineage_depth_mismatch",
+                    "malformed_child_sessions",
+                    "stale_child_session_backref",
+                    "missing_child_session_backref",
+                }
+                for issue in issues
+            ),
             "detail": "session parent links are consistent",
         },
         {
@@ -354,6 +483,20 @@ def cross_session_integrity_report(
                     and str(session.meta.get(_RESUME_REASON_META) or "") == _PLANNED_STOP_REASON
                 )
             ),
+            "lineage_issue_count": sum(
+                1 for issue in issues
+                if issue["code"] in {
+                    "missing_parent_session",
+                    "lineage_cycle",
+                    "malformed_lineage_root",
+                    "lineage_root_mismatch",
+                    "malformed_lineage_depth",
+                    "lineage_depth_mismatch",
+                    "malformed_child_sessions",
+                    "stale_child_session_backref",
+                    "missing_child_session_backref",
+                }
+            ),
         },
     }
 
@@ -391,7 +534,9 @@ def repair_cross_session_integrity(
     stale_interrupted = 0
     duplicate_interrupted = 0
     cleared_planned_stop = 0
+    repaired_lineage_backrefs = 0
     repaired_ids: set[str] = set()
+    lineage_repairs: list[dict[str, Any]] = []
 
     for run in runs.list(status="running", limit=run_limit):
         started_at = _utc(_parse_iso(str(run.get("started_at") or "")))
@@ -550,6 +695,48 @@ def repair_cross_session_integrity(
             "repair_kind": "planned_stop_resume_pending",
         })
 
+    sessions: dict[str, Any] = {}
+    for row in store.list(session_limit, include_internal=True):
+        sid = str(row.get("id") or "")
+        if not sid:
+            continue
+        session = store.load(sid)
+        if session is not None:
+            sessions[sid] = session
+    children_by_parent: dict[str, list[str]] = {}
+    for child_id, child_session in sessions.items():
+        if child_session.parent_id and child_session.parent_id in sessions:
+            children_by_parent.setdefault(child_session.parent_id, []).append(child_id)
+    for parent_id, session in sessions.items():
+        meta = session.meta if isinstance(session.meta, dict) else {}
+        actual_children = sorted(children_by_parent.get(parent_id, []))
+        has_child_meta = "child_sessions" in meta
+        if not actual_children and not has_child_meta:
+            continue
+        current_children = meta.get("child_sessions") if isinstance(meta.get("child_sessions"), list) else []
+        current_normalized = [str(child_id) for child_id in current_children if child_id]
+        if current_normalized == actual_children:
+            continue
+        session.meta["child_sessions"] = actual_children
+        try:
+            store.save(session)
+        except Exception as exc:  # noqa: BLE001
+            skipped += 1
+            lineage_repairs.append({
+                "session_id": parent_id,
+                "status": "error",
+                "error": f"{type(exc).__name__}: {exc}",
+                "repair_kind": "lineage_child_sessions",
+            })
+            continue
+        repaired_lineage_backrefs += 1
+        lineage_repairs.append({
+            "session_id": parent_id,
+            "status": "rebuilt",
+            "repair_kind": "lineage_child_sessions",
+            "child_sessions": actual_children,
+        })
+
     return {
         "object": "hermes.cross_session_integrity_repair",
         "repaired_at": now.isoformat(),
@@ -557,7 +744,9 @@ def repair_cross_session_integrity(
         "repaired_running_runs": stale_interrupted,
         "repaired_duplicate_running_runs": duplicate_interrupted,
         "cleared_planned_stop_resume_pending": cleared_planned_stop,
+        "repaired_lineage_backrefs": repaired_lineage_backrefs,
         "marked_resume_pending": marked_resume,
         "skipped": skipped,
         "runs": repaired,
+        "lineage": lineage_repairs,
     }

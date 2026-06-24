@@ -209,7 +209,8 @@ def test_no_key_custom_provider_probes_v1_models_from_root_base_url(tmp_path, mo
     assert any(row["id"] == "llamacpp-live-model" and row["source"] == "live" for row in rows)
 
 
-def test_dashboard_provider_probe_passes_base_url(monkeypatch):
+def test_dashboard_provider_probe_passes_base_url(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     from aegis.config import Config
     import aegis.doctor as doctor
     from aegis.dashboard_fastapi import _provider_probe
@@ -220,25 +221,32 @@ def test_dashboard_provider_probe_passes_base_url(monkeypatch):
         seen["provider"] = config.get("model.provider")
         seen["model"] = config.get("model.default")
         seen["base_url"] = config.get("model.base_url")
-        return True, "ok"
+        seen["timeout"] = str(config.get("providers.probe_timeout_seconds"))
+        return True, "ok sk-1234567890abcdef"
 
     monkeypatch.setattr(doctor, "probe_provider", fake_probe)
 
     result = _provider_probe(
-        Config({"model": {"provider": "openai", "default": "gpt-5.5"}}),
+        Config.load(),
         {
             "provider": "litellm-proxy",
             "model": "proxy-model",
             "base_url": "http://proxy.local/v1",
+            "timeout_seconds": 2,
         },
     )
 
     assert result["ok"] is True
+    assert result["detail"] == "ok [REDACTED]"
+    assert result["timeout_seconds"] == 2
     assert seen == {
         "provider": "litellm-proxy",
         "model": "proxy-model",
         "base_url": "http://proxy.local/v1",
+        "timeout": "2.0",
     }
+    cached = Config.load().get("providers.probe_cache.litellm-proxy")
+    assert cached["detail"] == "ok [REDACTED]"
 
 
 def test_provider_capability_matrix_exposes_limits_pricing_and_flags(tmp_path, monkeypatch):
@@ -249,6 +257,18 @@ def test_provider_capability_matrix_exposes_limits_pricing_and_flags(tmp_path, m
 
     cfg = Config.load()
     cfg.data["model"] = {"provider": "openai", "default": "gpt-5.5"}
+    cfg.data.setdefault("providers", {})["probe_cache"] = {
+        "openai": {
+            "ok": True,
+            "status": "ready",
+            "provider": "openai",
+            "model": "gpt-5.5",
+            "detail": "openai probe ok",
+            "latency_ms": 42,
+            "tested_at": "2026-06-24T00:00:00+00:00",
+            "timeout_seconds": 3,
+        }
+    }
 
     matrix = registry.provider_capability_matrix(cfg, ["openai"])
 
@@ -258,6 +278,9 @@ def test_provider_capability_matrix_exposes_limits_pricing_and_flags(tmp_path, m
     assert row["provider"] == "openai"
     assert row["auth"]["available"] is True
     assert row["probe"]["status"] == "ready"
+    assert row["probe"]["live"] is True
+    assert row["probe"]["latency_ms"] == 42
+    assert row["last_probe"]["detail"] == "openai probe ok"
     assert row["limits"]["context"] >= 400_000
     assert row["limits"]["max_output"] >= 8192
     model = next(item for item in row["models"] if item["id"] == "gpt-5.5")
@@ -265,3 +288,57 @@ def test_provider_capability_matrix_exposes_limits_pricing_and_flags(tmp_path, m
     assert model["capabilities"]["reasoning"] is True
     assert model["capabilities"]["structured_output"] is False
     assert model["pricing"]["known"] is True
+    assert matrix["totals"]["audio"] >= 0
+
+
+def test_provider_capability_matrix_exposes_fallback_chain(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.config import Config
+    from aegis.providers import registry
+
+    cfg = Config.load()
+    cfg.data["model"] = {"provider": "localtest", "default": "local-main"}
+    cfg.data["custom_providers"] = [
+        {
+            "name": "localtest",
+            "base_url": "http://local.test/v1",
+            "api_mode": "chat_completions",
+            "context_length": 70_000,
+        }
+    ]
+    cfg.data["fallback_providers"] = [{"provider": "ollama", "model": "llama3.1"}]
+
+    matrix = registry.provider_capability_matrix(cfg, ["localtest", "ollama"])
+
+    assert [row["provider"] for row in matrix["fallback_chain"]] == ["localtest", "ollama"]
+    local = next(row for row in matrix["providers"] if row["provider"] == "localtest")
+    ollama = next(row for row in matrix["providers"] if row["provider"] == "ollama")
+    assert local["fallback_enabled"] is True
+    assert ollama["fallback_enabled"] is True
+    assert [row["provider"] for row in local["fallback_chain"]] == ["localtest", "ollama"]
+
+
+def test_provider_probe_timeout_is_bounded(monkeypatch):
+    from aegis.config import Config
+    import aegis.doctor as doctor
+
+    seen: dict[str, float] = {}
+
+    class Provider:
+        name = "fake"
+        model = "fake-model"
+
+        def complete(self, messages, **kwargs):
+            seen["timeout"] = kwargs["timeout"]
+            from aegis.types import LLMResponse
+            return LLMResponse(text="ok")
+
+    monkeypatch.setattr("aegis.providers.fallback.build_with_fallbacks", lambda config: Provider())
+    cfg = Config.load()
+    cfg.data.setdefault("providers", {})["probe_timeout_seconds"] = 999
+
+    ok, detail = doctor.probe_provider(cfg)
+
+    assert ok is True
+    assert "fake/fake-model responded" in detail
+    assert seen["timeout"] == 30.0

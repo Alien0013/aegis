@@ -47,7 +47,7 @@ local files directly.
 | System/Ops | `system`, `ops` (curator/backup/memory-reset/update/services), `ops/checkpoints` | `dashboard._system_info/_ops_status/_ops_action` | home, checkpoints, curator state | `aegis system`/`doctor`/`backup` | destructive ops confirmed |
 | Evals/Kanban/Plugins/Review | `evals`/`eval`, `kanban`, `plugins`, `review` | respective `_dashboard_*` | eval/kanban/plugin stores | `aegis evals` etc. | read + gated writes |
 
-## Status vs. the cockpit spec
+## Status vs. the dashboard spec
 **Already real (not dummy):** all pages above flow through `/api/*` to real stores; the browser
 surface opens on Sessions, `/dashboard` is the compact overview, and `/command-center` is the
 sessions/system/usage ops overlay; chat streams (SSE); terminal is a real PTY; config is validated

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import inspect
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -173,6 +176,14 @@ class Tool:
     groups: list[str] = []
     # which toolset this belongs to (enabled via config.tools.toolsets)
     toolset: str = "core"
+    # provenance and policy hints surfaced by the dashboard/API.
+    source: str = "builtin"
+    source_path: str = ""
+    manifest_id: str = ""
+    required_env: list[str] = []
+    required_auth: list[str] = []
+    output_limits: dict[str, Any] = {}
+    risk_level: str = ""
 
     def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:  # pragma: no cover
         raise NotImplementedError
@@ -188,3 +199,122 @@ class Tool:
             "description": self.description.strip(),
             "parameters": self.parameters,
         }
+
+    def metadata(self) -> dict[str, Any]:
+        """Hermes-style audit metadata for model-visible and dashboard tool inventories.
+
+        The metadata intentionally exposes names, hashes, and source locations only. It
+        never reads configured secret values; env/auth fields are identifiers a human can
+        satisfy during setup.
+        """
+        return tool_metadata(self)
+
+
+def _schema_hash(schema: Any) -> str:
+    try:
+        body = json.dumps(schema, sort_keys=True, separators=(",", ":"), default=str)
+    except TypeError:
+        body = repr(schema)
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def _safe_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, dict):
+        values = list(value.keys())
+    elif isinstance(value, str):
+        values = [value]
+    elif isinstance(value, (list, tuple, set)):
+        values = list(value)
+    else:
+        values = [value]
+    return sorted({str(item).strip() for item in values if str(item).strip()})
+
+
+def _tool_source(tool: Tool) -> str:
+    raw = (
+        getattr(tool, "source", "")
+        or getattr(tool, "_aegis_source", "")
+        or ("plugin" if getattr(tool, "_aegis_plugin", "") else "")
+        or "builtin"
+    )
+    return str(raw).strip().lower() or "builtin"
+
+
+def _tool_source_path(tool: Tool, source: str) -> str:
+    for attr in ("source_path", "_aegis_source_path", "_aegis_plugin"):
+        value = str(getattr(tool, attr, "") or "").strip()
+        if value:
+            return value
+    if source == "mcp":
+        server = str(getattr(tool, "server_name", "") or "").strip()
+        remote = str(getattr(tool, "_remote", "") or getattr(tool, "name", "") or "").strip()
+        if server:
+            return f"mcp://{server}/{remote}"
+    try:
+        path = inspect.getsourcefile(tool.__class__) or inspect.getfile(tool.__class__)
+    except (TypeError, OSError):
+        path = ""
+    return str(path or "")
+
+
+def _tool_risk(tool: Tool) -> str:
+    explicit = str(getattr(tool, "risk_level", "") or "").strip().lower()
+    if explicit:
+        return explicit
+    groups = {str(group).lower() for group in getattr(tool, "groups", []) or []}
+    if groups & {"runtime", "automation", "computer"}:
+        return "high"
+    if groups & {"fs", "filesystem", "network"}:
+        return "medium"
+    return "low"
+
+
+def _tool_output_limits(tool: Tool) -> dict[str, Any]:
+    raw = getattr(tool, "output_limits", None)
+    if isinstance(raw, dict) and raw:
+        return dict(raw)
+    max_chars = getattr(tool, "max_output_chars", None) or getattr(tool, "MAX_OUTPUT_CHARS", None)
+    if max_chars:
+        return {"max_chars": int(max_chars), "policy": "truncate"}
+    return {"max_chars": "config:tools.max_output_chars", "policy": "truncate"}
+
+
+def tool_metadata(tool: Tool) -> dict[str, Any]:
+    schema = tool.schema()
+    available, reason = tool.available()
+    cls = tool.__class__
+    source = _tool_source(tool)
+    source_path = _tool_source_path(tool, source)
+    required_env = _safe_list(
+        getattr(tool, "required_env", None)
+        or getattr(tool, "_aegis_required_env", None)
+        or getattr(tool, "env", None)
+    )
+    required_auth = _safe_list(
+        getattr(tool, "required_auth", None)
+        or getattr(tool, "_aegis_required_auth", None)
+        or (["env"] if required_env else [])
+    )
+    manifest_id = str(
+        getattr(tool, "manifest_id", "")
+        or getattr(tool, "_aegis_manifest_id", "")
+        or getattr(tool, "server_name", "")
+        or ""
+    )
+    handler_module = f"{cls.__module__}.{cls.__qualname__}"
+    return {
+        "source": source,
+        "source_path": source_path,
+        "manifest_id": manifest_id,
+        "toolset": str(getattr(tool, "toolset", "") or "core"),
+        "schema_hash": _schema_hash(schema),
+        "handler_module": handler_module,
+        "availability_status": "available" if available else "unavailable",
+        "availability_reason": "" if available else str(reason),
+        "required_env": required_env,
+        "required_auth": required_auth,
+        "output_limits": _tool_output_limits(tool),
+        "risk_level": _tool_risk(tool),
+    }

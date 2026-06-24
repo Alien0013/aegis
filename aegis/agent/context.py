@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .. import __version__
-from ..config import Config, Workspace, context_file_max_chars
+from ..config import Config, Workspace, context_file_max_chars, workspace_dir
 from ..util import estimate_tokens, now_local
 
 DEFAULT_IDENTITY = f"""\
@@ -157,14 +157,31 @@ class PromptPart:
     tier: str
     name: str
     text: str
+    source_name: str = ""
+    source_path: str = ""
+    cache_stable: bool | None = None
 
     def metadata(self) -> dict:
+        tokens = estimate_tokens(self.text)
+        warnings: list[str] = []
+        lowered = self.text.lower()
+        if "[blocked:" in lowered:
+            warnings.append("source blocked by prompt-injection scanner")
+        if "truncated" in lowered:
+            warnings.append("source was truncated before prompt assembly")
+        cache_stable = self.cache_stable if self.cache_stable is not None else self.tier == "stable"
         return {
+            "id": f"{self.tier}:{self.name}",
             "tier": self.tier,
             "name": self.name,
+            "source_name": self.source_name or self.name,
+            "source_path": self.source_path,
             "hash": hashlib.sha256(self.text.encode("utf-8")).hexdigest()[:16],
             "chars": len(self.text),
-            "tokens": estimate_tokens(self.text),
+            "tokens": tokens,
+            "token_estimate": tokens,
+            "cache_stable": bool(cache_stable),
+            "warnings": warnings,
         }
 
 
@@ -246,33 +263,54 @@ class ContextBuilder:
     ) -> PromptBuild:
         # --- stable tier ---
         parts = [
-            PromptPart("stable", "identity", identity or DEFAULT_IDENTITY),
-            PromptPart("stable", "agentic_guidance", AGENTIC_GUIDANCE),
-            PromptPart("stable", "aegis_capabilities", AEGIS_CAPABILITIES),
-            PromptPart("stable", "tool_guidance", TOOL_GUIDANCE),
+            PromptPart("stable", "identity", identity or DEFAULT_IDENTITY, "AEGIS built-in"),
+            PromptPart("stable", "agentic_guidance", AGENTIC_GUIDANCE, "AEGIS built-in"),
+            PromptPart("stable", "aegis_capabilities", AEGIS_CAPABILITIES, "AEGIS built-in"),
+            PromptPart("stable", "tool_guidance", TOOL_GUIDANCE, "AEGIS built-in"),
         ]
         hint = PLATFORM_HINTS.get((platform or "").lower())
         if hint:                                  # channel-specific behavior (gateway mode)
-            parts.append(PromptPart("stable", f"platform:{platform}", hint))
+            parts.append(PromptPart("stable", f"platform:{platform}", hint, "platform hint", f"gateway:{platform}"))
         if skills_index:
-            parts.append(PromptPart("stable", "skills_index", skills_index))
+            parts.append(PromptPart("stable", "skills_index", skills_index, "skills index"))
         if runtime_block:
-            parts.append(PromptPart("stable", "runtime", runtime_block))
+            parts.append(PromptPart("stable", "runtime", runtime_block, "runtime config"))
 
         # --- context tier ---
         soul = self._persona()
         if soul:
-            parts.append(PromptPart("context", "persona", "# Persona\n" + soul))
+            parts.append(PromptPart(
+                "context",
+                "persona",
+                "# Persona\n" + soul,
+                "workspace persona",
+                str(workspace_dir() / "SOUL.md"),
+                cache_stable=False,
+            ))
         rules = self.workspace.rules()
         if rules:
-            parts.append(PromptPart("context", "project_rules", "# Project & global rules\n" + rules))
+            parts.append(PromptPart(
+                "context",
+                "project_rules",
+                "# Project & global rules\n" + rules,
+                "workspace rules",
+                str(self.cwd),
+                cache_stable=False,
+            ))
         if coding_block:                          # coding posture: brief + one-time git snapshot
-            parts.append(PromptPart("context", "coding_workspace", coding_block))
+            parts.append(PromptPart(
+                "context",
+                "coding_workspace",
+                coding_block,
+                "coding workspace",
+                str(self.cwd),
+                cache_stable=False,
+            ))
 
         # --- volatile tier ---
         if memory_block:
-            parts.append(PromptPart("volatile", "memory", memory_block))
-        parts.append(PromptPart("volatile", "environment", self._env_block()))
+            parts.append(PromptPart("volatile", "memory", memory_block, "memory snapshot", cache_stable=False))
+        parts.append(PromptPart("volatile", "environment", self._env_block(), "runtime environment", cache_stable=False))
 
         kept = [p for p in parts if p.text.strip()]
         text = "\n\n---\n\n".join(p.text.strip() for p in kept)

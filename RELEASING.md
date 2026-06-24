@@ -35,6 +35,58 @@ python -m build
 twine upload dist/*          # username: __token__ · password: a pypi-… token you create
 ```
 
+## Release verification checklist
+
+Before any production tag, the local and CI gates should agree:
+
+```bash
+bash scripts/verify_all.sh
+python scripts/release_provenance.py --artifact-dir dist --out release-provenance/python
+python scripts/release_provenance.py --artifact-dir dist --out release-provenance/python --check
+```
+
+`scripts/verify_all.sh` runs the parity ledger checker, generated-reference
+drift check, Python tests, release-provenance smoke, web typecheck/build,
+desktop tests, Python compile checks, and `git diff --check`.
+
+For desktop artifacts, CI generates the same proof inside each
+`desktop/release` folder:
+
+- `SHA256SUMS`
+- `sbom.cdx.json`
+- `release-summary.json`
+
+The desktop release jobs verify those files before uploading artifacts or
+attaching files to a GitHub Release. The packaged backend manifest also includes
+per-file hashes for the staged backend.
+
+## Desktop packaged smoke
+
+Desktop release builds must stage a backend unless they explicitly declare an
+external backend dependency:
+
+```bash
+cd desktop
+AEGIS_RELEASE=1 AEGIS_DESKTOP_BACKEND_SOURCE=build/ci-backend npm run dist:linux
+```
+
+Packaging fails if the staged backend command cannot run `--version`, if unsafe
+symlinks are present, or if a release build is missing required signing and
+notarization inputs without an explicit override.
+
+## Signing and unsigned overrides
+
+Signed/notarized artifacts are only claimed when credentials are present:
+
+- Windows: `DESKTOP_WINDOWS_CSC_LINK`/`DESKTOP_WINDOWS_CSC_NAME` plus password
+  as needed.
+- macOS: signing material plus either Apple ID notarization credentials or App
+  Store Connect API key credentials.
+
+If credentials are unavailable, set `AEGIS_ALLOW_UNSIGNED_DESKTOP_RELEASE=1` only
+for internal testing. Unsigned builds are not equivalent to signed/notarized
+release artifacts, and release notes must say they are unsigned.
+
 ## After publishing
 
 ```bash

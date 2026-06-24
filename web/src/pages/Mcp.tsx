@@ -14,6 +14,13 @@ interface Server {
   status?: string;
   env_keys?: string[];
   header_keys?: string[];
+  tool_filter?: {
+    mode?: string;
+    include?: string[];
+    exclude?: string[];
+  };
+  selected_tool_count?: number | null;
+  excluded_tool_count?: number;
 }
 interface CatalogEntry {
   name: string;
@@ -129,6 +136,13 @@ export function Mcp() {
                         {server.cwd && <span>cwd {server.cwd}</span>}
                         {!!server.env_keys?.length && <span>env {server.env_keys.join(", ")}</span>}
                         {!!server.header_keys?.length && <span>headers {server.header_keys.join(", ")}</span>}
+                      </div>
+                    )}
+                    {server.tool_filter && server.tool_filter.mode !== "all" && (
+                      <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] text-faint">
+                        <Badge tone="warning">filter {server.tool_filter.mode}</Badge>
+                        {server.selected_tool_count != null && <Badge tone="info">selected {server.selected_tool_count}</Badge>}
+                        {!!server.excluded_tool_count && <Badge tone="danger">excluded {server.excluded_tool_count}</Badge>}
                       </div>
                     )}
                   </div>

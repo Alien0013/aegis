@@ -65,6 +65,18 @@ test("remote dashboard mode skips local backend spawn", () => {
 test("restart and splash lifecycle is single-flight", () => {
   requireSnippet("restartingBackend");
   requireSnippet("lastBootPhase");
+  requireSnippet("desktopLifecycle");
+  requireSnippet("initialDesktopLifecycle()");
+  requireSnippet("function setDesktopLifecycle");
+  requireSnippet("transitionDesktopLifecycle");
+  requireSnippet("lifecyclePublicSnapshot");
+  requireSnippet("descriptor.desktop.lifecycle");
+  requireSnippet('setDesktopLifecycle("probing_backend"');
+  requireSnippet('setDesktopLifecycle("remote_mode"');
+  requireSnippet('? "remote_mode" : "ready"');
+  requireSnippet('setDesktopLifecycle("crashed"');
+  requireSnippet('setDesktopLifecycle("repairing"');
+  requireSnippet('setDesktopLifecycle("stopped"');
   requireSnippet("function ensureSplash");
   requireSnippet("if (restartingBackend) return;");
   requireSnippet("quitting || restartingBackend");

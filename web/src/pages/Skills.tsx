@@ -22,6 +22,26 @@ interface SkillRow {
   source?: string;
   installed_at?: string;
   editable: boolean;
+  usage?: Record<string, unknown>;
+  provenance?: {
+    origin?: string;
+    agent_created?: boolean;
+    curatable?: boolean;
+    pinned?: boolean;
+    protected?: boolean;
+    bundled?: boolean;
+    hub_installed?: boolean;
+    installed?: boolean;
+    source?: string;
+  };
+  quality?: {
+    ok?: boolean;
+    issues?: string[];
+    warnings?: string[];
+    support_files?: { count?: number; unsafe?: Array<{ path?: string; reason?: string }> };
+    duplicates?: Array<{ path?: string; tier?: number; active?: boolean }>;
+    requires?: { env?: string[]; bins?: string[]; os?: string[]; satisfied?: boolean; reason?: string };
+  };
 }
 
 interface Registry { name: string; kind: string; ref: string }
@@ -280,15 +300,30 @@ export function Skills() {
                             {s.editable && !s.installed && <Badge tone="neutral">local</Badge>}
                             {!s.editable && !s.installed && <Badge tone="neutral">built in</Badge>}
                             {!s.available && <Badge tone={s.enabled ? "warning" : "neutral"}>{s.enabled ? "gated" : "disabled"}</Badge>}
+                            {s.provenance?.curatable && <Badge tone="info">curatable</Badge>}
+                            {s.provenance?.pinned && <Badge tone="neutral">pinned</Badge>}
+                            {s.quality && !s.quality.ok && <Badge tone="warning">quality</Badge>}
                           </div>
                           <div className="mt-1 line-clamp-2 text-xs text-faint">
                             {s.unavailable_reason || s.description || "-"}
                           </div>
+                          {(s.quality?.issues?.[0] || s.quality?.warnings?.[0]) && (
+                            <div className={s.quality?.issues?.[0] ? "mt-1 text-xs text-warning" : "mt-1 text-xs text-faint"}>
+                              {s.quality?.issues?.[0] || s.quality?.warnings?.[0]}
+                            </div>
+                          )}
                           {!![...(s.platforms || []), ...(s.environments || []), ...(s.toolsets || [])].length && (
                             <div className="mt-1 flex flex-wrap gap-1">
                               {(s.platforms || []).map((x) => <MiniTag key={`p:${x}`}>platform:{x}</MiniTag>)}
                               {(s.environments || []).map((x) => <MiniTag key={`e:${x}`}>env:{x}</MiniTag>)}
                               {(s.toolsets || []).map((x) => <MiniTag key={`t:${x}`}>toolset:{x}</MiniTag>)}
+                            </div>
+                          )}
+                          {s.quality && (
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              <MiniTag>origin:{s.provenance?.origin || "user"}</MiniTag>
+                              <MiniTag>support:{s.quality.support_files?.count || 0}</MiniTag>
+                              {!!s.quality.duplicates?.length && <MiniTag>copies:{s.quality.duplicates.length}</MiniTag>}
                             </div>
                           )}
                         </button>

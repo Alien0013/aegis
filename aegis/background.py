@@ -15,7 +15,7 @@ from .types import new_id
 class BgTask:
     id: str
     prompt: str
-    status: str = "running"     # running | done | error
+    status: str = "running"     # running | cancelling | cancelled | done | error
     result: str = ""
     error: str = ""
     run_id: str = ""
@@ -32,6 +32,8 @@ class BgTask:
     user_name: str = ""
     thread_id: str = ""
     message_id: str = ""
+    cancel_requested: bool = False
+    retry_of: str = ""
 
 
 class BackgroundCapacityError(RuntimeError):
@@ -66,6 +68,7 @@ class BackgroundManager:
         self._executor: ThreadPoolExecutor | None = None
         self._executor_size = 0
         self._completion_events: list[dict[str, Any]] = []
+        self._active_agents: dict[str, Any] = {}
 
     def _max_workers(self, config: Any) -> int:
         async_value = _positive_config_int(config, "delegation.max_async_children")
@@ -102,7 +105,7 @@ class BackgroundManager:
         return 50
 
     def _running_count_locked(self) -> int:
-        return sum(1 for task in self._tasks.values() if task.status == "running")
+        return sum(1 for task in self._tasks.values() if task.status in {"running", "cancelling"})
 
     def capacity(self, config: Any) -> dict[str, int]:
         with self._lock:
@@ -159,10 +162,11 @@ class BackgroundManager:
         session_meta: dict | None = None,
         delivery: dict[str, Any] | None = None,
     ) -> BgTask:
+        parent_session_id = str(getattr(parent_session, "id", "") or (session_meta or {}).get("parent_session_id") or "")
         return BgTask(
             id=new_id("bg"),
             prompt=prompt,
-            parent_session_id=str(getattr(parent_session, "id", "") or ""),
+            parent_session_id=parent_session_id,
             agent_type=str((session_meta or {}).get("agent_type") or "general"),
             role=str((session_meta or {}).get("role") or "leaf"),
             model=str((session_meta or {}).get("model") or config.get("delegation.model", "")
@@ -262,9 +266,13 @@ class BackgroundManager:
 
         meta = {
             "background_task_id": task.id,
+            "creator_kind": "background",
             **runtime_controls_meta(session_runtime_controls(parent_session)),
             **(session_meta or {}),
         }
+        parent_session_id = getattr(parent_session, "id", "") if parent_session is not None else ""
+        if parent_session_id:
+            meta.setdefault("parent_session_id", parent_session_id)
 
         try:
             timeout = max(0.0, float(config.get("delegation.child_timeout_seconds", 0) or 0))
@@ -284,6 +292,9 @@ class BackgroundManager:
                     surface="background",
                     meta=meta,
                 )
+                if parent_session_id and not session.parent_id:
+                    session.parent_id = parent_session_id
+                    runner.store.save(session)
                 agent = runner.make_agent(
                     session=session,
                     cwd=cwd,
@@ -291,6 +302,14 @@ class BackgroundManager:
                     registry=registry,
                     approver=approver,
                 )
+                with self._lock:
+                    self._active_agents[task.id] = agent
+                    cancel_requested = task.cancel_requested
+                if cancel_requested:
+                    try:
+                        agent.cancel()
+                    except Exception:  # noqa: BLE001
+                        pass
                 if timeout > 0:                  # wall-clock budget: cancel at the next safe point
                     def _expire(a=agent, t=task):
                         t.error = t.error or f"child timed out after {timeout:g}s"
@@ -310,15 +329,21 @@ class BackgroundManager:
                 )
                 with self._lock:
                     task.result = result.text or ""
-                    task.status = "done"
+                    if task.cancel_requested:
+                        task.status = "cancelled"
+                        task.error = task.error or "cancel requested"
+                    else:
+                        task.status = "done"
                     task.run_id = result.run_id
                     task.finished_at = time.time()
             except Exception as e:  # noqa: BLE001
                 with self._lock:
                     task.error = f"{type(e).__name__}: {e}"
-                    task.status = "error"
+                    task.status = "cancelled" if task.cancel_requested else "error"
                     task.finished_at = time.time()
             finally:
+                with self._lock:
+                    self._active_agents.pop(task.id, None)
                 if watchdog is not None:
                     watchdog.cancel()
                 close = getattr(runner, "close", None)
@@ -414,7 +439,10 @@ class BackgroundManager:
                      "result_preview": (t.result or t.error)[:80], "run_id": t.run_id,
                      "agent_type": t.agent_type, "parent_session_id": t.parent_session_id,
                      "created_at": t.created_at, "started_at": t.started_at,
-                     "finished_at": t.finished_at}
+                     "finished_at": t.finished_at, "cancel_requested": t.cancel_requested,
+                     "retry_of": t.retry_of, "error": t.error[:500],
+                     "platform": t.platform, "chat_id": t.chat_id,
+                     "thread_id": t.thread_id, "message_id": t.message_id}
                     for t in self._tasks.values()]
 
     def get(self, task_id: str) -> BgTask | None:
@@ -423,6 +451,66 @@ class BackgroundManager:
                 if t.id.startswith(task_id):
                     return t
         return None
+
+    def cancel(self, task_id: str) -> dict[str, Any]:
+        task = self.get(task_id)
+        if task is None:
+            return {"ok": False, "error": "background task not found", "id": task_id}
+        agent = None
+        with self._lock:
+            task.cancel_requested = True
+            if task.status == "running":
+                task.status = "cancelling"
+            elif task.status not in {"cancelling", "done", "error", "cancelled"}:
+                task.status = "cancelled"
+                task.finished_at = task.finished_at or time.time()
+            agent = self._active_agents.get(task.id)
+        if agent is not None:
+            try:
+                cancel = getattr(agent, "cancel", None)
+                if callable(cancel):
+                    cancel()
+                cancel_event = getattr(agent, "cancel_event", None)
+                if cancel_event is not None:
+                    cancel_event.set()
+            except Exception as exc:  # noqa: BLE001
+                return {"ok": False, "error": f"cancel failed: {type(exc).__name__}: {exc}", "id": task.id}
+        return {"ok": True, "id": task.id, "status": task.status, "cancel_requested": True}
+
+    def retry(self, config: Any, task_id: str, *, cwd=None, on_done=None,
+              registry=None, include_mcp: bool = True, approver=None) -> dict[str, Any]:
+        task = self.get(task_id)
+        if task is None:
+            return {"ok": False, "error": "background task not found", "id": task_id}
+        if task.status in {"running", "cancelling"}:
+            return {"ok": False, "error": "background task is still running", "id": task.id}
+        new_id = self.spawn(
+            config,
+            task.prompt,
+            cwd=cwd,
+            on_done=on_done,
+            registry=registry,
+            include_mcp=include_mcp,
+            session_meta={
+                "agent_type": task.agent_type,
+                "role": task.role,
+                "model": task.model,
+                "parent_session_id": task.parent_session_id,
+            },
+            approver=approver,
+            delivery={
+                "platform": task.platform,
+                "chat_id": task.chat_id,
+                "user_id": task.user_id,
+                "user_name": task.user_name,
+                "thread_id": task.thread_id,
+                "message_id": task.message_id,
+            },
+        )
+        retried = self.get(new_id)
+        if retried is not None:
+            retried.retry_of = task.id
+        return {"ok": True, "id": new_id, "retry_of": task.id}
 
     def completions(
         self,

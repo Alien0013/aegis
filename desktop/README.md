@@ -46,6 +46,24 @@ from login time. The desktop backend resolver reads live user-scoped
 `%LOCALAPPDATA%\aegis\venv\Scripts\aegis.exe` or `PATH`, so a value set with
 `setx` works without logging out.
 
+## Lifecycle and diagnostics
+
+The native app reports the same lifecycle states in IPC diagnostics and the
+chat-first Desktop Shell operations rail:
+
+- `booting`
+- `probing_backend`
+- `ready`
+- `remote_mode`
+- `updating`
+- `crashed`
+- `repairing`
+- `stopped`
+
+The lifecycle snapshot includes recent transitions, update stage, backend
+process metadata, and a bounded crash history. Use the in-app repair actions or
+`aegis desktop --doctor` when the state is `crashed` or `repairing`.
+
 ## Linux sandbox note
 Electron's Chromium needs a root-owned setuid helper that `npm install` can't set,
 so an unprivileged install would otherwise abort with a *"SUID sandbox helper …
@@ -64,6 +82,9 @@ A structured Electron app under `electron/`:
   while reporting progress to the splash, then opens the main window and swaps it
   in when loaded. Keeps the backend alive (**restart-on-crash**, up to 3×), stops
   it cleanly on quit, and captures stdout/stderr to a log for the failure screen.
+- **`electron/desktop-lifecycle.cjs`** — the named desktop lifecycle contract,
+  bounded transition log, and bounded crash-history snapshot used by diagnostics
+  and the Desktop Shell.
 - **`electron/backend-env.cjs`** / **`electron/windows-user-env.cjs`** — resolve
   the backend binary and launch environment, including the Windows registry
   fallback for stale GUI environments.

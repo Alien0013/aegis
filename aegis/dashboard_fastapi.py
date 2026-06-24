@@ -1231,6 +1231,10 @@ def _observability_contract_payload(config: Config) -> dict[str, Any]:
             "plugins": "/api/plugins",
             "dashboard_plugins": "/api/dashboard/plugins",
             "dashboard_plugin_hub": "/api/dashboard/plugins/hub",
+            "tools": "/api/tools",
+            "tool_inventory": "/api/tools/inventory",
+            "tool_validation": "/api/tools/validation",
+            "toolsets": "/api/tools/toolsets",
         },
         "semantics": {
             "hook_failure_policy": "best_effort",
@@ -2272,10 +2276,148 @@ def _skill_category(skill) -> str:
     return "General"
 
 
-def _skill_entry(skill, usage: dict, installed_lock: dict, loader) -> dict:
+def _skill_shadow_index(loader) -> dict[str, list[dict[str, Any]]]:
+    from .skills import _parse_frontmatter
+    from .util import read_text
+
+    shadows: dict[str, list[dict[str, Any]]] = {}
+    seen_paths: set[tuple[str, str]] = set()
+    try:
+        paths = loader._search_paths()  # noqa: SLF001 - dashboard provenance view mirrors loader precedence.
+    except Exception:  # noqa: BLE001
+        return shadows
+    for tier, base in paths:
+        try:
+            files = loader._skill_files(base)  # noqa: SLF001
+        except Exception:  # noqa: BLE001
+            continue
+        for skill_md in files:
+            raw = read_text(skill_md)
+            fm = _parse_frontmatter(raw)
+            name = str(fm.get("name") or skill_md.parent.name or "").strip()
+            if not name:
+                continue
+            try:
+                resolved = str(skill_md.resolve())
+            except OSError:
+                resolved = str(skill_md)
+            dedupe_key = (name, resolved)
+            if dedupe_key in seen_paths:
+                continue
+            seen_paths.add(dedupe_key)
+            shadows.setdefault(name, []).append({
+                "path": str(skill_md),
+                "tier": tier,
+            })
+    return shadows
+
+
+def _skill_quality_report(skill, loader, usage: dict, installed_lock: dict, shadows: list[dict[str, Any]]) -> dict:
+    from . import provenance
+    from .memory import scan_entry
+    from .tools.skill_manage import _split_skill_content
+    from .util import read_text
+
+    issues: list[str] = []
+    warnings: list[str] = []
+    raw = read_text(skill.path)
+    fm, body, err = _split_skill_content(raw)
+    if err:
+        issues.append(err)
+        body = skill.full_body()
+    else:
+        fm_name = str(fm.get("name") or "").strip()
+        if fm_name != skill.name:
+            issues.append(f"frontmatter name {fm_name!r} does not match discovered skill {skill.name!r}")
+    injection = scan_entry(body or raw)
+    if injection:
+        issues.append(f"prompt-injection pattern: {injection}")
+    ok, reason = skill.satisfied()
+    if not ok and reason:
+        issues.append(reason)
+    unavailable = loader.unavailable_reason(skill)
+    if unavailable and unavailable != reason:
+        warnings.append(unavailable)
+
+    root = skill.path.parent
+    unsafe_support: list[dict[str, str]] = []
+    support_count = 0
+    try:
+        resolved_root = root.resolve()
+    except OSError:
+        resolved_root = root
+    for path in root.rglob("*"):
+        if path == skill.path or path.is_dir():
+            continue
+        try:
+            rel = str(path.relative_to(root))
+        except ValueError:
+            rel = path.name
+        if rel.startswith(".git/") or "/.git/" in rel:
+            continue
+        support_count += 1
+        reason_text = ""
+        if path.is_symlink():
+            reason_text = "symlinked support file"
+        try:
+            path.resolve().relative_to(resolved_root)
+        except (OSError, ValueError):
+            reason_text = reason_text or "support file escapes skill directory"
+        if reason_text:
+            unsafe_support.append({"path": rel, "reason": reason_text})
+    if unsafe_support:
+        issues.append("unsafe support files: " + ", ".join(row["path"] for row in unsafe_support[:3]))
+
+    active_path = str(skill.path)
+    duplicate_rows = [
+        {**row, "active": row.get("path") == active_path}
+        for row in shadows
+    ]
+    if len(duplicate_rows) > 1:
+        warnings.append(f"{len(duplicate_rows) - 1} shadowed duplicate skill file(s)")
+
+    installed = installed_lock.get(skill.name, {}) if isinstance(installed_lock, dict) else {}
+    return {
+        "ok": not issues,
+        "issues": issues,
+        "warnings": warnings,
+        "frontmatter": {
+            "valid": err is None,
+            "name": str(fm.get("name") or skill.name) if isinstance(fm, dict) else skill.name,
+            "description": str(fm.get("description") or skill.description) if isinstance(fm, dict) else skill.description,
+        },
+        "requires": {
+            "env": list((skill.requires or {}).get("env", []) or []),
+            "bins": list((skill.requires or {}).get("bins", []) or []),
+            "os": list((skill.requires or {}).get("os", []) or []),
+            "satisfied": ok,
+            "reason": reason,
+        },
+        "support_files": {
+            "count": support_count,
+            "unsafe": unsafe_support[:10],
+        },
+        "duplicates": duplicate_rows,
+        "usage": usage.get(skill.name, {}) if isinstance(usage, dict) else {},
+        "provenance": {
+            "origin": "agent" if provenance.is_agent_created(skill.name) else ("installed" if installed else "user"),
+            "agent_created": provenance.is_agent_created(skill.name),
+            "curatable": provenance.curatable(skill.name),
+            "pinned": provenance.is_pinned(skill.name),
+            "protected": provenance.is_protected(skill.name),
+            "bundled": provenance.is_bundled(skill.name),
+            "hub_installed": provenance.is_hub_installed(skill.name),
+            "installed": bool(installed),
+            "source": installed.get("source", ""),
+        },
+    }
+
+
+def _skill_entry(skill, usage: dict, installed_lock: dict, loader, shadows: list[dict[str, Any]] | None = None) -> dict:
     reason = loader.unavailable_reason(skill)
     ok = not reason
     lock = installed_lock.get(skill.name, {}) if isinstance(installed_lock, dict) else {}
+    quality = _skill_quality_report(skill, loader, usage, installed_lock, shadows or [])
     return {
         "name": skill.name,
         "description": skill.description,
@@ -2293,6 +2435,8 @@ def _skill_entry(skill, usage: dict, installed_lock: dict, loader) -> dict:
         "installed_at": lock.get("installed_at", ""),
         "editable": _skill_path_editable(skill.path),
         "usage": usage.get(skill.name, {}) if isinstance(usage, dict) else {},
+        "quality": quality,
+        "provenance": quality["provenance"],
     }
 
 
@@ -2303,7 +2447,8 @@ def _skills_payload(config: Config) -> dict:
     loader = SkillsLoader(config)
     usage = loader.usage()
     lock = marketplace.installed()
-    rows = [_skill_entry(skill, usage, lock, loader)
+    shadow_index = _skill_shadow_index(loader)
+    rows = [_skill_entry(skill, usage, lock, loader, shadow_index.get(skill.name, []))
             for skill in sorted(loader.discover().values(), key=lambda s: s.name)]
     categories: dict[str, int] = {}
     for row in rows:
@@ -2519,7 +2664,7 @@ def _plugins_payload(config: Config) -> dict:
         for row in dashboard_plugins
         if row.get("name")
     }
-    return {
+    payload = {
         "plugins": status_rows,
         "manifests": [m.to_dict() for m in list_manifests(config)],
         "plugin_status": status_rows,
@@ -2543,6 +2688,100 @@ def _plugins_payload(config: Config) -> dict:
         "disabled": config.get("plugins.disabled", []) or [],
         "allowlist": config.get("plugins.allowlist", []) or [],
         "safe_mode": safe_mode_enabled(),
+    }
+    payload["extension_status"] = _extensions_status_payload(config, plugin_payload=payload)
+    return payload
+
+
+def _extensions_status_payload(
+    config: Config,
+    *,
+    plugin_payload: dict[str, Any] | None = None,
+    mcp_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    from .acp import PROTOCOL_VERSION as ACP_PROTOCOL_VERSION
+
+    plugin_payload = plugin_payload or _plugins_payload(config)
+    mcp_payload = mcp_payload or dash._dashboard_mcp_catalog(config)
+    plugin_rows = list(plugin_payload.get("plugin_status") or plugin_payload.get("plugins") or [])
+    manifests = list(plugin_payload.get("manifests") or [])
+    errors = list(plugin_payload.get("errors") or [])
+    dashboard_mounts = plugin_payload.get("dashboard_api_mounts") or {}
+    if not isinstance(dashboard_mounts, dict):
+        dashboard_mounts = {}
+    mcp_servers = list(mcp_payload.get("servers") or [])
+    active_mcp = [row for row in mcp_servers if row.get("enabled", True)]
+    manifest_error_rows = [
+        row for row in plugin_rows
+        if row.get("manifest_errors") or str(row.get("load_status") or row.get("status") or "") == "error"
+    ]
+    middleware_kinds = sorted({
+        str(kind)
+        for row in plugin_rows
+        for kind in (row.get("middleware_kinds") or [])
+        if str(kind)
+    })
+    hook_names = sorted({
+        str(name)
+        for row in plugin_rows
+        for name in (row.get("hook_names") or [])
+        if str(name)
+    })
+    selected_mcp = sum(
+        int(row.get("selected_tool_count") or 0)
+        for row in mcp_servers
+        if row.get("selected_tool_count") is not None
+    )
+    api_mount_errors = [
+        mount for mount in dashboard_mounts.values()
+        if isinstance(mount, dict) and (mount.get("status") == "error" or mount.get("error_count"))
+    ]
+    return {
+        "ok": True,
+        "mcp": {
+            "enabled": bool(mcp_payload.get("enabled", True)),
+            "server_count": len(mcp_servers),
+            "active_server_count": len(active_mcp),
+            "stdio_count": sum(1 for row in mcp_servers if row.get("transport") == "stdio"),
+            "http_count": sum(1 for row in mcp_servers if row.get("transport") == "http"),
+            "malformed": list(mcp_payload.get("malformed") or []),
+            "catalog_count": len(mcp_payload.get("catalog") or []),
+            "filtered_server_count": sum(
+                1 for row in mcp_servers
+                if ((row.get("tool_filter") or {}).get("mode") not in {None, "", "all"})
+            ),
+            "selected_tool_count": selected_mcp,
+        },
+        "plugins": {
+            "safe_mode": bool(plugin_payload.get("safe_mode", False)),
+            "manifest_count": len(manifests),
+            "loaded_count": len(plugin_payload.get("loaded") or []),
+            "error_count": len(errors),
+            "runtime_error_count": len(manifest_error_rows),
+            "dashboard_plugin_count": int(plugin_payload.get("dashboard_plugin_count") or 0),
+            "dashboard_api_route_count": int(plugin_payload.get("dashboard_api_route_count") or 0),
+            "dashboard_api_error_count": len(api_mount_errors),
+            "middleware_kinds": middleware_kinds,
+            "hook_names": hook_names,
+            "enabled": list(plugin_payload.get("enabled") or []),
+            "disabled": list(plugin_payload.get("disabled") or []),
+            "allowlist": list(plugin_payload.get("allowlist") or []),
+            "manifest_errors": [
+                {
+                    "name": str(row.get("key") or row.get("name") or ""),
+                    "errors": row.get("manifest_errors") or [str(row.get("load_error") or row.get("error") or "error")],
+                }
+                for row in manifest_error_rows
+            ],
+        },
+        "acp": {
+            "enabled": True,
+            "protocol_version": ACP_PROTOCOL_VERSION,
+            "surface_runner": "aegis.surface.SurfaceRunner",
+            "session_store": "aegis.session.SessionStore",
+            "shared_trace_state": True,
+            "session_management": ["list", "detail", "search", "fork", "load"],
+        },
     }
 
 
@@ -2813,6 +3052,7 @@ def _dashboard_plugin_hub(config: Config) -> dict[str, Any]:
         "enabled": payload.get("enabled", []),
         "disabled": payload.get("disabled", []),
         "allowlist": payload.get("allowlist", []),
+        "extension_status": _extensions_status_payload(config, plugin_payload=payload),
     }
 
 
@@ -4444,6 +4684,46 @@ def _cron_delivery_targets(config: Config) -> dict[str, Any]:
     return {"targets": targets, "channels": sorted(enabled_channels)}
 
 
+def _background_jobs_payload(config: Config) -> dict[str, Any]:
+    from .background import get_manager
+
+    manager = get_manager()
+    jobs = manager.list()
+    active = [job for job in jobs if str(job.get("status") or "") in {"running", "cancelling"}]
+    failed = [job for job in jobs if str(job.get("status") or "") in {"error", "cancelled"}]
+    completed = [job for job in jobs if str(job.get("status") or "") == "done"]
+    return {
+        "ok": True,
+        "capacity": manager.capacity(config),
+        "jobs": jobs,
+        "active": active,
+        "completed": completed,
+        "failed": failed,
+        "completions": manager.completions(),
+        "stats": {
+            "total": len(jobs),
+            "active": len(active),
+            "completed": len(completed),
+            "failed": len(failed),
+        },
+    }
+
+
+def _background_job_cancel_response(job_id: str) -> JSONResponse:
+    from .background import get_manager
+
+    result = get_manager().cancel(job_id)
+    return JSONResponse(result, status_code=200 if result.get("ok") else 404)
+
+
+def _background_job_retry_response(config: Config, job_id: str) -> JSONResponse:
+    from .background import get_manager
+
+    result = get_manager().retry(config, job_id)
+    status = 200 if result.get("ok") else 409 if "running" in str(result.get("error") or "") else 404
+    return JSONResponse(result, status_code=status)
+
+
 def _service_result(result) -> dict:
     return {"ok": bool(getattr(result, "ok", False)), "message": str(getattr(result, "message", ""))}
 
@@ -4551,28 +4831,55 @@ def _gateway_outbox_action(message_id: int, action: str) -> tuple[dict[str, Any]
 
 def _provider_probe(config: Config, body: dict[str, Any]) -> dict:
     from .doctor import probe_provider
+    from .redact import redact_secrets
 
     probe_config = Config(copy.deepcopy(config.data))
     provider = str(body.get("provider") or "").strip()
     model = str(body.get("model") or "").strip()
     base_url = str(body.get("base_url") or "").strip()
+    try:
+        timeout = float(
+            body.get("timeout_seconds")
+            or body.get("timeout")
+            or config.get("providers.probe_timeout_seconds", 15)
+            or 15
+        )
+    except (TypeError, ValueError):
+        timeout = 15.0
+    timeout = max(1.0, min(timeout, 30.0))
     if provider:
         probe_config.data.setdefault("model", {})["provider"] = provider
     if model:
         probe_config.data.setdefault("model", {})["default"] = model
     if base_url:
         probe_config.data.setdefault("model", {})["base_url"] = base_url
+    probe_config.data.setdefault("providers", {})["probe_timeout_seconds"] = timeout
     start = time.perf_counter()
     ok, detail = probe_provider(probe_config)
     latency_ms = int((time.perf_counter() - start) * 1000)
-    return {
+    safe_detail = redact_secrets(str(detail or ""))
+    provider_name = str(probe_config.get("model.provider") or "")
+    model_name = str(probe_config.get("model.default") or "")
+    record = {
         "ok": bool(ok),
-        "provider": probe_config.get("model.provider"),
-        "model": probe_config.get("model.default"),
-        "detail": detail,
+        "status": "ready" if ok else "error",
+        "provider": provider_name,
+        "model": model_name,
+        "detail": safe_detail,
+        "error": "" if ok else safe_detail,
         "latency_ms": latency_ms,
         "tested_at": datetime.now(timezone.utc).isoformat(),
+        "timeout_seconds": timeout,
     }
+    cache = config.get("providers.probe_cache", {}) or {}
+    if not isinstance(cache, dict):
+        cache = {}
+    cache[provider_name] = dict(record)
+    try:
+        config.set("providers.probe_cache", cache)
+    except Exception:  # noqa: BLE001
+        pass
+    return record
 
 
 def _set_main_model_payload(config: Config, body: dict[str, Any]) -> dict[str, Any]:
@@ -5602,10 +5909,13 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
             "traces": detail.get("traces", []),
             "timeline": detail.get("timeline", {}),
             "links": detail.get("links", {}),
-            "lineage": {
-                "parent": detail.get("parent"),
-                "children": detail.get("children", []),
-            } if detail.get("found") else {"parent": None, "children": []},
+            "lineage": detail.get("lineage") if detail.get("found") else {
+                "found": False,
+                "parent": None,
+                "children": [],
+                "warnings": [],
+                "summary": {},
+            },
         }
     if path == "/api/memory":
         from .memory import MemoryStore
@@ -5621,6 +5931,8 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
         return _skills_payload(config)
     if path == "/api/tools":
         return dash._dashboard_tools(config)["tools"]
+    if path == "/api/tools/inventory":
+        return dash._dashboard_tool_inventory(config)
     if path == "/api/tools/validation":
         return dash._dashboard_tool_schema_validation(config)
     if path == "/api/tools/toolsets":
@@ -5850,6 +6162,8 @@ def _api_post(
         return dash._dashboard_tool_toggle(body, config)
     if path == "/api/tools/permission-dry-run":
         return dash._dashboard_tool_permission_dry_run(body, config)
+    if path == "/api/security/policy-simulate":
+        return dash._dashboard_security_policy_simulator(body, config)
     if path == "/api/skills/bundles":
         from .skill_bundles import save_bundle
 
@@ -6817,6 +7131,11 @@ def create_app(config: Config) -> FastAPI:
         _require_request(request, config)
         return JSONResponse(_plugins_payload(config))
 
+    @app.get("/api/extensions/status")
+    async def api_extensions_status(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_extensions_status_payload(config))
+
     @app.get("/api/dashboard/plugins")
     async def api_dashboard_plugins(request: Request) -> JSONResponse:
         _require_request(request, config)
@@ -7021,6 +7340,11 @@ def create_app(config: Config) -> FastAPI:
         _require_request(request, config)
         return JSONResponse(dash._dashboard_toolsets(config))
 
+    @app.get("/api/tools/inventory")
+    async def api_tools_inventory(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(dash._dashboard_tool_inventory(config))
+
     @app.get("/api/tools/validation")
     async def api_tools_validation(request: Request) -> JSONResponse:
         _require_request(request, config)
@@ -7037,6 +7361,19 @@ def create_app(config: Config) -> FastAPI:
         if not isinstance(body, dict):
             body = {}
         result = dash._dashboard_tool_permission_dry_run(body, config)
+        return JSONResponse(result, status_code=200 if result.get("ok") else 400)
+
+    @app.post("/api/security/policy-simulate")
+    async def api_security_policy_simulate(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        raw = await request.body()
+        try:
+            body = json.loads(raw) if raw else {}
+        except ValueError:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        result = dash._dashboard_security_policy_simulator(body, config)
         return JSONResponse(result, status_code=200 if result.get("ok") else 400)
 
     @app.put("/api/tools/toolsets/{name}")
@@ -7367,6 +7704,20 @@ def create_app(config: Config) -> FastAPI:
         _require_request(request, config)
         return JSONResponse(dash._dashboard_session_detail(session_id, config))
 
+    @app.get("/api/sessions/{session_id}/prompt-audit")
+    async def api_session_prompt_audit(session_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        result = dash._dashboard_session_prompt_audit(session_id, config)
+        return JSONResponse(result, status_code=200 if result.get("found") else 404)
+
+    @app.get("/api/sessions/{session_id}/lineage")
+    async def api_session_lineage(session_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from .session import SessionStore
+
+        result = SessionStore().lineage(session_id)
+        return JSONResponse(result, status_code=200 if result.get("found") else 404)
+
     @app.patch("/api/sessions/{session_id}")
     async def api_session_patch(session_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)
@@ -7416,6 +7767,12 @@ def create_app(config: Config) -> FastAPI:
             "count": len(session.messages),
             "messages": [_message_payload(message, i) for i, message in enumerate(session.messages)],
         })
+
+    @app.get("/api/sessions/{session_id}/timeline")
+    async def api_session_timeline(session_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        result = dash._dashboard_session_timeline(session_id, config)
+        return JSONResponse(result, status_code=200 if result.get("found") else 404)
 
     @app.post("/api/sessions/{session_id}/messages")
     async def api_session_message_add(session_id: str, request: Request) -> JSONResponse:
@@ -7491,6 +7848,27 @@ def create_app(config: Config) -> FastAPI:
 
         ok = SessionStore().delete(session_id)
         return JSONResponse({"ok": ok, "id": session_id}, status_code=200 if ok else 404)
+
+    @app.get("/api/runs/{run_id}/timeline")
+    async def api_run_timeline(run_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        result = dash._dashboard_run_timeline(run_id, config)
+        return JSONResponse(result, status_code=200 if result.get("found") else 404)
+
+    @app.get("/api/background/jobs")
+    async def api_background_jobs(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_background_jobs_payload(config))
+
+    @app.post("/api/background/jobs/{job_id}/cancel")
+    async def api_background_job_cancel(job_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return _background_job_cancel_response(job_id)
+
+    @app.post("/api/background/jobs/{job_id}/retry")
+    async def api_background_job_retry(job_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return _background_job_retry_response(config, job_id)
 
     @app.get("/api/cron/jobs")
     async def api_cron_jobs(request: Request) -> JSONResponse:

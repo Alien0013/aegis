@@ -1019,6 +1019,7 @@ def _model_capabilities(
             "pixtral", "qwen-vl", "vision", "vl-",
         )
     )
+    audio = any(marker in m for marker in ("audio", "realtime", "transcribe", "tts", "speech"))
     native_images = mode in {
         ApiMode.ANTHROPIC_MESSAGES.value,
         ApiMode.CHAT_COMPLETIONS.value,
@@ -1038,6 +1039,10 @@ def _model_capabilities(
             ApiMode.CODEX_APP_SERVER.value,
         },
         "images": bool(native_images and chat_vision),
+        "audio": bool(audio and mode in {
+            ApiMode.CHAT_COMPLETIONS.value,
+            ApiMode.RESPONSES.value,
+        }),
         "reasoning_effort": bool(anthropic_reasoning or (
             openai_reasoning and mode in {
                 ApiMode.CHAT_COMPLETIONS.value,
@@ -1064,6 +1069,7 @@ def _capability_summary(capabilities: dict) -> str:
         ("tool_calls", "tools"),
         ("streaming", "stream"),
         ("images", "images"),
+        ("audio", "audio"),
         ("reasoning_effort", "reasoning"),
         ("reasoning_stream", "reasoning-stream"),
         ("response_state", "response-state"),
@@ -1083,6 +1089,7 @@ def _normalized_capabilities(capabilities: dict) -> dict:
         "streaming": bool(capabilities.get("streaming")),
         "vision": bool(capabilities.get("images")),
         "images": bool(capabilities.get("images")),
+        "audio": bool(capabilities.get("audio")),
         "reasoning": bool(capabilities.get("reasoning_effort")),
         "reasoning_effort": bool(capabilities.get("reasoning_effort")),
         "reasoning_stream": bool(capabilities.get("reasoning_stream")),
@@ -1106,6 +1113,35 @@ def _resolved_spec_context_length(provider_name: str, spec: ProviderSpec) -> int
         )
         or spec.context_length
     )
+
+
+def _provider_probe_cache(config: cfg.Config | None) -> dict[str, dict]:
+    if config is None:
+        return {}
+    raw = config.get("providers.probe_cache", {}) or {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _probe_record_for(config: cfg.Config | None, provider_name: str) -> dict:
+    raw = _provider_probe_cache(config).get(provider_name)
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _fallback_chain_rows(report: dict) -> list[dict]:
+    rows: list[dict] = []
+    chain = report.get("chain") if isinstance(report.get("chain"), list) else []
+    for index, row in enumerate(chain):
+        if not isinstance(row, dict):
+            continue
+        rows.append({
+            "index": index,
+            "role": row.get("role", ""),
+            "provider": row.get("name") or row.get("provider") or "",
+            "model": row.get("model", ""),
+            "status": "error" if row.get("error") else "configured",
+            "reason": row.get("warning") or row.get("error") or "",
+        })
+    return rows
 
 
 def _provider_status(provider: Provider, *, role: str, configured: dict | None = None) -> dict:
@@ -1142,6 +1178,7 @@ def _spec_status(name: str, spec: ProviderSpec, *, origin: str) -> dict:
     )
     entry = _OAUTH_CATALOG.get(name)
     context_length = _resolved_spec_context_length(name, spec)
+    auth_state = _auth_status(auth)
     return {
         "name": name,
         "display_name": entry.display_name if entry else name,
@@ -1159,7 +1196,8 @@ def _spec_status(name: str, spec: ProviderSpec, *, origin: str) -> dict:
         "oauth": bool(spec.oauth),
         "oauth_status": _oauth_status_for_spec(name, spec),
         "oauth_notes": _oauth_notes_for_spec(name),
-        "auth": _auth_status(auth),
+        "auth": auth_state,
+        "credential_status": "ready" if auth_state.get("available") else "missing",
         "capabilities": capabilities,
         "capability_flags": _normalized_capabilities(capabilities),
         "capability_summary": _capability_summary(capabilities),
@@ -1198,8 +1236,15 @@ def provider_capability_matrix(config: cfg.Config, provider_names: list[str] | N
         "reasoning": 0,
         "streaming": 0,
         "known_pricing": 0,
+        "audio": 0,
     }
     provider_rows: list[dict] = []
+    fallback_chain = _fallback_chain_rows(report)
+    has_fallback_chain = len(fallback_chain) > 1
+    fallback_names = (
+        {str(row.get("provider") or "") for row in fallback_chain if row.get("provider")}
+        if has_fallback_chain else set()
+    )
     for row in catalog:
         name = str(row.get("name") or "")
         auth = row.get("auth") if isinstance(row.get("auth"), dict) else {}
@@ -1239,6 +1284,7 @@ def provider_capability_matrix(config: cfg.Config, provider_names: list[str] | N
             totals["models"] += 1
             totals["tools"] += 1 if caps.get("tools") else 0
             totals["vision"] += 1 if caps.get("vision") else 0
+            totals["audio"] += 1 if caps.get("audio") else 0
             totals["reasoning"] += 1 if caps.get("reasoning") else 0
             totals["streaming"] += 1 if caps.get("streaming") else 0
             totals["known_pricing"] += 1 if pricing.get("known") else 0
@@ -1248,6 +1294,17 @@ def provider_capability_matrix(config: cfg.Config, provider_names: list[str] | N
         totals["ready"] += 1 if ready else 0
         totals["missing_auth"] += 0 if ready else 1
         capabilities = row.get("capability_flags") or _normalized_capabilities(row.get("capabilities") or {})
+        probe_record = _probe_record_for(config, name)
+        live_probe = bool(probe_record)
+        probe_status = str(probe_record.get("status") or ("ready" if ready else "missing_auth"))
+        if not ready:
+            probe_status = "missing_auth"
+        probe_detail = str(
+            probe_record.get("detail")
+            or probe_record.get("message")
+            or ("configured for live probe" if ready else "provider auth is not configured")
+        )
+        last_error = "" if probe_status == "ready" else probe_detail
         provider_rows.append({
             "provider": name,
             "name": name,
@@ -1265,19 +1322,27 @@ def provider_capability_matrix(config: cfg.Config, provider_names: list[str] | N
                 "env_vars": list(row.get("env_vars") or []),
                 "oauth": bool(row.get("oauth")),
                 "oauth_status": row.get("oauth_status", ""),
+                "credential_status": "ready" if ready else "missing",
             },
             "probe": {
-                "status": "ready" if ready else "missing_auth",
-                "live": False,
-                "latency_ms": None,
-                "message": "configured for live probe" if ready else "provider auth is not configured",
+                "status": probe_status,
+                "live": live_probe,
+                "ok": bool(probe_record.get("ok", probe_status == "ready")),
+                "latency_ms": probe_record.get("latency_ms"),
+                "message": probe_detail,
+                "tested_at": str(probe_record.get("tested_at") or ""),
+                "timeout_seconds": probe_record.get("timeout_seconds"),
             },
+            "last_probe": probe_record,
+            "last_error": last_error,
             "limits": {
                 "context": int(row.get("context_length") or 0),
                 "max_output": max((int(m.get("max_output_tokens") or 0) for m in normalized_models), default=0),
             },
             "capabilities": capabilities,
             "capability_summary": row.get("capability_summary", ""),
+            "fallback_chain": fallback_chain if name in fallback_names else [],
+            "fallback_enabled": has_fallback_chain and name in fallback_names,
             "models": normalized_models,
             "model_count": len(normalized_models),
         })
@@ -1286,6 +1351,7 @@ def provider_capability_matrix(config: cfg.Config, provider_names: list[str] | N
         "active": {"provider": active_provider, "model": active_model},
         "totals": totals,
         "providers": provider_rows,
+        "fallback_chain": fallback_chain,
     }
 
 
@@ -1403,6 +1469,7 @@ def provider_report(config: cfg.Config) -> dict:
     return {
         "active": active,
         "chain": chain,
+        "fallback_chain": _fallback_chain_rows({"chain": chain}),
         "fallbacks": fallbacks,
         "routing": routing,
         "provider_catalog": provider_catalog,

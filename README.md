@@ -91,7 +91,7 @@ The one-line installer accepts the same first-run policy through `--toolsets`,
 | Terminal agent | Interactive REPL with streaming, slash commands, queued/interruptible turns, long-run status footer, `@file`/`@diff`/`@url` context references, sessions, branching, checkpoints, diff, rollback, goals, traces, and usage. |
 | Dashboard | Token-gated FastAPI + React/Vite control panel that opens on sessions, keeps `/dashboard` as a calmer overview, keeps `/agents` focused on running turns/subagents/tools, and keeps `/command-center` as a compact sessions/system/usage ops overlay. It also includes chat, terminal, models, tools, skills, memory, schedules, kanban, MCP, channels, webhooks, pairing, provider accounts, env/secrets, plugins, analytics, files, logs, profiles, docs, system, and config. |
 | Desktop | Electron app that launches/probes a local dashboard backend on a random port with a random token, shows boot/retry/log states, remembers window settings, and can run from source or package installers. |
-| Providers | Built-in registry for Anthropic, OpenAI, Codex-compatible paths, Google, OpenRouter, Groq, DeepSeek, Qwen/DashScope, xAI, Mistral, Together, Hugging Face, local OpenAI-compatible endpoints, Ollama, LM Studio, vLLM, and more. API-key auth is the default path; OAuth exists where implemented. |
+| Providers | Built-in registry for Anthropic, OpenAI, Codex-compatible paths, Google, OpenRouter, Groq, DeepSeek, Qwen/DashScope, xAI, Mistral, Together, Hugging Face, local OpenAI-compatible endpoints, Ollama, LM Studio, vLLM, and more. API-key auth is the default path; OAuth exists where implemented. The dashboard provider matrix shows auth readiness, redacted live probe status, fallback chains, context/output limits, pricing, and model capabilities. |
 | Tools and permissions | File, patch, shell, process, web, browser, LSP, GitHub, code execution, image generation, subagents, model mixtures, cron/kanban, memory, skills, MCP/plugin tools, and local/cloud helpers all pass through a central registry and permission engine. |
 | Memory and skills | File-backed `MEMORY.md`/`USER.md`, SQLite/FTS5 session recall, bundled `SKILL.md` packages, skill creation/improvement, session review, redaction, and approval-based promotion. |
 | Automation and evals | `aegis cron`, `aegis kanban`, `aegis spec`, `aegis watch`, `aegis bench`, `aegis eval`, `aegis ab`, traces, runs, cost analytics, backup/import/snapshot, and security/debug reports. |
@@ -116,6 +116,7 @@ python -m aegis.cli.main --help
 python -m aegis.cli.main status
 python -m aegis.cli.main tools list
 bash scripts/run_tests.sh
+bash scripts/verify_all.sh
 ```
 
 Dashboard:
@@ -215,26 +216,22 @@ scripts/                test, build, and verification helpers
 tests/                  offline regression suite
 ```
 
-## Product Polish Remaining
+## Product Proof Remaining
 
-AEGIS already has the core local runtime and most product surfaces in place. The
-remaining work is mostly proof, visibility, and release polish:
+AEGIS now has the Hermes-class local runtime surfaces in place: prompt audit,
+trace timeline, provider matrix, tool provenance, background jobs, cron preview,
+gateway delivery state, plugin inventory, security policy simulation, desktop
+lifecycle, generated references, and release provenance are covered by
+`aegis verify` / `bash scripts/verify_all.sh`.
 
-Hermes still feels larger mostly because it has more native product shell around
-the same class of agent: a deeper desktop renderer, a richer stateful terminal
-TUI, broader platform adapters, mature installer/update flows, and more
-generated references. AEGIS is now intentionally session-first in both the
-browser and terminal.
+The remaining proof is external to this repo:
 
-| Area | Remaining parity work |
+| Area | Remaining proof |
 | --- | --- |
-| Dashboard overview | More trace explainability, prompt/context audit, provider capability/probe matrix hardening, fuller tool provenance, background job lifecycle, cron dry-run/next-fire views, and gateway backpressure metrics. |
-| Desktop release | Formal lifecycle state machine, packaged smoke artifact verification, crash history/repair UX, release artifact hashes/SBOM, and signed/notarized release evidence when credentials are available. |
-| Terminal polish | A richer stateful full-screen TUI, generated slash-command docs, more visual REPL polish, and stronger parity tests for goals, branching, checkpoints, and rollback. |
-| API/SDK contracts | Endpoint contract fixtures for chat/completions, responses-style behavior, streaming metadata, auth, cancellation, run events, MCP, and eval replay. |
-| Gateway confidence | Fake-adapter contract tests for every channel and explicit live-test instructions for platform credentials. No live Telegram/Discord/Slack/etc. coverage is claimed here. |
-| Security and operations | Policy explanation API, network/file safety simulators, broader redaction coverage, release provenance, and one command that proves Python, web, desktop, docs, security, installer, and release checks. |
-| Documentation | Generated CLI/API references, page-level dashboard docs, release checklist, and a maintained parity matrix in `docs/feature-parity-matrix.md`. |
+| Desktop release | Real signed Windows and notarized macOS artifacts require release credentials and CI artifacts. |
+| Live platforms | Telegram, Discord, Slack, webhook, and other live channel smoke requires real platform test accounts. |
+| Live providers | Provider probes require intentionally configured credentials and network access. |
+| UI assets | Screenshots and marketing assets should be refreshed with provenance whenever the product UI changes. |
 
 ## Good To Know
 

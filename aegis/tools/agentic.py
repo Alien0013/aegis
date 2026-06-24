@@ -470,9 +470,16 @@ class SubagentTool(Tool):
                 if registry is not None:
                     kwargs["registry"] = registry
                 child_config = _child_config_for_toolsets(config, toolsets)
-                child_session = Session.create()
+                parent_session = getattr(parent, "session", None)
+                parent_session_id = getattr(parent_session, "id", "") or ""
+                child_session = Session.create(title=f"subagent {sid}", parent_id=parent_session_id or None)
                 from ..surface import apply_session_runtime, inherit_session_runtime
-                inherit_session_runtime(getattr(parent, "session", None), child_session)
+                inherit_session_runtime(parent_session, child_session)
+                child_session.meta["creator_kind"] = "subagent"
+                child_session.meta["subagent_id"] = sid
+                child_session.meta["agent_type"] = atype
+                if parent_session_id:
+                    child_session.meta["parent_session_id"] = parent_session_id
                 _seed_role_prompt(child_session, atype, role_prompt)
                 from ..surface import _agent_create
                 child = _agent_create(
@@ -501,7 +508,8 @@ class SubagentTool(Tool):
                     meta={
                         "subagent_id": sid,
                         "agent_type": atype,
-                        "parent_session_id": getattr(getattr(parent, "session", None), "id", ""),
+                        "parent_session_id": parent_session_id,
+                        "creator_kind": "subagent",
                     },
                     on_event=lambda event: _relay_subagent_stream_event(ctx, sid, task, atype, event),
                 )

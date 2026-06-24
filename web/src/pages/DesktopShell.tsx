@@ -13,7 +13,7 @@ import { ThemeSwitcher } from "../components/ThemeSwitcher";
 import { openCommandPalette } from "../components/CommandPalette";
 import { Badge, Toaster } from "../components/ui";
 import { ago, compact } from "../lib/format";
-import { desktop, isDesktop } from "../lib/desktop";
+import { desktop, isDesktop, type DesktopConnection, type DesktopLifecycleStatus } from "../lib/desktop";
 import { GraphicalChat } from "./GraphicalChat";
 
 interface SessionRow {
@@ -66,6 +66,7 @@ export function DesktopShell() {
   const [runtime, setRuntime] = useState({ model: "", provider: "" });
   const [chatResetToken, setChatResetToken] = useState(0);
   const [sessionHudOpen, setSessionHudOpen] = useState(false);
+  const [connection, setConnection] = useState<DesktopConnection | null>(null);
   const shownModel = runtime.model || status.data?.model || model;
   const shownProvider = runtime.provider || status.data?.provider || provider;
   const sessions = (data || []).slice(0, 50);
@@ -112,6 +113,27 @@ export function DesktopShell() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  useEffect(() => {
+    if (!isDesktop || !desktop?.getConnection) return;
+    const bridge = desktop;
+    let cancelled = false;
+    const load = () => {
+      bridge.getConnection?.()
+        .then((value) => {
+          if (!cancelled) setConnection(value || null);
+        })
+        .catch(() => {
+          if (!cancelled) setConnection(null);
+        });
+    };
+    load();
+    const timer = window.setInterval(load, 2500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, []);
 
   return (
@@ -270,6 +292,7 @@ export function DesktopShell() {
           sessions={sessions}
           activeId={activeId}
           status={status.data || undefined}
+          lifecycle={connection?.desktop?.lifecycle}
           model={shownModel}
           provider={shownProvider}
           ready={ready}
@@ -297,6 +320,7 @@ function DesktopOpsRail({
   sessions,
   activeId,
   status,
+  lifecycle,
   model,
   provider,
   ready,
@@ -308,6 +332,7 @@ function DesktopOpsRail({
   sessions: SessionRow[];
   activeId: string;
   status?: DesktopStatus;
+  lifecycle?: DesktopLifecycleStatus;
   model: string;
   provider: string;
   ready: boolean;
@@ -344,6 +369,7 @@ function DesktopOpsRail({
           <ShellMetric label="skills" value={String(status?.skills ?? "-")} />
           <ShellMetric label="version" value={status?.version ? `v${status.version}` : "-"} />
         </div>
+        {lifecycle && <LifecycleStrip lifecycle={lifecycle} />}
       </div>
 
       <div className="border-b border-border px-4 py-3">
@@ -450,6 +476,40 @@ function LiveWorkItem({ row }: { row: ActivityRow }) {
         {row.active_tool && <span>tool {row.active_tool}</span>}
         {row.subagents_active ? <span>{row.subagents_active} sub</span> : null}
         {elapsed && <span>{elapsed}</span>}
+      </div>
+    </div>
+  );
+}
+
+function LifecycleStrip({ lifecycle }: { lifecycle: DesktopLifecycleStatus }) {
+  const state = String(lifecycle.state || "unknown").replace(/_/g, " ");
+  const crashCount = lifecycle.crashHistory?.length || 0;
+  const lastEvent = lifecycle.events?.at(-1);
+  const tone = lifecycle.state === "ready" || lifecycle.state === "remote_mode"
+    ? "success"
+    : lifecycle.state === "crashed"
+      ? "danger"
+      : "info";
+  return (
+    <div className="mt-3 rounded-[var(--radius)] border border-border bg-surface-2/45 px-3 py-2 text-xs">
+      <div className="flex items-center gap-2">
+        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+          tone === "success" ? "bg-success" : tone === "danger" ? "bg-danger" : "bg-info"
+        }`} />
+        <span className="min-w-0 flex-1 truncate font-medium text-text">{state}</span>
+        {lifecycle.restartAttempt ? (
+          <span className="shrink-0 text-[11px] text-faint">retry {lifecycle.restartAttempt}</span>
+        ) : null}
+      </div>
+      <div className="mt-1 line-clamp-2 text-[11px] text-faint">
+        {lifecycle.message || lastEvent?.message || "Desktop lifecycle is reporting."}
+      </div>
+      <div className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-faint">
+        {lifecycle.mode && <span>{lifecycle.mode}</span>}
+        {lifecycle.port ? <span>port {lifecycle.port}</span> : null}
+        {lifecycle.updateStage && <span>update {lifecycle.updateStage}</span>}
+        {crashCount ? <span>{crashCount} crash{crashCount === 1 ? "" : "es"}</span> : null}
+        {lastEvent?.at && <span>{ago(lastEvent.at)}</span>}
       </div>
     </div>
   );

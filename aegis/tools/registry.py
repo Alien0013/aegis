@@ -11,30 +11,48 @@ logger = logging.getLogger(__name__)
 
 
 class ToolRegistry:
-    def __init__(self):
+    def __init__(self, *, enforce_schema: bool = False):
         self._tools: dict[str, Tool] = {}
+        self.enforce_schema = enforce_schema
+        self._rejections: list[dict[str, object]] = []
+
+    def _reject(self, tool: Tool, reason: str, *, issues: list[dict] | None = None) -> None:
+        record = {
+            "tool": str(getattr(tool, "name", "") or "<unnamed>"),
+            "source": str(getattr(tool, "source", "") or getattr(tool, "toolset", "") or "tool"),
+            "toolset": str(getattr(tool, "toolset", "") or "core"),
+            "reason": reason,
+            "issues": issues or [],
+        }
+        self._rejections.append(record)
+        logger.warning("Tool registration rejected: %s (%s)", record["tool"], reason)
 
     def register(self, tool: Tool) -> None:
         if not tool.name:
             raise ValueError("Tool must have a name")
-        existing = self._tools.get(tool.name)
-        if existing is not None:
-            source = str(getattr(tool, "source", "") or "")
-            allow_shadow = bool(getattr(tool, "allow_shadow", False))
-            if source in {"memory_provider", "plugin"} and not allow_shadow:
-                logger.warning(
-                    "Tool registration ignored: %s tool '%s' would shadow existing tool",
-                    source,
-                    tool.name,
+        if self.enforce_schema:
+            from .schema_validation import validate_tool_schema
+
+            issues = validate_tool_schema(tool)
+            errors = [issue for issue in issues if issue.severity == "error"]
+            if errors:
+                self._reject(
+                    tool,
+                    "invalid schema",
+                    issues=[issue.to_dict() for issue in issues],
                 )
                 return
-            if existing.toolset != tool.toolset and not allow_shadow:
-                logger.warning(
-                    "Tool registration ignored: tool '%s' from toolset '%s' would shadow "
-                    "existing toolset '%s'",
-                    tool.name,
-                    tool.toolset,
-                    existing.toolset,
+        existing = self._tools.get(tool.name)
+        if existing is not None:
+            allow_shadow = bool(getattr(tool, "allow_shadow", False))
+            if not allow_shadow:
+                existing_source = str(getattr(existing, "source", "") or "")
+                self._reject(
+                    tool,
+                    (
+                        f"duplicate name shadows existing {existing_source or 'tool'} "
+                        f"from toolset '{existing.toolset}'"
+                    ),
                 )
                 return
         self._tools[tool.name] = tool
@@ -48,6 +66,9 @@ class ToolRegistry:
 
     def all(self) -> list[Tool]:
         return list(self._tools.values())
+
+    def rejections(self) -> list[dict[str, object]]:
+        return list(self._rejections)
 
     def available(self, toolsets: list[str], *, only_usable: bool = True,
                   disabled: list[str] | set[str] | None = None) -> list[Tool]:
@@ -93,7 +114,7 @@ def default_registry(*, include_plugins: bool = True) -> ToolRegistry:
     from .state import state_tools
     from .voice import voice_tools
 
-    reg = ToolRegistry()
+    reg = ToolRegistry(enforce_schema=True)
     reg.register_all(all_builtin_tools())
     reg.register_all(extra_tools())
     reg.register_all(aux_tools())

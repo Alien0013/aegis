@@ -1396,6 +1396,7 @@ def test_provider_report_exposes_chain_routing_and_catalog():
     assert report["active"]["capabilities"]["tool_calls"] is True
     assert report["active"]["capabilities"]["images"] is False
     assert [row["name"] for row in report["chain"]] == ["localtest", "ollama"]
+    assert [row["provider"] for row in report["fallback_chain"]] == ["localtest", "ollama"]
     assert report["fallbacks"][0]["role"] == "fallback:1"
     assert report["fallbacks"][0]["capabilities"]["tool_calls"] is True
     assert report["routing"][0]["known_provider"] is True

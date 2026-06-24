@@ -27,6 +27,24 @@ interface SessionDetail {
   messages?: RawMessage[];
   title?: string;
   timeline?: { items?: TimelineItem[]; summary?: { total?: number; errors?: number; tools?: number; provider_calls?: number } };
+  lineage?: {
+    root_id?: string;
+    parent?: LineageNode | null;
+    current?: LineageNode;
+    children?: LineageNode[];
+    descendants?: LineageNode[];
+    warnings?: { code?: string; session_id?: string; parent_id?: string; at?: string }[];
+    summary?: { ancestor_count?: number; child_count?: number; descendant_count?: number; warning_count?: number };
+  };
+}
+interface LineageNode {
+  id: string;
+  title?: string;
+  parent_id?: string;
+  relation?: string;
+  depth?: number;
+  message_count?: number;
+  origin?: { kind?: string; platform?: string; cron_job_id?: string; background_task_id?: string; subagent_id?: string };
 }
 
 type Tab = "overview" | "history";
@@ -102,6 +120,8 @@ export function Sessions() {
 
   const turns = detail ? cleanTranscript(detail.messages || []) : [];
   const timeline = (detail?.timeline?.items || []).slice(0, 12);
+  const lineage = detail?.lineage;
+  const lineageChildren = (lineage?.children || []).slice(0, 5);
 
   return (
     <>
@@ -212,6 +232,46 @@ export function Sessions() {
             </div>
             <div className="scroll-thin flex-1 space-y-3 overflow-y-auto p-4">
               {!detail && <Loading />}
+              {lineage?.current && (
+                <div className="border border-border bg-surface-2/55 p-3">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <div className="font-mono text-xs font-semibold uppercase text-faint">Lineage</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      <Badge tone="neutral">{lineage.summary?.ancestor_count || 0} ancestors</Badge>
+                      <Badge tone="info">{lineage.summary?.descendant_count || 0} descendants</Badge>
+                      {!!lineage.summary?.warning_count && <Badge tone="warning">{lineage.summary.warning_count} warnings</Badge>}
+                    </div>
+                  </div>
+                  <div className="grid gap-2 md:grid-cols-3">
+                    <LineageMini label="Root" node={lineage.root_id === lineage.current.id ? lineage.current : undefined} id={lineage.root_id} />
+                    <LineageMini label="Parent" node={lineage.parent || undefined} />
+                    <LineageMini label="Current" node={lineage.current} />
+                  </div>
+                  {!!lineageChildren.length && (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {lineageChildren.map((child) => (
+                        <button
+                          key={child.id}
+                          onClick={() => open(child.id)}
+                          className="border border-border bg-bg px-2 py-1 text-left font-mono text-[11px] text-faint hover:text-primary"
+                          title={child.title || child.id}
+                        >
+                          {compact(child.title || child.id, 30)}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {!!lineage.warnings?.length && (
+                    <div className="mt-2 space-y-1">
+                      {lineage.warnings.slice(0, 3).map((warning, i) => (
+                        <div key={`${warning.code}-${i}`} className="font-mono text-[11px] text-warning">
+                          {warning.code}: {warning.session_id || warning.parent_id || warning.at || ""}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               {!!timeline.length && (
                 <div className="border border-border bg-surface-2/55 p-3">
                   <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -263,6 +323,22 @@ export function Sessions() {
       )}
       <PluginSlot name="sessions:bottom" className="mt-[var(--gap)]" />
     </>
+  );
+}
+
+function LineageMini({ label, node, id }: { label: string; node?: LineageNode; id?: string }) {
+  const displayId = node?.id || id || "";
+  const title = node?.title || displayId || "-";
+  const kind = node?.origin?.kind || node?.relation || "";
+  return (
+    <div className="min-w-0 border border-border bg-bg/60 px-2 py-2">
+      <div className="text-[10px] uppercase text-faint">{label}</div>
+      <div className="truncate font-mono text-xs text-text">{compact(title, 34)}</div>
+      <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
+        {kind && <Badge tone="neutral">{kind}</Badge>}
+        <span className="truncate font-mono text-[10px] text-faint">{displayId || "none"}</span>
+      </div>
+    </div>
   );
 }
 

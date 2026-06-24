@@ -388,6 +388,130 @@ def test_background_completions_can_consume_by_parent_session():
     assert [event["id"] for event in mgr.completions()] == ["bg_b1"]
 
 
+def test_background_manager_cancel_running_task_records_cancelled(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import threading
+    import time
+
+    import aegis.surface as surface
+    from aegis.background import BackgroundManager
+    from aegis.config import Config
+
+    entered = threading.Event()
+
+    class FakeAgent:
+        def __init__(self):
+            self.cancel_event = threading.Event()
+
+        def cancel(self):
+            self.cancel_event.set()
+
+    class FakeRunner:
+        def __init__(self, config, cwd=None, include_mcp=True):
+            pass
+
+        def load_or_create_session(self, session_id=None, title=None, surface="", meta=None, **_kwargs):
+            return type("S", (), {"id": session_id, "title": title, "meta": meta or {}, "parent_id": ""})()
+
+        def make_agent(self, **_kwargs):
+            return FakeAgent()
+
+        def run_prompt(self, prompt, **kwargs):
+            agent = kwargs["agent"]
+            entered.set()
+            assert agent.cancel_event.wait(2)
+            return type("R", (), {"text": f"cancelled {prompt}", "run_id": "run_cancel"})()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(surface, "SurfaceRunner", FakeRunner)
+    config = Config.load()
+    mgr = BackgroundManager()
+    task_id = mgr.spawn(config, "slow background")
+    assert entered.wait(2)
+
+    result = mgr.cancel(task_id)
+    assert result["ok"] is True
+    assert result["cancel_requested"] is True
+
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        task = mgr.get(task_id)
+        if task and task.status == "cancelled":
+            break
+        time.sleep(0.02)
+
+    task = mgr.get(task_id)
+    assert task is not None
+    assert task.status == "cancelled"
+    assert task.cancel_requested is True
+    assert task.error == "cancel requested"
+    events = mgr.completions()
+    assert events and events[-1]["id"] == task_id
+    assert events[-1]["status"] == "cancelled"
+
+
+def test_background_manager_retry_completed_task_preserves_metadata(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    import time
+
+    import aegis.surface as surface
+    from aegis.background import BackgroundManager
+    from aegis.config import Config
+
+    class FakeRunner:
+        def __init__(self, config, cwd=None, include_mcp=True):
+            pass
+
+        def load_or_create_session(self, session_id=None, title=None, surface="", meta=None, **_kwargs):
+            return type("S", (), {"id": session_id, "title": title, "meta": meta or {}, "parent_id": ""})()
+
+        def make_agent(self, **_kwargs):
+            return object()
+
+        def run_prompt(self, prompt, **kwargs):
+            return type("R", (), {"text": f"ok {prompt}", "run_id": f"run_{prompt.replace(' ', '_')}"})()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(surface, "SurfaceRunner", FakeRunner)
+    config = Config.load()
+    mgr = BackgroundManager()
+    original_id = mgr.spawn(
+        config,
+        "retry me",
+        session_meta={"agent_type": "review", "parent_session_id": "sess-parent", "role": "critic"},
+    )
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        task = mgr.get(original_id)
+        if task and task.status == "done":
+            break
+        time.sleep(0.02)
+
+    retry = mgr.retry(config, original_id)
+    assert retry["ok"] is True
+    retry_id = retry["id"]
+    assert retry_id != original_id
+
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        retried = mgr.get(retry_id)
+        if retried and retried.status == "done":
+            break
+        time.sleep(0.02)
+
+    retried = mgr.get(retry_id)
+    assert retried is not None
+    assert retried.retry_of == original_id
+    assert retried.prompt == "retry me"
+    assert retried.agent_type == "review"
+    assert retried.role == "critic"
+    assert retried.parent_session_id == "sess-parent"
+
+
 def test_background_subagent_dispatches_bounded_multiple_tasks(tmp_path, monkeypatch):
     from aegis.config import Config
     from aegis.tools.agentic import SubagentTool

@@ -24,7 +24,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -e ".[dev]" && bash scripts/run_tests.sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            desktop/package-lock.json
+      - name: Install web and desktop dependencies
+        run: |
+          (cd web && npm ci)
+          (cd desktop && npm ci)
+      - name: Full release gate
+        run: pip install -e ".[dev]" && bash scripts/verify_all.sh
 
   build-and-publish:
     needs: test
@@ -47,6 +59,15 @@ jobs:
         run: |
           pip install build
           python -m build
+      - name: Generate Python artifact provenance
+        run: python scripts/release_provenance.py --artifact-dir dist --out release-provenance/python
+      - name: Verify Python artifact provenance
+        run: python scripts/release_provenance.py --artifact-dir dist --out release-provenance/python --check
+      - name: Upload Python provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-python-provenance
+          path: release-provenance/python/*
       - name: Publish to TestPyPI (trusted publishing)
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'testpypi'
         uses: pypa/gh-action-pypi-publish@release/v1
@@ -98,6 +119,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run dist:linux
+      - name: Generate desktop artifact provenance
+        run: python scripts/release_provenance.py --artifact-dir desktop/release --out desktop/release
+      - name: Verify desktop artifact provenance
+        run: python scripts/release_provenance.py --artifact-dir desktop/release --out desktop/release --check
       - name: Upload desktop workflow artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -162,6 +187,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run dist:win
+      - name: Generate desktop artifact provenance
+        run: python scripts/release_provenance.py --artifact-dir desktop/release --out desktop/release
+      - name: Verify desktop artifact provenance
+        run: python scripts/release_provenance.py --artifact-dir desktop/release --out desktop/release --check
       - name: Upload desktop workflow artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -237,6 +266,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run dist:mac
+      - name: Generate desktop artifact provenance
+        run: python scripts/release_provenance.py --artifact-dir desktop/release --out desktop/release
+      - name: Verify desktop artifact provenance
+        run: python scripts/release_provenance.py --artifact-dir desktop/release --out desktop/release --check
       - name: Upload desktop workflow artifacts
         uses: actions/upload-artifact@v4
         with:

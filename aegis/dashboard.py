@@ -10,6 +10,7 @@ dashboard token; do not expose it publicly without trusted network controls.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -177,6 +178,7 @@ def _dashboard_kanban(include_archived: bool = False) -> dict:
 
 
 def _dashboard_tools(config: Config) -> dict:
+    from .redact import redact_secret_values
     from .tools.registry import default_registry
 
     reg = default_registry()
@@ -187,6 +189,7 @@ def _dashboard_tools(config: Config) -> dict:
     for tool in reg.all():
         available, reason = tool.available()
         in_toolset = tool.toolset in toolsets or "all" in toolsets
+        metadata = _jsonable(redact_secret_values(tool.metadata()))
         rows.append({
             "name": tool.name,
             "description": tool.description.splitlines()[0] if tool.description else "",
@@ -198,12 +201,30 @@ def _dashboard_tools(config: Config) -> dict:
             "available": bool(available),
             "unavailable_reason": "" if available else str(reason),
             "schema": _jsonable(tool.schema()),
+            "provenance": {
+                "source": metadata.get("source", "builtin"),
+                "source_path": metadata.get("source_path", ""),
+                "manifest_id": metadata.get("manifest_id", ""),
+                "handler_module": metadata.get("handler_module", ""),
+            },
+            "source": metadata.get("source", "builtin"),
+            "source_path": metadata.get("source_path", ""),
+            "manifest_id": metadata.get("manifest_id", ""),
+            "schema_hash": metadata.get("schema_hash", ""),
+            "handler_module": metadata.get("handler_module", ""),
+            "availability_status": metadata.get("availability_status", "available" if available else "unavailable"),
+            "availability_reason": metadata.get("availability_reason", "" if available else str(reason)),
+            "required_env": metadata.get("required_env", []),
+            "required_auth": metadata.get("required_auth", []),
+            "output_limits": metadata.get("output_limits", {}),
+            "risk_level": metadata.get("risk_level", "low"),
         })
     return {
         "toolsets": toolsets,
         "disabled": sorted(disabled),
         "deny_groups": list(config.get("tools.deny_groups", []) or []),
         "allowlist": list(config.get("tools.allowlist", []) or []),
+        "rejections": reg.rejections(),
         "tools": sorted(rows, key=lambda row: (row["toolset"], row["name"])),
     }
 
@@ -307,7 +328,36 @@ def _dashboard_tool_schema_validation(config: Config) -> dict:
     result = validate_tool_registry(reg.all()).to_dict()
     disabled = set(config.get("tools.disabled", []) or [])
     result["disabled"] = sorted(disabled)
+    result["rejections"] = reg.rejections()
     return result
+
+
+def _dashboard_tool_inventory(config: Config) -> dict:
+    payload = _dashboard_tools(config)
+    validation = _dashboard_tool_schema_validation(config)
+    tools = payload["tools"]
+    sources: dict[str, int] = {}
+    risks: dict[str, int] = {}
+    for tool in tools:
+        source = str(tool.get("source") or "builtin")
+        risk = str(tool.get("risk_level") or "low")
+        sources[source] = sources.get(source, 0) + 1
+        risks[risk] = risks.get(risk, 0) + 1
+    return {
+        "ok": bool(validation.get("ok", True)) and not payload.get("rejections"),
+        "toolsets": payload["toolsets"],
+        "disabled": payload["disabled"],
+        "deny_groups": payload["deny_groups"],
+        "allowlist": payload["allowlist"],
+        "total": len(tools),
+        "enabled": sum(1 for tool in tools if tool.get("enabled")),
+        "available": sum(1 for tool in tools if tool.get("available")),
+        "sources": sources,
+        "risks": risks,
+        "rejections": payload.get("rejections", []),
+        "validation": validation,
+        "tools": tools,
+    }
 
 
 def _dashboard_tool_permission_dry_run(body: dict, config: Config) -> dict:
@@ -358,6 +408,154 @@ def _dashboard_tool_permission_dry_run(body: dict, config: Config) -> dict:
             "reason": auth_reason,
         },
         "explanation": _jsonable(explanation),
+    }
+
+
+def _dashboard_security_policy_simulator(body: dict, config: Config) -> dict:
+    from .net_safety import resolve_safe
+    from .redact import redact_secret_values
+    from .security_scan import scan_command
+    from .tools.file_safety import is_sensitive, read_denial
+    from .tools.registry import default_registry
+
+    body = body if isinstance(body, dict) else {}
+    command = str(body.get("command") or body.get("cmd") or "").strip()
+    url = str(body.get("url") or "").strip()
+    raw_path = str(body.get("path") or body.get("file") or "").strip()
+    tool_name = str(body.get("tool") or "").strip()
+    args = body.get("args", {})
+    if isinstance(args, str):
+        try:
+            args = json.loads(args) if args.strip() else {}
+        except json.JSONDecodeError:
+            args = {}
+    if not isinstance(args, dict):
+        args = {}
+
+    checks: dict[str, Any] = {}
+    decisions: list[str] = []
+    reasons: list[str] = []
+
+    def add_decision(name: str, decision: str, reason: str = "") -> None:
+        decisions.append(decision)
+        if reason:
+            reasons.append(f"{name}: {reason}")
+
+    if raw_path:
+        workspace_root = Path(str(body.get("workspace_root") or Path.cwd())).expanduser()
+        candidate = Path(raw_path).expanduser()
+        if not candidate.is_absolute():
+            candidate = workspace_root / candidate
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            resolved = candidate
+        try:
+            root_resolved = workspace_root.resolve()
+        except OSError:
+            root_resolved = workspace_root
+        try:
+            inside_workspace = resolved == root_resolved or resolved.relative_to(root_resolved) is not None
+        except ValueError:
+            inside_workspace = False
+        write_reason = is_sensitive(resolved)
+        read_reason = read_denial(resolved)
+        file_decision = "allow"
+        file_reasons: list[str] = []
+        if write_reason:
+            file_decision = "prompt"
+            file_reasons.append(write_reason)
+        if read_reason:
+            file_decision = "deny"
+            file_reasons.append(read_reason)
+        if not inside_workspace:
+            boundary_decision = "deny" if bool(body.get("enforce_workspace", False)) else "prompt"
+            file_decision = "deny" if boundary_decision == "deny" else file_decision if file_decision == "deny" else "prompt"
+            file_reasons.append("outside workspace/profile root")
+        checks["file"] = {
+            "path": str(resolved),
+            "workspace_root": str(root_resolved),
+            "inside_workspace": inside_workspace,
+            "write_sensitive_reason": write_reason,
+            "read_denial_reason": read_reason,
+            "decision": file_decision,
+            "reasons": file_reasons,
+        }
+        add_decision("file", file_decision, "; ".join(file_reasons))
+
+    if command:
+        flagged, scan_reason = scan_command(command)
+        dry = _dashboard_tool_permission_dry_run(
+            {"tool": "bash", "args": {"command": command}},
+            config,
+        )
+        explanation = dry.get("explanation", {}) if dry.get("ok") else {}
+        shell_decision = str(explanation.get("decision") or ("prompt" if flagged else "allow"))
+        if flagged and shell_decision == "allow":
+            shell_decision = "prompt"
+        checks["shell"] = {
+            "command": redact_secret_values(command),
+            "decision": shell_decision,
+            "security_scan": {"flagged": flagged, "reason": scan_reason},
+            "permission": explanation,
+            "authorize_without_approver": dry.get("authorize_without_approver", {}),
+        }
+        add_decision("shell", shell_decision, scan_reason)
+
+    if url:
+        host, pinned_ip, reason = resolve_safe(url, config)
+        network_decision = "allow" if pinned_ip and not reason else "deny"
+        checks["network"] = {
+            "url": redact_secret_values(url),
+            "host": host,
+            "pinned_ip": pinned_ip or "",
+            "decision": network_decision,
+            "reason": reason,
+            "allow_private_urls": bool(config.get("security.allow_private_urls", False)),
+        }
+        add_decision("network", network_decision, reason)
+
+    if tool_name:
+        dry = _dashboard_tool_permission_dry_run({"tool": tool_name, "args": args}, config)
+        tool = default_registry().get(tool_name)
+        meta = tool.metadata() if tool is not None else {}
+        explanation = dry.get("explanation", {}) if dry.get("ok") else {}
+        tool_decision = str(explanation.get("decision") or ("deny" if not dry.get("ok") else "allow"))
+        checks["tool"] = {
+            "name": tool_name,
+            "args": dry.get("args", redact_secret_values(args)),
+            "decision": tool_decision,
+            "risk_level": str(meta.get("risk_level") or ""),
+            "groups": list(meta.get("groups") or []),
+            "source": str(meta.get("source") or ""),
+            "permission": explanation,
+            "visibility": dry.get("visibility", {}),
+            "available": dry.get("available", tool is not None),
+            "error": dry.get("error", ""),
+        }
+        add_decision("tool", tool_decision, dry.get("error", ""))
+
+    if not checks:
+        return {"ok": False, "error": "provide at least one of path, command, url, or tool"}
+
+    if "deny" in decisions:
+        decision = "deny"
+    elif "prompt" in decisions:
+        decision = "prompt"
+    else:
+        decision = "allow"
+    return {
+        "ok": True,
+        "decision": decision,
+        "checks": _jsonable(redact_secret_values(checks)),
+        "reasons": reasons,
+        "input": _jsonable(redact_secret_values({
+            "path": raw_path,
+            "command": command,
+            "url": url,
+            "tool": tool_name,
+            "args": args,
+        })),
     }
 
 
@@ -1677,7 +1875,7 @@ def _message_detail(message, index: int) -> dict:
 def _session_prompt_detail(sess) -> dict:
     meta = getattr(sess, "meta", {}) if hasattr(sess, "meta") else {}
     meta = meta if isinstance(meta, dict) else {}
-    parts = [_jsonable(p) for p in (meta.get("prompt_parts") or []) if isinstance(p, dict)]
+    parts = [_prompt_part_audit(p) for p in (meta.get("prompt_parts") or []) if isinstance(p, dict)]
     by_tier: dict[str, list[dict]] = {}
     for part in parts:
         by_tier.setdefault(str(part.get("tier") or "other"), []).append(part)
@@ -1690,6 +1888,12 @@ def _session_prompt_detail(sess) -> dict:
     controls = meta.get("runtime_controls") if isinstance(meta.get("runtime_controls"), dict) else {}
     last_refs = meta.get("last_context_references") if isinstance(meta.get("last_context_references"), dict) else {}
     ref_history = [r for r in (meta.get("context_references") or []) if isinstance(r, dict)]
+    warnings = _prompt_audit_warnings(meta, parts)
+    stable_hashes = [str(p.get("hash") or "") for p in parts if p.get("cache_stable")]
+    stable_key = (
+        hashlib.sha256("|".join(stable_hashes).encode("utf-8")).hexdigest()[:16]
+        if stable_hashes else ""
+    )
     return {
         "hash": meta.get("system_prompt_hash", ""),
         "chars": int(meta.get("system_prompt_chars", 0) or 0),
@@ -1697,11 +1901,66 @@ def _session_prompt_detail(sess) -> dict:
         "part_count": len(parts),
         "parts": parts,
         "tiers": by_tier,
+        "warnings": warnings,
+        "cache": {
+            "stable_part_count": len(stable_hashes),
+            "stable_hash": stable_key,
+            "context_part_count": sum(1 for p in parts if str(p.get("tier") or "") == "context"),
+            "volatile_part_count": sum(1 for p in parts if str(p.get("tier") or "") == "volatile"),
+        },
         "runtime": _jsonable(runtime),
         "runtime_controls": _jsonable(controls),
         "context_references": _jsonable(last_refs),
         "context_reference_history": _jsonable(ref_history[-10:]),
         "preview": prompt_text[:1200],
+    }
+
+
+def _prompt_part_audit(part: dict) -> dict:
+    row = _jsonable(part)
+    tier = str(row.get("tier") or "other")
+    name = str(row.get("name") or "part")
+    row.setdefault("id", f"{tier}:{name}")
+    row.setdefault("source_name", row.get("source") or name)
+    row.setdefault("source_path", "")
+    row.setdefault("cache_stable", tier == "stable")
+    row.setdefault("warnings", [])
+    if "token_estimate" not in row:
+        row["token_estimate"] = int(row.get("tokens", 0) or 0)
+    return row
+
+
+def _prompt_audit_warnings(meta: dict, parts: list[dict]) -> list[str]:
+    warnings: list[str] = []
+    audit = meta.get("prompt_audit") if isinstance(meta.get("prompt_audit"), dict) else {}
+    for source in (meta.get("context_file_warnings") or [], audit.get("warnings") or []):
+        if isinstance(source, list):
+            warnings.extend(str(item) for item in source if item)
+        elif source:
+            warnings.append(str(source))
+    for part in parts:
+        for warning in part.get("warnings") or []:
+            if warning:
+                warnings.append(str(warning))
+    return sorted(set(warnings))
+
+
+def _dashboard_session_prompt_audit(session_id: str, config: Config | None = None) -> dict:
+    from .session import SessionStore
+    store = SessionStore()
+    sess = store.load(session_id)
+    if sess is None:
+        return {"found": False, "id": session_id, "error": "session not found"}
+    prompt = _session_prompt_detail(sess)
+    prompt.pop("preview", None)
+    prompt["raw_content_included"] = False
+    return {
+        "found": True,
+        "id": sess.id,
+        "title": sess.title,
+        "created_at": sess.created_at,
+        "updated_at": sess.updated_at,
+        **prompt,
     }
 
 
@@ -1754,6 +2013,7 @@ def _dashboard_session_detail(session_id: str, config: Config | None = None) -> 
     metrics = _session_metrics(sess)
     children = store.children(sess.id)
     parent = store.load(sess.parent_id) if sess.parent_id else None
+    lineage = store.lineage(sess.id)
     linked = _dashboard_session_links(sess, config)
     detail = {
         "found": True,
@@ -1769,6 +2029,7 @@ def _dashboard_session_detail(session_id: str, config: Config | None = None) -> 
             "updated_at": parent.updated_at,
         } if parent is not None else None,
         "children": _jsonable(children),
+        "lineage": _jsonable(lineage),
         "metrics": metrics,
         "prompt": _session_prompt_detail(sess),
         "messages": [_message_detail(m, i) for i, m in enumerate(sess.messages)],
@@ -2080,6 +2341,50 @@ def _dashboard_trace_timeline(query: dict, config: Config | None = None) -> dict
         "source": detail.get("source", ""),
         "trace": detail.get("trace", {}),
         **timeline,
+    }
+
+
+def _dashboard_session_timeline(session_id: str, config: Config | None = None) -> dict:
+    detail = _dashboard_session_detail(session_id, config)
+    if not detail.get("found"):
+        return {"found": False, "id": session_id, "error": detail.get("error", "session not found")}
+    timeline = detail.get("timeline") if isinstance(detail.get("timeline"), dict) else {}
+    return {
+        "found": True,
+        "id": session_id,
+        "session": {
+            "id": detail.get("id", session_id),
+            "title": detail.get("title", ""),
+            "created_at": detail.get("created_at", ""),
+            "updated_at": detail.get("updated_at", ""),
+        },
+        **timeline,
+    }
+
+
+def _dashboard_run_timeline(run_id: str, config: Config | None = None) -> dict:
+    try:
+        from .runs import RunStore
+
+        run = RunStore().get(run_id)
+    except Exception:  # noqa: BLE001
+        run = None
+    if not run:
+        return {"found": False, "id": run_id, "error": "run not found"}
+    trace_id = str(run.get("trace_id") or "")
+    if trace_id:
+        timeline = _dashboard_trace_timeline({"id": [trace_id]}, config)
+    else:
+        session_id = str(run.get("session_id") or "")
+        timeline = _dashboard_session_timeline(session_id, config) if session_id else {}
+    if not timeline.get("found"):
+        return {"found": False, "id": run_id, "run": _jsonable(run), "error": timeline.get("error", "timeline not found")}
+    return {
+        **timeline,
+        "id": run_id,
+        "run": _jsonable(run),
+        "trace_id": trace_id or timeline.get("trace_id", ""),
+        "source": timeline.get("source", "run"),
     }
 
 
@@ -2683,6 +2988,9 @@ def _dashboard_mcp_catalog(config: Config, *, live: bool = False) -> dict:
             malformed.append(str(name))
             continue
         transport = "http" if spec.get("url") else "stdio"
+        tool_filter = spec.get("tool_filter") if isinstance(spec.get("tool_filter"), dict) else {}
+        include = [str(item) for item in (tool_filter.get("include") or [])]
+        exclude = [str(item) for item in (tool_filter.get("exclude") or [])]
         servers.append({
             "name": str(name),
             "transport": transport,
@@ -2693,6 +3001,13 @@ def _dashboard_mcp_catalog(config: Config, *, live: bool = False) -> dict:
             "cwd": spec.get("cwd", ""),
             "env_keys": sorted((spec.get("env") or {}).keys()),
             "header_keys": sorted((spec.get("headers") or {}).keys()),
+            "tool_filter": {
+                "include": include,
+                "exclude": exclude,
+                "mode": "include" if "include" in tool_filter else ("exclude" if exclude else "all"),
+            },
+            "selected_tool_count": len(include) if "include" in tool_filter else None,
+            "excluded_tool_count": len(exclude),
             "status": "configured" if bool(spec.get("enabled", True)) else "disabled",
             **(_mcp_live_inventory(str(name), spec) if live else {}),
         })

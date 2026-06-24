@@ -172,6 +172,51 @@ def test_cross_session_integrity_report_distinguishes_stale_planned_stop_markers
     assert any(check["id"] == "planned_stop_recovery" and check["ok"] is False for check in report["checks"])
 
 
+def test_cross_session_integrity_reports_and_repairs_lineage_backrefs(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+
+    from aegis.session import Session, SessionStore
+    from aegis.session_checks import cross_session_integrity_report, repair_cross_session_integrity
+
+    store = SessionStore()
+    root = Session(id="sess-lineage-root", title="lineage root")
+    root.meta["child_sessions"] = ["sess-missing-child"]
+    store.save(root)
+
+    child = Session(id="sess-lineage-child", title="lineage child", parent_id=root.id)
+    child.meta["lineage_root"] = root.id
+    child.meta["lineage_depth"] = 1
+    store.save(child)
+
+    bad_meta = Session(id="sess-bad-lineage-meta", title="bad lineage meta", parent_id=root.id)
+    bad_meta.meta["lineage_root"] = "missing-root"
+    bad_meta.meta["lineage_depth"] = "deep"
+    store.save(bad_meta)
+
+    cycle_a = Session(id="sess-cycle-a", title="cycle a", parent_id="sess-cycle-b")
+    cycle_b = Session(id="sess-cycle-b", title="cycle b", parent_id="sess-cycle-a")
+    store.save(cycle_a)
+    store.save(cycle_b)
+
+    before = cross_session_integrity_report(stale_running_seconds=3600, stale_resume_pending_seconds=3600)
+    codes = {issue["code"] for issue in before["issues"]}
+
+    assert before["status"] == "error"
+    assert "lineage_cycle" in codes
+    assert "stale_child_session_backref" in codes
+    assert "missing_child_session_backref" in codes
+    assert "malformed_lineage_root" in codes
+    assert "malformed_lineage_depth" in codes
+    assert before["counts"]["lineage_issue_count"] >= 5
+
+    repair = repair_cross_session_integrity(stale_running_seconds=3600, stale_resume_pending_seconds=3600)
+    repaired_root = store.load(root.id)
+
+    assert repair["repaired_lineage_backrefs"] >= 1
+    assert repaired_root.meta["child_sessions"] == [bad_meta.id, child.id]
+    assert any(row["repair_kind"] == "lineage_child_sessions" for row in repair["lineage"])
+
+
 def test_repair_cross_session_integrity_interrupts_stale_running_runs(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
 

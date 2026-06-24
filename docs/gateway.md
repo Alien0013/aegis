@@ -62,6 +62,23 @@ aegis cron add "@daily" "summarize today's commits"
 aegis cron run        # runs jobs; the gateway also ticks them
 ```
 
+## Adapter contract proof
+
+AEGIS separates fake-adapter coverage from credentialed live smoke claims. The
+contract suite in `tests/test_gateway_adapter_contract.py` exercises every
+built-in channel plus bridge channels registered in `aegis.platforms`:
+
+- built-in: `api_server`, `telegram`, `discord`, `slack`, `signal`, `matrix`,
+  `email`, `mattermost`, `webhook`, `whatsapp`, `ntfy`
+- bridge: `bluebubbles`, `dingtalk`, `feishu`, `homeassistant`,
+  `msgraph_webhook`, `qqbot`, `relay`, `sms`, `wecom`, `weixin`,
+  `whatsapp_cloud`, `yuanbao`
+
+Each fake adapter must prove inbound normalization, attachment preservation,
+safe delivery metadata, clarify/approval prompt replies, media filtering, and
+outbox dead-letter redaction. Live platform support still requires a real token
+or webhook account and should be recorded separately from the fake test result.
+
 ## User services
 
 ```bash

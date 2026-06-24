@@ -86,6 +86,18 @@ def _redact_string_values(value):
     return value
 
 
+def cmd_verify(args, config: Config) -> int:
+    """Run the repo-wide local verification gate."""
+
+    root = Path(__file__).resolve().parents[2]
+    script = root / "scripts" / "verify_all.sh"
+    if not script.exists():
+        return _die(f"verification script not found: {script}")
+    cmd = ["bash", str(script)]
+    cmd.extend(getattr(args, "verify_args", []) or [])
+    return subprocess.call(cmd, cwd=root)
+
+
 # --------------------------------------------------------------------------- #
 # chat / interactive
 # --------------------------------------------------------------------------- #
@@ -2598,6 +2610,10 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--json", action="store_true", help="print machine-readable status")
     st.set_defaults(func=cmd_status)
 
+    vf = sub.add_parser("verify", help="run the full Python/web/desktop/docs parity gate")
+    vf.add_argument("verify_args", nargs=argparse.REMAINDER, help="arguments passed to scripts/verify_all.sh")
+    vf.set_defaults(func=cmd_verify)
+
     lg = sub.add_parser("logs", help="tail agent/desktop/errors/gateway/gui logs")
     lg.add_argument(
         "name",
@@ -2785,6 +2801,8 @@ def build_parser() -> argparse.ArgumentParser:
     secp = sub.add_parser("security", help="security audit of deps/MCP/plugins/skills")
     secp.add_argument("action", nargs="?", choices=["audit"], default="audit")
     secp.add_argument("--fail-on", dest="fail_on")
+    secp.add_argument("--json", action="store_true", help="print machine-readable audit output")
+    secp.add_argument("--markdown", action="store_true", help="print markdown audit output")
     secp.set_defaults(func=_ops.cmd_security_audit)
 
     dbg = sub.add_parser("debug", help="bundle a redacted debug report")

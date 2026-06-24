@@ -136,7 +136,15 @@ def test_dashboard_tools_payload_includes_schema_and_policy(tmp_path, monkeypatc
     assert payload["toolsets"] == ["core"]
     assert payload["deny_groups"] == ["runtime"]
     assert payload["allowlist"] == ["git status"]
-    assert any("schema" in row and "toolset" in row and "enabled" in row for row in payload["tools"])
+    assert any(
+        "schema" in row
+        and "toolset" in row
+        and "enabled" in row
+        and "schema_hash" in row
+        and "provenance" in row
+        and "risk_level" in row
+        for row in payload["tools"]
+    )
 
 
 def test_files_browser_lists_and_reads(tmp_path, monkeypatch):

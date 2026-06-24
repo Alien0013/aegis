@@ -78,6 +78,7 @@ _TELEGRAM_ALLOWED_UPDATES = json.dumps([
     "edited_channel_post",
     "callback_query",
 ])
+_TELEGRAM_MIN_MEDIA_GROUP_COALESCE_SECONDS = 0.05
 
 _COMMAND_DESCRIPTIONS = {
     "help": "Show available AEGIS commands",
@@ -309,7 +310,12 @@ class TelegramAdapter(BasePlatformAdapter):
         self._rate_limiter = FixedWindowRateLimiter(limit=self.rate_limit_per_minute, window_seconds=60)
         self._callback_payloads: dict[str, str] = {}
         self._callback_payload_meta: dict[str, dict] = {}
-        self.media_group_coalesce_seconds = _env_float("TELEGRAM_MEDIA_GROUP_COALESCE_SECONDS", 0.75)
+        self.requested_media_group_coalesce_seconds = _env_float("TELEGRAM_MEDIA_GROUP_COALESCE_SECONDS", 0.75)
+        self.media_group_coalesce_seconds = (
+            max(self.requested_media_group_coalesce_seconds, _TELEGRAM_MIN_MEDIA_GROUP_COALESCE_SECONDS)
+            if self.requested_media_group_coalesce_seconds > 0
+            else 0.0
+        )
         self._media_group_lock = threading.RLock()
         self._media_groups: dict[str, dict] = {}
         self._base = f"https://api.telegram.org/bot{self.token}"
@@ -335,6 +341,7 @@ class TelegramAdapter(BasePlatformAdapter):
             "command_language_code_configured": bool(self.command_language_code),
             "callback_ttl_env": "TELEGRAM_CALLBACK_TTL_SECONDS",
             "callback_ttl_seconds": self.callback_ttl_seconds,
+            "requested_media_group_coalesce_seconds": self.requested_media_group_coalesce_seconds,
             "media_group_coalesce_seconds": self.media_group_coalesce_seconds,
             "idempotency_env": [
                 "TELEGRAM_IDEMPOTENCY_TTL_SECONDS",
@@ -987,17 +994,19 @@ class TelegramAdapter(BasePlatformAdapter):
         with self._media_group_lock:
             record = self._media_groups.get(key)
             if record is None:
-                timer = threading.Timer(delay, self._flush_media_group, args=(key,))
-                timer.daemon = True
                 record = {
                     "event": ev,
                     "attachments": [],
                     "texts": [],
                     "raw_texts": [],
-                    "timer": timer,
+                    "timer": None,
+                    "generation": 0,
                 }
                 self._media_groups[key] = record
-                timer.start()
+            else:
+                timer = record.get("timer")
+                if timer is not None:
+                    timer.cancel()
             record["attachments"].extend(dict(row) for row in ev.attachments)
             text = str(ev.text or "").strip()
             if text and not text.startswith("["):
@@ -1005,10 +1014,18 @@ class TelegramAdapter(BasePlatformAdapter):
             raw = str(raw_text or "").strip()
             if raw:
                 record["raw_texts"].append(raw)
+            record["generation"] = int(record.get("generation") or 0) + 1
+            timer = threading.Timer(delay, self._flush_media_group, args=(key, record["generation"]))
+            timer.daemon = True
+            record["timer"] = timer
+            timer.start()
         return True
 
-    def _flush_media_group(self, key: str) -> None:
+    def _flush_media_group(self, key: str, generation: int | None = None) -> None:
         with self._media_group_lock:
+            record = self._media_groups.get(key)
+            if generation is not None and record and int(record.get("generation") or 0) != generation:
+                return
             record = self._media_groups.pop(key, None)
         if not record:
             return

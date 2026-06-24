@@ -10,6 +10,7 @@ export interface DesktopConnection {
   wsUrl?: string;
   desktop?: {
     updater?: DesktopUpdaterStatus;
+    lifecycle?: DesktopLifecycleStatus;
     updateEligibility?: { ok?: boolean; reason?: string };
     repair?: DesktopRepairPanel;
   };
@@ -45,6 +46,37 @@ export interface DesktopRepairAction {
 export interface DesktopRepairPanel {
   available?: boolean;
   actions?: DesktopRepairAction[];
+}
+
+export interface DesktopLifecycleStatus {
+  state?: string;
+  message?: string;
+  phase?: string;
+  mode?: string;
+  backendPid?: number | null;
+  port?: number;
+  restartAttempt?: number;
+  updateStage?: string;
+  updatedAt?: string;
+  events?: Array<{
+    state?: string;
+    at?: string;
+    message?: string;
+    phase?: string;
+    mode?: string;
+    backendPid?: number | null;
+    port?: number;
+    restartAttempt?: number;
+    updateStage?: string;
+  }>;
+  crashHistory?: Array<{
+    at?: string;
+    message?: string;
+    code?: number | null;
+    signal?: string;
+    restartAttempt?: number;
+    maxCrashRestarts?: number;
+  }>;
 }
 
 export interface DesktopRepairResult {

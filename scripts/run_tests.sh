@@ -5,6 +5,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# The full product test suite opens many SQLite DBs, file watchers, and desktop
+# fixtures. Match the release gate's nofile floor when the host allows it.
+ulimit -n 4096 2>/dev/null || true
+
 export TZ=UTC
 export AEGIS_HOME="$(mktemp -d -t aegis-tests-XXXXXX)"
 trap 'rm -rf "$AEGIS_HOME"' EXIT

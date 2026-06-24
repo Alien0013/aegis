@@ -325,6 +325,8 @@ class Agent:
             "stable",
             f"subagent_role:{agent_type}",
             f"# Subagent role ({agent_type})\n{role_prompt}",
+            "subagent runtime",
+            f"session:{self.session.id}",
         )
 
     def ensure_system_prompt(self, force: bool = False) -> None:
@@ -355,6 +357,7 @@ class Agent:
         }
         meta = getattr(self, "_last_prompt_metadata", None)
         parts = []
+        warnings = list(self.session.meta.get("context_file_warnings") or [])
         if current_build and isinstance(meta, dict) and meta.get("hash") == actual["hash"]:
             parts = meta.get("parts", []) or []
             warnings = list(meta.get("context_file_warnings") or [])
@@ -368,6 +371,36 @@ class Agent:
         self.session.meta["system_prompt_chars"] = actual["chars"]
         self.session.meta["system_prompt_tokens"] = actual["tokens"]
         self.session.meta["prompt_parts"] = parts
+        self.session.meta["prompt_audit"] = self._prompt_audit_metadata(actual, parts, warnings)
+
+    def _prompt_audit_metadata(self, actual: dict, parts: list[dict], warnings: list[str]) -> dict:
+        import hashlib
+
+        tiers: dict[str, list[str]] = {}
+        all_warnings = list(warnings)
+        for part in parts:
+            tier = str(part.get("tier") or "other")
+            name = str(part.get("name") or "")
+            tiers.setdefault(tier, []).append(name)
+            for warning in part.get("warnings") or []:
+                if warning:
+                    all_warnings.append(str(warning))
+        stable_hashes = [str(p.get("hash") or "") for p in parts if p.get("cache_stable")]
+        stable_key = hashlib.sha256("|".join(stable_hashes).encode("utf-8")).hexdigest()[:16] if stable_hashes else ""
+        return {
+            "hash": actual.get("hash", ""),
+            "chars": int(actual.get("chars", 0) or 0),
+            "tokens": int(actual.get("tokens", 0) or 0),
+            "part_count": len(parts),
+            "tiers": tiers,
+            "warnings": sorted(set(all_warnings)),
+            "cache": {
+                "stable_part_count": len(stable_hashes),
+                "stable_hash": stable_key,
+                "volatile_part_count": sum(1 for p in parts if str(p.get("tier") or "") == "volatile"),
+                "context_part_count": sum(1 for p in parts if str(p.get("tier") or "") == "context"),
+            },
+        }
 
     def refresh_volatile(self) -> None:
         if self.memory:

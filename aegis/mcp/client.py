@@ -280,6 +280,11 @@ class MCPTool(Tool):
         self.name = f"mcp__{_safe_name_part(client.name)}__{_safe_name_part(tool_def['name'])}"
         self.source = "mcp"
         self.server_name = client.name
+        self.source_path = f"mcp://{client.name}/{self._remote}"
+        self.manifest_id = client.name
+        self.required_env = sorted(str(key) for key in client.env)
+        self.required_auth = ["headers"] if client.headers else ([] if not self.required_env else ["env"])
+        self.output_limits = {"max_chars": 30000, "policy": "truncate"}
         self.description = tool_def.get("description", "") or f"MCP tool {self._remote}"
         self.parameters = _normalize_mcp_input_schema(tool_def.get("inputSchema"))
 
@@ -301,6 +306,11 @@ class MCPReadResourceTool(Tool):
         self.name = f"mcp__{_safe_name_part(client.name)}__read_resource"
         self.source = "mcp"
         self.server_name = client.name
+        self.source_path = f"mcp://{client.name}/resources"
+        self.manifest_id = client.name
+        self.required_env = sorted(str(key) for key in client.env)
+        self.required_auth = ["headers"] if client.headers else ([] if not self.required_env else ["env"])
+        self.output_limits = {"max_chars": 30000, "policy": "truncate"}
         preview = _capability_preview(resources, "uri")
         self.description = (
             f"Read an MCP resource from server '{client.name}' by URI."
@@ -335,6 +345,11 @@ class MCPGetPromptTool(Tool):
         self.name = f"mcp__{_safe_name_part(client.name)}__get_prompt"
         self.source = "mcp"
         self.server_name = client.name
+        self.source_path = f"mcp://{client.name}/prompts"
+        self.manifest_id = client.name
+        self.required_env = sorted(str(key) for key in client.env)
+        self.required_auth = ["headers"] if client.headers else ([] if not self.required_env else ["env"])
+        self.output_limits = {"max_chars": 30000, "policy": "truncate"}
         preview = _capability_preview(prompts, "name")
         self.description = (
             f"Render an MCP prompt template from server '{client.name}' by name."

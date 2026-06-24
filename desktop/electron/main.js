@@ -50,6 +50,11 @@ const {
   pauseGatewayForUpdate,
   resumeGatewayAfterUpdate,
 } = require("./gateway-update-coordination.cjs");
+const {
+  initialDesktopLifecycle,
+  lifecyclePublicSnapshot,
+  transitionDesktopLifecycle,
+} = require("./desktop-lifecycle.cjs");
 
 // Chromium checks the Linux setuid sandbox before main.js runs, so launch.js
 // puts --no-sandbox on argv; mirror it here so child processes inherit it.
@@ -91,6 +96,7 @@ let backendCwdSource = "";
 let backendReadyPromise = null;
 let restartingBackend = false;
 let lastBootPhase = null;
+let desktopLifecycle = initialDesktopLifecycle();
 let autoUpdater = null;
 let autoUpdaterConfigured = false;
 let updateCheckInFlight = false;
@@ -163,9 +169,31 @@ function readRecentLogLines(maxLines = 200) {
 
 function setUpdaterStatus(event, details = {}) {
   updaterStatus = transitionUpdaterStatus(updaterStatus, event, details);
+  if (["checking", "available", "progress", "ready", "installing"].includes(String(event || ""))) {
+    setDesktopLifecycle("updating", {
+      message: updaterStatus.message || updaterStatus.stage,
+      updateStage: updaterStatus.stage,
+      mode: connectionModeSafe(),
+    });
+  }
   const summary = updaterStatus.message || updaterStatus.error || updaterStatus.stage;
   log(`updater status: ${updaterStatus.stage}${summary ? `: ${summary}` : ""}`);
   return updaterStatus;
+}
+
+function connectionModeSafe() {
+  try {
+    return remoteConnection().enabled ? "remote" : "local";
+  } catch {
+    return "";
+  }
+}
+
+function setDesktopLifecycle(state, details = {}) {
+  desktopLifecycle = transitionDesktopLifecycle(desktopLifecycle, state, details);
+  const summary = desktopLifecycle.message || desktopLifecycle.state;
+  log(`desktop lifecycle: ${desktopLifecycle.state}${summary ? `: ${summary}` : ""}`);
+  return desktopLifecycle;
 }
 
 function hiddenWindowsChildOptions(options = {}) {
@@ -277,6 +305,10 @@ function startBackend() {
         AEGIS_DESKTOP_REMOTE_URL: remote.url,
         AEGIS_DESKTOP_REMOTE_TOKEN: remote.tokenConfigured ? "[configured]" : "",
       };
+      setDesktopLifecycle("remote_mode", {
+        message: `Connected to remote dashboard ${remote.url}`,
+        mode: "remote",
+      });
       log(`using remote dashboard: ${remote.url} (${backendCwdSource})`);
       backendReadyPromise = Promise.resolve(0);
       resolve();
@@ -317,6 +349,11 @@ function startBackend() {
       packaged: app.isPackaged,
       resourcesPath: backendOptions.resourcesPath,
     };
+    setDesktopLifecycle("booting", {
+      message: "Starting local AEGIS dashboard backend.",
+      mode: "local",
+      port,
+    });
     log(`starting backend: ${bin} dashboard --host 127.0.0.1 --port ${port}`);
     backend = spawn(bin, backendArgs, hiddenWindowsChildOptions({
       env: {
@@ -341,6 +378,12 @@ function startBackend() {
         } else {
           log(`backend announced ready on port ${announcedPort}`);
         }
+        setDesktopLifecycle("probing_backend", {
+          message: "Backend announced readiness; verifying health.",
+          mode: "local",
+          backendPid: backend && backend.pid,
+          port,
+        });
         return announcedPort;
       })
       .catch((error) => {
@@ -352,6 +395,16 @@ function startBackend() {
       log(`backend exited code=${code} sig=${sig}`);
       backend = null;
       backendStartedAt = 0;
+      setDesktopLifecycle(quitting || restartingBackend ? "stopped" : "crashed", {
+        message: quitting || restartingBackend
+          ? "Backend stopped during desktop shutdown or restart."
+          : "The AEGIS backend stopped unexpectedly.",
+        mode: connectionModeSafe(),
+        code,
+        signal: sig,
+        restartAttempt: crashRestarts,
+        maxCrashRestarts: MAX_CRASH_RESTARTS,
+      });
       if (quitting || restartingBackend) return;
       onBackendCrash();
     });
@@ -451,6 +504,7 @@ function connectionDescriptor() {
     }),
   };
   descriptor.desktop.updater = { ...updaterStatus };
+  descriptor.desktop.lifecycle = lifecyclePublicSnapshot(desktopLifecycle);
   return descriptor;
 }
 
@@ -525,6 +579,7 @@ async function runDesktopRepairAction(action) {
     return { ok: !error, action: id, path: logPath(), ...(error ? { error } : {}) };
   }
   if (id === "restart_backend") {
+    setDesktopLifecycle("repairing", { phase: id, message: "Restarting the desktop backend." });
     setTimeout(() => restartFromScratch(), 0);
     return { ok: true, action: id, restarting: true };
   }
@@ -532,6 +587,7 @@ async function runDesktopRepairAction(action) {
     const selected = await chooseBackendEnvTarget();
     if (selected.cancelled) return { ok: false, action: id, cancelled: true };
     const result = persistDesktopBackendEnv({ [selected.key]: selected.value });
+    setDesktopLifecycle("repairing", { phase: id, message: `Updating ${selected.key} and restarting backend.` });
     setTimeout(() => restartFromScratch(), 0);
     return {
       ok: true,
@@ -560,6 +616,7 @@ function runtimeDiagnostics() {
     authMode: descriptor.authMode,
     backend: descriptor.backend,
     desktop: descriptor.desktop,
+    lifecycle: descriptor.desktop.lifecycle,
     logs: {
       path: logPath(),
       recent: readRecentLogLines(80),
@@ -610,6 +667,12 @@ function apiRequest({ method = "GET", path: requestPath = "", body = null } = {}
 async function onBackendCrash() {
   if (quitting || restartingBackend) return;
   if (crashRestarts >= MAX_CRASH_RESTARTS) {
+    setDesktopLifecycle("crashed", {
+      message: "The AEGIS backend stopped repeatedly.",
+      mode: connectionModeSafe(),
+      restartAttempt: crashRestarts,
+      maxCrashRestarts: MAX_CRASH_RESTARTS,
+    });
     ensureSplash();
     boot({ error: "The AEGIS backend stopped repeatedly. Open logs for details." });
     return;
@@ -880,6 +943,7 @@ function installDownloadedUpdate() {
 /* ---------- boot sequence ---------- */
 async function run() {
   ensureSplash();
+  setDesktopLifecycle("booting", { message: "Starting AEGIS desktop.", mode: connectionModeSafe() });
   boot({ pct: 12, message: "Starting AEGIS backend…" });
   try {
     await startBackend();
@@ -892,6 +956,12 @@ async function run() {
     });
     if (gatewayResume.resumed) log("gateway service resumed after update");
     else if (!gatewayResume.ok) log(`gateway service resume after update failed: ${gatewayResume.error}`);
+    setDesktopLifecycle(connectionDescriptor().mode === "remote" ? "remote_mode" : "probing_backend", {
+      message: "Waiting for backend health check.",
+      mode: connectionDescriptor().mode,
+      backendPid: backend && backend.pid,
+      port,
+    });
     boot({ pct: 30, message: "Waiting for the agent to come online…" });
     const readyAnnouncement = await waitForBackendReadyAnnouncement(2500);
     await probe(`${backendBaseUrl()}/api/health`, readyAnnouncement ? 20 : 70, (done, total) =>
@@ -900,6 +970,12 @@ async function run() {
     createWindow();
     await win.loadURL(route(DEFAULT_ROUTE));
     boot({ pct: 100, message: "Ready" });
+    setDesktopLifecycle(connectionDescriptor().mode === "remote" ? "remote_mode" : "ready", {
+      message: connectionDescriptor().mode === "remote" ? "Remote dashboard is ready." : "Local AEGIS backend is ready.",
+      mode: connectionDescriptor().mode,
+      backendPid: backend && backend.pid,
+      port,
+    });
     win.show();
     if (splash && !splash.isDestroyed()) { splash.close(); splash = null; }
     installMenu();
@@ -910,6 +986,12 @@ async function run() {
     setTimeout(() => initAutoUpdate(false), 4000);   // quiet check shortly after launch
   } catch (e) {
     log(`boot failed: ${e.message}`);
+    setDesktopLifecycle("crashed", {
+      message: e.message,
+      mode: connectionModeSafe(),
+      restartAttempt: crashRestarts,
+      maxCrashRestarts: MAX_CRASH_RESTARTS,
+    });
     const desktopSettings = readDesktopSettings({ userData: app.getPath("userData") });
     const settingsBackendEnv = desktopSettings.backendEnv || {};
     const launchEnv = {
@@ -937,6 +1019,7 @@ async function run() {
 async function restartFromScratch() {
   if (restartingBackend) return;
   restartingBackend = true;
+  setDesktopLifecycle("repairing", { phase: "restart_backend", message: "Restarting desktop backend." });
   crashRestarts = 0;
   const previousBackend = backend;
   backend = null;
@@ -1081,6 +1164,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on("will-quit", () => { try { globalShortcut.unregisterAll(); } catch { /* ignore */ } });
   app.on("before-quit", () => {
     quitting = true;
+    setDesktopLifecycle("stopped", { message: "AEGIS desktop is shutting down.", mode: connectionModeSafe() });
     try { globalShortcut.unregisterAll(); } catch { /* ignore */ }
     try { tray && tray.destroy(); } catch { /* ignore */ }
     try { backend && backend.kill(); } catch { /* ignore */ }

@@ -49,11 +49,22 @@ class PluginAPI:
         self.files: list[Path] = []
         self.errors: list[tuple[Path, str]] = []
         self._current_plugin: Path | None = None
+        self._current_manifest_id: str = ""
+        self._current_manifest_path: str = ""
+        self._current_required_env: list[str] = []
 
     def register_tool(self, tool) -> None:
-        tool.source = getattr(tool, "source", "") or "plugin"
+        declared_source = str(getattr(tool, "source", "") or "").strip()
+        tool.source = declared_source if declared_source and declared_source != "builtin" else "plugin"
         if self._current_plugin is not None:
             tool._aegis_plugin = str(self._current_plugin)
+            tool._aegis_source_path = str(self._current_plugin)
+            if self._current_manifest_id:
+                tool._aegis_manifest_id = self._current_manifest_id
+            if self._current_manifest_path:
+                tool._aegis_manifest_path = self._current_manifest_path
+            if self._current_required_env and not getattr(tool, "required_env", None):
+                tool._aegis_required_env = list(self._current_required_env)
             _PLUGIN_TOOLS.setdefault(self._current_plugin, []).append(getattr(tool, "name", str(tool)))
         self.tools.append(tool)
 
@@ -1003,7 +1014,8 @@ def _manifest_identity(manifest: PluginManifest) -> Path | None:
     return None
 
 
-def _load_plugin_file(api: PluginAPI, path: Path, *, quiet: bool) -> None:
+def _load_plugin_file(api: PluginAPI, path: Path, *, quiet: bool,
+                      manifest: PluginManifest | None = None) -> None:
     path = path.resolve()
     api.files.append(path)
     _clear_plugin_side_effects(path)
@@ -1023,10 +1035,16 @@ def _load_plugin_file(api: PluginAPI, path: Path, *, quiet: bool) -> None:
         _PLUGIN_MODULES[path] = module_name
         if hasattr(module, "register"):
             api._current_plugin = path
+            api._current_manifest_id = manifest.key or manifest.name if manifest else ""
+            api._current_manifest_path = str(manifest.path) if manifest else ""
+            api._current_required_env = [str(item) for item in (manifest.requires_env if manifest else [])]
             try:
                 module.register(api)
             finally:
                 api._current_plugin = None
+                api._current_manifest_id = ""
+                api._current_manifest_path = ""
+                api._current_required_env = []
         _record_plugin_load(path, status="loaded", started=started)
     except Exception as e:  # noqa: BLE001
         _record_plugin_load(path, status="error", started=started, error=str(e))
@@ -1058,18 +1076,30 @@ def _load_plugin_entrypoint(api: PluginAPI, manifest: PluginManifest, *, quiet: 
         register = getattr(target, "register", None)
         if callable(register):
             api._current_plugin = identity
+            api._current_manifest_id = manifest.key or manifest.name
+            api._current_manifest_path = str(manifest.path)
+            api._current_required_env = [str(item) for item in manifest.requires_env]
             try:
                 register(api)
             finally:
                 api._current_plugin = None
+                api._current_manifest_id = ""
+                api._current_manifest_path = ""
+                api._current_required_env = []
             _record_plugin_load(identity, status="loaded", started=started)
             return
         if callable(target):
             api._current_plugin = identity
+            api._current_manifest_id = manifest.key or manifest.name
+            api._current_manifest_path = str(manifest.path)
+            api._current_required_env = [str(item) for item in manifest.requires_env]
             try:
                 target(api)
             finally:
                 api._current_plugin = None
+                api._current_manifest_id = ""
+                api._current_manifest_path = ""
+                api._current_required_env = []
             _record_plugin_load(identity, status="loaded", started=started)
             return
         raise ValueError("entry point has no register(api) function")
@@ -1082,6 +1112,20 @@ def _load_plugin_entrypoint(api: PluginAPI, manifest: PluginManifest, *, quiet: 
 
 def _manifest_matches(manifest: PluginManifest, name: str) -> bool:
     return name in {manifest.name, manifest.key or manifest.name}
+
+
+def _manifest_validation_errors(manifest: PluginManifest) -> list[str]:
+    errors: list[str] = []
+    if manifest.manifest_version > _SUPPORTED_MANIFEST_VERSION:
+        errors.append(
+            f"manifest_version {manifest.manifest_version} is newer than supported "
+            f"{_SUPPORTED_MANIFEST_VERSION}"
+        )
+    raw = manifest.raw if isinstance(manifest.raw, dict) else {}
+    raw_entry = str(raw.get("entrypoint") or raw.get("main") or "").strip()
+    if raw_entry and manifest.entrypoint is None:
+        errors.append("entrypoint is outside the plugin directory or missing")
+    return errors
 
 
 def _find_manifest(name: str, config) -> PluginManifest | None:
@@ -1554,8 +1598,12 @@ def plugin_status(config=None, api: PluginAPI | None = None) -> list[dict[str, A
         runtime = _plugin_runtime_contributions(entrypoint)
         drift = _plugin_contribution_drift(declared, runtime)
         missing_env = _missing_env_names_from_requires(manifest.requires_env)
+        manifest_errors = _manifest_validation_errors(manifest)
         if not manifest.enabled:
             status = "disabled"
+        elif manifest_errors:
+            status = "error"
+            row["error"] = "; ".join(manifest_errors)
         elif entrypoint is None:
             status = "inactive"
         elif entrypoint in errors:
@@ -1572,6 +1620,7 @@ def plugin_status(config=None, api: PluginAPI | None = None) -> list[dict[str, A
             "load_duration_ms": load_info.get("duration_ms", 0),
             "loaded_at": str(load_info.get("loaded_at") or ""),
             "load_error": str(load_info.get("error") or row.get("error") or ""),
+            "manifest_errors": manifest_errors,
             "declared_contributions": declared,
             "runtime_contributions": runtime,
             "contribution_drift": drift,
@@ -1643,7 +1692,7 @@ def load_plugins(*, quiet: bool = False, config=None) -> PluginAPI:
             _clear_plugin_side_effects(manifest.entrypoint)
             continue
         if manifest.entrypoint.exists():
-            _load_plugin_file(api, manifest.entrypoint, quiet=quiet)
+            _load_plugin_file(api, manifest.entrypoint, quiet=quiet, manifest=manifest)
         else:
             api.errors.append((manifest.path, f"entrypoint not found: {manifest.entrypoint}"))
     for base, _source in bases:
