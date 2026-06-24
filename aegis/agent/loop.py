@@ -31,7 +31,7 @@ _PARALLEL_SAFE_TOOLS = frozenset({
     "search", "session_search", "skill", "system_status", "tool_search",
     "vision_analyze", "web_extract", "web_fetch", "web_search",
 })
-_PATH_SCOPED_TOOLS = frozenset({"apply_patch", "edit_file", "list_dir", "read_file", "write_file"})
+_PATH_SCOPED_TOOLS = frozenset({"apply_patch", "patch", "edit_file", "list_dir", "read_file", "write_file"})
 # Max times the ultracode loop is pushed to continue past a premature "done" while
 # todo items remain open — bounded so it can never loop forever.
 _ULTRACODE_MAX_CONTINUES = 12
@@ -468,7 +468,7 @@ class ToolExecutor:
         if call.name in ("write_file", "edit_file"):
             p = call.arguments.get("path")
             return [p] if p else []
-        if call.name == "apply_patch":
+        if call.name in {"apply_patch", "patch"}:
             from ..tools.extra_builtin import extract_patch_paths
             return extract_patch_paths(call.arguments.get("patch", "") or "")
         return []
@@ -498,7 +498,7 @@ class ToolExecutor:
         if call.name in {"read_file", "list_dir", "write_file", "edit_file"}:
             path = call.arguments.get("path")
             return [str(path or ".")]
-        if call.name == "apply_patch":
+        if call.name in {"apply_patch", "patch"}:
             try:
                 from ..tools.extra_builtin import extract_patch_paths
                 return extract_patch_paths(call.arguments.get("patch", "") or "")
@@ -744,7 +744,7 @@ class ToolExecutor:
         if call.name not in _PATH_SCOPED_TOOLS:
             return []
         raw_paths: list[str] = []
-        if call.name == "apply_patch":
+        if call.name in {"apply_patch", "patch"}:
             raw_paths = self._edit_paths(call)
         else:
             raw = call.arguments.get("path")

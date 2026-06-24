@@ -5,10 +5,12 @@ from __future__ import annotations
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, fields
+import json
 from typing import Any
 
 from .types import new_id
+from .util import atomic_write, read_text
 
 
 @dataclass
@@ -69,6 +71,52 @@ class BackgroundManager:
         self._executor_size = 0
         self._completion_events: list[dict[str, Any]] = []
         self._active_agents: dict[str, Any] = {}
+        self._load_persisted()
+
+    def _state_path(self):
+        from . import config as cfg
+
+        return cfg.sub("background", "tasks.json")
+
+    def _load_persisted(self) -> None:
+        try:
+            raw = read_text(self._state_path())
+            data = json.loads(raw) if raw.strip() else {}
+        except Exception:  # noqa: BLE001
+            return
+        tasks: dict[str, BgTask] = {}
+        for item in data.get("tasks", []):
+            if not isinstance(item, dict):
+                continue
+            bg_fields = {field_info.name for field_info in fields(BgTask)}
+            clean = {key: value for key, value in item.items() if key in bg_fields}
+            try:
+                task = BgTask(**clean)
+            except TypeError:
+                continue
+            if task.status in {"running", "cancelling"}:
+                task.status = "interrupted"
+                task.error = task.error or "background worker stopped before completion"
+                task.finished_at = task.finished_at or time.time()
+                task.cancel_requested = False
+            tasks[task.id] = task
+        events = data.get("completion_events", [])
+        with self._lock:
+            self._tasks.update(tasks)
+            self._completion_events = [event for event in events if isinstance(event, dict)][-200:]
+            self._persist_locked()
+
+    def _persist_locked(self) -> None:
+        payload = {
+            "version": 1,
+            "tasks": [asdict(task) for task in self._tasks.values()],
+            "completion_events": self._completion_events[-200:],
+            "updated_at": time.time(),
+        }
+        try:
+            atomic_write(self._state_path(), json.dumps(payload, indent=2, sort_keys=True))
+        except Exception:  # noqa: BLE001
+            pass
 
     def _max_workers(self, config: Any) -> int:
         async_value = _positive_config_int(config, "delegation.max_async_children")
@@ -199,6 +247,7 @@ class BackgroundManager:
             self._completion_events.append(event)
             self._completion_events = self._completion_events[-200:]
             self._prune_completed_locked(config)
+            self._persist_locked()
         self._queue_async_delegation_event(task)
 
     def _queue_async_delegation_event(self, task: BgTask) -> None:
@@ -284,6 +333,7 @@ class BackgroundManager:
             watchdog = None
             with self._lock:
                 task.started_at = time.time()
+                self._persist_locked()
             try:
                 runner = SurfaceRunner(config, cwd=cwd, include_mcp=include_mcp)
                 session = runner.load_or_create_session(
@@ -336,11 +386,13 @@ class BackgroundManager:
                         task.status = "done"
                     task.run_id = result.run_id
                     task.finished_at = time.time()
+                    self._persist_locked()
             except Exception as e:  # noqa: BLE001
                 with self._lock:
                     task.error = f"{type(e).__name__}: {e}"
                     task.status = "cancelled" if task.cancel_requested else "error"
                     task.finished_at = time.time()
+                    self._persist_locked()
             finally:
                 with self._lock:
                     self._active_agents.pop(task.id, None)
@@ -400,6 +452,7 @@ class BackgroundManager:
                 )
             for task in tasks:
                 self._tasks[task.id] = task
+            self._persist_locked()
         for task in tasks:
             self._start_registered(
                 config,
@@ -465,6 +518,7 @@ class BackgroundManager:
                 task.status = "cancelled"
                 task.finished_at = task.finished_at or time.time()
             agent = self._active_agents.get(task.id)
+            self._persist_locked()
         if agent is not None:
             try:
                 cancel = getattr(agent, "cancel", None)
@@ -509,7 +563,9 @@ class BackgroundManager:
         )
         retried = self.get(new_id)
         if retried is not None:
-            retried.retry_of = task.id
+            with self._lock:
+                retried.retry_of = task.id
+                self._persist_locked()
         return {"ok": True, "id": new_id, "retry_of": task.id}
 
     def completions(
@@ -535,6 +591,7 @@ class BackgroundManager:
                     ]
                 else:
                     self._completion_events.clear()
+                self._persist_locked()
             return events
 
 

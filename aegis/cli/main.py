@@ -409,6 +409,27 @@ def cmd_skills(args, config: Config) -> int:
         except Exception as e:  # noqa: BLE001
             return _die(str(e))
         return 0
+    if args.action == "preview":
+        from .. import marketplace
+        if not args.name:
+            return _die("usage: aegis skills preview <git:owner/repo[@ref][/dir] | url>")
+        try:
+            report = marketplace.preview(args.name, force=getattr(args, "force", False))
+        except Exception as e:  # noqa: BLE001
+            return _die(str(e))
+        if getattr(args, "json", False):
+            _print(json.dumps(report, indent=2, sort_keys=True))
+        else:
+            _print(f"preview: {report['source']}")
+            for row in report.get("skills", []):
+                state = "installable" if row.get("installable") else "blocked"
+                suffix = ""
+                if row.get("warning"):
+                    suffix = f" — warning: {row['warning']}"
+                if row.get("blocker"):
+                    suffix = f" — blocker: {row['blocker']}"
+                _print(f"  {row['name']:<24} {state}{suffix}")
+        return 0 if report.get("ok") else 1
     if args.action == "search":
         from .. import marketplace
         results = marketplace.search(args.name or "")
@@ -1951,7 +1972,7 @@ def cmd_config(args, config: Config) -> int:
         _print(f"reset {reset_key} -> default{suffix}")
         return 0
     if args.action in ("check", "doctor", "migrate"):
-        from ..config import DEFAULT_CONFIG, _deep_merge
+        from ..config import DEFAULT_CONFIG, _config_delta, _deep_merge, _dump_config_delta
 
         file_errors = cfg.validate_config_file()
 
@@ -1965,11 +1986,33 @@ def cmd_config(args, config: Config) -> int:
                     out[key] = v
             return out
 
+        raw_config, raw_errors = cfg.parse_config_file()
         defaults, current = flat(DEFAULT_CONFIG), flat(config.data)
         missing = [k for k in defaults if k not in current]
         unknown = [k for k in current if k not in defaults and k.split(".")[0] not in
                    ("custom_providers", "fallback_providers", "hooks", "mcp", "routing")]
         type_errors = cfg.config_type_errors(config.data)
+        normalized_data = _deep_merge(DEFAULT_CONFIG, raw_config)
+        normalized_delta = _config_delta(normalized_data, DEFAULT_CONFIG)
+        normalized_text = _dump_config_delta(normalized_delta)
+        try:
+            current_text = cfg.config_path().read_text(encoding="utf-8")
+        except FileNotFoundError:
+            current_text = ""
+        would_write = current_text.strip() != normalized_text.strip()
+        migrate_payload = {
+            "ok": not (file_errors or raw_errors or type_errors),
+            "object": "aegis.config.migration_preview",
+            "action": "migrate",
+            "path": str(cfg.config_path()),
+            "dry_run": bool(getattr(args, "dry_run", False)),
+            "would_write": would_write,
+            "missing_default_keys": missing,
+            "unknown_keys": unknown,
+            "type_errors": type_errors,
+            "config_yaml_errors": file_errors or raw_errors,
+            "normalized_delta": redact_secret_values(normalized_delta),
+        }
         if args.action in ("check", "doctor"):
             if json_mode:
                 _print(json.dumps({
@@ -1991,13 +2034,26 @@ def cmd_config(args, config: Config) -> int:
             _print(f"type mismatches: {', '.join(type_errors) or '(none)'}")
             _print(f"provider credentials: {active_provider_credentials_status()}")
             return 1 if file_errors or type_errors else 0
+        if getattr(args, "dry_run", False):
+            if json_mode:
+                _print(json.dumps(migrate_payload, indent=2, sort_keys=True))
+                return 1 if not migrate_payload["ok"] else 0
+            _print("config migration preview")
+            _print(f"  path: {cfg.config_path()}")
+            _print(f"  would write: {'yes' if would_write else 'no'}")
+            _print(f"  config YAML: {'ok' if not (file_errors or raw_errors) else str(len(file_errors or raw_errors)) + ' error(s)'}")
+            _print(f"  value types: {'ok' if not type_errors else str(len(type_errors)) + ' error(s)'}")
+            _print(f"  unknown keys: {', '.join(unknown) or '(none)'}")
+            return 1 if not migrate_payload["ok"] else 0
         if file_errors:
             return _die("config file failed validation: " + "; ".join(file_errors))
+        if raw_errors:
+            return _die("config file failed parsing: " + "; ".join(raw_errors))
         if type_errors:
             return _die("config file failed type validation: " + "; ".join(type_errors))
         config.data = _deep_merge(DEFAULT_CONFIG, config.data)
         config.save()
-        _print(f"migrated: added {len(missing)} missing default key(s).")
+        _print(f"migrated: normalized config delta ({'wrote changes' if would_write else 'already current'}).")
         return 0
     # dump
     import yaml
@@ -2260,6 +2316,51 @@ def cmd_update(args, config: Config) -> int:
     pkg_root = Path(aegis.__file__).resolve().parent.parent
     branch = getattr(args, "branch", None) or "main"
     is_git = (pkg_root / ".git").exists()
+    json_mode = bool(getattr(args, "json", False))
+
+    git_commands = [
+        ["git", "fetch", "-q", "origin", branch],
+        ["git", "checkout", "-q", branch],
+        ["git", "pull", "--ff-only", "origin", branch],
+        [sys.executable, "-m", "pip", "install", "-q", "-e", "."],
+    ]
+    pip_commands = [
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "-q",
+            "--upgrade",
+            f"git+https://github.com/Alien0013/aegis.git@{branch}",
+        ]
+    ]
+
+    if getattr(args, "dry_run", False):
+        payload = {
+            "ok": True,
+            "object": "aegis.update.plan",
+            "dry_run": True,
+            "branch": branch,
+            "package_root": str(pkg_root),
+            "install_mode": "git-editable" if is_git else "pip-git",
+            "commands": git_commands if is_git else pip_commands,
+            "snapshot_planned": True,
+            "gateway_restart_planned": True,
+            "mutates": False,
+        }
+        if json_mode:
+            _print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            _print("update dry-run")
+            _print(f"  branch: {branch}")
+            _print(f"  package root: {pkg_root}")
+            _print(f"  install mode: {payload['install_mode']}")
+            _print("  planned commands:")
+            for command in payload["commands"]:
+                _print("    " + " ".join(str(part) for part in command))
+            _print("  no files, refs, packages, snapshots, or services were changed.")
+        return 0
 
     if getattr(args, "check", False):
         if is_git:
@@ -2278,16 +2379,57 @@ def cmd_update(args, config: Config) -> int:
                                       capture_output=True, text=True).stdout.strip()
                 remote = subprocess.run(["git", "rev-parse", f"origin/{branch}"], cwd=str(pkg_root),
                                         capture_output=True, text=True).stdout.strip()
-                _print("up to date." if head and remote and head == remote
-                       else f"update available on origin/{branch} (shallow checkout; commit count unavailable).")
+                message = ("up to date." if head and remote and head == remote
+                           else f"update available on origin/{branch} (shallow checkout; commit count unavailable).")
+                if json_mode:
+                    _print(json.dumps({
+                        "ok": True,
+                        "object": "aegis.update.status",
+                        "branch": branch,
+                        "package_root": str(pkg_root),
+                        "install_mode": "git-editable",
+                        "shallow": True,
+                        "head": head,
+                        "remote": remote,
+                        "available": bool(head and remote and head != remote),
+                        "message": message,
+                    }, indent=2, sort_keys=True))
+                else:
+                    _print(message)
             else:
                 behind = subprocess.run(["git", "rev-list", "--count", f"HEAD..origin/{branch}"],
                                         cwd=str(pkg_root), capture_output=True, text=True).stdout.strip()
-                _print(f"{behind} commit(s) behind origin/{branch}" if behind not in ("", "0")
-                       else "up to date.")
+                available = behind not in ("", "0")
+                message = f"{behind} commit(s) behind origin/{branch}" if available else "up to date."
+                if json_mode:
+                    _print(json.dumps({
+                        "ok": True,
+                        "object": "aegis.update.status",
+                        "branch": branch,
+                        "package_root": str(pkg_root),
+                        "install_mode": "git-editable",
+                        "shallow": False,
+                        "behind": int(behind or 0),
+                        "available": available,
+                        "message": message,
+                    }, indent=2, sort_keys=True))
+                else:
+                    _print(message)
         else:
-            _print("git/pip install — run `aegis update` to reinstall from "
-                   "git+https://github.com/Alien0013/aegis.git")
+            message = ("git/pip install — run `aegis update` to reinstall from "
+                       "git+https://github.com/Alien0013/aegis.git")
+            if json_mode:
+                _print(json.dumps({
+                    "ok": True,
+                    "object": "aegis.update.status",
+                    "branch": branch,
+                    "package_root": str(pkg_root),
+                    "install_mode": "pip-git",
+                    "available": None,
+                    "message": message,
+                }, indent=2, sort_keys=True))
+            else:
+                _print(message)
         return 0
 
     try:                              # snapshot config/state so a bad update is recoverable
@@ -2300,14 +2442,12 @@ def cmd_update(args, config: Config) -> int:
 
     if is_git:
         _print(f"updating from git ({branch}) at {pkg_root}…")
-        subprocess.run(["git", "fetch", "-q", "origin", branch], cwd=str(pkg_root))
-        subprocess.run(["git", "checkout", "-q", branch], cwd=str(pkg_root))
-        subprocess.run(["git", "pull", "--ff-only", "origin", branch], cwd=str(pkg_root))
-        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-e", "."], cwd=str(pkg_root))
+        for command in git_commands:
+            subprocess.run(command, cwd=str(pkg_root))
     else:
         _print("reinstalling from git…")
-        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--upgrade",
-                        f"git+https://github.com/Alien0013/aegis.git@{branch}"])
+        for command in pip_commands:
+            subprocess.run(command)
     _print("✓ updated. Run `aegis doctor` to confirm.")
     from ..gateway.service import restart_after_update
     restart_after_update()        # bounce the gateway service if one is installed
@@ -2506,6 +2646,99 @@ def _die(msg: str) -> int:
     return 1
 
 
+def cmd_hermes_compat(args, config: Config) -> int:
+    """Small top-level command aliases for Hermes/Codex muscle memory."""
+
+    name = str(getattr(args, "command", "") or "")
+    if name == "version":
+        _print(f"aegis {__version__}")
+        return 0
+    if name in {"login", "logout"}:
+        args.action = name
+        args.provider = getattr(args, "provider", None)
+        args.manual = bool(getattr(args, "manual", False))
+        return cmd_auth(args, config)
+    if name == "migrate":
+        args.action = "migrate"
+        args.key = None
+        args.value = []
+        args.secrets = False
+        args.force = False
+        return cmd_config(args, config)
+    if name == "dump":
+        args.action = "dump"
+        args.key = None
+        args.value = []
+        args.dry_run = False
+        args.secrets = False
+        args.force = False
+        return cmd_config(args, config)
+    if name == "fallback":
+        args.action = "doctor"
+        args.provider = None
+        args.model = None
+        return cmd_model(args, config)
+    if name == "prompt-size":
+        from ..providers import registry
+
+        active = registry.provider_report(config).get("active", {})
+        context = int(active.get("context_length") or config.get("agent.max_context_tokens", 0) or 0)
+        threshold = float(config.get("context_compression.threshold", 0.5) or 0.5)
+        protect_last = int(config.get("context_compression.protect_last", 0) or 0)
+        _print(f"model: {config.get('model.provider')}/{config.get('model.default')}")
+        _print(f"context window: {context:,} tokens")
+        _print(f"compression threshold: {threshold:.0%}")
+        _print(f"protected tail: {protect_last} message(s)")
+        return 0
+    if name in {"gui", "portal"}:
+        from .. import dashboard as _dash
+
+        return _dash.cmd_dashboard(args, config)
+    if name == "computer-use":
+        args.action = "status"
+        return cmd_tools(args, config)
+    if name == "lsp":
+        _print("LSP/code intelligence is exposed through the lsp/code tools, ACP, and dashboard diagnostics.")
+        args.action = "status"
+        return cmd_tools(args, config)
+    if name == "bundles":
+        args.action = "bundles"
+        args.name = None
+        args.force = False
+        args.json = bool(getattr(args, "json", False))
+        args.members = ""
+        args.description = ""
+        args.instruction = ""
+        return cmd_skills(args, config)
+    if name == "claw":
+        args.action = "hub"
+        args.name = "clawhub"
+        args.force = False
+        args.json = bool(getattr(args, "json", False))
+        args.members = ""
+        args.description = ""
+        args.instruction = ""
+        return cmd_skills(args, config)
+    if name == "proxy":
+        return cmd_serve(args, config)
+    if name in {"slack", "whatsapp", "whatsapp-cloud"}:
+        args.action = "run"
+        args.channels = "whatsapp" if name.startswith("whatsapp") else name
+        return cmd_gateway(args, config)
+    if name == "postinstall":
+        _print("postinstall compatibility check")
+        _print("Run `aegis setup` for onboarding, `aegis desktop --install-only` for desktop deps, or `aegis doctor` for diagnostics.")
+        return 0
+    if name == "send":
+        _print("send compatibility surface")
+        _print("Use `aegis gateway --channels <platform>` for live messaging, or cron/webhook delivery with `--deliver platform:chat_id`.")
+        return 0
+    if name == "pets":
+        _print("AEGIS does not ship a pet UI; use `aegis background`, `/agents`, or the dashboard Agents page for visible workers.")
+        return 0
+    return _die(f"unknown compatibility command: {name}")
+
+
 _SETUP_SECTIONS = ("model", "terminal", "tools", "gateway", "agent", "web", "memory", "dashboard", "services")
 
 
@@ -2597,8 +2830,34 @@ def build_parser() -> argparse.ArgumentParser:
     _add_setup_args(ob, include_section=True)
     ob.set_defaults(func=cmd_setup)
 
+    ver = sub.add_parser("version", help="print the AEGIS version")
+    ver.set_defaults(func=cmd_hermes_compat)
+
+    for _name in ("login", "logout"):
+        auth_alias = sub.add_parser(_name, help=f"{_name} to a provider account (alias of `aegis auth {_name}`)")
+        auth_alias.add_argument("provider", nargs="?")
+        auth_alias.add_argument("--manual", action="store_true", help="manual code-paste OAuth flow")
+        auth_alias.set_defaults(func=cmd_hermes_compat)
+
+    mig = sub.add_parser("migrate", help="migrate/normalize config (alias of `aegis config migrate`)")
+    mig.add_argument("--dry-run", action="store_true", help="preview config migration without writing")
+    mig.add_argument("--json", action="store_true", help="print machine-readable migration output")
+    mig.set_defaults(func=cmd_hermes_compat)
+
+    dump = sub.add_parser("dump", help="print a redacted config dump")
+    dump.add_argument("--json", action="store_true", help="reserved for compatibility; dump is YAML")
+    dump.set_defaults(func=cmd_hermes_compat)
+
+    fb = sub.add_parser("fallback", help="show model/provider fallback diagnostics")
+    fb.set_defaults(func=cmd_hermes_compat)
+
+    ps = sub.add_parser("prompt-size", help="show active context and compression sizing")
+    ps.set_defaults(func=cmd_hermes_compat)
+
     up = sub.add_parser("update", help="update AEGIS to the latest version")
     up.add_argument("--check", action="store_true", help="report if an update is available, don't install")
+    up.add_argument("--dry-run", action="store_true", help="show the update plan without changing anything")
+    up.add_argument("--json", action="store_true", help="print machine-readable update status or plan")
     up.add_argument("--branch", help="update against a non-default branch")
     up.set_defaults(func=cmd_update)
 
@@ -2733,12 +2992,12 @@ def build_parser() -> argparse.ArgumentParser:
     cu.add_argument("--list", action="store_true", help="list snapshots (rollback)")
     cu.set_defaults(func=_curator.cmd_curator)
 
-    for _name in ("dashboard", "ui"):       # `aegis ui` is the friendly alias
+    for _name in ("dashboard", "ui", "gui", "portal"):       # `aegis ui` is the friendly alias
         db = sub.add_parser(_name, help="open the AEGIS control panel in your browser")
         db.add_argument("--host")
         db.add_argument("--port", type=int)
         db.add_argument("--no-open", action="store_true", help="don't auto-open the browser")
-        db.set_defaults(func=_dash.cmd_dashboard)
+        db.set_defaults(func=_dash.cmd_dashboard if _name in {"dashboard", "ui"} else cmd_hermes_compat)
 
     tu = sub.add_parser("tui", help="open the terminal agent (compatibility alias)")
     tu.add_argument("--once", action="store_true", help="show status and exit")
@@ -2781,6 +3040,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     ac = sub.add_parser("acp", help="run as an ACP stdio server for IDEs")
     ac.set_defaults(func=_acp.cmd_acp)
+
+    lsp = sub.add_parser("lsp", help="show LSP/code-intelligence readiness")
+    lsp.set_defaults(func=cmd_hermes_compat)
 
     from ..gateway.pairing import cmd_pairing as _cmd_pairing
     pr = sub.add_parser("pairing", help="approve/revoke gateway users")
@@ -2832,15 +3094,24 @@ def build_parser() -> argparse.ArgumentParser:
     sk.add_argument("action", nargs="?",
                     choices=[
                         "list", "view", "new", "install", "search", "remove", "uninstall", "hub",
-                        "bundles", "bundle", "unbundle",
+                        "preview", "bundles", "bundle", "unbundle",
                     ],
                     default="list")
     sk.add_argument("name", nargs="?", help="skill name, install source, or hub name")
     sk.add_argument("--force", action="store_true", help="install even if the security scan flags it")
+    sk.add_argument("--json", action="store_true", help="print machine-readable skill command output")
     sk.add_argument("--members", help="comma-separated skill names for `aegis skills bundle`")
     sk.add_argument("--description", default="", help="description for `aegis skills bundle`")
     sk.add_argument("--instruction", default="", help="extra guidance injected by `aegis skills bundle`")
     sk.set_defaults(func=cmd_skills)
+
+    for _name, _help in (
+        ("bundles", "list skill bundles (alias of `aegis skills bundles`)"),
+        ("claw", "show the Claw skill hub (alias of `aegis skills hub clawhub`)"),
+    ):
+        compat_sk = sub.add_parser(_name, help=_help)
+        compat_sk.add_argument("--json", action="store_true", help="print machine-readable skill output")
+        compat_sk.set_defaults(func=cmd_hermes_compat)
 
     pl = sub.add_parser("plugins", help="manage manifest and drop-in plugins")
     pl.add_argument("action", nargs="?",
@@ -2929,6 +3200,11 @@ def build_parser() -> argparse.ArgumentParser:
     sv.add_argument("--port", type=int)
     sv.set_defaults(func=cmd_serve)
 
+    prx = sub.add_parser("proxy", help="run the OpenAI-compatible API server (alias of serve)")
+    prx.add_argument("--host")
+    prx.add_argument("--port", type=int)
+    prx.set_defaults(func=cmd_hermes_compat)
+
     rp = sub.add_parser("rpc", help="run a local JSON-RPC agent server over stdio")
     rp.set_defaults(func=cmd_rpc)
 
@@ -3010,6 +3286,7 @@ def build_parser() -> argparse.ArgumentParser:
                     default="summary")
     cf.add_argument("key", nargs="?")
     cf.add_argument("value", nargs="*")
+    cf.add_argument("--dry-run", action="store_true", help="preview config migration without writing")
     cf.add_argument("--secrets", action="store_true", help="edit the local secrets .env file")
     cf.add_argument("--force", action="store_true", help="allow config set to create an unknown custom key")
     _add_setup_args(cf)
@@ -3038,6 +3315,23 @@ def build_parser() -> argparse.ArgumentParser:
                    default="run", help="run, or install/control an OS service")
     g.add_argument("--channels", help="comma list: cli,telegram (default cli)")
     g.set_defaults(func=cmd_gateway)
+
+    for _name in ("slack", "whatsapp", "whatsapp-cloud"):
+        platform_cmd = sub.add_parser(_name, help=f"run gateway for {_name}")
+        platform_cmd.set_defaults(func=cmd_hermes_compat)
+
+    send = sub.add_parser("send", help="show gateway delivery/send guidance")
+    send.add_argument("args", nargs="*")
+    send.set_defaults(func=cmd_hermes_compat)
+
+    cu = sub.add_parser("computer-use", help="show computer-use tool readiness")
+    cu.set_defaults(func=cmd_hermes_compat)
+
+    post = sub.add_parser("postinstall", help="post-install compatibility check")
+    post.set_defaults(func=cmd_hermes_compat)
+
+    pets = sub.add_parser("pets", help="show visible-agent alternatives")
+    pets.set_defaults(func=cmd_hermes_compat)
 
     d = sub.add_parser("doctor", help="diagnose (and optionally repair) the installation")
     d.add_argument("--fix", action="store_true", help="create missing dirs + tighten secret perms")

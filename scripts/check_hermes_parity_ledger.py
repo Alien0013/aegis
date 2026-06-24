@@ -29,6 +29,15 @@ LEDGER_COLUMNS = ["aegis_path", "subsystem", "phase", "status", "evidence", "not
 ALLOWED_STATUSES = {"pending", "partial", "complete", "blocked", "not-needed-aegis-specific"}
 FINAL_STATUSES = {"complete", "not-needed-aegis-specific"}
 DEFAULT_EXTERNAL_MAP = Path("/home/alienai/AEGIS_Hermes_Code_To_Code_Map.csv")
+MATRIX_UNRESOLVED_MARKERS = ("partial", "needs audit", "missing")
+MATRIX_CLOSED_STATUSES = {
+    "present",
+    "done",
+    "complete",
+    "not-needed-aegis-specific",
+    "out-of-scope",
+    "credential-bound",
+}
 
 
 def repo_root() -> Path:
@@ -136,6 +145,111 @@ def duplicates(values: list[str]) -> list[str]:
     return sorted(value for value, count in counts.items() if count > 1)
 
 
+def _split_markdown_table_row(line: str) -> list[str]:
+    raw = line.strip()
+    if not raw.startswith("|") or not raw.endswith("|"):
+        return []
+    return [cell.strip().replace("<br>", " ") for cell in raw.strip("|").split("|")]
+
+
+def _is_markdown_separator(cells: list[str]) -> bool:
+    if not cells:
+        return False
+    return all(cell and set(cell.replace(":", "").replace("-", "").strip()) == set() for cell in cells)
+
+
+def parse_feature_matrix(path: Path) -> list[dict[str, str]]:
+    """Return capability rows from the feature parity markdown tables."""
+
+    if not path.exists():
+        raise FileNotFoundError(str(path))
+    rows: list[dict[str, str]] = []
+    current_section = ""
+    headers: list[str] = []
+    in_feature_table = False
+    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            current_section = stripped.lstrip("#").strip()
+            headers = []
+            in_feature_table = False
+            continue
+        cells = _split_markdown_table_row(line)
+        if not cells:
+            headers = []
+            in_feature_table = False
+            continue
+        normalized = [cell.lower() for cell in cells]
+        if "capability" in normalized and any("status" in cell for cell in normalized):
+            headers = normalized
+            in_feature_table = True
+            continue
+        if _is_markdown_separator(cells):
+            continue
+        if not in_feature_table or not headers:
+            continue
+        try:
+            capability_idx = headers.index("capability")
+        except ValueError:
+            continue
+        status_idx = next((idx for idx, header in enumerate(headers) if "status" in header), -1)
+        evidence_idx = next((idx for idx, header in enumerate(headers) if "evidence" in header), -1)
+        gap_idx = next((idx for idx, header in enumerate(headers) if "gap" in header), -1)
+        if status_idx < 0 or len(cells) <= max(capability_idx, status_idx):
+            continue
+        rows.append(
+            {
+                "line": str(lineno),
+                "section": current_section,
+                "capability": cells[capability_idx],
+                "status": cells[status_idx],
+                "evidence": cells[evidence_idx] if evidence_idx >= 0 and evidence_idx < len(cells) else "",
+                "gap": cells[gap_idx] if gap_idx >= 0 and gap_idx < len(cells) else "",
+            }
+        )
+    return rows
+
+
+def validate_feature_matrix(path: Path, *, final: bool = False) -> tuple[list[str], dict[str, object]]:
+    rows = parse_feature_matrix(path)
+    errors: list[str] = []
+    status_counts: Counter[str] = Counter()
+    unresolved: list[dict[str, str]] = []
+    closure_exceptions: list[dict[str, str]] = []
+
+    for row in rows:
+        status = row["status"].strip()
+        status_key = status.lower()
+        status_counts[status] += 1
+        haystack = f"{status} {row['evidence']} {row['gap']}".lower()
+        has_unresolved_marker = any(marker in status_key for marker in MATRIX_UNRESOLVED_MARKERS)
+        is_closed = status_key in MATRIX_CLOSED_STATUSES
+        has_exception = any(marker in haystack for marker in ("not-needed-aegis-specific", "out-of-scope"))
+        is_credential_bound = "credential-bound" in status_key or (
+            "credential-bound" in haystack and any(marker in haystack for marker in ("live", "credential", "external"))
+        )
+        if has_unresolved_marker and not has_exception:
+            unresolved.append(row)
+        elif has_exception or is_credential_bound:
+            closure_exceptions.append(row)
+        elif not is_closed:
+            unresolved.append(row)
+
+    if final and unresolved:
+        for row in unresolved:
+            errors.append(
+                "feature matrix unresolved row "
+                f"{row['line']}: {row['capability']} has status {row['status']!r}"
+            )
+    summary = {
+        "rows": len(rows),
+        "statuses": dict(sorted(status_counts.items())),
+        "unresolved": len(unresolved),
+        "closed_exceptions": len(closure_exceptions),
+    }
+    return errors, summary
+
+
 def validate(
     map_rows: list[dict[str, str]],
     ledger_rows: list[dict[str, str]],
@@ -194,6 +308,12 @@ def print_summary(summary: dict[str, object], *, as_json: bool) -> None:
     for subsystem, counts in summary["subsystems"].items():  # type: ignore[index,union-attr]
         parts = ", ".join(f"{status or '(blank)'}={count}" for status, count in counts.items())
         print(f"  {subsystem:<18} {parts}")
+    matrix = summary.get("feature_matrix")
+    if isinstance(matrix, dict):
+        print("Feature matrix:")
+        print(f"  rows={matrix.get('rows', 0)} unresolved={matrix.get('unresolved', 0)}")
+        for status, count in (matrix.get("statuses") or {}).items():
+            print(f"  {status:<28} {count}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -208,6 +328,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--sync", action="store_true", help="create/update ledger rows from the code map")
     parser.add_argument("--final", action="store_true", help="require final complete/not-needed statuses")
+    parser.add_argument(
+        "--matrix",
+        dest="matrix_path",
+        default=str(root / "docs" / "feature-parity-matrix.md"),
+        help="feature parity matrix markdown path checked in --final mode",
+    )
     parser.add_argument("--json", action="store_true", help="print summary as JSON")
     return parser
 
@@ -232,6 +358,14 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     errors, summary = validate(map_rows, ledger_rows, final=args.final)
+    if args.final:
+        try:
+            matrix_errors, matrix_summary = validate_feature_matrix(Path(args.matrix_path), final=True)
+        except FileNotFoundError as exc:
+            print(f"feature matrix error: {exc}", file=sys.stderr)
+            return 2
+        errors.extend(matrix_errors)
+        summary["feature_matrix"] = matrix_summary
     print_summary(summary, as_json=args.json)
     if errors:
         if args.json:

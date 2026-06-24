@@ -7,34 +7,68 @@ Generated from `aegis.cli.repl.SLASH_COMMANDS`.
 | --- | --- | --- | --- |
 | /agents | agents | list background agents | /agents |
 | /background | agents | launch a background agent task | /background <prompt> |
+| /cron | agents | show cron command guidance | /cron |
 | /kanban | agents | multi-agent task board | /kanban [list\|create <title>\|show <id>\|dispatch\|stats] |
 | /tasks | agents | list background tasks | /tasks |
+| /approve | approvals | approval guidance for pending tool/API/gateway requests | /approve |
+| /deny | approvals | denial guidance for pending tool/API/gateway requests | /deny |
+| /blueprint | automation | show cron blueprint guidance | /blueprint |
 | /handoff | channels | hand this session to a gateway channel | /handoff <platform> <chat_id> |
+| /pet | compatibility | Hermes-only companion UI: intentionally out of scope | /pet |
+| /skin | compatibility | Hermes-only skin UI: use AEGIS themes instead | /skin |
+| /suggestions | compatibility | show suggestion guidance | /suggestions |
 | /compress | context | compact context now | /compress [here N\|focus topic] |
 | /context | context | show the token budget breakdown (system, history, tools) | /context |
 | /retry | context | rerun the last user turn | /retry |
 | /save | context | export this session to markdown | /save [path] |
 | /undo | context | remove the last user turn and its response | /undo |
+| /commands | discover | Hermes-compatible alias for /help | /commands [term] |
 | /help | discover | show or search slash commands | /help [term] |
 | /model | discover | show the active provider and model | /model |
+| /platform | discover | show one gateway platform's configuration status | /platform <name> |
+| /platforms | discover | list gateway platform configuration status | /platforms |
+| /prompt | discover | show prompt-audit pointers for the active session | /prompt |
 | /provider | discover | show or switch the active provider | /provider [name] |
 | /skills | discover | list loaded skills | /skills |
 | /status | discover | show runtime, session, recap, and trace status | /status |
 | /tools | discover | list enabled tools | /tools |
+| /toolsets | discover | list active toolsets and Hermes-compatible aliases | /toolsets |
+| /version | discover | show the AEGIS version and runtime | /version |
+| /whoami | discover | show local profile, workspace, provider, and session identity | /whoami |
+| /footer | display | toggle post-turn status footer | /footer on\|off\|status |
+| /indicator | display | show status indicator settings | /indicator |
+| /redraw | display | redraw current status/footer | /redraw |
+| /statusbar | display | toggle terminal status bar | /statusbar on\|off\|status |
 | /timestamps | display | toggle terminal timestamps | /timestamps on\|off\|status |
+| /verbose | display | toggle verbose tool progress | /verbose on\|off\|status |
 | /exit | exit | leave the terminal surface | /exit |
 | /quit | exit | leave the terminal surface | /quit |
 | /goal | goals | set a standing goal and start it | /goal <objective> |
 | /subgoal | goals | set a nested standing goal | /subgoal <objective> |
+| /bundles | learning | show bundled skill guidance | /bundles |
+| /curator | learning | show curator command guidance | /curator |
 | /learn | learning | review this session for reusable memories or skills | /learn |
 | /memory | learning | show memory and user profile files | /memory |
 | /personality | learning | set the active persona | /personality <name> |
 | /skill | learning | create or extract a skill | /skill [new <name> [description]] |
+| /browser | media | show browser tool connection guidance | /browser [status\|connect\|disconnect] |
+| /copy | media | copy guidance for terminal sessions | /copy |
+| /image | media | show image input/generation guidance | /image |
+| /paste | media | paste guidance for terminal sessions | /paste |
+| /voice | media | show voice/STT/TTS status and commands | /voice [status\|on\|off] |
 | /busy | model control | show or set busy input behavior | /busy [queue\|steer\|interrupt\|status] |
 | /fast | model control | toggle priority/fast mode | /fast [on\|off\|status] |
+| /queue | model control | Hermes-compatible alias for /busy queue | /queue |
 | /reasoning | model control | set reasoning visibility or effort | /reasoning off\|none\|summary\|live\|... |
+| /reload | model control | refresh volatile prompt state and runtime context | /reload |
+| /reload-mcp | model control | show MCP reload guidance for the active runtime | /reload-mcp |
+| /reload-skills | model control | reload skills into the active agent | /reload-skills |
+| /steer | model control | Hermes-compatible alias for /busy steer | /steer |
+| /stop | model control | Hermes-compatible interrupt guidance for active gateway/API turns | /stop |
 | /think | model control | set reasoning effort | /think off\|minimal\|low\|medium\|high\|xhigh |
+| /debug | observability | show redacted debug-report command guidance | /debug [share] |
 | /evals | observability | list eval runs or inspect one | /evals [id] |
+| /insights | observability | show usage-insights command guidance | /insights |
 | /trace | observability | list traces for this session or inspect one | /trace [id] |
 | /usage | observability | show token and rate-limit usage | /usage |
 | /architect | planning | strong model plans → this model implements (Aider-style) | /architect <task> |
@@ -45,11 +79,23 @@ Generated from `aegis.cli.repl.SLASH_COMMANDS`.
 | /ultracode | planning | run the rigorous autonomous plan→implement→verify loop | /ultracode <task> |
 | /branch | sessions | fork this conversation into a named child session | /branch [title] |
 | /clear | sessions | start a fresh session | /clear |
+| /history | sessions | Hermes-compatible alias for /sessions | /history [query] |
 | /new | sessions | start a fresh session | /new |
 | /resume | sessions | resume by picker number, id, title, or unique search | /resume [number\|id\|title] |
 | /sessions | sessions | pick recent sessions or search history | /sessions [query] |
+| /start | sessions | Hermes-compatible alias for /new | /start |
 | /title | sessions | rename this session | /title <name> |
+| /topic | sessions | Hermes-compatible alias for /title | /topic <name> |
+| /billing | setup | show provider billing/usage guidance | /billing |
+| /codex-runtime | setup | show Codex-compatible runtime status | /codex-runtime |
+| /config | setup | show config command guidance | /config |
+| /credits | setup | show provider credits/usage guidance | /credits |
+| /plugins | setup | show plugin command guidance | /plugins |
+| /profile | setup | show profile command guidance | /profile |
 | /secret | setup | store a local secret with hidden input | /secret set <ENV_KEY> |
+| /sethome | setup | show AEGIS_HOME/profile home guidance | /sethome |
+| /update | setup | show runtime update command guidance | /update |
 | /diff | workspace | show changes since the last checkpoint | /diff [checkpoint-id] |
 | /rollback | workspace | restore files from a checkpoint | /rollback [checkpoint-id] |
+| /snapshot | workspace | show snapshot/checkpoint command guidance | /snapshot |
 | /yolo | workspace | toggle this session's existing approval bypass | /yolo |

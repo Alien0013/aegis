@@ -1,9 +1,44 @@
 from __future__ import annotations
 
 import json
+import argparse
 
 import pytest
 import yaml
+
+
+def test_hermes_compat_top_level_commands_are_registered():
+    from aegis.cli.main import build_parser
+
+    parser = build_parser()
+    choices = set()
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            choices.update(action.choices)
+
+    expected = {
+        "bundles",
+        "claw",
+        "computer-use",
+        "dump",
+        "fallback",
+        "gui",
+        "login",
+        "logout",
+        "lsp",
+        "migrate",
+        "pets",
+        "portal",
+        "postinstall",
+        "prompt-size",
+        "proxy",
+        "send",
+        "slack",
+        "version",
+        "whatsapp",
+        "whatsapp-cloud",
+    }
+    assert expected <= choices
 
 
 def test_config_summary_is_readable_ascii_and_redacts_secret(monkeypatch, capsys):
@@ -329,6 +364,15 @@ def test_config_mutation_commands_support_json(capsys):
     assert data["object"] == "aegis.config.check"
     assert data["ok"] is True
     assert data["type_errors"] == []
+
+    before = cfg.config_path().read_text(encoding="utf-8")
+    assert main(["config", "migrate", "--dry-run", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["object"] == "aegis.config.migration_preview"
+    assert data["dry_run"] is True
+    assert data["ok"] is True
+    assert "normalized_delta" in data
+    assert cfg.config_path().read_text(encoding="utf-8") == before
 
 
 def test_config_json_redacts_secret_values(monkeypatch, capsys):

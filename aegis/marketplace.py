@@ -292,6 +292,156 @@ def _install_skill_dirs(dirs: list[Path], source: str, force: bool = False,
     return installed
 
 
+def _preview_skill_dirs(dirs: list[Path], source: str, force: bool = False,
+                        fallback_name: str | None = None) -> dict:
+    dest_root = cfg.skills_dir()
+    lock = _load_lock()
+    skills: list[dict] = []
+    errors: list[str] = []
+    for d in dirs:
+        try:
+            name = _validate_skill_dir(d)
+            skill_md = d / "SKILL.md"
+            body = read_text(skill_md)
+        except ValueError as exc:
+            if not fallback_name:
+                errors.append(str(exc))
+                continue
+            try:
+                name = _coerce_skill_name(fallback_name)
+                skill_md = d / "SKILL.md"
+                body = _replace_frontmatter_name(read_text(skill_md), name)
+            except Exception as fallback_exc:  # noqa: BLE001
+                errors.append(str(fallback_exc))
+                continue
+        description = _frontmatter_value(body, "description")
+        hard_block = _hard_block_skill_tree(d)
+        scan_warning = _scan_skill(d)
+        blocked = bool(hard_block or (scan_warning and not force))
+        digest = _digest(body)
+        target = dest_root / name
+        skills.append({
+            "name": name,
+            "description": description,
+            "source": source,
+            "digest": digest,
+            "path": str(d),
+            "destination": str(target),
+            "already_installed": target.exists() or name in lock,
+            "installable": not blocked,
+            "blocked": bool(hard_block),
+            "blocker": hard_block or "",
+            "warning": scan_warning or "",
+            "requires_force": bool(scan_warning and not hard_block),
+            "would_replace": target.exists(),
+        })
+    return {
+        "ok": not errors,
+        "source": source,
+        "force": bool(force),
+        "count": len(skills),
+        "installable_count": sum(1 for skill in skills if skill.get("installable")),
+        "blocked_count": sum(1 for skill in skills if not skill.get("installable")),
+        "skills": skills,
+        "errors": errors,
+    }
+
+
+def _preview_zip_url(source: str, force: bool = False, fallback_name: str | None = None) -> dict:
+    res = httpx.get(source, timeout=45, follow_redirects=True)
+    _raise_for_status(res)
+    tmp = Path(tempfile.mkdtemp(prefix="aegis-skill-preview-zip-"))
+    _safe_extract_zip(res.content, tmp)
+    return _preview_skill_dirs(_skill_dirs_under(tmp), source, force=force, fallback_name=fallback_name)
+
+
+def _preview_lobehub(identifier: str, force: bool = False) -> dict:
+    identifier = identifier.strip().strip("/")
+    if not identifier:
+        raise ValueError("lobehub skill id is required")
+    url = f"https://chat-agents.lobehub.com/{quote(identifier)}.json"
+    res = httpx.get(url, timeout=30, follow_redirects=True)
+    _raise_for_status(res)
+    data = res.json()
+    meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+    config = data.get("config") if isinstance(data.get("config"), dict) else {}
+    name = _coerce_skill_name(identifier)
+    title = str(meta.get("title") or data.get("title") or identifier).strip()
+    description = str(meta.get("description") or title or f"LobeHub agent {identifier}").strip()
+    system_role = str(config.get("systemRole") or data.get("systemRole") or "").strip()
+    body = "\n".join([
+        "---",
+        f"name: {name}",
+        "description: " + json.dumps(description[:500], ensure_ascii=False),
+        f"source: {json.dumps(url, ensure_ascii=False)}",
+        f"homepage: {json.dumps(f'https://lobehub.com/agent/{identifier}', ensure_ascii=False)}",
+        "---",
+        "",
+        f"# {title}",
+        "",
+        system_role or description,
+        "",
+    ])
+    tmp = Path(tempfile.mkdtemp(prefix="aegis-skill-preview-lobehub-"))
+    d = tmp / name
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "SKILL.md").write_text(body, encoding="utf-8")
+    return _preview_skill_dirs([d], f"lobehub:{identifier}", force=force)
+
+
+def preview(source: str, force: bool = False) -> dict:
+    """Preview a marketplace install without writing skills or lockfile state."""
+    source = (source or "").strip()
+    if not source:
+        raise ValueError("skill source is required")
+    normalized = _github_source_from_url(source) if source.startswith("http") else None
+    if normalized:
+        source = normalized
+
+    if source.startswith("lobehub:"):
+        return _preview_lobehub(source.removeprefix("lobehub:"), force=force)
+    if source.startswith("clawhub:"):
+        slug = _slugify_skill_name(source.removeprefix("clawhub:"))
+        url = f"{CLAWHUB_API_BASE}/api/v1/download?slug={quote(slug)}"
+        return _preview_zip_url(url, force=force, fallback_name=slug)
+    if source.startswith("skills-sh:"):
+        spec = source.removeprefix("skills-sh:").strip("/")
+        parts = spec.split("/")
+        if len(parts) < 3:
+            raise ValueError("skills.sh source must be skills-sh:owner/repo/skill-id")
+        source = _github_find_skill_source("/".join(parts[:2]), parts[-1])
+
+    local = Path(source).expanduser()
+    if local.exists() and local.is_dir():
+        dirs = [local] if (local / "SKILL.md").exists() else \
+            [p for p in local.iterdir() if p.is_dir() and (p / "SKILL.md").exists()]
+        if not dirs:
+            raise ValueError(f"no SKILL.md packages under {local}")
+        return _preview_skill_dirs(dirs, str(local), force=force)
+
+    if source.startswith("http") and source.endswith("SKILL.md"):
+        res = httpx.get(source, timeout=30, follow_redirects=True)
+        _raise_for_status(res)
+        tmp = Path(tempfile.mkdtemp(prefix="aegis-skill-preview-url-"))
+        d = tmp / (_frontmatter_value(res.text, "name") or "downloaded-skill")
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "SKILL.md").write_text(res.text, encoding="utf-8")
+        return _preview_skill_dirs([d], source, force=force)
+
+    if source.startswith("http") and (source.endswith(".zip") or "/download" in urlparse(source).path):
+        return _preview_zip_url(source, force=force)
+
+    repo, ref, subdir = _parse_git_spec(source)
+    return _preview_skill_dirs(_git_clone(repo, ref, subdir), source, force=force)
+
+
+def preview_hub(name: str, config, force: bool = False) -> dict:
+    taps = list_taps(config)
+    if name not in taps:
+        raise ValueError(f"unknown hub '{name}'. Known: {', '.join(taps)}")
+    return preview(f"git:{taps[name]}", force=force)
+
+
 def _parse_git_spec(source: str) -> tuple[str, str | None, str | None]:
     spec = source[4:] if source.startswith("git:") else source
     ref = None

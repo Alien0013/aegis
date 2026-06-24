@@ -640,6 +640,23 @@ def test_terminal_slash_help_is_searchable():
     assert "/branch" in session_help
     assert "pick recent sessions" in session_help
 
+    compat = {cmd.name for cmd in repl.SLASH_COMMANDS}
+    for name in (
+        "/approve",
+        "/deny",
+        "/queue",
+        "/steer",
+        "/stop",
+        "/voice",
+        "/snapshot",
+        "/debug",
+        "/platforms",
+        "/toolsets",
+        "/version",
+        "/whoami",
+    ):
+        assert name in compat
+
 
 def test_terminal_slash_completer_uses_command_metadata():
     from prompt_toolkit.document import Document
@@ -745,6 +762,55 @@ def test_terminal_busy_command_reports_mode_hints(monkeypatch):
     assert repl.handle_slash("/busy steer", agent) == ""
     assert "→ steer" in lines[-1]
     assert "guidance" in lines[-1]
+
+    assert repl.handle_slash("/queue", agent) == ""
+    assert cfg.get("gateway.busy_mode") == "queue"
+
+    assert repl.handle_slash("/steer", agent) == ""
+    assert cfg.get("gateway.busy_mode") == "steer"
+
+
+def test_terminal_hermes_compat_slash_commands_report_real_surfaces(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from aegis.cli import repl
+    from aegis.config import Config
+    from aegis.session import Session
+
+    cfg = Config.load()
+    cfg.data.setdefault("voice", {})["enabled"] = False
+    agent = SimpleNamespace(
+        config=cfg,
+        session=Session.create(),
+        cwd=tmp_path,
+        provider=SimpleNamespace(describe=lambda: "mock-provider/mock-model"),
+    )
+    lines = []
+    monkeypatch.setattr(repl, "_out", lambda text, style=None: lines.append(str(text)))
+
+    for command in (
+        "/version",
+        "/whoami",
+        "/prompt",
+        "/toolsets",
+        "/platforms",
+        "/debug",
+        "/voice status",
+        "/browser",
+        "/image",
+        "/snapshot",
+        "/approve",
+        "/pet",
+    ):
+        assert repl.handle_slash(command, agent) == ""
+
+    text = "\n".join(lines)
+    assert "AEGIS" in text
+    assert "mock-provider/mock-model" in text
+    assert "Prompt audit" in text
+    assert "voice tools" in text
+    assert "browser tools" in text
+    assert "Hermes-only visual chrome" in text
 
 
 def test_terminal_session_picker_resume_and_branch(monkeypatch):

@@ -6,8 +6,33 @@ Generated from the built-in tool registry without personal plugins.
 | Tool | Toolset | Groups | Risk | Schema | Parameters | Summary |
 | --- | --- | --- | --- | --- | --- | --- |
 | browser | browser | network, automation | high | 8d1764b2de3e | action, path, selector, text, url | Drive a headless browser. actions: navigate(url) \| text (readable page text) \| html \| click(selector) \| type(selector,text) \| screenshot(path) \| back. State persists across calls within a session. |
+| browser_back | browser | network, automation | high | 141e846c5411 |  | Go back in browser history. |
+| browser_capture | browser | network, automation | high | 6207680b5b28 | path | Capture a browser screenshot. |
+| browser_cdp | browser | network, automation | high | 2f4e787ebf43 |  | Return page HTML from the connected browser context. |
+| browser_click | browser | network, automation | high | 9e848b81d0f6 | selector | Click an element by selector. |
+| browser_console | browser | network, automation | high | 589f47e55f08 |  | Return page HTML for console/context inspection. |
+| browser_content | browser | network, automation | high | f9f368e01693 |  | Return page HTML content. |
+| browser_dialog | browser | network, automation | high | 9111f9fd2754 |  | Return page text after dialog handling by the browser backend. |
+| browser_fill | browser | network, automation | high | 6f059e9a46bf | selector, text | Fill an element by selector. |
+| browser_get_images | browser | network, automation | high | 2163ae01692e |  | Return page HTML so image URLs can be extracted. |
+| browser_get_text | browser | network, automation | high | bd004884c17d |  | Get readable page text. |
+| browser_go_back | browser | network, automation | high | c60fdb96f207 |  | Go back in browser history. |
+| browser_goto | browser | network, automation | high | d9b89be7f0c0 | url | Go to a URL in the browser. |
+| browser_html | browser | network, automation | high | 6442cdfe1816 |  | Return page HTML. |
+| browser_navigate | browser | network, automation | high | 40dcb84b6bf6 | url | Navigate the browser to a URL. |
+| browser_open | browser | network, automation | high | fef931a18755 | url | Open a URL in the browser. |
+| browser_press | browser | network, automation | high | 8c1815395b74 |  | Read page text after external/browser key input. |
+| browser_read | browser | network, automation | high | 48f44d666757 |  | Read readable page text. |
+| browser_screenshot | browser | network, automation | high | 3cb90a260b55 | path | Save a browser screenshot. |
+| browser_scroll | browser | network, automation | high | c9a4c70eb94d |  | Read page text after external/browser scrolling. |
+| browser_snapshot | browser | network, automation | high | 084f11e9ff97 |  | Return a compact textual browser snapshot. |
+| browser_source | browser | network, automation | high | 48a2b3cf1136 |  | Return page source HTML. |
+| browser_text | browser | network, automation | high | 80fcaa31e460 |  | Return readable page text. |
+| browser_type | browser | network, automation | high | 172dd7118192 | selector, text | Type text into an element by selector. |
+| browser_vision | browser | network, automation | high | eea1554f1e65 | path | Capture a screenshot for vision analysis. |
 | web_verify | browser | network, automation | high | 558d4d77ebae | allow_console_errors, expect_selector, expect_text, ready_timeout, start, url | Verify a web UI actually works: load a URL in a headless browser and report whether it rendered without console/page errors, and optionally whether expect_text / expect_selector are present. Optionally start the dev server first (start='npm run dev'), wait for it, check, and shut it down. Use after editing frontend code to confirm the page still renders — the UI equivalent of running tests. |
 | computer | computer | runtime, automation | high | 02d77a532ae2 | action, amount, combo, path, text, x, y | Control the local screen/keyboard/mouse (pyautogui). actions: screenshot \| click(x,y) \| move(x,y) \| type(text) \| key(combo) \| scroll(amount). Destructive keys and shell-injection payloads are blocked. |
+| computer_use | computer | runtime, automation | high | 851c0deec67b | action, amount, combo, path, text, x, y | Compatibility alias for `computer`. |
 | agent_state | core |  | low | b1b67bd78440 | action, id, limit, title | Inspect AEGIS runtime state that is shared across CLI, dashboard, API, ACP, gateway, and automation surfaces. Actions: current, list_sessions, session, branch, runs, run, traces, trace, evals, background. |
 | apply_patch | core | fs | medium | bd08de25e537 | patch | Apply a unified diff (git/patch format) to files in the working directory. Use for multi-file or multi-hunk edits. |
 | bash | core | runtime | high | 0ed182df6b68 | background, command, notify_on_complete, pty, timeout, watch_patterns | Run a shell command in the working directory and return stdout/stderr. |
@@ -16,6 +41,7 @@ Generated from the built-in tool registry without personal plugins.
 | cloud_image | core | network | medium | 23750dae713a | model, prompt | Generate an image via fal.ai (FAL_KEY). Saves a PNG and returns its path. |
 | code_search | core | fs | medium | f7488d83cd79 | action, k, path, query | Semantic, natural-language search over the codebase — find code by what it DOES, not just literal text. action: search (default) \| index (rebuild the embedding index). Give a query like 'where are auth tokens validated'. Falls back to the structural repo map when no embeddings provider is configured. Use this to locate relevant code on a large/unfamiliar repo before reading files. |
 | cronjob | core | automation | high | f4721ba50560 | action, context_from, deliver, enable_now, enabled, enabled_toolsets, include_disabled, job_id, max_runs, model, name, no_agent, prompt, schedule, script, service_action, skill, skills, workdir | Manage scheduled cron jobs. Use action=create/list/update/delete/run/status/service. Jobs run when `aegis cron install` service or `aegis gateway` is active. |
+| delegate_task | core | automation | high | c48c481f369a | agent_type, background, continue_id, role, task, tasks, toolsets | Compatibility alias for `spawn_subagent`. |
 | dependency_audit | core | network | medium | 6037cdacd192 | max, path | Scan installed Python packages (or a requirements.txt) for known vulnerabilities via the OSV.dev database. Reports each affected package with its advisory IDs (CVE/GHSA). Use before shipping or when asked about supply-chain risk. |
 | download | core | network, fs | medium | c0d6f2834beb | path, url | Download a URL to a local file. |
 | edit_file | core | fs | medium | 636ef0848797 | new_string, old_string, path, replace_all | Replace an exact string in a file. old_string must be unique unless replace_all=true. |
@@ -24,29 +50,64 @@ Generated from the built-in tool registry without personal plugins.
 | github | core | network, runtime | high | 5e1f1a8b372f | action, body, number, title | Interact with GitHub via the gh CLI. actions: issues \| prs \| view(number) \| checks(number) \| create_issue(title, body) \| create_pr(title, body). |
 | glob | core |  | low | 70a69aaff1b6 | path, pattern | Find files matching a glob pattern (e.g. '**/*.py'). Returns matching paths. |
 | http_request | core | network | medium | 86a38f603ab2 | body, headers, method, url | Make an arbitrary HTTP request (GET/POST/PUT/DELETE) and return status + body. For APIs. |
+| image_generate | core | network | medium | 1d6f46a7a6fb | model, prompt, size | Compatibility alias for `generate_image`. |
 | kanban | core | automation | high | b4b9c67484bd | action, assignee, body, child, created_cards, filter_status, id, metadata, parent, parents, priority, status, tenant, text, title, workspace | Manage your task board (persists across turns/sessions, shared with other workers). actions: list \| create \| show \| move \| complete \| block \| unblock \| comment \| heartbeat \| link \| runs. create accepts parents=[ids] (dependent cards start gated in 'todo' and auto-promote to 'ready' when every parent is done), assignee, tenant, workspace (scratch\|dir:<path>\|worktree). complete takes text=summary + metadata={changed_files,tests_run,...} and optional created_cards=[ids you created] (verified against the board). show returns parent handoffs, prior run attempts (for retries), and the comment thread. Use this for multi-step or multi-specialist work you want durable and auditable. |
+| kanban_add | core | automation | high | 6765821095a8 | assignee, body, parents, priority, tenant, title, workspace | Add a kanban card. |
+| kanban_block | core | automation | high | f1064f978396 | id, text | Block a kanban card. |
+| kanban_comment | core | automation | high | 3a748ed619fb | id, text | Comment on a kanban card. |
+| kanban_complete | core | automation | high | 59c68c621913 | created_cards, id, metadata, text | Mark a kanban card complete. |
+| kanban_create | core | automation | high | 83c6bc95d2f6 | assignee, body, parents, priority, tenant, title, workspace | Create a kanban card. |
+| kanban_depend | core | automation | high | d58e2fef4262 | child, parent | Link a dependency between kanban cards. |
+| kanban_done | core | automation | high | 0eced9d3573d | created_cards, id, metadata, text | Mark a kanban card done. |
+| kanban_finish | core | automation | high | 60d4ee20e454 | created_cards, id, metadata, text | Finish a kanban card. |
+| kanban_get | core | automation | high | a52fe99f2fd0 | id | Get a kanban card. |
+| kanban_heartbeat | core | automation | high | 5e5ee05c0473 | id, text | Record kanban worker heartbeat. |
+| kanban_link | core | automation | high | edbc1e1a24e2 | child, parent | Link a parent and child kanban card. |
+| kanban_list | core | automation | high | 402dde870c61 | filter_status | List kanban cards. |
+| kanban_move | core | automation | high | 7888a08c8c69 | id, status | Move a kanban card to another status. |
+| kanban_note | core | automation | high | b9466e5d21c7 | id, text | Add a note to a kanban card. |
+| kanban_runs | core | automation | high | b790ee04643d | id | List runs for a kanban card. |
+| kanban_set_status | core | automation | high | 4079b46c27ea | id, status | Set a kanban card status. |
+| kanban_show | core | automation | high | a7f005c0ff24 | id | Show a kanban card. |
+| kanban_unblock | core | automation | high | c73356702303 | id | Unblock a kanban card. |
+| kanban_update_status | core | automation | high | 93492ada4b6b | id, status | Update a kanban card status. |
+| kanban_view | core | automation | high | 1cd4a565838d | id | View a kanban card. |
 | list_dir | core |  | low | 1e42033cf111 | path | List the entries of a directory. |
 | memory | core |  | low | 3773c5d73943 | action, content, old_text, target | Save durable information to persistent memory that survives across sessions. Memory is injected into future sessions, so keep it compact and focused on facts that will still matter later. |
 | mixture_of_agents | core | automation | high | 1fd2c2eb78e1 | models, prompt, synthesize | Fan ONE prompt across SEVERAL models in parallel and synthesize their answers into one. Use for high-stakes questions where cross-model agreement matters (design decisions, tricky bugs, fact checks). models: list like ['gpt-5.5', 'openrouter/google/gemini-2.5-pro'] — a bare model id uses the current provider; 'provider/model' picks the provider. Costs one call per model plus a synthesis call. |
+| patch | core | fs | medium | d98ff9e427f2 | patch | Compatibility alias for `apply_patch`. |
 | process | core | runtime | high | 7221dbe94af9 | action, command, data, id, limit, notify_on_complete, offset, pty, session_id, timeout, watch_patterns | Manage long-running background processes (dev servers, watchers). actions: start(command) \| list \| poll(id) \| log/logs(id) \| wait(id, timeout) \| kill/stop(id) \| write/submit/close(id). |
 | read_file | core |  | low | 691a0f97840b | limit, offset, path | Read a text file. Returns content with 1-based line numbers. Use offset/limit for large files. |
+| read_terminal | core | runtime | high | 744c41446a0f | id, limit, offset, session_id | Read output from a long-running terminal/process session. |
 | repo_map | core | fs | medium | 53e530cac746 | action, name, path, query | Structural map of the codebase: the most important files (ranked by how often their symbols are referenced) and the classes/functions each defines. action: map (whole-repo outline) \| find (locate where a symbol is defined). Optional path scopes to a subdirectory; optional query filters by file path or symbol name. Use this first to orient on an unfamiliar repo instead of reading files blindly. |
 | schedule_task | core | automation | high | 64200e3076db | deliver, prompt, schedule | Schedule a recurring task. schedule: interval ('30m','2h','@daily') or 5-field cron. Runs when the scheduler/gateway is active. |
 | search | core |  | low | 754058b8da60 | glob, path, pattern | Search file contents for a regex (uses ripgrep if available). Returns matching lines. |
+| search_files | core |  | low | cd5c92482a75 | glob, path, pattern | Compatibility alias for `search`. |
 | secret | core |  | low | 49fe672ccef3 | key, prompt | Safely capture a local secret into ~/.aegis/.env. Pass only the env var name and a prompt; never pass the secret value as a tool argument. |
 | send_message | core | network | medium | b2ed246973a9 | chat_id, platform, text, thread_id | Proactively send a message to the user (or another conversation) on a messaging channel like Telegram or Discord. Use it to follow up, notify, or deliver a result out-of-band — e.g. from a scheduled/cron task ('remind me at 5pm'). Defaults to the current conversation; only works while the gateway is running. |
 | session_search | core |  | low | 75e0101b2ce1 | around_message_id, around_message_row_id, head, limit, profile, query, role_filter, session_id, sort, tail, window | Browse, search, read, or scroll PAST conversations/sessions. Use whenever the user references previous chats, last session, memory, or earlier work instead of asking them to repeat context. |
 | skill | core |  | low | 61f83fe1a9b8 | action, body, description, name | Work with skills (your procedural memory). action: list \| view (load full body) \| create (SAVE a reusable skill after solving a non-trivial, repeatable task) \| improve (append a learned note to an existing skill) \| stats (usage counts). Creating and improving skills is how you get better over time. |
 | skill_manage | core |  | low | 9372214b894b | action, body, content, description, file_path, into, name, new_string, old_string, overwrite, replace_all | Manage skills with an action-style schema. Actions: list, view, create, patch, write_file, delete, usage, pin, unpin, report, consolidate. Uses AEGIS SkillsLoader for discovery/create/view/usage and the curator for pinning, reports, recoverable delete-by-archive, and consolidating overlapping skills into one. |
+| skill_view | core |  | low | 394b520fd1a3 | name, skill | Load the full body for one skill. |
+| skills_list | core |  | low | 5aee40fbb6b4 |  | List available skills. |
 | spawn_subagent | core | automation | high | 782c3962c8d9 | agent_type, background, continue_id, role, task, tasks, toolsets | Delegate self-contained sub-task(s) to fresh child agents, each with its own context. Pass `task` for one, or `tasks` (array) to run several IN PARALLEL (bounded). agent_type picks a specialist: explore/plan/review are READ-ONLY (safe to fan out), general (default) has normal child tools except shared side-effect/recurse tools (clarify, memory, send_message, execute_code, and nested spawn unless orchestrator). Pass continue_id to follow up with a previous subagent (it keeps its context). Returns each child's final answer. |
 | system_status | core |  | low | 7c1462ba9204 |  | Inspect AEGIS runtime status: provider/auth, tools, skills, plugins, workspace, dashboard, and user services. Does not reveal tokens or secret values. |
+| terminal | core | runtime | high | 3ad434c69feb | background, command, notify_on_complete, pty, timeout, watch_patterns | Compatibility alias for `bash`. |
+| todo | core |  | low | 2ac08994a635 | todos | Compatibility alias for `todo_write`. |
 | todo_write | core |  | low | 7c5e2cf7ddf3 | todos | Record/replace the working task list. Pass the full list each call. |
 | tool_search | core |  | low | 2b110d1d8997 | query | Search YOUR available tools by keyword (self-discovery). Returns matching tool names + descriptions. |
 | web_fetch | core | network | medium | 71740924c281 | url | Fetch a URL and return its readable text content. |
 | web_search | core | network | medium | 944f7ce60f4d | query | Search the web. Returns titles, URLs, and snippets. Backend configurable (web.search_backend). |
 | write_file | core | fs | medium | 7c74e94e3349 | content, path | Create or overwrite a file with the given content. Creates parent directories. |
+| x_search | core | network | medium | 1c1065eab5fd | query | Compatibility alias for `web_search`. |
 | lsp | lsp | runtime | high | da4bb2cf0408 | action, character, line, new_name, path | Code intelligence from a persistent language server. action: diagnostics \| hover \| definition \| references \| rename \| symbols \| status \| restart. Give path, plus line + character (0-based) for position queries and new_name for rename. Only works on files inside a git project. |
+| audio_analyze | vision | network, runtime | high | ac1de6f921a5 | model, path, prompt | Analyze an audio file by transcribing it with the configured STT provider. |
+| media_analyze | vision | network, runtime | high | a5f7627bae38 | max_frames, media_type, model, path, prompt | Analyze image, audio, or video media. Images use the vision model; audio is transcribed with STT; video is sampled into frames with ffmpeg and analyzed by the vision model. Returns clear setup errors when the needed provider/dependency is unavailable. |
+| video_analyze | vision | network, runtime | high | 7c22e37e9324 | max_frames, path, prompt | Analyze a video by sampling frames with ffmpeg and using the vision model. |
 | vision_analyze | vision | network | medium | ae465487aa7a | image, prompt | Analyze an image with a vision model and answer a question about it. `image` may be a local file path, an http(s) URL, or a base64 data URL. Use for screenshots, diagrams, photos, or charts — not for generating images. |
+| audio_transcribe | voice | network | medium | 35af065fd85a | model, path | Compatibility alias for `transcribe`. |
 | speak | voice | network | medium | 964f98267688 | model, path, text, voice | Synthesize speech from text (text-to-speech). Saves an audio file and returns its path. |
+| speech_to_text | voice | network | medium | 806f60056f1a | model, path | Compatibility alias for `transcribe`. |
+| text_to_speech | voice | network | medium | 933ac1d26bd8 | model, path, text, voice | Compatibility alias for `speak`. |
 | transcribe | voice | network | medium | 69562168da2a | model, path | Transcribe an audio file to text (speech-to-text). |
 | web_extract | web | network | medium | 19f16757dd71 | query, url | Fetch a web page and return a focused, aux-model summary/extraction of it (cheaper on context than raw web_fetch for large pages). Optionally pass `query` to weight the extraction toward a specific question. |

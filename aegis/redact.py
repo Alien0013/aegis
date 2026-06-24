@@ -54,6 +54,27 @@ _SENSITIVE_QUERY_RE = re.compile(
     r"password|auth|jwt|session|secret|key|code|signature|x-amz-signature)=)([^&#\s]+)",
     re.IGNORECASE,
 )
+_EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+_SSN_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
+_PHONE_RE = re.compile(
+    r"(?<![\w+])(?:\+?1[\s.-]?)?(?:\(\d{3}\)|\d{3})[\s.-]?\d{3}[\s.-]?\d{4}(?!\w)"
+)
+_CARD_CANDIDATE_RE = re.compile(r"(?<!\d)(?:\d[ -]?){13,19}(?!\d)")
+
+
+def _luhn_valid(value: str) -> bool:
+    digits = [int(ch) for ch in re.sub(r"\D", "", value)]
+    if len(digits) < 13 or len(digits) > 19:
+        return False
+    total = 0
+    parity = len(digits) % 2
+    for idx, digit in enumerate(digits):
+        if idx % 2 == parity:
+            digit *= 2
+            if digit > 9:
+                digit -= 9
+        total += digit
+    return total % 10 == 0
 
 
 def redact_secrets(text: str) -> str:
@@ -68,6 +89,34 @@ def redact_secrets(text: str) -> str:
     value = _URL_USERINFO_RE.sub(r"\1[REDACTED]\3", value)
     value = _SENSITIVE_QUERY_RE.sub(r"\1[REDACTED]", value)
     return _SECRET_RE.sub("[REDACTED]", value)
+
+
+def redact_pii(text: str) -> str:
+    """Mask common personal identifiers. Intended for opt-in outbound channels."""
+    value = text or ""
+    value = _EMAIL_RE.sub("[REDACTED_EMAIL]", value)
+    value = _SSN_RE.sub("[REDACTED_SSN]", value)
+    value = _PHONE_RE.sub("[REDACTED_PHONE]", value)
+
+    def card_repl(match: re.Match[str]) -> str:
+        return "[REDACTED_CARD]" if _luhn_valid(match.group(0)) else match.group(0)
+
+    return _CARD_CANDIDATE_RE.sub(card_repl, value)
+
+
+def pii_redaction_enabled(config: Any) -> bool:
+    getter = getattr(config, "get", None)
+    if not callable(getter):
+        return False
+    return bool(getter("privacy.redact_pii", False))
+
+
+def redact_outbound_text(text: str, config: Any = None) -> str:
+    """Apply the outbound redaction policy: secrets always, PII when opted in."""
+    value = redact_secrets(text)
+    if pii_redaction_enabled(config):
+        value = redact_pii(value)
+    return value
 
 
 _SECRET_KEY_RE = re.compile(r"(api[_-]?key|token|secret|password|credential|auth|bearer|value)", re.IGNORECASE)

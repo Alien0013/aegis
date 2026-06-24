@@ -291,6 +291,31 @@ def test_redact_secrets_covers_headers_json_env_urls_and_private_keys():
     assert out.count("[REDACTED]") >= 6
 
 
+def test_redact_pii_masks_common_personal_identifiers():
+    from aegis.redact import redact_outbound_text, redact_pii
+
+    raw = (
+        "Email jane.doe@example.com phone (204) 555-1212 "
+        "ssn 123-45-6789 card 4111 1111 1111 1111"
+    )
+    out = redact_pii(raw)
+
+    assert "jane.doe@example.com" not in out
+    assert "(204) 555-1212" not in out
+    assert "123-45-6789" not in out
+    assert "4111 1111 1111 1111" not in out
+    assert "[REDACTED_EMAIL]" in out
+    assert "[REDACTED_PHONE]" in out
+    assert "[REDACTED_SSN]" in out
+    assert "[REDACTED_CARD]" in out
+
+    class Cfg:
+        def get(self, key, default=None):
+            return True if key == "privacy.redact_pii" else default
+
+    assert "[REDACTED_EMAIL]" in redact_outbound_text("mail jane.doe@example.com", Cfg())
+
+
 def test_learn_redact_reuses_shared_module():
     from aegis import learn
     from aegis.redact import redact_secrets
@@ -423,6 +448,33 @@ def test_send_message_tool(tmp_path, monkeypatch):
     assert not r.is_error
     row = DeliveryQueue().due()[3]
     assert json.loads(row["metadata"]) == {}
+
+
+def test_send_message_tool_can_redact_pii_when_enabled(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.config import Config
+    from aegis.tools.base import ToolContext
+    from aegis.tools.extra_builtin import SendMessageTool
+
+    cfg = Config.load()
+    cfg.data.setdefault("privacy", {})["redact_pii"] = True
+
+    r = SendMessageTool().run(
+        {
+            "text": "contact jane.doe@example.com at 204-555-1212",
+            "platform": "telegram",
+            "chat_id": "7",
+        },
+        ToolContext(config=cfg),
+    )
+    assert not r.is_error
+
+    from aegis.gateway.queue import DeliveryQueue
+    row = DeliveryQueue().due()[0]
+    assert "jane.doe@example.com" not in row["text"]
+    assert "204-555-1212" not in row["text"]
+    assert "[REDACTED_EMAIL]" in row["text"]
+    assert "[REDACTED_PHONE]" in row["text"]
 
 
 # --- ntfy push-notification channel -----------------------------------------

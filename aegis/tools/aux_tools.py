@@ -9,6 +9,9 @@ per-task ``auxiliary.vision`` / ``auxiliary.web_extract`` slots (falling back to
 
 from __future__ import annotations
 
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 
 from ..types import Message
@@ -139,5 +142,109 @@ class WebExtractTool(Tool):
         return ToolResult.ok(out, display=f"extracted {url[:50]}")
 
 
+class MediaAnalyzeTool(Tool):
+    name = "media_analyze"
+    description = (
+        "Analyze image, audio, or video media. Images use the vision model; audio is "
+        "transcribed with STT; video is sampled into frames with ffmpeg and analyzed by "
+        "the vision model. Returns clear setup errors when the needed provider/dependency "
+        "is unavailable."
+    )
+    groups = ["network", "runtime"]
+    toolset = "vision"
+    parameters = {
+        "type": "object",
+        "properties": {
+            "path": {"type": "string", "description": "Local media file path."},
+            "media_type": {"type": "string", "enum": ["auto", "image", "audio", "video"]},
+            "prompt": {"type": "string", "description": "Question or focus for the analysis."},
+            "max_frames": {"type": "integer", "description": "Maximum video frames to sample (default 4)."},
+            "model": {"type": "string", "description": "Optional STT model for audio."},
+        },
+        "required": ["path"],
+    }
+
+    def run(self, args, ctx: ToolContext) -> ToolResult:
+        path = Path(str(args.get("path") or "")).expanduser()
+        if not path.is_file():
+            return ToolResult.error(f"media file not found: {path}")
+        media_type = str(args.get("media_type") or "auto").strip().lower()
+        if media_type == "auto":
+            media_type = self._infer_type(path)
+        prompt = str(args.get("prompt") or "Describe the important content.").strip()
+        if media_type == "image":
+            return VisionAnalyzeTool().run({"image": str(path), "prompt": prompt}, ctx)
+        if media_type == "audio":
+            from .voice import TranscribeTool
+
+            result = TranscribeTool().run({"path": str(path), "model": args.get("model", "whisper-1")}, ctx)
+            if result.is_error:
+                return result
+            return ToolResult.ok(
+                f"Audio transcript:\n{result.content}",
+                display=f"analyzed audio {path.name}",
+                data={"transcript": result.content, "path": str(path)},
+            )
+        if media_type == "video":
+            return self._analyze_video(path, prompt, int(args.get("max_frames", 4) or 4), ctx)
+        return ToolResult.error("media_type must be auto, image, audio, or video.")
+
+    @staticmethod
+    def _infer_type(path: Path) -> str:
+        suffix = path.suffix.lower()
+        if suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"}:
+            return "image"
+        if suffix in {".wav", ".mp3", ".m4a", ".aac", ".ogg", ".oga", ".opus", ".flac"}:
+            return "audio"
+        if suffix in {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}:
+            return "video"
+        return "image"
+
+    def _analyze_video(self, path: Path, prompt: str, max_frames: int, ctx: ToolContext) -> ToolResult:
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            return ToolResult.error("video analysis needs ffmpeg on PATH to sample frames.")
+        max_frames = max(1, min(max_frames, 12))
+        with tempfile.TemporaryDirectory(prefix="aegis-video-frames-") as td:
+            frame_pattern = str(Path(td) / "frame-%03d.jpg")
+            cmd = [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                str(path),
+                "-vf",
+                "fps=1/10",
+                "-frames:v",
+                str(max_frames),
+                frame_pattern,
+            ]
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if proc.returncode != 0:
+                return ToolResult.error(f"ffmpeg frame extraction failed: {(proc.stderr or proc.stdout)[:500]}")
+            frames = sorted(Path(td).glob("frame-*.jpg"))
+            if not frames:
+                return ToolResult.error("ffmpeg did not extract any frames from the video.")
+            summaries: list[str] = []
+            for index, frame in enumerate(frames, 1):
+                result = VisionAnalyzeTool().run(
+                    {
+                        "image": str(frame),
+                        "prompt": f"{prompt}\nThis is sampled video frame {index} of {len(frames)}.",
+                    },
+                    ctx,
+                )
+                if result.is_error:
+                    return result
+                summaries.append(f"Frame {index}: {result.content.strip()}")
+        return ToolResult.ok(
+            "Video frame analysis:\n" + "\n\n".join(summaries),
+            display=f"analyzed video {path.name}",
+            data={"frames_analyzed": len(summaries), "path": str(path)},
+        )
+
+
 def aux_tools() -> list[Tool]:
-    return [VisionAnalyzeTool(), WebExtractTool()]
+    return [VisionAnalyzeTool(), WebExtractTool(), MediaAnalyzeTool()]

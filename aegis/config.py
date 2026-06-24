@@ -471,6 +471,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "scan_enabled": True,        # Tirith-style pre-execution command scanning
         "allow_private_urls": False, # SSRF: allow fetches to private/internal IPs (metadata still blocked)
     },
+    "privacy": {
+        "redact_pii": False,         # opt-in: mask common email/phone/SSN/card shapes on outbound messages
+    },
     "checkpoints": {
         "enabled": True,             # auto-checkpoint each turn's edit batch (/rollback, /diff)
     },

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -41,6 +42,33 @@ def test_installers_advertise_first_run_surface_selection():
     assert "AEGIS_SKILLS" in ps1
     assert '"--toolsets", $InstallToolsets.Trim()' in ps1
     assert '"--skills", $InstallSkills.Trim()' in ps1
+
+
+def test_update_dry_run_json_does_not_mutate(monkeypatch, tmp_path, capsys):
+    from aegis import config as cfg
+    from aegis.cli import main as cli_main
+
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path / ".aegis"))
+    monkeypatch.setenv("AEGIS_SKIP_FIRST_RUN", "1")
+    cfg.set_profile(None)
+
+    calls = []
+
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("update --dry-run must not execute subprocesses")
+
+    monkeypatch.setattr(cli_main.subprocess, "run", fake_run)
+
+    assert cli_main.main(["update", "--dry-run", "--json", "--branch", "main"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["object"] == "aegis.update.plan"
+    assert payload["dry_run"] is True
+    assert payload["mutates"] is False
+    assert payload["snapshot_planned"] is True
+    assert payload["gateway_restart_planned"] is True
+    assert payload["commands"]
+    assert calls == []
 
 
 def test_install_sh_does_not_advertise_removed_tui():

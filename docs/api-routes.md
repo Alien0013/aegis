@@ -218,6 +218,7 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/skills/bundles/{name} | DELETE | api_skill_bundle_delete |
 | /api/skills/manage | GET | api_skills_manage |
 | /api/skills/marketplace/install | POST | api_skills_marketplace_install |
+| /api/skills/marketplace/preview | POST | api_skills_marketplace_preview |
 | /api/skills/marketplace/search | GET | api_skills_marketplace_search |
 | /api/skills/marketplace/uninstall | POST | api_skills_marketplace_uninstall |
 | /api/skills/{name} | DELETE | api_skill_delete |

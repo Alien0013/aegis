@@ -327,6 +327,33 @@ def test_background_manager_spawn_many_is_all_or_nothing_at_capacity():
     assert [row["id"] for row in mgr.list()] == ["bg_busy"]
 
 
+def test_background_manager_persists_retained_records(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.background import BackgroundManager, BgTask
+
+    mgr = BackgroundManager()
+    with mgr._lock:
+        mgr._tasks["bg_running"] = BgTask(id="bg_running", prompt="still going", status="running")
+        mgr._tasks["bg_done"] = BgTask(
+            id="bg_done",
+            prompt="done",
+            status="done",
+            result="finished",
+            finished_at=123.0,
+        )
+        mgr._completion_events = [{"id": "bg_done", "status": "done", "background": True}]
+        mgr._persist_locked()
+
+    reloaded = BackgroundManager()
+    rows = {row["id"]: row for row in reloaded.list()}
+
+    assert rows["bg_done"]["status"] == "done"
+    assert rows["bg_done"]["result_preview"] == "finished"
+    assert rows["bg_running"]["status"] == "interrupted"
+    assert "stopped before completion" in rows["bg_running"]["error"]
+    assert reloaded.completions()[0]["id"] == "bg_done"
+
+
 def test_background_manager_prunes_completed_records(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import time

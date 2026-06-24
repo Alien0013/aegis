@@ -461,7 +461,7 @@ class SendMessageTool(Tool):
                 "send_message needs an active channel + conversation. It works inside the "
                 "gateway (`aegis gateway`); otherwise pass both platform and chat_id.")
         from ..gateway.queue import DeliveryQueue
-        from ..redact import redact_secrets
+        from ..redact import redact_outbound_text
         metadata: dict[str, Any] = {}
         current_platform = str(gateway.get("platform") or getattr(agent, "platform", "") or "")
         current_chat_id = str(gateway.get("chat_id") or getattr(agent, "chat_id", "") or "")
@@ -469,10 +469,11 @@ class SendMessageTool(Tool):
             metadata.update(delivery_metadata)
         if thread_id:
             metadata["thread_id"] = str(thread_id)
+        outbound_config = ctx.config or getattr(agent, "config", None)
         DeliveryQueue().enqueue(
             str(platform),
             str(chat_id),
-            redact_secrets(text),
+            redact_outbound_text(text, outbound_config),
             thread_id=thread_id,
             metadata=metadata,
         )

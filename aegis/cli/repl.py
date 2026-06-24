@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 from .. import __version__
-from ..config import Config
+from ..config import Config, get_home
 from ..session import Session, SessionStore
 
 if TYPE_CHECKING:
@@ -56,18 +56,29 @@ class SlashCommand:
 
 SLASH_COMMANDS = (
     SlashCommand("/help", "discover", "show or search slash commands", "/help [term]"),
+    SlashCommand("/commands", "discover", "Hermes-compatible alias for /help", "/commands [term]"),
     SlashCommand("/status", "discover", "show runtime, session, recap, and trace status"),
+    SlashCommand("/whoami", "discover", "show local profile, workspace, provider, and session identity"),
+    SlashCommand("/version", "discover", "show the AEGIS version and runtime"),
     SlashCommand("/model", "discover", "show the active provider and model"),
     SlashCommand("/provider", "discover", "show or switch the active provider", "/provider [name]"),
+    SlashCommand("/prompt", "discover", "show prompt-audit pointers for the active session"),
     SlashCommand("/tools", "discover", "list enabled tools"),
+    SlashCommand("/toolsets", "discover", "list active toolsets and Hermes-compatible aliases"),
     SlashCommand("/skills", "discover", "list loaded skills"),
+    SlashCommand("/platforms", "discover", "list gateway platform configuration status"),
+    SlashCommand("/platform", "discover", "show one gateway platform's configuration status", "/platform <name>"),
     SlashCommand("/trace", "observability", "list traces for this session or inspect one", "/trace [id]"),
     SlashCommand("/evals", "observability", "list eval runs or inspect one", "/evals [id]"),
     SlashCommand("/usage", "observability", "show token and rate-limit usage"),
+    SlashCommand("/debug", "observability", "show redacted debug-report command guidance", "/debug [share]"),
+    SlashCommand("/insights", "observability", "show usage-insights command guidance"),
     SlashCommand("/sessions", "sessions", "pick recent sessions or search history", "/sessions [query]"),
+    SlashCommand("/history", "sessions", "Hermes-compatible alias for /sessions", "/history [query]"),
     SlashCommand("/resume", "sessions", "resume by picker number, id, title, or unique search", "/resume [number|id|title]"),
     SlashCommand("/branch", "sessions", "fork this conversation into a named child session", "/branch [title]"),
     SlashCommand("/new", "sessions", "start a fresh session"),
+    SlashCommand("/start", "sessions", "Hermes-compatible alias for /new"),
     SlashCommand("/clear", "sessions", "start a fresh session"),
     SlashCommand("/ultracode", "planning", "run the rigorous autonomous plan→implement→verify loop", "/ultracode <task>"),
     SlashCommand("/architect", "planning", "strong model plans → this model implements (Aider-style)", "/architect <task>"),
@@ -81,25 +92,60 @@ SLASH_COMMANDS = (
     SlashCommand("/undo", "context", "remove the last user turn and its response"),
     SlashCommand("/save", "context", "export this session to markdown", "/save [path]"),
     SlashCommand("/title", "sessions", "rename this session", "/title <name>"),
+    SlashCommand("/topic", "sessions", "Hermes-compatible alias for /title", "/topic <name>"),
     SlashCommand("/think", "model control", "set reasoning effort", "/think off|minimal|low|medium|high|xhigh"),
     SlashCommand("/reasoning", "model control", "set reasoning visibility or effort", "/reasoning off|none|summary|live|..."),
     SlashCommand("/fast", "model control", "toggle priority/fast mode", "/fast [on|off|status]"),
     SlashCommand("/busy", "model control", "show or set busy input behavior", "/busy [queue|steer|interrupt|status]"),
+    SlashCommand("/queue", "model control", "Hermes-compatible alias for /busy queue"),
+    SlashCommand("/steer", "model control", "Hermes-compatible alias for /busy steer"),
+    SlashCommand("/stop", "model control", "Hermes-compatible interrupt guidance for active gateway/API turns"),
+    SlashCommand("/reload", "model control", "refresh volatile prompt state and runtime context"),
+    SlashCommand("/reload-skills", "model control", "reload skills into the active agent"),
+    SlashCommand("/reload-mcp", "model control", "show MCP reload guidance for the active runtime"),
     SlashCommand("/timestamps", "display", "toggle terminal timestamps", "/timestamps on|off|status"),
+    SlashCommand("/statusbar", "display", "toggle terminal status bar", "/statusbar on|off|status"),
+    SlashCommand("/footer", "display", "toggle post-turn status footer", "/footer on|off|status"),
+    SlashCommand("/indicator", "display", "show status indicator settings"),
+    SlashCommand("/verbose", "display", "toggle verbose tool progress", "/verbose on|off|status"),
+    SlashCommand("/redraw", "display", "redraw current status/footer"),
     SlashCommand("/goal", "goals", "set a standing goal and start it", "/goal <objective>"),
     SlashCommand("/subgoal", "goals", "set a nested standing goal", "/subgoal <objective>"),
     SlashCommand("/background", "agents", "launch a background agent task", "/background <prompt>"),
     SlashCommand("/tasks", "agents", "list background tasks"),
     SlashCommand("/agents", "agents", "list background agents"),
     SlashCommand("/kanban", "agents", "multi-agent task board", "/kanban [list|create <title>|show <id>|dispatch|stats]"),
+    SlashCommand("/cron", "agents", "show cron command guidance"),
+    SlashCommand("/curator", "learning", "show curator command guidance"),
     SlashCommand("/learn", "learning", "review this session for reusable memories or skills"),
     SlashCommand("/skill", "learning", "create or extract a skill", "/skill [new <name> [description]]"),
+    SlashCommand("/bundles", "learning", "show bundled skill guidance"),
     SlashCommand("/memory", "learning", "show memory and user profile files"),
     SlashCommand("/personality", "learning", "set the active persona", "/personality <name>"),
+    SlashCommand("/voice", "media", "show voice/STT/TTS status and commands", "/voice [status|on|off]"),
+    SlashCommand("/browser", "media", "show browser tool connection guidance", "/browser [status|connect|disconnect]"),
+    SlashCommand("/image", "media", "show image input/generation guidance"),
+    SlashCommand("/copy", "media", "copy guidance for terminal sessions"),
+    SlashCommand("/paste", "media", "paste guidance for terminal sessions"),
     SlashCommand("/secret", "setup", "store a local secret with hidden input", "/secret set <ENV_KEY>"),
+    SlashCommand("/config", "setup", "show config command guidance"),
+    SlashCommand("/profile", "setup", "show profile command guidance"),
+    SlashCommand("/plugins", "setup", "show plugin command guidance"),
+    SlashCommand("/update", "setup", "show runtime update command guidance"),
+    SlashCommand("/billing", "setup", "show provider billing/usage guidance"),
+    SlashCommand("/credits", "setup", "show provider credits/usage guidance"),
+    SlashCommand("/codex-runtime", "setup", "show Codex-compatible runtime status"),
+    SlashCommand("/sethome", "setup", "show AEGIS_HOME/profile home guidance"),
     SlashCommand("/handoff", "channels", "hand this session to a gateway channel", "/handoff <platform> <chat_id>"),
     SlashCommand("/diff", "workspace", "show changes since the last checkpoint", "/diff [checkpoint-id]"),
+    SlashCommand("/snapshot", "workspace", "show snapshot/checkpoint command guidance"),
     SlashCommand("/rollback", "workspace", "restore files from a checkpoint", "/rollback [checkpoint-id]"),
+    SlashCommand("/approve", "approvals", "approval guidance for pending tool/API/gateway requests"),
+    SlashCommand("/deny", "approvals", "denial guidance for pending tool/API/gateway requests"),
+    SlashCommand("/blueprint", "automation", "show cron blueprint guidance"),
+    SlashCommand("/pet", "compatibility", "Hermes-only companion UI: intentionally out of scope"),
+    SlashCommand("/skin", "compatibility", "Hermes-only skin UI: use AEGIS themes instead"),
+    SlashCommand("/suggestions", "compatibility", "show suggestion guidance"),
     SlashCommand("/yolo", "workspace", "toggle this session's existing approval bypass"),
     SlashCommand("/quit", "exit", "leave the terminal surface"),
     SlashCommand("/exit", "exit", "leave the terminal surface"),
@@ -1827,6 +1873,17 @@ def handle_slash(
     parts = cmd.strip().split()
     name = parts[0].lower()
     arg = " ".join(parts[1:])
+    alias_target = {
+        "/commands": ("/help", arg),
+        "/history": ("/sessions", arg),
+        "/start": ("/new", ""),
+        "/topic": ("/title", arg),
+        "/queue": ("/busy", "queue"),
+        "/steer": ("/busy", "steer"),
+    }.get(name)
+    if alias_target:
+        name, arg = alias_target
+        parts = [name] + (arg.split() if arg else [])
 
     if name in ("/quit", "/exit"):
         return "break"
@@ -1834,6 +1891,49 @@ def handle_slash(
         for line in slash_help_lines(arg):
             _out(line)
         _out("Anything else is sent to the agent.")
+    elif name == "/version":
+        _out(f"AEGIS {__version__}")
+        _out(f"python: {sys.version.split()[0]} · cwd: {agent.cwd}")
+    elif name == "/whoami":
+        profile = getattr(agent.config, "profile", None) or agent.config.get("profile.name", "default")
+        _out(f"profile: {profile}")
+        _out(f"home: {get_home()}")
+        _out(f"workspace: {agent.cwd}")
+        _out(f"session: {agent.session.id}")
+        _out(f"provider: {agent.provider.describe()}")
+    elif name == "/prompt":
+        run_id, trace_id, _turn_id = _run_refs(agent)
+        _out(f"session: {agent.session.id}")
+        if run_id:
+            _out(f"last run: {run_id}")
+        if trace_id:
+            _out(f"last trace: {trace_id}")
+        _out("Prompt audit: dashboard /prompt-audit or API /api/sessions/{session_id}/prompt-audit")
+    elif name == "/toolsets":
+        toolsets = list(agent.config.get("tools.toolsets", []) or [])
+        _out("active toolsets: " + (", ".join(toolsets) if toolsets else "(none)"))
+        _out(
+            "compat aliases: file=core, terminal=core, skills=core, memory=core, "
+            "session_search=core, delegation=core, cronjob=core, tts=voice, computer_use=computer"
+        )
+    elif name in ("/platform", "/platforms"):
+        try:
+            from ..platforms import BRIDGE_PLATFORM_DEFINITIONS
+            names = sorted(BRIDGE_PLATFORM_DEFINITIONS)
+        except Exception:  # noqa: BLE001
+            names = []
+        if name == "/platform" and arg:
+            target = arg.strip().lower()
+            matches = [p for p in names if str(p).lower() == target]
+            _out(f"platform {target}: {'known' if matches else 'not configured/unknown'}")
+        else:
+            _out("platforms: " + (", ".join(str(p) for p in names if p) or "(none discovered)"))
+        _out("Use the dashboard Channels page or `aegis gateway status` for live adapter state.")
+    elif name == "/debug":
+        _out("debug report: run `aegis debug share` to create a redacted debug-report.zip")
+        _out("security report: run `aegis security audit --json` or `--markdown`")
+    elif name == "/insights":
+        _out("usage insights: run `aegis insights` or open the dashboard Analytics page")
     elif name == "/yolo":
         eng = agent.permissions
         on = getattr(eng, "_mode_override", None) == "full"
@@ -2060,6 +2160,50 @@ def handle_slash(
             if store is not None:
                 store.save(agent.session)
             _out(f"busy input mode → {value} ({_busy_mode_hint(value)})", style="green")
+    elif name == "/stop":
+        _out("Terminal turns stop with Ctrl+C while the model is running.")
+        _out("Gateway/API runs support /stop through their control channels; set terminal busy mode with /busy interrupt.")
+    elif name in ("/reload", "/reload-skills"):
+        try:
+            agent.refresh_volatile()
+            _out("runtime context reloaded", style="green")
+        except Exception as exc:  # noqa: BLE001
+            _out(f"reload failed: {exc}", style="yellow")
+    elif name == "/reload-mcp":
+        _out("MCP tools are rebuilt when the agent/runtime is recreated.")
+        _out("Use `aegis mcp list`, the dashboard MCP page, or start a new session with /new after MCP config changes.")
+    elif name in ("/statusbar", "/footer", "/verbose"):
+        section, key, label = {
+            "/statusbar": ("display", "status_bar", "status bar"),
+            "/footer": ("display", "status_footer", "status footer"),
+            "/verbose": ("display", "tool_progress", "tool progress"),
+        }[name]
+        value = (arg or "status").strip().lower()
+        current = agent.config.data.setdefault(section, {}).get(key, agent.config.get(f"{section}.{key}"))
+        if value in {"", "status"}:
+            _out(f"{label}: {current}")
+        elif name == "/verbose":
+            agent.config.data.setdefault(section, {})[key] = (
+                "verbose" if value in {"on", "true", "1", "yes"} else "compact"
+            )
+            agent.config.save()
+            _out(f"{label} → {agent.config.data[section][key]}", style="green")
+        elif value in {"on", "true", "1", "yes"}:
+            agent.config.data.setdefault(section, {})[key] = True
+            agent.config.save()
+            _out(f"{label} → on", style="green")
+        elif value in {"off", "false", "0", "no"}:
+            agent.config.data.setdefault(section, {})[key] = False
+            agent.config.save()
+            _out(f"{label} → off", style="green")
+        else:
+            _out(f"usage: {name} on|off|status")
+    elif name == "/indicator":
+        _out(f"status bar: {agent.config.get('display.status_bar', True)}")
+        _out(f"status footer: {agent.config.get('display.status_footer', True)}")
+        _out(f"tool progress: {agent.config.get('display.tool_progress', 'compact')}")
+    elif name == "/redraw":
+        _maybe_print_status_footer(agent, on_event or Renderer(agent.config))
     elif name == "/tools":
         for t in agent.registry.all():
             g = f" [{','.join(t.groups)}]" if t.groups else ""
@@ -2097,6 +2241,31 @@ def handle_slash(
         if agent.memory:
             _out("# MEMORY\n" + (agent.memory.store.raw("memory") or "(empty)"))
             _out("# USER\n" + (agent.memory.store.raw("user") or "(empty)"))
+    elif name == "/bundles":
+        _out("skill bundles: run `aegis skills bundles` to list installable bundled skill groups.")
+    elif name == "/voice":
+        value = (arg or "status").strip().lower()
+        if value in {"", "status"}:
+            _out("voice tools: speak, transcribe")
+            _out("dashboard/API: /api/audio/voices, /api/audio/tts, /api/audio/transcribe")
+        elif value in {"on", "off"}:
+            agent.config.data.setdefault("voice", {})["enabled"] = value == "on"
+            agent.config.save()
+            _out(f"voice → {value}", style="green")
+        else:
+            _out("usage: /voice [status|on|off]")
+    elif name == "/browser":
+        _out("browser tools: browser, web_verify, web_extract")
+        _out("Use `aegis browser connect <url>` or the dashboard browser controls for live CDP sessions.")
+    elif name == "/image":
+        _out("image input: `aegis chat --image path.png \"prompt\"`")
+        _out("image tools: generate_image, cloud_image, vision_analyze")
+    elif name == "/copy":
+        _out("Copy terminal text with your terminal selection/clipboard shortcut.")
+        _out("Use /save [path] to export the current session as Markdown.")
+    elif name == "/paste":
+        _out("Paste text at the prompt with your terminal paste shortcut.")
+        _out("For images, use `aegis chat --image path.png \"prompt\"`.")
     elif name == "/secret":
         sub = parts[1].lower() if len(parts) > 1 else ""
         key = parts[2].strip() if len(parts) > 2 else ""
@@ -2112,6 +2281,24 @@ def handle_slash(
                     _out(f"secret setup skipped for {key}", style="yellow")
                 else:
                     _out(f"secret stored as {key}", style="green")
+    elif name == "/config":
+        _out("config: `aegis config show|edit|set|doctor|migrate`")
+        _out("dashboard: Config, Keys, Provider Auth, and Runtime Profiles pages")
+    elif name == "/profile":
+        _out("profiles: `aegis profile list|use|create|export|import`")
+    elif name == "/plugins":
+        _out("plugins: `aegis plugins list|doctor` or the dashboard Plugins page")
+    elif name == "/update":
+        _out("update: `aegis update --dry-run` to inspect, `aegis update` to run with snapshot/rollback protection")
+    elif name in ("/billing", "/credits"):
+        _out("Billing/credits are provider-owned. AEGIS shows local usage via /usage, `aegis insights`, and Analytics.")
+        _out("Credential pools expose cooldown and auth status in the Provider Auth dashboard.")
+    elif name == "/codex-runtime":
+        _out(f"provider: {agent.provider.describe()}")
+        _out(f"surface: {surface} · session: {agent.session.id}")
+    elif name == "/sethome":
+        _out(f"current AEGIS_HOME: {get_home()}")
+        _out("Set AEGIS_HOME in the shell before launching, or use profiles for isolated config/state.")
     elif name == "/usage":
         u = agent.budget.usage
         _out(f"tokens this session — input: {u.input_tokens:,}  output: {u.output_tokens:,}", style="cyan")
@@ -2248,6 +2435,11 @@ def handle_slash(
         else:
             ns.id = rest or None
         cmd_kanban(ns, agent.config)
+    elif name == "/cron":
+        _out("cron: use `aegis cron list|add|run|status` or the dashboard Cron page.")
+        _out("Tool form: cronjob action=create/list/update/delete/run/status/service.")
+    elif name == "/curator":
+        _out("curator: use `aegis curator run --dry-run` or the dashboard Skills/Memory pages.")
     elif name == "/handoff":
         parts = (arg or "").split()
         if len(parts) < 2:
@@ -2274,6 +2466,17 @@ def handle_slash(
         from ..checkpoints import CheckpointStore
         restored = CheckpointStore(agent.cwd).rollback(arg or None)
         _out(f"rolled back {len(restored)} file(s): {', '.join(restored) or '(none)'}", style="yellow")
+    elif name == "/snapshot":
+        _out("snapshot: run `aegis snapshot` for a workspace snapshot, or use /diff and /rollback for checkpoints.")
+    elif name in ("/approve", "/deny"):
+        _out("Terminal approvals are shown inline at the moment a tool needs approval.")
+        _out("Gateway/API approvals use their pending approval channels; this REPL has no hidden approval queue.")
+    elif name == "/blueprint":
+        _out("cron blueprints are available from the dashboard Cron page and cron preview APIs.")
+    elif name in ("/pet", "/skin"):
+        _out(f"{name} is Hermes-only visual chrome; AEGIS uses dashboard themes and terminal display settings instead.")
+    elif name == "/suggestions":
+        _out("Suggestions: use /help to discover commands, /status for next actions, and the dashboard overview for ops hints.")
     elif name == "/retry":
         # drop the last assistant turn (+ its tool messages) and re-run the last user msg
         msgs = agent.session.messages

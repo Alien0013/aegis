@@ -16,7 +16,8 @@ run() {
   "$@"
 }
 
-run "$PYTHON" scripts/check_hermes_parity_ledger.py
+run "$PYTHON" scripts/generate_hermes_code_map.py --check
+run "$PYTHON" scripts/check_hermes_parity_ledger.py --final
 run "$PYTHON" scripts/generate_reference_docs.py --check
 run bash scripts/run_tests.sh
 

@@ -6999,6 +6999,24 @@ def create_app(config: Config) -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
 
+    @app.post("/api/skills/marketplace/preview")
+    async def api_skills_marketplace_preview(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from . import marketplace
+
+        body = await request.json()
+        try:
+            if body.get("hub"):
+                report = marketplace.preview_hub(str(body["hub"]), config, force=bool(body.get("force", False)))
+            else:
+                source = str(body.get("source") or body.get("name") or "").strip()
+                if not source:
+                    return JSONResponse({"ok": False, "error": "source is required"}, status_code=400)
+                report = marketplace.preview(source, force=bool(body.get("force", False)))
+            return JSONResponse({"ok": bool(report.get("ok", True)), "preview": report, **report})
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
     @app.post("/api/skills/marketplace/uninstall")
     async def api_skills_marketplace_uninstall(request: Request) -> JSONResponse:
         _require_request(request, config)

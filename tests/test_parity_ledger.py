@@ -7,6 +7,7 @@ from pathlib import Path
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check_hermes_parity_ledger.py"
+MAP_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "generate_hermes_code_map.py"
 
 
 def _write_csv(path: Path, rows: list[dict[str, str]]) -> None:
@@ -27,6 +28,39 @@ def _write_csv(path: Path, rows: list[dict[str, str]]) -> None:
 
 def _run(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, check=False)
+
+
+def _run_map_script(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run([sys.executable, str(MAP_SCRIPT), *args], capture_output=True, text=True, check=False)
+
+
+def _write_closed_ledger(code_map: Path, ledger: Path, rows: list[dict[str, str]]) -> None:
+    _write_csv(code_map, rows)
+    with ledger.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=["aegis_path", "subsystem", "phase", "status", "evidence", "notes"])
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    "aegis_path": row["aegis_path"],
+                    "subsystem": row["subsystem"],
+                    "phase": "phase-test",
+                    "status": "complete",
+                    "evidence": f"focused evidence for {row['aegis_path']}",
+                    "notes": "closed for test",
+                }
+            )
+
+
+def _write_matrix(path: Path, status: str, *, gap: str = "closed by focused evidence") -> None:
+    path.write_text(
+        "# Matrix\n\n"
+        "## Runtime\n\n"
+        "| Capability | AEGIS status | Evidence / likely files | Gap to close |\n"
+        "|---|---:|---|---|\n"
+        f"| Mid-turn steering | {status} | tests/test_surface.py | {gap} |\n",
+        encoding="utf-8",
+    )
 
 
 def test_parity_ledger_sync_creates_accounted_rows(tmp_path):
@@ -120,3 +154,83 @@ def test_parity_ledger_final_mode_requires_closed_statuses(tmp_path):
 
     assert result.returncode == 1
     assert "not allowed in --final mode" in result.stderr
+
+
+def test_parity_ledger_final_mode_rejects_unresolved_feature_matrix_rows(tmp_path):
+    code_map = tmp_path / "map.csv"
+    ledger = tmp_path / "ledger.csv"
+    matrix = tmp_path / "matrix.md"
+    rows = [
+        {
+            "aegis_path": "aegis/agent/context.py",
+            "subsystem": "agent-core",
+            "aegis_lines": "10",
+            "hermes_counterpart": "agent/prompt_builder.py",
+            "hermes_lines": "20",
+            "match_reason": "manual architecture map",
+            "parity_action": "Align behavior contract",
+        }
+    ]
+    _write_closed_ledger(code_map, ledger, rows)
+    _write_matrix(matrix, "Partial", gap="Verify every surface supports it consistently.")
+
+    result = _run("--map", str(code_map), "--ledger", str(ledger), "--matrix", str(matrix), "--final")
+
+    assert result.returncode == 1
+    assert "feature matrix unresolved row" in result.stderr
+    assert "Mid-turn steering" in result.stderr
+
+
+def test_parity_ledger_final_mode_allows_credential_bound_feature_matrix_rows(tmp_path):
+    code_map = tmp_path / "map.csv"
+    ledger = tmp_path / "ledger.csv"
+    matrix = tmp_path / "matrix.md"
+    rows = [
+        {
+            "aegis_path": "aegis/gateway/channels.py",
+            "subsystem": "gateway",
+            "aegis_lines": "10",
+            "hermes_counterpart": "gateway/platforms/telegram.py",
+            "hermes_lines": "20",
+            "match_reason": "manual architecture map",
+            "parity_action": "Align behavior contract",
+        }
+    ]
+    _write_closed_ledger(code_map, ledger, rows)
+    _write_matrix(
+        matrix,
+        "Credential-bound",
+        gap="Implementation is local; live platform smoke is credential-bound external proof.",
+    )
+
+    result = _run("--map", str(code_map), "--ledger", str(ledger), "--matrix", str(matrix), "--final")
+
+    assert result.returncode == 0, result.stderr
+    assert "Feature matrix:" in result.stdout
+    assert "unresolved=0" in result.stdout
+
+
+def test_code_map_generator_includes_cjs_and_excludes_generated_paths(tmp_path):
+    code_map = tmp_path / "map.csv"
+    code_map.write_text(
+        "aegis_path,subsystem,aegis_lines,hermes_counterpart,hermes_lines,match_reason,parity_action\n",
+        encoding="utf-8",
+    )
+    root = Path.cwd()
+    generated = root / "site-next" / ".next" / "parity-test-generated.js"
+    cjs = root / "desktop" / "electron" / "parity-test-source.cjs"
+    try:
+        generated.parent.mkdir(parents=True, exist_ok=True)
+        generated.write_text("console.log('generated')\n", encoding="utf-8")
+        cjs.write_text("module.exports = {}\n", encoding="utf-8")
+
+        result = _run_map_script("--map", str(code_map), "--write")
+
+        assert result.returncode == 0, result.stderr
+        rows = list(csv.DictReader(code_map.open(newline="", encoding="utf-8")))
+        paths = {row["aegis_path"] for row in rows}
+        assert "desktop/electron/parity-test-source.cjs" in paths
+        assert "site-next/.next/parity-test-generated.js" not in paths
+    finally:
+        generated.unlink(missing_ok=True)
+        cjs.unlink(missing_ok=True)

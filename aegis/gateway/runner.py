@@ -56,11 +56,11 @@ def _message_timestamps_enabled(config: Config | None) -> bool:
     return bool(raw)
 
 
-def _redact_approval_prompt(prompt: str | None) -> str:
+def _redact_approval_prompt(prompt: str | None, config: Config | None = None) -> str:
     """Redact credentials before an approval prompt leaves the gateway."""
-    from ..redact import redact_secrets
+    from ..redact import redact_outbound_text
 
-    return redact_secrets(str(prompt or ""))
+    return redact_outbound_text(str(prompt or ""), config)
 
 
 def _gateway_origin_from_event(ev: MessageEvent) -> dict[str, Any]:
@@ -827,7 +827,7 @@ class GatewayRunner:
                                         self.config.get("gateway.clarify_timeout_seconds", 3600)) or 3600)
 
         def approve(prompt: str):
-            prompt = _redact_approval_prompt(prompt)
+            prompt = _redact_approval_prompt(prompt, self.config)
             ask_exec = getattr(adapter, "ask_exec_approval", None)
             if callable(ask_exec):
                 answer = str(ask_exec(ev, prompt, timeout=timeout) or "")
@@ -1310,10 +1310,10 @@ class GatewayRunner:
                     final_text = self._run_gateway_proxy_turn(ev, key, session, prompt_message, generation)
                     if generation != self._generation(key):
                         return ""
-                    from ..redact import redact_secrets
+                    from ..redact import redact_outbound_text
                     from .replies import shape_reply
 
-                    reply = shape_reply(redact_secrets(final_text), api_calls=1)
+                    reply = shape_reply(redact_outbound_text(final_text, self.config), api_calls=1)
                     if self._clear_resume_pending(session):
                         self._sessions[key] = session
                         self.store.save(session)
@@ -1512,11 +1512,11 @@ class GatewayRunner:
                         self.store.save(agent.session)
                 except Exception:  # noqa: BLE001  (goal machinery must never eat the reply)
                     pass
-                from ..redact import redact_secrets
+                from ..redact import redact_outbound_text
                 from .replies import shape_reply
                 api_calls = getattr(getattr(agent, "budget", None), "api_call_count", 0)
                 # secrets out, raw provider errors -> friendly one-liner, empty -> clear message
-                reply = shape_reply(redact_secrets(final_text), api_calls=api_calls)
+                reply = shape_reply(redact_outbound_text(final_text, self.config), api_calls=api_calls)
                 if goal_notes:
                     reply += "\n\n" + "\n".join(goal_notes)
                 if learned and self.config.get("gateway.show_learning", True):
@@ -1914,7 +1914,15 @@ class GatewayRunner:
     ) -> None:
         """Durably queue an outbound message (used by cron + retry on send failure)."""
         from .queue import DeliveryQueue
-        DeliveryQueue().enqueue(platform, chat_id, text, thread_id=thread_id, metadata=metadata)
+        from ..redact import redact_outbound_text
+
+        DeliveryQueue().enqueue(
+            platform,
+            chat_id,
+            redact_outbound_text(text, self.config),
+            thread_id=thread_id,
+            metadata=metadata,
+        )
 
     def _send_via_adapter(
         self,
@@ -1928,17 +1936,20 @@ class GatewayRunner:
         if adapter is None:
             return False
         try:
+            from ..redact import redact_outbound_text
+
+            safe_text = redact_outbound_text(text, self.config)
             deliver = getattr(adapter, "deliver", None)
             if callable(deliver):
                 try:
-                    deliver(chat_id, text, metadata=metadata or {})
+                    deliver(chat_id, safe_text, metadata=metadata or {})
                 except TypeError:
-                    deliver(chat_id, text)
+                    deliver(chat_id, safe_text)
             else:
                 try:
-                    adapter.send(chat_id, text, metadata=metadata or {})
+                    adapter.send(chat_id, safe_text, metadata=metadata or {})
                 except TypeError:
-                    adapter.send(chat_id, text)
+                    adapter.send(chat_id, safe_text)
             return True
         except Exception:  # noqa: BLE001
             return False
