@@ -651,6 +651,7 @@ def test_terminal_slash_help_is_searchable():
         "/snapshot",
         "/debug",
         "/platforms",
+        "/restart",
         "/toolsets",
         "/version",
         "/whoami",

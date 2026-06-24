@@ -274,7 +274,7 @@ aegis/builtin_skills/dockerize/SKILL.md,skills-bundled,68,optional-skills/autono
 aegis/builtin_skills/docx/SKILL.md,skills-bundled,58,optional-skills/autonomous-ai-agents/antigravity-cli/SKILL.md,242,same filename in AEGIS skills tree,Map to AEGIS bundled skill catalog; keep original if useful and validate metadata/security.
 aegis/builtin_skills/email-triage/SKILL.md,skills-bundled,25,optional-skills/autonomous-ai-agents/antigravity-cli/SKILL.md,242,same filename in AEGIS skills tree,Map to AEGIS bundled skill catalog; keep original if useful and validate metadata/security.
 aegis/builtin_skills/expense-summary/SKILL.md,skills-bundled,25,optional-skills/autonomous-ai-agents/antigravity-cli/SKILL.md,242,same filename in AEGIS skills tree,Map to AEGIS bundled skill catalog; keep original if useful and validate metadata/security.
-aegis/builtin_skills/frontend-design/SKILL.md,skills-bundled,51,optional-skills/autonomous-ai-agents/antigravity-cli/SKILL.md,242,same filename in AEGIS skills tree,Map to AEGIS bundled skill catalog; keep original if useful and validate metadata/security.
+aegis/builtin_skills/frontend-design/SKILL.md,skills-bundled,54,optional-skills/autonomous-ai-agents/antigravity-cli/SKILL.md,242,same filename in AEGIS skills tree,Map to AEGIS bundled skill catalog; keep original if useful and validate metadata/security.
 aegis/builtin_skills/github/SKILL.md,skills-bundled,34,optional-skills/autonomous-ai-agents/antigravity-cli/SKILL.md,242,same filename in AEGIS skills tree,Map to AEGIS bundled skill catalog; keep original if useful and validate metadata/security.
 aegis/builtin_skills/github-actions/SKILL.md,skills-bundled,57,optional-skills/autonomous-ai-agents/antigravity-cli/SKILL.md,242,same filename in AEGIS skills tree,Map to AEGIS bundled skill catalog; keep original if useful and validate metadata/security.
 aegis/builtin_skills/incident-response/SKILL.md,skills-bundled,43,optional-skills/autonomous-ai-agents/antigravity-cli/SKILL.md,242,same filename in AEGIS skills tree,Map to AEGIS bundled skill catalog; keep original if useful and validate metadata/security.
@@ -341,7 +341,7 @@ aegis/checkpoints.py,runtime-other,158,tools/checkpoint_manager.py + aegis_cli/c
 aegis/cli/__init__.py,cli,1,agent/__init__.py,9,same basename,"Align behavior contract, add parity tests, expose status in dashboard/docs."
 aegis/cli/main.py,cli,3506,aegis_cli/main.py,13212,manual architecture map,"Align behavior contract, add parity tests, expose status in dashboard/docs."
 aegis/cli/menu.py,cli,144,,,no close reference path by simple scan,Decide if this remains AEGIS-specific or add parity equivalent/tests.
-aegis/cli/repl.py,cli,2839,cli.py + aegis_cli/commands.py + aegis_cli/cli_commands_mixin.py,,manual architecture map,"Align behavior contract, add parity tests, expose status in dashboard/docs."
+aegis/cli/repl.py,cli,2843,cli.py + aegis_cli/commands.py + aegis_cli/cli_commands_mixin.py,,manual architecture map,"Align behavior contract, add parity tests, expose status in dashboard/docs."
 aegis/cli/tui.py,cli,53,ui-tui/* + aegis_cli/main.py --tui,,manual architecture map,"Align behavior contract, add parity tests, expose status in dashboard/docs."
 aegis/config.py,runtime-other,1155,aegis_cli/config.py + aegis_constants.py,,manual architecture map,"Align behavior contract, add parity tests, expose status in dashboard/docs."
 aegis/constants.py,runtime-other,34,agent/pet/constants.py,168,same basename,"Align behavior contract, add parity tests, expose status in dashboard/docs."
@@ -587,7 +587,7 @@ docs/quickstart.md,docs,220,website/docs/getting-started/quickstart.md,391,fuzzy
 docs/sdk.md,docs,109,website/docs/*,,write/generated docs parity needed,Generate or update docs from source so CLI/API/surface docs cannot drift.
 docs/security.md,docs,53,website/docs/user-guide/security.md,679,fuzzy docs topic match,Generate or update docs from source so CLI/API/surface docs cannot drift.
 docs/serve.md,docs,63,website/docs/user-guide/features/api-server.md,504,fuzzy docs topic match,Generate or update docs from source so CLI/API/surface docs cannot drift.
-docs/slash-commands.md,docs,101,website/docs/reference slash command pages,,Phase 5 generated slash reference added after baseline map,Generated from SLASH_COMMANDS; do not edit by hand.
+docs/slash-commands.md,docs,102,website/docs/reference slash command pages,,Phase 5 generated slash reference added after baseline map,Generated from SLASH_COMMANDS; do not edit by hand.
 docs/tools-reference.md,docs,113,website/docs/reference tool pages,,Phase 5 generated tool reference added after baseline map,Generated from built-in tool registry metadata; do not edit by hand.
 docs/tools.md,docs,128,website/docs/developer-guide/adding-tools.md,212,fuzzy docs topic match,Generate or update docs from source so CLI/API/surface docs cannot drift.
 docs/tracing-evals.md,docs,82,website/docs/*,,write/generated docs parity needed,Generate or update docs from source so CLI/API/surface docs cannot drift.
@@ -682,7 +682,7 @@ tests/test_packaging.py,tests,75,tests/*,,add/align behavior contract tests,Keep
 tests/test_parity_ledger.py,tests,236,tests/* parity/release checks,,Phase 0 parity ledger tests added after baseline map,Keep/add tests proving parity coverage cannot lose mapped rows.
 tests/test_phases.py,tests,875,tests/*,,add/align behavior contract tests,Keep/add tests proving AEGIS-like behavior in AEGIS runtime.
 tests/test_plan_mode.py,tests,30,tests/*,,add/align behavior contract tests,Keep/add tests proving AEGIS-like behavior in AEGIS runtime.
-tests/test_product_surfaces.py,tests,3844,tests/*,,add/align behavior contract tests,Keep/add tests proving AEGIS-like behavior in AEGIS runtime.
+tests/test_product_surfaces.py,tests,3845,tests/*,,add/align behavior contract tests,Keep/add tests proving AEGIS-like behavior in AEGIS runtime.
 tests/test_profiles_cli.py,tests,56,tests/*,,add/align behavior contract tests,Keep/add tests proving AEGIS-like behavior in AEGIS runtime.
 tests/test_provider_model_inventory.py,tests,344,tests/*,,add/align behavior contract tests,Keep/add tests proving AEGIS-like behavior in AEGIS runtime.
 tests/test_providers.py,tests,1997,tests/*,,add/align behavior contract tests,Keep/add tests proving AEGIS-like behavior in AEGIS runtime.

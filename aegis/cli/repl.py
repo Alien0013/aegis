@@ -103,6 +103,7 @@ SLASH_COMMANDS = (
     SlashCommand("/reload", "model control", "refresh volatile prompt state and runtime context"),
     SlashCommand("/reload-skills", "model control", "reload skills into the active agent"),
     SlashCommand("/reload-mcp", "model control", "show MCP reload guidance for the active runtime"),
+    SlashCommand("/restart", "model control", "show gateway/API restart guidance"),
     SlashCommand("/timestamps", "display", "toggle terminal timestamps", "/timestamps on|off|status"),
     SlashCommand("/statusbar", "display", "toggle terminal status bar", "/statusbar on|off|status"),
     SlashCommand("/footer", "display", "toggle post-turn status footer", "/footer on|off|status"),
@@ -2172,6 +2173,9 @@ def handle_slash(
     elif name == "/reload-mcp":
         _out("MCP tools are rebuilt when the agent/runtime is recreated.")
         _out("Use `aegis mcp list`, the dashboard MCP page, or start a new session with /new after MCP config changes.")
+    elif name == "/restart":
+        _out("restart gateway: run `aegis gateway restart` or use the dashboard Channels/System controls.")
+        _out("restart API/dashboard: stop and relaunch `aegis serve`/`aegis dashboard`, or restart the desktop shell.")
     elif name in ("/statusbar", "/footer", "/verbose"):
         section, key, label = {
             "/statusbar": ("display", "status_bar", "status bar"),

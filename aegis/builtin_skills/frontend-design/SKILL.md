@@ -49,3 +49,6 @@ Layout: `display:grid;gap:var(--space);grid-template-columns:repeat(auto-fit,min
 - Resize to 360px and 1440px: no horizontal scroll, no overlap.
 - Tab through: every interactive element shows a focus ring, order is logical.
 - Run an a11y/contrast check (axe or Lighthouse) and confirm valid semantic HTML.
+
+## Learned Notes
+- When building a standalone product/landing page via a subagent or temporary artifact, require a concrete verification pass before reporting success: check the output file exists, expected H1/product name is present, semantic landmarks exist (`nav`, `main`, multiple `section`s), any product/process diagram renders or is present, keyboard focus styling (`:focus-visible`) exists, and `prefers-reduced-motion` guards animations. Report the artifact path and these verification facts instead of only describing the design.

@@ -63,6 +63,7 @@ Generated from `aegis.cli.repl.SLASH_COMMANDS`.
 | /reload | model control | refresh volatile prompt state and runtime context | /reload |
 | /reload-mcp | model control | show MCP reload guidance for the active runtime | /reload-mcp |
 | /reload-skills | model control | reload skills into the active agent | /reload-skills |
+| /restart | model control | show gateway/API restart guidance | /restart |
 | /steer | model control | compatibility alias for /busy steer | /steer |
 | /stop | model control | interrupt guidance for active gateway/API turns | /stop |
 | /think | model control | set reasoning effort | /think off\|minimal\|low\|medium\|high\|xhigh |
