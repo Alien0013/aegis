@@ -66,7 +66,39 @@ def _price(model: str, config=None) -> tuple[float, float]:
     for prefix, price in sorted(table.items(), key=lambda kv: -len(kv[0])):
         if prefix.lower() in m:
             return tuple(price) if isinstance(price, (list, tuple)) else (price, price)
+    # Fall back to the models.dev catalog (aegis models refresh) so models not in the
+    # built-in table are still priced instead of silently costing $0.
+    try:
+        from .model_meta import pricing as _mm_pricing
+        hit = _mm_pricing(model)
+        if hit:
+            return hit
+    except Exception:  # noqa: BLE001
+        pass
     return (0.0, 0.0)
+
+
+def _cache_write_mult(config=None) -> float:
+    ttl = str((config.get("prompt_caching.cache_ttl", "5m") if config else "5m") or "5m").lower()
+    return 2.0 if ttl in ("1h", "60m") else 1.25
+
+
+def _turn_cost(e: dict, pin: float, pout: float, cache_write_mult: float = 1.25) -> float:
+    """Cost of one logged turn in USD, honoring provider cache semantics.
+
+    Anthropic reports ``input_tokens`` as the *fresh* (uncached) count with cache reads
+    and writes tallied separately; OpenAI-style ``prompt_tokens`` includes cached input,
+    so fresh = input − cache_read. Cache reads bill ~10%; Anthropic cache writes bill a
+    premium (1.25x at 5m TTL, 2x at 1h)."""
+    inp = e.get("input", 0)
+    cr = e.get("cache_read", 0)
+    cw = e.get("cache_write", 0)
+    out = e.get("output", 0)
+    provider = str(e.get("provider", "")).lower()
+    model = str(e.get("model", "")).lower()
+    anthropic_like = "anthropic" in provider or "claude" in model
+    fresh = inp if anthropic_like else max(0, inp - cr)
+    return (fresh * pin + cr * pin * 0.1 + cw * pin * cache_write_mult + out * pout) / 1_000_000
 
 
 def price_for_model(model: str, config=None) -> dict:
@@ -84,10 +116,12 @@ def cost_report(days: int = 30, config=None) -> dict:
     if not raw.strip():
         return {"days": days, "calls": 0, "total_cost_usd": 0.0, "by_model": {}}
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    cw_mult = _cache_write_mult(config)
     by_model: dict[str, dict] = {}
     total = 0.0
     calls = 0
     cache_read_total = 0
+    cache_write_total = 0
     for line in raw.strip().splitlines():
         try:
             e = json.loads(line)
@@ -99,20 +133,23 @@ def cost_report(days: int = 30, config=None) -> dict:
         calls += 1
         model = e.get("model", "?")
         pin, pout = _price(model, config)
-        # cached input tokens billed at ~10% (Anthropic/OpenAI cache read discount)
         cr = e.get("cache_read", 0)
-        fresh_in = max(0, e["input"] - cr)
-        cost = (fresh_in * pin + cr * pin * 0.1 + e["output"] * pout) / 1_000_000
+        cw = e.get("cache_write", 0)
+        cost = _turn_cost(e, pin, pout, cw_mult)
         total += cost
         cache_read_total += cr
-        m = by_model.setdefault(model, {"calls": 0, "input": 0, "output": 0, "cache_read": 0, "cost_usd": 0.0})
+        cache_write_total += cw
+        m = by_model.setdefault(model, {"calls": 0, "input": 0, "output": 0,
+                                        "cache_read": 0, "cache_write": 0, "cost_usd": 0.0})
         m["calls"] += 1
         m["input"] += e["input"]
         m["output"] += e["output"]
         m["cache_read"] += cr
+        m["cache_write"] += cw
         m["cost_usd"] = round(m["cost_usd"] + cost, 4)
     return {"days": days, "calls": calls, "total_cost_usd": round(total, 4),
-            "cache_read_tokens": cache_read_total, "by_model": by_model}
+            "cache_read_tokens": cache_read_total, "cache_write_tokens": cache_write_total,
+            "by_model": by_model}
 
 
 def daily_series(days: int = 30, config=None) -> list[dict]:
@@ -131,12 +168,9 @@ def daily_series(days: int = 30, config=None) -> list[dict]:
         if day not in series:
             continue
         pin, pout = _price(e.get("model", "?"), config)
-        cr = e.get("cache_read", 0)
-        fresh_in = max(0, e["input"] - cr)
         series[day]["calls"] += 1
         series[day]["cost_usd"] = round(
-            series[day]["cost_usd"]
-            + (fresh_in * pin + cr * pin * 0.1 + e["output"] * pout) / 1_000_000, 6)
+            series[day]["cost_usd"] + _turn_cost(e, pin, pout, _cache_write_mult(config)), 6)
     return [{"date": d, **v} for d, v in series.items()]
 
 
@@ -148,7 +182,9 @@ def cmd_cost(args, config) -> int:
         return 0
     print(f"AEGIS cost — last {days} days · {r['calls']} call(s) · ~${r['total_cost_usd']:.4f}")
     if r.get("cache_read_tokens"):
-        print(f"  cache reads: {r['cache_read_tokens']:,} tokens (billed ~10%)")
+        print(f"  cache reads:  {r['cache_read_tokens']:,} tokens (billed ~10%)")
+    if r.get("cache_write_tokens"):
+        print(f"  cache writes: {r['cache_write_tokens']:,} tokens (billed ~125% at 5m TTL, 200% at 1h)")
     for model, m in sorted(r["by_model"].items(), key=lambda kv: -kv[1]["cost_usd"]):
         print(f"  {model:<28} {m['calls']:>4} calls  in {m['input']:>8,}  out {m['output']:>7,}"
               f"  ~${m['cost_usd']:.4f}")

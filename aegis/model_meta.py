@@ -115,6 +115,25 @@ def _context_from_cache(model: str, provider: str | None = None) -> int | None:
     return None
 
 
+def pricing(model: str | None, provider: str | None = None) -> tuple[float, float] | None:
+    """Resolve (input, output) USD-per-1M-token pricing from the models.dev cache.
+
+    Returns ``None`` when the model isn't in the cache (caller falls back to its own
+    table). Populated by ``aegis models refresh``."""
+    m = (model or "").lower().strip()
+    if not m:
+        return None
+    cache = _load_cache()
+    for key in _cache_keys(m, provider):
+        cached = cache.get(key)
+        if isinstance(cached, dict) and isinstance(cached.get("cost"), dict):
+            cost = cached["cost"]
+            inp, outp = float(cost.get("input") or 0.0), float(cost.get("output") or 0.0)
+            if inp or outp:
+                return (inp, outp)
+    return None
+
+
 def context_window(
     model: str | None,
     config=None,
@@ -163,11 +182,22 @@ def refresh(timeout: float = 20.0) -> int:
         for mid, meta in (models.items() if isinstance(models, dict) else []):
             ctx = (((meta or {}).get("limit") or {}).get("context")
                    or (meta or {}).get("context_window"))
+            cost = (meta or {}).get("cost") or {}
+            row: dict = {}
             if ctx:
-                model_key = str(mid).lower()
-                row = {"context": int(ctx)}
-                out[f"{str(provider_name).lower()}/{model_key}"] = row
-                out.setdefault(model_key, row)
+                row["context"] = int(ctx)
+            # models.dev cost is USD per 1M tokens: {input, output, cache_read, cache_write}
+            if isinstance(cost, dict) and (cost.get("input") is not None
+                                           or cost.get("output") is not None):
+                row["cost"] = {
+                    "input": float(cost.get("input") or 0.0),
+                    "output": float(cost.get("output") or 0.0),
+                }
+            if not row:
+                continue
+            model_key = str(mid).lower()
+            out[f"{str(provider_name).lower()}/{model_key}"] = row
+            out.setdefault(model_key, row)
     from .util import atomic_write
     atomic_write(_cache_path(), json.dumps(out))
     _cache = out

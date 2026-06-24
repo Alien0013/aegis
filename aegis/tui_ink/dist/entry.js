@@ -34140,6 +34140,8 @@ var ToolCard = ({ m, g }) => {
   const icon = g.icons[m.name] || g.iconDefault;
   const secs = m.ms ? (m.ms / 1e3).toFixed(1) + "s" : "";
   const pill = m.status === "running" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: AMBER, children: g.spinner[0] }) : m.status === "error" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: RED, children: `${g.bad} ${secs}` }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: GREEN, children: `${g.ok} ${secs}` });
+  const stat = parseDiffStat(m.summary || m.preview);
+  const summary = (m.summary || "").replace(ANSI_RE, "");
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Box_default, { children: [
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: AMBER, children: `  ${icon} ` }),
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, bold: true, children: m.name }),
@@ -34147,9 +34149,28 @@ var ToolCard = ({ m, g }) => {
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: m.preview.slice(0, 80) }),
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { children: "  " }),
     pill,
-    m.summary && m.status !== "running" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `  ${m.summary.replace(ANSI_RE, "").slice(0, 60)}` }) : null
+    stat ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Text, { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { children: "  " }),
+      stat.adds ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: GREEN, children: `+${stat.adds}` }) : null,
+      stat.adds && stat.dels ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { children: " " }) : null,
+      stat.dels ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: RED, children: `-${stat.dels}` }) : null
+    ] }) : null,
+    summary && !stat && m.status !== "running" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `  ${summary.slice(0, 60)}` }) : null
   ] });
 };
+function parseDiffStat(text) {
+  if (!text) return null;
+  const t = text.replace(ANSI_RE, "");
+  let m = t.match(/\+(\d+)[\s/,]*-(\d+)/) || t.match(/-(\d+)[\s/,]*\+(\d+)/);
+  if (m) {
+    const a = t.indexOf("+") < t.indexOf("-") ? [m[1], m[2]] : [m[2], m[1]];
+    return { adds: parseInt(a[0], 10), dels: parseInt(a[1], 10) };
+  }
+  const ins = t.match(/(\d+)\s+insertion/);
+  const del = t.match(/(\d+)\s+deletion/);
+  if (ins || del) return { adds: ins ? +ins[1] : 0, dels: del ? +del[1] : 0 };
+  return null;
+}
 var MessageView = ({ m, g }) => {
   switch (m.kind) {
     case "user":
@@ -34184,14 +34205,19 @@ var App2 = ({ url: url2, token: token2 }) => {
   const [scroll, setScroll] = (0, import_react23.useState)(0);
   const [size, setSize] = (0, import_react23.useState)({ cols: stdout.columns || 80, rows: stdout.rows || 24 });
   const [connected, setConnected] = (0, import_react23.useState)(false);
+  const [pending, setPending] = (0, import_react23.useState)([]);
   const wsRef = (0, import_react23.useRef)(null);
+  const histRef = (0, import_react23.useRef)([]);
+  const histIdxRef = (0, import_react23.useRef)(-1);
+  const draftRef = (0, import_react23.useRef)("");
   (0, import_react23.useEffect)(() => {
-    stdout.write("\x1B[?1049h\x1B[2J\x1B[H\x1B[?25l");
+    const mouse = /^(1|true|yes|on)$/i.test(process.env.AEGIS_TUI_MOUSE || "");
+    stdout.write("\x1B[?1049h\x1B[2J\x1B[H\x1B[?25l" + (mouse ? "\x1B[?1000h\x1B[?1006h" : ""));
     const onResize = () => setSize({ cols: stdout.columns || 80, rows: stdout.rows || 24 });
     stdout.on("resize", onResize);
     return () => {
       stdout.off("resize", onResize);
-      stdout.write("\x1B[?25h\x1B[?1049l");
+      stdout.write((mouse ? "\x1B[?1000l\x1B[?1006l" : "") + "\x1B[?25h\x1B[?1049l");
     };
   }, [stdout]);
   (0, import_react23.useEffect)(() => {
@@ -34244,6 +34270,13 @@ var App2 = ({ url: url2, token: token2 }) => {
     return () => ws.close();
   }, []);
   use_input_default((input, key) => {
+    const mouse = input.match(/\[<(\d+);\d+;\d+[Mm]/);
+    if (mouse) {
+      const btn = parseInt(mouse[1], 10);
+      if (btn === 64) setScroll((s) => Math.min(messages.length - 1, s + 3));
+      else if (btn === 65) setScroll((s) => Math.max(0, s - 3));
+      return;
+    }
     if (key.ctrl && input === "c") {
       if (running && !asking) wsRef.current?.send(JSON.stringify({ type: "interrupt" }));
       else exit();
@@ -34259,6 +34292,26 @@ var App2 = ({ url: url2, token: token2 }) => {
     }
     if (key.escape) {
       setScroll(0);
+      if (pending.length) setPending([]);
+      return;
+    }
+    if ((key.upArrow || key.downArrow) && !running && !asking && histRef.current.length) {
+      const hist = histRef.current;
+      if (key.upArrow) {
+        if (histIdxRef.current === -1) {
+          draftRef.current = value;
+          histIdxRef.current = hist.length - 1;
+        } else histIdxRef.current = Math.max(0, histIdxRef.current - 1);
+      } else {
+        if (histIdxRef.current === -1) return;
+        histIdxRef.current = histIdxRef.current + 1;
+        if (histIdxRef.current >= hist.length) {
+          histIdxRef.current = -1;
+          setValue(draftRef.current);
+          return;
+        }
+      }
+      setValue(hist[histIdxRef.current]);
       return;
     }
     if (key.tab && !running && !asking && value.startsWith("/")) {
@@ -34270,17 +34323,30 @@ var App2 = ({ url: url2, token: token2 }) => {
   const onSubmit = (text) => {
     setValue("");
     setScroll(0);
+    histIdxRef.current = -1;
     if (asking) {
       wsRef.current?.send(JSON.stringify({ type: "answer", value: text }));
       setAsking(null);
       return;
     }
-    if (running) return;
-    if (!text.trim()) return;
-    dispatch({ t: "user", text });
-    wsRef.current?.send(JSON.stringify({ type: "input", text }));
+    if (running) {
+      setPending([]);
+      return;
+    }
+    if (text.endsWith("\\")) {
+      setPending((p) => [...p, text.slice(0, -1)]);
+      return;
+    }
+    const full = (pending.length ? pending.join("\n") + "\n" : "") + text;
+    setPending([]);
+    if (!full.trim()) return;
+    histRef.current = [...histRef.current, full].slice(-100);
+    dispatch({ t: "user", text: full });
+    wsRef.current?.send(JSON.stringify({ type: "input", text: full }));
   };
-  const bodyRows = Math.max(3, size.rows - 3);
+  const slashMatches = !running && !asking && value.startsWith("/") ? commands.filter((c) => c.name.startsWith(value.split(" ")[0])).slice(0, 6) : [];
+  const chromeRows = 3 + pending.length + (slashMatches.length ? slashMatches.length + 1 : 0);
+  const bodyRows = Math.max(3, size.rows - chromeRows);
   const end = Math.max(0, messages.length - scroll);
   let used = 0;
   let start = end;
@@ -34290,13 +34356,13 @@ var App2 = ({ url: url2, token: token2 }) => {
     start = i;
   }
   const visible = messages.slice(start, end);
+  const anchorBottom = used >= bodyRows;
   const uni = CLIENT_UNI;
   const g = glyphs(uni);
   const spinner = g.spinner[tick % g.spinner.length];
   const ctxText = header.ctx_window ? `${ctxBar(header.ctx_percent, g.barFull, g.barEmpty)} ${header.ctx_percent}% (${fmtTokens(header.ctx_used)}/${fmtTokens(header.ctx_window)})` : fmtTokens(header.ctx_used);
   const scrolledUp = scroll > 0;
   const sep = g.sep;
-  const slashMatches = !running && !asking && value.startsWith("/") ? commands.filter((c) => c.name.startsWith(value.split(" ")[0])).slice(0, 6) : [];
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Box_default, { flexDirection: "column", width: size.cols, height: size.rows, children: [
     /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Box_default, { children: [
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { backgroundColor: PANEL, color: AMBER, bold: true, children: ` ${g.brand} ` }),
@@ -34304,7 +34370,16 @@ var App2 = ({ url: url2, token: token2 }) => {
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { backgroundColor: PANEL, color: MUTED, children: `${g.dot} ${(header.session_title || header.session_id || "").slice(0, 24)} ` }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { backgroundColor: PANEL, color: MUTED, children: `${g.dot} v${header.version || ""} ` })
     ] }),
-    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box_default, { flexDirection: "column", flexGrow: 1, overflow: "hidden", children: visible.map((m, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MessageView, { m, g }, start + i)) }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+      Box_default,
+      {
+        flexDirection: "column",
+        flexGrow: 1,
+        overflow: "hidden",
+        justifyContent: anchorBottom ? "flex-end" : "flex-start",
+        children: visible.map((m, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MessageView, { m, g }, start + i))
+      }
+    ),
     /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Box_default, { children: [
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { backgroundColor: PANEL, color: running ? AMBER : MUTED, children: running ? ` ${spinner} working\u2026 ^C stop ` : ` ready ` }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { backgroundColor: PANEL, color: MUTED, children: `${sep} ctx ` }),
@@ -34321,6 +34396,10 @@ var App2 = ({ url: url2, token: token2 }) => {
       ] }, c.name)),
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `  ${g.dot} Tab to complete` })
     ] }) : null,
+    pending.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box_default, { flexDirection: "column", children: pending.map((line, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Box_default, { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `   ${g.dot} ` }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { children: line })
+    ] }, i)) }) : null,
     /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Box_default, { children: [
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: asking?.secret ? CYAN : AMBER, bold: true, children: ` ${asking ? asking.label : "aegis " + g.arrow} ` }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
@@ -34330,7 +34409,7 @@ var App2 = ({ url: url2, token: token2 }) => {
           onChange: (v) => setValue(v.replace(/\t/g, "")),
           onSubmit,
           mask: asking?.secret ? "*" : void 0,
-          placeholder: connected ? running && !asking ? "working\u2026 (^C to stop)" : "message or /command \xB7 PgUp scroll" : "connecting\u2026"
+          placeholder: connected ? running && !asking ? "working\u2026 (^C to stop)" : "message or /command \xB7 \u2191 history \xB7 \\ + \u21B5 newline \xB7 \u21DE scroll" : "connecting\u2026"
         }
       )
     ] })

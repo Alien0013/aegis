@@ -231,6 +231,9 @@ const ToolCard: React.FC<{m: Extract<Msg, {kind: 'tool'}>; g: G}> = ({m, g}) => 
     m.status === 'running' ? <Text color={AMBER}>{g.spinner[0]}</Text>
       : m.status === 'error' ? <Text color={RED}>{`${g.bad} ${secs}`}</Text>
         : <Text color={GREEN}>{`${g.ok} ${secs}`}</Text>;
+  // diff-aware: surface +adds/-dels for edit/write/patch tools from the result summary
+  const stat = parseDiffStat(m.summary || m.preview);
+  const summary = (m.summary || '').replace(ANSI_RE, '');
   return (
     <Box>
       <Text color={AMBER}>{`  ${icon} `}</Text>
@@ -239,11 +242,34 @@ const ToolCard: React.FC<{m: Extract<Msg, {kind: 'tool'}>; g: G}> = ({m, g}) => 
       <Text color={MUTED}>{m.preview.slice(0, 80)}</Text>
       <Text>  </Text>
       {pill}
-      {m.summary && m.status !== 'running'
-        ? <Text color={MUTED}>{`  ${m.summary.replace(ANSI_RE, '').slice(0, 60)}`}</Text> : null}
+      {stat ? (
+        <Text>
+          <Text>{'  '}</Text>
+          {stat.adds ? <Text color={GREEN}>{`+${stat.adds}`}</Text> : null}
+          {stat.adds && stat.dels ? <Text> </Text> : null}
+          {stat.dels ? <Text color={RED}>{`-${stat.dels}`}</Text> : null}
+        </Text>
+      ) : null}
+      {summary && !stat && m.status !== 'running'
+        ? <Text color={MUTED}>{`  ${summary.slice(0, 60)}`}</Text> : null}
     </Box>
   );
 };
+
+function parseDiffStat(text?: string): {adds: number; dels: number} | null {
+  if (!text) return null;
+  const t = text.replace(ANSI_RE, '');
+  // matches "(+3 -1)", "+3/-1", "3 insertions, 1 deletion", etc.
+  let m = t.match(/\+(\d+)[\s/,]*-(\d+)/) || t.match(/-(\d+)[\s/,]*\+(\d+)/);
+  if (m) {
+    const a = t.indexOf('+') < t.indexOf('-') ? [m[1], m[2]] : [m[2], m[1]];
+    return {adds: parseInt(a[0], 10), dels: parseInt(a[1], 10)};
+  }
+  const ins = t.match(/(\d+)\s+insertion/);
+  const del = t.match(/(\d+)\s+deletion/);
+  if (ins || del) return {adds: ins ? +ins[1] : 0, dels: del ? +del[1] : 0};
+  return null;
+}
 
 const MessageView: React.FC<{m: Msg; g: G}> = ({m, g}) => {
   switch (m.kind) {
@@ -277,16 +303,23 @@ const App: React.FC<{url: string; token: string}> = ({url, token}) => {
   const [scroll, setScroll] = useState(0); // messages hidden below the fold (0 = follow bottom)
   const [size, setSize] = useState({cols: stdout.columns || 80, rows: stdout.rows || 24});
   const [connected, setConnected] = useState(false);
+  const [pending, setPending] = useState<string[]>([]); // composed lines awaiting send (multiline)
   const wsRef = useRef<WebSocket | null>(null);
+  const histRef = useRef<string[]>([]);      // submitted inputs, oldest→newest
+  const histIdxRef = useRef<number>(-1);     // -1 = editing live draft
+  const draftRef = useRef<string>('');       // live draft stashed while browsing history
 
-  // alternate screen on mount; restore on exit
+  // alternate screen on mount; restore on exit. Mouse-wheel scroll is opt-in
+  // (AEGIS_TUI_MOUSE=1) because mouse tracking disables native text selection/copy-paste.
   useEffect(() => {
-    stdout.write('\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l');
+    // 1049=alt screen, 25l=hide cursor; 1000/1006=mouse wheel + SGR encoding (opt-in)
+    const mouse = /^(1|true|yes|on)$/i.test(process.env.AEGIS_TUI_MOUSE || '');
+    stdout.write('\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l' + (mouse ? '\x1b[?1000h\x1b[?1006h' : ''));
     const onResize = () => setSize({cols: stdout.columns || 80, rows: stdout.rows || 24});
     stdout.on('resize', onResize);
     return () => {
       stdout.off('resize', onResize);
-      stdout.write('\x1b[?25h\x1b[?1049l');
+      stdout.write((mouse ? '\x1b[?1000l\x1b[?1006l' : '') + '\x1b[?25h\x1b[?1049l');
     };
   }, [stdout]);
 
@@ -328,6 +361,14 @@ const App: React.FC<{url: string; token: string}> = ({url, token}) => {
   }, []);
 
   useInput((input, key) => {
+    // SGR mouse wheel: ESC [ < 64 ; col ; row M (64=up, 65=down)
+    const mouse = input.match(/\[<(\d+);\d+;\d+[Mm]/);
+    if (mouse) {
+      const btn = parseInt(mouse[1], 10);
+      if (btn === 64) setScroll((s) => Math.min(messages.length - 1, s + 3));
+      else if (btn === 65) setScroll((s) => Math.max(0, s - 3));
+      return;
+    }
     if (key.ctrl && input === 'c') {
       if (running && !asking) wsRef.current?.send(JSON.stringify({type: 'interrupt'}));
       else exit();
@@ -335,7 +376,21 @@ const App: React.FC<{url: string; token: string}> = ({url, token}) => {
     }
     if (key.pageUp) { setScroll((s) => Math.min(messages.length - 1, s + 5)); return; }
     if (key.pageDown) { setScroll((s) => Math.max(0, s - 5)); return; }
-    if (key.escape) { setScroll(0); return; }
+    if (key.escape) { setScroll(0); if (pending.length) setPending([]); return; }
+    // Up/Down: browse composer history (when not navigating slash completion)
+    if ((key.upArrow || key.downArrow) && !running && !asking && histRef.current.length) {
+      const hist = histRef.current;
+      if (key.upArrow) {
+        if (histIdxRef.current === -1) { draftRef.current = value; histIdxRef.current = hist.length - 1; }
+        else histIdxRef.current = Math.max(0, histIdxRef.current - 1);
+      } else {
+        if (histIdxRef.current === -1) return;
+        histIdxRef.current = histIdxRef.current + 1;
+        if (histIdxRef.current >= hist.length) { histIdxRef.current = -1; setValue(draftRef.current); return; }
+      }
+      setValue(hist[histIdxRef.current]);
+      return;
+    }
     if (key.tab && !running && !asking && value.startsWith('/')) {
       const token = value.split(' ')[0];
       const hit = commands.find((c) => c.name.startsWith(token));
@@ -346,19 +401,32 @@ const App: React.FC<{url: string; token: string}> = ({url, token}) => {
   const onSubmit = (text: string) => {
     setValue('');
     setScroll(0);
+    histIdxRef.current = -1;
     if (asking) {
       wsRef.current?.send(JSON.stringify({type: 'answer', value: text}));
       setAsking(null);
       return;
     }
-    if (running) return;
-    if (!text.trim()) return;
-    dispatch({t: 'user', text});
-    wsRef.current?.send(JSON.stringify({type: 'input', text}));
+    if (running) { setPending([]); return; }
+    // trailing backslash = newline continuation: keep composing instead of sending
+    if (text.endsWith('\\')) {
+      setPending((p) => [...p, text.slice(0, -1)]);
+      return;
+    }
+    const full = (pending.length ? pending.join('\n') + '\n' : '') + text;
+    setPending([]);
+    if (!full.trim()) return;
+    histRef.current = [...histRef.current, full].slice(-100);
+    dispatch({t: 'user', text: full});
+    wsRef.current?.send(JSON.stringify({type: 'input', text: full}));
   };
 
-  // bottom-anchored viewport: walk back from (end - scroll) until we fill the body height
-  const bodyRows = Math.max(3, size.rows - 3);
+  const slashMatches = (!running && !asking && value.startsWith('/'))
+    ? commands.filter((c) => c.name.startsWith(value.split(' ')[0])).slice(0, 6)
+    : [];
+  // bottom-anchored viewport: header(1)+status(1)+composer(1) + pending + completion menu
+  const chromeRows = 3 + pending.length + (slashMatches.length ? slashMatches.length + 1 : 0);
+  const bodyRows = Math.max(3, size.rows - chromeRows);
   const end = Math.max(0, messages.length - scroll);
   let used = 0;
   let start = end;
@@ -368,6 +436,9 @@ const App: React.FC<{url: string; token: string}> = ({url, token}) => {
     start = i;
   }
   const visible = messages.slice(start, end);
+  // When content fills/overflows the viewport, anchor to the BOTTOM so the newest lines
+  // (the streaming answer) stay visible instead of being clipped off-screen at the bottom.
+  const anchorBottom = used >= bodyRows;
 
   const uni = CLIENT_UNI;
   const g = glyphs(uni);
@@ -377,9 +448,6 @@ const App: React.FC<{url: string; token: string}> = ({url, token}) => {
     : fmtTokens(header.ctx_used);
   const scrolledUp = scroll > 0;
   const sep = g.sep;
-  const slashMatches = (!running && !asking && value.startsWith('/'))
-    ? commands.filter((c) => c.name.startsWith(value.split(' ')[0])).slice(0, 6)
-    : [];
 
   return (
     <Box flexDirection="column" width={size.cols} height={size.rows}>
@@ -391,8 +459,9 @@ const App: React.FC<{url: string; token: string}> = ({url, token}) => {
         <Text backgroundColor={PANEL} color={MUTED}>{`${g.dot} v${header.version || ''} `}</Text>
       </Box>
 
-      {/* message viewport */}
-      <Box flexDirection="column" flexGrow={1} overflow="hidden">
+      {/* message viewport — bottom-anchored when full so the newest lines stay visible */}
+      <Box flexDirection="column" flexGrow={1} overflow="hidden"
+           justifyContent={anchorBottom ? 'flex-end' : 'flex-start'}>
         {visible.map((m, i) => <MessageView key={start + i} m={m} g={g} />)}
       </Box>
 
@@ -422,6 +491,18 @@ const App: React.FC<{url: string; token: string}> = ({url, token}) => {
         </Box>
       ) : null}
 
+      {/* pending multiline lines (Ctrl+J), shown above the composer */}
+      {pending.length ? (
+        <Box flexDirection="column">
+          {pending.map((line, i) => (
+            <Box key={i}>
+              <Text color={MUTED}>{`   ${g.dot} `}</Text>
+              <Text>{line}</Text>
+            </Box>
+          ))}
+        </Box>
+      ) : null}
+
       {/* composer */}
       <Box>
         <Text color={asking?.secret ? CYAN : AMBER} bold>{` ${asking ? asking.label : 'aegis ' + g.arrow} `}</Text>
@@ -430,7 +511,7 @@ const App: React.FC<{url: string; token: string}> = ({url, token}) => {
           onChange={(v) => setValue(v.replace(/\t/g, ''))}
           onSubmit={onSubmit}
           mask={asking?.secret ? '*' : undefined}
-          placeholder={connected ? (running && !asking ? 'working… (^C to stop)' : 'message or /command · PgUp scroll') : 'connecting…'}
+          placeholder={connected ? (running && !asking ? 'working… (^C to stop)' : 'message or /command · ↑ history · \\ + ↵ newline · ⇞ scroll') : 'connecting…'}
         />
       </Box>
     </Box>
