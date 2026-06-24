@@ -586,7 +586,7 @@ _CONFIG_FIELD_META: dict[str, dict[str, Any]] = {
     },
     "agent.service_tier": {
         "label": "Fast mode",
-        "description": "Default provider priority tier for models that support Hermes-style fast mode.",
+        "description": "Default provider priority tier for models that support reference-style fast mode.",
         "enum": list(CONFIG_FIELD_ENUMS["agent.service_tier"]),
         "group": "Agent",
     },
@@ -6005,7 +6005,7 @@ def _api_post(
         )
         report = cross_session_integrity_report(**limits)
         return {
-            "object": "hermes.cross_session_integrity_repair_result",
+            "object": "aegis.cross_session_integrity_repair_result",
             "ok": bool(repair.get("ok", False)) and str(report.get("status") or "") != "error",
             "repair": repair,
             "report": report,

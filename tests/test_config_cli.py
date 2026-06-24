@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 
-def test_hermes_compat_top_level_commands_are_registered():
+def test_aegis_compat_top_level_commands_are_registered():
     from aegis.cli.main import build_parser
 
     parser = build_parser()

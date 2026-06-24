@@ -427,7 +427,7 @@ class WebhookChannel(BasePlatformAdapter):
                     "X-Secret",
                     "X-Webhook-Signature",
                     "Idempotency-Key",
-                    "X-AEGIS-Delivery-Id",
+                    "X-Aegis-Delivery-Id",
                 ],
                 "allowed_platforms": sorted(self.allowed_platforms or []),
                 "allowed_platforms_env": f"{self.env_prefix}_ALLOWED_PLATFORMS",
@@ -982,7 +982,7 @@ class WebhookChannel(BasePlatformAdapter):
         headers = {"Content-Type": "application/json"}
         delivery_id = str(payload["delivery_id"])
         headers["Idempotency-Key"] = delivery_id
-        headers["X-AEGIS-Delivery-Id"] = delivery_id
+        headers["X-Aegis-Delivery-Id"] = delivery_id
         if self.outbound_secret:
             headers["X-Secret"] = self.outbound_secret
             timestamp = str(int(time.time()))

@@ -1,6 +1,6 @@
 # AEGIS Feature Parity Matrix
 
-**Purpose:** make the production target explicit: every major Codex/Hermes-style capability family should either already exist in AEGIS, have a verified partial implementation, or be listed as a concrete build gap with likely files to change.
+**Purpose:** make the production target explicit: every major Codex-style capability family should either already exist in AEGIS, have a verified partial implementation, or be listed as a concrete build gap with likely files to change.
 
 **Boundary:** this matrix is for capability parity, not copied implementation. AEGIS must keep its own code, names, prompts, docs voice, security model, and product identity. Third-party user-modeling integrations outside the local AEGIS runtime are out of scope for this product-polish pass.
 
@@ -47,7 +47,7 @@ Status legend:
 | Memory commands | Present | `aegis/memory.py` | Add provider provenance status. |
 | Session browse/list/export | Present | `aegis/session.py`, CLI docs | Add richer source filtering and lineage. |
 | Config setup/edit/status/doctor | Present | `aegis/config.py`, `aegis/doctor.py`, `aegis/onboarding.py` | Add migration/diff preview for config changes. |
-| Runtime slash commands | Present | `aegis/cli/repl.py`, generated `docs/slash-commands.md`, `tests/test_generated_reference_docs.py` | Add more Hermes-like slash commands where product behavior needs them. |
+| Runtime slash commands | Present | `aegis/cli/repl.py`, generated `docs/slash-commands.md`, `tests/test_generated_reference_docs.py` | Add more AEGIS-like slash commands where product behavior needs them. |
 | Voice toggles | Present | `/voice` in `aegis/cli/repl.py`, `aegis/tools/voice.py`, `/api/audio/voices`, `/api/audio/tts`, `/api/audio/transcribe`, dashboard audio tests | CLI toggles and audio endpoints are covered; live voice-provider use is credential-bound by provider keys. |
 | Snapshot/rollback commands | Present | `/snapshot`, `aegis snapshot`, `aegis checkpoints`, generated slash/CLI docs, checkpoint tests | Snapshot guidance, config/state snapshots, and file checkpoint rollback are exposed. |
 | Debug report command | Present | `/debug`, `aegis debug share`, `aegis/ops.py`, generated slash/CLI docs | Debug bundles are redacted and command-visible; keep redaction tests broad. |
@@ -250,7 +250,7 @@ Status legend:
 | Capability | AEGIS status | Evidence / likely files | Gap to close |
 |---|---:|---|---|
 | Vision/image input | Present | registry found vision tool; CLI docs mention `--image` | Verify provider fallback and dashboard upload path. |
-| Image generation | Present | `generate_image`, `cloud_image`, `image_generate` alias, tool inventory tests | Native and cloud image tools are visible with Hermes-compatible alias/provenance. |
+| Image generation | Present | `generate_image`, `cloud_image`, `image_generate` alias, tool inventory tests | Native and cloud image tools are visible with compatibility alias/provenance. |
 | Video/audio analysis | Present | `media_analyze`, `audio_analyze`, `video_analyze`, `aegis/tools/aux_tools.py`, `tests/test_tool_schema_validation.py` | Audio delegates to STT; video samples frames with ffmpeg and vision provider readiness checks. |
 | TTS | Present | registry found voice tools | Add voice selection/status UI. |
 | STT | Present | `transcribe`, `speech_to_text`, `audio_transcribe`, `/api/audio/transcribe`, gateway audio tests | STT tool/API/gateway contracts are covered locally; live provider keys remain credential-bound. |
@@ -272,7 +272,7 @@ Status legend:
 | Provider docs | Present | docs and registry | Provider capability/probe matrix details are surfaced; live-account smoke remains credential-bound. |
 | Gateway docs | Present | docs/gateway | Platform contract, fake-adapter testing, delivery observability, and live-smoke boundaries are documented. |
 | Release docs | Present | `RELEASING.md` | Keep credential-bound signing/notarization notes current. |
-| Full parity ledger | Present | `docs/hermes-code-map.csv`, `docs/hermes-parity-ledger.csv`, `scripts/check_hermes_parity_ledger.py --final` | Final mode is closed: 950 rows covered, 723 complete, 227 AEGIS-specific site rows justified, zero pending/partial. |
+| Full parity ledger | Present | `docs/aegis-code-map.csv`, `docs/aegis-parity-ledger.csv`, `scripts/check_aegis_parity_ledger.py --final` | Final mode is closed: 786 rows covered, 777 complete, 9 AEGIS-specific site rows justified, zero pending/partial. |
 | Roadmap | Present | README and this matrix now describe current credential-bound limits | Keep refreshed after each production slice. |
 | Full audit doc | Present | `docs/full-repo-audit.md` | Keep updated after major slices. |
 | Production plan | Present | `docs/production-harness-plan.md` | Keep tied to this matrix. |
@@ -281,12 +281,12 @@ Status legend:
 
 ## 16. Current Verified State
 
-The implementation phases in `/home/alienai/AEGIS_to_Hermes_Full_Parity_Codex_MASTER.md`
+The implementation phases in the AEGIS parity master plan
 are closed against the local parity gate:
 
 1. Prompt audit, trace timeline, tool provenance, provider matrix, generated docs, sessions, gateway delivery observability, cron/background jobs, memory/skills governance, MCP/plugins, security simulator, dashboard/desktop lifecycle, and release provenance are implemented.
 2. `bash scripts/verify_all.sh` is the single local gate for ledger coverage, generated docs, Python tests, release provenance smoke, web typecheck/build, desktop tests, compileall, and `git diff --check`.
-3. `python scripts/check_hermes_parity_ledger.py --final` closes every code-map row: 786 total, 777 complete, 9 AEGIS-specific site rows justified, zero pending/partial, and zero unresolved matrix rows.
+3. `python scripts/check_aegis_parity_ledger.py --final` closes every code-map row: 786 total, 777 complete, 9 AEGIS-specific site rows justified, zero pending/partial, and zero unresolved matrix rows.
 4. Remaining proof that cannot be produced locally is credential-bound: signed/notarized release artifacts and live Telegram/Slack/Discord/webhook/provider account smoke runs.
 
 ---

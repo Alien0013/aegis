@@ -770,7 +770,7 @@ Strengths:
 Current proof:
 
 1. `scripts/verify_all.sh` is the single local verification gate for ledger, generated docs, Python, release provenance, web, desktop, compile, and whitespace checks.
-2. `python scripts/check_hermes_parity_ledger.py --final` closes 950 code-map rows: 723 complete and 227 AEGIS-specific site rows justified.
+2. `python scripts/check_aegis_parity_ledger.py --final` closes 950 code-map rows: 723 complete and 227 AEGIS-specific site rows justified.
 3. Release docs include the verification matrix plus signed/notarized credential requirements.
 4. Product docs now link the production harness plan, parity ledger, and this audit.
 

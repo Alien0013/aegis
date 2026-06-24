@@ -21,7 +21,7 @@ One auditable Python runtime for the terminal, browser dashboard, desktop app, A
 
 ---
 
-AEGIS is a self-hostable agent harness for people who want a Codex/Hermes-class
+AEGIS is a self-hostable agent harness for people who want a Codex-class
 coding and operations assistant without moving the whole workflow into a remote
 black box. The same agent loop powers every surface: terminal chat, the local
 React dashboard, Electron desktop, OpenAI-compatible API, JSON-RPC, Python SDK,
@@ -218,7 +218,7 @@ tests/                  offline regression suite
 
 ## Product Proof Remaining
 
-AEGIS now has the Hermes-class local runtime surfaces in place: prompt audit,
+AEGIS now has the production local runtime surfaces in place: prompt audit,
 trace timeline, provider matrix, tool provenance, background jobs, cron preview,
 gateway delivery state, plugin inventory, security policy simulation, desktop
 lifecycle, generated references, and release provenance are covered by

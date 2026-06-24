@@ -24,7 +24,7 @@ def test_builtin_tool_schemas_validate_cleanly():
     assert result.issues == []
 
 
-def test_hermes_tool_aliases_are_registered_with_provenance():
+def test_aegis_tool_aliases_are_registered_with_provenance():
     reg = default_registry(include_plugins=False)
     aliases = {
         "terminal": "bash",
@@ -71,7 +71,7 @@ def test_hermes_tool_aliases_are_registered_with_provenance():
         assert tool is not None, alias
         meta = tool.metadata()
         assert meta["source"] == "alias"
-        assert meta["manifest_id"] == "hermes-compat"
+        assert meta["manifest_id"] == "aegis-compat"
         assert meta["source_path"] == f"alias://{alias}->{target}"
 
 

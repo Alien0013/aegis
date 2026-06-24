@@ -58,10 +58,10 @@ def test_chat_event_row_carries_text_and_tool_id():
     batch = _chat_event_row({"type": "tool_start", "id": "s2", "name": "spawn_subagent",
                              "args": {"tasks": ["audit API", "check dashboard", "write tests"]}})
     assert batch["target"] == "3 tasks: audit API | check dashboard | write tests"
-    hermes_batch = _chat_event_row({"type": "tool_start", "id": "s3", "name": "delegate_task",
+    aegis_batch = _chat_event_row({"type": "tool_start", "id": "s3", "name": "delegate_task",
                                     "args": {"tasks": [{"goal": "inspect gateway"},
                                                        {"goal": "verify cron"}]}})
-    assert hermes_batch["target"] == "2 tasks: inspect gateway | verify cron"
+    assert aegis_batch["target"] == "2 tasks: inspect gateway | verify cron"
     res = _chat_event_row({"type": "tool_result", "id": "c1", "name": "bash", "preview": "ok"})
     assert res["id"] == "c1" and res["status"] == "ok" and res["target"] == "ok"
     assert res["preview"] == "ok"

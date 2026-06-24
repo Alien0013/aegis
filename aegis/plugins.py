@@ -84,7 +84,7 @@ class PluginAPI:
         install_hint: str = "",
         **entry_kwargs: Any,
     ) -> None:
-        """Register a Hermes-style gateway platform adapter.
+        """Register reference-style gateway platform adapter.
 
         AEGIS builds plugin platforms through the existing channel adapter path,
         while preserving richer metadata for dashboard/setup surfaces.
@@ -235,7 +235,7 @@ _SETUP_HOOKS: dict[str, Any] = {}
 
 MANIFEST_NAMES = ("plugin.yaml", "plugin.yml", "aegis-plugin.json", "plugin.json")
 INSTALL_METADATA_NAME = ".aegis-install.json"
-ENTRY_POINT_GROUPS = ("hermes_agent.plugins", "aegis.plugins")
+ENTRY_POINT_GROUPS = ("aegis_agent.plugins", "aegis.plugins")
 _VALID_PLUGIN_KINDS = {
     "standalone",
     "backend",
@@ -444,11 +444,11 @@ def _env_truthy(name: str) -> bool:
 
 
 def safe_mode_enabled() -> bool:
-    return _env_truthy("AEGIS_SAFE_MODE") or _env_truthy("HERMES_SAFE_MODE")
+    return _env_truthy("AEGIS_SAFE_MODE")
 
 
 def _project_plugins_enabled(config=None) -> bool:
-    if _env_truthy("AEGIS_ENABLE_PROJECT_PLUGINS") or _env_truthy("HERMES_ENABLE_PROJECT_PLUGINS"):
+    if _env_truthy("AEGIS_ENABLE_PROJECT_PLUGINS"):
         return True
     if config is None:
         return False
@@ -485,7 +485,7 @@ def _project_plugin_bases() -> list[Path]:
     bases: list[Path] = []
     seen_bases: set[Path] = set()
     for root in roots:
-        for rel in ((".aegis", "plugins"), (".hermes", "plugins")):
+        for rel in ((".aegis", "plugins"),):
             base = root.joinpath(*rel).resolve()
             if base == user_base or base in seen_bases:
                 continue

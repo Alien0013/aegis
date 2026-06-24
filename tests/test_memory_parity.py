@@ -1,4 +1,4 @@
-"""AEGIS-parity memory semantics: limits, delimiter, drift guard, ambiguity, render."""
+"""Parity memory semantics: limits, delimiter, drift guard, ambiguity, render."""
 
 from __future__ import annotations
 

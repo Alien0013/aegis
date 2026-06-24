@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the AEGIS -> Hermes parity ledger.
+"""Validate the AEGIS parity ledger.
 
 The code-to-code map is the no-missing-code source of truth. The ledger records
 the working status for each mapped AEGIS file so parity work can move phase by
@@ -20,15 +20,15 @@ MAP_COLUMNS = [
     "aegis_path",
     "subsystem",
     "aegis_lines",
-    "hermes_counterpart",
-    "hermes_lines",
+    "reference_counterpart",
+    "reference_lines",
     "match_reason",
     "parity_action",
 ]
 LEDGER_COLUMNS = ["aegis_path", "subsystem", "phase", "status", "evidence", "notes"]
 ALLOWED_STATUSES = {"pending", "partial", "complete", "blocked", "not-needed-aegis-specific"}
 FINAL_STATUSES = {"complete", "not-needed-aegis-specific"}
-DEFAULT_EXTERNAL_MAP = Path("/home/alienai/AEGIS_Hermes_Code_To_Code_Map.csv")
+DEFAULT_EXTERNAL_MAP = Path("/home/alienai/AEGIS_Code_To_Code_Map.csv")
 MATRIX_UNRESOLVED_MARKERS = ("partial", "needs audit", "missing")
 MATRIX_CLOSED_STATUSES = {
     "present",
@@ -45,7 +45,7 @@ def repo_root() -> Path:
 
 
 def default_map_path(root: Path) -> Path:
-    repo_copy = root / "docs" / "hermes-code-map.csv"
+    repo_copy = root / "docs" / "aegis-code-map.csv"
     if repo_copy.exists():
         return repo_copy
     return DEFAULT_EXTERNAL_MAP
@@ -115,7 +115,7 @@ def default_status(row: dict[str, str]) -> tuple[str, str, str]:
     if path.startswith("site-next/.next/"):
         return (
             "not-needed-aegis-specific",
-            "Generated Next.js build output; tracked by release/build verification, not Hermes source parity.",
+            "Generated Next.js build output; tracked by release/build verification, not runtime source parity.",
             "Generated artifact row accounted for in Phase 0.",
         )
     return "pending", "", "Awaiting phase implementation and evidence."
@@ -318,12 +318,12 @@ def print_summary(summary: dict[str, object], *, as_json: bool) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     root = repo_root()
-    parser = argparse.ArgumentParser(description="Validate AEGIS/Hermes parity ledger coverage")
+    parser = argparse.ArgumentParser(description="Validate AEGIS/AEGIS parity ledger coverage")
     parser.add_argument("--map", dest="map_path", default=str(default_map_path(root)), help="code-to-code CSV path")
     parser.add_argument(
         "--ledger",
         dest="ledger_path",
-        default=str(root / "docs" / "hermes-parity-ledger.csv"),
+        default=str(root / "docs" / "aegis-parity-ledger.csv"),
         help="parity ledger CSV path",
     )
     parser.add_argument("--sync", action="store_true", help="create/update ledger rows from the code map")

@@ -369,7 +369,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "max_spawn_depth": 1,        # flat by default; role=orchestrator can opt into deeper trees
         "context_engine": "default", # context-management strategy (plugins can register others)
         "reasoning_effort": "medium",   # off|minimal|low|medium|high|xhigh
-        "service_tier": "",          # ""/normal or priority (Hermes fast/priority mode)
+        "service_tier": "",          # ""/normal or priority (AEGIS fast/priority mode)
         "subdir_hints": True,        # inject a subdir's rule files when the agent first works there
         "compression": {"preserve_first": 3, "preserve_last": 20, "max_tool_tokens": 600,
                         # in-loop compaction fires when history fills this fraction of the
@@ -509,7 +509,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "cron": {
         "approval": "deny",          # headless approval for scheduled jobs: deny (safe) | approve (auto-run)
-        "skip_memory": True,         # AEGIS-style: scheduled jobs use prompt/script/skills,
+        "skip_memory": True,         # reference-style: scheduled jobs use prompt/script/skills,
                                      # not injected personal memory, unless explicitly opted in
     },
     "webhook": {
@@ -1010,9 +1010,9 @@ def _positive_int(value: Any, default: int) -> int:
 def context_file_max_chars(config: Config | None = None, explicit: Any = None) -> int:
     """Return the configured workspace-context file cap.
 
-    Hermes exposes this as the top-level ``context_file_max_chars`` key. AEGIS also
+    AEGIS exposes this as the top-level ``context_file_max_chars`` key. AEGIS also
     accepts ``workspace.context_file_max_chars`` so profile-local config can keep
-    workspace settings grouped while remaining compatible with the Hermes name.
+    workspace settings grouped while remaining compatible with the AEGIS name.
     """
     value = explicit
     if value is None and config is not None:

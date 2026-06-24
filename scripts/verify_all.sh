@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Full local release/parity gate. Keep this as the one command CI and humans can
-# use before claiming a Hermes-parity slice is ready.
+# use before claiming a parity slice is ready.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -16,8 +16,8 @@ run() {
   "$@"
 }
 
-run "$PYTHON" scripts/generate_hermes_code_map.py --check
-run "$PYTHON" scripts/check_hermes_parity_ledger.py --final
+run "$PYTHON" scripts/generate_aegis_code_map.py --check
+run "$PYTHON" scripts/check_aegis_parity_ledger.py --final
 run "$PYTHON" scripts/generate_reference_docs.py --check
 run bash scripts/run_tests.sh
 

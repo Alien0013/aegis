@@ -1,7 +1,7 @@
 """Small cross-platform helpers used by gateway adapters.
 
 These are intentionally narrow. The gateway adapters stay blocking and small,
-while this module keeps Hermes-style normalization rules in one place.
+while this module keeps reference-style normalization rules in one place.
 """
 
 from __future__ import annotations
@@ -636,7 +636,7 @@ def capped_command_menu(
 ) -> list[str]:
     """Return slash command names capped for platform command menus.
 
-    Telegram caps BotCommand lists at 100, but Hermes deliberately keeps a
+    Telegram caps BotCommand lists at 100, but AEGIS deliberately keeps a
     smaller 30-command budget per scope so growth never silently overflows.
     AEGIS has fewer commands today; this helper keeps the same bounded behavior.
     """

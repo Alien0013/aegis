@@ -52,7 +52,7 @@ The Sessions drawer includes a lineage panel for roots, parents, current
 session origin, children, descendants, and integrity warnings derived from the
 same `parent_id` graph used by branch, compression, subagent, background,
 gateway, and cron sessions.
-The Skills page includes a Hermes-style quality/provenance report for each
+The Skills page includes a quality/provenance report for each
 loaded skill: origin, curatable/pinned state, support-file count, duplicate
 shadowing, frontmatter validity, prompt-injection warnings, missing env/bin/OS
 requirements, and unsafe support-file paths. The API exposes the same report so
@@ -155,7 +155,7 @@ Representative dashboard APIs:
 - `/api/models` - active provider/model plus resolver, auth, capability, cached probe, and fallback details.
 - `/api/providers/matrix` - provider capability/auth/probe matrix with context/output limits, pricing flags, audio/vision/tool/streaming/reasoning support, redacted last probe, last error, and fallback chain.
 - `/api/providers/probe` - bounded live provider probe that stores a redacted last-probe result for the matrix.
-- `/api/tools/inventory` - Hermes-style tool inventory with source/provenance, schema hash, availability, required env/auth names, output limits, risk level, and registry rejections.
+- `/api/tools/inventory` - tool inventory with source/provenance, schema hash, availability, required env/auth names, output limits, risk level, and registry rejections.
 - `/api/tools/validation` - model-visible tool schema validation.
 - `/api/tools/permission-dry-run` - structured policy decision without executing the tool.
 - `/api/security/policy-simulate` - file/shell/network/tool policy simulation without execution.

@@ -65,7 +65,7 @@ def cross_session_integrity_report(
     stale_running_seconds: float = 6 * 60 * 60,
     stale_resume_pending_seconds: float = 24 * 60 * 60,
 ) -> dict[str, Any]:
-    """Return a Hermes-style restart/replay health report for session state.
+    """Return reference-style restart/replay health report for session state.
 
     The report is intentionally read-only.  It validates the durable joins that
     power session restore, run replay, approval/event lookups, and gateway
@@ -441,7 +441,7 @@ def cross_session_integrity_report(
         },
     ])
     return {
-        "object": "hermes.cross_session_integrity_report",
+        "object": "aegis.cross_session_integrity_report",
         "generated_at": now.isoformat(),
         "ok": status == "ok",
         "status": status,
@@ -738,7 +738,7 @@ def repair_cross_session_integrity(
         })
 
     return {
-        "object": "hermes.cross_session_integrity_repair",
+        "object": "aegis.cross_session_integrity_repair",
         "repaired_at": now.isoformat(),
         "ok": skipped == 0,
         "repaired_running_runs": stale_interrupted,

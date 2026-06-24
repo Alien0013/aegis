@@ -1356,7 +1356,7 @@ def fire_due_jobs(config, *, sink=None, store: "CronStore | None" = None,
                   stale_after: float = _CRON_CLAIM_STALE_SECONDS) -> dict:
     """Claim and run due cron jobs using the external-scheduler contract.
 
-    This is the Hermes-style managed scheduler path: it is safe to call from a
+    This is the reference-style managed scheduler path: it is safe to call from a
     dashboard/API process because due jobs are leased in the shared cron store
     before execution, and the global tick lock keeps it from overlapping the
     built-in local ticker.
@@ -1369,7 +1369,7 @@ def fire_due_jobs(config, *, sink=None, store: "CronStore | None" = None,
         if not acquired:
             return {
                 "ok": True,
-                "object": "hermes.cron.fire_result",
+                "object": "aegis.cron.fire_result",
                 "acquired": False,
                 "dry_run": bool(dry_run),
                 "owner": owner,
@@ -1383,7 +1383,7 @@ def fire_due_jobs(config, *, sink=None, store: "CronStore | None" = None,
             due_jobs = store.due(limit=limit, now=now, stale_after=stale_after)
             return {
                 "ok": True,
-                "object": "hermes.cron.fire_result",
+                "object": "aegis.cron.fire_result",
                 "acquired": True,
                 "dry_run": True,
                 "owner": owner,
@@ -1419,7 +1419,7 @@ def fire_due_jobs(config, *, sink=None, store: "CronStore | None" = None,
         ]
         return {
             "ok": all(bool(result.get("ok")) for result in results) if results else True,
-            "object": "hermes.cron.fire_result",
+            "object": "aegis.cron.fire_result",
             "acquired": True,
             "dry_run": False,
             "owner": owner,

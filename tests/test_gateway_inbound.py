@@ -4102,7 +4102,7 @@ def _assert_signed_bridge_posts(sent, expected_payloads):
         delivery_id = payload.get("delivery_id")
         assert delivery_id
         assert headers["Idempotency-Key"] == delivery_id
-        assert headers["X-AEGIS-Delivery-Id"] == delivery_id
+        assert headers["X-Aegis-Delivery-Id"] == delivery_id
         timestamp = headers["X-Webhook-Timestamp"]
         assert timestamp.isdigit()
         expected_signature = "sha256=" + hmac.new(
@@ -4131,7 +4131,7 @@ def test_gateway_webhook_channel_outbound_payload_reuses_delivery_id(monkeypatch
     assert first_payload["delivery_id"] == second_payload["delivery_id"]
     assert first_headers["Idempotency-Key"] == second_headers["Idempotency-Key"]
     assert json.loads(first_body)["delivery_id"] == json.loads(second_body)["delivery_id"]
-    assert first_headers["X-AEGIS-Delivery-Id"] == second_headers["X-AEGIS-Delivery-Id"]
+    assert first_headers["X-Aegis-Delivery-Id"] == second_headers["X-Aegis-Delivery-Id"]
 
 
 def test_gateway_webhook_channel_outbound_bridge_send(monkeypatch):
@@ -4238,7 +4238,7 @@ def test_gateway_webhook_channel_outbound_bridge_send(monkeypatch):
         "X-Secret",
         "X-Webhook-Signature",
         "Idempotency-Key",
-        "X-AEGIS-Delivery-Id",
+        "X-Aegis-Delivery-Id",
     ]
 
 

@@ -2646,8 +2646,8 @@ def _die(msg: str) -> int:
     return 1
 
 
-def cmd_hermes_compat(args, config: Config) -> int:
-    """Small top-level command aliases for Hermes/Codex muscle memory."""
+def cmd_command_aliases(args, config: Config) -> int:
+    """Small top-level command aliases for common agent CLI muscle memory."""
 
     name = str(getattr(args, "command", "") or "")
     if name == "version":
@@ -2831,28 +2831,28 @@ def build_parser() -> argparse.ArgumentParser:
     ob.set_defaults(func=cmd_setup)
 
     ver = sub.add_parser("version", help="print the AEGIS version")
-    ver.set_defaults(func=cmd_hermes_compat)
+    ver.set_defaults(func=cmd_command_aliases)
 
     for _name in ("login", "logout"):
         auth_alias = sub.add_parser(_name, help=f"{_name} to a provider account (alias of `aegis auth {_name}`)")
         auth_alias.add_argument("provider", nargs="?")
         auth_alias.add_argument("--manual", action="store_true", help="manual code-paste OAuth flow")
-        auth_alias.set_defaults(func=cmd_hermes_compat)
+        auth_alias.set_defaults(func=cmd_command_aliases)
 
     mig = sub.add_parser("migrate", help="migrate/normalize config (alias of `aegis config migrate`)")
     mig.add_argument("--dry-run", action="store_true", help="preview config migration without writing")
     mig.add_argument("--json", action="store_true", help="print machine-readable migration output")
-    mig.set_defaults(func=cmd_hermes_compat)
+    mig.set_defaults(func=cmd_command_aliases)
 
     dump = sub.add_parser("dump", help="print a redacted config dump")
     dump.add_argument("--json", action="store_true", help="reserved for compatibility; dump is YAML")
-    dump.set_defaults(func=cmd_hermes_compat)
+    dump.set_defaults(func=cmd_command_aliases)
 
     fb = sub.add_parser("fallback", help="show model/provider fallback diagnostics")
-    fb.set_defaults(func=cmd_hermes_compat)
+    fb.set_defaults(func=cmd_command_aliases)
 
     ps = sub.add_parser("prompt-size", help="show active context and compression sizing")
-    ps.set_defaults(func=cmd_hermes_compat)
+    ps.set_defaults(func=cmd_command_aliases)
 
     up = sub.add_parser("update", help="update AEGIS to the latest version")
     up.add_argument("--check", action="store_true", help="report if an update is available, don't install")
@@ -2997,7 +2997,7 @@ def build_parser() -> argparse.ArgumentParser:
         db.add_argument("--host")
         db.add_argument("--port", type=int)
         db.add_argument("--no-open", action="store_true", help="don't auto-open the browser")
-        db.set_defaults(func=_dash.cmd_dashboard if _name in {"dashboard", "ui"} else cmd_hermes_compat)
+        db.set_defaults(func=_dash.cmd_dashboard if _name in {"dashboard", "ui"} else cmd_command_aliases)
 
     tu = sub.add_parser("tui", help="open the terminal agent (compatibility alias)")
     tu.add_argument("--once", action="store_true", help="show status and exit")
@@ -3042,7 +3042,7 @@ def build_parser() -> argparse.ArgumentParser:
     ac.set_defaults(func=_acp.cmd_acp)
 
     lsp = sub.add_parser("lsp", help="show LSP/code-intelligence readiness")
-    lsp.set_defaults(func=cmd_hermes_compat)
+    lsp.set_defaults(func=cmd_command_aliases)
 
     from ..gateway.pairing import cmd_pairing as _cmd_pairing
     pr = sub.add_parser("pairing", help="approve/revoke gateway users")
@@ -3111,7 +3111,7 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         compat_sk = sub.add_parser(_name, help=_help)
         compat_sk.add_argument("--json", action="store_true", help="print machine-readable skill output")
-        compat_sk.set_defaults(func=cmd_hermes_compat)
+        compat_sk.set_defaults(func=cmd_command_aliases)
 
     pl = sub.add_parser("plugins", help="manage manifest and drop-in plugins")
     pl.add_argument("action", nargs="?",
@@ -3203,7 +3203,7 @@ def build_parser() -> argparse.ArgumentParser:
     prx = sub.add_parser("proxy", help="run the OpenAI-compatible API server (alias of serve)")
     prx.add_argument("--host")
     prx.add_argument("--port", type=int)
-    prx.set_defaults(func=cmd_hermes_compat)
+    prx.set_defaults(func=cmd_command_aliases)
 
     rp = sub.add_parser("rpc", help="run a local JSON-RPC agent server over stdio")
     rp.set_defaults(func=cmd_rpc)
@@ -3318,20 +3318,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     for _name in ("slack", "whatsapp", "whatsapp-cloud"):
         platform_cmd = sub.add_parser(_name, help=f"run gateway for {_name}")
-        platform_cmd.set_defaults(func=cmd_hermes_compat)
+        platform_cmd.set_defaults(func=cmd_command_aliases)
 
     send = sub.add_parser("send", help="show gateway delivery/send guidance")
     send.add_argument("args", nargs="*")
-    send.set_defaults(func=cmd_hermes_compat)
+    send.set_defaults(func=cmd_command_aliases)
 
     cu = sub.add_parser("computer-use", help="show computer-use tool readiness")
-    cu.set_defaults(func=cmd_hermes_compat)
+    cu.set_defaults(func=cmd_command_aliases)
 
     post = sub.add_parser("postinstall", help="post-install compatibility check")
-    post.set_defaults(func=cmd_hermes_compat)
+    post.set_defaults(func=cmd_command_aliases)
 
     pets = sub.add_parser("pets", help="show visible-agent alternatives")
-    pets.set_defaults(func=cmd_hermes_compat)
+    pets.set_defaults(func=cmd_command_aliases)
 
     d = sub.add_parser("doctor", help="diagnose (and optionally repair) the installation")
     d.add_argument("--fix", action="store_true", help="create missing dirs + tighten secret perms")

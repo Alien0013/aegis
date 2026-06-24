@@ -464,7 +464,7 @@ def test_openai_server_auth_protects_models_and_rejects_bad_json(monkeypatch, tm
     assert json.loads(bad_data)["error"] == "invalid json"
 
 
-def test_hermes_session_key_requires_auth_and_rejects_invalid(monkeypatch, tmp_path):
+def test_aegis_session_key_requires_auth_and_rejects_invalid(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
     from aegis.config import Config
@@ -478,7 +478,7 @@ def test_hermes_session_key_requires_auth_and_rejects_invalid(monkeypatch, tmp_p
             "POST",
             "/v1/chat/completions",
             {"messages": [{"role": "user", "content": "hi"}]},
-            headers={"X-Hermes-Session-Key": "gateway:user-42"},
+            headers={"X-Aegis-Session-Key": "gateway:user-42"},
         )
     finally:
         srv.shutdown()
@@ -495,7 +495,7 @@ def test_hermes_session_key_requires_auth_and_rejects_invalid(monkeypatch, tmp_p
             {"input": "hi"},
             headers={
                 "Authorization": "Bearer serve-secret",
-                "X-Hermes-Session-Key": "x" * 257,
+                "X-Aegis-Session-Key": "x" * 257,
             },
         )
     finally:
@@ -559,7 +559,7 @@ def test_openai_chat_completions_http_nonstream_records_run_metadata(monkeypatch
     assert call["max_tokens"] == 123
 
 
-def test_hermes_session_key_chat_echoes_and_stays_separate_from_session_id(monkeypatch, tmp_path):
+def test_aegis_session_key_chat_echoes_and_stays_separate_from_session_id(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
     from aegis.config import Config
@@ -577,7 +577,7 @@ def test_hermes_session_key_chat_echoes_and_stays_separate_from_session_id(monke
             {"messages": [{"role": "user", "content": "hi"}]},
             headers={
                 "Authorization": "Bearer serve-secret",
-                "X-Hermes-Session-Key": "gateway:user-42",
+                "X-Aegis-Session-Key": "gateway:user-42",
             },
         )
     finally:
@@ -587,8 +587,8 @@ def test_hermes_session_key_chat_echoes_and_stays_separate_from_session_id(monke
     body = json.loads(data)
     expected_session_id = server._derive_chat_session_id(None, "hi")
     assert status == 200
-    assert headers["X-Hermes-Session-Key"] == "gateway:user-42"
-    assert headers["X-Hermes-Session-Id"] == expected_session_id
+    assert headers["X-Aegis-Session-Key"] == "gateway:user-42"
+    assert headers["X-Aegis-Session-Id"] == expected_session_id
     assert body["metadata"]["session_key"] == "gateway:user-42"
     assert body["metadata"]["session_id"] == expected_session_id
     assert _FakeRunner.calls[0]["session_id"] == expected_session_id
@@ -634,8 +634,8 @@ def test_chat_completions_derives_stable_session_for_stateless_frontends(monkeyp
 
     expected = server._derive_chat_session_id("stay terse", "first request")
     assert first_status == second_status == 200
-    assert first_headers["X-Hermes-Session-Id"] == expected
-    assert second_headers["X-Hermes-Session-Id"] == expected
+    assert first_headers["X-Aegis-Session-Id"] == expected
+    assert second_headers["X-Aegis-Session-Id"] == expected
     assert json.loads(first_data)["metadata"]["session_id"] == expected
     assert json.loads(second_data)["metadata"]["session_id"] == expected
     assert [call["session_id"] for call in _FakeRunner.calls] == [expected, expected]
@@ -1003,9 +1003,9 @@ def test_openai_chat_completions_stream_sse_contract(monkeypatch, tmp_path):
     assert status == 200
     events = _sse_events(data)
     assert events[-1] == ("done", "[DONE]")
-    progress = [payload for name, payload in events if name == "hermes.tool.progress"]
+    progress = [payload for name, payload in events if name == "aegis.tool.progress"]
     assert progress
-    assert progress[0]["object"] == "hermes.tool.progress"
+    assert progress[0]["object"] == "aegis.tool.progress"
     assert progress[0]["type"] == "tool_start"
     assert progress[0]["name"] == "read_file"
     chunks = [
@@ -1267,7 +1267,7 @@ def test_server_health_capabilities_and_body_limit(monkeypatch, tmp_path):
     assert json.loads(detailed_data)["max_body_bytes"] == 8
     assert caps_status == 200
     caps = json.loads(caps_data)
-    assert caps["object"] == "hermes.api_server.capabilities"
+    assert caps["object"] == "aegis.api_server.capabilities"
     assert caps["legacy_object"] == "capabilities"
     assert caps["transport"] == "aiohttp"
     assert caps["auth"]["type"] == "bearer"
@@ -1298,12 +1298,12 @@ def test_server_health_capabilities_and_body_limit(monkeypatch, tmp_path):
     assert caps["features"]["responses_persistence"] is True
     assert caps["features"]["responses_truncation_auto"] is True
     assert caps["features"]["tool_progress_events"] is True
-    assert caps["features"]["session_key_header"] == "X-Hermes-Session-Key"
+    assert caps["features"]["session_key_header"] == "X-Aegis-Session-Key"
     assert too_large_status == 413
     assert json.loads(too_large_data)["error"] == "request body too large"
 
 
-def test_server_accepts_hermes_api_server_key_alias(monkeypatch, tmp_path):
+def test_server_accepts_aegis_api_server_key_alias(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     monkeypatch.setenv("API_SERVER_KEY", "alias-secret")
     import aegis.server as server
@@ -1481,20 +1481,20 @@ def test_server_session_checks_report_and_repair_stale_runs(monkeypatch, tmp_pat
     alias = json.loads(alias_data)
 
     assert status == 200
-    assert body["object"] == "hermes.cross_session_integrity_report"
+    assert body["object"] == "aegis.cross_session_integrity_report"
     assert "generated_at" in body
     assert "stale_running_run" in {issue["code"] for issue in body["issues"]}
     assert repair_status == 200
-    assert repair["object"] == "hermes.cross_session_integrity_repair_result"
+    assert repair["object"] == "aegis.cross_session_integrity_repair_result"
     assert repair["repair"]["repaired_running_runs"] == 1
     assert repair["repair"]["marked_resume_pending"] == 1
-    assert repair["repair"]["object"] == "hermes.cross_session_integrity_repair"
-    assert repair["report"]["object"] == "hermes.cross_session_integrity_report"
+    assert repair["repair"]["object"] == "aegis.cross_session_integrity_repair"
+    assert repair["report"]["object"] == "aegis.cross_session_integrity_report"
     assert "stale_running_run" not in {issue["code"] for issue in repair["report"]["issues"]}
     assert runs.get(run["id"])["status"] == "interrupted"
     assert store.load(session.id).meta["resume_reason"] == "api_repair"
     assert alias_status == 200
-    assert alias["object"] == "hermes.cross_session_integrity_report"
+    assert alias["object"] == "aegis.cross_session_integrity_report"
 
 
 def test_responses_create_retrieve_cancel_delete(monkeypatch, tmp_path):
@@ -2167,7 +2167,7 @@ def test_responses_rejects_unsupported_content_parts(monkeypatch, tmp_path):
     assert _FakeRunner.calls == []
 
 
-def test_responses_echo_hermes_session_key(monkeypatch, tmp_path):
+def test_responses_echo_aegis_session_key(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
     from aegis.config import Config
@@ -2185,7 +2185,7 @@ def test_responses_echo_hermes_session_key(monkeypatch, tmp_path):
             {"model": "served-model", "input": "hello"},
             headers={
                 "Authorization": "Bearer serve-secret",
-                "X-Hermes-Session-Key": "gateway:user-42",
+                "X-Aegis-Session-Key": "gateway:user-42",
             },
         )
     finally:
@@ -2194,8 +2194,8 @@ def test_responses_echo_hermes_session_key(monkeypatch, tmp_path):
 
     body = json.loads(data)
     assert status == 200
-    assert headers["X-Hermes-Session-Key"] == "gateway:user-42"
-    assert headers["X-Hermes-Session-Id"] == "serve:test"
+    assert headers["X-Aegis-Session-Key"] == "gateway:user-42"
+    assert headers["X-Aegis-Session-Id"] == "serve:test"
     assert body["metadata"]["session_key"] == "gateway:user-42"
     assert _FakeRunner.calls[0]["session_id"] is None
     assert _FakeRunner.calls[0]["meta"]["gateway_session_key"] == "gateway:user-42"
@@ -4872,7 +4872,7 @@ def test_server_session_list_filters_and_end_reason(monkeypatch, tmp_path):
     assert json.loads(patch_data)["session"]["meta"]["end_reason"] == "completed"
 
 
-def test_server_session_create_and_fork_honor_hermes_fields(monkeypatch, tmp_path):
+def test_server_session_create_and_fork_honor_aegis_fields(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
     from aegis.config import Config
@@ -4889,7 +4889,7 @@ def test_server_session_create_and_fork_honor_hermes_fields(monkeypatch, tmp_pat
                 "model": "gpt-test",
                 "reasoning_effort": "high",
                 "system_prompt": "You are testing.",
-                "metadata": {"client": "hermes-compatible"},
+                "metadata": {"client": "aegis-compatible"},
             },
         )
         duplicate_status, duplicate_data = _request(
@@ -4923,7 +4923,7 @@ def test_server_session_create_and_fork_honor_hermes_fields(monkeypatch, tmp_pat
     assert created["meta"]["runtime_controls"]["model"] == "gpt-test"
     assert created["meta"]["runtime_controls"]["reasoning_effort"] == "high"
     assert created["meta"]["system_prompt"] == "You are testing."
-    assert created["meta"]["client"] == "hermes-compatible"
+    assert created["meta"]["client"] == "aegis-compatible"
     assert created["messages"][0]["role"] == "system"
     assert duplicate_status == 409
     assert json.loads(duplicate_data)["code"] == "session_exists"
@@ -5041,7 +5041,7 @@ def test_server_session_chat_stream_uses_sse_cors_headers(monkeypatch, tmp_path)
     assert headers["Access-Control-Allow-Origin"] == "http://client.local"
     assert headers["X-Accel-Buffering"] == "no"
     assert headers["X-Frame-Options"] == "DENY"
-    assert headers["X-Hermes-Session-Id"] == session_id
+    assert headers["X-Aegis-Session-Id"] == session_id
     events = _sse_events(stream_data)
     names = [name for name, _payload in events]
     assert names[:2] == ["run.started", "message.started"]
@@ -5244,13 +5244,13 @@ def test_server_run_read_endpoints(monkeypatch, tmp_path):
     assert any(
         row["id"] == run["id"]
         and row["run_id"] == run["id"]
-        and row["object"] == "hermes.run"
+        and row["object"] == "aegis.run"
         and row["output"] == "done"
         for row in json.loads(list_data)["data"]
     )
     assert get_status == 200
     get_body = json.loads(get_data)
-    assert get_body["object"] == "hermes.run"
+    assert get_body["object"] == "aegis.run"
     assert get_body["run_id"] == run["id"]
     assert get_body["status"] == "completed"
     assert get_body["output"] == "done"
@@ -5455,7 +5455,7 @@ class _RepeatedApprovalRunRunner:
         )
 
 
-def test_server_run_echoes_hermes_session_key(monkeypatch, tmp_path):
+def test_server_run_echoes_aegis_session_key(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     import aegis.server as server
     from aegis.config import Config
@@ -5473,7 +5473,7 @@ def test_server_run_echoes_hermes_session_key(monkeypatch, tmp_path):
             {"input": "slow run", "session_id": "serve:run-key"},
             headers={
                 "Authorization": "Bearer serve-secret",
-                "X-Hermes-Session-Key": "gateway:user-42",
+                "X-Aegis-Session-Key": "gateway:user-42",
             },
         )
         assert _BlockingRunRunner.started.wait(2)
@@ -5484,10 +5484,10 @@ def test_server_run_echoes_hermes_session_key(monkeypatch, tmp_path):
 
     body = json.loads(create_data)
     assert create_status == 202
-    assert create_headers["X-Hermes-Session-Key"] == "gateway:user-42"
-    assert create_headers["X-Hermes-Session-Id"] == "serve:run-key"
+    assert create_headers["X-Aegis-Session-Key"] == "gateway:user-42"
+    assert create_headers["X-Aegis-Session-Id"] == "serve:run-key"
     assert body["id"] == body["run_id"]
-    assert body["object"] == "hermes.run"
+    assert body["object"] == "aegis.run"
     assert body["status"] == "started"
     assert body["session_key"] == "gateway:user-42"
     assert _BlockingRunRunner.calls[0]["meta"]["gateway_session_key"] == "gateway:user-42"
@@ -5686,7 +5686,7 @@ def test_server_run_events_normalize_agent_emitted_events(monkeypatch, tmp_path)
     assert "run.completed" in event_types
     assert [event["sequence_number"] for event in events] == list(range(len(events)))
     for event in events:
-        assert event["object"] == "hermes.run.event"
+        assert event["object"] == "aegis.run.event"
         assert event["run_id"] == run_id
         assert isinstance(event["id"], str) and event["id"].startswith("evt_")
     tool_event = next(event for event in events if event["type"] == "tool_start")
@@ -5795,7 +5795,7 @@ def test_server_created_run_persists_across_handler_restart(monkeypatch, tmp_pat
     assert final["run"]["id"] == run_id
     assert final["run"]["status"] == "completed"
     assert final["run_id"] == run_id
-    assert final["object"] == "hermes.run"
+    assert final["object"] == "aegis.run"
     assert final["status"] == "completed"
     assert final["output"] == "finished"
 
@@ -5822,7 +5822,7 @@ def test_server_created_run_persists_across_handler_restart(monkeypatch, tmp_pat
     assert get_status == 200
     assert run["id"] == run_id
     assert run["run_id"] == run_id
-    assert run["object"] == "hermes.run"
+    assert run["object"] == "aegis.run"
     assert run["status"] == "completed"
     assert run["session_id"] == "serve:persist-run"
     assert run["result"] == "finished"
@@ -5895,7 +5895,7 @@ def test_server_startup_marks_stale_api_runs_interrupted(monkeypatch, tmp_path):
     assert saved["data"]["last_event"] == "run.interrupted"
     assert get_status == 200
     assert body["run_id"] == run["id"]
-    assert body["object"] == "hermes.run"
+    assert body["object"] == "aegis.run"
     assert body["status"] == "interrupted"
     assert body["run"]["id"] == run["id"]
     assert body["run"]["status"] == "interrupted"
@@ -6057,7 +6057,7 @@ def test_server_run_approval_choice_unblocks_pending_run(monkeypatch, tmp_path):
     assert pending_status == 200
     assert pending["pending"] and pending["pending"][0]["prompt"] == "Allow shell command?"
     assert approval_status == 200
-    assert approval["object"] == "hermes.run.approval_response"
+    assert approval["object"] == "aegis.run.approval_response"
     assert approval["run_id"] == run_id
     assert approval["choice"] == "once"
     assert approval["approved"] is True
@@ -6373,7 +6373,7 @@ def test_server_api_jobs_fire_due(monkeypatch, tmp_path):
     assert create_status == 201
     assert fire_status == 200
     fired = json.loads(fire_data)
-    assert fired["object"] == "hermes.cron.fire_result"
+    assert fired["object"] == "aegis.cron.fire_result"
     assert fired["claimed"] == 1
     assert fired["ran"] == 1
     assert fired["results"][0]["job_id"] == job_id

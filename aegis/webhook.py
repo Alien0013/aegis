@@ -296,7 +296,7 @@ def verify_signature(secret: str, body: bytes, header) -> bool:
     if generic_signature:
         timestamp = (
             _headers_get(header, "X-Webhook-Timestamp")
-            or _headers_get(header, "X-AEGIS-Timestamp")
+            or _headers_get(header, "X-Aegis-Timestamp")
             or _headers_get(header, "X-Timestamp")
         )
         return _verify_timestamped_sha256_hmac(

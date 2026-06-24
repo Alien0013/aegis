@@ -560,7 +560,7 @@ def _dashboard_security_policy_simulator(body: dict, config: Config) -> dict:
 
 
 def _dashboard_api_adapter_status(config: Config) -> dict:
-    """Expose the Hermes-compatible API adapter's operational contract."""
+    """Expose the compatibility API adapter's operational contract."""
     payload: dict[str, Any] = {
         "ok": True,
         "server": "aegis",

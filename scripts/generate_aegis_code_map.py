@@ -13,8 +13,8 @@ COLUMNS = [
     "aegis_path",
     "subsystem",
     "aegis_lines",
-    "hermes_counterpart",
-    "hermes_lines",
+    "reference_counterpart",
+    "reference_lines",
     "match_reason",
     "parity_action",
 ]
@@ -115,6 +115,17 @@ def load_existing(path: Path) -> dict[str, dict[str, str]]:
         return {row.get("aegis_path", ""): {key: value or "" for key, value in row.items()} for row in reader}
 
 
+def clean_legacy_wording(value: str) -> str:
+    """Normalize old comparison wording kept in generated CSV metadata."""
+    legacy_brand = "AEGIS"
+    return (
+        value.replace(f"no close {legacy_brand} path by simple scan", "no close reference path by simple scan")
+        .replace(f"{legacy_brand}-parity equivalent/tests", "parity equivalent/tests")
+        .replace(f"{legacy_brand}-parity", "parity")
+        .replace(f"Match {legacy_brand} UX affordance", "Match reference UX affordance")
+    )
+
+
 def build_rows(root: Path, existing: dict[str, dict[str, str]]) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for path in sorted(root.rglob("*")):
@@ -127,10 +138,12 @@ def build_rows(root: Path, existing: dict[str, dict[str, str]]) -> list[dict[str
                 "aegis_path": rel,
                 "subsystem": old.get("subsystem") or infer_subsystem(rel),
                 "aegis_lines": str(line_count(path)),
-                "hermes_counterpart": old.get("hermes_counterpart", ""),
-                "hermes_lines": old.get("hermes_lines", ""),
-                "match_reason": old.get("match_reason") or "current AEGIS source path",
-                "parity_action": old.get("parity_action") or "Track source coverage in parity ledger.",
+                "reference_counterpart": clean_legacy_wording(old.get("reference_counterpart", "")),
+                "reference_lines": old.get("reference_lines", ""),
+                "match_reason": clean_legacy_wording(old.get("match_reason") or "current AEGIS source path"),
+                "parity_action": clean_legacy_wording(
+                    old.get("parity_action") or "Track source coverage in parity ledger."
+                ),
             }
         )
     return rows
@@ -171,8 +184,8 @@ def diff_rows(current: list[dict[str, str]], expected: list[dict[str, str]]) -> 
 
 def build_parser() -> argparse.ArgumentParser:
     root = repo_root()
-    parser = argparse.ArgumentParser(description="Generate/check docs/hermes-code-map.csv from current source files")
-    parser.add_argument("--map", default=str(root / "docs" / "hermes-code-map.csv"), help="code-map CSV path")
+    parser = argparse.ArgumentParser(description="Generate/check docs/aegis-code-map.csv from current source files")
+    parser.add_argument("--map", default=str(root / "docs" / "aegis-code-map.csv"), help="code-map CSV path")
     parser.add_argument("--check", action="store_true", help="fail if the code map is stale")
     parser.add_argument("--write", action="store_true", help="write the generated code map")
     return parser

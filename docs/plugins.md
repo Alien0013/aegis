@@ -4,7 +4,7 @@ AEGIS supports three plugin shapes:
 
 - Drop a legacy `*.py` file in `~/.aegis/plugins/`.
 - Install a manifest package with `plugin.json` or `aegis-plugin.json`.
-- Install a Hermes-style package with `plugin.yaml` or `plugin.yml`.
+- Install a manifest package with `plugin.yaml` or `plugin.yml`.
 
 ## Manifest packages
 
@@ -24,7 +24,7 @@ def register(api):
     api.register_tool(MyTool())
 ```
 
-Hermes-style YAML packages are also accepted:
+YAML manifest packages are also accepted:
 
 ```yaml
 name: langfuse
@@ -93,5 +93,5 @@ manifest state, registered tools, channel names, provider names, and load errors
 They also expose plugin status, source, kind, category, declared env/tool/hook
 metadata, and per-plugin hook/middleware/provider/tool registrations.
 
-Set `AEGIS_SAFE_MODE=1` or `HERMES_SAFE_MODE=1` to skip plugin discovery and
+Set `AEGIS_SAFE_MODE=1` to skip plugin discovery and
 loading during troubleshooting.

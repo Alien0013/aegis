@@ -2961,15 +2961,15 @@ def test_fastapi_session_checks_repair_marks_resume_pending(tmp_path, monkeypatc
     body = repair.json()
 
     assert repair.status_code == 200
-    assert body["object"] == "hermes.cross_session_integrity_repair_result"
-    assert body["repair"]["object"] == "hermes.cross_session_integrity_repair"
+    assert body["object"] == "aegis.cross_session_integrity_repair_result"
+    assert body["repair"]["object"] == "aegis.cross_session_integrity_repair"
     assert body["repair"]["repaired_running_runs"] == 1
     assert body["repair"]["marked_resume_pending"] == 1
-    assert body["report"]["object"] == "hermes.cross_session_integrity_report"
+    assert body["report"]["object"] == "aegis.cross_session_integrity_report"
     assert runs.get(run["id"])["status"] == "interrupted"
     assert store.load(session.id).meta["resume_reason"] == "dashboard_repair"
     assert alias.status_code == 200
-    assert alias.json()["object"] == "hermes.cross_session_integrity_report"
+    assert alias.json()["object"] == "aegis.cross_session_integrity_report"
 
 
 def test_fastapi_session_checks_repair_false_only_reports(tmp_path, monkeypatch):
@@ -3003,7 +3003,7 @@ def test_fastapi_session_checks_repair_false_only_reports(tmp_path, monkeypatch)
     body = report.json()
 
     assert report.status_code == 200
-    assert body["object"] == "hermes.cross_session_integrity_report"
+    assert body["object"] == "aegis.cross_session_integrity_report"
     assert "stale_running_run" in {issue["code"] for issue in body["issues"]}
     assert runs.get(run["id"])["status"] == "running"
     assert store.load(session.id).meta.get("resume_pending") is None
@@ -3987,7 +3987,7 @@ def test_fastapi_entrypoint_plugin_package_dashboard_manifest_mounts(tmp_path, m
     from aegis.config import Config
     from aegis.dashboard_fastapi import create_app
 
-    ep = types.SimpleNamespace(name="entry-dash", value="entrydash:register", group="hermes_agent.plugins")
+    ep = types.SimpleNamespace(name="entry-dash", value="entrydash:register", group="aegis_agent.plugins")
 
     class FakeEntryPoints(list):
         def select(self, *, group):

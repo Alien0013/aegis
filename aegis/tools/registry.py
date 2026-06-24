@@ -13,10 +13,10 @@ logger = logging.getLogger(__name__)
 
 
 class ToolAlias(Tool):
-    """Hermes-compatible tool name that delegates to an existing AEGIS tool."""
+    """compatibility tool name that delegates to an existing AEGIS tool."""
 
     source = "alias"
-    manifest_id = "hermes-compat"
+    manifest_id = "aegis-compat"
 
     def __init__(
         self,
@@ -160,8 +160,8 @@ def _register_alias(reg: ToolRegistry, alias: str, target: str, **kwargs: Any) -
     reg.register(ToolAlias(alias, tool, **kwargs))
 
 
-def _register_hermes_aliases(reg: ToolRegistry) -> None:
-    """Expose Hermes/Codex-familiar tool names without duplicating tool logic."""
+def _register_aegis_aliases(reg: ToolRegistry) -> None:
+    """Expose familiar agent tool names without duplicating tool logic."""
     direct = {
         "terminal": "bash",
         "patch": "apply_patch",
@@ -505,7 +505,7 @@ def default_registry(*, include_plugins: bool = True) -> ToolRegistry:
     reg.register_all(process_tools())
     reg.register_all(dev_tools())
     reg.register_all(cloud_tools())
-    _register_hermes_aliases(reg)
+    _register_aegis_aliases(reg)
     if include_plugins:
         try:
             from ..plugins import load_plugins

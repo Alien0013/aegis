@@ -82,7 +82,7 @@ class ToolContext:
                       registry: Any = None, permissions: Any = None) -> ToolResult:
         """Run another registered tool through the normal permission/middleware path.
 
-        Plugin tools use this as their Hermes-style ``ctx.dispatch_tool`` helper. It
+        Plugin tools use this as their reference-style ``ctx.dispatch_tool`` helper. It
         intentionally reuses the current agent's registry and permission engine when
         available so plugin dispatch cannot bypass the harness' tool policy.
         """
@@ -106,7 +106,7 @@ class ToolContext:
                        persist: bool = True) -> dict[str, Any]:
         """Append a message to the active session and optionally persist it.
 
-        This gives plugins a small, explicit equivalent of Hermes' message-injection
+        This gives plugins a small, explicit equivalent of AEGIS' message-injection
         hook without exposing session internals as a stable API surface.
         """
         from ..types import Message
@@ -201,7 +201,7 @@ class Tool:
         }
 
     def metadata(self) -> dict[str, Any]:
-        """Hermes-style audit metadata for model-visible and dashboard tool inventories.
+        """reference-style audit metadata for model-visible and dashboard tool inventories.
 
         The metadata intentionally exposes names, hashes, and source locations only. It
         never reads configured secret values; env/auth fields are identifiers a human can

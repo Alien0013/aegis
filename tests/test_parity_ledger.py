@@ -6,8 +6,8 @@ import sys
 from pathlib import Path
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check_hermes_parity_ledger.py"
-MAP_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "generate_hermes_code_map.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check_aegis_parity_ledger.py"
+MAP_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "generate_aegis_code_map.py"
 
 
 def _write_csv(path: Path, rows: list[dict[str, str]]) -> None:
@@ -15,8 +15,8 @@ def _write_csv(path: Path, rows: list[dict[str, str]]) -> None:
         "aegis_path",
         "subsystem",
         "aegis_lines",
-        "hermes_counterpart",
-        "hermes_lines",
+        "reference_counterpart",
+        "reference_lines",
         "match_reason",
         "parity_action",
     ]
@@ -73,8 +73,8 @@ def test_parity_ledger_sync_creates_accounted_rows(tmp_path):
                 "aegis_path": "aegis/agent/context.py",
                 "subsystem": "agent-core",
                 "aegis_lines": "10",
-                "hermes_counterpart": "agent/prompt_builder.py",
-                "hermes_lines": "20",
+                "reference_counterpart": "agent/prompt_builder.py",
+                "reference_lines": "20",
                 "match_reason": "manual architecture map",
                 "parity_action": "Align behavior contract",
             },
@@ -82,8 +82,8 @@ def test_parity_ledger_sync_creates_accounted_rows(tmp_path):
                 "aegis_path": "site-next/.next/server/app/page.js",
                 "subsystem": "site",
                 "aegis_lines": "1",
-                "hermes_counterpart": "",
-                "hermes_lines": "",
+                "reference_counterpart": "",
+                "reference_lines": "",
                 "match_reason": "generated",
                 "parity_action": "Decide",
             },
@@ -112,8 +112,8 @@ def test_parity_ledger_reports_missing_rows(tmp_path):
                 "aegis_path": "aegis/server.py",
                 "subsystem": "runtime-other",
                 "aegis_lines": "100",
-                "hermes_counterpart": "gateway/platforms/api_server.py",
-                "hermes_lines": "",
+                "reference_counterpart": "gateway/platforms/api_server.py",
+                "reference_lines": "",
                 "match_reason": "manual architecture map",
                 "parity_action": "Align",
             }
@@ -137,8 +137,8 @@ def test_parity_ledger_final_mode_requires_closed_statuses(tmp_path):
                 "aegis_path": "aegis/agent/context.py",
                 "subsystem": "agent-core",
                 "aegis_lines": "10",
-                "hermes_counterpart": "agent/prompt_builder.py",
-                "hermes_lines": "20",
+                "reference_counterpart": "agent/prompt_builder.py",
+                "reference_lines": "20",
                 "match_reason": "manual architecture map",
                 "parity_action": "Align behavior contract",
             }
@@ -165,8 +165,8 @@ def test_parity_ledger_final_mode_rejects_unresolved_feature_matrix_rows(tmp_pat
             "aegis_path": "aegis/agent/context.py",
             "subsystem": "agent-core",
             "aegis_lines": "10",
-            "hermes_counterpart": "agent/prompt_builder.py",
-            "hermes_lines": "20",
+            "reference_counterpart": "agent/prompt_builder.py",
+            "reference_lines": "20",
             "match_reason": "manual architecture map",
             "parity_action": "Align behavior contract",
         }
@@ -190,8 +190,8 @@ def test_parity_ledger_final_mode_allows_credential_bound_feature_matrix_rows(tm
             "aegis_path": "aegis/gateway/channels.py",
             "subsystem": "gateway",
             "aegis_lines": "10",
-            "hermes_counterpart": "gateway/platforms/telegram.py",
-            "hermes_lines": "20",
+            "reference_counterpart": "gateway/platforms/telegram.py",
+            "reference_lines": "20",
             "match_reason": "manual architecture map",
             "parity_action": "Align behavior contract",
         }
@@ -213,7 +213,7 @@ def test_parity_ledger_final_mode_allows_credential_bound_feature_matrix_rows(tm
 def test_code_map_generator_includes_cjs_and_excludes_generated_paths(tmp_path):
     code_map = tmp_path / "map.csv"
     code_map.write_text(
-        "aegis_path,subsystem,aegis_lines,hermes_counterpart,hermes_lines,match_reason,parity_action\n",
+        "aegis_path,subsystem,aegis_lines,reference_counterpart,reference_lines,match_reason,parity_action\n",
         encoding="utf-8",
     )
     root = Path.cwd()

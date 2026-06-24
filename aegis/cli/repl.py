@@ -56,7 +56,7 @@ class SlashCommand:
 
 SLASH_COMMANDS = (
     SlashCommand("/help", "discover", "show or search slash commands", "/help [term]"),
-    SlashCommand("/commands", "discover", "Hermes-compatible alias for /help", "/commands [term]"),
+    SlashCommand("/commands", "discover", "compatibility alias for /help", "/commands [term]"),
     SlashCommand("/status", "discover", "show runtime, session, recap, and trace status"),
     SlashCommand("/whoami", "discover", "show local profile, workspace, provider, and session identity"),
     SlashCommand("/version", "discover", "show the AEGIS version and runtime"),
@@ -64,7 +64,7 @@ SLASH_COMMANDS = (
     SlashCommand("/provider", "discover", "show or switch the active provider", "/provider [name]"),
     SlashCommand("/prompt", "discover", "show prompt-audit pointers for the active session"),
     SlashCommand("/tools", "discover", "list enabled tools"),
-    SlashCommand("/toolsets", "discover", "list active toolsets and Hermes-compatible aliases"),
+    SlashCommand("/toolsets", "discover", "list active toolsets and compatibility aliases"),
     SlashCommand("/skills", "discover", "list loaded skills"),
     SlashCommand("/platforms", "discover", "list gateway platform configuration status"),
     SlashCommand("/platform", "discover", "show one gateway platform's configuration status", "/platform <name>"),
@@ -74,11 +74,11 @@ SLASH_COMMANDS = (
     SlashCommand("/debug", "observability", "show redacted debug-report command guidance", "/debug [share]"),
     SlashCommand("/insights", "observability", "show usage-insights command guidance"),
     SlashCommand("/sessions", "sessions", "pick recent sessions or search history", "/sessions [query]"),
-    SlashCommand("/history", "sessions", "Hermes-compatible alias for /sessions", "/history [query]"),
+    SlashCommand("/history", "sessions", "compatibility alias for /sessions", "/history [query]"),
     SlashCommand("/resume", "sessions", "resume by picker number, id, title, or unique search", "/resume [number|id|title]"),
     SlashCommand("/branch", "sessions", "fork this conversation into a named child session", "/branch [title]"),
     SlashCommand("/new", "sessions", "start a fresh session"),
-    SlashCommand("/start", "sessions", "Hermes-compatible alias for /new"),
+    SlashCommand("/start", "sessions", "compatibility alias for /new"),
     SlashCommand("/clear", "sessions", "start a fresh session"),
     SlashCommand("/ultracode", "planning", "run the rigorous autonomous plan→implement→verify loop", "/ultracode <task>"),
     SlashCommand("/architect", "planning", "strong model plans → this model implements (Aider-style)", "/architect <task>"),
@@ -92,14 +92,14 @@ SLASH_COMMANDS = (
     SlashCommand("/undo", "context", "remove the last user turn and its response"),
     SlashCommand("/save", "context", "export this session to markdown", "/save [path]"),
     SlashCommand("/title", "sessions", "rename this session", "/title <name>"),
-    SlashCommand("/topic", "sessions", "Hermes-compatible alias for /title", "/topic <name>"),
+    SlashCommand("/topic", "sessions", "compatibility alias for /title", "/topic <name>"),
     SlashCommand("/think", "model control", "set reasoning effort", "/think off|minimal|low|medium|high|xhigh"),
     SlashCommand("/reasoning", "model control", "set reasoning visibility or effort", "/reasoning off|none|summary|live|..."),
     SlashCommand("/fast", "model control", "toggle priority/fast mode", "/fast [on|off|status]"),
     SlashCommand("/busy", "model control", "show or set busy input behavior", "/busy [queue|steer|interrupt|status]"),
-    SlashCommand("/queue", "model control", "Hermes-compatible alias for /busy queue"),
-    SlashCommand("/steer", "model control", "Hermes-compatible alias for /busy steer"),
-    SlashCommand("/stop", "model control", "Hermes-compatible interrupt guidance for active gateway/API turns"),
+    SlashCommand("/queue", "model control", "compatibility alias for /busy queue"),
+    SlashCommand("/steer", "model control", "compatibility alias for /busy steer"),
+    SlashCommand("/stop", "model control", "interrupt guidance for active gateway/API turns"),
     SlashCommand("/reload", "model control", "refresh volatile prompt state and runtime context"),
     SlashCommand("/reload-skills", "model control", "reload skills into the active agent"),
     SlashCommand("/reload-mcp", "model control", "show MCP reload guidance for the active runtime"),
@@ -143,8 +143,8 @@ SLASH_COMMANDS = (
     SlashCommand("/approve", "approvals", "approval guidance for pending tool/API/gateway requests"),
     SlashCommand("/deny", "approvals", "denial guidance for pending tool/API/gateway requests"),
     SlashCommand("/blueprint", "automation", "show cron blueprint guidance"),
-    SlashCommand("/pet", "compatibility", "Hermes-only companion UI: intentionally out of scope"),
-    SlashCommand("/skin", "compatibility", "Hermes-only skin UI: use AEGIS themes instead"),
+    SlashCommand("/pet", "compatibility", "external companion UI: intentionally out of scope"),
+    SlashCommand("/skin", "compatibility", "external skin UI: use AEGIS themes instead"),
     SlashCommand("/suggestions", "compatibility", "show suggestion guidance"),
     SlashCommand("/yolo", "workspace", "toggle this session's existing approval bypass"),
     SlashCommand("/quit", "exit", "leave the terminal surface"),
@@ -2474,7 +2474,7 @@ def handle_slash(
     elif name == "/blueprint":
         _out("cron blueprints are available from the dashboard Cron page and cron preview APIs.")
     elif name in ("/pet", "/skin"):
-        _out(f"{name} is Hermes-only visual chrome; AEGIS uses dashboard themes and terminal display settings instead.")
+        _out(f"{name} is external visual chrome; AEGIS uses dashboard themes and terminal display settings instead.")
     elif name == "/suggestions":
         _out("Suggestions: use /help to discover commands, /status for next actions, and the dashboard overview for ops hints.")
     elif name == "/retry":

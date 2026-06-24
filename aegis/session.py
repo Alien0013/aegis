@@ -538,7 +538,7 @@ class SessionStore:
     def mark_resume_pending(self, sid: str, reason: str = "restart_timeout") -> bool:
         """Mark a gateway session as interrupted but resumable after a restart.
 
-        This mirrors Hermes' ``resume_pending`` flag while preserving the current
+        This mirrors AEGIS' ``resume_pending`` flag while preserving the current
         AEGIS transcript/session id.  The flag is cleared after the next
         successful gateway turn.
         """

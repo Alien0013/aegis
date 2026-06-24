@@ -6,7 +6,7 @@ OpenAI-compatible HTTP, JSON-RPC, Python SDK, ACP, MCP, cron, webhooks, and
 messaging gateways.
 
 Use this page as the product map. For implementation status and remaining
-Hermes/Codex-style polish, see [feature-parity-matrix.md](feature-parity-matrix.md).
+Codex-style polish, see [feature-parity-matrix.md](feature-parity-matrix.md).
 
 ## Start Here
 
@@ -27,7 +27,7 @@ Hermes/Codex-style polish, see [feature-parity-matrix.md](feature-parity-matrix.
 | Gateway and channels | [gateway.md](gateway.md) |
 | Tracing and evals | [tracing-evals.md](tracing-evals.md) |
 | Architecture | [architecture.md](architecture.md) |
-| Hermes parity ledger | `docs/hermes-parity-ledger.csv` checked by `scripts/check_hermes_parity_ledger.py` |
+| AEGIS parity ledger | `docs/aegis-parity-ledger.csv` checked by `scripts/check_aegis_parity_ledger.py` |
 | Generated reference drift | `scripts/generate_reference_docs.py --check` through `scripts/verify_all.sh` |
 
 ## Current Product Surfaces
@@ -95,9 +95,9 @@ The remaining parity work is mostly product hardening:
 - Generated CLI, slash-command, API-route, and tool references are checked by
   `scripts/generate_reference_docs.py --check`, so docs cannot drift from the
   parser, registry, or FastAPI route table.
-- Repo-wide parity ledger coverage from `docs/hermes-code-map.csv` to
-  `docs/hermes-parity-ledger.csv`, checked by `aegis verify`; final mode
-  currently closes 950 rows with zero pending/partial rows.
+- Repo-wide parity ledger coverage from `docs/aegis-code-map.csv` to
+  `docs/aegis-parity-ledger.csv`, checked by `aegis verify`; final mode
+  currently closes 786 rows with zero pending/partial rows.
 - API/SDK contract fixtures for streaming, cancellation, auth, run events,
   responses-style behavior, MCP, and eval replay.
 - Fake-adapter tests and explicit credentialed live-test instructions for

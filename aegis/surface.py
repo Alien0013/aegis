@@ -867,7 +867,7 @@ def _retarget_agent(
 
 
 def normalize_service_tier(value: Any) -> str:
-    """Normalize Hermes-style fast/priority controls into a persisted value."""
+    """Normalize reference-style fast/priority controls into a persisted value."""
     text = str(value or "").strip().lower()
     if not text:
         return ""

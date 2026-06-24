@@ -2,7 +2,7 @@
 
 Bundles live under ``~/.aegis/skill-bundles/*.yaml`` and map one slash/preload
 name to multiple skills. Config-based ``skills.bundles`` still works; file
-bundles provide the AEGIS-style list/save/delete lifecycle.
+bundles provide the reference-style list/save/delete lifecycle.
 """
 
 from __future__ import annotations

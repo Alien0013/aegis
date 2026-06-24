@@ -10,7 +10,7 @@ const {
 
 const at = (value) => new Date(value);
 
-test("desktop lifecycle exposes Hermes-style named states", () => {
+test("desktop lifecycle exposes reference-style named states", () => {
   let lifecycle = initialDesktopLifecycle(at("2026-06-17T10:00:00.000Z"));
   assert.equal(lifecycle.state, "booting");
   assert.equal(lifecycle.events.length, 1);

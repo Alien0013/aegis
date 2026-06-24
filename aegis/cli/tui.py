@@ -2,7 +2,7 @@
 
 AEGIS' terminal product surface is the chat REPL.  The old store-backed
 ``aegis tui`` status dashboard was intentionally removed as a separate UX so the CLI
-matches Hermes' model more closely: one terminal agent surface, with status
+matches AEGIS' model more closely: one terminal agent surface, with status
 available through ``aegis status``.
 """
 

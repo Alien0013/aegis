@@ -661,7 +661,7 @@ def test_gateway_proxy_url_delegates_platform_turn_to_chat_completions(tmp_path,
     assert out == "proxied reply"
     assert seen["url"] == "https://proxy.test/v1/chat/completions"
     assert seen["headers"]["Authorization"] == "Bearer proxy-secret"
-    assert seen["headers"]["X-Hermes-Session-Id"] == key
+    assert seen["headers"]["X-Aegis-Session-Id"] == key
     assert seen["json"]["model"] == "proxy-model"
     assert seen["json"]["messages"][-1]["role"] == "user"
     assert seen["json"]["messages"][-1]["content"].startswith("use proxy")

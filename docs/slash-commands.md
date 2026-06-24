@@ -14,15 +14,15 @@ Generated from `aegis.cli.repl.SLASH_COMMANDS`.
 | /deny | approvals | denial guidance for pending tool/API/gateway requests | /deny |
 | /blueprint | automation | show cron blueprint guidance | /blueprint |
 | /handoff | channels | hand this session to a gateway channel | /handoff <platform> <chat_id> |
-| /pet | compatibility | Hermes-only companion UI: intentionally out of scope | /pet |
-| /skin | compatibility | Hermes-only skin UI: use AEGIS themes instead | /skin |
+| /pet | compatibility | external companion UI: intentionally out of scope | /pet |
+| /skin | compatibility | external skin UI: use AEGIS themes instead | /skin |
 | /suggestions | compatibility | show suggestion guidance | /suggestions |
 | /compress | context | compact context now | /compress [here N\|focus topic] |
 | /context | context | show the token budget breakdown (system, history, tools) | /context |
 | /retry | context | rerun the last user turn | /retry |
 | /save | context | export this session to markdown | /save [path] |
 | /undo | context | remove the last user turn and its response | /undo |
-| /commands | discover | Hermes-compatible alias for /help | /commands [term] |
+| /commands | discover | compatibility alias for /help | /commands [term] |
 | /help | discover | show or search slash commands | /help [term] |
 | /model | discover | show the active provider and model | /model |
 | /platform | discover | show one gateway platform's configuration status | /platform <name> |
@@ -32,7 +32,7 @@ Generated from `aegis.cli.repl.SLASH_COMMANDS`.
 | /skills | discover | list loaded skills | /skills |
 | /status | discover | show runtime, session, recap, and trace status | /status |
 | /tools | discover | list enabled tools | /tools |
-| /toolsets | discover | list active toolsets and Hermes-compatible aliases | /toolsets |
+| /toolsets | discover | list active toolsets and compatibility aliases | /toolsets |
 | /version | discover | show the AEGIS version and runtime | /version |
 | /whoami | discover | show local profile, workspace, provider, and session identity | /whoami |
 | /footer | display | toggle post-turn status footer | /footer on\|off\|status |
@@ -58,13 +58,13 @@ Generated from `aegis.cli.repl.SLASH_COMMANDS`.
 | /voice | media | show voice/STT/TTS status and commands | /voice [status\|on\|off] |
 | /busy | model control | show or set busy input behavior | /busy [queue\|steer\|interrupt\|status] |
 | /fast | model control | toggle priority/fast mode | /fast [on\|off\|status] |
-| /queue | model control | Hermes-compatible alias for /busy queue | /queue |
+| /queue | model control | compatibility alias for /busy queue | /queue |
 | /reasoning | model control | set reasoning visibility or effort | /reasoning off\|none\|summary\|live\|... |
 | /reload | model control | refresh volatile prompt state and runtime context | /reload |
 | /reload-mcp | model control | show MCP reload guidance for the active runtime | /reload-mcp |
 | /reload-skills | model control | reload skills into the active agent | /reload-skills |
-| /steer | model control | Hermes-compatible alias for /busy steer | /steer |
-| /stop | model control | Hermes-compatible interrupt guidance for active gateway/API turns | /stop |
+| /steer | model control | compatibility alias for /busy steer | /steer |
+| /stop | model control | interrupt guidance for active gateway/API turns | /stop |
 | /think | model control | set reasoning effort | /think off\|minimal\|low\|medium\|high\|xhigh |
 | /debug | observability | show redacted debug-report command guidance | /debug [share] |
 | /evals | observability | list eval runs or inspect one | /evals [id] |
@@ -79,13 +79,13 @@ Generated from `aegis.cli.repl.SLASH_COMMANDS`.
 | /ultracode | planning | run the rigorous autonomous plan→implement→verify loop | /ultracode <task> |
 | /branch | sessions | fork this conversation into a named child session | /branch [title] |
 | /clear | sessions | start a fresh session | /clear |
-| /history | sessions | Hermes-compatible alias for /sessions | /history [query] |
+| /history | sessions | compatibility alias for /sessions | /history [query] |
 | /new | sessions | start a fresh session | /new |
 | /resume | sessions | resume by picker number, id, title, or unique search | /resume [number\|id\|title] |
 | /sessions | sessions | pick recent sessions or search history | /sessions [query] |
-| /start | sessions | Hermes-compatible alias for /new | /start |
+| /start | sessions | compatibility alias for /new | /start |
 | /title | sessions | rename this session | /title <name> |
-| /topic | sessions | Hermes-compatible alias for /title | /topic <name> |
+| /topic | sessions | compatibility alias for /title | /topic <name> |
 | /billing | setup | show provider billing/usage guidance | /billing |
 | /codex-runtime | setup | show Codex-compatible runtime status | /codex-runtime |
 | /config | setup | show config command guidance | /config |

@@ -762,7 +762,7 @@ def test_cron_fire_due_jobs_claims_and_runs_once(monkeypatch, tmp_path):
     second = fire_due_jobs(None, store=store, owner="test-scheduler", verbose=False)
 
     assert result["ok"] is True
-    assert result["object"] == "hermes.cron.fire_result"
+    assert result["object"] == "aegis.cron.fire_result"
     assert result["claimed"] == 1
     assert result["ran"] == 1
     assert result["results"][0]["job_id"] == job.id
@@ -1014,20 +1014,20 @@ def test_cron_store_backs_up_corrupt_json(monkeypatch, tmp_path):
     assert len(list(tmp_path.glob("cron.json.corrupt.*.bak"))) == 2
 
 
-def test_cron_store_imports_hermes_jobs_object_and_repairs_control_chars(monkeypatch, tmp_path):
+def test_cron_store_imports_aegis_jobs_object_and_repairs_control_chars(monkeypatch, tmp_path):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     from aegis.cron import CronStore
 
     (tmp_path / "cron.json").write_text(json.dumps({
-        "jobs": [{"id": "cron_hermes", "schedule": "every 1h", "prompt": "from hermes"}],
+        "jobs": [{"id": "cron_aegis", "schedule": "every 1h", "prompt": "from aegis"}],
         "updated_at": "2026-06-16T00:00:00Z",
     }), encoding="utf-8")
 
     jobs = CronStore().list()
 
     assert len(jobs) == 1
-    assert jobs[0].id == "cron_hermes"
-    assert jobs[0].prompt == "from hermes"
+    assert jobs[0].id == "cron_aegis"
+    assert jobs[0].prompt == "from aegis"
     assert isinstance(json.loads((tmp_path / "cron.json").read_text(encoding="utf-8")), list)
 
     (tmp_path / "cron.json").write_text(

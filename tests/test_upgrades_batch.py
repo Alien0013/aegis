@@ -1,4 +1,4 @@
-"""Batch of AEGIS-parity upgrades: guardrails, fuzzy edit, file safety/state,
+"""Batch of parity upgrades: guardrails, fuzzy edit, file safety/state,
 cache breakpoints, URL policy, @references, snapshots, admin tiers, rate limits."""
 
 from __future__ import annotations

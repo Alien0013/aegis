@@ -328,7 +328,7 @@ def _cors_headers(config: Config | None, origin: str = "") -> dict[str, str] | N
         "Access-Control-Allow-Headers": (
             "Authorization, Content-Type, Accept, OpenAI-Beta, Idempotency-Key, "
             "X-Aegis-Session, X-Aegis-Provider, X-Aegis-Cwd, "
-            "X-Hermes-Session-Id, X-Hermes-Session-Key"
+            "X-Aegis-Session-Id, X-Aegis-Session-Key"
         ),
         "Access-Control-Max-Age": "600",
     }
@@ -2092,7 +2092,7 @@ def _capabilities(config: Config) -> dict[str, Any]:
         if name:
             endpoints.setdefault(name, True)
     return {
-        "object": "hermes.api_server.capabilities",
+        "object": "aegis.api_server.capabilities",
         "legacy_object": "capabilities",
         "server": "aegis",
         "transport": "aiohttp",
@@ -2128,8 +2128,8 @@ def _capabilities(config: Config) -> dict[str, Any]:
             "run_approvals": True,
             "job_control": True,
             "cancellation": "active server-process runs",
-            "session_continuity_header": "X-Hermes-Session-Id",
-            "session_key_header": "X-Hermes-Session-Key",
+            "session_continuity_header": "X-Aegis-Session-Id",
+            "session_key_header": "X-Aegis-Session-Key",
         },
         "provider": report.get("active") or report.get("model") or {},
     }
@@ -2244,12 +2244,12 @@ def _public_api_run_status(status: Any) -> str:
     return text
 
 
-def _with_hermes_run_aliases(record: dict[str, Any]) -> dict[str, Any]:
+def _with_aegis_run_aliases(record: dict[str, Any]) -> dict[str, Any]:
     out = dict(record)
     run_id = str(out.get("run_id") or out.get("id") or "")
     out["id"] = str(out.get("id") or run_id)
     out["run_id"] = run_id
-    out["object"] = "hermes.run"
+    out["object"] = "aegis.run"
     out["status"] = _public_api_run_status(out.get("status"))
     out["output"] = out.get("output", out.get("result", ""))
     return out
@@ -2260,7 +2260,7 @@ def _public_stored_run_record(run: dict[str, Any]) -> dict[str, Any]:
     public_status = _public_api_run_status(run.get("status"))
     created_at = _epoch_from_run_time(data.get("created_at") or run.get("started_at"))
     updated_at = _epoch_from_run_time(data.get("updated_at") or run.get("ended_at") or run.get("started_at"))
-    return _with_hermes_run_aliases({
+    return _with_aegis_run_aliases({
         "id": run.get("id", ""),
         "legacy_object": data.get("object") or "run",
         "status": public_status,
@@ -2354,7 +2354,7 @@ def _append_stored_run_event(
     sequence = int(data.get("event_sequence") or len(events))
     event = {
         "id": new_id("evt"),
-        "object": "hermes.run.event",
+        "object": "aegis.run.event",
         "type": event_type,
         "event": event_type,
         "run_id": run_id,
@@ -2455,7 +2455,7 @@ def _recover_stale_api_runs() -> int:
 def _public_run_record(record: dict[str, Any]) -> dict[str, Any]:
     public = {k: v for k, v in record.items() if k not in {"agent", "thread", "events"}}
     public["legacy_object"] = public.get("object") or "run"
-    return _with_hermes_run_aliases(public)
+    return _with_aegis_run_aliases(public)
 
 
 def _coerce_csv_list(value: Any) -> list[str]:
@@ -2924,13 +2924,13 @@ def make_handler(config: Config):
             self.wfile.write(_json_bytes(obj))
 
         def _session_key(self) -> tuple[str | None, tuple[int, dict[str, Any]] | None]:
-            raw = str(self.headers.get("X-Hermes-Session-Key") or "").strip()
+            raw = str(self.headers.get("X-Aegis-Session-Key") or "").strip()
             if not raw:
                 return None, None
             if not api_key:
                 return None, (
                     403,
-                    {"error": "X-Hermes-Session-Key requires API key authentication"},
+                    {"error": "X-Aegis-Session-Key requires API key authentication"},
                 )
             if any(ch in raw for ch in "\r\n\x00") or any(ord(ch) < 32 for ch in raw):
                 return None, (400, {"error": "Invalid session key"})
@@ -2946,9 +2946,9 @@ def make_handler(config: Config):
         ) -> dict[str, str]:
             headers: dict[str, str] = {}
             if session_id:
-                headers["X-Hermes-Session-Id"] = str(session_id)
+                headers["X-Aegis-Session-Id"] = str(session_id)
             if session_key:
-                headers["X-Hermes-Session-Key"] = str(session_key)
+                headers["X-Aegis-Session-Key"] = str(session_key)
             return headers
 
         def _write_sse(self, obj: Any, *, event: str = "message") -> bool:
@@ -3143,7 +3143,7 @@ def make_handler(config: Config):
             event_id = new_id("evt")
             event = {
                 "id": event_id,
-                "object": "hermes.run.event",
+                "object": "aegis.run.event",
                 "type": event_type,
                 "event": event_type,
                 "run_id": run_id,
@@ -3154,7 +3154,7 @@ def make_handler(config: Config):
                 event.update(payload)
                 event.update({
                     "id": event_id,
-                    "object": "hermes.run.event",
+                    "object": "aegis.run.event",
                     "type": event_type,
                     "event": event_type,
                     "run_id": run_id,
@@ -3742,7 +3742,7 @@ def make_handler(config: Config):
             )
             report = cross_session_integrity_report(**limits)
             return {
-                "object": "hermes.cross_session_integrity_repair_result",
+                "object": "aegis.cross_session_integrity_repair_result",
                 "ok": bool(repair.get("ok", False)) and str(report.get("status") or "") != "error",
                 "repair": repair,
                 "report": report,
@@ -4171,7 +4171,7 @@ def make_handler(config: Config):
                     if system_prompt:
                         session.messages.append(Message.system(system_prompt))
                 store.save(session)
-                return self._json(201, {"ok": True, "object": "hermes.session", "session": _session_payload(session)})
+                return self._json(201, {"ok": True, "object": "aegis.session", "session": _session_payload(session)})
             if path.startswith("/api/sessions/") and path.endswith("/messages"):
                 from .session import SessionStore
 
@@ -4231,7 +4231,7 @@ def make_handler(config: Config):
                 if body.get("title"):
                     child.title = str(body["title"])
                 store.save(child)
-                return self._json(201, {"ok": True, "object": "hermes.session", "session": _session_payload(child)})
+                return self._json(201, {"ok": True, "object": "aegis.session", "session": _session_payload(child)})
             if path.startswith("/api/sessions/") and path.endswith(("/chat", "/chat/stream")):
                 parts = path.split("/")
                 session_id = parts[-3] if path.endswith("/chat/stream") else parts[-2]
@@ -4304,7 +4304,7 @@ def make_handler(config: Config):
                 metadata.get("session_id")
                 or body.get("session_id")
                 or self.headers.get("X-Aegis-Session")
-                or self.headers.get("X-Hermes-Session-Id")
+                or self.headers.get("X-Aegis-Session-Id")
                 or None
             )
             if not session_id:
@@ -4344,7 +4344,7 @@ def make_handler(config: Config):
                 idempotency_key = str(self.headers.get("Idempotency-Key", "") or "")
                 idempotency_body = {
                     **body,
-                    "_session_id_header": self.headers.get("X-Aegis-Session") or self.headers.get("X-Hermes-Session-Id"),
+                    "_session_id_header": self.headers.get("X-Aegis-Session") or self.headers.get("X-Aegis-Session-Id"),
                     "_provider_header": self.headers.get("X-Aegis-Provider"),
                     "_cwd_header": self.headers.get("X-Aegis-Cwd"),
                     "_session_key_header": session_key,
@@ -4536,14 +4536,14 @@ def make_handler(config: Config):
                     if meta.get("type") in {"tool_start", "tool_result"}:
                         write_sse_payload({
                             "id": cid,
-                            "object": "hermes.tool.progress",
+                            "object": "aegis.tool.progress",
                             "created": int(time.time()),
                             "type": meta.get("type"),
                             "name": meta.get("name") or meta.get("tool_name") or "",
                             "status": meta.get("status") or ("done" if meta.get("type") == "tool_result" else "running"),
                             "summary": meta.get("summary") or meta.get("preview") or "",
                             "metadata": {"event": meta},
-                        }, event="hermes.tool.progress")
+                        }, event="aegis.tool.progress")
                         if stream_closed:
                             return
                 if not write_sse_payload(chunk):
@@ -4766,7 +4766,7 @@ def make_handler(config: Config):
                 metadata.get("session_id")
                 or body.get("session_id")
                 or self.headers.get("X-Aegis-Session")
-                or self.headers.get("X-Hermes-Session-Id")
+                or self.headers.get("X-Aegis-Session-Id")
             )
             provider_name = metadata.get("provider") or body.get("provider")
             cwd = metadata.get("cwd") or body.get("cwd")
@@ -4795,7 +4795,7 @@ def make_handler(config: Config):
             idempotency_key = str(self.headers.get("Idempotency-Key", "") or "")
             idempotency_body = {
                 **body,
-                "_session_id_header": self.headers.get("X-Aegis-Session") or self.headers.get("X-Hermes-Session-Id"),
+                "_session_id_header": self.headers.get("X-Aegis-Session") or self.headers.get("X-Aegis-Session-Id"),
                 "_provider_header": self.headers.get("X-Aegis-Provider"),
                 "_cwd_header": self.headers.get("X-Aegis-Cwd"),
                 "_session_key_header": session_key,
@@ -6205,7 +6205,7 @@ def make_handler(config: Config):
             first_pending = pending_items[0]
             return self._json(200, {
                 "ok": True,
-                "object": "hermes.run.approval_response",
+                "object": "aegis.run.approval_response",
                 "run_id": run_id,
                 "approval_id": first_pending["id"],
                 "approval_ids": [pending["id"] for pending in pending_items],

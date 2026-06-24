@@ -38,7 +38,7 @@ aegis gateway --channels telegram,discord,slack,signal,matrix,email,webhook
   (persistent goals) · `/steer <text>` · `stop`.
 - **Display controls** — `display.memory_notifications: off | on | verbose`
   controls background memory-review notes in chat. `display.tool_progress_grouping:
-  accumulate | separate` is accepted for Hermes-compatible progress grouping on
+  accumulate | separate` is accepted for compatibility progress grouping on
   surfaces that render editable tool-progress messages.
 - **Restart notifications** — if the previous gateway run died without a clean
   shutdown, admins (`gateway.admins`) get a DM explaining when and what crashed

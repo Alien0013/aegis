@@ -34,7 +34,7 @@ STALE_AFTER_DAYS = 30
 # Two skills whose descriptions match above this ratio are flagged as duplicates.
 DUP_THRESHOLD = 0.82
 
-# Lifecycle states (AEGIS-parity state machine): a skill is ACTIVE until it goes
+# Lifecycle states (parity state machine): a skill is ACTIVE until it goes
 # unused past stale_after_days (-> STALE), then archived past archive_after_days
 # (-> ARCHIVED); using it again reactivates it. Pinned skills never transition.
 STATE_ACTIVE = "active"

@@ -40,7 +40,7 @@ preempts the loop; `/status` shows the active goal plus a local session recap.
 - `aegis setup` / `aegis onboard` — wizard
 - `aegis model [list|doctor|set <provider> [<model>]]`
 - `aegis auth [status|login <p>|logout <p>]`
-- `aegis config [summary|show|status] [--json]` — Hermes-style terminal summary
+- `aegis config [summary|show|status] [--json]` — reference-style terminal summary
   with paths, masked secret status, model/runtime settings, and edit/setup hints
 - `aegis config edit [--secrets]` — open `config.yaml` or the profile `.env`
   in `$EDITOR`, with backup/validation for YAML edits

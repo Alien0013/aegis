@@ -547,8 +547,7 @@ class GatewayRunner:
             raise RuntimeError("gateway proxy URL is not configured")
         headers = {
             "Content-Type": "application/json",
-            "X-Hermes-Session-Id": key,
-            "X-AEGIS-Session-Id": key,
+            "X-Aegis-Session-Id": key,
         }
         if proxy["key"]:
             headers["Authorization"] = f"Bearer {proxy['key']}"

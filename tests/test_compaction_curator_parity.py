@@ -1,4 +1,4 @@
-"""AEGIS-parity batch: configurable compaction threshold, gateway hygiene safety-net,
+"""Parity batch: configurable compaction threshold, gateway hygiene safety-net,
 curator run-gating + backups/rollback + reports, and the aligned default values."""
 
 from __future__ import annotations

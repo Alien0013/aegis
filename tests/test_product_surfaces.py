@@ -72,7 +72,7 @@ def test_cli_parser_exposes_upgrade_commands():
     assert cfg_setup.install_services is True
 
 
-def test_config_summary_prints_hermes_style_terminal_surface(monkeypatch, capsys):
+def test_config_summary_prints_aegis_style_terminal_surface(monkeypatch, capsys):
     from argparse import Namespace
 
     from aegis.cli import main
@@ -770,7 +770,7 @@ def test_terminal_busy_command_reports_mode_hints(monkeypatch):
     assert cfg.get("gateway.busy_mode") == "steer"
 
 
-def test_terminal_hermes_compat_slash_commands_report_real_surfaces(monkeypatch, tmp_path):
+def test_terminal_aegis_compat_slash_commands_report_real_surfaces(monkeypatch, tmp_path):
     from types import SimpleNamespace
 
     from aegis.cli import repl
@@ -810,7 +810,7 @@ def test_terminal_hermes_compat_slash_commands_report_real_surfaces(monkeypatch,
     assert "Prompt audit" in text
     assert "voice tools" in text
     assert "browser tools" in text
-    assert "Hermes-only visual chrome" in text
+    assert "external visual chrome" in text
 
 
 def test_terminal_session_picker_resume_and_branch(monkeypatch):
@@ -2802,7 +2802,7 @@ def test_local_plugin_install_rejects_unsupported_manifest_version_before_copy(t
     assert plugins.list_manifests(cfg) == []
 
 
-def test_hermes_style_plugin_yaml_metadata_category_key_and_safe_mode(tmp_path, monkeypatch):
+def test_aegis_style_plugin_yaml_metadata_category_key_and_safe_mode(tmp_path, monkeypatch):
     from aegis import config as cfg_paths
     from aegis import plugins
     from aegis.config import Config
@@ -2989,12 +2989,12 @@ def test_project_plugins_are_ignored_by_default_and_opt_in_with_env(tmp_path, mo
     assert row["declared_contributions"]["tools"] == ["project_tool"]
 
 
-def test_hermes_project_plugins_config_opt_in_and_safe_mode(tmp_path, monkeypatch):
+def test_aegis_project_plugins_config_opt_in_and_safe_mode(tmp_path, monkeypatch):
     from aegis import plugins
     from aegis.config import Config
 
     monkeypatch.chdir(tmp_path)
-    pkg = tmp_path / ".hermes" / "plugins" / "ops" / "pulse"
+    pkg = tmp_path / ".aegis" / "plugins" / "ops" / "pulse"
     pkg.mkdir(parents=True)
     (pkg / "plugin.yaml").write_text(
         "name: pulse\n"
@@ -3019,12 +3019,12 @@ def test_hermes_project_plugins_config_opt_in_and_safe_mode(tmp_path, monkeypatc
     assert manifest.category == "ops"
     assert [t.name for t in plugins.load_plugins(config=cfg).tools] == ["pulse_tool"]
 
-    monkeypatch.setenv("HERMES_SAFE_MODE", "1")
+    monkeypatch.setenv("AEGIS_SAFE_MODE", "1")
     assert plugins.list_manifests(cfg) == []
     assert plugins.load_plugins(config=cfg).tools == []
 
 
-def test_hermes_entrypoint_plugins_are_discovered_opt_in_and_reported(tmp_path, monkeypatch):
+def test_aegis_entrypoint_plugins_are_discovered_opt_in_and_reported(tmp_path, monkeypatch):
     import sys
     from types import SimpleNamespace
     from aegis import plugins
@@ -3043,7 +3043,7 @@ def test_hermes_entrypoint_plugins_are_discovered_opt_in_and_reported(tmp_path, 
 
     def fake_entry_points():
         return {
-            "hermes_agent.plugins": [
+            "aegis_agent.plugins": [
                 SimpleNamespace(name="entry-demo", value="entry_plugin"),
             ],
         }
@@ -3072,7 +3072,7 @@ def test_hermes_entrypoint_plugins_are_discovered_opt_in_and_reported(tmp_path, 
     assert row["hook_names"] == ["on_session_start"]
     assert row["runtime_contributions"]["tools"] == ["entry_tool"]
 
-    monkeypatch.setenv("HERMES_SAFE_MODE", "1")
+    monkeypatch.setenv("AEGIS_SAFE_MODE", "1")
     assert plugins.list_manifests(cfg) == []
     assert plugins.load_plugins(config=cfg).tools == []
     sys.modules.pop("entry_plugin", None)
@@ -3098,7 +3098,7 @@ def test_entrypoint_middleware_only_plugin_clears_on_disable(tmp_path, monkeypat
 
     def fake_entry_points():
         return {
-            "hermes_agent.plugins": [
+            "aegis_agent.plugins": [
                 SimpleNamespace(name="mw-only", value="middleware_plugin"),
             ],
         }

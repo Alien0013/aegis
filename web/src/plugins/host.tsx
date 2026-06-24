@@ -319,8 +319,6 @@ function ensureGlobalHost(reload: () => void = noopReload) {
   };
   window.__AEGIS_PLUGINS__ = host;
   window.__AEGIS_PLUGIN_SDK__ = sdk;
-  window.__HERMES_PLUGINS__ = host;
-  window.__HERMES_PLUGIN_SDK__ = sdk;
 }
 
 function assetUrl(manifest: DashboardPluginManifest, rel: string | undefined): string {
@@ -637,7 +635,5 @@ declare global {
   interface Window {
     __AEGIS_PLUGINS__?: DashboardPluginGlobal;
     __AEGIS_PLUGIN_SDK__?: DashboardPluginSdk;
-    __HERMES_PLUGINS__?: DashboardPluginGlobal;
-    __HERMES_PLUGIN_SDK__?: DashboardPluginSdk;
   }
 }

@@ -62,7 +62,7 @@ def normalize_display_setting(setting: str, value: Any, default: Any = None) -> 
 
 
 def resolve_display_setting(config: Any, platform: Any, setting: str, default: Any = None) -> Any:
-    """Resolve a display setting with Hermes-style per-platform overrides."""
+    """Resolve a display setting with reference-style per-platform overrides."""
     key = display_setting_key(setting)
     fallback = DISPLAY_DEFAULTS.get(key, default)
     data = getattr(config, "data", config)
