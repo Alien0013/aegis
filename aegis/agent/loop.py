@@ -407,13 +407,20 @@ def _fire_provider_observer(agent, event: str, payload: dict[str, Any]) -> None:
 
 def _usage_cost_usd(model: str, usage, config) -> float:
     try:
-        from ..usage_log import _price
+        reported = getattr(usage, "cost", None)
+        if reported is not None:
+            return round(float(reported), 6)   # provider-billed actual, not an estimate
+        from ..usage_log import _price, _extra_rates
         pin, pout = _price(model, config)
+        extra = _extra_rates(model, config)
         cache_read = int(getattr(usage, "cache_read", 0) or 0)
         input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
         output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
         fresh_in = max(0, input_tokens - cache_read)
-        return round((fresh_in * pin + cache_read * pin * 0.1 + output_tokens * pout) / 1_000_000, 6)
+        cr_rate = extra.get("cache_read")
+        cr_rate = cr_rate if cr_rate is not None else pin * 0.1
+        req = float(extra.get("request_cost") or 0.0)
+        return round((fresh_in * pin + cache_read * cr_rate + output_tokens * pout) / 1_000_000 + req, 6)
     except Exception:  # noqa: BLE001
         return 0.0
 

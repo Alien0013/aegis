@@ -56,3 +56,65 @@ def test_models_dev_pricing_reads_cached_cost(monkeypatch):
                                                         "cost": {"input": 3.0, "output": 15.0}}})
     assert model_meta.pricing("claude-x", "anthropic") == (3.0, 15.0)
     assert model_meta.pricing("nope") is None
+
+
+def test_provider_reported_cost_wins_over_estimate():
+    # a turn carrying the provider's actual cost uses it verbatim, ignoring token math
+    e = {"provider": "openrouter", "model": "whatever", "input": 999_999, "output": 999_999,
+         "cache_read": 0, "cache_write": 0, "cost": 0.0123}
+    assert usage_log._turn_cost(e, 3.0, 15.0, 1.25) == 0.0123
+
+
+def test_request_cost_is_added_per_turn():
+    e = {"provider": "x", "model": "y", "input": 1000, "output": 0, "cache_read": 0, "cache_write": 0}
+    extra = {"cache_read": None, "cache_write": None, "request_cost": 0.005}
+    cost = usage_log._turn_cost(e, 3.0, 15.0, 1.25, extra)
+    assert abs(cost - ((1000 * 3) / 1_000_000 + 0.005)) < 1e-9
+
+
+def test_catalog_cache_rate_used_instead_of_multiplier():
+    # Gemini-style: cache_read is NOT 0.1x of input — the catalog rate must be used.
+    e = {"provider": "google", "model": "gemini-2.5-pro",
+         "input": 12_000, "cache_read": 10_000, "cache_write": 0, "output": 0}  # openai-like: fresh=2000
+    extra = {"cache_read": 0.25, "cache_write": None, "request_cost": None}
+    cost = usage_log._turn_cost(e, 1.25, 10.0, 1.25, extra)
+    assert abs(cost - (2000 * 1.25 + 10_000 * 0.25) / 1_000_000) < 1e-9   # 0.005, not 0.00375
+
+
+def test_catalog_cache_write_scales_with_ttl():
+    e = {"provider": "anthropic", "model": "claude-sonnet-4-6",
+         "input": 0, "cache_read": 0, "cache_write": 1000, "output": 0}
+    extra = {"cache_read": None, "cache_write": 3.75, "request_cost": None}   # 5m catalog rate
+    c5 = usage_log._turn_cost(e, 3.0, 15.0, 1.25, extra)        # 5m → factor 1.0
+    assert abs(c5 - (1000 * 3.75) / 1_000_000) < 1e-9
+    c1h = usage_log._turn_cost(e, 3.0, 15.0, 2.0, extra)        # 1h → factor 1.6 → 6.0
+    assert abs(c1h - (1000 * 6.0) / 1_000_000) < 1e-9
+
+
+def test_cost_report_marks_actual_vs_estimated(tmp_path, monkeypatch):
+    monkeypatch.setattr(usage_log, "_path", lambda: tmp_path / "usage.jsonl")
+    cfg = Config.load()
+    usage_log.log("anthropic", "claude-sonnet-4-6", Usage(1000, 500, 0, 0))   # estimated
+    actual = Usage(1000, 500, 0, 0)
+    actual.cost = 0.02
+    usage_log.log("openrouter", "some-model", actual)                         # provider-billed
+    r = usage_log.cost_report(30, cfg)
+    assert r["cost_status"] == "mixed"
+    assert "provider" in r["cost_source"]
+
+
+def test_pricing_full_reads_cache_fields(monkeypatch):
+    monkeypatch.setattr(model_meta, "_load_cache",
+                        lambda: {"anthropic/claude-x": {"context": 200000,
+                                 "cost": {"input": 3.0, "output": 15.0,
+                                          "cache_read": 0.30, "cache_write": 3.75}}})
+    full = model_meta.pricing_full("claude-x", "anthropic")
+    assert full["cache_read"] == 0.30 and full["cache_write"] == 3.75
+    assert model_meta.pricing_full("nope") is None
+
+
+def test_reported_cost_parses_openrouter_usage():
+    from aegis.providers.chat_completions import _reported_cost
+    assert _reported_cost({"cost": 0.0042}) == 0.0042
+    assert _reported_cost({"cost_details": {"upstream_inference_cost": 0.01}}) == 0.01
+    assert _reported_cost({"prompt_tokens": 100}) is None

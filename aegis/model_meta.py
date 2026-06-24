@@ -134,6 +134,31 @@ def pricing(model: str | None, provider: str | None = None) -> tuple[float, floa
     return None
 
 
+def pricing_full(model: str | None, provider: str | None = None) -> dict | None:
+    """Full per-1M-token pricing from the models.dev cache, including cache and request
+    fees: ``{input, output, cache_read, cache_write, request_cost}`` (cache/request keys
+    are ``None`` when the catalog doesn't list them). Returns ``None`` when uncached."""
+    m = (model or "").lower().strip()
+    if not m:
+        return None
+    cache = _load_cache()
+    for key in _cache_keys(m, provider):
+        cached = cache.get(key)
+        if isinstance(cached, dict) and isinstance(cached.get("cost"), dict):
+            cost = cached["cost"]
+            inp, outp = float(cost.get("input") or 0.0), float(cost.get("output") or 0.0)
+            if not (inp or outp):
+                continue
+
+            def _opt(field):
+                v = cost.get(field)
+                return float(v) if v is not None else None
+
+            return {"input": inp, "output": outp, "cache_read": _opt("cache_read"),
+                    "cache_write": _opt("cache_write"), "request_cost": _opt("request_cost")}
+    return None
+
+
 def context_window(
     model: str | None,
     config=None,
@@ -187,12 +212,19 @@ def refresh(timeout: float = 20.0) -> int:
             if ctx:
                 row["context"] = int(ctx)
             # models.dev cost is USD per 1M tokens: {input, output, cache_read, cache_write}
+            # (plus an optional flat per-request fee). Preserve the cache + request fields so
+            # cost estimates use real per-model cache rates instead of a derived multiplier.
             if isinstance(cost, dict) and (cost.get("input") is not None
                                            or cost.get("output") is not None):
                 row["cost"] = {
                     "input": float(cost.get("input") or 0.0),
                     "output": float(cost.get("output") or 0.0),
                 }
+                for src, dst in (("cache_read", "cache_read"), ("cache_write", "cache_write"),
+                                 ("cache_reads", "cache_read"), ("cache_writes", "cache_write"),
+                                 ("request", "request_cost"), ("request_cost", "request_cost")):
+                    if cost.get(src) is not None:
+                        row["cost"][dst] = float(cost[src])
             if not row:
                 continue
             model_key = str(mid).lower()

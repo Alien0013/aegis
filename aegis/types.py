@@ -126,12 +126,15 @@ class Usage:
     output_tokens: int = 0
     cache_read: int = 0     # tokens served from the prompt cache (cheap)
     cache_write: int = 0    # tokens written to the prompt cache
+    cost: float | None = None   # provider-reported actual USD cost, when the API returns one
 
     def add(self, other: "Usage") -> None:
         self.input_tokens += other.input_tokens
         self.output_tokens += other.output_tokens
         self.cache_read += other.cache_read
         self.cache_write += other.cache_write
+        if other.cost is not None:
+            self.cost = (self.cost or 0.0) + other.cost
 
 
 @dataclass

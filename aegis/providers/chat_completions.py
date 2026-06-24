@@ -17,6 +17,22 @@ from .base import ApiMode, OnDelta, ProviderTransport
 from .auth import AuthProvider
 
 
+def _reported_cost(usage: dict) -> float | None:
+    """Provider-reported actual USD cost when the API returns one (e.g. OpenRouter's
+    ``usage.cost``). Returns None when absent so the caller falls back to an estimate."""
+    if not isinstance(usage, dict):
+        return None
+    cost = usage.get("cost")
+    if cost is None:
+        details = usage.get("cost_details")
+        if isinstance(details, dict):
+            cost = details.get("upstream_inference_cost") or details.get("total_cost")
+    try:
+        return float(cost) if cost is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 class ChatCompletionsTransport(ProviderTransport):
     api_mode = ApiMode.CHAT_COMPLETIONS
 
@@ -137,13 +153,15 @@ class ChatCompletionsTransport(ProviderTransport):
             for i, tc in enumerate(msg.get("tool_calls") or [])
         ]
         usage = data.get("usage") or {}
+        usage_obj = Usage(usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0),
+                          (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0))
+        usage_obj.cost = _reported_cost(usage)
         return LLMResponse(
             text=msg.get("content") or "",
             tool_calls=tool_calls,
             finish_reason=choice.get("finish_reason"),
             reasoning=msg.get("reasoning_content") or msg.get("reasoning") or "",
-            usage=Usage(usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0),
-                        (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)),
+            usage=usage_obj,
             raw=data,
         )
 
@@ -176,6 +194,7 @@ class ChatCompletionsTransport(ProviderTransport):
                         u = chunk["usage"]
                         usage = Usage(u.get("prompt_tokens", 0), u.get("completion_tokens", 0),
                                       (u.get("prompt_tokens_details") or {}).get("cached_tokens", 0))
+                        usage.cost = _reported_cost(u)
                     for choice in chunk.get("choices", []):
                         if choice.get("finish_reason"):
                             finish_reason = choice["finish_reason"]
