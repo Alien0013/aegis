@@ -63,7 +63,7 @@ aegis chat -q "summarize this folder"
 aegis chat --continue
 aegis chat --image plot.png "what is wrong with this chart?"
 aegis batch prompts.txt
-aegis tui --once
+aegis status
 ```
 
 Useful REPL commands:

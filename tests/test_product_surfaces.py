@@ -94,7 +94,7 @@ def test_config_summary_prints_hermes_style_terminal_surface(monkeypatch, capsys
     assert "aegis config reset <key>" in out
     assert "aegis config doctor" in out
     assert "aegis config setup" in out
-    assert "aegis tui" in out
+    assert "aegis chat" in out
 
 
 def test_tool_context_exposes_plugin_developer_helpers(tmp_path):

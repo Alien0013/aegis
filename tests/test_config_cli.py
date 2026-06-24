@@ -43,7 +43,7 @@ def test_config_summary_is_readable_ascii_and_redacts_secret(monkeypatch, capsys
     assert "Telegram:   configured" in out
     assert "Input mode:" in out
     assert "aegis config setup memory" in out
-    assert "aegis tui" in out
+    assert "aegis chat" in out
     assert "aegis setup dashboard" in out
 
     assert main(["config", "view"]) == 0
@@ -119,7 +119,7 @@ def test_config_status_json_is_machine_readable_and_redacted(monkeypatch, capsys
     assert data["validation"]["config_yaml"] == "ok"
     assert "aegis config view" in data["commands"]
     assert "aegis config edit" in data["commands"]
-    assert "aegis tui" in data["commands"]
+    assert "aegis chat" in data["commands"]
     assert "aegis config setup memory" in data["commands"]
     assert "aegis setup dashboard" in data["commands"]
     assert "sk-test-secret-value" not in out

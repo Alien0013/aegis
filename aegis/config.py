@@ -547,6 +547,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "status_footer": True,
         "tool_progress": "compact",  # compact | detailed
         "tool_progress_grouping": "accumulate",  # accumulate | separate
+        "long_task_heartbeat_seconds": 20,  # terminal still-working pulse for quiet long turns
         "timestamps": False,          # opt-in terminal timestamp display controls
         "memory_notifications": "on",  # off | on | verbose
         "theme": "system",

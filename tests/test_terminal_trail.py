@@ -117,6 +117,25 @@ def test_renderer_turn_timeline_summarizes_long_runs(capsys, monkeypatch):
     assert "1 error(s)" in out
 
 
+def test_renderer_surfaces_subagent_lifecycle(capsys, monkeypatch):
+    monkeypatch.setattr(repl, "_console", None)
+    monkeypatch.setenv("AEGIS_ASCII", "1")
+    r = Renderer(None)
+    for event in (
+        {"type": "subagent_start", "id": "sub_123456789", "agent_type": "review", "task": "audit terminal UI"},
+        {"type": "subagent_text", "id": "sub_123456789", "text": "working"},
+        {"type": "subagent_done", "id": "sub_123456789", "status": "done", "run_id": "run_abc123456"},
+    ):
+        r(event)
+
+    out = capsys.readouterr().out
+    assert "subagent started" in out
+    assert "review sub_1234567" in out
+    assert "audit terminal UI" in out
+    assert "subagent done" in out
+    assert "run run_abc1234" in out
+
+
 def test_run_terminal_turn_emits_turn_boundaries(tmp_path, monkeypatch):
     from types import SimpleNamespace
 

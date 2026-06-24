@@ -32,7 +32,7 @@ Hermes/Codex-style polish, see [feature-parity-matrix.md](feature-parity-matrix.
 | Surface | Run it | What it shares |
 | --- | --- | --- |
 | Terminal agent | `aegis` or `aegis chat -q "..."` | Sessions, memory, tools, permissions, traces, run rows, provider routing. |
-| Terminal cockpit | `aegis tui --once` or `aegis tui --watch` | Store-backed status for sessions, runs, cron, kanban, dashboard, and services. |
+| Terminal status | `aegis status` | Read-only install/auth/tools/skills/plugins/service status. |
 | Browser dashboard | `aegis ui --no-open --port 9119` | Token-gated FastAPI API plus the built React/Vite UI from `aegis/static/web_dist/`. |
 | Dashboard development | Start `aegis ui --no-open`, then `cd web && npm run dev` | Vite proxies `/api` to the dashboard backend. |
 | Desktop | `aegis desktop` or `cd desktop && npm start` | Electron launches/probes the local dashboard backend and reuses the same AEGIS home. |

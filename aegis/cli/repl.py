@@ -419,6 +419,8 @@ class Renderer:
         self._provider_reasoning_chars = 0
         self._provider_reasoning = ""
         self.status = TerminalStatusState()
+        self._heartbeat_stop = threading.Event()
+        self._heartbeat_thread: threading.Thread | None = None
 
     def _reasoning_mode(self) -> str:
         if self.config is None:
@@ -435,6 +437,52 @@ class Renderer:
 
     def _timestamps_enabled(self) -> bool:
         return bool(self.config is not None and self.config.get("display.timestamps", False))
+
+    def _heartbeat_interval(self) -> float:
+        if self.config is None:
+            return 20.0
+        try:
+            value = float(self.config.get("display.long_task_heartbeat_seconds", 20) or 0)
+        except (TypeError, ValueError):
+            value = 20.0
+        return max(0.0, value)
+
+    def _heartbeat_enabled(self) -> bool:
+        if not getattr(sys.stdout, "isatty", lambda: False)():
+            return False
+        return self._heartbeat_interval() > 0
+
+    def _start_heartbeat(self) -> None:
+        if not self._heartbeat_enabled():
+            return
+        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+            return
+        self._heartbeat_stop.clear()
+
+        def loop() -> None:
+            interval = self._heartbeat_interval()
+            while not self._heartbeat_stop.wait(interval):
+                if self._streaming or not self.status.started_at or self.status.duration_ms:
+                    continue
+                if self.status.phase not in {
+                    "running", "thinking", "model", "tool", "subagent", "compacting", "budget",
+                }:
+                    continue
+                segment = self.status.segment(
+                    busy_mode=self.config.get("gateway.busy_mode", "queue") if self.config else None,
+                )
+                if segment:
+                    self._emit(f"  {_ui('⏱', '...')} still working · {segment}", style="bright_black")
+
+        self._heartbeat_thread = threading.Thread(
+            target=loop,
+            name="aegis-terminal-heartbeat",
+            daemon=True,
+        )
+        self._heartbeat_thread.start()
+
+    def _stop_heartbeat(self) -> None:
+        self._heartbeat_stop.set()
 
     def _emit(self, text: str, style: str | None = None) -> None:
         if self._timestamps_enabled():
@@ -466,12 +514,14 @@ class Renderer:
         self.status.update(e)
         t = e["type"]
         if t == "terminal_turn_start":
+            self._start_heartbeat()
             chars = int(e.get("chars") or 0)
             sid = str(e.get("session_id") or "")
             label = f" · session {sid[:12]}" if sid else ""
             self._emit(f"  {_ui('◆', 'run')} turn started · {chars:,} chars{label}", style=TERM_CYAN)
             return
         if t == "terminal_turn_end":
+            self._stop_heartbeat()
             status = str(e.get("status") or "ok")
             style = "red" if status == "error" else TERM_GREEN
             prefix = _ui("✗", "x") if status == "error" else _ui("✓", "ok")
@@ -593,6 +643,27 @@ class Renderer:
             detail = self._tool_detail_line(e) if self._tool_progress_mode() == "detailed" else ""
             if detail:
                 self._emit(f"      {detail}", style="bright_black")
+        elif t == "subagent_start":
+            sid = str(e.get("id") or e.get("subagent_id") or "")
+            kind = str(e.get("agent_type") or "agent")
+            task = _oneline(e.get("task") or e.get("prompt") or "", 72)
+            label = f"{kind} {sid[:12]}".strip()
+            self._emit(f"  {_ui('↳', '>')} subagent started · {label} · {task}".rstrip(), style=TERM_CYAN)
+        elif t == "subagent_done":
+            sid = str(e.get("id") or e.get("subagent_id") or "")
+            status = str(e.get("status") or "done")
+            style = "red" if status == "error" else TERM_GREEN
+            run_id = str(e.get("run_id") or "")
+            run = f" · run {run_id[:12]}" if run_id else ""
+            prefix = _ui("✗", "x") if status == "error" else _ui("✓", "ok")
+            self._emit(f"  {prefix} subagent {status} · {sid[:12]}{run}", style=style)
+        elif t in {"subagent_text", "subagent_reasoning"}:
+            if self._tool_progress_mode() != "detailed":
+                return
+            sid = str(e.get("id") or e.get("subagent_id") or "")
+            text = _oneline(e.get("text") or "", 96)
+            label = "reasoning" if t == "subagent_reasoning" else "output"
+            self._emit(f"    {_ui('↳', '>')} subagent {sid[:12]} {label}: {text}", style="bright_black")
         elif t == "ultracode_continue":
             self._emit(f"  {_ui('↻', '...')} ultracode: {e.get('remaining', '?')} todo(s) left — continuing "
                        f"(push {e.get('n', '')}/{12})", style=TERM_CYAN)

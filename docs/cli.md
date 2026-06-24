@@ -113,10 +113,9 @@ metadata for dashboard filtering and replay.
 to a messaging channel. The gateway adopts it the next time that chat sends a
 message (the chat gets a ping immediately if the gateway is running).
 
-## Cockpit slash commands
+## Terminal Slash Commands
 
-The REPL includes the product-facing shortcuts used by the terminal and dashboard
-cockpit:
+The REPL includes the product-facing shortcuts used by the terminal agent:
 
 - `/reasoning off|none|summary|live|minimal|low|medium|high|xhigh`
 - `/busy queue|steer|interrupt`

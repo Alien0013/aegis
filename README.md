@@ -68,7 +68,7 @@ Open the other local surfaces:
 aegis ui --no-open --port 9119       # browser dashboard backend + built UI
 aegis desktop                        # Electron shell around the dashboard
 aegis serve --port 8790              # OpenAI-compatible API
-aegis tui --once                     # terminal cockpit snapshot
+aegis status                         # terminal status snapshot
 ```
 
 Use `aegis status`, `aegis tools list`, and `aegis skills list` for live counts
@@ -223,12 +223,12 @@ remaining work is mostly proof, visibility, and release polish:
 Hermes still feels larger mostly because it has more native product shell around
 the same class of agent: a deeper desktop renderer, a richer stateful terminal
 TUI, broader platform adapters, mature installer/update flows, and more
-generated references. AEGIS is now intentionally session-first in the browser
-instead of landing users in an all-in-one admin cockpit.
+generated references. AEGIS is now intentionally session-first in both the
+browser and terminal.
 
 | Area | Remaining parity work |
 | --- | --- |
-| Dashboard cockpit | More trace explainability, prompt/context audit, provider capability/probe matrix hardening, fuller tool provenance, background job lifecycle, cron dry-run/next-fire views, and gateway backpressure metrics. |
+| Dashboard overview | More trace explainability, prompt/context audit, provider capability/probe matrix hardening, fuller tool provenance, background job lifecycle, cron dry-run/next-fire views, and gateway backpressure metrics. |
 | Desktop release | Formal lifecycle state machine, packaged smoke artifact verification, crash history/repair UX, release artifact hashes/SBOM, and signed/notarized release evidence when credentials are available. |
 | Terminal polish | A richer stateful full-screen TUI, generated slash-command docs, more visual REPL polish, and stronger parity tests for goals, branching, checkpoints, and rollback. |
 | API/SDK contracts | Endpoint contract fixtures for chat/completions, responses-style behavior, streaming metadata, auth, cancellation, run events, MCP, and eval replay. |

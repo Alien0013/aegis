@@ -1570,7 +1570,7 @@ def cmd_config(args, config: Config) -> int:
             "aegis config reset <key>",
             "aegis config doctor",
             "aegis config setup",
-            "aegis tui",
+            "aegis chat",
             *config_setup_commands,
             *setup_commands,
             "aegis setup",
@@ -1737,7 +1737,7 @@ def cmd_config(args, config: Config) -> int:
         _print("  aegis config reset <key>          # Reset a config key or section to defaults")
         _print("  aegis config doctor               # Validate config and provider credentials")
         _print("  aegis config setup                # Run setup wizard from config")
-        _print("  aegis tui                         # Open terminal cockpit with config/edit actions")
+        _print("  aegis chat                        # Open the terminal agent")
         for section in _SETUP_SECTIONS:
             note = setup_descriptions.get(section, f"Configure {section}")
             _print(f"  aegis config setup {section:<9} # {note}")
@@ -2724,9 +2724,9 @@ def build_parser() -> argparse.ArgumentParser:
         db.add_argument("--no-open", action="store_true", help="don't auto-open the browser")
         db.set_defaults(func=_dash.cmd_dashboard)
 
-    tu = sub.add_parser("tui", help="terminal cockpit for sessions/runs/cron/kanban")
-    tu.add_argument("--once", action="store_true", help="render one snapshot and exit")
-    tu.add_argument("--watch", action="store_true", help="refresh until interrupted")
+    tu = sub.add_parser("tui", help="open the terminal agent (compatibility alias)")
+    tu.add_argument("--once", action="store_true", help="show status and exit")
+    tu.add_argument("--watch", action="store_true", help="refresh status until interrupted")
     tu.add_argument("--interval", type=float, default=5.0, help="watch refresh interval in seconds")
     tu.add_argument("--no-color", action="store_true", help="disable ANSI color")
     tu.set_defaults(func=_tui.cmd_tui)
