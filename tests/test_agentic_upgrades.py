@@ -636,6 +636,7 @@ def test_deferred_tool_selectors_cover_dynamic_sources():
         ToolSearchTool(),
     ])
     cfg = Config.load()
+    cfg.data.setdefault("tools", {})["toolsets"] = ["core", "mcp"]
     cfg.data.setdefault("tools", {})["defer_schemas"] = True
     cfg.data["tools"]["deferred"] = ["source:mcp", "plugin:*", "glob:local_*"]
 

@@ -620,7 +620,7 @@ tests/conftest.py,tests,55,skills/creative/comfyui/tests/conftest.py,65,same tes
 tests/test_ab.py,tests,98,tests/*,,add/align behavior contract tests,Keep/add tests proving AEGIS-like behavior in AEGIS runtime.
 tests/test_acp.py,tests,448,tests/*,,add/align behavior contract tests,Keep/add tests proving AEGIS-like behavior in AEGIS runtime.
 tests/test_agent_perms.py,tests,426,tests/*,,add/align behavior contract tests,Keep/add tests proving AEGIS-like behavior in AEGIS runtime.
-tests/test_agentic_upgrades.py,tests,763,tests/*,,add/align behavior contract tests,Keep/add tests proving AEGIS-like behavior in AEGIS runtime.
+tests/test_agentic_upgrades.py,tests,764,tests/*,,add/align behavior contract tests,Keep/add tests proving AEGIS-like behavior in AEGIS runtime.
 tests/test_ambient.py,tests,88,tests/*,,add/align behavior contract tests,Keep/add tests proving AEGIS-like behavior in AEGIS runtime.
 tests/test_automation.py,tests,1252,tests/*,,add/align behavior contract tests,Keep/add tests proving AEGIS-like behavior in AEGIS runtime.
 tests/test_bench.py,tests,98,tests/*,,add/align behavior contract tests,Keep/add tests proving AEGIS-like behavior in AEGIS runtime.

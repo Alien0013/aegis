@@ -797,7 +797,7 @@ def test_cron_job_runtime_overrides_model_toolsets_and_workdir(monkeypatch, tmp_
     assert result["enabled_toolsets"] == ["core", "web"]
     assert result["workdir"] == str(workdir)
     assert seen["model"] == "cron-model"
-    assert seen["toolsets"] == ["core", "web", "mcp"]
+    assert seen["toolsets"] == ["core", "web"]
     assert {"clarify", "send_message", "cronjob", "schedule_task"}.issubset(set(seen["disabled_tools"]))
     assert str(seen["kwargs"]["cwd"]) == str(workdir)
     saved = CronStore().get(job.id)
