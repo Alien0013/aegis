@@ -45,9 +45,9 @@ python scripts/release_provenance.py --artifact-dir dist --out release-provenanc
 python scripts/release_provenance.py --artifact-dir dist --out release-provenance/python --check
 ```
 
-`scripts/verify_all.sh` runs the parity ledger checker, generated-reference
-drift check, Python tests, release-provenance smoke, web typecheck/build,
-desktop tests, Python compile checks, and `git diff --check`.
+`scripts/verify_all.sh` runs the generated-reference drift check, Python tests,
+release-provenance smoke, web typecheck/build, desktop tests, Python compile
+checks, and `git diff --check`.
 
 For desktop artifacts, CI generates the same proof inside each
 `desktop/release` folder:

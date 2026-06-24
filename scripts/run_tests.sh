@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hermetic test runner — use this, not bare `pytest`, for parity with CI.
+# Hermetic test runner — use this, not bare `pytest`, to match CI exactly.
 # Strips real credentials, pins UTC, and runs against a throwaway AEGIS_HOME so a
 # developer's local keys or timezone can never change the outcome.
 set -euo pipefail

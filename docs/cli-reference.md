@@ -86,7 +86,7 @@ Generated from `aegis.cli.main.build_parser()`.
 | aegis ui | open the AEGIS control panel in your browser | `aegis ui [-h] [--host HOST] [--port PORT] [--no-open]` |
 | aegis uninstall | remove AEGIS (--purge also deletes ~/.aegis) | `aegis uninstall [-h] [--purge]` |
 | aegis update | update AEGIS to the latest version | `aegis update [-h] [--check] [--dry-run] [--json] [--branch BRANCH]` |
-| aegis verify | run the full Python/web/desktop/docs parity gate | `aegis verify [-h] ...` |
+| aegis verify | run the full Python/web/desktop/docs release gate | `aegis verify [-h] ...` |
 | aegis version | print the AEGIS version | `aegis version [-h]` |
 | aegis watch | ambient mode: run the project's tests on every save | `aegis watch [-h] [path]` |
 | aegis webhook | event webhooks that trigger the agent | `aegis webhook [-h] [--secret SECRET] [--host HOST] [--port PORT]                      [--deliver DELIVER] [--deliver-only] [--events EVENTS]                      [--skills SKILLS]                      [{list,add,remove,serve}] [name] [prompt ...]` |

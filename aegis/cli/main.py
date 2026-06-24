@@ -3004,7 +3004,7 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--json", action="store_true", help="print machine-readable status")
     st.set_defaults(func=cmd_status)
 
-    vf = sub.add_parser("verify", help="run the full Python/web/desktop/docs parity gate")
+    vf = sub.add_parser("verify", help="run the full Python/web/desktop/docs release gate")
     vf.add_argument("verify_args", nargs=argparse.REMAINDER, help="arguments passed to scripts/verify_all.sh")
     vf.set_defaults(func=cmd_verify)
 
@@ -3029,7 +3029,7 @@ def build_parser() -> argparse.ArgumentParser:
     cm.add_argument("shell", choices=["bash", "zsh", "fish"])
     cm.set_defaults(func=cmd_completion)
 
-    # --- parity subsystems (modules under aegis/) ---
+    # --- subsystem subcommands (modules under aegis/) ---
     from .. import acp as _acp
     from .. import backup as _backup
     from .. import curator as _curator

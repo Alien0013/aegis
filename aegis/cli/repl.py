@@ -2859,7 +2859,7 @@ def interactive(config: Config, *, model=None, provider_name=None,
     if _fullscreen_enabled(config):
         store = store or SessionStore()
         session = session or Session.create()
-        # 1) literal Node/Ink terminal (the Hermes-style surface)
+        # 1) full-screen Node/Ink terminal (the premium surface)
         try:
             from .tui_ink import launch_ink_tui
             launch_ink_tui(config, model=model, provider_name=provider_name,

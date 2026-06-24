@@ -1,87 +1,104 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="660" viewBox="0 0 1120 660" role="img" aria-label="AEGIS architecture map">
   <defs>
-    <linearGradient id="sysBg" x1="0" y1="0" x2="1120" y2="660" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#071115"/>
-      <stop offset="1" stop-color="#111a22"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="1120" y2="660" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#191b20"/>
+      <stop offset="1" stop-color="#121317"/>
     </linearGradient>
-    <linearGradient id="sysLine" x1="120" y1="0" x2="980" y2="0" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#36e2c0"/>
-      <stop offset="0.52" stop-color="#e8ba66"/>
-      <stop offset="1" stop-color="#7ab7ff"/>
+    <linearGradient id="accent" x1="0" y1="0" x2="1120" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#d6a15e"/>
+      <stop offset="0.55" stop-color="#7ecf8f"/>
+      <stop offset="1" stop-color="#6fb7d8"/>
     </linearGradient>
-    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
-      <path d="M0 0 10 5 0 10z" fill="#7d969e"/>
+    <marker id="arr" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+      <path d="M0 0 9 4.5 0 9z" fill="#8f968f"/>
     </marker>
     <style>
-      .title{font:800 32px Inter,ui-sans-serif,Segoe UI,sans-serif;fill:#edf8f5}
-      .sub{font:500 15px Inter,ui-sans-serif,Segoe UI,sans-serif;fill:#8fa4ac}
-      .h{font:800 15px Inter,ui-sans-serif,Segoe UI,sans-serif;fill:#edf8f5}
-      .p{font:500 12px Inter,ui-sans-serif,Segoe UI,sans-serif;fill:#a9bdc4}
-      .mono{font:600 12px ui-monospace,Menlo,Consolas,monospace;fill:#8fa4ac}
-      .box{fill:#0c2026;stroke:#27464e;stroke-width:1.2}
-      .core{fill:#102a31;stroke:url(#sysLine);stroke-width:2}
-      .link{stroke:#7d969e;stroke-width:1.7;fill:none;marker-end:url(#arrow)}
+      .title{font:800 33px Inter,ui-sans-serif,Segoe UI,sans-serif;fill:#f3f1e8}
+      .sub{font:500 15px Inter,ui-sans-serif,Segoe UI,sans-serif;fill:#8f968f}
+      .h{font:700 16px Inter,ui-sans-serif,Segoe UI,sans-serif;fill:#d6a15e}
+      .hc{font:700 16px Inter,ui-sans-serif,Segoe UI,sans-serif;fill:#f3f1e8}
+      .p{font:500 13px Inter,ui-sans-serif,Segoe UI,sans-serif;fill:#b9c0bb}
+      .mono{font:600 12.5px ui-monospace,Menlo,Consolas,monospace;fill:#7ecf8f}
+      .box{fill:#22252c;stroke:#3a3f47;stroke-width:1.2}
+      .core{fill:#262a31;stroke:url(#accent);stroke-width:2}
+      .pill{fill:#1b1d22;stroke:#4a5159}
+      .link{stroke:#8f968f;stroke-width:1.7;fill:none;marker-end:url(#arr)}
     </style>
   </defs>
-  <rect width="1120" height="660" rx="24" fill="url(#sysBg)"/>
-  <text x="56" y="64" class="title">AEGIS architecture</text>
-  <text x="56" y="92" class="sub">One agent loop, many surfaces, shared safety, shared state.</text>
-  <rect x="56" y="130" width="240" height="430" rx="16" class="box"/>
-  <text x="82" y="164" class="h">Surfaces</text>
-  <text x="82" y="192" class="p">Terminal REPL and one-shot chat</text>
-  <text x="82" y="222" class="p">React dashboard and desktop app</text>
-  <text x="82" y="252" class="p">Gateway: Telegram, Discord, Slack,</text>
-  <text x="82" y="270" class="p">Signal, Matrix, Email, Webhook, ntfy</text>
-  <text x="82" y="300" class="p">OpenAI-compatible API server</text>
-  <text x="82" y="330" class="p">Python SDK, JSON-RPC, ACP for IDEs</text>
-  <text x="82" y="360" class="p">MCP client and AEGIS MCP server</text>
-  <path d="M82 390h188" stroke="#27464e"/>
-  <text x="82" y="424" class="mono">aegis</text>
-  <text x="82" y="452" class="mono">aegis ui</text>
-  <text x="82" y="480" class="mono">aegis gateway</text>
-  <text x="82" y="508" class="mono">aegis serve</text>
-  <rect x="414" y="114" width="292" height="94" rx="18" class="core"/>
-  <text x="456" y="151" class="h">SurfaceRunner</text>
-  <text x="456" y="177" class="p">Normalizes messages, sessions, events,</text>
-  <text x="456" y="195" class="p">context references, controls, and tracing.</text>
-  <rect x="374" y="250" width="372" height="154" rx="20" class="core"/>
-  <text x="424" y="290" class="h">Agent.run</text>
-  <text x="424" y="318" class="p">Bounded loop with governance, compaction,</text>
-  <text x="424" y="338" class="p">thinking recovery, cost caps, and routing.</text>
-  <g>
-    <rect x="398" y="362" width="140" height="28" rx="14" fill="#0b171c" stroke="#315961"/>
-    <text x="424" y="381" class="mono">context build</text>
-    <rect x="552" y="362" width="160" height="28" rx="14" fill="#0b171c" stroke="#315961"/>
-    <text x="574" y="381" class="mono">tool execution</text>
-  </g>
-  <rect x="356" y="456" width="166" height="104" rx="16" class="box"/>
-  <text x="382" y="490" class="h">Providers</text>
-  <text x="382" y="518" class="p">29 presets</text>
-  <text x="382" y="538" class="p">API key, OAuth, pools, fallback</text>
-  <rect x="598" y="456" width="166" height="104" rx="16" class="box"/>
-  <text x="624" y="490" class="h">Permission gate</text>
-  <text x="624" y="518" class="p">Hardline blocklist</text>
-  <text x="624" y="538" class="p">Scan, approval, sandbox</text>
-  <rect x="824" y="130" width="240" height="430" rx="16" class="box"/>
-  <text x="850" y="164" class="h">Execution and state</text>
-  <text x="850" y="192" class="p">45 registered tools, 37 visible by default</text>
-  <text x="850" y="222" class="p">Files, shell, browser, LSP, GitHub,</text>
-  <text x="850" y="240" class="p">processes, semantic code search, cloud</text>
-  <text x="850" y="270" class="p">MCP and plugin tools</text>
-  <text x="850" y="300" class="p">Local, Docker, SSH, Singularity, Modal</text>
-  <path d="M850 328h188" stroke="#27464e"/>
-  <text x="850" y="360" class="p">Sessions, traces, evals, trajectories</text>
-  <text x="850" y="390" class="p">Memory, skills, curator, learning loop</text>
-  <text x="850" y="420" class="p">Cron, kanban workers, gateway queue</text>
-  <text x="850" y="450" class="p">Cost analytics, snapshots, backups</text>
-  <text x="850" y="500" class="mono">~/.aegis</text>
-  <text x="850" y="528" class="mono">config.yaml | auth.json | sessions</text>
-  <path d="M296 344C346 344 346 161 414 161" class="link"/>
-  <path d="M560 208v42" class="link"/>
-  <path d="M500 404v52" class="link"/>
-  <path d="M640 404v52" class="link"/>
-  <path d="M746 328C786 328 786 344 824 344" class="link"/>
-  <path d="M764 508C790 508 796 508 824 508" class="link"/>
-  <rect x="200" y="596" width="720" height="34" rx="17" fill="#0c2026" stroke="#27464e"/>
-  <text x="234" y="618" class="mono">Same context rules, same providers, same tool permissions, same durable state across every entry point.</text>
+  <rect width="1120" height="660" rx="22" fill="url(#bg)"/>
+  <rect x="2" y="2" width="1116" height="656" rx="21" fill="none" stroke="#2b2f36"/>
+  <text x="56" y="62" class="title">AEGIS architecture</text>
+  <text x="56" y="90" class="sub">One agent loop. Many surfaces. Shared safety, shared state — all on your machine.</text>
+
+  <!-- Surfaces -->
+  <rect x="56" y="126" width="264" height="438" rx="16" class="box"/>
+  <text x="82" y="160" class="h">Surfaces</text>
+  <text x="82" y="190" class="p">Full-screen Node/Ink terminal</text>
+  <text x="82" y="212" class="p">React dashboard · Electron desktop</text>
+  <text x="82" y="234" class="p">OpenAI-compatible API · JSON-RPC</text>
+  <text x="82" y="256" class="p">Python SDK · ACP · MCP server</text>
+  <text x="82" y="278" class="p">Gateway: Telegram, Discord, Slack,</text>
+  <text x="82" y="296" class="p">Signal, Matrix, Mattermost, Email…</text>
+  <text x="82" y="318" class="p">Cron, kanban, webhooks, watchers</text>
+  <path d="M82 344h212" stroke="#3a3f47"/>
+  <text x="82" y="378" class="mono">aegis</text>
+  <text x="82" y="406" class="mono">aegis ui</text>
+  <text x="82" y="434" class="mono">aegis serve</text>
+  <text x="82" y="462" class="mono">aegis gateway</text>
+  <text x="82" y="490" class="mono">aegis cron · aegis mcp</text>
+
+  <!-- Core -->
+  <rect x="404" y="118" width="312" height="92" rx="16" class="core"/>
+  <text x="430" y="152" class="hc">SurfaceRunner</text>
+  <text x="430" y="178" class="p">Normalizes messages, sessions, events,</text>
+  <text x="430" y="196" class="p">context refs, controls, and tracing.</text>
+
+  <rect x="384" y="248" width="352" height="158" rx="18" class="core"/>
+  <text x="412" y="284" class="hc">Agent.run</text>
+  <text x="412" y="310" class="p">Bounded loop: governance, compaction,</text>
+  <text x="412" y="328" class="p">prompt caching, cost caps, routing.</text>
+  <rect x="408" y="350" width="142" height="30" rx="15" class="pill"/>
+  <text x="430" y="370" class="mono">context build</text>
+  <rect x="566" y="350" width="150" height="30" rx="15" class="pill"/>
+  <text x="588" y="370" class="mono">tool execution</text>
+
+  <rect x="372" y="452" width="168" height="106" rx="14" class="box"/>
+  <text x="398" y="486" class="h">Providers</text>
+  <text x="398" y="514" class="p">Anthropic, OpenAI, Gemini,</text>
+  <text x="398" y="532" class="p">OpenRouter, local, +more</text>
+  <text x="398" y="550" class="p">keys · OAuth · pools · fallback</text>
+
+  <rect x="580" y="452" width="156" height="106" rx="14" class="box"/>
+  <text x="606" y="486" class="h">Permission gate</text>
+  <text x="606" y="514" class="p">Hardline blocklist</text>
+  <text x="606" y="532" class="p">scan · approval</text>
+  <text x="606" y="550" class="p">sandbox · provenance</text>
+
+  <!-- Execution & state -->
+  <rect x="800" y="126" width="264" height="438" rx="16" class="box"/>
+  <text x="826" y="160" class="h">Execution &amp; state</text>
+  <text x="826" y="190" class="p">106 tools · ~22 live, rest deferred</text>
+  <text x="826" y="212" class="p">files, shell, browser, LSP, process,</text>
+  <text x="826" y="230" class="p">code exec, repo map, image, vision</text>
+  <text x="826" y="252" class="p">MCP &amp; plugin tools · subagents</text>
+  <text x="826" y="274" class="p">Local · Docker · SSH · Modal</text>
+  <path d="M826 300h212" stroke="#3a3f47"/>
+  <text x="826" y="332" class="p">Sessions, traces, evals, trajectories</text>
+  <text x="826" y="358" class="p">Memory (4 backends) · 70+ skills</text>
+  <text x="826" y="384" class="p">Curator · learning loop · recall</text>
+  <text x="826" y="410" class="p">Cron, kanban, gateway queue</text>
+  <text x="826" y="436" class="p">Cost analytics · snapshots · backups</text>
+  <path d="M826 460h212" stroke="#3a3f47"/>
+  <text x="826" y="494" class="mono">~/.aegis</text>
+  <text x="826" y="520" class="mono">config · auth · sessions · memory</text>
+
+  <!-- links -->
+  <path d="M320 322C360 322 364 164 404 164" class="link"/>
+  <path d="M560 210v38" class="link"/>
+  <path d="M474 406v46" class="link"/>
+  <path d="M656 406v46" class="link"/>
+  <path d="M736 300C772 300 768 322 800 322" class="link"/>
+
+  <rect x="210" y="600" width="700" height="34" rx="17" fill="#22252c" stroke="#3a3f47"/>
+  <text x="244" y="622" class="mono">Same context rules · same providers · same permissions · same durable state — every entry point.</text>
 </svg>

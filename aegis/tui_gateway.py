@@ -1,6 +1,6 @@
 """WebSocket gateway between the Node/Ink terminal client and the Python agent.
 
-This is the Python half of AEGIS' Hermes-style terminal: a local-only WebSocket server
+This is the Python half of AEGIS' full-screen terminal: a local-only WebSocket server
 that owns the agent, runs each turn on a worker thread, and streams the result to the Ink
 client as JSON frames. Every byte the turn would normally print to the terminal is captured
 (ANSI intact) and forwarded as ``output`` frames, so the Ink surface shows exactly what the

@@ -13,31 +13,31 @@ One auditable Python runtime for the terminal, browser dashboard, desktop app, A
 
 <p align="center">
   <a href="#quickstart">Quickstart</a> ·
-  <a href="#what-aegis-does-now">What it does</a> ·
-  <a href="#run-and-test">Run and test</a> ·
-  <a href="#product-polish-remaining">Parity remaining</a> ·
+  <a href="#what-aegis-does">What it does</a> ·
+  <a href="#the-terminal">Terminal</a> ·
+  <a href="#run-and-test">Run &amp; test</a> ·
   <a href="docs/index.md">Docs</a>
 </p>
 
 ---
 
-AEGIS is a self-hostable agent harness for people who want a Codex-class
-coding and operations assistant without moving the whole workflow into a remote
-black box. The same agent loop powers every surface: terminal chat, the local
-React dashboard, Electron desktop, OpenAI-compatible API, JSON-RPC, Python SDK,
-ACP, MCP, cron, webhooks, and messaging gateways.
+AEGIS is a self-hostable agent harness for people who want a capable coding and
+operations assistant **on their own machine** — not behind someone else's API. The
+same agent loop powers every surface: a full-screen terminal, a local React
+dashboard, an Electron desktop app, an OpenAI-compatible API, JSON-RPC, a Python
+SDK, ACP, MCP, cron, webhooks, and messaging gateways.
 
 State is local by default. Config, secrets, sessions, memory, traces, evals,
 checkpoints, logs, and tool output live under `~/.aegis` or `$AEGIS_HOME`.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash
-aegis            # terminal agent
+aegis            # full-screen terminal agent
 aegis ui         # local browser dashboard
 ```
 
-AEGIS starts with a cost-safe CLI tool surface. Opt into extra model-visible
-toolsets during install only when you need them:
+AEGIS starts with a lean, cost-safe tool surface (≈22 live tool schemas; the rest
+are loaded on demand). Opt into extra toolsets only when you need them:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Alien0013/aegis/main/install.sh | bash -s -- \
@@ -74,33 +74,45 @@ aegis status                         # terminal status snapshot
 
 Use `aegis status`, `aegis tools list`, and `aegis skills list` for live counts
 from your current checkout and environment. Optional tools report missing
-dependencies instead of failing import.
+dependencies instead of failing import. Run `aegis cost status` to inspect live
+token overhead, and `aegis models refresh` to pull the latest model/pricing
+catalog so `aegis cost` is accurate for any model.
 
-Run `aegis cost status` to inspect live tool-schema and skill-index token
-overhead. If an older install has an expensive broad surface, run
-`aegis cost optimize` to switch it back to the lean CLI profile.
+## The Terminal
 
-Run `aegis setup tools --advanced` to revise optional browser, computer, voice,
-LSP, and MCP toolsets. The setup step writes the model-visible toolset config
-and reports enabled tools, available skills, and plugin tool totals.
-Automation can pin the same policy with
-`aegis setup tools --non-interactive --accept-risk --toolsets core --skills web-research,summarize`.
-The one-line installer accepts the same first-run policy through `--toolsets`,
-`--skills`, `AEGIS_TOOLSETS`, and `AEGIS_SKILLS`.
+Run `aegis` on an interactive TTY and it opens a **full-screen Node/Ink terminal**:
 
-## What AEGIS Does Now
+- alternate-screen layout with a **fixed header** and a bottom-anchored scroll
+  region (`PgUp`/`PgDn`/`Esc`, optional mouse wheel via `AEGIS_TUI_MOUSE=1`)
+- structured **tool cards** (status pill, duration, `+adds/-dels` diff stats),
+  thinking, message bubbles, and notices — streamed from the agent as events
+- a live **status bar**: model, context meter, tokens, cost, reasoning, perms
+- a persistent **composer** with slash-command completion (`Tab`), history
+  (`↑`/`↓`), and multi-line input (`\` + Enter); `^C` interrupts a turn
+- Unicode glyphs with an automatic ASCII fallback
+
+It's driven by an in-process Python WebSocket gateway (`aegis.tui_gateway`). The
+Ink bundle ships prebuilt, so only `node` on PATH is needed at runtime — and if
+Node is absent (or `AEGIS_CLASSIC_TUI=1`), AEGIS falls back to a pure-Python
+full-screen surface, then to a classic line REPL. Every surface shares the same
+streaming, slash commands, queued/interruptible turns, `@file`/`@diff`/`@url`
+context references, sessions, branching, checkpoints, diff, rollback, goals,
+traces, and usage.
+
+## What AEGIS Does
 
 | Area | Current behavior |
 | --- | --- |
-| Shared runtime | CLI, dashboard, desktop, API, SDK, ACP, MCP, gateway, cron, webhooks, and background work enter through the same `SurfaceRunner` and `Agent.run` path. Live activity snapshots track phase, active model/tool/subagent state, child subagent cards, and run breadcrumbs across surfaces. |
-| Terminal agent | Running `aegis` on an interactive TTY opens a full-screen **Node/Ink** terminal UI — alternate-screen layout with a fixed header, a bottom-anchored scrollback viewport (`PgUp`/`PgDn`/`Esc`) that renders structured **tool cards** (status pills, durations), thinking, message bubbles and notices, a live status bar (model, context meter, tokens, cost), a persistent composer with **slash-command completion** (`Tab`), Unicode-aware glyphs with an ASCII fallback, and `^C` to interrupt — driven by an in-process Python WebSocket gateway (`aegis.tui_gateway`) that streams structured event frames. The bundle ships prebuilt, so only `node` on PATH is needed at runtime; `AEGIS_CLASSIC_TUI=1` (or no Node) falls back to the pure-Python full-screen surface, then the classic line REPL. All surfaces share the same streaming, slash commands, queued/interruptible turns, `@file`/`@diff`/`@url` context references, sessions, branching, checkpoints, diff, rollback, goals, traces, and usage. |
-| Dashboard | Token-gated FastAPI + React/Vite control panel that opens on sessions, keeps `/dashboard` as a calmer overview, keeps `/agents` focused on running turns/subagents/tools, and keeps `/command-center` as a compact sessions/system/usage ops overlay. It also includes chat, terminal, models, tools, skills, memory, schedules, kanban, MCP, channels, webhooks, pairing, provider accounts, env/secrets, plugins, analytics, files, logs, profiles, docs, system, and config. |
-| Desktop | Electron app that launches/probes a local dashboard backend on a random port with a random token, shows boot/retry/log states, remembers window settings, and can run from source or package installers. |
-| Providers | Built-in registry for Anthropic, OpenAI, Codex-compatible paths, Google, OpenRouter, Groq, DeepSeek, Qwen/DashScope, xAI, Mistral, Together, Hugging Face, local OpenAI-compatible endpoints, Ollama, LM Studio, vLLM, and more. API-key auth is the default path; OAuth exists where implemented. The dashboard provider matrix shows auth readiness, redacted live probe status, fallback chains, context/output limits, pricing, and model capabilities. |
-| Tools and permissions | File, patch, shell, process, web, browser, LSP, GitHub, code execution, image generation, subagents, model mixtures, cron/kanban, memory, skills, MCP/plugin tools, and local/cloud helpers all pass through a central registry and permission engine. |
-| Memory and skills | File-backed `MEMORY.md`/`USER.md`, SQLite/FTS5 session recall, bundled `SKILL.md` packages, skill creation/improvement, session review, redaction, and approval-based promotion. |
-| Automation and evals | `aegis cron`, `aegis kanban`, `aegis spec`, `aegis watch`, `aegis bench`, `aegis eval`, `aegis ab`, traces, runs, cost analytics, backup/import/snapshot, and security/debug reports. |
-| API and embedding | OpenAI-compatible `/v1/chat/completions` and `/v1/models`, JSON-RPC stdio, Python SDK, ACP stdio server, MCP client, and `aegis mcp serve`. |
+| Shared runtime | CLI, dashboard, desktop, API, SDK, ACP, MCP, gateway, cron, webhooks, and background work all enter through the same `SurfaceRunner` and `Agent.run` path. Live activity snapshots track phase, active model/tool/subagent state, child subagent cards, and run breadcrumbs across surfaces. |
+| Terminal agent | Full-screen Node/Ink TUI (see [The Terminal](#the-terminal)) with a pure-Python and classic-REPL fallback chain. |
+| Dashboard | Token-gated FastAPI + React/Vite control panel that opens on sessions, with `/dashboard` as a calmer overview and `/command-center` as a compact sessions/system/usage overlay. Includes chat, terminal, models, tools, skills, memory, schedules, kanban, MCP, channels, webhooks, pairing, provider accounts, env/secrets, plugins, analytics, files, logs, profiles, docs, system, and config. |
+| Desktop | Electron app that launches/probes a local dashboard backend on a random port with a random token, shows boot/retry/log states, remembers window settings, and runs from source or packaged installers. |
+| Providers | Built-in registry for Anthropic, OpenAI, Codex-compatible paths, Google, OpenRouter, Groq, DeepSeek, Qwen/DashScope, xAI, Mistral, Together, Hugging Face, local OpenAI-compatible endpoints, Ollama, LM Studio, vLLM, and more. API-key auth is the default; OAuth where implemented. The dashboard provider matrix shows auth readiness, redacted live-probe status, fallback chains, context/output limits, pricing, and model capabilities. |
+| Tools &amp; permissions | A lean primitive tool surface — file, patch, shell, process, web, browser, LSP, code execution, image generation, vision, subagents, model mixtures, cron/kanban, memory, skills — plus deferred integrations and MCP/plugin tools, all through one registry and permission engine. Cost-safe by default (~22 live schemas; the rest load on demand via `tool_search`). |
+| Memory | File-backed `MEMORY.md`/`USER.md` plus pluggable backends (JSONL, HTTP, Honcho, Mem0), FTS5 session recall, redaction/sanitization, session review, and approval-based promotion. |
+| Skills | 70+ bundled `SKILL.md` playbooks (coding, devops, automation, data, creative, productivity), skill creation/improvement, and a built-in **automation/watchers** skill (poll RSS/JSON/GitHub on a schedule, react only to what's new). |
+| Automation &amp; evals | `aegis cron`, `aegis kanban`, `aegis spec`, `aegis watch`, `aegis bench`, `aegis eval`, `aegis ab`, traces, runs, cost analytics, backup/import/snapshot, and security/debug reports. |
+| API &amp; embedding | OpenAI-compatible `/v1/chat/completions` and `/v1/models`, JSON-RPC stdio, Python SDK, ACP stdio server, MCP client, and `aegis mcp serve`. |
 
 ## Run And Test
 
@@ -130,35 +142,27 @@ Dashboard:
 aegis ui --no-open --port 9119
 
 # In another terminal for frontend development:
-cd web
-npm install
-npm run dev
-npm run typecheck
-npm run build
+cd web && npm install && npm run dev   # Vite proxies /api to the backend
+npm run typecheck && npm run build
+scripts/check_web_dist.sh              # verify the committed built bundle
+```
 
-# From the repo root, verify the committed built bundle:
-scripts/check_web_dist.sh
+Terminal UI (Node/Ink) — rebuild after editing `aegis/tui_ink/src`:
+
+```bash
+scripts/build_tui.sh                   # npm install + typecheck + bundle
 ```
 
 Desktop:
 
 ```bash
 aegis desktop --doctor
-aegis desktop --install-only
 aegis desktop
-
-cd desktop
-npm install
-npm start
-npm run test:desktop
-npm run pack
+cd desktop && npm install && npm run test:desktop && npm run pack
 ```
 
-`npm run dist`, `npm run dist:linux`, `npm run dist:win`, and `npm run dist:mac`
-build installer artifacts when the local platform and signing inputs allow it.
-This repository does not claim signed Windows installers or notarized macOS
-artifacts are complete unless those release credentials and CI artifacts are
-actually present.
+`npm run dist:linux|win|mac` build installer artifacts when the local platform
+and signing inputs allow it.
 
 OpenAI-compatible API:
 
@@ -176,11 +180,10 @@ Gateway and automation:
 aegis gateway --channels telegram,discord
 aegis cron list
 aegis trace list
-aegis eval list
 aegis security audit
 ```
 
-Live provider calls and live messaging platform tests require configured
+Live provider calls and live messaging-platform tests require configured
 credentials. Use `aegis doctor --probe` only when you intentionally want network
 provider probes.
 
@@ -188,16 +191,16 @@ provider probes.
 
 <p align="center"><img src="assets/system-map.svg" alt="AEGIS architecture map" width="900"></p>
 
-Every surface enters through the same runtime. That keeps behavior consistent:
-a disabled tool stays disabled everywhere; sessions can be resumed from another
+Every surface enters through the same runtime, so behavior stays consistent: a
+disabled tool stays disabled everywhere; a session can be resumed from another
 surface; memory, permissions, traces, run rows, and usage are shared.
 
 <p align="center"><img src="assets/runtime-loop.svg" alt="AEGIS runtime loop" width="900"></p>
 
 The loop builds context from rules, memory, skills, and references; routes to the
-selected provider; runs tool calls through policy; wraps untrusted outputs;
-emits events; persists traces and usage; and can review completed work for
-memory or skill candidates.
+selected provider; runs tool calls through policy; wraps untrusted outputs; emits
+events; persists traces and usage; and can review completed work for memory or
+skill candidates.
 
 ## Repository Layout
 
@@ -215,41 +218,38 @@ aegis/                  Python package
   builtin_skills/       bundled SKILL.md packages
   static/web_dist/      built dashboard served by aegis ui
 web/                    React + Vite dashboard source
-site-next/              Next.js internals/marketing site
 desktop/                Electron shell
-docs/                   install, CLI, dashboard, API, SDK, providers, security, parity
+docs/                   install, CLI, dashboard, API, SDK, providers, security
 assets/                 README images and diagrams
 scripts/                test, build, and verification helpers
 tests/                  offline regression suite
 ```
 
-## Product Proof Remaining
+## Roadmap
 
-AEGIS now has the production local runtime surfaces in place: prompt audit,
-trace timeline, provider matrix, tool provenance, background jobs, cron preview,
-gateway delivery state, plugin inventory, security policy simulation, desktop
-lifecycle, generated references, and release provenance are covered by
-`aegis verify` / `bash scripts/verify_all.sh`.
+The local runtime, terminal, dashboard, desktop shell, API, SDK, MCP, gateway,
+automation, tracing, eval, memory, and skills surfaces are all in the repo and
+covered by `aegis verify` / `bash scripts/verify_all.sh`. What's intentionally
+**not** claimed here, because it needs resources outside this repo:
 
-The remaining proof is external to this repo:
-
-| Area | Remaining proof |
+| Area | What's outstanding |
 | --- | --- |
-| Desktop release | Real signed Windows and notarized macOS artifacts require release credentials and CI artifacts. |
-| Live platforms | Telegram, Discord, Slack, webhook, and other live channel smoke requires real platform test accounts. |
-| Live providers | Provider probes require intentionally configured credentials and network access. |
-| UI assets | Screenshots and marketing assets should be refreshed with provenance whenever the product UI changes. |
+| Desktop release | Real signed Windows / notarized macOS artifacts need release credentials + CI. |
+| Live platforms | Telegram, Discord, Slack, and webhook smoke needs real platform test accounts. |
+| Live providers | Provider probes need intentionally configured credentials and network access. |
+| Enterprise auth | Native AWS Bedrock / Azure AD identity providers (API-key paths already work). |
 
 ## Good To Know
 
 - Optional features need extra dependencies or credentials: browser/computer,
   LSP, voice, vision, provider probes, some gateway channels, and some skills.
 - The dashboard binds to `127.0.0.1` by default. Keep the token private if you
-  bind it to another interface or place it behind your own auth.
+  bind it elsewhere or place it behind your own auth.
 - Back up local state with `aegis backup`; inspect paths with `aegis status`.
-- Update with `aegis update`. Remove with `./uninstall.sh`; add `--purge` only
-  if you also want to delete `~/.aegis`.
+- Update with `aegis update`. Remove with `./uninstall.sh`; add `--purge` only if
+  you also want to delete `~/.aegis`.
 
 ## License
 
 MIT. Your keys, your data, your machine.
+</content>
