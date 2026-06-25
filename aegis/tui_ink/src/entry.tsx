@@ -13,12 +13,31 @@ import {Box, Text, render, useApp, useInput, useStdout} from 'ink';
 import TextInput from 'ink-text-input';
 import WebSocket from 'ws';
 
-const AMBER = '#d6a15e';
-const GREEN = '#7ecf8f';
-const CYAN = '#6fb7d8';
-const RED = '#e96e6e';
-const MUTED = '#8f968f';
-const PANEL = '#262a31';
+// Terminal palettes, keyed by the same names as the dashboard themes so the TUI tracks
+// the configured theme (the launcher passes AEGIS_TUI_THEME from display.theme; the env
+// var still wins if set directly). Unknown names fall back to the signature aegis-dark.
+type Palette = {amber: string; green: string; cyan: string; red: string; muted: string; panel: string; code: string};
+const THEMES: Record<string, Palette> = {
+  'aegis-dark': {amber: '#d6a15e', green: '#7ecf8f', cyan: '#6fb7d8', red: '#e96e6e', muted: '#8f968f', panel: '#262a31', code: '#cdd6c4'},
+  'aegis-light': {amber: '#9a6b1f', green: '#0c8f88', cyan: '#2f6bff', red: '#d83a52', muted: '#6b7280', panel: '#e6e8ec', code: '#16191f'},
+  'midnight': {amber: '#a78bfa', green: '#34d399', cyan: '#22d3ee', red: '#fb7185', muted: '#8b8baf', panel: '#1c1c40', code: '#d7d4ff'},
+  'ember': {amber: '#f97316', green: '#84cc16', cyan: '#fb923c', red: '#ef4444', muted: '#b08c78', panel: '#321a10', code: '#ffe0c8'},
+  'mono': {amber: '#cfcfcf', green: '#bdbdbd', cyan: '#dddddd', red: '#e57373', muted: '#7d7d7d', panel: '#202020', code: '#d6d6d6'},
+  'cyberpunk': {amber: '#fcee0a', green: '#00ff9f', cyan: '#00d4ff', red: '#ff003c', muted: '#7a8aa0', panel: '#1a1a2e', code: '#e0e0ff'},
+  'rose': {amber: '#e0709a', green: '#86c79b', cyan: '#88b9d8', red: '#e05c6e', muted: '#9a8a90', panel: '#2a1a22', code: '#f3dde6'},
+  'nord': {amber: '#ebcb8b', green: '#a3be8c', cyan: '#88c0d0', red: '#bf616a', muted: '#7b88a1', panel: '#3b4252', code: '#d8dee9'},
+  'dracula': {amber: '#f1fa8c', green: '#50fa7b', cyan: '#8be9fd', red: '#ff5555', muted: '#8a8fb3', panel: '#343746', code: '#f8f8f2'},
+  'gruvbox': {amber: '#fabd2f', green: '#b8bb26', cyan: '#83a598', red: '#fb4934', muted: '#a89984', panel: '#3c3836', code: '#ebdbb2'},
+  'solarized': {amber: '#b58900', green: '#859900', cyan: '#2aa198', red: '#dc322f', muted: '#839496', panel: '#073642', code: '#eee8d5'},
+  'latte': {amber: '#df8e1d', green: '#40a02b', cyan: '#209fb5', red: '#d20f39', muted: '#8c8fa1', panel: '#e6e9ef', code: '#4c4f69'},
+};
+const THEME = THEMES[(process.env.AEGIS_TUI_THEME || 'aegis-dark').toLowerCase()] || THEMES['aegis-dark'];
+const AMBER = THEME.amber;
+const GREEN = THEME.green;
+const CYAN = THEME.cyan;
+const RED = THEME.red;
+const MUTED = THEME.muted;
+const PANEL = THEME.panel;
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
@@ -81,7 +100,7 @@ function glyphs(uni: boolean) {
   };
 }
 
-const CODE = '#cdd6c4';
+const CODE = THEME.code;
 
 type Header = {
   brand?: string; model?: string; session_id?: string; session_title?: string;

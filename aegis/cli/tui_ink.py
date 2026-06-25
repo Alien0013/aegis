@@ -53,6 +53,10 @@ def launch_ink_tui(config: Config, *, model=None, provider_name=None,
     env = dict(os.environ)
     env["AEGIS_TUI_WS"] = f"ws://{host}:{port}"
     env["AEGIS_TUI_TOKEN"] = token
+    # Hand the configured theme to the Ink client so the terminal palette tracks the
+    # dashboard's theme names (AEGIS_TUI_THEME in the environment still wins if set).
+    if "AEGIS_TUI_THEME" not in env:
+        env["AEGIS_TUI_THEME"] = str(config.get("display.theme", "aegis-dark") or "aegis-dark")
 
     # The child owns the terminal; ignore SIGINT in the parent so ^C reaches Ink, which
     # turns it into an interrupt/exit rather than killing the gateway out from under it.
