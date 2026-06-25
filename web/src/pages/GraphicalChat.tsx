@@ -94,10 +94,18 @@ interface ModelsPayload {
   preset_rows?: Record<string, ModelRow[]>;
 }
 
+interface PersistedMsg {
+  role: string;
+  content?: string;
+  name?: string;
+  tool_call_id?: string;
+  tool_calls?: { id?: string; name?: string; arguments?: unknown }[];
+}
+
 interface SessionPayload {
   found?: boolean;
   error?: string;
-  messages?: { role: string; content: string }[];
+  messages?: PersistedMsg[];
   meta?: {
     model?: string;
     provider?: string;
@@ -153,6 +161,62 @@ function renderToolArgs(value: unknown): string {
 
 function isDiffLike(text: string): boolean {
   return /^(diff --git|@@ |[+-]{3}\s|[+-][^\n])/m.test(text);
+}
+
+function toolTargetFromArgs(args: unknown): string {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return "";
+  const r = args as Record<string, unknown>;
+  return String(r.path || r.file_path || r.command || r.cmd || r.query || r.url || r.pattern || "");
+}
+
+// Rebuild full chat turns — including tool-call cards — from a persisted session's
+// messages, so reopening a session replays the tools the way a live run renders them
+// (not just the final text). Assistant + tool messages between two user turns form one
+// assistant turn; tool results are matched back to their call by id.
+function restoreTurns(messages: PersistedMsg[]): Turn[] {
+  const turns: Turn[] = [];
+  let current: Turn | null = null;
+  const byId: Record<string, ToolEvent> = {};
+  const flush = () => { if (current) { turns.push(current); current = null; } };
+  for (const msg of messages) {
+    if (msg.role === "user") {
+      flush();
+      if ((msg.content || "").trim()) turns.push({ role: "user", text: msg.content || "" });
+    } else if (msg.role === "assistant") {
+      if (!current) current = { role: "assistant", text: "", tools: [] };
+      for (const tc of msg.tool_calls || []) {
+        const name = String(tc.name || "tool");
+        const diff = diffPreviewFromArgs(name, tc.arguments);
+        const ev: ToolEvent = {
+          id: String(tc.id || `${name}-${current.tools!.length}`),
+          name,
+          target: toolTargetFromArgs(tc.arguments),
+          args: renderToolArgs(tc.arguments),
+          preview: diff,
+          diff,
+          summary: "",
+          status: "ok",
+          startedAt: 0,
+          kind: "tool",
+        };
+        current.tools!.push(ev);
+        byId[ev.id] = ev;
+      }
+      if ((msg.content || "").trim()) current.text = msg.content || "";
+    } else if (msg.role === "tool") {
+      const ev = byId[msg.tool_call_id || ""];
+      const content = msg.content || "";
+      if (ev) {
+        ev.summary = content;
+        if (!ev.preview) ev.preview = content;
+        const failed = /\[exit\s+[1-9]/.test(content) || /^(error|traceback)/i.test(content.trim());
+        ev.status = failed ? "error" : "ok";
+        if (failed) ev.error = content;
+      }
+    }
+  }
+  flush();
+  return turns.filter((t) => (t.text || "").trim() || (t.tools && t.tools.length > 0));
 }
 
 function diffPreviewFromArgs(name: string, args: unknown): string {
@@ -361,11 +425,7 @@ export function GraphicalChat({
         if (sessionProvider) setProvider(sessionProvider, false);
         if (sessionReasoning) setReasoningEffort(sessionReasoning);
         if (sessionServiceTier) setFastMode(sessionServiceTier === "priority");
-        setTurns(
-          data.messages
-            .filter((t) => (t.role === "user" || t.role === "assistant") && (t.content || "").trim())
-            .map((t) => ({ role: t.role as "user" | "assistant", text: t.content || "" })),
-        );
+        setTurns(restoreTurns(data.messages));
       })
       .catch(() => {});
     return () => {
