@@ -24,6 +24,9 @@ export function ThemeSwitcher({ up }: { up?: boolean }) {
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
+        aria-label="Change theme"
+        aria-haspopup="menu"
+        aria-expanded={open}
         title="Theme"
         className="flex items-center gap-2 rounded-[var(--radius)] border border-border bg-surface px-2.5 py-1.5 text-xs text-dim hover:text-text"
       >

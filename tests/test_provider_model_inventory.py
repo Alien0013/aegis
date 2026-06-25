@@ -286,7 +286,8 @@ def test_provider_capability_matrix_exposes_limits_pricing_and_flags(tmp_path, m
     model = next(item for item in row["models"] if item["id"] == "gpt-5.5")
     assert model["capabilities"]["tools"] is True
     assert model["capabilities"]["reasoning"] is True
-    assert model["capabilities"]["structured_output"] is False
+    # OpenAI (chat/responses) now advertises structured output (response_format / text.format).
+    assert model["capabilities"]["structured_output"] is True
     assert model["pricing"]["known"] is True
     assert matrix["totals"]["audio"] >= 0
 

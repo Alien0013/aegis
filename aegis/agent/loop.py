@@ -1454,6 +1454,7 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
     continuations = 0
     empty_nudges = 0
     ultracode_continues = 0
+    self_verifies = 0
     from ..util import estimate_tokens
     schema_tokens = estimate_tokens(json.dumps(schemas))   # tools count toward the window
 
@@ -1877,6 +1878,26 @@ def run_conversation(agent, on_event: OnEvent | None = None) -> Message:
                     continue
                 # Done (or hit the cap): let it finalize and leave ultracode mode.
                 agent._ultracode_active = False
+            # Pre-final self-verify gate (opt-in): have the model critically re-check its own
+            # answer against the task before finalizing, so a fast-but-wrong final gets one
+            # chance to be caught and fixed. Off by default (adds one model call); bounded to
+            # once per turn so it can never loop; skipped for trivial turns that used no tools.
+            try:
+                _verify_min_tools = int(agent.config.get("agent.self_verify_min_tools", 1))
+            except (TypeError, ValueError):
+                _verify_min_tools = 1
+            if (agent.config.get("agent.self_verify", False)
+                    and self_verifies < 1
+                    and (resp.text or "").strip()
+                    and agent.tools_used >= _verify_min_tools):
+                self_verifies += 1
+                emit({"type": "self_verify"})
+                session.messages.append(Message.user(
+                    "Before you finish: critically re-check the answer above against the original "
+                    "request. If anything is incomplete, unverified, or wrong, fix it NOW with tool "
+                    "calls and real output. If it is correct and complete, briefly confirm and give "
+                    "the final answer. Do not invent verification you did not perform."))
+                continue
             # No manual "save this as a skill" nudge: the forked background review
             # (agent/review.py) already creates skills automatically (learn.auto_apply_skills),
             # so prompting the user to do it by hand would be redundant and contradictory.

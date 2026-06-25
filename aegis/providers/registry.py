@@ -1061,6 +1061,13 @@ def _model_capabilities(
         "response_cancel": mode == ApiMode.RESPONSES.value,
         "dynamic_tools": mode == ApiMode.CODEX_APP_SERVER.value,
         "fast_mode": fast_mode,
+        # OpenAI-family backends accept a response_format / text.format contract;
+        # Anthropic gets the same effect via tool-forcing (not a body field), and
+        # the codex app-server has no such parameter.
+        "structured_output": mode in {
+            ApiMode.CHAT_COMPLETIONS.value,
+            ApiMode.RESPONSES.value,
+        },
     }
 
 
@@ -1097,9 +1104,7 @@ def _normalized_capabilities(capabilities: dict) -> dict:
         "response_cancel": bool(capabilities.get("response_cancel")),
         "dynamic_tools": bool(capabilities.get("dynamic_tools")),
         "fast_mode": bool(capabilities.get("fast_mode")),
-        # AEGIS has schema-clean tool calls, but no dedicated provider response_format
-        # contract yet. Keep this explicit so the matrix does not overclaim.
-        "structured_output": False,
+        "structured_output": bool(capabilities.get("structured_output")),
     }
 
 

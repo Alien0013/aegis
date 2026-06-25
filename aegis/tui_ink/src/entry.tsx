@@ -73,8 +73,15 @@ function glyphs(uni: boolean) {
     cont: uni ? '↻' : '~',
     down: uni ? '↘' : 'v',
     up: uni ? '⇡' : '^',
+    bullet: uni ? '•' : '*',
+    quote: uni ? '▏' : '|',
+    rule: uni ? '─' : '-',
+    check: uni ? '☑' : '[x]',
+    uncheck: uni ? '☐' : '[ ]',
   };
 }
+
+const CODE = '#cdd6c4';
 
 type Header = {
   brand?: string; model?: string; session_id?: string; session_title?: string;
@@ -271,12 +278,102 @@ function parseDiffStat(text?: string): {adds: number; dels: number} | null {
   return null;
 }
 
+// --- terminal markdown ------------------------------------------------------
+// Render the model's markdown the way a chat surface would: headings, lists,
+// blockquotes, fenced code, rules, and inline **bold** / *italic* / `code` /
+// [links]. Kept compact and dependency-free; the streaming text stays plain
+// (with a cursor) and re-renders as formatted markdown once the turn settles.
+const INLINE_RE =
+  /(\*\*([^*]+)\*\*|__([^_]+)__|(?<!\*)\*(?!\s)([^*]+?)\*|(?<![\w_])_(?!\s)([^_]+?)_(?![\w_])|`([^`]+)`|\[([^\]]+)\]\(([^)]+)\))/;
+
+function inlineMd(text: string, keyBase: string): React.ReactNode[] {
+  const nodes: React.ReactNode[] = [];
+  let rest = text;
+  let k = 0;
+  while (rest) {
+    const m = INLINE_RE.exec(rest);
+    if (!m || m.index === undefined) { nodes.push(<Text key={`${keyBase}-${k++}`}>{rest}</Text>); break; }
+    if (m.index > 0) nodes.push(<Text key={`${keyBase}-${k++}`}>{rest.slice(0, m.index)}</Text>);
+    if (m[2] != null || m[3] != null) {
+      nodes.push(<Text key={`${keyBase}-${k++}`} bold>{m[2] ?? m[3]}</Text>);
+    } else if (m[4] != null || m[5] != null) {
+      nodes.push(<Text key={`${keyBase}-${k++}`} italic>{m[4] ?? m[5]}</Text>);
+    } else if (m[6] != null) {
+      nodes.push(<Text key={`${keyBase}-${k++}`} color={CYAN} backgroundColor={PANEL}>{` ${m[6]} `}</Text>);
+    } else if (m[7] != null) {
+      nodes.push(<Text key={`${keyBase}-${k++}`} color={CYAN} underline>{m[7]}</Text>);
+    }
+    rest = rest.slice(m.index + m[0].length);
+  }
+  return nodes;
+}
+
+const Markdown: React.FC<{text: string; g: G}> = ({text, g}) => {
+  const lines = text.replace(/\r/g, '').split('\n');
+  const out: React.ReactNode[] = [];
+  let i = 0;
+  let key = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const fence = line.match(/^\s*```(\S*)/);
+    if (fence) {
+      const lang = fence[1];
+      const body: string[] = [];
+      i++;
+      while (i < lines.length && !/^\s*```/.test(lines[i])) { body.push(lines[i]); i++; }
+      i++; // closing fence
+      out.push(
+        <Box key={key++} flexDirection="column" marginLeft={2}>
+          {lang ? <Text color={MUTED}>{`${g.dot} ${lang}`}</Text> : null}
+          {body.map((b, j) => (
+            <Text key={j}><Text color={MUTED}>{`${g.quote} `}</Text><Text color={CODE}>{b}</Text></Text>
+          ))}
+        </Box>,
+      );
+      continue;
+    }
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) { out.push(<Text key={key++} color={AMBER} bold>{h[2]}</Text>); i++; continue; }
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
+      out.push(<Text key={key++} color={MUTED}>{g.rule.repeat(24)}</Text>); i++; continue;
+    }
+    const q = line.match(/^>\s?(.*)$/);
+    if (q) {
+      out.push(<Text key={key++} color={MUTED}>{`${g.quote} `}{inlineMd(q[1], `q${key}`)}</Text>); i++; continue;
+    }
+    const task = line.match(/^(\s*)[-*+]\s+\[([ xX])\]\s+(.*)$/);
+    if (task) {
+      const done = task[2].toLowerCase() === 'x';
+      out.push(
+        <Text key={key++}>{task[1]}<Text color={done ? GREEN : MUTED}>{`${done ? g.check : g.uncheck} `}</Text>{inlineMd(task[3], `t${key}`)}</Text>,
+      );
+      i++; continue;
+    }
+    const b = line.match(/^(\s*)[-*+]\s+(.*)$/);
+    if (b) {
+      out.push(<Text key={key++}>{b[1]}<Text color={AMBER}>{`${g.bullet} `}</Text>{inlineMd(b[2], `b${key}`)}</Text>);
+      i++; continue;
+    }
+    const n = line.match(/^(\s*)(\d+)\.\s+(.*)$/);
+    if (n) {
+      out.push(<Text key={key++}>{n[1]}<Text color={AMBER}>{`${n[2]}. `}</Text>{inlineMd(n[3], `n${key}`)}</Text>);
+      i++; continue;
+    }
+    if (!line.trim()) { out.push(<Text key={key++}> </Text>); i++; continue; }
+    out.push(<Text key={key++}>{inlineMd(line, `p${key}`)}</Text>);
+    i++;
+  }
+  return <Box flexDirection="column">{out}</Box>;
+};
+
 const MessageView: React.FC<{m: Msg; g: G}> = ({m, g}) => {
   switch (m.kind) {
     case 'user':
       return <Text color={AMBER} bold>{`${g.arrow} ${m.text}`}</Text>;
     case 'assistant':
-      return <Text>{m.text}{m.streaming ? <Text color={MUTED}>{g.cursor}</Text> : null}</Text>;
+      return m.streaming
+        ? <Text>{m.text}<Text color={MUTED}>{g.cursor}</Text></Text>
+        : <Markdown text={m.text} g={g} />;
     case 'thinking':
       return <Text color={MUTED}>{`  ${g.dot} thinking${m.done ? ' complete' : '…'} (${m.chars} chars)`}</Text>;
     case 'tool':

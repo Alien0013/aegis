@@ -389,6 +389,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "agent": {
         "max_iterations": 50,
         "ultracode_max_iterations": 250,   # /ultracode raises the step budget so the loop can finish
+        "self_verify": False,              # opt-in: re-check the answer once before finalizing (adds 1 call)
+        "self_verify_min_tools": 1,        # only self-verify turns that used at least this many tools
         "personality": "",
         "stream": True,
         "subagent_concurrency": 4,   # max child agents run in parallel by spawn_subagent
@@ -714,6 +716,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "dashboard": {
         "frontend": "static",         # static | packaged
         "cockpit": True,
+        # Keep a chat run alive when the client disconnects (e.g. switching views) so the
+        # turn finishes in the background instead of being cancelled. Explicit stop / new
+        # prompt still cancel via /api/chat/control.
+        "detach_on_disconnect": True,
         "auth": {
             "registration_enabled": True,      # loopback-only dashboard token bootstrap/rotation
             "oauth_providers": [],             # [{id, name, client_id, authorize_url, token_url, callback_path}]

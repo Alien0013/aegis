@@ -104,6 +104,7 @@ class ChatCompletionsTransport(ProviderTransport):
         cwd=None,
         on_reasoning: OnDelta | None = None,
         service_tier: str = "",
+        response_format: dict | None = None,
     ) -> LLMResponse:
         url = f"{base_url}/chat/completions"
         headers = {"Content-Type": "application/json", **(extra_headers or {}), **auth.headers()}
@@ -124,6 +125,8 @@ class ChatCompletionsTransport(ProviderTransport):
         if wire_tools:
             payload["tools"] = wire_tools
             payload["tool_choice"] = "auto"
+        if response_format:                       # structured output (json_object / json_schema)
+            payload["response_format"] = response_format
         if stream:
             payload["stream_options"] = {"include_usage": True}
 

@@ -28,13 +28,13 @@ function WindowControls() {
   const btn = "app-no-drag flex h-full w-11 items-center justify-center text-dim transition-colors";
   return (
     <div className="flex h-full">
-      <button className={`${btn} hover:bg-surface-2 hover:text-text`} title="Minimize" onClick={() => desktop?.minimize()}>
+      <button className={`${btn} hover:bg-surface-2 hover:text-text`} aria-label="Minimize" title="Minimize" onClick={() => desktop?.minimize()}>
         <Icon name="winMin" size={15} />
       </button>
-      <button className={`${btn} hover:bg-surface-2 hover:text-text`} title={max ? "Restore" : "Maximize"} onClick={() => desktop?.maximizeToggle()}>
+      <button className={`${btn} hover:bg-surface-2 hover:text-text`} aria-label={max ? "Restore" : "Maximize"} title={max ? "Restore" : "Maximize"} onClick={() => desktop?.maximizeToggle()}>
         <Icon name={max ? "winRestore" : "winMax"} size={13} />
       </button>
-      <button className={`${btn} hover:bg-danger hover:text-white`} title="Close" onClick={() => desktop?.close()}>
+      <button className={`${btn} hover:bg-danger hover:text-white`} aria-label="Close window" title="Close" onClick={() => desktop?.close()}>
         <Icon name="x" size={15} />
       </button>
     </div>
@@ -62,6 +62,7 @@ export function TitleBar() {
         <button
           onClick={openCommandPalette}
           className="app-no-drag group flex h-6 items-center gap-2 rounded-full border border-border bg-surface-2/70 pl-2.5 pr-1.5 text-[12px] text-faint transition-colors hover:border-border-2 hover:text-dim"
+          aria-label="Open command palette"
           title="Command palette"
         >
           <Icon name="search" size={12} />

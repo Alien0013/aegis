@@ -85,6 +85,7 @@ function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
       <div className="flex min-w-0 items-center gap-3">
         <button
           onClick={onOpenNav}
+          aria-label="Open navigation"
           title="Open navigation"
           className="grid h-8 w-8 shrink-0 place-items-center rounded-[var(--radius)] border border-border bg-surface text-dim hover:text-text lg:hidden"
         >
@@ -111,6 +112,7 @@ function TopBar({ onOpenNav }: { onOpenNav: () => void }) {
         </div>
         <button
           onClick={openCommandPalette}
+          aria-label="Open command palette"
           title="Command palette (Ctrl/⌘ K)"
           className="flex h-8 items-center gap-1.5 rounded-[var(--radius)] border border-border bg-surface px-2.5 font-mono text-[11px] text-dim hover:text-text"
         >

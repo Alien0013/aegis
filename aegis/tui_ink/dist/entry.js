@@ -33995,9 +33995,15 @@ function glyphs(uni) {
     sub: uni ? "\u21B3" : ">",
     cont: uni ? "\u21BB" : "~",
     down: uni ? "\u2198" : "v",
-    up: uni ? "\u21E1" : "^"
+    up: uni ? "\u21E1" : "^",
+    bullet: uni ? "\u2022" : "*",
+    quote: uni ? "\u258F" : "|",
+    rule: uni ? "\u2500" : "-",
+    check: uni ? "\u2611" : "[x]",
+    uncheck: uni ? "\u2610" : "[ ]"
   };
 }
+var CODE = "#cdd6c4";
 function fmtTokens(n) {
   if (!n) return "0";
   if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
@@ -34171,15 +34177,131 @@ function parseDiffStat(text) {
   if (ins || del) return { adds: ins ? +ins[1] : 0, dels: del ? +del[1] : 0 };
   return null;
 }
+var INLINE_RE = /(\*\*([^*]+)\*\*|__([^_]+)__|(?<!\*)\*(?!\s)([^*]+?)\*|(?<![\w_])_(?!\s)([^_]+?)_(?![\w_])|`([^`]+)`|\[([^\]]+)\]\(([^)]+)\))/;
+function inlineMd(text, keyBase) {
+  const nodes = [];
+  let rest = text;
+  let k = 0;
+  while (rest) {
+    const m = INLINE_RE.exec(rest);
+    if (!m || m.index === void 0) {
+      nodes.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { children: rest }, `${keyBase}-${k++}`));
+      break;
+    }
+    if (m.index > 0) nodes.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { children: rest.slice(0, m.index) }, `${keyBase}-${k++}`));
+    if (m[2] != null || m[3] != null) {
+      nodes.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { bold: true, children: m[2] ?? m[3] }, `${keyBase}-${k++}`));
+    } else if (m[4] != null || m[5] != null) {
+      nodes.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { italic: true, children: m[4] ?? m[5] }, `${keyBase}-${k++}`));
+    } else if (m[6] != null) {
+      nodes.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: CYAN, backgroundColor: PANEL, children: ` ${m[6]} ` }, `${keyBase}-${k++}`));
+    } else if (m[7] != null) {
+      nodes.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: CYAN, underline: true, children: m[7] }, `${keyBase}-${k++}`));
+    }
+    rest = rest.slice(m.index + m[0].length);
+  }
+  return nodes;
+}
+var Markdown = ({ text, g }) => {
+  const lines = text.replace(/\r/g, "").split("\n");
+  const out = [];
+  let i = 0;
+  let key = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const fence = line.match(/^\s*```(\S*)/);
+    if (fence) {
+      const lang = fence[1];
+      const body = [];
+      i++;
+      while (i < lines.length && !/^\s*```/.test(lines[i])) {
+        body.push(lines[i]);
+        i++;
+      }
+      i++;
+      out.push(
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Box_default, { flexDirection: "column", marginLeft: 2, children: [
+          lang ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `${g.dot} ${lang}` }) : null,
+          body.map((b2, j) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Text, { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `${g.quote} ` }),
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: CODE, children: b2 })
+          ] }, j))
+        ] }, key++)
+      );
+      continue;
+    }
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) {
+      out.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: AMBER, bold: true, children: h[2] }, key++));
+      i++;
+      continue;
+    }
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
+      out.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: g.rule.repeat(24) }, key++));
+      i++;
+      continue;
+    }
+    const q = line.match(/^>\s?(.*)$/);
+    if (q) {
+      out.push(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Text, { color: MUTED, children: [
+        `${g.quote} `,
+        inlineMd(q[1], `q${key}`)
+      ] }, key++));
+      i++;
+      continue;
+    }
+    const task = line.match(/^(\s*)[-*+]\s+\[([ xX])\]\s+(.*)$/);
+    if (task) {
+      const done = task[2].toLowerCase() === "x";
+      out.push(
+        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Text, { children: [
+          task[1],
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: done ? GREEN : MUTED, children: `${done ? g.check : g.uncheck} ` }),
+          inlineMd(task[3], `t${key}`)
+        ] }, key++)
+      );
+      i++;
+      continue;
+    }
+    const b = line.match(/^(\s*)[-*+]\s+(.*)$/);
+    if (b) {
+      out.push(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Text, { children: [
+        b[1],
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: AMBER, children: `${g.bullet} ` }),
+        inlineMd(b[2], `b${key}`)
+      ] }, key++));
+      i++;
+      continue;
+    }
+    const n = line.match(/^(\s*)(\d+)\.\s+(.*)$/);
+    if (n) {
+      out.push(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Text, { children: [
+        n[1],
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: AMBER, children: `${n[2]}. ` }),
+        inlineMd(n[3], `n${key}`)
+      ] }, key++));
+      i++;
+      continue;
+    }
+    if (!line.trim()) {
+      out.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { children: " " }, key++));
+      i++;
+      continue;
+    }
+    out.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { children: inlineMd(line, `p${key}`) }, key++));
+    i++;
+  }
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box_default, { flexDirection: "column", children: out });
+};
 var MessageView = ({ m, g }) => {
   switch (m.kind) {
     case "user":
       return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: AMBER, bold: true, children: `${g.arrow} ${m.text}` });
     case "assistant":
-      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Text, { children: [
+      return m.streaming ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Text, { children: [
         m.text,
-        m.streaming ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: g.cursor }) : null
-      ] });
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: g.cursor })
+      ] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Markdown, { text: m.text, g });
     case "thinking":
       return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `  ${g.dot} thinking${m.done ? " complete" : "\u2026"} (${m.chars} chars)` });
     case "tool":

@@ -51,6 +51,7 @@ export function Sidebar({ open = false, onClose }: { open?: boolean; onClose?: (
           </div>
           <button
             onClick={onClose}
+            aria-label="Close navigation"
             title="Close navigation"
             className="grid h-8 w-8 place-items-center rounded-[var(--radius)] text-faint hover:bg-surface-2 hover:text-text lg:hidden"
           >

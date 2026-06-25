@@ -2099,3 +2099,26 @@ def test_non_codex_backend_omits_session_headers(monkeypatch):
 
     assert "session_id" not in captured["headers"]
     assert "x-client-request-id" not in captured["headers"]
+
+
+def test_structured_output_response_format_mapping():
+    """Chat-style response_format maps to the Responses API text.format shape."""
+    from aegis.providers.responses import _to_text_format
+
+    chat = {"type": "json_schema",
+            "json_schema": {"name": "Person", "schema": {"type": "object"}, "strict": True}}
+    out = _to_text_format(chat)
+    assert out == {"type": "json_schema", "name": "Person",
+                   "schema": {"type": "object"}, "strict": True}
+    assert _to_text_format({"type": "json_object"}) == {"type": "json_object"}
+
+
+def test_structured_output_capability_per_api_mode():
+    """OpenAI-family modes advertise structured_output; codex app-server does not."""
+    from aegis.providers.base import ApiMode
+    from aegis.providers.registry import _model_capabilities, _normalized_capabilities
+
+    chat = _normalized_capabilities(_model_capabilities("gpt-x", ApiMode.CHAT_COMPLETIONS))
+    codex = _normalized_capabilities(_model_capabilities("gpt-x", ApiMode.CODEX_APP_SERVER))
+    assert chat["structured_output"] is True
+    assert codex["structured_output"] is False

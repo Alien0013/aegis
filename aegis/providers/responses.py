@@ -22,6 +22,24 @@ from .schema import sanitize as _sanitize_schema
 DEFAULT_INSTRUCTIONS = "You are AEGIS, a careful coding agent. Follow the user's instructions."
 
 
+def _to_text_format(response_format: dict) -> dict:
+    """Map a chat-style ``response_format`` to the Responses API ``text.format`` shape.
+
+    Chat ``{"type":"json_schema","json_schema":{"name","schema","strict"}}`` flattens to
+    ``{"type":"json_schema","name","schema","strict"}``; ``json_object`` passes through.
+    Anything already in ``text.format`` shape (schema/name at top level) is returned as-is.
+    """
+    fmt = dict(response_format or {})
+    if fmt.get("type") == "json_schema" and isinstance(fmt.get("json_schema"), dict):
+        inner = fmt["json_schema"]
+        out = {"type": "json_schema"}
+        for key in ("name", "schema", "strict", "description"):
+            if key in inner:
+                out[key] = inner[key]
+        return out
+    return fmt
+
+
 class ResponsesTransport(ProviderTransport):
     api_mode = ApiMode.RESPONSES
 
@@ -119,6 +137,7 @@ class ResponsesTransport(ProviderTransport):
         on_response_id=None,
         on_reasoning: OnDelta | None = None,
         service_tier: str = "",
+        response_format: dict | None = None,
     ) -> LLMResponse:
         url = f"{base_url}/responses"
         headers = {"Content-Type": "application/json", **(extra_headers or {}), **auth.headers()}
@@ -190,6 +209,8 @@ class ResponsesTransport(ProviderTransport):
         wire_tools = self._to_wire_tools(tools)
         if wire_tools:
             payload["tools"] = wire_tools
+        if response_format:                       # structured output -> Responses `text.format`
+            payload["text"] = {"format": _to_text_format(response_format)}
 
         if wire_stream:
             resp = self._stream(url, headers, payload, on_delta, timeout, on_response_id, on_reasoning)

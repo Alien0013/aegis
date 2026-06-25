@@ -5464,12 +5464,23 @@ def _dashboard_chat_control_response(body: dict[str, Any]) -> JSONResponse:
     }, status_code=200 if accepted else 409)
 
 
-def _dashboard_chat_streaming_response(body: dict, chat_runner, request: Request) -> StreamingResponse:
+def _dashboard_chat_streaming_response(
+    body: dict, chat_runner, request: Request, config: Config | None = None
+) -> StreamingResponse:
     events_q: queue.Queue[dict | object] = queue.Queue()
     sentinel = object()
     cancelled = threading.Event()
     active: dict[str, Any] = {}
     active_lock = threading.Lock()
+    # When the client merely disconnects (e.g. the user switches dashboard/desktop views),
+    # keep the agent run alive so it finishes in the background instead of being cancelled —
+    # the session persists incrementally and the client reattaches on return. Explicit stop /
+    # new-prompt still cancel through the /api/chat/control endpoint by run id.
+    # The live route always supplies config (detach defaults on); a missing config keeps the
+    # conservative legacy cancel-on-disconnect behavior.
+    detach_on_disconnect = False
+    if config is not None:
+        detach_on_disconnect = bool(config.get("dashboard.detach_on_disconnect", True))
 
     def start_cancel_watchdog() -> None:
         with active_lock:
@@ -5526,7 +5537,8 @@ def _dashboard_chat_streaming_response(body: dict, chat_runner, request: Request
         try:
             while True:
                 if await request.is_disconnected():
-                    cancel_active_agent()
+                    if not detach_on_disconnect:
+                        cancel_active_agent()
                     break
                 try:
                     item = events_q.get_nowait()
@@ -5538,10 +5550,12 @@ def _dashboard_chat_streaming_response(body: dict, chat_runner, request: Request
                     break
                 yield f"data: {json.dumps(item)}\n\n".encode()
         except asyncio.CancelledError:
-            cancel_active_agent()
+            if not detach_on_disconnect:
+                cancel_active_agent()
             raise
         finally:
-            if not saw_sentinel:
+            # Detach mode: leave the worker running so the turn completes in the background.
+            if not saw_sentinel and not detach_on_disconnect:
                 cancel_active_agent()
 
     return StreamingResponse(stream(), media_type="text/event-stream")
@@ -8437,7 +8451,7 @@ def create_app(config: Config) -> FastAPI:
     async def chat_stream(request: Request) -> StreamingResponse:
         _require_request(request, config)
         body = await request.json()
-        return _dashboard_chat_streaming_response(body, chat_runner, request)
+        return _dashboard_chat_streaming_response(body, chat_runner, request, config)
 
     @app.post("/api/chat/control")
     async def chat_control(request: Request) -> JSONResponse:
