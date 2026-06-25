@@ -26,6 +26,7 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/background/jobs/{job_id}/retry | POST | api_background_job_retry |
 | /api/browser/manage | GET | api_browser_manage_get |
 | /api/browser/manage | POST | api_browser_manage |
+| /api/chat/attach | POST | chat_attach |
 | /api/chat/control | POST | chat_control |
 | /api/chat/stream | POST | chat_stream |
 | /api/check/update | GET | api_update_check |
