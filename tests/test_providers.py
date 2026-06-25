@@ -1995,3 +1995,107 @@ def test_reasoning_threads_to_provider():
     agent = Agent(config=cfg, provider=fp, session=Session.create())
     agent.run("hi")
     assert fp.last_reasoning == "high"
+
+
+def test_codex_backend_sends_session_cache_headers(monkeypatch):
+    """The Codex backend routes prompt-cache scope by request headers; a stable
+    session id must ride along as `session_id` / `x-client-request-id` so cache
+    hits stay high across the many turns of one run."""
+    from aegis.providers.responses import ResponsesTransport
+    from aegis.types import Message
+
+    captured: dict = {}
+
+    class FakeAuth:
+        def headers(self):
+            return {}
+
+    class FakeStream:
+        status_code = 200
+        headers: dict = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return None
+
+        def iter_lines(self):
+            yield ('data: {"type":"response.completed","response":{"output":'
+                   '[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],'
+                   '"status":"completed","usage":{"input_tokens":5,"output_tokens":1}}}')
+            yield "data: [DONE]"
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return None
+
+        def stream(self, method, url, headers, json):
+            captured["headers"] = headers
+            return FakeStream()
+
+    monkeypatch.setattr("aegis.providers.responses.httpx.Client", FakeClient)
+    ResponsesTransport().complete(
+        base_url="https://chatgpt.com/backend-api/codex",
+        auth=FakeAuth(),
+        model="gpt-5.5",
+        messages=[Message.user("hi")],
+        tools=None,
+        stream=False,
+        session_id="sess-abc-123",
+    )
+
+    assert captured["headers"]["session_id"] == "sess-abc-123"
+    assert captured["headers"]["x-client-request-id"] == "sess-abc-123"
+
+
+def test_non_codex_backend_omits_session_headers(monkeypatch):
+    from aegis.providers.responses import ResponsesTransport
+    from aegis.types import Message
+
+    captured: dict = {}
+
+    class FakeAuth:
+        def headers(self):
+            return {}
+
+    class FakeResponse:
+        status_code = 200
+        headers: dict = {}
+
+        def json(self):
+            return {"output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}]}
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return None
+
+        def post(self, url, headers, json):
+            captured["headers"] = headers
+            return FakeResponse()
+
+    monkeypatch.setattr("aegis.providers.responses.httpx.Client", FakeClient)
+    ResponsesTransport().complete(
+        base_url="https://api.openai.com/v1",
+        auth=FakeAuth(),
+        model="gpt-5.5",
+        messages=[Message.user("hi")],
+        tools=None,
+        stream=False,
+        session_id="sess-abc-123",
+    )
+
+    assert "session_id" not in captured["headers"]
+    assert "x-client-request-id" not in captured["headers"]

@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from ..tools.base import ToolResult
-from ..types import LLMResponse, Message, ToolCall, ToolSchema
+from ..types import LLMResponse, Message, ToolCall, ToolSchema, Usage
 from .auth import AuthProvider
 from .base import ApiMode, ApprovalHandler, OnDelta, ProviderTransport, ToolRunner
 from .schema import sanitize as _sanitize_schema
@@ -250,6 +250,10 @@ class CodexAppServerTransport(ProviderTransport):
         text_parts: list[str] = []
         completed_text: str | None = None
         errors: list[str] = []
+        # Codex app-server reports usage via `thread/tokenUsage/updated`; the per-step
+        # `last` buckets sum to the turn total. inputTokens already includes the cached
+        # subset (totalTokens == inputTokens + outputTokens), matching AEGIS's convention.
+        usage_input = usage_cached = usage_output = 0
 
         def handle_server_request(msg: dict[str, Any]) -> None:
             self._handle_server_request(msg, tool_runner=tool_runner, approver=approver)
@@ -289,6 +293,12 @@ class CodexAppServerTransport(ProviderTransport):
                 delta = params.get("delta") or ""
                 if delta and on_reasoning:
                     on_reasoning(delta)
+            elif method == "thread/tokenUsage/updated":
+                last = (params.get("tokenUsage") or {}).get("last") or {}
+                usage_input += int(last.get("inputTokens") or 0)
+                usage_cached += int(last.get("cachedInputTokens") or 0)
+                usage_output += (int(last.get("outputTokens") or 0)
+                                 + int(last.get("reasoningOutputTokens") or 0))
             elif method == "item/completed":
                 item = params.get("item") or {}
                 if item.get("type") == "agentMessage" and item.get("text"):
@@ -313,7 +323,9 @@ class CodexAppServerTransport(ProviderTransport):
         if errors and not (completed_text or text_parts):
             raise CodexAppServerError("; ".join(errors))
         final_text = completed_text if completed_text is not None else "".join(text_parts)
-        return LLMResponse(text=final_text, finish_reason="completed", raw={"turn_id": turn_id})
+        usage = Usage(usage_input, usage_output, usage_cached, 0)
+        return LLMResponse(text=final_text, finish_reason="completed", usage=usage,
+                           raw={"turn_id": turn_id})
 
     def close(self) -> None:
         if self._client is not None:

@@ -124,6 +124,16 @@ class ResponsesTransport(ProviderTransport):
         headers = {"Content-Type": "application/json", **(extra_headers or {}), **auth.headers()}
         is_codex_backend = self._requires_stream(base_url)
         wire_stream = stream or is_codex_backend
+        if is_codex_backend:
+            # The Codex backend routes prompt-cache *scope* by these request headers
+            # (not by the body `prompt_cache_key`). A stable per-session id keeps the
+            # cache warm across the many turns of one agent run — without it, requests
+            # scatter across cache nodes and hit rate collapses to ~0.
+            import hashlib as _hashlib
+            scope = str(session_id or "").strip() or _hashlib.sha256(
+                self._instructions(messages).encode("utf-8")).hexdigest()[:32]
+            headers["session_id"] = scope
+            headers["x-client-request-id"] = scope
         state = response_state or {}
         store_response = bool(state.get("enabled") and state.get("store"))
         previous_response_id = str(state.get("previous_response_id") or "").strip()
