@@ -76,6 +76,31 @@ function looksLikeDiff(value: string): boolean {
   return /^(diff --git|@@ |[+-]{3}\s|[+-][^\n])/m.test(value);
 }
 
+// Per-tool glyph so the transcript reads at a glance (parity with the terminal UI),
+// mapped onto the existing icon set.
+function toolIcon(name: string): string {
+  const n = name.toLowerCase();
+  if (/(bash|shell|exec|run|process|command|terminal)/.test(n)) return "terminal";
+  if (/(web|http|browser|url|fetch|request)/.test(n)) return "external";
+  if (/(search|grep|glob|find)/.test(n)) return "search";
+  if (/(memory|recall)/.test(n)) return "memory";
+  if (/skill/.test(n)) return "skills";
+  if (/(kanban|todo)/.test(n)) return "kanban";
+  if (/(cron|schedul)/.test(n)) return "cron";
+  if (/(subagent|spawn|agent)/.test(n)) return "agents";
+  if (/(sql|database|\bdb\b)/.test(n)) return "database";
+  if (/(read|write|edit|patch|file|dir|\bls\b|cat)/.test(n)) return "files";
+  return "tools";
+}
+
+function diffStat(diff: string): { adds: number; dels: number } {
+  const lines = diff.split("\n");
+  return {
+    adds: lines.filter((l) => l.startsWith("+") && !l.startsWith("+++")).length,
+    dels: lines.filter((l) => l.startsWith("-") && !l.startsWith("---")).length,
+  };
+}
+
 function FileDiffPanel({ diff }: { diff: string }) {
   const lines = diff.split("\n");
   const files = lines.filter((line) => line.startsWith("diff --git ")).length;
@@ -116,6 +141,7 @@ export function ToolCall({ tool }: { tool: ToolEntry }) {
   const elapsed = tool.startedAt > 0
     ? fmtElapsed((tool.completedAt ?? now) - tool.startedAt) : null;
   const hasBody = !!(tool.args || tool.preview || tool.summary || tool.error);
+  const stat = isDiff ? diffStat(diffText) : null;
 
   return (
     <div className={cn("overflow-hidden rounded-[var(--radius)] border", TONE[tool.status])}>
@@ -128,10 +154,17 @@ export function ToolCall({ tool }: { tool: ToolEntry }) {
         {hasBody
           ? <Icon name={open ? "chevronDown" : "chevronRight"} size={12} className="shrink-0 text-faint" />
           : <span className="w-3 shrink-0" />}
-        <Icon name="zap" size={12} className={cn("shrink-0",
+        <Icon name={toolIcon(tool.name)} size={12} className={cn("shrink-0",
           tool.status === "error" ? "text-danger" : tool.status === "running" ? "text-primary" : "text-primary/70")} />
         <span className="shrink-0 font-mono font-medium text-text">{tool.name}</span>
         <span className="min-w-0 flex-1 truncate font-mono text-faint">{tool.target}</span>
+        {stat && (stat.adds > 0 || stat.dels > 0) && (
+          <span className="shrink-0 font-mono text-[11px] tabular-nums">
+            {stat.adds > 0 && <span className="text-success">+{stat.adds}</span>}
+            {stat.adds > 0 && stat.dels > 0 && <span> </span>}
+            {stat.dels > 0 && <span className="text-danger">-{stat.dels}</span>}
+          </span>
+        )}
         {tool.status === "running" && (
           <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" style={{ animation: "pulse-dot 1s infinite" }} />
         )}
