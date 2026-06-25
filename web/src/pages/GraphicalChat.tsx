@@ -426,6 +426,7 @@ export function GraphicalChat({
         if (sessionReasoning) setReasoningEffort(sessionReasoning);
         if (sessionServiceTier) setFastMode(sessionServiceTier === "priority");
         setTurns(restoreTurns(data.messages));
+        if (!cancelled) attachToLiveRun(sessionId);   // resume if a run is still in flight
       })
       .catch(() => {});
     return () => {
@@ -873,6 +874,93 @@ export function GraphicalChat({
         if (next) window.setTimeout(() => void sendText(next), 0);
       }
     }
+  };
+
+  // Reattach to a run that is still in flight for this session (e.g. it was started,
+  // then the user switched views and came back). Replays the backlog then follows the
+  // live stream; a "no_active_run" frame means nothing is live, so we just keep the
+  // persisted transcript that was already loaded.
+  const attachToLiveRun = (sid: string) => {
+    if (!sid) return;
+    streamRef.current.controller?.abort();
+    const controller = new AbortController();
+    const token = streamRef.current.token + 1;
+    streamRef.current = { token, controller };
+    const active = () => streamRef.current.token === token && !controller.signal.aborted;
+    let resumed = false;
+    void postStream("chat/attach", { session_id: sid }, (data) => {
+      if (!active()) return;
+      const type = String(data.type || "");
+      if (type === "no_active_run") return;
+      if (type === "resume") {
+        resumed = true;
+        setBusy(true);
+        const prompt = String(data.prompt || "");
+        setTurns((t) => {
+          // The in-flight turn may be partially persisted (the agent saves incrementally),
+          // so the reloaded transcript can already hold a stub of it. Drop that stub and let
+          // the replayed stream rebuild the turn cleanly — no duplicate prompt or tool cards.
+          const arr = [...t];
+          const n = arr.length;
+          if (n >= 2 && arr[n - 1].role === "assistant" && arr[n - 2].role === "user" && arr[n - 2].text === prompt) {
+            arr.pop(); arr.pop();
+          } else if (n >= 1 && arr[n - 1].role === "user" && arr[n - 1].text === prompt) {
+            arr.pop();
+          }
+          return [
+            ...arr,
+            ...(prompt ? [{ role: "user" as const, text: prompt }] : []),
+            { role: "assistant" as const, text: "", tools: [] },
+          ];
+        });
+        return;
+      }
+      if (!resumed) return;
+      applyStreamFrameToStatus(data as Record<string, unknown>);
+      if (type === "final") {
+        patchLast((turn) => ({ ...turn, text: String(data.reply || turn.text) }));
+        return;
+      }
+      if (type === "error") {
+        patchLast((turn) => ({ ...turn, text: String(data.reply || "error") }));
+        return;
+      }
+      if (type !== "event") return;
+      const ev = (data.event || {}) as Record<string, unknown>;
+      const et = String(ev.type || "");
+      if (et === "assistant_delta" || et === "assistant_message") {
+        patchLast((turn) => ({ ...turn, text: turn.text + String(ev.text || "") }));
+      } else if (et === "reasoning_delta") {
+        patchLast((turn) => ({ ...turn, reasoning: (turn.reasoning || "") + String(ev.text || "") }));
+      } else if (et === "tool_start") {
+        const name = String(ev.name || "tool");
+        const argsDiff = diffPreviewFromArgs(name, ev.args);
+        patchLast((turn) => ({
+          ...turn,
+          tools: [...(turn.tools || []), {
+            id: String(ev.id || ev.name), name, target: String(ev.target || ""),
+            args: renderToolArgs(ev.args), preview: argsDiff || String(ev.preview || ""),
+            summary: String(ev.summary || ""), diff: argsDiff, status: "running",
+            startedAt: Date.now(), kind: "tool",
+          }],
+        }));
+      } else if (et === "tool_result") {
+        patchLast((turn) => ({
+          ...turn,
+          tools: (turn.tools || []).map((x) => (x.id === String(ev.id || ev.name) ? {
+            ...x,
+            status: normalizeToolStatus(ev.status, "ok"),
+            target: String(ev.target || x.target),
+            preview: String(ev.preview || x.diff || x.preview || ""),
+            summary: String(ev.summary || x.summary || ""),
+            error: normalizeToolStatus(ev.status, "ok") === "error" ? String(ev.summary || ev.preview || x.error || "") : x.error,
+            completedAt: Date.now(),
+          } : x)),
+        }));
+      }
+    }, { signal: controller.signal }).catch(() => {}).finally(() => {
+      if (streamRef.current.token === token) { streamRef.current.controller = null; setBusy(false); }
+    });
   };
 
   const send = async () => {

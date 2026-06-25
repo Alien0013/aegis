@@ -59,6 +59,70 @@ _DASHBOARD_ACTIVE_CHAT_AGENTS: dict[str, dict[str, Any]] = {}
 _DASHBOARD_ACTIVE_CHAT_LOCK = threading.Lock()
 logger = logging.getLogger(__name__)
 
+# Session-scoped fan-out of chat-stream frames so a client that returns mid-run
+# (after switching views) can replay the backlog and then follow the live stream —
+# the reattach half of detach_on_disconnect.
+_DASHBOARD_LIVE_RUNS: dict[str, "_LiveRun"] = {}
+_DASHBOARD_LIVE_RUNS_LOCK = threading.Lock()
+_LIVE_SENTINEL = object()
+
+
+class _LiveRun:
+    """A live chat run's frame buffer + subscriber fan-out, keyed by session id."""
+
+    def __init__(self, prompt: str = ""):
+        self.prompt = prompt
+        self._lock = threading.Lock()
+        self._events: list[dict] = []
+        self._subscribers: set[queue.Queue] = set()
+        self.done = False
+
+    def publish(self, frame: dict) -> None:
+        with self._lock:
+            self._events.append(frame)
+            subs = list(self._subscribers)
+        for q in subs:
+            q.put(frame)
+
+    def finish(self) -> None:
+        with self._lock:
+            self.done = True
+            subs = list(self._subscribers)
+        for q in subs:
+            q.put(_LIVE_SENTINEL)
+
+    def subscribe(self) -> tuple[queue.Queue, list[dict], bool]:
+        q: queue.Queue = queue.Queue()
+        with self._lock:                 # snapshot backlog + add subscriber atomically
+            backlog = list(self._events)
+            done = self.done
+            self._subscribers.add(q)
+        return q, backlog, done
+
+    def unsubscribe(self, q: queue.Queue) -> None:
+        with self._lock:
+            self._subscribers.discard(q)
+
+
+def _register_live_run(session_id: str, live: "_LiveRun") -> None:
+    if not session_id:
+        return
+    with _DASHBOARD_LIVE_RUNS_LOCK:
+        _DASHBOARD_LIVE_RUNS[session_id] = live
+
+
+def _drop_live_run(session_id: str, live: "_LiveRun") -> None:
+    if not session_id:
+        return
+    with _DASHBOARD_LIVE_RUNS_LOCK:
+        if _DASHBOARD_LIVE_RUNS.get(session_id) is live:
+            _DASHBOARD_LIVE_RUNS.pop(session_id, None)
+
+
+def _get_live_run(session_id: str) -> "_LiveRun | None":
+    with _DASHBOARD_LIVE_RUNS_LOCK:
+        return _DASHBOARD_LIVE_RUNS.get(session_id)
+
 
 def _coerce_dashboard_bool(value: Any, default: bool = False) -> bool:
     if value is None:
@@ -5481,6 +5545,17 @@ def _dashboard_chat_streaming_response(
     detach_on_disconnect = False
     if config is not None:
         detach_on_disconnect = bool(config.get("dashboard.detach_on_disconnect", True))
+    live = _LiveRun(prompt=str(body.get("message") or ""))
+
+    def emit(frame: Any) -> None:
+        # Fan every stream frame out to both this request and the session-scoped live
+        # channel, so a client returning mid-run can replay + follow (see /api/chat/attach).
+        events_q.put(frame)
+        if isinstance(frame, dict):
+            try:
+                live.publish(frame)
+            except Exception:  # noqa: BLE001
+                pass
 
     def start_cancel_watchdog() -> None:
         with active_lock:
@@ -5501,6 +5576,10 @@ def _dashboard_chat_streaming_response(
 
     def on_agent(agent: Any) -> None:
         active["agent"] = agent
+        sid = str(getattr(getattr(agent, "session", None), "id", "") or body.get("session_id") or "")
+        if sid:
+            active["live_sid"] = sid
+            _register_live_run(sid, live)
         _register_dashboard_chat_agent(agent, body)
         if cancelled.is_set():
             _cancel_dashboard_stream_agent(agent)
@@ -5518,7 +5597,7 @@ def _dashboard_chat_streaming_response(
             dash._dashboard_chat_stream(
                 body,
                 chat_runner,
-                events_q.put,
+                emit,
                 on_agent=on_agent,
                 cancel_event=cancelled,
             )
@@ -5526,6 +5605,8 @@ def _dashboard_chat_streaming_response(
             agent = active.get("agent")
             if agent is not None:
                 _unregister_dashboard_chat_agent(agent, body)
+            live.finish()
+            _drop_live_run(str(active.get("live_sid") or ""), live)
             events_q.put(sentinel)
 
     thread = threading.Thread(target=worker, daemon=True)
@@ -5557,6 +5638,39 @@ def _dashboard_chat_streaming_response(
             # Detach mode: leave the worker running so the turn completes in the background.
             if not saw_sentinel and not detach_on_disconnect:
                 cancel_active_agent()
+
+    return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+def _dashboard_chat_attach_response(session_id: str, request: Request) -> StreamingResponse:
+    """Reattach to a live chat run for ``session_id``: replay the frames emitted so far,
+    then follow new ones until the run ends. Emits a single ``no_active_run`` frame when
+    nothing is live (the client then just shows the persisted transcript)."""
+    live = _get_live_run(session_id)
+
+    async def stream():
+        if live is None:
+            yield f"data: {json.dumps({'type': 'no_active_run', 'session_id': session_id})}\n\n".encode()
+            return
+        sub, backlog, done = live.subscribe()
+        try:
+            resume = {"type": "resume", "session_id": session_id, "prompt": live.prompt}
+            yield f"data: {json.dumps(resume)}\n\n".encode()
+            for frame in backlog:
+                yield f"data: {json.dumps(frame)}\n\n".encode()
+            while not done:
+                if await request.is_disconnected():
+                    break
+                try:
+                    item = sub.get_nowait()
+                except queue.Empty:
+                    await asyncio.sleep(0.05)
+                    continue
+                if item is _LIVE_SENTINEL:
+                    break
+                yield f"data: {json.dumps(item)}\n\n".encode()
+        finally:
+            live.unsubscribe(sub)
 
     return StreamingResponse(stream(), media_type="text/event-stream")
 
@@ -8452,6 +8566,13 @@ def create_app(config: Config) -> FastAPI:
         _require_request(request, config)
         body = await request.json()
         return _dashboard_chat_streaming_response(body, chat_runner, request, config)
+
+    @app.post("/api/chat/attach")
+    async def chat_attach(request: Request) -> StreamingResponse:
+        _require_request(request, config)
+        body = await request.json()
+        session_id = str((body or {}).get("session_id") or "").strip()
+        return _dashboard_chat_attach_response(session_id, request)
 
     @app.post("/api/chat/control")
     async def chat_control(request: Request) -> JSONResponse:
