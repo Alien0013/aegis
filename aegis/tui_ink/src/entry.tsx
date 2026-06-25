@@ -286,6 +286,31 @@ function parseDiffStat(text?: string): {adds: number; dels: number} | null {
 const INLINE_RE =
   /(\*\*([^*]+)\*\*|__([^_]+)__|(?<!\*)\*(?!\s)([^*]+?)\*|(?<![\w_])_(?!\s)([^_]+?)_(?![\w_])|`([^`]+)`|\[([^\]]+)\]\(([^)]+)\))/;
 
+// Lightweight, language-agnostic code highlighting for fenced blocks — the same
+// approach as the dashboard, mapped onto terminal colors. Comments dim, strings
+// green, numbers amber, keywords cyan.
+const HL_RE =
+  /(\/\/[^\n]*|#[^\n]*|--[^\n]*|\/\*[\s\S]*?\*\/)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)|\b(0x[0-9a-fA-F]+|\d[\d_.]*)\b|\b(const|let|var|function|fn|def|class|struct|enum|interface|type|return|yield|if|elif|else|for|while|do|switch|case|break|continue|in|of|import|from|export|package|use|new|delete|await|async|try|except|catch|finally|throw|raise|with|as|public|private|protected|static|final|void|int|float|double|string|str|bool|boolean|true|false|null|nil|none|None|True|False|undefined|self|this|super|lambda|match|select|insert|update|where|and|or|not)\b/g;
+
+function highlightCode(line: string, keyBase: string): React.ReactNode[] {
+  const nodes: React.ReactNode[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  let k = 0;
+  HL_RE.lastIndex = 0;
+  while ((m = HL_RE.exec(line)) !== null) {
+    if (m.index > last) nodes.push(<Text key={`${keyBase}-${k++}`} color={CODE}>{line.slice(last, m.index)}</Text>);
+    if (m[1] != null) nodes.push(<Text key={`${keyBase}-${k++}`} color={MUTED} italic>{m[1]}</Text>);
+    else if (m[2] != null) nodes.push(<Text key={`${keyBase}-${k++}`} color={GREEN}>{m[2]}</Text>);
+    else if (m[3] != null) nodes.push(<Text key={`${keyBase}-${k++}`} color={AMBER}>{m[3]}</Text>);
+    else if (m[4] != null) nodes.push(<Text key={`${keyBase}-${k++}`} color={CYAN}>{m[4]}</Text>);
+    last = m.index + m[0].length;
+  }
+  if (last < line.length) nodes.push(<Text key={`${keyBase}-${k++}`} color={CODE}>{line.slice(last)}</Text>);
+  if (!nodes.length) nodes.push(<Text key={`${keyBase}-0`} color={CODE}>{line || ' '}</Text>);
+  return nodes;
+}
+
 function inlineMd(text: string, keyBase: string): React.ReactNode[] {
   const nodes: React.ReactNode[] = [];
   let rest = text;
@@ -326,7 +351,7 @@ const Markdown: React.FC<{text: string; g: G}> = ({text, g}) => {
         <Box key={key++} flexDirection="column" marginLeft={2}>
           {lang ? <Text color={MUTED}>{`${g.dot} ${lang}`}</Text> : null}
           {body.map((b, j) => (
-            <Text key={j}><Text color={MUTED}>{`${g.quote} `}</Text><Text color={CODE}>{b}</Text></Text>
+            <Text key={j}><Text color={MUTED}>{`${g.quote} `}</Text>{highlightCode(b, `c${j}`)}</Text>
           ))}
         </Box>,
       );

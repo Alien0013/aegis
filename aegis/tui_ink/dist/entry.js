@@ -34178,6 +34178,25 @@ function parseDiffStat(text) {
   return null;
 }
 var INLINE_RE = /(\*\*([^*]+)\*\*|__([^_]+)__|(?<!\*)\*(?!\s)([^*]+?)\*|(?<![\w_])_(?!\s)([^_]+?)_(?![\w_])|`([^`]+)`|\[([^\]]+)\]\(([^)]+)\))/;
+var HL_RE = /(\/\/[^\n]*|#[^\n]*|--[^\n]*|\/\*[\s\S]*?\*\/)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)|\b(0x[0-9a-fA-F]+|\d[\d_.]*)\b|\b(const|let|var|function|fn|def|class|struct|enum|interface|type|return|yield|if|elif|else|for|while|do|switch|case|break|continue|in|of|import|from|export|package|use|new|delete|await|async|try|except|catch|finally|throw|raise|with|as|public|private|protected|static|final|void|int|float|double|string|str|bool|boolean|true|false|null|nil|none|None|True|False|undefined|self|this|super|lambda|match|select|insert|update|where|and|or|not)\b/g;
+function highlightCode(line, keyBase) {
+  const nodes = [];
+  let last = 0;
+  let m;
+  let k = 0;
+  HL_RE.lastIndex = 0;
+  while ((m = HL_RE.exec(line)) !== null) {
+    if (m.index > last) nodes.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: CODE, children: line.slice(last, m.index) }, `${keyBase}-${k++}`));
+    if (m[1] != null) nodes.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, italic: true, children: m[1] }, `${keyBase}-${k++}`));
+    else if (m[2] != null) nodes.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: GREEN, children: m[2] }, `${keyBase}-${k++}`));
+    else if (m[3] != null) nodes.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: AMBER, children: m[3] }, `${keyBase}-${k++}`));
+    else if (m[4] != null) nodes.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: CYAN, children: m[4] }, `${keyBase}-${k++}`));
+    last = m.index + m[0].length;
+  }
+  if (last < line.length) nodes.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: CODE, children: line.slice(last) }, `${keyBase}-${k++}`));
+  if (!nodes.length) nodes.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: CODE, children: line || " " }, `${keyBase}-0`));
+  return nodes;
+}
 function inlineMd(text, keyBase) {
   const nodes = [];
   let rest = text;
@@ -34224,7 +34243,7 @@ var Markdown = ({ text, g }) => {
           lang ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `${g.dot} ${lang}` }) : null,
           body.map((b2, j) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Text, { children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `${g.quote} ` }),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: CODE, children: b2 })
+            highlightCode(b2, `c${j}`)
           ] }, j))
         ] }, key++)
       );
