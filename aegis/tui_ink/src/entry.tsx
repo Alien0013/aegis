@@ -13,11 +13,58 @@ import {Box, Text, render, useApp, useInput, useStdout} from 'ink';
 import TextInput from 'ink-text-input';
 import WebSocket from 'ws';
 
-// Terminal palettes, keyed by the same names as the dashboard themes so the TUI tracks
-// the configured theme (the launcher passes AEGIS_TUI_THEME from display.theme; the env
-// var still wins if set directly). Unknown names fall back to the signature aegis-dark.
-type Palette = {amber: string; green: string; cyan: string; red: string; muted: string; panel: string; code: string};
-const THEMES: Record<string, Palette> = {
+// ── Theme: a structured semantic palette derived from a small per-theme base ──
+// Each theme authors a 7-color BASE; the semantic roles the UI actually paints with
+// (diff add/remove + word-level, status tiers, selection, borders, accent) are DERIVED
+// from that base via color math — the way a real design system cascades tokens — so all
+// twelve themes stay internally cohesive without hand-authoring every role. Keyed by the
+// same names as the dashboard themes (the launcher passes AEGIS_TUI_THEME from
+// display.theme; the env var still wins). Unknown names fall back to signature aegis-dark.
+type BasePalette = {amber: string; green: string; cyan: string; red: string; muted: string; panel: string; code: string};
+
+function parseHex(h: string): [number, number, number] {
+  const m = /^#?([0-9a-f]{6})$/i.exec((h || '').trim());
+  if (!m) return [136, 136, 136];
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
+}
+function toHex(r: number, g: number, b: number): string {
+  const c = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
+  return '#' + ((1 << 24) | (c(r) << 16) | (c(g) << 8) | c(b)).toString(16).slice(1);
+}
+function mix(a: string, b: string, t: number): string {
+  const pa = parseHex(a), pb = parseHex(b);
+  return toHex(pa[0] + (pb[0] - pa[0]) * t, pa[1] + (pb[1] - pa[1]) * t, pa[2] + (pb[2] - pa[2]) * t);
+}
+const lighten = (c: string, t: number) => mix(c, '#ffffff', t);
+const darken = (c: string, t: number) => mix(c, '#000000', t);
+
+type Palette = BasePalette & {
+  diffAdd: string; diffDel: string; diffAddWord: string; diffDelWord: string;
+  statusGood: string; statusWarn: string; statusBad: string; statusCritical: string;
+  selBg: string; border: string; accent: string;
+};
+
+function derive(b: BasePalette): Palette {
+  const light = parseHex(b.panel)[0] > 140;   // light themes mix toward dark for legibility
+  const lift = (c: string, t: number) => (light ? darken(c, t) : lighten(c, t));
+  return {
+    ...b,
+    accent: b.amber,
+    diffAdd: b.green,
+    diffDel: b.red,
+    diffAddWord: lift(b.green, 0.28),
+    diffDelWord: lift(b.red, 0.24),
+    statusGood: b.green,
+    statusWarn: b.amber,
+    statusBad: b.red,
+    statusCritical: lift(b.red, 0.2),
+    selBg: mix(b.panel, b.amber, 0.22),
+    border: mix(b.muted, b.panel, 0.5),
+  };
+}
+
+const BASE: Record<string, BasePalette> = {
   'aegis-dark': {amber: '#d6a15e', green: '#7ecf8f', cyan: '#6fb7d8', red: '#e96e6e', muted: '#8f968f', panel: '#262a31', code: '#cdd6c4'},
   'aegis-light': {amber: '#9a6b1f', green: '#0c8f88', cyan: '#2f6bff', red: '#d83a52', muted: '#6b7280', panel: '#e6e8ec', code: '#16191f'},
   'midnight': {amber: '#a78bfa', green: '#34d399', cyan: '#22d3ee', red: '#fb7185', muted: '#8b8baf', panel: '#1c1c40', code: '#d7d4ff'},
@@ -31,13 +78,24 @@ const THEMES: Record<string, Palette> = {
   'solarized': {amber: '#b58900', green: '#859900', cyan: '#2aa198', red: '#dc322f', muted: '#839496', panel: '#073642', code: '#eee8d5'},
   'latte': {amber: '#df8e1d', green: '#40a02b', cyan: '#209fb5', red: '#d20f39', muted: '#8c8fa1', panel: '#e6e9ef', code: '#4c4f69'},
 };
-const THEME = THEMES[(process.env.AEGIS_TUI_THEME || 'aegis-dark').toLowerCase()] || THEMES['aegis-dark'];
+const THEME = derive(BASE[(process.env.AEGIS_TUI_THEME || 'aegis-dark').toLowerCase()] || BASE['aegis-dark']);
 const AMBER = THEME.amber;
 const GREEN = THEME.green;
 const CYAN = THEME.cyan;
 const RED = THEME.red;
 const MUTED = THEME.muted;
 const PANEL = THEME.panel;
+const ACCENT = THEME.accent;
+const BORDER = THEME.border;
+const SEL = THEME.selBg;
+const DIFF_ADD = THEME.diffAdd;
+const DIFF_DEL = THEME.diffDel;
+const DIFF_ADD_W = THEME.diffAddWord;
+const DIFF_DEL_W = THEME.diffDelWord;
+const ST_GOOD = THEME.statusGood;
+const ST_WARN = THEME.statusWarn;
+const ST_BAD = THEME.statusBad;
+const ST_CRIT = THEME.statusCritical;
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
@@ -101,6 +159,25 @@ function glyphs(uni: boolean) {
 }
 
 const CODE = THEME.code;
+
+// Brand banner — block-letter AEGIS rendered in the theme accent on connect, with an
+// ASCII fallback for terminals without box-drawing. Drawn once at session start; it scrolls
+// away after the first turn (the reference TUI does the same with its welcome hero).
+const BANNER_UNI = [
+  ' █████╗ ███████╗ ██████╗ ██╗███████╗',
+  '██╔══██╗██╔════╝██╔════╝ ██║██╔════╝',
+  '███████║█████╗  ██║  ███╗██║███████╗',
+  '██╔══██║██╔══╝  ██║   ██║██║╚════██║',
+  '██║  ██║███████╗╚██████╔╝██║███████║',
+  '╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═╝╚══════╝',
+];
+const BANNER_ASCII = [
+  '  _   ___ ___ ___ ___ ',
+  ' /_\\ | __/ __|_ _/ __|',
+  '/ _ \\| _| (_ || |\\__ \\',
+  "/_/ \\_\\___\\___|___|___/",
+];
+const TAGLINE = 'the local-first agent workbench you own';
 
 type Header = {
   brand?: string; model?: string; session_id?: string; session_title?: string;
@@ -254,15 +331,15 @@ const ToolCard: React.FC<{m: Extract<Msg, {kind: 'tool'}>; g: G}> = ({m, g}) => 
   const icon = g.icons[m.name] || g.iconDefault;
   const secs = m.ms ? (m.ms / 1000).toFixed(1) + 's' : '';
   const pill =
-    m.status === 'running' ? <Text color={AMBER}>{g.spinner[0]}</Text>
-      : m.status === 'error' ? <Text color={RED}>{`${g.bad} ${secs}`}</Text>
-        : <Text color={GREEN}>{`${g.ok} ${secs}`}</Text>;
+    m.status === 'running' ? <Text color={ACCENT}>{g.spinner[0]}</Text>
+      : m.status === 'error' ? <Text color={ST_BAD}>{`${g.bad} ${secs}`}</Text>
+        : <Text color={ST_GOOD}>{`${g.ok} ${secs}`}</Text>;
   // diff-aware: surface +adds/-dels for edit/write/patch tools from the result summary
   const stat = parseDiffStat(m.summary || m.preview);
   const summary = (m.summary || '').replace(ANSI_RE, '');
   return (
     <Box>
-      <Text color={AMBER}>{`  ${icon} `}</Text>
+      <Text color={ACCENT}>{`  ${icon} `}</Text>
       <Text color={MUTED} bold>{m.name}</Text>
       <Text> </Text>
       <Text color={MUTED}>{m.preview.slice(0, 80)}</Text>
@@ -271,9 +348,9 @@ const ToolCard: React.FC<{m: Extract<Msg, {kind: 'tool'}>; g: G}> = ({m, g}) => 
       {stat ? (
         <Text>
           <Text>{'  '}</Text>
-          {stat.adds ? <Text color={GREEN}>{`+${stat.adds}`}</Text> : null}
+          {stat.adds ? <Text color={DIFF_ADD}>{`+${stat.adds}`}</Text> : null}
           {stat.adds && stat.dels ? <Text> </Text> : null}
-          {stat.dels ? <Text color={RED}>{`-${stat.dels}`}</Text> : null}
+          {stat.dels ? <Text color={DIFF_DEL}>{`-${stat.dels}`}</Text> : null}
         </Text>
       ) : null}
       {summary && !stat && m.status !== 'running'
@@ -366,12 +443,26 @@ const Markdown: React.FC<{text: string; g: G}> = ({text, g}) => {
       i++;
       while (i < lines.length && !/^\s*```/.test(lines[i])) { body.push(lines[i]); i++; }
       i++; // closing fence
+      // Diff blocks (```diff or a body of +/- lines) render as a colored patch: added
+      // lines green, removed lines red, hunk headers cyan — with a brighter marker glyph.
+      const isDiff = /^diff$/i.test(lang) ||
+        (body.length > 1 && body.filter((b) => /^[+-]/.test(b)).length >= Math.max(2, body.length / 2));
       out.push(
         <Box key={key++} flexDirection="column" marginLeft={2}>
           {lang ? <Text color={MUTED}>{`${g.dot} ${lang}`}</Text> : null}
-          {body.map((b, j) => (
-            <Text key={j}><Text color={MUTED}>{`${g.quote} `}</Text>{highlightCode(b, `c${j}`)}</Text>
-          ))}
+          {body.map((b, j) => {
+            if (isDiff) {
+              if (b.startsWith('+') && !b.startsWith('+++')) {
+                return <Text key={j}><Text color={DIFF_ADD_W}>+</Text><Text color={DIFF_ADD}>{b.slice(1)}</Text></Text>;
+              }
+              if (b.startsWith('-') && !b.startsWith('---')) {
+                return <Text key={j}><Text color={DIFF_DEL_W}>-</Text><Text color={DIFF_DEL}>{b.slice(1)}</Text></Text>;
+              }
+              if (b.startsWith('@@')) return <Text key={j} color={CYAN}>{b}</Text>;
+              return <Text key={j} color={MUTED}>{b || ' '}</Text>;
+            }
+            return <Text key={j}><Text color={MUTED}>{`${g.quote} `}</Text>{highlightCode(b, `c${j}`)}</Text>;
+          })}
         </Box>,
       );
       continue;
@@ -431,6 +522,87 @@ const MessageView: React.FC<{m: Msg; g: G}> = ({m, g}) => {
   }
 };
 
+// Brand hero shown once at session start (until the first turn). Mirrors the reference
+// TUI's welcome banner: themed block-letter logo + a one-line identity row.
+const Banner: React.FC<{header: Header; g: G; uni: boolean}> = ({header, g, uni}) => {
+  const art = uni ? BANNER_UNI : BANNER_ASCII;
+  const model = header.model || '?';
+  const session = (header.session_title || header.session_id || 'new session').slice(0, 36);
+  return (
+    <Box flexDirection="column" marginLeft={1} marginTop={1}>
+      {art.map((line, i) => (
+        <Text key={i} color={i < art.length / 2 ? ACCENT : mix(ACCENT, MUTED, 0.35)} bold>{line}</Text>
+      ))}
+      <Box marginTop={1}>
+        <Text color={MUTED}>{`  ${TAGLINE}`}</Text>
+      </Box>
+      <Box>
+        <Text color={MUTED}>{`  ${g.dot} `}</Text>
+        <Text color={CYAN}>{model}</Text>
+        <Text color={MUTED}>{`  ${g.sep}  ${session}  ${g.sep}  `}</Text>
+        <Text color={MUTED}>{`type a message, or /help`}</Text>
+      </Box>
+      <Box marginTop={1}><Text color={BORDER}>{g.rule.repeat(48)}</Text></Box>
+    </Box>
+  );
+};
+
+// Model-picker overlay (Ctrl+P): a filterable switcher floated over the transcript. Type to
+// filter, ↑↓ to move, Enter switches the live session model, Esc closes. Selection is applied
+// by sending a normal `/model <provider>/<model>` input through the existing slash path.
+const ModelPicker: React.FC<{
+  matches: {model: string; provider: string; current?: boolean}[];
+  query: string; sel: number; g: G; cols: number;
+}> = ({matches, query, sel, g, cols}) => {
+  const w = Math.max(40, Math.min(cols - 4, 72));
+  const window = matches.slice(Math.max(0, sel - 7), Math.max(8, sel + 1)).length ? matches : [];
+  const start = Math.max(0, Math.min(sel - 7, Math.max(0, matches.length - 8)));
+  const view = window.slice(start, start + 8);
+  return (
+    <Box flexDirection="column" marginLeft={2} marginTop={1} width={w}>
+      <Text color={ACCENT} bold>{`${g.brand.replace('AEGIS', '')} Switch model`}</Text>
+      <Box>
+        <Text color={MUTED}>{`  ${g.arrow} `}</Text>
+        <Text color={CYAN}>{query || ''}</Text>
+        <Text color={MUTED}>{query ? '' : 'type to filter…'}</Text>
+      </Box>
+      <Box marginTop={1} flexDirection="column">
+        {view.length === 0 ? <Text color={MUTED}>{'  (no matches)'}</Text> : view.map((m) => {
+          const i = matches.indexOf(m);
+          const on = i === sel;
+          return (
+            <Box key={`${m.provider}/${m.model}`}>
+              <Text backgroundColor={on ? SEL : undefined} color={on ? ACCENT : (m.current ? GREEN : CODE)} bold={on}>
+                {`  ${m.current ? g.ok : ' '} ${m.model.padEnd(28).slice(0, 28)}`}
+              </Text>
+              <Text backgroundColor={on ? SEL : undefined} color={MUTED}>{`  ${m.provider}${m.current ? '  · current' : ''}`}</Text>
+            </Box>
+          );
+        })}
+      </Box>
+      <Box marginTop={1}><Text color={BORDER}>{g.rule.repeat(Math.min(w, 56))}</Text></Box>
+      <Text color={MUTED}>{`  ${matches.length} model(s) ${g.sep} ↑↓ move ${g.sep} ↵ switch ${g.sep} Esc cancel`}</Text>
+    </Box>
+  );
+};
+
+// Todo panel: the agent's live plan pinned above the composer, mirrored from the latest
+// todo_write result so progress is visible during long autonomous runs without scrolling.
+const TodoPanel: React.FC<{todos: {mark: string; text: string}[]; g: G}> = ({todos, g}) => {
+  const done = todos.filter((t) => t.mark === 'x').length;
+  return (
+    <Box flexDirection="column">
+      <Text color={MUTED}>{`  ${g.dot} Plan ${done}/${todos.length} ${g.rule.repeat(8)}`}</Text>
+      {todos.slice(0, 8).map((t, i) => {
+        const c = t.mark === 'x' ? GREEN : t.mark === '~' ? ACCENT : MUTED;
+        const box = t.mark === 'x' ? g.check : t.mark === '~' ? g.cont : g.uncheck;
+        return <Text key={i} color={c}>{`   ${box} ${t.text.slice(0, 64)}`}</Text>;
+      })}
+      {todos.length > 8 ? <Text color={MUTED}>{`   ${g.dot} +${todos.length - 8} more`}</Text> : null}
+    </Box>
+  );
+};
+
 const App: React.FC<{url: string; token: string}> = ({url, token}) => {
   const {exit} = useApp();
   const {stdout} = useStdout();
@@ -445,6 +617,13 @@ const App: React.FC<{url: string; token: string}> = ({url, token}) => {
   const [size, setSize] = useState({cols: stdout.columns || 80, rows: stdout.rows || 24});
   const [connected, setConnected] = useState(false);
   const [pending, setPending] = useState<string[]>([]); // composed lines awaiting send (multiline)
+  // model-picker overlay (Ctrl+P): a filterable model switcher floated over the transcript
+  const [overlay, setOverlay] = useState<null | 'models'>(null);
+  const [models, setModels] = useState<{model: string; provider: string; current?: boolean}[]>([]);
+  const [modelQuery, setModelQuery] = useState('');
+  const [modelIdx, setModelIdx] = useState(0);
+  // todo panel: the agent's live plan, parsed from the latest todo_write result
+  const [todos, setTodos] = useState<{mark: string; text: string}[]>([]);
   const wsRef = useRef<WebSocket | null>(null);
   const histRef = useRef<string[]>([]);      // submitted inputs, oldest→newest
   const histIdxRef = useRef<number>(-1);     // -1 = editing live draft
@@ -486,7 +665,23 @@ const App: React.FC<{url: string; token: string}> = ({url, token}) => {
           if (Array.isArray(frame.commands)) setCommands(frame.commands);
           break;
         case 'output': dispatch({t: 'output', text: String(frame.text || '')}); setScroll(0); break;
-        case 'event': dispatch({t: 'event', e: frame.event || {}}); setScroll(0); break;
+        case 'event': {
+          const ev = frame.event || {};
+          // Mirror the agent's live plan: parse the latest todo_write result into the panel.
+          if (ev.type === 'tool_result' && ev.name === 'todo_write' && ev.preview) {
+            const parsed: {mark: string; text: string}[] = [];
+            for (const ln of String(ev.preview).split('\n')) {
+              const m = ln.match(/^\s*\[([ ~xX])\]\s+(.*)$/);
+              if (m) parsed.push({mark: m[1].toLowerCase(), text: m[2]});
+            }
+            if (parsed.length) setTodos(parsed);
+          }
+          dispatch({t: 'event', e: ev}); setScroll(0); break;
+        }
+        case 'models':
+          setModels(Array.isArray(frame.list) ? frame.list : []);
+          setModelQuery(''); setModelIdx(0);
+          break;
         case 'status':
           if (frame.header) setHeader(frame.header);
           setRunning(Boolean(frame.running));
@@ -501,6 +696,12 @@ const App: React.FC<{url: string; token: string}> = ({url, token}) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // filtered + clamped model list for the picker overlay
+  const modelMatches = overlay === 'models'
+    ? models.filter((m) => `${m.model} ${m.provider}`.toLowerCase().includes(modelQuery.toLowerCase()))
+    : [];
+  const modelSel = Math.max(0, Math.min(modelIdx, modelMatches.length - 1));
+
   useInput((input, key) => {
     // SGR mouse wheel: ESC [ < 64 ; col ; row M (64=up, 65=down)
     const mouse = input.match(/\[<(\d+);\d+;\d+[Mm]/);
@@ -510,9 +711,30 @@ const App: React.FC<{url: string; token: string}> = ({url, token}) => {
       else if (btn === 65) setScroll((s) => Math.max(0, s - 3));
       return;
     }
+    // ── model-picker overlay owns all keys while open ──
+    if (overlay === 'models') {
+      if (key.escape) { setOverlay(null); return; }
+      if (key.upArrow) { setModelIdx((i) => Math.max(0, i - 1)); return; }
+      if (key.downArrow) { setModelIdx((i) => Math.min(modelMatches.length - 1, i + 1)); return; }
+      if (key.return) {
+        const m = modelMatches[modelSel];
+        if (m) wsRef.current?.send(JSON.stringify({type: 'input', text: `/model ${m.provider}/${m.model}`}));
+        setOverlay(null);
+        return;
+      }
+      if (key.backspace || key.delete) { setModelQuery((q) => q.slice(0, -1)); setModelIdx(0); return; }
+      if (input && !key.ctrl && !key.meta && !key.tab) { setModelQuery((q) => q + input); setModelIdx(0); }
+      return;
+    }
     if (key.ctrl && input === 'c') {
       if (running && !asking) wsRef.current?.send(JSON.stringify({type: 'interrupt'}));
       else exit();
+      return;
+    }
+    // Ctrl+P: open the model-picker overlay (request the inventory from the gateway)
+    if (key.ctrl && input === 'p' && !running && !asking) {
+      setOverlay('models'); setModelQuery(''); setModelIdx(0);
+      wsRef.current?.send(JSON.stringify({type: 'models'}));
       return;
     }
     if (key.pageUp) { setScroll((s) => Math.min(messages.length - 1, s + 5)); return; }
@@ -566,7 +788,8 @@ const App: React.FC<{url: string; token: string}> = ({url, token}) => {
     ? commands.filter((c) => c.name.startsWith(value.split(' ')[0])).slice(0, 6)
     : [];
   // bottom-anchored viewport: header(1)+status(1)+composer(1) + pending + completion menu
-  const chromeRows = 3 + pending.length + (slashMatches.length ? slashMatches.length + 1 : 0);
+  const chromeRows = 3 + pending.length + (slashMatches.length ? slashMatches.length + 1 : 0)
+    + (todos.length && !overlay ? Math.min(todos.length, 8) + (todos.length > 8 ? 2 : 1) : 0);
   const bodyRows = Math.max(3, size.rows - chromeRows);
   const end = Math.max(0, messages.length - scroll);
   let used = 0;
@@ -587,6 +810,9 @@ const App: React.FC<{url: string; token: string}> = ({url, token}) => {
   const ctxText = header.ctx_window
     ? `${ctxBar(header.ctx_percent, g.barFull, g.barEmpty)} ${header.ctx_percent}% (${fmtTokens(header.ctx_used)}/${fmtTokens(header.ctx_window)})`
     : fmtTokens(header.ctx_used);
+  // context-fill colored by status tier: green < 60% < amber < 80% < red < 92% < critical
+  const ctxPct = header.ctx_percent || 0;
+  const ctxColor = ctxPct >= 92 ? ST_CRIT : ctxPct >= 80 ? ST_BAD : ctxPct >= 60 ? ST_WARN : ST_GOOD;
   const scrolledUp = scroll > 0;
   const sep = g.sep;
 
@@ -600,19 +826,24 @@ const App: React.FC<{url: string; token: string}> = ({url, token}) => {
         <Text backgroundColor={PANEL} color={MUTED}>{`${g.dot} v${header.version || ''} `}</Text>
       </Box>
 
-      {/* message viewport — bottom-anchored when full so the newest lines stay visible */}
+      {/* message viewport — model-picker overlay floats over it; else banner until the
+          first turn, then the bottom-anchored transcript */}
       <Box flexDirection="column" flexGrow={1} overflow="hidden"
-           justifyContent={anchorBottom ? 'flex-end' : 'flex-start'}>
-        {visible.map((m, i) => <MessageView key={start + i} m={m} g={g} />)}
+           justifyContent={overlay || messages.length === 0 ? 'flex-start' : anchorBottom ? 'flex-end' : 'flex-start'}>
+        {overlay === 'models'
+          ? <ModelPicker matches={modelMatches} query={modelQuery} sel={modelSel} g={g} cols={size.cols} />
+          : messages.length === 0 && connected
+            ? <Banner header={header} g={g} uni={uni} />
+            : visible.map((m, i) => <MessageView key={start + i} m={m} g={g} />)}
       </Box>
 
       {/* status bar */}
       <Box>
-        <Text backgroundColor={PANEL} color={running ? AMBER : MUTED}>
-          {running ? ` ${spinner} working… ^C stop ` : ` ready `}
+        <Text backgroundColor={PANEL} color={running ? ACCENT : ST_GOOD}>
+          {running ? ` ${spinner} working… ^C stop ` : ` ${g.ok} ready `}
         </Text>
         <Text backgroundColor={PANEL} color={MUTED}>{`${sep} ctx `}</Text>
-        <Text backgroundColor={PANEL} color={GREEN}>{ctxText}</Text>
+        <Text backgroundColor={PANEL} color={ctxColor}>{ctxText}</Text>
         <Text backgroundColor={PANEL} color={MUTED}>{` ${sep} ${fmtTokens(header.input_tokens)}↑ ${fmtTokens(header.output_tokens)}↓`}</Text>
         {header.cost ? <Text backgroundColor={PANEL} color={MUTED}>{` ${sep} $${(header.cost || 0).toFixed(4)}`}</Text> : null}
         <Text backgroundColor={PANEL} color={MUTED}>{` ${sep} ${header.reasoning || ''} ${sep} ${header.perms || ''} `}</Text>
@@ -632,6 +863,9 @@ const App: React.FC<{url: string; token: string}> = ({url, token}) => {
         </Box>
       ) : null}
 
+      {/* todo panel — the agent's live plan, hidden while an overlay is open */}
+      {todos.length && !overlay ? <TodoPanel todos={todos} g={g} /> : null}
+
       {/* pending multiline lines (Ctrl+J), shown above the composer */}
       {pending.length ? (
         <Box flexDirection="column">
@@ -644,15 +878,16 @@ const App: React.FC<{url: string; token: string}> = ({url, token}) => {
         </Box>
       ) : null}
 
-      {/* composer */}
+      {/* composer — focus is released while the model-picker overlay owns input */}
       <Box>
         <Text color={asking?.secret ? CYAN : AMBER} bold>{` ${asking ? asking.label : 'aegis ' + g.arrow} `}</Text>
         <TextInput
           value={value}
           onChange={(v) => setValue(v.replace(/\t/g, ''))}
           onSubmit={onSubmit}
+          focus={!overlay}
           mask={asking?.secret ? '*' : undefined}
-          placeholder={connected ? (running && !asking ? 'working… (^C to stop)' : 'message or /command · ↑ history · \\ + ↵ newline · ⇞ scroll') : 'connecting…'}
+          placeholder={connected ? (running && !asking ? 'working… (^C to stop)' : 'message or /command · ^P model · ↑ history · ⇞ scroll') : 'connecting…'}
         />
       </Box>
     </Box>

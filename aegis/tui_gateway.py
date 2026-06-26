@@ -272,19 +272,9 @@ class TuiGateway:
         commands = [{"name": c.name, "summary": c.summary} for c in repl.SLASH_COMMANDS]
         await ws.send(json.dumps({"type": "ready", "header": header_snapshot(self._agent),
                                   "commands": commands}))
-        try:
-            banner_sink = _Sink(lambda s: self._emit_threadsafe({"type": "output", "text": s}))
-            orig_stdout, orig_console = sys.stdout, repl._console
-            sys.stdout = banner_sink
-            from rich.console import Console
-            repl._console = Console(file=banner_sink, force_terminal=True,
-                                    color_system="truecolor", width=100, soft_wrap=False)
-            repl.banner(self._agent)
-        except Exception:  # noqa: BLE001
-            pass
-        finally:
-            sys.stdout = orig_stdout
-            repl._console = orig_console
+        # The Ink client renders its own themed brand banner on `ready`; sending the
+        # plain Rich banner here too would duplicate it, so the terminal banner is
+        # intentionally suppressed for the Ink surface (the classic REPL still prints it).
 
         sender = asyncio.create_task(self._sender(ws))
         try:
@@ -331,6 +321,32 @@ class TuiGateway:
                 self._answer_value = str(msg.get("value") or "")
                 ev, self._answer_event = self._answer_event, None
                 ev.set()
+        elif kind == "models":
+            # Model-picker overlay: send the inventory so the Ink client can render a
+            # filterable switcher. Selection is applied by the client sending a normal
+            # `/model <provider>/<model>` input through the existing slash path.
+            self._emit_threadsafe(self._models_payload())
+
+    def _models_payload(self) -> dict:
+        rows: list[dict] = []
+        cur_provider = str(getattr(getattr(self._agent, "provider", None), "name", "") or "")
+        cur_model = str(getattr(getattr(self._agent, "provider", None), "model", "") or "")
+        try:
+            from .providers.registry import model_inventory
+            for row in model_inventory(self.config):
+                model = str(row.get("id") or "").strip()
+                provider = str(row.get("provider") or "").strip()
+                if not model:
+                    continue
+                rows.append({
+                    "model": model,
+                    "provider": provider,
+                    "current": bool(model == cur_model and (not cur_provider or provider == cur_provider)),
+                })
+        except Exception:  # noqa: BLE001
+            pass
+        return {"type": "models", "list": rows,
+                "current": {"provider": cur_provider, "model": cur_model}}
 
     async def _run_turn(self, ws, text: str) -> None:
         loop = asyncio.get_running_loop()

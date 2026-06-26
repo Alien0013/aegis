@@ -33907,7 +33907,41 @@ var build_default = TextInput;
 // src/entry.tsx
 init_wrapper();
 var import_jsx_runtime = __toESM(require_jsx_runtime(), 1);
-var THEMES = {
+function parseHex(h) {
+  const m = /^#?([0-9a-f]{6})$/i.exec((h || "").trim());
+  if (!m) return [136, 136, 136];
+  const n = parseInt(m[1], 16);
+  return [n >> 16 & 255, n >> 8 & 255, n & 255];
+}
+function toHex(r, g, b) {
+  const c = (v) => Math.max(0, Math.min(255, Math.round(v)));
+  return "#" + (1 << 24 | c(r) << 16 | c(g) << 8 | c(b)).toString(16).slice(1);
+}
+function mix(a, b, t) {
+  const pa = parseHex(a), pb = parseHex(b);
+  return toHex(pa[0] + (pb[0] - pa[0]) * t, pa[1] + (pb[1] - pa[1]) * t, pa[2] + (pb[2] - pa[2]) * t);
+}
+var lighten = (c, t) => mix(c, "#ffffff", t);
+var darken = (c, t) => mix(c, "#000000", t);
+function derive(b) {
+  const light = parseHex(b.panel)[0] > 140;
+  const lift = (c, t) => light ? darken(c, t) : lighten(c, t);
+  return {
+    ...b,
+    accent: b.amber,
+    diffAdd: b.green,
+    diffDel: b.red,
+    diffAddWord: lift(b.green, 0.28),
+    diffDelWord: lift(b.red, 0.24),
+    statusGood: b.green,
+    statusWarn: b.amber,
+    statusBad: b.red,
+    statusCritical: lift(b.red, 0.2),
+    selBg: mix(b.panel, b.amber, 0.22),
+    border: mix(b.muted, b.panel, 0.5)
+  };
+}
+var BASE = {
   "aegis-dark": { amber: "#d6a15e", green: "#7ecf8f", cyan: "#6fb7d8", red: "#e96e6e", muted: "#8f968f", panel: "#262a31", code: "#cdd6c4" },
   "aegis-light": { amber: "#9a6b1f", green: "#0c8f88", cyan: "#2f6bff", red: "#d83a52", muted: "#6b7280", panel: "#e6e8ec", code: "#16191f" },
   "midnight": { amber: "#a78bfa", green: "#34d399", cyan: "#22d3ee", red: "#fb7185", muted: "#8b8baf", panel: "#1c1c40", code: "#d7d4ff" },
@@ -33921,13 +33955,24 @@ var THEMES = {
   "solarized": { amber: "#b58900", green: "#859900", cyan: "#2aa198", red: "#dc322f", muted: "#839496", panel: "#073642", code: "#eee8d5" },
   "latte": { amber: "#df8e1d", green: "#40a02b", cyan: "#209fb5", red: "#d20f39", muted: "#8c8fa1", panel: "#e6e9ef", code: "#4c4f69" }
 };
-var THEME = THEMES[(process.env.AEGIS_TUI_THEME || "aegis-dark").toLowerCase()] || THEMES["aegis-dark"];
+var THEME = derive(BASE[(process.env.AEGIS_TUI_THEME || "aegis-dark").toLowerCase()] || BASE["aegis-dark"]);
 var AMBER = THEME.amber;
 var GREEN = THEME.green;
 var CYAN = THEME.cyan;
 var RED = THEME.red;
 var MUTED = THEME.muted;
 var PANEL = THEME.panel;
+var ACCENT = THEME.accent;
+var BORDER = THEME.border;
+var SEL = THEME.selBg;
+var DIFF_ADD = THEME.diffAdd;
+var DIFF_DEL = THEME.diffDel;
+var DIFF_ADD_W = THEME.diffAddWord;
+var DIFF_DEL_W = THEME.diffDelWord;
+var ST_GOOD = THEME.statusGood;
+var ST_WARN = THEME.statusWarn;
+var ST_BAD = THEME.statusBad;
+var ST_CRIT = THEME.statusCritical;
 var ANSI_RE = /\x1b\[[0-9;]*m/g;
 var ICONS_UNI = {
   bash: "$",
@@ -34019,6 +34064,21 @@ function glyphs(uni) {
   };
 }
 var CODE = THEME.code;
+var BANNER_UNI = [
+  " \u2588\u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2557\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557",
+  "\u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2557\u2588\u2588\u2554\u2550\u2550\u2550\u2550\u255D\u2588\u2588\u2554\u2550\u2550\u2550\u2550\u255D \u2588\u2588\u2551\u2588\u2588\u2554\u2550\u2550\u2550\u2550\u255D",
+  "\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2551\u2588\u2588\u2588\u2588\u2588\u2557  \u2588\u2588\u2551  \u2588\u2588\u2588\u2557\u2588\u2588\u2551\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557",
+  "\u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2551\u2588\u2588\u2554\u2550\u2550\u255D  \u2588\u2588\u2551   \u2588\u2588\u2551\u2588\u2588\u2551\u255A\u2550\u2550\u2550\u2550\u2588\u2588\u2551",
+  "\u2588\u2588\u2551  \u2588\u2588\u2551\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557\u255A\u2588\u2588\u2588\u2588\u2588\u2588\u2554\u255D\u2588\u2588\u2551\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2551",
+  "\u255A\u2550\u255D  \u255A\u2550\u255D\u255A\u2550\u2550\u2550\u2550\u2550\u2550\u255D \u255A\u2550\u2550\u2550\u2550\u2550\u255D \u255A\u2550\u255D\u255A\u2550\u2550\u2550\u2550\u2550\u2550\u255D"
+];
+var BANNER_ASCII = [
+  "  _   ___ ___ ___ ___ ",
+  " /_\\ | __/ __|_ _/ __|",
+  "/ _ \\| _| (_ || |\\__ \\",
+  "/_/ \\_\\___\\___|___|___/"
+];
+var TAGLINE = "the local-first agent workbench you own";
 function fmtTokens(n) {
   if (!n) return "0";
   if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
@@ -34160,11 +34220,11 @@ function reduce(ms, a) {
 var ToolCard = ({ m, g }) => {
   const icon = g.icons[m.name] || g.iconDefault;
   const secs = m.ms ? (m.ms / 1e3).toFixed(1) + "s" : "";
-  const pill = m.status === "running" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: AMBER, children: g.spinner[0] }) : m.status === "error" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: RED, children: `${g.bad} ${secs}` }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: GREEN, children: `${g.ok} ${secs}` });
+  const pill = m.status === "running" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: ACCENT, children: g.spinner[0] }) : m.status === "error" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: ST_BAD, children: `${g.bad} ${secs}` }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: ST_GOOD, children: `${g.ok} ${secs}` });
   const stat = parseDiffStat(m.summary || m.preview);
   const summary = (m.summary || "").replace(ANSI_RE, "");
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Box_default, { children: [
-    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: AMBER, children: `  ${icon} ` }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: ACCENT, children: `  ${icon} ` }),
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, bold: true, children: m.name }),
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { children: " " }),
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: m.preview.slice(0, 80) }),
@@ -34172,9 +34232,9 @@ var ToolCard = ({ m, g }) => {
     pill,
     stat ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Text, { children: [
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { children: "  " }),
-      stat.adds ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: GREEN, children: `+${stat.adds}` }) : null,
+      stat.adds ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: DIFF_ADD, children: `+${stat.adds}` }) : null,
       stat.adds && stat.dels ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { children: " " }) : null,
-      stat.dels ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: RED, children: `-${stat.dels}` }) : null
+      stat.dels ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: DIFF_DEL, children: `-${stat.dels}` }) : null
     ] }) : null,
     summary && !stat && m.status !== "running" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `  ${summary.slice(0, 60)}` }) : null
   ] });
@@ -34253,13 +34313,32 @@ var Markdown = ({ text, g }) => {
         i++;
       }
       i++;
+      const isDiff = /^diff$/i.test(lang) || body.length > 1 && body.filter((b2) => /^[+-]/.test(b2)).length >= Math.max(2, body.length / 2);
       out.push(
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Box_default, { flexDirection: "column", marginLeft: 2, children: [
           lang ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `${g.dot} ${lang}` }) : null,
-          body.map((b2, j) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Text, { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `${g.quote} ` }),
-            highlightCode(b2, `c${j}`)
-          ] }, j))
+          body.map((b2, j) => {
+            if (isDiff) {
+              if (b2.startsWith("+") && !b2.startsWith("+++")) {
+                return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Text, { children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: DIFF_ADD_W, children: "+" }),
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: DIFF_ADD, children: b2.slice(1) })
+                ] }, j);
+              }
+              if (b2.startsWith("-") && !b2.startsWith("---")) {
+                return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Text, { children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: DIFF_DEL_W, children: "-" }),
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: DIFF_DEL, children: b2.slice(1) })
+                ] }, j);
+              }
+              if (b2.startsWith("@@")) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: CYAN, children: b2 }, j);
+              return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: b2 || " " }, j);
+            }
+            return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Text, { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `${g.quote} ` }),
+              highlightCode(b2, `c${j}`)
+            ] }, j);
+          })
         ] }, key++)
       );
       continue;
@@ -34348,6 +34427,58 @@ var MessageView = ({ m, g }) => {
       return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { children: m.text });
   }
 };
+var Banner = ({ header, g, uni }) => {
+  const art = uni ? BANNER_UNI : BANNER_ASCII;
+  const model = header.model || "?";
+  const session = (header.session_title || header.session_id || "new session").slice(0, 36);
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Box_default, { flexDirection: "column", marginLeft: 1, marginTop: 1, children: [
+    art.map((line, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: i < art.length / 2 ? ACCENT : mix(ACCENT, MUTED, 0.35), bold: true, children: line }, i)),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box_default, { marginTop: 1, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `  ${TAGLINE}` }) }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Box_default, { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `  ${g.dot} ` }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: CYAN, children: model }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `  ${g.sep}  ${session}  ${g.sep}  ` }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `type a message, or /help` })
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box_default, { marginTop: 1, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: BORDER, children: g.rule.repeat(48) }) })
+  ] });
+};
+var ModelPicker = ({ matches, query, sel, g, cols }) => {
+  const w = Math.max(40, Math.min(cols - 4, 72));
+  const window2 = matches.slice(Math.max(0, sel - 7), Math.max(8, sel + 1)).length ? matches : [];
+  const start = Math.max(0, Math.min(sel - 7, Math.max(0, matches.length - 8)));
+  const view = window2.slice(start, start + 8);
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Box_default, { flexDirection: "column", marginLeft: 2, marginTop: 1, width: w, children: [
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: ACCENT, bold: true, children: `${g.brand.replace("AEGIS", "")} Switch model` }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Box_default, { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `  ${g.arrow} ` }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: CYAN, children: query || "" }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: query ? "" : "type to filter\u2026" })
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box_default, { marginTop: 1, flexDirection: "column", children: view.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: "  (no matches)" }) : view.map((m) => {
+      const i = matches.indexOf(m);
+      const on = i === sel;
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Box_default, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { backgroundColor: on ? SEL : void 0, color: on ? ACCENT : m.current ? GREEN : CODE, bold: on, children: `  ${m.current ? g.ok : " "} ${m.model.padEnd(28).slice(0, 28)}` }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { backgroundColor: on ? SEL : void 0, color: MUTED, children: `  ${m.provider}${m.current ? "  \xB7 current" : ""}` })
+      ] }, `${m.provider}/${m.model}`);
+    }) }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box_default, { marginTop: 1, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: BORDER, children: g.rule.repeat(Math.min(w, 56)) }) }),
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `  ${matches.length} model(s) ${g.sep} \u2191\u2193 move ${g.sep} \u21B5 switch ${g.sep} Esc cancel` })
+  ] });
+};
+var TodoPanel = ({ todos, g }) => {
+  const done = todos.filter((t) => t.mark === "x").length;
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Box_default, { flexDirection: "column", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `  ${g.dot} Plan ${done}/${todos.length} ${g.rule.repeat(8)}` }),
+    todos.slice(0, 8).map((t, i) => {
+      const c = t.mark === "x" ? GREEN : t.mark === "~" ? ACCENT : MUTED;
+      const box = t.mark === "x" ? g.check : t.mark === "~" ? g.cont : g.uncheck;
+      return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: c, children: `   ${box} ${t.text.slice(0, 64)}` }, i);
+    }),
+    todos.length > 8 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `   ${g.dot} +${todos.length - 8} more` }) : null
+  ] });
+};
 var App2 = ({ url: url2, token: token2 }) => {
   const { exit } = use_app_default();
   const { stdout } = use_stdout_default();
@@ -34362,6 +34493,11 @@ var App2 = ({ url: url2, token: token2 }) => {
   const [size, setSize] = (0, import_react23.useState)({ cols: stdout.columns || 80, rows: stdout.rows || 24 });
   const [connected, setConnected] = (0, import_react23.useState)(false);
   const [pending, setPending] = (0, import_react23.useState)([]);
+  const [overlay, setOverlay] = (0, import_react23.useState)(null);
+  const [models, setModels] = (0, import_react23.useState)([]);
+  const [modelQuery, setModelQuery] = (0, import_react23.useState)("");
+  const [modelIdx, setModelIdx] = (0, import_react23.useState)(0);
+  const [todos, setTodos] = (0, import_react23.useState)([]);
   const wsRef = (0, import_react23.useRef)(null);
   const histRef = (0, import_react23.useRef)([]);
   const histIdxRef = (0, import_react23.useRef)(-1);
@@ -34404,9 +34540,24 @@ var App2 = ({ url: url2, token: token2 }) => {
           dispatch({ t: "output", text: String(frame.text || "") });
           setScroll(0);
           break;
-        case "event":
-          dispatch({ t: "event", e: frame.event || {} });
+        case "event": {
+          const ev = frame.event || {};
+          if (ev.type === "tool_result" && ev.name === "todo_write" && ev.preview) {
+            const parsed = [];
+            for (const ln of String(ev.preview).split("\n")) {
+              const m = ln.match(/^\s*\[([ ~xX])\]\s+(.*)$/);
+              if (m) parsed.push({ mark: m[1].toLowerCase(), text: m[2] });
+            }
+            if (parsed.length) setTodos(parsed);
+          }
+          dispatch({ t: "event", e: ev });
           setScroll(0);
+          break;
+        }
+        case "models":
+          setModels(Array.isArray(frame.list) ? frame.list : []);
+          setModelQuery("");
+          setModelIdx(0);
           break;
         case "status":
           if (frame.header) setHeader(frame.header);
@@ -34425,6 +34576,8 @@ var App2 = ({ url: url2, token: token2 }) => {
     ws.on("error", (err) => dispatch({ t: "output", text: `  gateway error: ${err.message}` }));
     return () => ws.close();
   }, []);
+  const modelMatches = overlay === "models" ? models.filter((m) => `${m.model} ${m.provider}`.toLowerCase().includes(modelQuery.toLowerCase())) : [];
+  const modelSel = Math.max(0, Math.min(modelIdx, modelMatches.length - 1));
   use_input_default((input, key) => {
     const mouse = input.match(/\[<(\d+);\d+;\d+[Mm]/);
     if (mouse) {
@@ -34433,9 +34586,46 @@ var App2 = ({ url: url2, token: token2 }) => {
       else if (btn === 65) setScroll((s) => Math.max(0, s - 3));
       return;
     }
+    if (overlay === "models") {
+      if (key.escape) {
+        setOverlay(null);
+        return;
+      }
+      if (key.upArrow) {
+        setModelIdx((i) => Math.max(0, i - 1));
+        return;
+      }
+      if (key.downArrow) {
+        setModelIdx((i) => Math.min(modelMatches.length - 1, i + 1));
+        return;
+      }
+      if (key.return) {
+        const m = modelMatches[modelSel];
+        if (m) wsRef.current?.send(JSON.stringify({ type: "input", text: `/model ${m.provider}/${m.model}` }));
+        setOverlay(null);
+        return;
+      }
+      if (key.backspace || key.delete) {
+        setModelQuery((q) => q.slice(0, -1));
+        setModelIdx(0);
+        return;
+      }
+      if (input && !key.ctrl && !key.meta && !key.tab) {
+        setModelQuery((q) => q + input);
+        setModelIdx(0);
+      }
+      return;
+    }
     if (key.ctrl && input === "c") {
       if (running && !asking) wsRef.current?.send(JSON.stringify({ type: "interrupt" }));
       else exit();
+      return;
+    }
+    if (key.ctrl && input === "p" && !running && !asking) {
+      setOverlay("models");
+      setModelQuery("");
+      setModelIdx(0);
+      wsRef.current?.send(JSON.stringify({ type: "models" }));
       return;
     }
     if (key.pageUp) {
@@ -34501,7 +34691,7 @@ var App2 = ({ url: url2, token: token2 }) => {
     wsRef.current?.send(JSON.stringify({ type: "input", text: full }));
   };
   const slashMatches = !running && !asking && value.startsWith("/") ? commands.filter((c) => c.name.startsWith(value.split(" ")[0])).slice(0, 6) : [];
-  const chromeRows = 3 + pending.length + (slashMatches.length ? slashMatches.length + 1 : 0);
+  const chromeRows = 3 + pending.length + (slashMatches.length ? slashMatches.length + 1 : 0) + (todos.length && !overlay ? Math.min(todos.length, 8) + (todos.length > 8 ? 2 : 1) : 0);
   const bodyRows = Math.max(3, size.rows - chromeRows);
   const end = Math.max(0, messages.length - scroll);
   let used = 0;
@@ -34517,6 +34707,8 @@ var App2 = ({ url: url2, token: token2 }) => {
   const g = glyphs(uni);
   const spinner = g.spinner[tick % g.spinner.length];
   const ctxText = header.ctx_window ? `${ctxBar(header.ctx_percent, g.barFull, g.barEmpty)} ${header.ctx_percent}% (${fmtTokens(header.ctx_used)}/${fmtTokens(header.ctx_window)})` : fmtTokens(header.ctx_used);
+  const ctxPct = header.ctx_percent || 0;
+  const ctxColor = ctxPct >= 92 ? ST_CRIT : ctxPct >= 80 ? ST_BAD : ctxPct >= 60 ? ST_WARN : ST_GOOD;
   const scrolledUp = scroll > 0;
   const sep = g.sep;
   return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Box_default, { flexDirection: "column", width: size.cols, height: size.rows, children: [
@@ -34532,14 +34724,14 @@ var App2 = ({ url: url2, token: token2 }) => {
         flexDirection: "column",
         flexGrow: 1,
         overflow: "hidden",
-        justifyContent: anchorBottom ? "flex-end" : "flex-start",
-        children: visible.map((m, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MessageView, { m, g }, start + i))
+        justifyContent: overlay || messages.length === 0 ? "flex-start" : anchorBottom ? "flex-end" : "flex-start",
+        children: overlay === "models" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ModelPicker, { matches: modelMatches, query: modelQuery, sel: modelSel, g, cols: size.cols }) : messages.length === 0 && connected ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Banner, { header, g, uni }) : visible.map((m, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MessageView, { m, g }, start + i))
       }
     ),
     /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Box_default, { children: [
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { backgroundColor: PANEL, color: running ? AMBER : MUTED, children: running ? ` ${spinner} working\u2026 ^C stop ` : ` ready ` }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { backgroundColor: PANEL, color: running ? ACCENT : ST_GOOD, children: running ? ` ${spinner} working\u2026 ^C stop ` : ` ${g.ok} ready ` }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { backgroundColor: PANEL, color: MUTED, children: `${sep} ctx ` }),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { backgroundColor: PANEL, color: GREEN, children: ctxText }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { backgroundColor: PANEL, color: ctxColor, children: ctxText }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { backgroundColor: PANEL, color: MUTED, children: ` ${sep} ${fmtTokens(header.input_tokens)}\u2191 ${fmtTokens(header.output_tokens)}\u2193` }),
       header.cost ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { backgroundColor: PANEL, color: MUTED, children: ` ${sep} $${(header.cost || 0).toFixed(4)}` }) : null,
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { backgroundColor: PANEL, color: MUTED, children: ` ${sep} ${header.reasoning || ""} ${sep} ${header.perms || ""} ` }),
@@ -34552,6 +34744,7 @@ var App2 = ({ url: url2, token: token2 }) => {
       ] }, c.name)),
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `  ${g.dot} Tab to complete` })
     ] }) : null,
+    todos.length && !overlay ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TodoPanel, { todos, g }) : null,
     pending.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box_default, { flexDirection: "column", children: pending.map((line, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Box_default, { children: [
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { color: MUTED, children: `   ${g.dot} ` }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Text, { children: line })
@@ -34564,8 +34757,9 @@ var App2 = ({ url: url2, token: token2 }) => {
           value,
           onChange: (v) => setValue(v.replace(/\t/g, "")),
           onSubmit,
+          focus: !overlay,
           mask: asking?.secret ? "*" : void 0,
-          placeholder: connected ? running && !asking ? "working\u2026 (^C to stop)" : "message or /command \xB7 \u2191 history \xB7 \\ + \u21B5 newline \xB7 \u21DE scroll" : "connecting\u2026"
+          placeholder: connected ? running && !asking ? "working\u2026 (^C to stop)" : "message or /command \xB7 ^P model \xB7 \u2191 history \xB7 \u21DE scroll" : "connecting\u2026"
         }
       )
     ] })
