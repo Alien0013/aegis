@@ -124,6 +124,15 @@ def log_exc(context: str) -> None:
         logger().exception(context)
     except Exception:  # noqa: BLE001
         pass
+    # Strict (dev/CI) mode: re-raise the exception currently being handled so a
+    # swallowed bug fails loudly instead of vanishing. No-op in production, and a
+    # no-op when called outside an active ``except`` block.
+    import sys
+
+    from ._strict import is_strict
+
+    if is_strict() and sys.exc_info()[0] is not None:
+        raise
 
 
 def info(msg: str) -> None:

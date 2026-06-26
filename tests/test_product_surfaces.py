@@ -498,7 +498,7 @@ def test_manual_compress_child_inherits_runtime_controls(monkeypatch, tmp_path):
         return []
 
     monkeypatch.setattr("aegis.hooks.run_hooks", fake_run_hooks)
-    monkeypatch.setattr(loop, "_engine", lambda _agent: Engine())
+    monkeypatch.setattr("aegis.agent.compaction_runner._engine", lambda _agent: Engine())
     events = []
 
     child = loop.compact_now(agent, session, emit=events.append, reason="manual_context_compression")
@@ -544,7 +544,7 @@ def test_session_compress_callback_failure_does_not_break_compaction(monkeypatch
         cwd=tmp_path,
         event_callback=boom,
     )
-    monkeypatch.setattr(loop, "_engine", lambda _agent: Engine())
+    monkeypatch.setattr("aegis.agent.compaction_runner._engine", lambda _agent: Engine())
 
     result = loop.compact_now(agent, session, reason="manual_context_compression")
 

@@ -205,7 +205,7 @@ def test_aux_compression_preflight_lowers_live_threshold(monkeypatch):
     agent = SimpleNamespace(provider=Main(), session=Session.create())
     engine = DefaultContextEngine(threshold=0.75)
     events = []
-    monkeypatch.setattr(loop, "_summarizer", lambda _agent: Aux())
+    monkeypatch.setattr("aegis.agent.compaction_runner._summarizer", lambda _agent: Aux())
 
     loop._ensure_compression_feasibility(agent, engine, {"threshold": 0.75}, events.append)
 

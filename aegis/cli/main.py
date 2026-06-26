@@ -2930,6 +2930,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="aegis", description="AEGIS — terminal agent harness.")
     p.add_argument("--version", action="version", version=f"aegis {__version__}")
     p.add_argument("--profile", help="use a named config profile")
+    p.add_argument("--strict", action="store_true",
+                   help="developer mode: re-raise fail-soft swallowed errors (sets AEGIS_STRICT)")
     sub = p.add_subparsers(dest="command")
 
     c = sub.add_parser("chat", help="chat with the agent (default)")
@@ -3483,6 +3485,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if getattr(args, "strict", False):
+        from .._strict import set_strict
+        set_strict(True)
     config = Config.load(profile=args.profile)
 
     if not getattr(args, "command", None):
