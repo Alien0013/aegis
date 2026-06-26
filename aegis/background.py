@@ -377,6 +377,13 @@ class BackgroundManager:
                     surface="background",
                     meta=meta,
                 )
+                close = getattr(runner, "close", None)
+                if callable(close):
+                    try:
+                        close()
+                    except Exception:  # noqa: BLE001
+                        pass
+                runner = None
                 with self._lock:
                     task.result = result.text or ""
                     if task.cancel_requested:

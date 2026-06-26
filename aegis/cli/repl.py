@@ -60,13 +60,16 @@ SLASH_COMMANDS = (
     SlashCommand("/status", "discover", "show runtime, session, recap, and trace status"),
     SlashCommand("/whoami", "discover", "show local profile, workspace, provider, and session identity"),
     SlashCommand("/version", "discover", "show the AEGIS version and runtime"),
+    SlashCommand("/v", "discover", "Hermes alias for /version"),
     SlashCommand("/model", "discover", "show the active provider and model"),
     SlashCommand("/provider", "discover", "show or switch the active provider", "/provider [name]"),
     SlashCommand("/prompt", "discover", "show prompt-audit pointers for the active session"),
+    SlashCommand("/compose", "discover", "Hermes alias for /prompt in the terminal surface"),
     SlashCommand("/tools", "discover", "list enabled tools"),
     SlashCommand("/toolsets", "discover", "list active toolsets and compatibility aliases"),
     SlashCommand("/skills", "discover", "list loaded skills"),
     SlashCommand("/platforms", "discover", "list gateway platform configuration status"),
+    SlashCommand("/gateway", "discover", "Hermes alias for /platforms"),
     SlashCommand("/platform", "discover", "show one gateway platform's configuration status", "/platform <name>"),
     SlashCommand("/trace", "observability", "list traces for this session or inspect one", "/trace [id]"),
     SlashCommand("/evals", "observability", "list eval runs or inspect one", "/evals [id]"),
@@ -77,7 +80,9 @@ SLASH_COMMANDS = (
     SlashCommand("/history", "sessions", "compatibility alias for /sessions", "/history [query]"),
     SlashCommand("/resume", "sessions", "resume by picker number, id, title, or unique search", "/resume [number|id|title]"),
     SlashCommand("/branch", "sessions", "fork this conversation into a named child session", "/branch [title]"),
+    SlashCommand("/fork", "sessions", "Hermes alias for /branch", "/fork [title]"),
     SlashCommand("/new", "sessions", "start a fresh session"),
+    SlashCommand("/reset", "sessions", "Hermes alias for /new"),
     SlashCommand("/start", "sessions", "compatibility alias for /new"),
     SlashCommand("/clear", "sessions", "start a fresh session"),
     SlashCommand("/ultracode", "planning", "run the rigorous autonomous plan→implement→verify loop", "/ultracode <task>"),
@@ -98,21 +103,29 @@ SLASH_COMMANDS = (
     SlashCommand("/fast", "model control", "toggle priority/fast mode", "/fast [on|off|status]"),
     SlashCommand("/busy", "model control", "show or set busy input behavior", "/busy [queue|steer|interrupt|status]"),
     SlashCommand("/queue", "model control", "compatibility alias for /busy queue"),
+    SlashCommand("/q", "model control", "Hermes alias for /queue"),
     SlashCommand("/steer", "model control", "compatibility alias for /busy steer"),
     SlashCommand("/stop", "model control", "interrupt guidance for active gateway/API turns"),
     SlashCommand("/reload", "model control", "refresh volatile prompt state and runtime context"),
     SlashCommand("/reload-skills", "model control", "reload skills into the active agent"),
+    SlashCommand("/reload_skills", "model control", "Hermes alias for /reload-skills"),
     SlashCommand("/reload-mcp", "model control", "show MCP reload guidance for the active runtime"),
+    SlashCommand("/reload_mcp", "model control", "Hermes alias for /reload-mcp"),
     SlashCommand("/restart", "model control", "show gateway/API restart guidance"),
     SlashCommand("/timestamps", "display", "toggle terminal timestamps", "/timestamps on|off|status"),
+    SlashCommand("/ts", "display", "Hermes alias for /timestamps", "/ts on|off|status"),
     SlashCommand("/statusbar", "display", "toggle terminal status bar", "/statusbar on|off|status"),
+    SlashCommand("/sb", "display", "Hermes alias for /statusbar", "/sb on|off|status"),
     SlashCommand("/footer", "display", "toggle post-turn status footer", "/footer on|off|status"),
     SlashCommand("/indicator", "display", "show status indicator settings"),
     SlashCommand("/verbose", "display", "toggle verbose tool progress", "/verbose on|off|status"),
     SlashCommand("/redraw", "display", "redraw current status/footer"),
     SlashCommand("/goal", "goals", "set a standing goal and start it", "/goal <objective>"),
     SlashCommand("/subgoal", "goals", "set a nested standing goal", "/subgoal <objective>"),
+    SlashCommand("/moa", "agents", "run one prompt through configured Mixture-of-Agents models", "/moa <prompt>"),
     SlashCommand("/background", "agents", "launch a background agent task", "/background <prompt>"),
+    SlashCommand("/bg", "agents", "Hermes alias for /background", "/bg <prompt>"),
+    SlashCommand("/btw", "agents", "Hermes alias for /background", "/btw <prompt>"),
     SlashCommand("/tasks", "agents", "list background tasks"),
     SlashCommand("/agents", "agents", "list background agents"),
     SlashCommand("/kanban", "agents", "multi-agent task board", "/kanban [list|create <title>|show <id>|dispatch|stats]"),
@@ -136,17 +149,22 @@ SLASH_COMMANDS = (
     SlashCommand("/billing", "setup", "show provider billing/usage guidance"),
     SlashCommand("/credits", "setup", "show provider credits/usage guidance"),
     SlashCommand("/codex-runtime", "setup", "show Codex-compatible runtime status"),
+    SlashCommand("/codex_runtime", "setup", "Hermes alias for /codex-runtime"),
     SlashCommand("/sethome", "setup", "show AEGIS_HOME/profile home guidance"),
+    SlashCommand("/set-home", "setup", "Hermes alias for /sethome"),
     SlashCommand("/handoff", "channels", "hand this session to a gateway channel", "/handoff <platform> <chat_id>"),
     SlashCommand("/diff", "workspace", "show changes since the last checkpoint", "/diff [checkpoint-id]"),
     SlashCommand("/snapshot", "workspace", "show snapshot/checkpoint command guidance"),
+    SlashCommand("/snap", "workspace", "Hermes alias for /snapshot"),
     SlashCommand("/rollback", "workspace", "restore files from a checkpoint", "/rollback [checkpoint-id]"),
     SlashCommand("/approve", "approvals", "approval guidance for pending tool/API/gateway requests"),
     SlashCommand("/deny", "approvals", "denial guidance for pending tool/API/gateway requests"),
     SlashCommand("/blueprint", "automation", "show cron blueprint guidance"),
+    SlashCommand("/bp", "automation", "Hermes alias for /blueprint"),
     SlashCommand("/pet", "compatibility", "external companion UI: intentionally out of scope"),
     SlashCommand("/skin", "compatibility", "external skin UI: use AEGIS themes instead"),
     SlashCommand("/suggestions", "compatibility", "show suggestion guidance"),
+    SlashCommand("/suggest", "compatibility", "Hermes alias for /suggestions"),
     SlashCommand("/yolo", "workspace", "toggle this session's existing approval bypass"),
     SlashCommand("/quit", "exit", "leave the terminal surface"),
     SlashCommand("/exit", "exit", "leave the terminal surface"),
@@ -1895,6 +1913,60 @@ def quick_memory(raw: str, agent: Agent) -> bool:
     return True
 
 
+def _moa_model_specs(config: Any) -> list[str]:
+    """Configured Mixture-of-Agents model specs for the `/moa` slash command.
+
+    Primary config is `moa.models`; legacy/experimental locations are accepted so
+    early adopters do not lose their setup as this surface converges with Hermes.
+    """
+    raw = None
+    for path in ("moa.models", "mixture.models", "auxiliary.moa.models"):
+        try:
+            raw = config.get(path)
+        except Exception:  # noqa: BLE001
+            raw = None
+        if raw:
+            break
+    if isinstance(raw, str):
+        candidates = raw.replace("\n", ",").split(",")
+    elif isinstance(raw, (list, tuple)):
+        candidates = list(raw)
+    else:
+        candidates = []
+    specs: list[str] = []
+    for item in candidates:
+        value = str(item or "").strip()
+        if value:
+            specs.append(value)
+    return specs[:5]
+
+
+def _handle_moa_slash(arg: str, agent: Any) -> None:
+    prompt = (arg or "").strip()
+    if not prompt:
+        _out("usage: /moa <prompt> — runs configured moa.models (2–5 model specs)", style="yellow")
+        return
+    specs = _moa_model_specs(agent.config)
+    if len(specs) < 2:
+        _out("/moa needs at least two configured models.", style="yellow")
+        _out("Configure e.g. `aegis config set moa.models '[\"gpt-5.5\", \"openrouter/google/gemini-2.5-pro\"]'`.")
+        return
+    from ..tools.agentic import MixtureTool
+    from ..tools.base import ToolContext
+
+    _out(f"mixture-of-agents: asking {', '.join(specs)}…", style="cyan")
+    result = MixtureTool().run(
+        {"prompt": prompt, "models": specs, "synthesize": True},
+        ToolContext(
+            cwd=Path(getattr(agent, "cwd", Path.cwd())),
+            config=getattr(agent, "config", None),
+            session=getattr(agent, "session", None),
+            agent=agent,
+        ),
+    )
+    _out(result.content, style="red" if result.is_error else "cyan")
+
+
 def handle_slash(
     cmd: str,
     agent: Agent,
@@ -1910,11 +1982,28 @@ def handle_slash(
     arg = " ".join(parts[1:])
     alias_target = {
         "/commands": ("/help", arg),
+        "/compose": ("/prompt", arg),
         "/history": ("/sessions", arg),
         "/start": ("/new", ""),
+        "/reset": ("/new", ""),
         "/topic": ("/title", arg),
+        "/fork": ("/branch", arg),
+        "/q": ("/busy", "queue"),
         "/queue": ("/busy", "queue"),
         "/steer": ("/busy", "steer"),
+        "/bg": ("/background", arg),
+        "/btw": ("/background", arg),
+        "/gateway": ("/platforms", arg),
+        "/reload_skills": ("/reload-skills", arg),
+        "/reload_mcp": ("/reload-mcp", arg),
+        "/ts": ("/timestamps", arg),
+        "/sb": ("/statusbar", arg),
+        "/codex_runtime": ("/codex-runtime", arg),
+        "/set-home": ("/sethome", arg),
+        "/snap": ("/snapshot", arg),
+        "/bp": ("/blueprint", arg),
+        "/suggest": ("/suggestions", arg),
+        "/v": ("/version", arg),
     }.get(name)
     if alias_target:
         name, arg = alias_target
@@ -2404,6 +2493,8 @@ def handle_slash(
             _out(f"personality → {arg}", style="green")
         else:
             _out("usage: /personality <name>")
+    elif name == "/moa":
+        _handle_moa_slash(arg, agent)
     elif name == "/background":
         if arg:
             from ..background import BackgroundCapacityError, get_manager

@@ -655,6 +655,25 @@ def test_terminal_slash_help_is_searchable():
         "/toolsets",
         "/version",
         "/whoami",
+        # Hermes exact alias parity (excluding pet/pet-generation surfaces by design).
+        "/bg",
+        "/bp",
+        "/btw",
+        "/codex_runtime",
+        "/compose",
+        "/fork",
+        "/gateway",
+        "/moa",
+        "/q",
+        "/reload_mcp",
+        "/reload_skills",
+        "/reset",
+        "/sb",
+        "/set-home",
+        "/snap",
+        "/suggest",
+        "/ts",
+        "/v",
     ):
         assert name in compat
 
@@ -663,7 +682,6 @@ def test_terminal_slash_completer_uses_command_metadata():
     from prompt_toolkit.document import Document
 
     from aegis.cli import repl
-
     completer = repl.make_slash_completer()
     assert completer is not None
     completions = list(completer.get_completions(Document("/tr", cursor_position=3), None))
@@ -671,6 +689,46 @@ def test_terminal_slash_completer_uses_command_metadata():
     trace = next(c for c in completions if c.text == "/trace")
     assert "/trace [id]" in str(trace.display)
     assert "observability" in str(trace.display_meta)
+
+
+def test_terminal_moa_slash_runs_configured_mixture(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from aegis.cli import repl
+    from aegis.config import Config
+    from aegis.session import Session
+
+    class FakeProvider:
+        name = "fake"
+        model = "fake-model"
+
+        def __init__(self, reply):
+            self.reply = reply
+
+        def complete(self, messages, tools=None, stream=False, **kwargs):  # noqa: ARG002
+            return SimpleNamespace(text=self.reply)
+
+    calls = []
+
+    def fake_build(config, model=None, name=None):  # noqa: ARG001
+        calls.append((name, model))
+        return FakeProvider(f"answer from {model or 'main'}")
+
+    cfg = Config.load()
+    cfg.data["moa"] = {"models": ["m1", "m2"]}
+    agent = SimpleNamespace(config=cfg, cwd=tmp_path, session=Session.create())
+    lines = []
+    monkeypatch.setattr(repl, "_out", lambda text="", style=None: lines.append(str(text)))
+    monkeypatch.setattr("aegis.providers.fallback.build_with_fallbacks", fake_build)
+
+    assert repl.handle_slash("/moa compare options", agent) == ""
+
+    rendered = "\n".join(lines)
+    assert "# Synthesis" in rendered
+    assert "answer from m1" in rendered
+    assert "answer from m2" in rendered
+    assert (None, "m1") in calls and (None, "m2") in calls
+
 
 
 def test_terminal_status_state_summarizes_progress():

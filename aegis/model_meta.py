@@ -150,7 +150,7 @@ def pricing_full(model: str | None, provider: str | None = None) -> dict | None:
             if not (inp or outp):
                 continue
 
-            def _opt(field):
+            def _opt(field, cost=cost):
                 v = cost.get(field)
                 return float(v) if v is not None else None
 

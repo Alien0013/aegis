@@ -14,8 +14,7 @@ from ..constants import MAX_PARALLEL_TOOLS
 from ..redact import redact_secret_values, redact_secrets
 from ..tools.base import ToolContext, ToolResult
 from ..types import Message, ToolCall, new_id
-from . import compaction, governance
-from .events import EventType
+from . import governance
 
 # Context-compaction orchestration was extracted to keep this module focused on the turn
 # loop + tool execution. These names are re-exported so existing callers and tests that do

@@ -474,6 +474,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "probe_timeout_seconds": 15,  # dashboard/provider probes are bounded and never use long chat timeouts
         "probe_cache": {},            # provider -> last safe redacted probe result
     },
+    "moa": {                          # /moa Mixture-of-Agents slash command
+        "models": [],                 # 2–5 model specs: ["gpt-5.5", "openrouter/google/gemini-2.5-pro"]
+    },
     "auxiliary": {                   # small/cheap model for internal side-tasks
         "provider": "",              # "" = reuse main provider
         "model": "",
