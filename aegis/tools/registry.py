@@ -476,6 +476,7 @@ def default_registry(*, include_plugins: bool = True) -> ToolRegistry:
     from .extra_builtin import extra_tools
     from .cloud import cloud_tools
     from .devtools import dev_tools
+    from .integrations import integration_tools
     from .lsp import lsp_tools
     from .process import process_tools
     from .project_tools import project_tools
@@ -507,6 +508,7 @@ def default_registry(*, include_plugins: bool = True) -> ToolRegistry:
     reg.register_all(project_tools())
     reg.register_all(dev_tools())
     reg.register_all(cloud_tools())
+    reg.register_all(integration_tools())
     _register_aegis_aliases(reg)
     if include_plugins:
         try:

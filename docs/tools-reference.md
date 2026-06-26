@@ -100,10 +100,22 @@ Generated from the built-in tool registry without personal plugins.
 | web_search | core | network | medium | 944f7ce60f4d | query | Search the web. Returns titles, URLs, and snippets. Backend configurable (web.search_backend). |
 | write_file | core | fs | medium | 7c74e94e3349 | content, path | Create or overwrite a file with the given content. Creates parent directories. |
 | x_search | core | network | medium | 1c1065eab5fd | query | Compatibility alias for `web_search`. |
+| discord | discord | network | medium | ebecda3a150d | action, channel_id, content, message | Discord bot integration. Supports basic REST actions when DISCORD_BOT_TOKEN is set: list_guilds, get_channel, send_message. |
+| discord_admin | discord_admin | network | medium | 2ca10788ef21 | action, guild_id, reason, user_id | Discord admin/moderation integration. Supports get_member, kick_member, and ban_member when DISCORD_BOT_TOKEN has the needed Discord permissions. |
+| feishu_doc_read | feishu_doc | network | medium | 8e0502348e18 | document_id | Read a Feishu/Lark document by document token. |
+| feishu_drive_add_comment | feishu_drive | network | medium | 4791000f04ee | comment_id, content, file_token, reply_id | Add a comment to a Feishu/Lark Drive file. |
+| feishu_drive_list_comment_replies | feishu_drive | network | medium | 433e3c7201c7 | comment_id, content, file_token, reply_id | List replies for a Feishu/Lark Drive comment. |
+| feishu_drive_list_comments | feishu_drive | network | medium | 321d02cd0a30 | comment_id, content, file_token, reply_id | List comments for a Feishu/Lark Drive file. |
+| feishu_drive_reply_comment | feishu_drive | network | medium | b019ce82ad09 | comment_id, content, file_token, reply_id | Reply to a Feishu/Lark Drive comment. |
+| ha_call_service | homeassistant | network | medium | 05a3dc2d377b | data, domain, entity_id, service | Call a Home Assistant service such as light.turn_on after safety validation. |
+| ha_get_state | homeassistant | network | medium | 198f0c121cb1 | entity_id | Get detailed Home Assistant state for one entity_id. |
+| ha_list_entities | homeassistant | network | medium | 551df20babe5 | area, domain | List Home Assistant entities, optionally filtering by domain or area/friendly name. |
+| ha_list_services | homeassistant | network | medium | 7ca816ac0180 | domain | List Home Assistant services/actions, optionally filtering by domain. |
 | lsp | lsp | runtime | high | da4bb2cf0408 | action, character, line, new_name, path | Code intelligence from a persistent language server. action: diagnostics \| hover \| definition \| references \| rename \| symbols \| status \| restart. Give path, plus line + character (0-based) for position queries and new_name for rename. Only works on files inside a git project. |
 | project_create | project |  | low | 8a2a5413d064 | name, path | Create a desktop Project (a named workspace) and switch this chat into it. Pass `path` to anchor it to a repo/folder — this chat's workspace moves there and the sidebar follows. Use when starting work in a new repo/folder; this is the intentional way to move the session, not `cd`. |
 | project_list | project |  | low | 0e10fc70aa82 |  | List the desktop Projects (named workspaces) and which one is active. |
 | project_switch | project |  | low | 09db1b48405c | project | Switch this chat into an existing desktop Project (by name, slug, or id). Moves the session's workspace to the project's primary folder and the sidebar follows. The intentional way to move between projects, not `cd`. |
+| video_generate | video_gen | network | medium | f1184e7ff8b4 | aspect_ratio, duration, image_url, model, prompt, resolution | Generate a video from a text prompt or animate an image using the configured video generation backend. AEGIS currently supports FAL-compatible endpoints when FAL_KEY is set; richer provider plugins can override this tool later. |
 | audio_analyze | vision | network, runtime | high | ac1de6f921a5 | model, path, prompt | Analyze an audio file by transcribing it with the configured STT provider. |
 | media_analyze | vision | network, runtime | high | a5f7627bae38 | max_frames, media_type, model, path, prompt | Analyze image, audio, or video media. Images use the vision model; audio is transcribed with STT; video is sampled into frames with ffmpeg and analyzed by the vision model. Returns clear setup errors when the needed provider/dependency is unavailable. |
 | video_analyze | vision | network, runtime | high | 7c22e37e9324 | max_frames, path, prompt | Analyze a video by sampling frames with ffmpeg and using the vision model. |
@@ -114,3 +126,8 @@ Generated from the built-in tool registry without personal plugins.
 | text_to_speech | voice | network | medium | 933ac1d26bd8 | model, path, text, voice | Compatibility alias for `speak`. |
 | transcribe | voice | network | medium | 69562168da2a | model, path | Transcribe an audio file to text (speech-to-text). |
 | web_extract | web | network | medium | 19f16757dd71 | query, url | Fetch a web page and return a focused, aux-model summary/extraction of it (cheaper on context than raw web_fetch for large pages). Optionally pass `query` to weight the extraction toward a specific question. |
+| yb_query_group_info | yuanbao | network | medium | 0dfd3378a053 | group_code | Query Yuanbao group/Pai info. |
+| yb_query_group_members | yuanbao | network | medium | 99a9cbb8160e | action, group_code, mention, name | Query Yuanbao group/Pai members for lookup or @mentions. |
+| yb_search_sticker | yuanbao |  | low | 64de648cec7a | limit, query | Search the built-in Yuanbao sticker catalogue by keyword. Works locally without credentials. |
+| yb_send_dm | yuanbao | network | medium | 907d75caee60 | group_code, message, name, user_id | Send a Yuanbao direct/private message via the Yuanbao gateway/plugin. |
+| yb_send_sticker | yuanbao | network | medium | b429c8498c52 | chat_id, reply_to, sticker | Send a real Yuanbao/TIM sticker via the Yuanbao gateway/plugin. |
