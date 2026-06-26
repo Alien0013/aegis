@@ -478,6 +478,7 @@ def default_registry(*, include_plugins: bool = True) -> ToolRegistry:
     from .devtools import dev_tools
     from .lsp import lsp_tools
     from .process import process_tools
+    from .project_tools import project_tools
     from .kanban_tool import kanban_tools
     from .code_search_tool import code_search_tools
     from .recall import recall_tools
@@ -503,6 +504,7 @@ def default_registry(*, include_plugins: bool = True) -> ToolRegistry:
     reg.register_all(kanban_tools())
     reg.register_all(state_tools())
     reg.register_all(process_tools())
+    reg.register_all(project_tools())
     reg.register_all(dev_tools())
     reg.register_all(cloud_tools())
     _register_aegis_aliases(reg)

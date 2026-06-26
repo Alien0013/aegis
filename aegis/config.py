@@ -40,6 +40,7 @@ DEFAULT_DEFERRED_TOOL_SELECTORS = [
     "toolset:vision",
     "toolset:web",
     "toolset:lsp",
+    "toolset:project",
     "toolset:mcp",
     "download",
     "http_request",
@@ -444,7 +445,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "allowlist": [],             # shell command prefixes auto-approved
         "toolsets": list(DEFAULT_TOOLSETS),
                                      # Cost-safe default: core tools only. Enable optional
-                                     # browser/computer/voice/web/lsp/mcp toolsets from setup,
+                                     # browser/computer/voice/web/lsp/project/mcp toolsets from setup,
                                      # the dashboard, or `aegis config set tools.toolsets ...`.
         "terminal_backend": "local", # local | docker | ssh | singularity | modal | daytona
         "subagent_terminal_backend": "", # "" inherits terminal_backend; else backend for subagents
