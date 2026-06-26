@@ -636,8 +636,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "memory_every": 10,           # run a memory review every N turns
         "flush_min_turns": 6,          # run a final memory review on session end after N user turns
         "skill_every_iters": 15,      # run a skill review/creation nudge when a turn used >= N tool iterations
-        "auto_apply": True,           # auto-write reviewed MEMORY (low risk); False = queue candidates
-        "auto_apply_skills": True,    # auto-write reviewed SKILLS too (full autonomy; False = human-gated)
+        "auto_apply": True,           # self-learning writes reviewed MEMORY directly; False = queue candidates
+        "auto_apply_skills": True,    # self-learning writes reviewed SKILLS directly too — full autonomy
+                                      #   (the point of a self-improving agent); False = queue candidates
     },
     "mcp": {
         "enabled": True,

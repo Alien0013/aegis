@@ -286,10 +286,13 @@ def maybe_review(agent, tools_this_turn: int) -> bool:
         return False
     if review_memory:
         meta["_turns_since_memory"] = 0
-    # Memory and skills gate independently: memory is low-risk (auto by default); skills are
-    # human-gated by default to avoid writing executable instructions to disk unattended.
-    auto_apply = bool(cfg.get("learn.auto_apply", False))
-    auto_apply_skills = bool(cfg.get("learn.auto_apply_skills", False))
+    # Memory and skills are both auto-applied by default — that is the whole point of a
+    # self-improving agent: it writes durable memory AND skills directly, without a human
+    # gate. Set learn.auto_apply / learn.auto_apply_skills to False to queue candidates
+    # instead. The fallbacks below mirror the shipped DEFAULT_CONFIG (both True) so the
+    # expressed intent is autonomy even if the key is ever absent.
+    auto_apply = bool(cfg.get("learn.auto_apply", True))
+    auto_apply_skills = bool(cfg.get("learn.auto_apply_skills", True))
 
     on_ev = getattr(agent.tool_context, "emit", None)   # surface what it saves to the user
 
