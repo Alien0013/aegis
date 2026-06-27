@@ -403,6 +403,18 @@ def register(app, config, chat_runner):
             "provider": config.get("model.provider"),
         })
 
+    @app.get("/api/audio/elevenlabs/voices")
+    async def api_audio_elevenlabs_voices(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse({
+            "available": False,
+            "provider": "elevenlabs",
+            "voices": [
+                {"id": "alloy", "name": "Alloy", "label": "Alloy", "provider": "aegis-default"},
+                {"id": "onyx", "name": "Onyx", "label": "Onyx", "provider": "aegis-default"},
+            ],
+        })
+
     @app.post("/api/audio/tts")
     async def api_audio_tts(request: Request) -> JSONResponse:
         _require_request(request, config)
@@ -416,6 +428,24 @@ def register(app, config, chat_runner):
             {"ok": not result.is_error, "content": result.content, "display": result.display, "data": result.data},
             status_code=502 if result.is_error else 200,
         )
+
+    @app.post("/api/audio/speak")
+    async def api_audio_speak(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        if not str(body.get("text") or "").strip():
+            return JSONResponse({"ok": False, "error": "text is required"}, status_code=400)
+        from ..tools.voice import SpeakTool
+
+        result = SpeakTool().run(body, _voice_tool_context(config))
+        payload = {"ok": not result.is_error, "content": result.content, "display": result.display, "data": result.data}
+        if isinstance(result.data, dict):
+            payload.update({
+                key: value
+                for key, value in result.data.items()
+                if key in {"data_url", "mime_type", "provider"}
+            })
+        return JSONResponse(payload, status_code=502 if result.is_error else 200)
 
     @app.post("/api/audio/transcribe")
     async def api_audio_transcribe(request: Request,

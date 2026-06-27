@@ -15,6 +15,8 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/agent/oneshot | POST | api_llm_oneshot |
 | /api/analytics/models | GET | api_analytics_models |
 | /api/analytics/usage | GET | api_analytics_usage |
+| /api/audio/elevenlabs/voices | GET | api_audio_elevenlabs_voices |
+| /api/audio/speak | POST | api_audio_speak |
 | /api/audio/transcribe | POST | api_audio_transcribe |
 | /api/audio/tts | POST | api_audio_tts |
 | /api/audio/voices | GET | api_audio_voices |

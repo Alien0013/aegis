@@ -4550,6 +4550,10 @@ def test_fastapi_audio_control_plane(tmp_path, monkeypatch):
     assert voices.status_code == 200
     assert "alloy" in voices.json()["voices"]
 
+    elevenlabs_voices = asyncio.run(_request(app, "GET", "/api/audio/elevenlabs/voices", headers=headers))
+    assert elevenlabs_voices.status_code == 200
+    assert "voices" in elevenlabs_voices.json()
+
     tts = asyncio.run(_request(
         app,
         "POST",
@@ -4560,6 +4564,17 @@ def test_fastapi_audio_control_plane(tmp_path, monkeypatch):
     assert tts.status_code == 200
     assert tts.json()["ok"] is True
     assert "speech" in tts.json()["content"]
+
+    speak = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/audio/speak",
+        json={"text": "hello", "voice": "alloy"},
+        headers=headers,
+    ))
+    assert speak.status_code == 200
+    assert speak.json()["ok"] is True
+    assert "speech" in speak.json()["content"]
 
     transcribed = asyncio.run(_request(
         app,
