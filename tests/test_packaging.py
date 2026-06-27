@@ -54,7 +54,7 @@ def test_desktop_wrapper_maps_install_update_surfaces_to_native_desktop():
     verifier = root / "scripts" / "verify-desktop-surface.mjs"
 
     assert manifest["name"] == "aegis-app-desktop"
-    assert manifest["scripts"]["typecheck"] == "node ./scripts/verify-desktop-surface.mjs && node --test electron/*.test.cjs"
+    assert manifest["scripts"]["typecheck"] == "node ./scripts/verify-desktop-surface.mjs && node --test electron/*.test.cjs scripts/*.test.cjs"
     assert verifier.is_file()
     native = manifest["aegis"]["native_install_update_surfaces"]
     assert native["desktop-uninstall"] == "../../desktop/electron/desktop-uninstall.cjs"
@@ -155,6 +155,18 @@ def test_desktop_bootstrap_runner_app_path_exposes_aegis_install_runner():
     assert "installScriptName" in source
     assert "resolveLocalInstallScript" in source
     assert "AEGIS_NONINTERACTIVE_ONBOARD" in source
+
+
+def test_desktop_assert_root_install_script_checks_aegis_workspace_install():
+    helper = ROOT / "apps" / "desktop" / "scripts" / "assert-root-install.cjs"
+    helper_test = ROOT / "apps" / "desktop" / "scripts" / "assert-root-install.test.cjs"
+
+    assert helper.is_file()
+    assert helper_test.is_file()
+    source = helper.read_text(encoding="utf-8")
+    assert "assertRootInstall" in source
+    assert "web/node_modules/vite/package.json" in source
+    assert "desktop/node_modules/electron/package.json" in source
 
 
 def test_shared_package_exports_aegis_runtime_contract():

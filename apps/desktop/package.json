@@ -4,7 +4,7 @@
   "private": true,
   "description": "Workspace wrapper for the AEGIS desktop app package.",
   "scripts": {
-    "typecheck": "node ./scripts/verify-desktop-surface.mjs && node --test electron/*.test.cjs",
+    "typecheck": "node ./scripts/verify-desktop-surface.mjs && node --test electron/*.test.cjs scripts/*.test.cjs",
     "start": "npm --prefix ../../desktop run start",
     "test": "npm --prefix ../../desktop run test:desktop",
     "test:desktop": "npm --prefix ../../desktop run test:desktop",
