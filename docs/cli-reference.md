@@ -16,7 +16,10 @@ Generated from `aegis.cli.main.build_parser()`.
 | aegis bundles | list skill bundles (alias of `aegis skills bundles`) | `aegis bundles [-h] [--json]` |
 | aegis chat | chat with the agent (default) | `aegis chat [-h] [-q QUERY] [-m MODEL] [--provider PROVIDER]                   [--resume RESUME] [--continue] [--yolo] [--worktree]                   [--image IMAGE] [-s SKILLS]                   [prompt ...]` |
 | aegis checkpoints | list/diff/rollback/clear file checkpoints | `aegis checkpoints [-h] [{list,diff,rollback,clear}] [id]` |
-| aegis claw | show the Claw skill hub (alias of `aegis skills hub clawhub`) | `aegis claw [-h] [--json]` |
+| aegis claw | OpenClaw migration and cleanup compatibility tools | `aegis claw [-h] {migrate,cleanup,clean} ...` |
+| aegis claw clean |  | `aegis claw cleanup [-h] [--source SOURCE] [--dry-run] [--yes]` |
+| aegis claw cleanup | archive leftover OpenClaw directories | `aegis claw cleanup [-h] [--source SOURCE] [--dry-run] [--yes]` |
+| aegis claw migrate | preview or record OpenClaw migration | `aegis claw migrate [-h] [--source SOURCE] [--dry-run]                           [--preset {user-data,full}] [--overwrite]                           [--migrate-secrets] [--no-backup]                           [--workspace-target WORKSPACE_TARGET]                           [--skill-conflict {skip,overwrite,rename}] [--yes]` |
 | aegis completion | output shell completion script | `aegis completion [-h] {bash,zsh,fish}` |
 | aegis computer-use | show computer-use tool readiness | `aegis computer-use [-h] [{status,doctor,install,permissions}]` |
 | aegis config | view, edit, get, or set configuration | `aegis config [-h] [--dry-run] [--secrets] [--force] [--quick]                     [--advanced] [--no-probe] [--no-services]                     [--non-interactive] [--accept-risk] [--json]                     [--provider PROVIDER]                     [--auth {skip,api-key,local,oauth,codex}] [--model MODEL]                     [--web WEB] [--toolsets TOOLSETS] [--skills SKILLS]                     [--channels CHANNELS]                     [--exec-mode {ask,auto,allowlist,deny,full,smart}]                     [--install-services]                     [{summary,show,status,view,edit,get,set,path,env-path,paths,dump,check,doctor,migrate,setup,reset}]                     [key] [value ...]` |

@@ -3443,6 +3443,52 @@ def cmd_moa(args, config: Config) -> int:
 
 
 # --------------------------------------------------------------------------- #
+# OpenClaw compatibility
+# --------------------------------------------------------------------------- #
+def cmd_claw(args, config: Config) -> int:
+    action = getattr(args, "claw_action", None) or "migrate"
+    source = Path(getattr(args, "source", None) or Path.home() / ".openclaw").expanduser()
+
+    if action == "migrate":
+        if not source.exists():
+            _print(f"OpenClaw source not found: {source}")
+            return 1
+        candidates = [
+            path.name for path in sorted(source.iterdir())
+            if path.name in {"config.yaml", "config.json", ".env", "skills", "memories", "sessions"}
+        ]
+        _print("OpenClaw migration preview" if getattr(args, "dry_run", False) else "OpenClaw migration")
+        _print(f"  source: {source}")
+        _print("  candidates: " + (", ".join(candidates) if candidates else "(none)"))
+        if getattr(args, "dry_run", False) or not getattr(args, "yes", False):
+            _print("  no files changed; rerun with --yes to record migration acknowledgement")
+            return 0
+        marker = cfg.sub("openclaw-migration.json")
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(json.dumps({"source": str(source), "candidates": candidates}, indent=2), encoding="utf-8")
+        _print(f"  recorded migration acknowledgement: {marker}")
+        return 0
+
+    if action in {"cleanup", "clean"}:
+        if not source.exists():
+            _print(f"No OpenClaw directory found: {source}")
+            return 0
+        archive = source.with_name(f"{source.name}.aegis-archive")
+        if archive.exists():
+            archive = source.with_name(f"{source.name}.aegis-archive-{int(time.time())}")
+        if getattr(args, "dry_run", False) or not getattr(args, "yes", False):
+            _print("OpenClaw cleanup preview")
+            _print(f"  would archive {source} -> {archive}")
+            _print("  no files changed; rerun with --yes to archive")
+            return 0
+        source.rename(archive)
+        _print(f"archived OpenClaw directory: {archive}")
+        return 0
+
+    return 1
+
+
+# --------------------------------------------------------------------------- #
 # doctor
 # --------------------------------------------------------------------------- #
 def cmd_doctor(args, config: Config) -> int:
@@ -4417,11 +4463,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     for _name, _help in (
         ("bundles", "list skill bundles (alias of `aegis skills bundles`)"),
-        ("claw", "show the Claw skill hub (alias of `aegis skills hub clawhub`)"),
     ):
         compat_sk = sub.add_parser(_name, help=_help)
         compat_sk.add_argument("--json", action="store_true", help="print machine-readable skill output")
         compat_sk.set_defaults(func=cmd_command_aliases)
+
+    claw = sub.add_parser("claw", help="OpenClaw migration and cleanup compatibility tools")
+    claw_sub = claw.add_subparsers(dest="claw_action")
+    claw_migrate = claw_sub.add_parser("migrate", help="preview or record OpenClaw migration")
+    claw_migrate.add_argument("--source", help="path to OpenClaw directory (default: ~/.openclaw)")
+    claw_migrate.add_argument("--dry-run", action="store_true", help="preview only; make no changes")
+    claw_migrate.add_argument("--preset", choices=["user-data", "full"], default="full")
+    claw_migrate.add_argument("--overwrite", action="store_true")
+    claw_migrate.add_argument("--migrate-secrets", action="store_true")
+    claw_migrate.add_argument("--no-backup", action="store_true")
+    claw_migrate.add_argument("--workspace-target")
+    claw_migrate.add_argument("--skill-conflict", choices=["skip", "overwrite", "rename"], default="skip")
+    claw_migrate.add_argument("--yes", "-y", action="store_true")
+    claw_cleanup = claw_sub.add_parser("cleanup", aliases=["clean"], help="archive leftover OpenClaw directories")
+    claw_cleanup.add_argument("--source", help="path to OpenClaw directory (default: ~/.openclaw)")
+    claw_cleanup.add_argument("--dry-run", action="store_true", help="preview only; make no changes")
+    claw_cleanup.add_argument("--yes", "-y", action="store_true")
+    claw.set_defaults(func=cmd_claw)
 
     pl = sub.add_parser("plugins", help="manage manifest and drop-in plugins")
     pl.add_argument("action", nargs="?",
