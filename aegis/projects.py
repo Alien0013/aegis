@@ -309,6 +309,150 @@ def get_project(conn: sqlite3.Connection, id_or_slug: str) -> Project | None:
     return _attach_folders(conn, _project_from_row(row))
 
 
+def _require_project(conn: sqlite3.Connection, project_id: str) -> Project:
+    project = get_project(conn, project_id)
+    if project is None:
+        raise ValueError(f"project not found: {project_id}")
+    return project
+
+
+def add_folder(
+    conn: sqlite3.Connection,
+    project_id: str,
+    path: str | os.PathLike[str],
+    *,
+    label: str | None = None,
+    is_primary: bool = False,
+) -> str:
+    """Add or update a folder on a project and optionally make it primary."""
+
+    project = _require_project(conn, project_id)
+    normalized = _normalize_path(path)
+    clean_label = str(label).strip() if label is not None and str(label).strip() else None
+    make_primary = bool(is_primary) or not project.primary_path
+    now = _now()
+    with _write_txn(conn):
+        if make_primary:
+            conn.execute("UPDATE project_folders SET is_primary = 0 WHERE project_id = ?", (project.id,))
+        conn.execute(
+            "INSERT INTO project_folders (project_id, path, label, is_primary, added_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(project_id, path) DO UPDATE SET "
+            "label = COALESCE(excluded.label, project_folders.label), "
+            "is_primary = CASE WHEN excluded.is_primary = 1 THEN 1 ELSE project_folders.is_primary END",
+            (project.id, normalized, clean_label, 1 if make_primary else 0, now),
+        )
+        if make_primary:
+            conn.execute("UPDATE projects SET primary_path = ? WHERE id = ?", (normalized, project.id))
+    return normalized
+
+
+def remove_folder(conn: sqlite3.Connection, project_id: str, path: str | os.PathLike[str]) -> bool:
+    """Remove a project folder, promoting the oldest remaining folder if needed."""
+
+    project = _require_project(conn, project_id)
+    normalized = _normalize_path(path)
+    row = conn.execute(
+        "SELECT is_primary FROM project_folders WHERE project_id = ? AND path = ?",
+        (project.id, normalized),
+    ).fetchone()
+    if row is None:
+        return False
+
+    was_primary = bool(row["is_primary"]) or project.primary_path == normalized
+    with _write_txn(conn):
+        conn.execute("DELETE FROM project_folders WHERE project_id = ? AND path = ?", (project.id, normalized))
+        if was_primary:
+            replacement = conn.execute(
+                "SELECT path FROM project_folders WHERE project_id = ? ORDER BY added_at ASC LIMIT 1",
+                (project.id,),
+            ).fetchone()
+            if replacement is None:
+                conn.execute("UPDATE projects SET primary_path = NULL WHERE id = ?", (project.id,))
+            else:
+                conn.execute("UPDATE project_folders SET is_primary = 0 WHERE project_id = ?", (project.id,))
+                conn.execute(
+                    "UPDATE project_folders SET is_primary = 1 WHERE project_id = ? AND path = ?",
+                    (project.id, replacement["path"]),
+                )
+                conn.execute("UPDATE projects SET primary_path = ? WHERE id = ?", (replacement["path"], project.id))
+    return True
+
+
+def set_primary(conn: sqlite3.Connection, project_id: str, path: str | os.PathLike[str]) -> bool:
+    """Mark an existing project folder as the primary workspace path."""
+
+    project = _require_project(conn, project_id)
+    normalized = _normalize_path(path)
+    row = conn.execute(
+        "SELECT 1 FROM project_folders WHERE project_id = ? AND path = ?",
+        (project.id, normalized),
+    ).fetchone()
+    if row is None:
+        return False
+    with _write_txn(conn):
+        conn.execute("UPDATE project_folders SET is_primary = 0 WHERE project_id = ?", (project.id,))
+        conn.execute(
+            "UPDATE project_folders SET is_primary = 1 WHERE project_id = ? AND path = ?",
+            (project.id, normalized),
+        )
+        conn.execute("UPDATE projects SET primary_path = ? WHERE id = ?", (normalized, project.id))
+    return True
+
+
+def update_project(conn: sqlite3.Connection, project_id: str, **fields: str | None) -> Project:
+    """Update editable project metadata and return the refreshed project."""
+
+    project = _require_project(conn, project_id)
+    updates: dict[str, str | None] = {}
+    if "name" in fields and fields["name"] is not None:
+        name = str(fields["name"] or "").strip()
+        if not name:
+            raise ValueError("project name must not be empty")
+        updates["name"] = name
+    if "description" in fields:
+        value = fields["description"]
+        updates["description"] = (str(value).strip() or None) if value is not None else None
+    if "icon" in fields:
+        value = fields["icon"]
+        updates["icon"] = (str(value).strip() or None) if value is not None else None
+    if "color" in fields:
+        value = fields["color"]
+        updates["color"] = (str(value).strip() or None) if value is not None else None
+    if "board_slug" in fields:
+        value = fields["board_slug"]
+        updates["board_slug"] = normalize_slug(value) if value else None
+    if "slug" in fields and fields["slug"]:
+        slug = normalize_slug(fields["slug"])
+        existing = conn.execute("SELECT id FROM projects WHERE slug = ?", (slug,)).fetchone()
+        if existing is not None and existing["id"] != project.id:
+            raise ValueError(f"project slug already exists: {slug}")
+        updates["slug"] = slug
+    if updates:
+        assignments = ", ".join(f"{key} = ?" for key in updates)
+        with _write_txn(conn):
+            conn.execute(f"UPDATE projects SET {assignments} WHERE id = ?", (*updates.values(), project.id))
+    refreshed = get_project(conn, project.id)
+    assert refreshed is not None
+    return refreshed
+
+
+def archive_project(conn: sqlite3.Connection, project_id: str) -> bool:
+    project = _require_project(conn, project_id)
+    with _write_txn(conn):
+        conn.execute("UPDATE projects SET archived = 1 WHERE id = ?", (project.id,))
+        if get_active_id(conn) == project.id:
+            conn.execute("DELETE FROM project_meta WHERE key = ?", (_ACTIVE_META_KEY,))
+    return True
+
+
+def restore_project(conn: sqlite3.Connection, project_id: str) -> bool:
+    project = _require_project(conn, project_id)
+    with _write_txn(conn):
+        conn.execute("UPDATE projects SET archived = 0 WHERE id = ?", (project.id,))
+    return True
+
+
 def set_active(conn: sqlite3.Connection, project_id: str | None) -> None:
     with _write_txn(conn):
         if project_id is None:

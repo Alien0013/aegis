@@ -3041,6 +3041,7 @@ def build_parser() -> argparse.ArgumentParser:
     from .. import insights as _insights
     from .. import kanban as _kanban
     from .. import webhook as _webhook
+    from . import project_cmd as _project_cmd
     from . import tui as _tui
 
     bk = sub.add_parser("backup", help="back up ~/.aegis to a zip")
@@ -3387,6 +3388,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     pfs = sub.add_parser("profiles", help="list isolated runtime profiles")
     pfs.set_defaults(func=cmd_profile, profile_action="list")
+
+    _project_cmd.add_project_parser(sub)
 
     cr = sub.add_parser("cron", help="schedule recurring agent tasks")
     cr.add_argument("action", nargs="?",

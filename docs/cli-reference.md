@@ -64,6 +64,19 @@ Generated from `aegis.cli.main.build_parser()`.
 | aegis profile show | show profile details | `aegis profile show [-h] [profile_name]` |
 | aegis profile use | set sticky default profile | `aegis profile use [-h] profile_name` |
 | aegis profiles | list isolated runtime profiles | `aegis profiles [-h]` |
+| aegis project | manage projects (named, multi-folder workspaces) | `aegis project [-h]                      {create,list,ls,show,add-folder,remove-folder,rename,set-primary,use,archive,restore,bind-board} ...` |
+| aegis project add-folder | add a folder to a project | `aegis project add-folder [-h] [--label LABEL] [--primary] project path` |
+| aegis project archive | archive a project | `aegis project archive [-h] project` |
+| aegis project bind-board | bind or unbind a kanban board slug | `aegis project bind-board [-h] project [board]` |
+| aegis project create | create a new project | `aegis project create [-h] [--slug SLUG] [--primary PATH]                             [--description DESCRIPTION] [--icon ICON]                             [--color COLOR] [--board BOARD] [--use]                             name [folders ...]` |
+| aegis project list | list projects | `aegis project list [-h] [--all]` |
+| aegis project ls |  | `aegis project list [-h] [--all]` |
+| aegis project remove-folder | remove a folder from a project | `aegis project remove-folder [-h] project path` |
+| aegis project rename | rename a project | `aegis project rename [-h] project name` |
+| aegis project restore | restore an archived project | `aegis project restore [-h] project` |
+| aegis project set-primary | set the primary folder | `aegis project set-primary [-h] project path` |
+| aegis project show | show project details | `aegis project show [-h] project` |
+| aegis project use | set or clear the active project | `aegis project use [-h] [project]` |
 | aegis prompt-size | show active context and compression sizing | `aegis prompt-size [-h]` |
 | aegis proxy | run the OpenAI-compatible API server (alias of serve) | `aegis proxy [-h] [--host HOST] [--port PORT]` |
 | aegis rpc | run a local JSON-RPC agent server over stdio | `aegis rpc [-h]` |
