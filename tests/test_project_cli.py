@@ -36,6 +36,30 @@ def test_project_cli_create_list_show_use_and_clear(monkeypatch, tmp_path, capsy
     assert "* client-portal" not in out
 
 
+def test_project_cli_path_switch_and_current_aliases(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path / "home"))
+
+    from aegis.cli.main import main
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    assert main(["project", "create", "Hermes Parity", "--path", str(repo)]) == 0
+    out = capsys.readouterr().out
+    assert "Created project hermes-parity" in out
+    assert f"primary: {repo}" in out
+
+    assert main(["project", "switch", "hermes-parity"]) == 0
+    out = capsys.readouterr().out
+    assert "Active project: hermes-parity" in out
+
+    assert main(["project", "current"]) == 0
+    out = capsys.readouterr().out
+    assert "active project:" in out
+    assert "hermes-parity" in out
+    assert f"primary: {repo}" in out
+
+
 def test_project_cli_folder_primary_archive_restore_and_board(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path / "home"))
 

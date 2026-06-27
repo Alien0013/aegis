@@ -26,6 +26,7 @@ def add_project_parser(subparsers: argparse._SubParsersAction) -> argparse.Argum
     create = sub.add_parser("create", help="create a new project")
     create.add_argument("name", help="human project name")
     create.add_argument("folders", nargs="*", help="folder paths to include; first folder becomes primary")
+    create.add_argument("--path", action="append", dest="paths", default=[], help="workspace path to include; first --path becomes primary")
     create.add_argument("--slug", help="explicit project slug")
     create.add_argument("--primary", metavar="PATH", help="primary workspace path")
     create.add_argument("--description", help="project description")
@@ -60,6 +61,11 @@ def add_project_parser(subparsers: argparse._SubParsersAction) -> argparse.Argum
 
     use = sub.add_parser("use", help="set or clear the active project")
     use.add_argument("project", nargs="?", help="project id or slug; omit to clear")
+
+    switch = sub.add_parser("switch", aliases=["select"], help="switch the active project")
+    switch.add_argument("project", nargs="?", help="project id or slug; omit to clear")
+
+    sub.add_parser("current", aliases=["status"], help="show the active project")
 
     archive = sub.add_parser("archive", help="archive a project")
     archive.add_argument("project", help="project id or slug")
@@ -97,6 +103,10 @@ def cmd_project(args: argparse.Namespace, config: Config) -> int:  # noqa: ARG00
         "rename": _cmd_rename,
         "set-primary": _cmd_set_primary,
         "use": _cmd_use,
+        "switch": _cmd_use,
+        "select": _cmd_use,
+        "current": _cmd_current,
+        "status": _cmd_current,
         "archive": _cmd_archive,
         "restore": _cmd_restore,
         "bind-board": _cmd_bind_board,
@@ -138,13 +148,16 @@ def _print_project(project: store.Project) -> None:
 
 
 def _cmd_create(args: argparse.Namespace) -> int:
+    path_args = list(getattr(args, "paths", []) or [])
+    folders = [*path_args, *list(args.folders or [])]
+    primary = args.primary or (path_args[0] if path_args else None)
     with store.connect_closing() as conn:
         project_id = store.create_project(
             conn,
             name=args.name,
             slug=args.slug,
-            folders=args.folders,
-            primary_path=args.primary,
+            folders=folders,
+            primary_path=primary,
             description=args.description,
             icon=args.icon,
             color=args.color,
@@ -157,6 +170,18 @@ def _cmd_create(args: argparse.Namespace) -> int:
         print("project: project disappeared after create", file=sys.stderr)
         return 2
     print(f"Created project {project.slug} ({project.id})")
+    _print_project(project)
+    return 0
+
+
+def _cmd_current(args: argparse.Namespace) -> int:  # noqa: ARG001
+    with store.connect_closing() as conn:
+        active_id = store.get_active_id(conn)
+        project = store.get_project(conn, active_id) if active_id else None
+    if project is None:
+        print("No active project")
+        return 0
+    print("active project:")
     _print_project(project)
     return 0
 
