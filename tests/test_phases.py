@@ -603,6 +603,83 @@ def test_cli_bare_existing_config_opens_repl(monkeypatch):
     assert called["ok"]
 
 
+def test_cli_top_level_tui_flag_routes_to_tui(monkeypatch):
+    from aegis.cli.main import main
+    from aegis.config import Config
+
+    Config.load().save()
+    calls = []
+    monkeypatch.setattr("aegis.cli.tui.cmd_tui", lambda args, config: calls.append((args, config)) or 0)
+
+    assert main(["--tui", "--resume", "sess_123", "--model", "m", "--provider", "p", "--yolo"]) == 0
+    args, _config = calls[0]
+    assert args.command == "tui"
+    assert args.resume == "sess_123"
+    assert args.model == "m"
+    assert args.provider == "p"
+    assert args.yolo is True
+    assert args.classic is False
+
+
+def test_cli_top_level_cli_flag_forces_classic_tui(monkeypatch):
+    from aegis.cli.main import main
+    from aegis.config import Config
+
+    Config.load().save()
+    calls = []
+    monkeypatch.setattr("aegis.cli.tui.cmd_tui", lambda args, config: calls.append((args, config)) or 0)
+
+    assert main(["--cli"]) == 0
+    assert calls[0][0].command == "tui"
+    assert calls[0][0].classic is True
+
+
+def test_cli_top_level_resume_propagates_to_default_repl(monkeypatch):
+    from aegis.cli.main import main
+    from aegis.config import Config
+
+    Config.load().save()
+    seen = {}
+    session = object()
+
+    def fake_terminal_session(args, store):
+        seen["resume"] = args.resume
+        seen["cont"] = args.cont
+        return session
+
+    def fake_interactive(config, *, session, store, **kwargs):
+        seen["session"] = session
+
+    monkeypatch.setattr("aegis.cli.main._terminal_session", fake_terminal_session)
+    monkeypatch.setattr("aegis.cli.repl.interactive", fake_interactive)
+
+    assert main(["--resume", "sess_123"]) == 0
+    assert seen == {"resume": "sess_123", "cont": False, "session": session}
+
+
+def test_cli_top_level_continue_name_propagates_to_default_repl(monkeypatch):
+    from aegis.cli.main import main
+    from aegis.config import Config
+
+    Config.load().save()
+    seen = {}
+    session = object()
+
+    def fake_terminal_session(args, store):
+        seen["resume"] = args.resume
+        seen["cont"] = args.cont
+        return session
+
+    monkeypatch.setattr("aegis.cli.main._terminal_session", fake_terminal_session)
+    monkeypatch.setattr(
+        "aegis.cli.repl.interactive",
+        lambda config, *, session, store, **kwargs: seen.update(session=session),
+    )
+
+    assert main(["--continue", "project chat"]) == 0
+    assert seen == {"resume": None, "cont": "project chat", "session": session}
+
+
 def test_cli_bare_first_run_can_be_bypassed(monkeypatch):
     from aegis.cli.main import main
 

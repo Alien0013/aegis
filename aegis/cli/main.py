@@ -111,8 +111,13 @@ def _terminal_session(args, store):
         if not session:
             return _die(f"session '{resume}' not found")
         return session
-    if getattr(args, "cont", False):
-        session = store.latest()
+    cont = getattr(args, "cont", False)
+    if cont:
+        session = None
+        if isinstance(cont, str):
+            session = store.load(cont) or store.resolve_title_to_tip(cont)
+        if session is None:
+            session = store.latest()
         if session:
             _print(f"(continuing {session.id})")
             return session
@@ -2986,6 +2991,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--profile", help="use a named config profile")
     p.add_argument("--strict", action="store_true",
                    help="developer mode: re-raise fail-soft swallowed errors (sets AEGIS_STRICT)")
+    p.add_argument("--tui", action="store_true", help="launch the modern terminal UI")
+    p.add_argument("--cli", action="store_true", help="force the classic line terminal")
+    p.add_argument("--dev", dest="tui_dev", action="store_true", help="with --tui: mark the launch as dev/source-mode")
+    p.add_argument("--resume", "-r", help="resume a session id/title")
+    p.add_argument("--continue", "-c", dest="cont", nargs="?", const=True, default=False,
+                   help="continue the latest session, or a named session when a value is given")
+    p.add_argument("--model", help="model override for the default chat/TUI launch")
+    p.add_argument("--provider", help="provider override for the default chat/TUI launch")
+    p.add_argument("--yolo", action="store_true", help="auto-approve all tools for the default chat/TUI launch")
     sub = p.add_subparsers(dest="command")
 
     c = sub.add_parser("chat", help="chat with the agent (default)")
@@ -3558,12 +3572,39 @@ def main(argv: list[str] | None = None) -> int:
     if not getattr(args, "command", None):
         if _needs_first_run():
             return _handle_first_run(config)
-        # default: interactive chat
         from argparse import Namespace
         from ..session import SessionStore
         from . import repl
+        if getattr(args, "tui", False) or getattr(args, "cli", False):
+            from . import tui as _tui
+
+            return _tui.cmd_tui(Namespace(
+                command="tui",
+                once=False,
+                watch=False,
+                interval=5.0,
+                no_color=False,
+                model=getattr(args, "model", None),
+                provider=getattr(args, "provider", None),
+                resume=getattr(args, "resume", None),
+                yolo=bool(getattr(args, "yolo", False)),
+                classic=bool(getattr(args, "cli", False)),
+                tui_dev=bool(getattr(args, "tui_dev", False)),
+            ), config)
+
+        # default: interactive chat
         store = SessionStore()
-        repl.interactive(config, session=_terminal_session(Namespace(), store), store=store)
+        session = _terminal_session(Namespace(resume=getattr(args, "resume", None), cont=getattr(args, "cont", False)), store)
+        if isinstance(session, int):
+            return session
+        repl.interactive(
+            config,
+            model=getattr(args, "model", None),
+            provider_name=getattr(args, "provider", None),
+            session=session,
+            store=store,
+            auto=bool(getattr(args, "yolo", False)),
+        )
         return 0
     try:
         return args.func(args, config)
