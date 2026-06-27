@@ -114,6 +114,6 @@ Generated from `aegis.cli.main.build_parser()`.
 | aegis verify | run the full Python/web/desktop/docs release gate | `aegis verify [-h] ...` |
 | aegis version | print the AEGIS version | `aegis version [-h]` |
 | aegis watch | ambient mode: run the project's tests on every save | `aegis watch [-h] [path]` |
-| aegis webhook | event webhooks that trigger the agent | `aegis webhook [-h] [--secret SECRET] [--host HOST] [--port PORT]                      [--deliver DELIVER] [--deliver-only] [--events EVENTS]                      [--skills SKILLS]                      [{list,add,remove,serve}] [name] [prompt ...]` |
+| aegis webhook | event webhooks that trigger the agent | `aegis webhook [-h] [--prompt PROMPT_OPTION] [--payload PAYLOAD]                      [--secret SECRET] [--host HOST] [--port PORT]                      [--deliver DELIVER] [--deliver-only] [--events EVENTS]                      [--skills SKILLS]                      [{list,ls,add,subscribe,remove,rm,serve,test}] [name]                      [prompt ...]` |
 | aegis whatsapp | run gateway for whatsapp | `aegis whatsapp [-h]` |
 | aegis whatsapp-cloud | run gateway for whatsapp-cloud | `aegis whatsapp-cloud [-h]` |

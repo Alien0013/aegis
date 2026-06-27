@@ -3801,9 +3801,11 @@ def build_parser() -> argparse.ArgumentParser:
     mo.set_defaults(func=_model_meta.cmd_models)
 
     wh = sub.add_parser("webhook", help="event webhooks that trigger the agent")
-    wh.add_argument("action", nargs="?", choices=["list", "add", "remove", "serve"], default="list")
+    wh.add_argument("action", nargs="?", choices=["list", "ls", "add", "subscribe", "remove", "rm", "serve", "test"], default="list")
     wh.add_argument("name", nargs="?")
     wh.add_argument("prompt", nargs="*")
+    wh.add_argument("--prompt", dest="prompt_option", help="prompt template for subscribe/add")
+    wh.add_argument("--payload", help="JSON payload for webhook test")
     wh.add_argument("--secret")
     wh.add_argument("--host")
     wh.add_argument("--port", type=int)

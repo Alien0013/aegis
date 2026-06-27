@@ -757,13 +757,19 @@ def serve_webhooks(config, host: str = "127.0.0.1", port: int = 8791) -> None:
 # CLI
 # --------------------------------------------------------------------------- #
 def cmd_webhook(args, config) -> int:
-    """CLI entry: ``add`` / ``list`` / ``remove`` / ``serve``."""
+    """CLI entry: ``add`` / ``subscribe`` / ``list`` / ``remove`` / ``serve`` / ``test``."""
     store = WebhookStore()
     action = getattr(args, "action", None) or "list"
+    if action == "subscribe":
+        action = "add"
+    if action == "ls":
+        action = "list"
+    if action == "rm":
+        action = "remove"
 
     if action == "add":
         name = getattr(args, "name", None)
-        prompt = getattr(args, "prompt", None)
+        prompt = getattr(args, "prompt_option", None) or getattr(args, "prompt", None)
         if isinstance(prompt, list):
             prompt = " ".join(prompt)
         if not name or not prompt:
@@ -795,6 +801,43 @@ def cmd_webhook(args, config) -> int:
             return 2
         print("removed" if store.remove(name) else "not found")
         return 0
+
+    if action == "test":
+        import urllib.request
+
+        name = str(getattr(args, "name", "") or "").strip()
+        if not name:
+            print("usage: aegis webhook test <name> [--payload JSON]")
+            return 2
+        hook = store.get(name)
+        if hook is None:
+            print(f"No webhook named '{name}'.")
+            return 1
+        payload = getattr(args, "payload", "") or '{"test": true, "event_type": "test", "message": "Hello from aegis webhook test"}'
+        host = getattr(args, "host", None) or config.get("server.host", "127.0.0.1")
+        port = int(getattr(args, "port", None) or 8791)
+        url = f"http://{host}:{port}/hook/{name}"
+        signature = "sha256=" + hmac.new(hook.secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        print(f"Sending test POST to {url}")
+        req = urllib.request.Request(
+            url,
+            data=payload.encode(),
+            headers={
+                "Content-Type": "application/json",
+                "X-Hub-Signature-256": signature,
+                "X-GitHub-Event": "test",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                body = resp.read().decode()
+                print(f"Response ({resp.status}): {body}")
+            return 0
+        except Exception as e:  # noqa: BLE001
+            print(f"Error: {e}")
+            print("Is the webhook server running? (aegis webhook serve)")
+            return 1
 
     if action == "serve":
         serve_webhooks(
