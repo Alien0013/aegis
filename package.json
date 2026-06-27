@@ -9,6 +9,7 @@
     "apps/shared",
     "web",
     "desktop",
+    "scripts/whatsapp-bridge",
     "ui-tui",
     "aegis/tui_ink",
     "website",

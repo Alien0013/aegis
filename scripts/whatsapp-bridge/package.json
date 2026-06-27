@@ -1,0 +1,21 @@
+{
+  "name": "@aegis/whatsapp-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AEGIS WhatsApp bridge package surface backed by the native webhook channel adapter.",
+  "scripts": {
+    "typecheck": "node ./scripts/verify-bridge-surface.mjs",
+    "build": "node ./scripts/verify-bridge-surface.mjs"
+  },
+  "aegis": {
+    "native_channel": "whatsapp",
+    "bridge_env_prefix": "WHATSAPP_CHANNEL",
+    "adapter": "aegis.gateway.webhook_channel.WebhookChannel",
+    "transport": "http_bridge",
+    "compatibility": "AEGIS exposes WhatsApp through its native signed webhook bridge and outbound webhook sender hooks."
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

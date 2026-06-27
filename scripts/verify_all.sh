@@ -33,6 +33,9 @@ if command -v npm >/dev/null 2>&1; then
   if [ -f apps/shared/package.json ]; then
     (cd apps/shared && run npm run typecheck)
   fi
+  if [ -f scripts/whatsapp-bridge/package.json ]; then
+    (cd scripts/whatsapp-bridge && run npm run typecheck)
+  fi
   if [ -f web/package.json ]; then
     (cd web && run npm run typecheck && run npm run build)
   fi

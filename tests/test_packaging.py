@@ -35,6 +35,7 @@ def test_package_wrapper_roots_delegate_to_native_aegis_packages():
         "apps/desktop": ("aegis-app-desktop", "npm --prefix ../../desktop run test:desktop"),
         "apps/bootstrap-installer": ("@aegis/bootstrap-installer", "node ./scripts/verify-installer-surface.mjs"),
         "apps/shared": ("@aegis/shared", "node ../../web/node_modules/typescript/bin/tsc -p . --noEmit"),
+        "scripts/whatsapp-bridge": ("@aegis/whatsapp-bridge", "node ./scripts/verify-bridge-surface.mjs"),
         "website": ("aegis-website", "npm --prefix ../site-next run build"),
         "ui-tui": ("aegis-ui-tui", "npm --prefix ../aegis/tui_ink run build"),
     }
@@ -64,6 +65,17 @@ def test_bootstrap_installer_package_wraps_native_install_scripts():
     assert manifest["private"] is True
     assert manifest["aegis"]["installer_scripts"] == ["../../install.sh", "../../install.ps1"]
     assert manifest["scripts"]["typecheck"] == "node ./scripts/verify-installer-surface.mjs"
+    assert verifier.is_file()
+
+
+def test_whatsapp_bridge_package_wraps_native_webhook_bridge():
+    manifest = json.loads((ROOT / "scripts" / "whatsapp-bridge" / "package.json").read_text(encoding="utf-8"))
+    verifier = ROOT / "scripts" / "whatsapp-bridge" / "scripts" / "verify-bridge-surface.mjs"
+    assert manifest["name"] == "@aegis/whatsapp-bridge"
+    assert manifest["private"] is True
+    assert manifest["aegis"]["native_channel"] == "whatsapp"
+    assert manifest["aegis"]["bridge_env_prefix"] == "WHATSAPP_CHANNEL"
+    assert manifest["scripts"]["typecheck"] == "node ./scripts/verify-bridge-surface.mjs"
     assert verifier.is_file()
 
 
