@@ -123,10 +123,10 @@ def list_hooks(config) -> dict[str, list[str]]:
 
 
 # --------------------------------------------------------------------------- #
-# CLI: `aegis hooks [list|test]`
+# CLI: `aegis hooks [list|test|doctor|revoke]`
 # --------------------------------------------------------------------------- #
 def cmd_hooks(args, config) -> int:
-    """``list`` shows configured hooks; ``test`` fires one event with sample context."""
+    """Manage configured lifecycle hooks."""
     action = getattr(args, "action", None) or "list"
 
     if action == "test":
@@ -146,6 +146,47 @@ def cmd_hooks(args, config) -> int:
             detail = r.error or (r.stderr.strip() if not r.ok else "")
             print(f"  [{mark}] {r.command}" + (f"  -> {detail}" if detail else ""))
         return 0 if all(r.ok for r in results) else 1
+
+    if action == "doctor":
+        hooks = list_hooks(config)
+        total = sum(len(commands) for commands in hooks.values())
+        if total == 0:
+            print("no hooks configured. Nothing to check.")
+            return 0
+        print(f"checking {total} configured hook(s)...")
+        problems = 0
+        for event in EVENTS:
+            for command in hooks.get(event, []):
+                if command.strip():
+                    print(f"  [ok] {event:<14} {command}")
+                else:
+                    problems += 1
+                    print(f"  [FAIL] {event:<14} empty command")
+        if problems:
+            print(f"{problems} hook issue(s) found.")
+            return 1
+        print("All configured hooks look healthy.")
+        return 0
+
+    if action in {"revoke", "remove", "rm"}:
+        target = getattr(args, "event", None)
+        if not target:
+            print("usage: aegis hooks revoke <command>")
+            return 2
+        removed = 0
+        for event in EVENTS:
+            commands = config.get(f"hooks.{event}", []) or []
+            was_string = isinstance(commands, str)
+            command_list = [commands] if was_string else list(commands)
+            kept = [str(command) for command in command_list if str(command) != target]
+            removed += len(command_list) - len(kept)
+            if len(kept) != len(command_list):
+                config.set(f"hooks.{event}", kept)
+        if removed == 0:
+            print(f"no configured hook command found for: {target}")
+            return 0
+        print(f"removed {removed} hook command(s) matching: {target}")
+        return 0
 
     # default: list
     hooks = list_hooks(config)

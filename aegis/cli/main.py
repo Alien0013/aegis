@@ -3816,7 +3816,7 @@ def build_parser() -> argparse.ArgumentParser:
     wh.set_defaults(func=_webhook.cmd_webhook)
 
     hk = sub.add_parser("hooks", help="lifecycle shell hooks")
-    hk.add_argument("action", nargs="?", choices=["list", "test"], default="list")
+    hk.add_argument("action", nargs="?", choices=["list", "test", "doctor", "revoke", "remove", "rm"], default="list")
     hk.add_argument("event", nargs="?")
     hk.set_defaults(func=_hooks.cmd_hooks)
 

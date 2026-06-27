@@ -34,7 +34,7 @@ Generated from `aegis.cli.main.build_parser()`.
 | aegis gateway | run the multi-channel gateway | `aegis gateway [-h] [--channels CHANNELS]                      [{run,install,uninstall,status,start,stop,restart}]` |
 | aegis gstack | run a goal through a sprint of roles (think→plan→build→review→test→ship→reflect) | `aegis gstack [-h] [--phases PHASES] [--from FROM_PHASE] [--dry]                     [goal ...]` |
 | aegis gui | open the AEGIS control panel in your browser | `aegis gui [-h] [--host HOST] [--port PORT] [--no-open]` |
-| aegis hooks | lifecycle shell hooks | `aegis hooks [-h] [{list,test}] [event]` |
+| aegis hooks | lifecycle shell hooks | `aegis hooks [-h] [{list,test,doctor,revoke,remove,rm}] [event]` |
 | aegis import | restore a backup zip | `aegis import [-h] path` |
 | aegis improve | verified self-improvement: keep curator edits only if the benchmark holds | `aegis improve [-h] [--min-delta MIN_DELTA] [--limit LIMIT] [{run,log}]` |
 | aegis insights | usage analytics over your history | `aegis insights [-h] [--days DAYS] [--source SOURCE] [--json]` |
