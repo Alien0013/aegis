@@ -31,7 +31,7 @@ Generated from `aegis.cli.main.build_parser()`.
 | aegis dump | print a redacted config dump | `aegis dump [-h] [--json]` |
 | aegis eval | run/list/show offline eval suites | `aegis eval [-h] [--limit LIMIT] [--json] [{list,run,show}] [path]` |
 | aegis fallback | list/add/remove/clear model fallback providers | `aegis fallback [-h] [{list,add,remove,clear}] [provider] [model]` |
-| aegis gateway | run the multi-channel gateway | `aegis gateway [-h] [--channels CHANNELS]                      [{run,install,uninstall,status,start,stop,restart}]` |
+| aegis gateway | run or configure the multi-channel gateway | `aegis gateway [-h] [--channels CHANNELS]                      [{run,install,uninstall,status,start,stop,restart,setup,list,enroll,migrate-legacy}]                      [platform] [user_id]` |
 | aegis gstack | run a goal through a sprint of roles (think→plan→build→review→test→ship→reflect) | `aegis gstack [-h] [--phases PHASES] [--from FROM_PHASE] [--dry]                     [goal ...]` |
 | aegis gui | open the AEGIS control panel in your browser | `aegis gui [-h] [--host HOST] [--port PORT] [--no-open]` |
 | aegis hooks | lifecycle shell hooks | `aegis hooks [-h] [{list,test,doctor,revoke,remove,rm}] [event]` |

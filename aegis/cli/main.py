@@ -3318,12 +3318,71 @@ def cmd_sessions(args, config: Config) -> int:
 # --------------------------------------------------------------------------- #
 def cmd_gateway(args, config: Config) -> int:
     action = getattr(args, "action", None)
+
     def configured_channels() -> list[str]:
         channels = [str(ch).strip() for ch in (config.get("gateway.channels", []) or []) if str(ch).strip()]
         api_enabled = bool(config.get("gateway.api_server.enabled", False)) or _env_enabled("API_SERVER_ENABLED")
         if api_enabled and "api_server" not in {ch.lower() for ch in channels}:
             channels.append("api_server")
         return channels
+
+    if action == "setup":
+        channels = [ch.strip() for ch in (args.channels or "").split(",") if ch.strip()]
+        if channels:
+            config.set("gateway.channels", channels)
+            _print("configured gateway channels: " + ", ".join(channels))
+        else:
+            current = configured_channels()
+            if current:
+                _print("configured gateway channels: " + ", ".join(current))
+            else:
+                _print("no gateway channels configured; pass --channels telegram,slack")
+        return 0
+
+    if action == "list":
+        from ..gateway.pairing import PairingStore
+
+        channels = configured_channels()
+        _print("gateway channels:")
+        if channels:
+            for channel in channels:
+                _print(f"  {channel}")
+        else:
+            _print("  (none)")
+        pairings = PairingStore().list()
+        _print("approved:")
+        approved = pairings.get("approved", {}) or {}
+        if approved:
+            for platform, users in approved.items():
+                _print(f"  {platform}: {', '.join(users) or '(none)'}")
+        else:
+            _print("  (none)")
+        _print("pending:")
+        pending = pairings.get("pending", {}) or {}
+        shown = False
+        for platform, codes in pending.items():
+            for code, info in codes.items():
+                shown = True
+                _print(f"  {platform}: {code} -> {info.get('user_id', '')}")
+        if not shown:
+            _print("  (none)")
+        return 0
+
+    if action == "enroll":
+        platform = getattr(args, "platform", None)
+        user_id = getattr(args, "user_id", None)
+        if not platform or not user_id:
+            _print("usage: aegis gateway enroll <platform> <user-id>")
+            return 1
+        from ..gateway.pairing import PairingStore
+
+        PairingStore().approve(platform, user_id)
+        _print(f"enrolled {user_id} on {platform}")
+        return 0
+
+    if action == "migrate-legacy":
+        _print("legacy gateway migration: no legacy AEGIS gateway units found")
+        return 0
 
     if action in ("install", "uninstall", "status", "start", "stop", "restart"):
         from ..gateway.service import cmd_gateway_service
@@ -4567,9 +4626,13 @@ def build_parser() -> argparse.ArgumentParser:
     se.add_argument("--stale-resume-pending-seconds", type=float, default=86400)
     se.set_defaults(func=cmd_sessions)
 
-    g = sub.add_parser("gateway", help="run the multi-channel gateway")
-    g.add_argument("action", nargs="?", choices=["run", "install", "uninstall", "status", "start", "stop", "restart"],
-                   default="run", help="run, or install/control an OS service")
+    g = sub.add_parser("gateway", help="run or configure the multi-channel gateway")
+    g.add_argument("action", nargs="?", choices=[
+        "run", "install", "uninstall", "status", "start", "stop", "restart",
+        "setup", "list", "enroll", "migrate-legacy",
+    ], default="run", help="run, configure, list, enroll, migrate, or control an OS service")
+    g.add_argument("platform", nargs="?", help="platform for gateway enroll")
+    g.add_argument("user_id", nargs="?", help="user/channel id for gateway enroll")
     g.add_argument("--channels", help="comma list: cli,telegram (default cli)")
     g.set_defaults(func=cmd_gateway)
 
