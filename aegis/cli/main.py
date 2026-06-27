@@ -1298,9 +1298,52 @@ def cmd_status(args, config: Config) -> int:
 
 def cmd_memory(args, config: Config) -> int:
     from ..memory import MemoryStore
+    from ..memory_providers import memory_provider_report, memory_provider_setup
 
     store = MemoryStore()
     target = "user" if args.user else "memory"
+    if args.action == "setup":
+        provider = (args.text[0] if args.text else "").strip().lower()
+        if not provider:
+            report = memory_provider_report(config)
+            _print("Available external memory providers:")
+            for row in report.get("provider_catalog", []):
+                _print(f"  {row['name']:<12} {row.get('display_name', row['name'])} — {row.get('description', '')}")
+            _print("\nUsage: aegis memory setup <provider>")
+            return 0
+        setup = memory_provider_setup(provider)
+        if not setup.get("known"):
+            _print(f"unknown memory provider: {provider}")
+            return 1
+        config.set("memory.provider", setup["name"])
+        config.save()
+        _print(f"memory.provider -> {setup['name']}")
+        _print(f"{setup.get('display_name', setup['name'])} setup:")
+        for step in setup.get("setup_steps", []):
+            _print(f"  - {step}")
+        env_names = [*setup.get("env_vars", []), *setup.get("env_any", []), *setup.get("optional_env_vars", [])]
+        if env_names:
+            _print("env: " + ", ".join(env_names))
+        keys = sorted(str(key) for key in (setup.get("config_schema") or {}) if str(key) != "memory.provider")
+        if keys:
+            _print("config: " + ", ".join(keys))
+        return 0
+    if args.action == "off":
+        config.set("memory.provider", "")
+        config.save()
+        _print("external memory provider disabled; builtin MEMORY.md/USER.md remain active")
+        return 0
+    if args.action == "reset":
+        reset_target = getattr(args, "target", "all") or "all"
+        if not getattr(args, "yes", False):
+            _print("memory reset requires --yes; builtin memory files would be modified")
+            return 1
+        targets = ("memory", "user") if reset_target == "all" else (reset_target,)
+        for tgt in targets:
+            for entry in list(store.entries(tgt)):
+                store.remove(tgt, entry)
+        _print(f"reset {reset_target}")
+        return 0
     if args.action == "add":
         if not args.text:
             return _die("usage: aegis memory add <text> [--user]")
@@ -1328,6 +1371,17 @@ def cmd_memory(args, config: Config) -> int:
             _print(f"{path.name}: {store.usage(tgt)}")
             _print(f"  path: {path}")
             _print(f"  entries: {len(store.entries(tgt))}")
+        report = memory_provider_report(config)
+        active = report.get("active", {})
+        provider = str(report.get("provider") or "")
+        if provider:
+            _print(f"External provider: {provider}")
+            _print(f"  status: {active.get('status', 'unknown')}")
+            problems = active.get("problems") or []
+            if problems:
+                _print("  setup: " + "; ".join(str(item) for item in problems))
+        else:
+            _print("External provider: builtin only")
         return 0
     _print("# MEMORY\n" + (store.raw("memory") or "(empty)"))
     _print("\n# USER\n" + (store.raw("user") or "(empty)"))
@@ -3411,11 +3465,13 @@ def build_parser() -> argparse.ArgumentParser:
     t.set_defaults(func=cmd_tools)
 
     mem = sub.add_parser("memory", help="show/add/replace/remove/status long-term memory")
-    mem.add_argument("action", nargs="?", choices=["show", "add", "replace", "remove", "clear", "status"],
+    mem.add_argument("action", nargs="?", choices=["show", "add", "replace", "remove", "clear", "status", "setup", "off", "reset"],
                      default="show")
     mem.add_argument("text", nargs="*")
     mem.add_argument("--old-text", help="unique substring to replace/remove")
     mem.add_argument("--user", action="store_true", help="target the user profile")
+    mem.add_argument("--yes", "-y", action="store_true", help="confirm destructive memory reset")
+    mem.add_argument("--target", choices=["all", "memory", "user"], default="all", help="memory reset target")
     mem.set_defaults(func=cmd_memory)
 
     cf = sub.add_parser("config", help="view, edit, get, or set configuration")

@@ -45,7 +45,7 @@ Generated from `aegis.cli.main.build_parser()`.
 | aegis logs | tail agent/desktop/errors/gateway/gui logs | `aegis logs [-h] [-n LINES] [-f]                   [{agent,desktop,errors,gateway,gui,legacy}]` |
 | aegis lsp | show LSP/code-intelligence readiness | `aegis lsp [-h]` |
 | aegis mcp | manage MCP servers (or `serve` to be one) | `aegis mcp [-h]                  [{list,add,remove,test,serve,catalog,install,tools}] [name]                  [cmd]` |
-| aegis memory | show/add/replace/remove/status long-term memory | `aegis memory [-h] [--old-text OLD_TEXT] [--user]                     [{show,add,replace,remove,clear,status}] [text ...]` |
+| aegis memory | show/add/replace/remove/status long-term memory | `aegis memory [-h] [--old-text OLD_TEXT] [--user] [--yes]                     [--target {all,memory,user}]                     [{show,add,replace,remove,clear,status,setup,off,reset}]                     [text ...]` |
 | aegis migrate | migrate/normalize config (alias of `aegis config migrate`) | `aegis migrate [-h] [--dry-run] [--json]` |
 | aegis model | show/set the model | `aegis model [-h] [{list,set,doctor}] [provider] [model]` |
 | aegis models | show/refresh model metadata (context window from models.dev) | `aegis models [-h] [{show,refresh}]` |
