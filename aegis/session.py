@@ -675,6 +675,31 @@ class SessionStore:
                 self.delete(sid)
         return victims
 
+    def optimize(self) -> dict[str, float | int]:
+        """Compact the session store without changing session data."""
+        if self.read_only:
+            raise RuntimeError("cannot optimize a read-only session store")
+        before = self.db.stat().st_size if self.db.exists() else 0
+        optimized = 0
+        conn = self._conn()
+        try:
+            conn.isolation_level = None
+            if getattr(self, "_fts", False):
+                try:
+                    conn.execute("INSERT INTO messages_fts(messages_fts) VALUES('optimize')")
+                    optimized = 1
+                except sqlite3.OperationalError:
+                    optimized = 0
+            try:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except sqlite3.OperationalError:
+                pass
+            conn.execute("VACUUM")
+        finally:
+            conn.close()
+        after = self.db.stat().st_size if self.db.exists() else 0
+        return {"fts_indexes": optimized, "before_bytes": before, "after_bytes": after}
+
     def search(self, query: str, limit: int = 20) -> list[dict]:
         with self._conn() as c:
             rows = c.execute(

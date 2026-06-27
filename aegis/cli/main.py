@@ -2697,6 +2697,9 @@ def cmd_sessions(args, config: Config) -> int:
         action = "rm"
     if action == "ls":
         action = "list"
+    if action == "repair":
+        action = "check"
+        args.repair = True
 
     if action == "browse":
         data = store.browse_sessions(limit=limit)
@@ -2778,6 +2781,15 @@ def cmd_sessions(args, config: Config) -> int:
             _print(f"  ... {len(victims) - 20} more")
         if not confirmed:
             _print("pass --yes to delete these empty sessions")
+        return 0
+
+    if action == "optimize":
+        result = store.optimize()
+        before_mb = float(result.get("before_bytes", 0)) / (1024 * 1024)
+        after_mb = float(result.get("after_bytes", 0)) / (1024 * 1024)
+        saved_mb = before_mb - after_mb
+        _print(f"Optimized {int(result.get('fts_indexes', 0))} FTS index(es).")
+        _print(f"Database size: {before_mb:.1f} MB -> {after_mb:.1f} MB (reclaimed {saved_mb:.1f} MB)")
         return 0
 
     if action == "check":
@@ -4090,7 +4102,7 @@ def build_parser() -> argparse.ArgumentParser:
     se = sub.add_parser("sessions", help="list/show/export/rename/remove/check sessions")
     se.add_argument("action", nargs="?", choices=[
         "list", "ls", "browse", "show", "rename", "rm", "delete", "remove",
-        "export", "prune", "stats", "summarize", "search", "check",
+        "export", "prune", "optimize", "stats", "summarize", "search", "check", "repair",
     ],
                     default="list")
     se.add_argument("id", nargs="?")

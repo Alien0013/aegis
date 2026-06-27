@@ -564,6 +564,46 @@ def test_cli_sessions_check_reports_and_repairs_stale_runs(capsys):
     assert store.load(session.id).meta["resume_pending"] is True
 
 
+def test_cli_sessions_repair_alias_reports_and_repairs_stale_runs(capsys):
+    from datetime import datetime, timedelta, timezone
+
+    from aegis.cli.main import main
+    from aegis.runs import RunStore
+    from aegis.session import Session, SessionStore
+
+    store = SessionStore()
+    runs = RunStore()
+    session = Session(id="cli-repair-alias", title="cli repair alias")
+    store.save(session)
+    run = runs.start(surface="gateway", kind="chat", session_id=session.id, prompt="stale")
+    run["started_at"] = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    runs.write(run)
+
+    assert main(["sessions", "repair", "--stale-running-seconds", "0"]) == 0
+    out = capsys.readouterr().out
+
+    assert "Cross-session checks: ok" in out
+    assert "interrupted stale runs: 1" in out
+    repaired = runs.get(run["id"])
+    assert repaired is not None
+    assert repaired["status"] == "interrupted"
+
+
+def test_cli_sessions_optimize_runs_store_maintenance(capsys):
+    from aegis.cli.main import main
+    from aegis.session import Message, Session, SessionStore
+
+    store = SessionStore()
+    session = Session(id="cli-optimize-session", title="cli optimize")
+    session.messages.append(Message(role="user", content="hello optimize"))
+    store.save(session)
+
+    assert main(["sessions", "optimize"]) == 0
+    out = capsys.readouterr().out
+    assert "Optimized" in out
+    assert "Database size:" in out
+
+
 def test_cli_logs_accepts_desktop_log_name(capsys):
     from aegis import config as cfg
     from aegis.cli.main import main
