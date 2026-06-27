@@ -162,6 +162,8 @@ SLASH_COMMANDS = (
     SlashCommand("/blueprint", "automation", "show cron blueprint guidance"),
     SlashCommand("/bp", "automation", "Hermes alias for /blueprint"),
     SlashCommand("/pet", "compatibility", "external companion UI: intentionally out of scope"),
+    SlashCommand("/hatch", "compatibility", "pet generation compatibility guidance", "/hatch [description]"),
+    SlashCommand("/generate-pet", "compatibility", "Hermes alias for /hatch", "/generate-pet [description]"),
     SlashCommand("/skin", "compatibility", "external skin UI: use AEGIS themes instead"),
     SlashCommand("/suggestions", "compatibility", "show suggestion guidance"),
     SlashCommand("/suggest", "compatibility", "Hermes alias for /suggestions"),
@@ -2003,6 +2005,7 @@ def handle_slash(
         "/snap": ("/snapshot", arg),
         "/bp": ("/blueprint", arg),
         "/suggest": ("/suggestions", arg),
+        "/generate-pet": ("/hatch", arg),
         "/v": ("/version", arg),
     }.get(name)
     if alias_target:
@@ -2602,6 +2605,10 @@ def handle_slash(
         _out("Gateway/API approvals use their pending approval channels; this REPL has no hidden approval queue.")
     elif name == "/blueprint":
         _out("cron blueprints are available from the dashboard Cron page and cron preview APIs.")
+    elif name == "/hatch":
+        prompt = arg.strip()
+        suffix = f" Requested pet concept: {prompt}" if prompt else ""
+        _out("AEGIS pet generation compatibility: external mascot generation is not bundled; use dashboard themes, terminal display settings, or add a local companion plugin." + suffix)
     elif name in ("/pet", "/skin"):
         _out(f"{name} is external visual chrome; AEGIS uses dashboard themes and terminal display settings instead.")
     elif name == "/suggestions":

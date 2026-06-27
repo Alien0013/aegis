@@ -656,7 +656,7 @@ def test_terminal_slash_help_is_searchable():
         "/toolsets",
         "/version",
         "/whoami",
-        # Hermes exact alias parity (excluding pet/pet-generation surfaces by design).
+        # Hermes exact alias parity.
         "/bg",
         "/bp",
         "/btw",
@@ -664,6 +664,8 @@ def test_terminal_slash_help_is_searchable():
         "/compose",
         "/fork",
         "/gateway",
+        "/generate-pet",
+        "/hatch",
         "/moa",
         "/q",
         "/reload_mcp",
@@ -861,6 +863,8 @@ def test_terminal_aegis_compat_slash_commands_report_real_surfaces(monkeypatch, 
         "/snapshot",
         "/approve",
         "/pet",
+        "/hatch neon fox",
+        "/generate-pet moss robot",
     ):
         assert repl.handle_slash(command, agent) == ""
 
@@ -871,6 +875,7 @@ def test_terminal_aegis_compat_slash_commands_report_real_surfaces(monkeypatch, 
     assert "voice tools" in text
     assert "browser tools" in text
     assert "external visual chrome" in text
+    assert "pet generation" in text
 
 
 def test_terminal_session_picker_resume_and_branch(monkeypatch):

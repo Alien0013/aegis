@@ -18,6 +18,8 @@ Generated from `aegis.cli.repl.SLASH_COMMANDS`.
 | /blueprint | automation | show cron blueprint guidance | /blueprint |
 | /bp | automation | Hermes alias for /blueprint | /bp |
 | /handoff | channels | hand this session to a gateway channel | /handoff <platform> <chat_id> |
+| /generate-pet | compatibility | Hermes alias for /hatch | /generate-pet [description] |
+| /hatch | compatibility | pet generation compatibility guidance | /hatch [description] |
 | /pet | compatibility | external companion UI: intentionally out of scope | /pet |
 | /skin | compatibility | external skin UI: use AEGIS themes instead | /skin |
 | /suggest | compatibility | Hermes alias for /suggestions | /suggest |
