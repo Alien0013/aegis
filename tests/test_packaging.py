@@ -77,6 +77,39 @@ def test_desktop_uninstall_app_path_delegates_to_native_desktop_module():
     assert "desktopUninstallPlan" in native.read_text(encoding="utf-8")
 
 
+def test_desktop_update_count_app_path_exposes_shallow_clone_helper():
+    helper = ROOT / "apps" / "desktop" / "electron" / "update-count.cjs"
+    helper_test = ROOT / "apps" / "desktop" / "electron" / "update-count.test.cjs"
+
+    assert helper.is_file()
+    assert helper_test.is_file()
+    source = helper.read_text(encoding="utf-8")
+    assert "shouldCountCommits" in source
+    assert "resolveBehindCount" in source
+
+
+def test_desktop_update_marker_app_path_exposes_aegis_marker_helper():
+    helper = ROOT / "apps" / "desktop" / "electron" / "update-marker.cjs"
+    helper_test = ROOT / "apps" / "desktop" / "electron" / "update-marker.test.cjs"
+
+    assert helper.is_file()
+    assert helper_test.is_file()
+    source = helper.read_text(encoding="utf-8")
+    assert ".aegis-update-in-progress" in source
+    assert "readLiveUpdateMarker" in source
+
+
+def test_desktop_update_remote_app_path_exposes_aegis_remote_helper():
+    helper = ROOT / "apps" / "desktop" / "electron" / "update-remote.cjs"
+    helper_test = ROOT / "apps" / "desktop" / "electron" / "update-remote.test.cjs"
+
+    assert helper.is_file()
+    assert helper_test.is_file()
+    source = helper.read_text(encoding="utf-8")
+    assert "github.com/alien0013/aegis" in source.lower()
+    assert "isOfficialSshRemote" in source
+
+
 def test_shared_package_exports_aegis_runtime_contract():
     manifest = json.loads((ROOT / "apps" / "shared" / "package.json").read_text(encoding="utf-8"))
     source = (ROOT / "apps" / "shared" / "src" / "index.ts").read_text(encoding="utf-8")
