@@ -114,6 +114,7 @@ Generated from `aegis.cli.repl.SLASH_COMMANDS`.
 | /secret | setup | store a local secret with hidden input | /secret set <ENV_KEY> |
 | /set-home | setup | compatibility alias for /sethome | /set-home |
 | /sethome | setup | show AEGIS_HOME/profile home guidance | /sethome |
+| /setup | setup | run aegis setup or inspect onboarding status | /setup [quick\|status] |
 | /update | setup | show runtime update command guidance | /update |
 | /diff | workspace | show changes since the last checkpoint | /diff [checkpoint-id] |
 | /rollback | workspace | restore files from a checkpoint | /rollback [checkpoint-id] |

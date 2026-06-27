@@ -142,6 +142,7 @@ SLASH_COMMANDS = (
     SlashCommand("/copy", "media", "copy guidance for terminal sessions"),
     SlashCommand("/paste", "media", "paste guidance for terminal sessions"),
     SlashCommand("/secret", "setup", "store a local secret with hidden input", "/secret set <ENV_KEY>"),
+    SlashCommand("/setup", "setup", "run aegis setup or inspect onboarding status", "/setup [quick|status]"),
     SlashCommand("/config", "setup", "show config command guidance"),
     SlashCommand("/profile", "setup", "show profile command guidance"),
     SlashCommand("/plugins", "setup", "show plugin command guidance"),
@@ -2411,6 +2412,17 @@ def handle_slash(
                     _out(f"secret setup skipped for {key}", style="yellow")
                 else:
                     _out(f"secret stored as {key}", style="green")
+    elif name == "/setup":
+        if (arg or "").strip().lower() == "status":
+            from ..tui_gateway import setup_status
+            status = setup_status(agent.config)
+            provider_state = "ready" if status.get("provider_configured") else "missing provider auth"
+            _out(f"setup status: {provider_state}")
+            _out(f"provider: {status.get('provider') or '?'}  model: {status.get('model') or '?'}")
+        else:
+            suffix = " --quick" if (arg or "").strip().lower() == "quick" else ""
+            _out(f"setup: run `aegis setup{suffix}` to configure providers, tools, memory, gateway, and desktop surfaces.")
+            _out("dashboard: Config, Keys, Provider Auth, Runtime Profiles, and Gateway pages")
     elif name == "/config":
         _out("config: `aegis config show|edit|set|doctor|migrate`")
         _out("dashboard: Config, Keys, Provider Auth, and Runtime Profiles pages")

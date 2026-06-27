@@ -32,6 +32,47 @@ def test_package_json_declares_ink_deps():
         assert name in deps, f"{name} should be a declared dependency"
 
 
+def test_tui_setup_parity_sources_are_aegis_native():
+    required = [
+        "src/bootstrap/state.ts",
+        "src/ink/log-update.ts",
+        "src/lib/terminalSetup.ts",
+        "src/app/setupHandoff.ts",
+        "src/app/slash/commands/setup.ts",
+        "src/content/setup.ts",
+    ]
+    for rel in required:
+        path = _INK / rel
+        assert path.is_file(), rel
+        text = path.read_text(encoding="utf-8")
+        assert "AEGIS" in text or "aegis" in text
+
+
+def test_repl_exposes_setup_slash_command():
+    commands = {command.name: command for command in repl.SLASH_COMMANDS}
+    assert "/setup" in commands
+    assert "aegis setup" in commands["/setup"].summary
+
+
+def test_gateway_setup_status_uses_provider_readiness(monkeypatch):
+    from aegis import tui_gateway
+
+    monkeypatch.setattr(
+        "aegis.providers.registry.provider_capability_matrix",
+        lambda _config: {"totals": {"ready": 0}, "active": {"provider": "anthropic", "model": "claude"}},
+    )
+    missing = tui_gateway.setup_status(Config.load())
+    assert missing["provider_configured"] is False
+    assert missing["provider"] == "anthropic"
+
+    monkeypatch.setattr(
+        "aegis.providers.registry.provider_capability_matrix",
+        lambda _config: {"totals": {"ready": 1}, "active": {"provider": "openai", "model": "gpt-5.5"}},
+    )
+    ready = tui_gateway.setup_status(Config.load())
+    assert ready == {"provider_configured": True, "provider": "openai", "model": "gpt-5.5"}
+
+
 # ---------------------------------------------------------------------------- gating
 def test_launch_requires_node(monkeypatch):
     monkeypatch.setattr(tui_ink.shutil, "which", lambda _name: None)

@@ -4127,6 +4127,41 @@ def cmd_slack(args, config: Config) -> int:
     return 0
 
 
+def cmd_setup_whatsapp_cloud(args, config: Config) -> int:
+    from ..install_surfaces import whatsapp_cloud_setup_plan
+
+    dry_run = bool(getattr(args, "dry_run", False))
+    json_mode = bool(getattr(args, "json", False))
+    plan = whatsapp_cloud_setup_plan(dry_run=dry_run)
+
+    if dry_run:
+        if json_mode:
+            _print(json.dumps(plan, indent=2, sort_keys=True))
+        else:
+            _print("WhatsApp Cloud setup dry-run")
+            _print(f"  channel: {plan['channel']}")
+            _print(f"  env prefix: {plan['env_prefix']}")
+            _print(f"  webhook URL: {plan['webhook_url']}")
+            _print("  no config files or services were changed")
+        return 0
+
+    channels = [str(ch).strip() for ch in (config.get("gateway.channels", []) or []) if str(ch).strip()]
+    if "whatsapp_cloud" not in channels:
+        channels.append("whatsapp_cloud")
+    config.set("gateway.channels", channels)
+    config.save()
+    if json_mode:
+        plan["configured_channels"] = channels
+        _print(json.dumps(plan, indent=2, sort_keys=True))
+    else:
+        _print("configured WhatsApp Cloud bridge")
+        _print("  gateway.channels: " + ", ".join(channels))
+        _print(f"  set secrets in: {cfg.env_path()}")
+        _print(f"  webhook URL: {plan['webhook_url']}")
+        _print("  run: aegis gateway --channels whatsapp_cloud")
+    return 0
+
+
 def cmd_command_aliases(args, config: Config) -> int:
     """Small top-level command aliases for common agent CLI muscle memory."""
 
@@ -4205,8 +4240,14 @@ def cmd_command_aliases(args, config: Config) -> int:
     if name == "proxy":
         return cmd_serve(args, config)
     if name in {"slack", "whatsapp", "whatsapp-cloud"}:
+        platform_action = str(getattr(args, "platform_action", "") or "run")
+        if name == "whatsapp-cloud" and platform_action == "setup":
+            return cmd_setup_whatsapp_cloud(args, config)
         args.action = "run"
-        args.channels = "whatsapp" if name.startswith("whatsapp") else name
+        if name == "whatsapp-cloud":
+            args.channels = "whatsapp_cloud"
+        else:
+            args.channels = "whatsapp" if name == "whatsapp" else name
         return cmd_gateway(args, config)
     if name == "postinstall":
         _print("postinstall compatibility check")
@@ -4947,8 +4988,17 @@ def build_parser() -> argparse.ArgumentParser:
     slack_manifest.set_defaults(func=cmd_slack)
     slack.set_defaults(func=cmd_slack)
 
+    swc = sub.add_parser("setup-whatsapp-cloud", help="configure the native WhatsApp Cloud webhook bridge")
+    swc.add_argument("--dry-run", action="store_true", help="print the setup plan without writing config")
+    swc.add_argument("--json", action="store_true", help="print machine-readable setup output")
+    swc.set_defaults(func=cmd_setup_whatsapp_cloud)
+
     for _name in ("whatsapp", "whatsapp-cloud"):
         platform_cmd = sub.add_parser(_name, help=f"run gateway for {_name}")
+        if _name == "whatsapp-cloud":
+            platform_cmd.add_argument("platform_action", nargs="?", choices=["run", "setup"], default="run")
+            platform_cmd.add_argument("--dry-run", action="store_true", help="for setup: print plan without writing config")
+            platform_cmd.add_argument("--json", action="store_true", help="for setup: print machine-readable output")
         platform_cmd.set_defaults(func=cmd_command_aliases)
 
     send = sub.add_parser("send", help="show gateway delivery/send guidance")
