@@ -817,6 +817,66 @@ def cmd_skills(args, config: Config) -> int:
         config.set("skills.include_bundled", True)
         _print("bundled skill seeding enabled")
         return 0
+    if args.action == "tap":
+        from .. import marketplace
+        subaction = args.name or "list"
+        taps = dict(config.get("skills.taps", {}) or {})
+        if subaction == "list":
+            for name, repo in marketplace.list_taps(config).items():
+                _print(f"  {name:<16} {repo}")
+            return 0
+        if subaction == "add":
+            repo = getattr(args, "target", None)
+            if not repo:
+                return _die("usage: aegis skills tap add <owner/repo>")
+            tap_name = str(repo).strip("/").split("/", 1)[0]
+            taps[tap_name] = repo
+            config.set("skills.taps", taps)
+            _print(f"added tap {tap_name} → {repo}")
+            return 0
+        if subaction in {"remove", "rm"}:
+            tap_name = getattr(args, "target", None)
+            if not tap_name:
+                return _die("usage: aegis skills tap remove <name>")
+            existed = taps.pop(tap_name, None) is not None
+            config.set("skills.taps", taps)
+            _print(f"removed tap {tap_name}" if existed else f"tap {tap_name} not found")
+            return 0
+        return _die("usage: aegis skills tap [list|add|remove] ...")
+    if args.action == "snapshot":
+        from .. import marketplace
+        subaction = args.name or "export"
+        path = getattr(args, "target", None)
+        if subaction == "export":
+            if not path:
+                return _die("usage: aegis skills snapshot export <path|->")
+            data = {
+                "version": 1,
+                "config": config.get("skills", {}) or {},
+                "installed": marketplace.installed(),
+            }
+            text = json.dumps(data, indent=2, sort_keys=True) + "\n"
+            if path == "-":
+                _print(text.rstrip())
+            else:
+                Path(path).expanduser().write_text(text, encoding="utf-8")
+                _print(f"exported skills snapshot → {path}")
+            return 0
+        if subaction == "import":
+            if not path:
+                return _die("usage: aegis skills snapshot import <path>")
+            data = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
+            if isinstance(data.get("config"), dict):
+                config.data["skills"] = data["config"]
+                config.save()
+            if isinstance(data.get("installed"), dict):
+                lock_path = cfg.skills_dir() / ".lock.json"
+                lock_path.parent.mkdir(parents=True, exist_ok=True)
+                lock_path.write_text(json.dumps(data["installed"], indent=2, sort_keys=True) + "\n",
+                                     encoding="utf-8")
+            _print(f"imported skills snapshot ← {path}")
+            return 0
+        return _die("usage: aegis skills snapshot [export|import] <path>")
     if args.action in {"remove", "uninstall"}:
         from .. import marketplace
         _print("removed" if marketplace.remove(args.name) else "not found")
@@ -4062,10 +4122,12 @@ def build_parser() -> argparse.ArgumentParser:
                     choices=[
                         "list", "view", "new", "install", "search", "remove", "uninstall", "hub",
                         "preview", "inspect", "browse", "check", "update", "audit",
-                        "config", "opt-in", "opt-out", "bundles", "bundle", "unbundle",
+                        "config", "opt-in", "opt-out", "tap", "snapshot",
+                        "bundles", "bundle", "unbundle",
                     ],
                     default="list")
     sk.add_argument("name", nargs="?", help="skill name, install source, or hub name")
+    sk.add_argument("target", nargs="?", help="extra argument for nested skill commands")
     sk.add_argument("--force", action="store_true", help="install even if the security scan flags it")
     sk.add_argument("--json", action="store_true", help="print machine-readable skill command output")
     sk.add_argument("--members", help="comma-separated skill names for `aegis skills bundle`")
