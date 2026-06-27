@@ -116,3 +116,43 @@ def test_format_diags_orders_errors_first():
     out = format_diags([_diag(5, "warn", sev=2), _diag(9, "err", sev=1)])
     lines = out.splitlines()
     assert "err" in lines[0] and "warn" in lines[1]
+
+
+def test_lsp_existing_binary_accepts_windows_wrappers(tmp_path, monkeypatch):
+    from aegis.lsp import install
+
+    bin_dir = tmp_path / "node_modules" / ".bin"
+    bin_dir.mkdir(parents=True)
+    wrapper = bin_dir / "pyright-langserver.cmd"
+    wrapper.write_text("@echo off\n")
+    wrapper.chmod(0o755)
+
+    monkeypatch.setattr(install, "lsp_dir", lambda: tmp_path)
+    monkeypatch.setattr(install.os, "name", "nt")
+
+    assert install.existing_binary("pyright-langserver") == str(wrapper)
+
+
+def test_lsp_npm_install_uses_quiet_reproducible_flags(tmp_path, monkeypatch):
+    from aegis.lsp import install
+
+    seen: dict[str, list[str]] = {}
+
+    class Result:
+        returncode = 0
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        seen["env_keys"] = sorted(kwargs.get("env", {}))
+        return Result()
+
+    monkeypatch.setattr(install, "lsp_dir", lambda: tmp_path)
+    monkeypatch.setattr(install.shutil, "which", lambda name: "/usr/bin/npm" if name == "npm" else None)
+    monkeypatch.setattr(install.subprocess, "run", fake_run)
+
+    assert install._npm("typescript-language-server typescript") is True
+    assert seen["cmd"][:4] == ["/usr/bin/npm", "install", "--prefix", str(tmp_path)]
+    assert "--silent" in seen["cmd"]
+    assert "--no-fund" in seen["cmd"]
+    assert "--no-audit" in seen["cmd"]
+    assert seen["cmd"][-2:] == ["typescript-language-server", "typescript"]

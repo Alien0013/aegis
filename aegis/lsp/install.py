@@ -18,6 +18,7 @@ from .._log import info
 _locks: dict[str, threading.Lock] = {}
 _failed: set[str] = set()
 _guard = threading.Lock()
+_WINDOWS_WRAPPER_SUFFIXES = (".cmd", ".exe", ".bat")
 
 
 def lsp_dir() -> Path:
@@ -29,15 +30,23 @@ def lsp_dir() -> Path:
 
 def _bin_dirs() -> list[Path]:
     base = lsp_dir()
-    return [base / "node_modules" / ".bin", base / "gobin", base / "venv" / "bin"]
+    venv_bin = base / "venv" / ("Scripts" if os.name == "nt" else "bin")
+    return [base / "node_modules" / ".bin", base / "gobin", venv_bin]
+
+
+def _binary_candidates(path: Path) -> list[Path]:
+    candidates = [path]
+    if os.name == "nt":
+        candidates.extend(path.with_name(f"{path.name}{suffix}") for suffix in _WINDOWS_WRAPPER_SUFFIXES)
+    return candidates
 
 
 def existing_binary(name: str) -> str | None:
     """A previously managed install of ``name``, if present."""
     for d in _bin_dirs():
-        cand = d / name
-        if cand.exists() and os.access(cand, os.X_OK):
-            return str(cand)
+        for cand in _binary_candidates(d / name):
+            if cand.exists() and os.access(cand, os.X_OK):
+                return str(cand)
     return None
 
 
@@ -79,7 +88,16 @@ def _npm(package: str) -> bool:
     npm = shutil.which("npm")
     if not npm:
         return False
-    return _run([npm, "install", "--prefix", str(lsp_dir()), *package.split()])
+    return _run([
+        npm,
+        "install",
+        "--prefix",
+        str(lsp_dir()),
+        "--silent",
+        "--no-fund",
+        "--no-audit",
+        *package.split(),
+    ])
 
 
 def _go(package: str) -> bool:
