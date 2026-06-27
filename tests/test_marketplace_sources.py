@@ -257,3 +257,69 @@ def test_dashboard_marketplace_preview_returns_scan_report(monkeypatch):
 
     assert res.status_code == 200
     assert res.json()["preview"]["skills"][0]["name"] == "demo-skill"
+
+
+def test_dashboard_skills_hub_route_aliases(monkeypatch, tmp_path):
+    from aegis import marketplace
+    from aegis.config import Config
+    from aegis.dashboard_fastapi import create_app
+
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    monkeypatch.setenv("AEGIS_DASHBOARD_TOKEN", "t")
+    monkeypatch.setattr(
+        marketplace,
+        "list_registries",
+        lambda config: [{"name": "demo", "kind": "github", "ref": "example/demo"}],
+    )
+    monkeypatch.setattr(
+        marketplace,
+        "search",
+        lambda query: [{"name": "demo-skill", "source": "git:example/demo", "hub": "demo", "query": query}],
+    )
+    monkeypatch.setattr(
+        marketplace,
+        "preview",
+        lambda source, force=False: {
+            "ok": True,
+            "source": source,
+            "force": force,
+            "skills": [{"name": "demo-skill", "installable": True}],
+            "errors": [],
+        },
+    )
+    monkeypatch.setattr(marketplace, "install", lambda source, force=False: ["demo-skill"])
+    monkeypatch.setattr(marketplace, "remove", lambda name: name == "demo-skill")
+    app = create_app(Config.load())
+
+    async def request(method, path, *, json=None):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.request(method, path, headers={"X-Aegis-Token": "t"}, json=json)
+
+    sources = asyncio.run(request("GET", "/api/skills/hub/sources"))
+    assert sources.status_code == 200
+    assert sources.json()["sources"][0]["name"] == "demo"
+
+    search = asyncio.run(request("GET", "/api/skills/hub/search?q=demo"))
+    assert search.status_code == 200
+    assert search.json()["results"][0]["name"] == "demo-skill"
+
+    preview = asyncio.run(request("GET", "/api/skills/hub/preview?identifier=git:example/demo"))
+    assert preview.status_code == 200
+    assert preview.json()["preview"]["skills"][0]["name"] == "demo-skill"
+
+    scan = asyncio.run(request("GET", "/api/skills/hub/scan?identifier=git:example/demo"))
+    assert scan.status_code == 200
+    assert scan.json()["scan"]["skills"][0]["installable"] is True
+
+    installed = asyncio.run(request("POST", "/api/skills/hub/install", json={"identifier": "git:example/demo"}))
+    assert installed.status_code == 200
+    assert installed.json()["installed"] == ["demo-skill"]
+
+    updated = asyncio.run(request("POST", "/api/skills/hub/update", json={}))
+    assert updated.status_code == 200
+    assert updated.json()["ok"] is True
+
+    uninstalled = asyncio.run(request("POST", "/api/skills/hub/uninstall", json={"name": "demo-skill"}))
+    assert uninstalled.status_code == 200
+    assert uninstalled.json()["ok"] is True

@@ -2133,12 +2133,47 @@ def test_fastapi_typed_mcp_and_skills_routes(tmp_path, monkeypatch):
     assert skill.status_code == 200
     assert skill.json()["ok"] is True
 
+    skills_list = asyncio.run(_request(app, "GET", "/api/skills", headers=headers))
+    assert skills_list.status_code == 200
+    assert any(row["name"] == "dash-test" for row in skills_list.json()["skills"])
+
     detail = asyncio.run(_request(app, "GET", "/api/skills/dash-test", headers=headers))
     assert detail.status_code == 200
     content = detail.json()["content"]
     assert "Dashboard test skill" in content
 
-    updated_content = content.replace("Use this skill", "Use this edited skill")
+    content_alias = asyncio.run(_request(
+        app,
+        "GET",
+        "/api/skills/content?name=dash-test",
+        headers=headers,
+    ))
+    assert content_alias.status_code == 200
+    assert content_alias.json()["name"] == "dash-test"
+    assert content_alias.json()["content"] == content
+
+    content_put = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/skills/content",
+        json={"name": "dash-test", "content": content.replace("dashboard", "skills editor")},
+        headers=headers,
+    ))
+    assert content_put.status_code == 200
+    assert "skills editor" in content_put.json()["body"]
+
+    toggled = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/skills/toggle",
+        json={"name": "dash-test", "enabled": False},
+        headers=headers,
+    ))
+    assert toggled.status_code == 200
+    assert toggled.json()["name"] == "dash-test"
+    assert toggled.json()["enabled"] is False
+
+    updated_content = content_put.json()["content"].replace("Use this skill", "Use this edited skill")
     updated = asyncio.run(_request(
         app,
         "PATCH",

@@ -136,6 +136,211 @@ def register(app, config, chat_runner):
         return JSONResponse({"ok": ok, "name": name, **_skills_payload(config)},
                             status_code=200 if ok else 404)
 
+    @app.get("/api/skills")
+    async def api_skills_list(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_skills_payload(config))
+
+    @app.get("/api/skills/content")
+    async def api_skills_content_get(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        name = str(request.query_params.get("name") or "").strip()
+        if not name:
+            return JSONResponse({"ok": False, "error": "name is required"}, status_code=400)
+        detail = _skill_detail(config, name)
+        if not detail.get("ok"):
+            return JSONResponse(detail, status_code=404)
+        skill = detail["skill"]
+        return JSONResponse({
+            "ok": True,
+            "name": skill["name"],
+            "path": skill["path"],
+            "content": detail["content"],
+            "skill": skill,
+        })
+
+    @app.put("/api/skills/content")
+    async def api_skills_content_put(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        name = str(body.get("name") or "").strip()
+        if not name:
+            return JSONResponse({"ok": False, "error": "name is required"}, status_code=400)
+        detail = _skill_detail(config, name)
+        if not detail.get("ok"):
+            return JSONResponse(detail, status_code=404)
+        try:
+            from ..tools.skill_manage import _split_skill_content
+            from ..util import atomic_write
+
+            skill_path = Path(detail["skill"]["path"]).resolve()
+            if not _skill_path_editable(skill_path):
+                return JSONResponse({"ok": False, "error": "only workspace or personal skills can be edited"}, status_code=403)
+            content = str(body.get("content") or "")
+            if not content:
+                return JSONResponse({"ok": False, "error": "content is required"}, status_code=400)
+            fm, _skill_body, err = _split_skill_content(content)
+            if err:
+                return JSONResponse({"ok": False, "error": err}, status_code=400)
+            safe = _safe_resource_name(name, "skill")
+            if str(fm.get("name") or "").strip() != safe:
+                return JSONResponse({"ok": False, "error": "frontmatter name must match skill name"}, status_code=400)
+            atomic_write(skill_path, content.rstrip() + "\n")
+            return JSONResponse({"ok": True, **_skill_detail(config, safe)})
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+    @app.put("/api/skills/toggle")
+    async def api_skills_toggle(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        name = str(body.get("name") or "").strip()
+        if not name:
+            return JSONResponse({"ok": False, "error": "name is required"}, status_code=400)
+        safe = _safe_resource_name(name, "skill")
+        disabled = [str(s) for s in (config.get("skills.disabled", []) or []) if str(s).strip()]
+        enabled = bool(body.get("enabled"))
+        if enabled:
+            disabled = [item for item in disabled if item != safe]
+        elif safe not in disabled:
+            disabled.append(safe)
+        config.set("skills.disabled", sorted(set(disabled)))
+        return JSONResponse({"ok": True, "name": safe, "enabled": enabled, **_skills_payload(config)})
+
+    def _hub_identifier(data: dict) -> str:
+        return str(data.get("identifier") or data.get("source") or data.get("name") or data.get("hub") or "").strip()
+
+    def _is_direct_skill_source(identifier: str) -> bool:
+        prefixes = ("git:", "http://", "https://", "skills-sh:", "lobehub:", "clawhub:", "/", "./", "../")
+        return identifier.startswith(prefixes)
+
+    @app.get("/api/skills/hub/sources")
+    async def api_skills_hub_sources(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from .. import marketplace
+
+        try:
+            return JSONResponse({
+                "ok": True,
+                "sources": marketplace.list_registries(config),
+                "taps": marketplace.list_taps(config),
+                "installed": marketplace.installed(),
+            })
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc), "sources": []}, status_code=502)
+
+    @app.get("/api/skills/hub/search")
+    async def api_skills_hub_search(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from .. import marketplace
+
+        query = str(request.query_params.get("q") or request.query_params.get("query") or "").strip()
+        limit = int(str(request.query_params.get("limit") or "20") or "20")
+        if not query:
+            return JSONResponse({"ok": True, "results": [], "source_counts": {}, "timed_out": [], "installed": marketplace.installed()})
+        try:
+            results = marketplace.search(query)[:max(1, min(limit, 50))]
+            counts: dict[str, int] = {}
+            for row in results:
+                hub = str(row.get("hub") or row.get("source") or "unknown")
+                counts[hub] = counts.get(hub, 0) + 1
+            return JSONResponse({
+                "ok": True,
+                "query": query,
+                "results": results,
+                "source_counts": counts,
+                "timed_out": [],
+                "installed": marketplace.installed(),
+            })
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc), "results": []}, status_code=502)
+
+    @app.get("/api/skills/hub/preview")
+    async def api_skills_hub_preview(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from .. import marketplace
+
+        identifier = _hub_identifier(dict(request.query_params))
+        if not identifier:
+            return JSONResponse({"ok": False, "error": "identifier is required"}, status_code=400)
+        try:
+            if identifier in marketplace.list_taps(config) and not _is_direct_skill_source(identifier):
+                report = marketplace.preview_hub(identifier, config, force=False)
+            else:
+                report = marketplace.preview(identifier, force=False)
+            return JSONResponse({"ok": bool(report.get("ok", True)), "identifier": identifier, "preview": report, **report})
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "identifier": identifier, "error": str(exc)}, status_code=400)
+
+    @app.get("/api/skills/hub/scan")
+    async def api_skills_hub_scan(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from .. import marketplace
+
+        identifier = _hub_identifier(dict(request.query_params))
+        if not identifier:
+            return JSONResponse({"ok": False, "error": "identifier is required"}, status_code=400)
+        try:
+            if identifier in marketplace.list_taps(config) and not _is_direct_skill_source(identifier):
+                report = marketplace.preview_hub(identifier, config, force=False)
+            else:
+                report = marketplace.preview(identifier, force=False)
+            return JSONResponse({"ok": bool(report.get("ok", True)), "identifier": identifier, "scan": report, "preview": report})
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "identifier": identifier, "error": str(exc)}, status_code=400)
+
+    @app.post("/api/skills/hub/install")
+    async def api_skills_hub_install(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from .. import marketplace
+
+        body = await request.json()
+        identifier = _hub_identifier(body)
+        if not identifier:
+            return JSONResponse({"ok": False, "error": "identifier is required"}, status_code=400)
+        force = bool(body.get("force", False))
+        try:
+            if identifier in marketplace.list_taps(config) and not _is_direct_skill_source(identifier):
+                names = marketplace.install_hub(identifier, config, force=force)
+            else:
+                names = marketplace.install(identifier, force=force)
+            return JSONResponse({**_skills_payload(config), "ok": True, "identifier": identifier, "installed": names})
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"ok": False, "identifier": identifier, "error": str(exc)}, status_code=400)
+
+    @app.post("/api/skills/hub/uninstall")
+    async def api_skills_hub_uninstall(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from .. import marketplace
+
+        body = await request.json()
+        name = str(body.get("name") or "").strip()
+        if not name:
+            return JSONResponse({"ok": False, "error": "name is required"}, status_code=400)
+        ok = marketplace.remove(name)
+        return JSONResponse({"ok": ok, "name": name, **_skills_payload(config)}, status_code=200 if ok else 404)
+
+    @app.post("/api/skills/hub/update")
+    async def api_skills_hub_update(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from .. import marketplace
+
+        try:
+            await request.json()
+        except Exception:  # noqa: BLE001
+            pass
+        updated: list[str] = []
+        errors: list[dict[str, str]] = []
+        for name, record in marketplace.installed().items():
+            source = str((record or {}).get("source") or "").strip()
+            if not source:
+                continue
+            try:
+                updated.extend(marketplace.install(source, force=True))
+            except Exception as exc:  # noqa: BLE001
+                errors.append({"name": name, "error": str(exc)})
+        return JSONResponse({"ok": not errors, "updated": updated, "errors": errors, **_skills_payload(config)})
+
     @app.post("/api/skills")
     async def api_skills_create(request: Request) -> JSONResponse:
         _require_request(request, config)
