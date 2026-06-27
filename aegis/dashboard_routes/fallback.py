@@ -145,11 +145,12 @@ def register(app, config, chat_runner):
             return
         await ws.accept()
         try:
-            from ..dashboard_pty import PtyBridge, dashboard_terminal_argv
+            from ..dashboard_pty import PtyBridge, dashboard_terminal_argv, dashboard_terminal_env
 
             bridge = PtyBridge.spawn(
                 dashboard_terminal_argv(ws.query_params.get("resume") or None),
                 cwd=os.getcwd(),
+                env=dashboard_terminal_env(),
                 cols=int(ws.query_params.get("cols") or 100),
                 rows=int(ws.query_params.get("rows") or 30),
             )

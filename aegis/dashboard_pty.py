@@ -116,7 +116,17 @@ class PtyBridge:
 def dashboard_terminal_argv(resume: str | None = None) -> list[str]:
     """Return the command used for the embedded dashboard terminal."""
     exe = os.environ.get("AEGIS_BIN") or shutil.which("aegis")
-    argv = [exe] if exe else [sys.executable, "-m", "aegis.cli.main"]
+    argv = [exe, "tui"] if exe else [sys.executable, "-m", "aegis.cli.main", "tui"]
     if resume:
-        argv.extend(["chat", "--resume", resume])
+        argv.extend(["--resume", resume])
     return argv
+
+
+def dashboard_terminal_env() -> dict[str, str]:
+    """Environment for the embedded dashboard terminal child process."""
+    env = os.environ.copy()
+    env.setdefault("TERM", "xterm-256color")
+    env["AEGIS_TUI_DASHBOARD"] = "1"
+    env["AEGIS_TUI_INLINE"] = "1"
+    env["AEGIS_TUI_DISABLE_MOUSE"] = "1"
+    return env

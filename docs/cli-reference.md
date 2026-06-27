@@ -95,7 +95,7 @@ Generated from `aegis.cli.main.build_parser()`.
 | aegis tools | list tools; `doctor` for availability; `status` for backends | `aegis tools [-h] [{list,status,doctor}]` |
 | aegis trace | inspect/export session traces | `aegis trace [-h] [--session SESSION] [--status STATUS] [--limit LIMIT]                    [--spans] [--out OUT] [--json]                    [{list,show,export}] [id]` |
 | aegis trajectory | record/export/compress session trajectories | `aegis trajectory [-h] [--out OUT]                         [--format {aegis,openai,hf,sharegpt,toolxml}]                         [--summarize]                         [{stats,export,compress}]` |
-| aegis tui | open the terminal agent (compatibility alias) | `aegis tui [-h] [--once] [--watch] [--interval INTERVAL] [--no-color]                  [-m MODEL] [--provider PROVIDER] [--classic] [--dev] [--yolo]` |
+| aegis tui | open the terminal agent (compatibility alias) | `aegis tui [-h] [--once] [--watch] [--interval INTERVAL] [--no-color]                  [-m MODEL] [--provider PROVIDER] [--resume RESUME]                  [--classic] [--dev] [--yolo]` |
 | aegis ui | open the AEGIS control panel in your browser | `aegis ui [-h] [--host HOST] [--port PORT] [--no-open]` |
 | aegis uninstall | remove AEGIS (--purge also deletes ~/.aegis) | `aegis uninstall [-h] [--purge]` |
 | aegis update | update AEGIS to the latest version | `aegis update [-h] [--check] [--dry-run] [--json] [--branch BRANCH]` |

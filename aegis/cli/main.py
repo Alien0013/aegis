@@ -3199,6 +3199,7 @@ def build_parser() -> argparse.ArgumentParser:
     tu.add_argument("--no-color", action="store_true", help="disable ANSI color")
     tu.add_argument("-m", "--model", help="model override for the TUI session")
     tu.add_argument("--provider", help="provider override for the TUI session")
+    tu.add_argument("--resume", help="resume a session id/title in the TUI")
     tu.add_argument("--classic", "--cli", dest="classic", action="store_true", help="force the classic line terminal")
     tu.add_argument("--dev", dest="tui_dev", action="store_true", help="mark this TUI launch as a dev/source-mode session")
     tu.add_argument("--yolo", action="store_true", help="bypass dangerous command approval prompts for this TUI session")

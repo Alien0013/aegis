@@ -30,18 +30,29 @@ def _open_ink_terminal_agent(
     provider_name=None,
     auto: bool = False,
     dev: bool = False,
+    session=None,
+    store=None,
 ) -> int:
     from .tui_ink import launch_ink_tui
 
-    launch_ink_tui(config, model=model, provider_name=provider_name, auto=auto, dev=dev)
+    launch_ink_tui(config, model=model, provider_name=provider_name, auto=auto, dev=dev, session=session, store=store)
     return 0
 
 
-def _open_classic_terminal_agent(config: Config, *, model=None, provider_name=None, auto: bool = False) -> int:
+def _open_classic_terminal_agent(
+    config: Config,
+    *,
+    model=None,
+    provider_name=None,
+    auto: bool = False,
+    session=None,
+    store=None,
+) -> int:
     from ..session import Session, SessionStore
     from . import repl
 
-    store = SessionStore()
+    store = store or SessionStore()
+    session = session or store.latest() or Session.create()
     previous = os.environ.get("AEGIS_CLASSIC_TUI")
     os.environ["AEGIS_CLASSIC_TUI"] = "1"
     try:
@@ -49,7 +60,7 @@ def _open_classic_terminal_agent(config: Config, *, model=None, provider_name=No
             config,
             model=model,
             provider_name=provider_name,
-            session=store.latest() or Session.create(),
+            session=session,
             store=store,
             auto=auto,
         )
@@ -69,6 +80,8 @@ def _open_terminal_agent(
     auto: bool = False,
     classic: bool = False,
     dev: bool = False,
+    session=None,
+    store=None,
 ) -> int:
     from . import repl
 
@@ -80,12 +93,14 @@ def _open_terminal_agent(
                 provider_name=provider_name,
                 auto=auto,
                 dev=dev,
+                session=session,
+                store=store,
             )
         except repl._FullscreenUnavailable:
             pass
         except Exception as exc:  # noqa: BLE001
             print(f"Ink terminal failed ({exc}); falling back to classic terminal.", file=sys.stderr)
-    return _open_classic_terminal_agent(config, model=model, provider_name=provider_name, auto=auto)
+    return _open_classic_terminal_agent(config, model=model, provider_name=provider_name, auto=auto, session=session, store=store)
 
 
 def cmd_tui(args: Namespace, config: Config) -> int:
@@ -108,6 +123,18 @@ def cmd_tui(args: Namespace, config: Config) -> int:
     if getattr(args, "once", False) or not (sys.stdin.isatty() and sys.stdout.isatty()):
         return _render_status(config)
 
+    from ..session import Session, SessionStore
+
+    store = SessionStore()
+    resume = str(getattr(args, "resume", "") or "").strip()
+    if resume:
+        session = store.load(resume)
+        if session is None:
+            print(f"session '{resume}' not found", file=sys.stderr)
+            return 1
+    else:
+        session = store.latest() or Session.create()
+
     return _open_terminal_agent(
         config,
         model=getattr(args, "model", None),
@@ -115,4 +142,6 @@ def cmd_tui(args: Namespace, config: Config) -> int:
         auto=bool(getattr(args, "yolo", False)),
         classic=bool(getattr(args, "classic", False) or getattr(args, "cli", False)),
         dev=bool(getattr(args, "tui_dev", False)),
+        session=session,
+        store=store,
     )

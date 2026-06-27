@@ -4832,4 +4832,16 @@ def test_dashboard_pty_argv_uses_aegis_binary(monkeypatch):
     from aegis.dashboard_pty import dashboard_terminal_argv
 
     monkeypatch.setenv("AEGIS_BIN", "/tmp/aegis-test")
-    assert dashboard_terminal_argv("sess") == ["/tmp/aegis-test", "chat", "--resume", "sess"]
+    assert dashboard_terminal_argv("sess") == ["/tmp/aegis-test", "tui", "--resume", "sess"]
+
+
+def test_dashboard_pty_env_marks_embedded_terminal(monkeypatch):
+    from aegis.dashboard_pty import dashboard_terminal_env
+
+    monkeypatch.setenv("AEGIS_TUI_THEME", "custom-theme")
+    env = dashboard_terminal_env()
+
+    assert env["AEGIS_TUI_DASHBOARD"] == "1"
+    assert env["AEGIS_TUI_INLINE"] == "1"
+    assert env["AEGIS_TUI_DISABLE_MOUSE"] == "1"
+    assert env["AEGIS_TUI_THEME"] == "custom-theme"
