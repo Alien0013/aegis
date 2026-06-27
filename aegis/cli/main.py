@@ -802,6 +802,21 @@ def cmd_skills(args, config: Config) -> int:
                 ok = False
                 _print(f"  [FAIL] {skill.name:<24} {reason}")
         return 0 if ok else 1
+    if args.action == "config":
+        _print("skills config:")
+        _print(f"  include_bundled: {str(config.get('skills.include_bundled', True)).lower()}")
+        _print("  allowlist: " + ", ".join(config.get("skills.allowlist", []) or []))
+        _print("  disabled: " + ", ".join(config.get("skills.disabled", []) or []))
+        _print("  paths: " + ", ".join(str(p) for p in (config.get("skills.paths", []) or [])))
+        return 0
+    if args.action == "opt-out":
+        config.set("skills.include_bundled", False)
+        _print("bundled skill seeding disabled")
+        return 0
+    if args.action == "opt-in":
+        config.set("skills.include_bundled", True)
+        _print("bundled skill seeding enabled")
+        return 0
     if args.action in {"remove", "uninstall"}:
         from .. import marketplace
         _print("removed" if marketplace.remove(args.name) else "not found")
@@ -4047,7 +4062,7 @@ def build_parser() -> argparse.ArgumentParser:
                     choices=[
                         "list", "view", "new", "install", "search", "remove", "uninstall", "hub",
                         "preview", "inspect", "browse", "check", "update", "audit",
-                        "bundles", "bundle", "unbundle",
+                        "config", "opt-in", "opt-out", "bundles", "bundle", "unbundle",
                     ],
                     default="list")
     sk.add_argument("name", nargs="?", help="skill name, install source, or hub name")

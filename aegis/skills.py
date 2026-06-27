@@ -279,7 +279,8 @@ class SkillsLoader:
         ]
         for p in self.config.get("skills.paths", []) or []:
             paths.append((3, Path(p).expanduser()))
-        paths.append((4, _bundled_dir()))
+        if self.config.get("skills.include_bundled", True) is not False:
+            paths.append((4, _bundled_dir()))
         return paths
 
     def _skill_files(self, base: Path) -> list[Path]:

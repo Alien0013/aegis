@@ -89,3 +89,24 @@ def test_skills_audit_reports_installed_skill_health(monkeypatch, tmp_path, caps
     out = capsys.readouterr().out
     assert "demo-skill" in out
     assert "ok" in out.lower()
+
+
+def test_skills_config_and_opt_in_out_toggle_bundled_skills(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path / "home"))
+
+    from aegis.config import Config
+    from aegis.cli.main import main
+
+    assert main(["skills", "opt-out"]) == 0
+    out = capsys.readouterr().out
+    assert "bundled skill seeding disabled" in out.lower()
+    assert Config.load().get("skills.include_bundled") is False
+
+    assert main(["skills", "config"]) == 0
+    out = capsys.readouterr().out
+    assert "include_bundled: false" in out.lower()
+
+    assert main(["skills", "opt-in"]) == 0
+    out = capsys.readouterr().out
+    assert "bundled skill seeding enabled" in out.lower()
+    assert Config.load().get("skills.include_bundled") is True
