@@ -91,6 +91,9 @@ def test_pyproject_extras_expose_native_compatibility_aliases():
     assert extras["pty"] == []
     assert extras["web"] == []
     assert extras["computer-use"] == extras["computer"]
+    for name in ("dingtalk", "feishu", "homeassistant", "sms", "wecom"):
+        assert name in extras
+        assert extras[name] == []
     for dep in extras["discord"] + extras["slack"] + extras["matrix"]:
         assert dep in extras["messaging"]
         assert dep in extras["gateway"]

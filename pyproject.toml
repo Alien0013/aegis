@@ -47,6 +47,11 @@ cli = []
 cron = []
 pty = []
 web = []
+dingtalk = []
+feishu = []
+homeassistant = []
+sms = []
+wecom = []
 all = [
     "playwright>=1.46,<2", "pyautogui>=0.9.54,<1", "Pillow>=10,<12", "discord.py>=2.4,<3",
     "slack_bolt>=1.21,<2", "matrix-nio>=0.24,<0.26", "honcho-ai>=1.0,<2", "mem0ai>=0.1,<0.3",
