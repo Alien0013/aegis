@@ -704,10 +704,10 @@ def cmd_skills(args, config: Config) -> int:
         except Exception as e:  # noqa: BLE001
             return _die(str(e))
         return 0
-    if args.action == "preview":
+    if args.action in {"preview", "inspect"}:
         from .. import marketplace
         if not args.name:
-            return _die("usage: aegis skills preview <git:owner/repo[@ref][/dir] | url>")
+            return _die(f"usage: aegis skills {args.action} <git:owner/repo[@ref][/dir] | url>")
         try:
             report = marketplace.preview(args.name, force=getattr(args, "force", False))
         except Exception as e:  # noqa: BLE001
@@ -725,7 +725,7 @@ def cmd_skills(args, config: Config) -> int:
                     suffix = f" — blocker: {row['blocker']}"
                 _print(f"  {row['name']:<24} {state}{suffix}")
         return 0 if report.get("ok") else 1
-    if args.action == "search":
+    if args.action in {"search", "browse"}:
         from .. import marketplace
         results = marketplace.search(args.name or "")
         if not results:
@@ -3977,7 +3977,7 @@ def build_parser() -> argparse.ArgumentParser:
     sk.add_argument("action", nargs="?",
                     choices=[
                         "list", "view", "new", "install", "search", "remove", "uninstall", "hub",
-                        "preview", "bundles", "bundle", "unbundle",
+                        "preview", "inspect", "browse", "bundles", "bundle", "unbundle",
                     ],
                     default="list")
     sk.add_argument("name", nargs="?", help="skill name, install source, or hub name")
