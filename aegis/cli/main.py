@@ -736,11 +736,50 @@ def cmd_tools(args, config: Config) -> int:
     from ..tools.registry import default_registry
     from ..surface import tool_inventory
 
+    action = getattr(args, "action", None) or "list"
     if getattr(args, "action", None) == "status":
         from ..tools.cloud import cmd_tools_status
         return cmd_tools_status(args, config)
     reg = default_registry()
-    if getattr(args, "action", None) == "doctor":
+    if action in {"enable", "disable"}:
+        selector = str(getattr(args, "name", "") or "").strip()
+        if not selector:
+            return _die(f"usage: aegis tools {action} <tool-or-toolset>")
+        enable = action == "enable"
+        tool = reg.get(selector)
+        known_toolsets = {t.toolset for t in reg.all()} | {"all", "core"}
+        toolsets = list(config.get("tools.toolsets", []) or ["core"])
+        disabled = [name for name in (config.get("tools.disabled", []) or []) if name != selector]
+
+        if tool is not None:
+            if enable:
+                if tool.toolset not in toolsets and "all" not in toolsets:
+                    toolsets.append(tool.toolset)
+                _print(f"enabled tool {selector}")
+            else:
+                disabled.append(selector)
+                _print(f"disabled tool {selector}")
+            config.set("tools.toolsets", sorted(dict.fromkeys(toolsets)))
+            config.set("tools.disabled", sorted(set(disabled)))
+            config.save()
+            return 0
+
+        if selector in known_toolsets:
+            if enable:
+                if selector not in toolsets:
+                    toolsets.append(selector)
+                _print(f"enabled toolset {selector}")
+            else:
+                toolsets = [name for name in toolsets if name != selector]
+                _print(f"disabled toolset {selector}")
+            config.set("tools.toolsets", sorted(dict.fromkeys(toolsets)))
+            config.set("tools.disabled", sorted(set(disabled)))
+            config.save()
+            return 0
+
+        return _die(f"unknown tool or toolset: {selector}")
+
+    if action == "doctor":
         from ..tools.schema_validation import validate_tool_registry
 
         validation = validate_tool_registry(reg.all())
@@ -3634,8 +3673,9 @@ def build_parser() -> argparse.ArgumentParser:
     cr.add_argument("--no-start", action="store_true", help="write service unit but do not start it")
     cr.set_defaults(func=cmd_cron)
 
-    t = sub.add_parser("tools", help="list tools; `doctor` for availability; `status` for backends")
-    t.add_argument("action", nargs="?", choices=["list", "status", "doctor"], default="list")
+    t = sub.add_parser("tools", help="list tools; enable/disable toolsets or individual tools")
+    t.add_argument("action", nargs="?", choices=["list", "status", "doctor", "enable", "disable"], default="list")
+    t.add_argument("name", nargs="?", help="tool or toolset for enable/disable")
     t.set_defaults(func=cmd_tools)
 
     mem = sub.add_parser("memory", help="show/add/replace/remove/status long-term memory")

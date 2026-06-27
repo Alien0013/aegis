@@ -92,7 +92,7 @@ Generated from `aegis.cli.main.build_parser()`.
 | aegis snapshot | config/state snapshots (auto before updates) | `aegis snapshot [-h] [{create,restore,prune,list}] [label]` |
 | aegis spec | spec-driven dev: list/show persistent requirements→design→tasks | `aegis spec [-h] [{list,show}] [slug]` |
 | aegis status | show install/auth/tools/skills/plugins/service status | `aegis status [-h] [--json]` |
-| aegis tools | list tools; `doctor` for availability; `status` for backends | `aegis tools [-h] [{list,status,doctor}]` |
+| aegis tools | list tools; enable/disable toolsets or individual tools | `aegis tools [-h] [{list,status,doctor,enable,disable}] [name]` |
 | aegis trace | inspect/export session traces | `aegis trace [-h] [--session SESSION] [--status STATUS] [--limit LIMIT]                    [--spans] [--out OUT] [--json]                    [{list,show,export}] [id]` |
 | aegis trajectory | record/export/compress session trajectories | `aegis trajectory [-h] [--out OUT]                         [--format {aegis,openai,hf,sharegpt,toolxml}]                         [--summarize]                         [{stats,export,compress}]` |
 | aegis tui | open the terminal agent (compatibility alias) | `aegis tui [-h] [--once] [--watch] [--interval INTERVAL] [--no-color]                  [-m MODEL] [--provider PROVIDER] [--resume RESUME]                  [--classic] [--dev] [--yolo]` |
