@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import copy
+import difflib
+import hashlib
 import importlib.metadata as importlib_metadata
 import json
 import os
@@ -12,6 +14,7 @@ import shlex
 import subprocess
 import sys
 import time
+import zipfile
 from pathlib import Path
 
 from .. import __version__
@@ -802,6 +805,97 @@ def cmd_skills(args, config: Config) -> int:
                 ok = False
                 _print(f"  [FAIL] {skill.name:<24} {reason}")
         return 0 if ok else 1
+    if args.action in {"list-modified", "diff", "reset"}:
+        from .. import marketplace
+        lock = marketplace.installed()
+        names = [args.name] if args.name else sorted(lock)
+        if args.action != "list-modified" and not args.name:
+            return _die(f"usage: aegis skills {args.action} <name>")
+
+        def _installed_body(skill_name: str) -> str | None:
+            path = cfg.skills_dir() / skill_name / "SKILL.md"
+            return path.read_text(encoding="utf-8") if path.exists() else None
+
+        def _digest(text: str) -> str:
+            return "sha256:" + hashlib.sha256(text.encode()).hexdigest()
+
+        modified: list[tuple[str, dict, str]] = []
+        for skill_name in names:
+            record = lock.get(skill_name) or {}
+            body = _installed_body(skill_name)
+            if body is None:
+                continue
+            current = _digest(body)
+            if current != record.get("digest"):
+                modified.append((skill_name, record, body))
+        if args.action == "list-modified":
+            if not modified:
+                _print("no modified skills")
+                return 0
+            for skill_name, record, _body in modified:
+                _print(f"  {skill_name:<24} modified  {record.get('source', '')}")
+            return 0
+        record = lock.get(args.name)
+        body = _installed_body(args.name)
+        if not record or body is None:
+            return _die(f"skill '{args.name}' is not installed or tracked")
+        if args.action == "reset":
+            record["digest"] = _digest(body)
+            lock[args.name] = record
+            lock_path = cfg.skills_dir() / ".lock.json"
+            lock_path.write_text(json.dumps(lock, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            _print(f"reset {args.name} baseline")
+            return 0
+        try:
+            report = marketplace.preview(str(record.get("source") or ""), force=True)
+            rows = report.get("skills", [])
+            row = next((r for r in rows if r.get("name") == args.name), rows[0] if rows else {})
+            source_body = (Path(str(row.get("path") or "")) / "SKILL.md").read_text(encoding="utf-8")
+        except Exception as e:  # noqa: BLE001
+            return _die(f"unable to load source for {args.name}: {e}")
+        diff = difflib.unified_diff(
+            source_body.splitlines(keepends=True),
+            body.splitlines(keepends=True),
+            fromfile=f"source/{args.name}/SKILL.md",
+            tofile=f"local/{args.name}/SKILL.md",
+        )
+        _print("".join(diff).rstrip() or f"{args.name} has no local changes")
+        return 0
+    if args.action == "repair-official":
+        cfg.skills_dir().mkdir(parents=True, exist_ok=True)
+        config.set("skills.include_bundled", True)
+        _print("official skill discovery repaired")
+        return 0
+    if args.action == "publish":
+        if not args.name:
+            return _die("usage: aegis skills publish <skill-dir> [--to local --repo out.zip]")
+        target = getattr(args, "to", "local") or "local"
+        if target != "local":
+            return _die("AEGIS publish currently prepares local packages; use --to local")
+        skill_dir = Path(args.name).expanduser()
+        skill_md = skill_dir / "SKILL.md"
+        if not skill_md.exists():
+            return _die(f"no SKILL.md in {skill_dir}")
+        body = skill_md.read_text(encoding="utf-8")
+        match = re.search(r"^name:\s*(.+)$", body, re.MULTILINE)
+        skill_name = (match.group(1).strip().strip("\"'") if match else skill_dir.name)
+        default_out = cfg.sub("skill-publish") / f"{skill_name}.zip"
+        out = Path(getattr(args, "repo", "") or default_out).expanduser()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for path in sorted(p for p in skill_dir.rglob("*") if p.is_file()):
+                zf.write(path, Path(skill_name) / path.relative_to(skill_dir))
+        manifest = {
+            "name": skill_name,
+            "package": str(out),
+            "digest": "sha256:" + hashlib.sha256(out.read_bytes()).hexdigest(),
+        }
+        Path(str(out) + ".manifest.json").write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        _print(f"prepared skill package → {out}")
+        return 0
     if args.action == "config":
         _print("skills config:")
         _print(f"  include_bundled: {str(config.get('skills.include_bundled', True)).lower()}")
@@ -4122,7 +4216,8 @@ def build_parser() -> argparse.ArgumentParser:
                     choices=[
                         "list", "view", "new", "install", "search", "remove", "uninstall", "hub",
                         "preview", "inspect", "browse", "check", "update", "audit",
-                        "config", "opt-in", "opt-out", "tap", "snapshot",
+                        "config", "opt-in", "opt-out", "tap", "snapshot", "list-modified",
+                        "diff", "reset", "repair-official", "publish",
                         "bundles", "bundle", "unbundle",
                     ],
                     default="list")
@@ -4133,6 +4228,9 @@ def build_parser() -> argparse.ArgumentParser:
     sk.add_argument("--members", help="comma-separated skill names for `aegis skills bundle`")
     sk.add_argument("--description", default="", help="description for `aegis skills bundle`")
     sk.add_argument("--instruction", default="", help="extra guidance injected by `aegis skills bundle`")
+    sk.add_argument("--to", choices=["local", "github", "clawhub"], default="local",
+                    help="publish target for `aegis skills publish`")
+    sk.add_argument("--repo", help="publish output path or future registry target")
     sk.set_defaults(func=cmd_skills)
 
     for _name, _help in (
