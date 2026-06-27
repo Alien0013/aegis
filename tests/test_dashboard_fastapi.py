@@ -792,6 +792,63 @@ def test_fastapi_files_upload_and_mkdir(tmp_path, monkeypatch):
     assert clear_pairing.status_code == 200
     assert clear_pairing.json()["cleared"] >= 1
 
+    telegram_start = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/messaging/telegram/onboarding/start",
+        json={"bot_name": "AEGIS Test"},
+        headers=headers,
+    ))
+    assert telegram_start.status_code == 200
+    telegram_start_body = telegram_start.json()
+    assert telegram_start_body["pairing_id"]
+    assert telegram_start_body["deep_link"]
+    assert telegram_start_body["qr_payload"] == telegram_start_body["deep_link"]
+
+    telegram_status = asyncio.run(_request(
+        app,
+        "GET",
+        f"/api/messaging/telegram/onboarding/{telegram_start_body['pairing_id']}",
+        headers=headers,
+    ))
+    assert telegram_status.status_code == 200
+    assert telegram_status.json()["status"] == "waiting"
+
+    telegram_apply = asyncio.run(_request(
+        app,
+        "POST",
+        f"/api/messaging/telegram/onboarding/{telegram_start_body['pairing_id']}/apply",
+        json={
+            "bot_token": "123456789:telegram-secret-token",
+            "bot_username": "aegis_test_bot",
+            "allowed_user_ids": ["1483958009", "1483958009", "7"],
+        },
+        headers=headers,
+    ))
+    assert telegram_apply.status_code == 200
+    telegram_apply_body = telegram_apply.json()
+    assert telegram_apply_body["ok"] is True
+    assert telegram_apply_body["platform"] == "telegram"
+    assert telegram_apply_body["bot_username"] == "aegis_test_bot"
+    assert "telegram-secret-token" not in json.dumps(telegram_apply_body)
+    import os
+    from aegis.config import Config
+
+    assert os.environ["TELEGRAM_BOT_TOKEN"] == "123456789:telegram-secret-token"
+    assert os.environ["TELEGRAM_ALLOWED_USERS"] == "1483958009,7"
+    assert os.environ["TELEGRAM_HOME_CHANNEL"] == "1483958009"
+    assert "telegram" in Config.load().get("gateway.channels")
+    assert pairing_store.is_authorized("telegram", "7")
+
+    telegram_cancel = asyncio.run(_request(
+        app,
+        "DELETE",
+        f"/api/messaging/telegram/onboarding/{telegram_start_body['pairing_id']}",
+        headers=headers,
+    ))
+    assert telegram_cancel.status_code == 200
+    assert telegram_cancel.json()["ok"] is True
+
     analytics = asyncio.run(_request(app, "GET", "/api/analytics/usage?days=7", headers=headers))
     assert analytics.status_code == 200
     analytics_body = analytics.json()

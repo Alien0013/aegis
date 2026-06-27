@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import secrets
+import time
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ..dashboard_fastapi import (
@@ -13,6 +16,54 @@ from ..dashboard_fastapi import (
     _require_request,
     _safe_resource_name,
 )
+
+
+_TELEGRAM_ONBOARDING_SESSIONS: dict[str, dict[str, Any]] = {}
+
+
+def _telegram_expiry() -> tuple[str, float]:
+    expires = datetime.now(timezone.utc) + timedelta(minutes=15)
+    return expires.isoformat().replace("+00:00", "Z"), expires.timestamp()
+
+
+def _prune_telegram_onboarding() -> None:
+    now = time.time()
+    for pairing_id, record in list(_TELEGRAM_ONBOARDING_SESSIONS.items()):
+        if float(record.get("expires_at_ts") or 0) <= now:
+            _TELEGRAM_ONBOARDING_SESSIONS.pop(pairing_id, None)
+
+
+def _normalize_telegram_user_id(value: Any) -> str | None:
+    raw = str(value or "").strip()
+    return raw if raw.isdigit() else None
+
+
+def _telegram_allowed_user_ids(body: dict[str, Any]) -> list[str]:
+    raw_values = body.get("allowed_user_ids") or body.get("allowed_users") or body.get("user_ids") or []
+    if isinstance(raw_values, str):
+        values = [part.strip() for part in raw_values.split(",")]
+    elif isinstance(raw_values, list):
+        values = raw_values
+    else:
+        values = [raw_values]
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = _normalize_telegram_user_id(value)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            out.append(normalized)
+    return out
+
+
+def _telegram_onboarding_status(record: dict[str, Any]) -> dict[str, Any]:
+    ready = bool(record.get("bot_token"))
+    return {
+        "status": "ready" if ready else "waiting",
+        "bot_username": record.get("bot_username") or None,
+        "owner_user_id": record.get("owner_user_id") or None,
+        "expires_at": record.get("expires_at") or "",
+    }
 
 
 def _safe_name(value: str, kind: str) -> str:
@@ -136,6 +187,93 @@ def register(app, config, chat_runner):  # noqa: ARG001
         from ..gateway.pairing import PairingStore
 
         return JSONResponse({"ok": True, "cleared": PairingStore().clear_pending()})
+
+    @app.post("/api/messaging/telegram/onboarding/start")
+    async def api_telegram_onboarding_start(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await _json_body(request)
+        pairing_id = "tg_" + secrets.token_urlsafe(10)
+        expires_at, expires_at_ts = _telegram_expiry()
+        bot_username = str(body.get("bot_username") or body.get("username") or "").strip().lstrip("@")
+        deep_link = str(body.get("deep_link") or "").strip()
+        if not deep_link:
+            target = bot_username or "BotFather"
+            deep_link = f"https://t.me/{target}?start={pairing_id}"
+        record = {
+            "pairing_id": pairing_id,
+            "bot_name": str(body.get("bot_name") or "AEGIS Agent").strip() or "AEGIS Agent",
+            "bot_token": str(body.get("bot_token") or body.get("token") or "").strip(),
+            "bot_username": bot_username,
+            "owner_user_id": _normalize_telegram_user_id(body.get("owner_user_id")),
+            "deep_link": deep_link,
+            "qr_payload": str(body.get("qr_payload") or deep_link).strip(),
+            "expires_at": expires_at,
+            "expires_at_ts": expires_at_ts,
+        }
+        _prune_telegram_onboarding()
+        _TELEGRAM_ONBOARDING_SESSIONS[pairing_id] = record
+        return JSONResponse({
+            "pairing_id": pairing_id,
+            "suggested_username": bot_username,
+            "deep_link": record["deep_link"],
+            "qr_payload": record["qr_payload"],
+            "expires_at": expires_at,
+        })
+
+    @app.get("/api/messaging/telegram/onboarding/{pairing_id}")
+    async def api_telegram_onboarding_get(pairing_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        _prune_telegram_onboarding()
+        record = _TELEGRAM_ONBOARDING_SESSIONS.get(pairing_id)
+        if record is None:
+            return JSONResponse({"ok": False, "error": "Telegram setup session not found"}, status_code=404)
+        return JSONResponse(_telegram_onboarding_status(record))
+
+    @app.post("/api/messaging/telegram/onboarding/{pairing_id}/apply")
+    async def api_telegram_onboarding_apply(pairing_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        _prune_telegram_onboarding()
+        record = _TELEGRAM_ONBOARDING_SESSIONS.get(pairing_id)
+        if record is None:
+            return JSONResponse({"ok": False, "error": "Telegram setup session not found"}, status_code=404)
+        body = await _json_body(request)
+        allowed_user_ids = _telegram_allowed_user_ids(body)
+        if not allowed_user_ids:
+            return JSONResponse({"ok": False, "error": "Add at least one allowed Telegram user ID."}, status_code=400)
+        bot_token = str(body.get("bot_token") or body.get("token") or record.get("bot_token") or "").strip()
+        if not bot_token:
+            return JSONResponse({"ok": False, "error": "Telegram setup is not ready yet."}, status_code=409)
+        bot_username = str(body.get("bot_username") or record.get("bot_username") or "").strip().lstrip("@")
+        from ..config import set_env_var
+        from ..gateway.pairing import PairingStore
+
+        set_env_var("TELEGRAM_BOT_TOKEN", bot_token)
+        set_env_var("TELEGRAM_ALLOWED_USERS", ",".join(allowed_user_ids))
+        set_env_var("TELEGRAM_HOME_CHANNEL", allowed_user_ids[0])
+        channels = [str(row).strip() for row in (config.get("gateway.channels", []) or []) if str(row).strip()]
+        if "telegram" not in channels:
+            channels.append("telegram")
+            config.set("gateway.channels", channels)
+        if hasattr(config, "save"):
+            config.save()
+        store = PairingStore()
+        for user_id in allowed_user_ids:
+            store.approve("telegram", user_id)
+        _TELEGRAM_ONBOARDING_SESSIONS.pop(pairing_id, None)
+        return JSONResponse({
+            "ok": True,
+            "platform": "telegram",
+            "bot_username": bot_username or None,
+            "allowed_user_ids": allowed_user_ids,
+            "restart_started": False,
+            "needs_restart": True,
+        })
+
+    @app.delete("/api/messaging/telegram/onboarding/{pairing_id}")
+    async def api_telegram_onboarding_delete(pairing_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        _TELEGRAM_ONBOARDING_SESSIONS.pop(pairing_id, None)
+        return JSONResponse({"ok": True})
 
     @app.get("/api/webhooks")
     async def api_webhooks_list(request: Request) -> JSONResponse:

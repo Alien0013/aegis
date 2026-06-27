@@ -185,6 +185,10 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/messaging/platforms/{platform_id} | GET | api_platform_registry_detail |
 | /api/messaging/platforms/{platform_id} | PUT | api_messaging_platform_update |
 | /api/messaging/platforms/{platform_id}/test | POST | api_messaging_platform_test |
+| /api/messaging/telegram/onboarding/start | POST | api_telegram_onboarding_start |
+| /api/messaging/telegram/onboarding/{pairing_id} | DELETE | api_telegram_onboarding_delete |
+| /api/messaging/telegram/onboarding/{pairing_id} | GET | api_telegram_onboarding_get |
+| /api/messaging/telegram/onboarding/{pairing_id}/apply | POST | api_telegram_onboarding_apply |
 | /api/model/auxiliary | GET | api_model_auxiliary |
 | /api/model/info | GET | api_model_info |
 | /api/model/moa | GET | api_model_moa |
