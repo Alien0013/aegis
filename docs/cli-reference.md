@@ -25,7 +25,7 @@ Generated from `aegis.cli.main.build_parser()`.
 | aegis curator | background skill maintenance | `aegis curator [-h] [--apply] [--dry-run] [--id ID] [--list]                      [{status,review,prune,archive,restore,transitions,pin,unpin,run,backup,rollback,list-archived}]                      [name]` |
 | aegis daemon | install/control user services | `aegis daemon [-h] [--channels CHANNELS] [--no-start]                     [{status,install,start,stop,restart,remove}]` |
 | aegis dashboard | open the AEGIS control panel in your browser | `aegis dashboard [-h] [--host HOST] [--port PORT] [--no-open]` |
-| aegis debug | bundle a redacted debug report | `aegis debug [-h] [{share}]` |
+| aegis debug | bundle a redacted debug report | `aegis debug [-h] [{share,delete}]` |
 | aegis desktop | install/update and launch the native desktop app | `aegis desktop [-h] [--status] [--doctor] [--install-only] [--reinstall]                      [--sandbox] [--source] [--cwd CWD] [--package [TARGET]]` |
 | aegis doctor | diagnose (and optionally repair) the installation | `aegis doctor [-h] [--fix] [--probe] [--release]` |
 | aegis dump | print a redacted config dump | `aegis dump [-h] [--json]` |

@@ -140,6 +140,17 @@ def cmd_security_audit(args, config) -> int:
 def cmd_debug(args, config) -> int:
     """`aegis debug share` — bundle redacted logs + config + doctor output into a zip."""
 
+    action = getattr(args, "action", None) or "share"
+    out = cfg.sub("debug-report.zip")
+    if action == "delete":
+        try:
+            out.unlink()
+        except FileNotFoundError:
+            print(f"no debug report found at {out}")
+            return 0
+        print(f"deleted debug report → {out}")
+        return 0
+
     def env_keys(text: str) -> str:
         rows: list[str] = []
         for line in text.splitlines():
@@ -163,7 +174,6 @@ def cmd_debug(args, config) -> int:
             return yaml.safe_dump(redact_secret_values(data), sort_keys=False)
         return redact_secrets(raw)
 
-    out = cfg.sub("debug-report.zip")
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         # redacted config
         raw = read_text(cfg.config_path())

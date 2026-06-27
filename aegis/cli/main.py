@@ -3938,7 +3938,7 @@ def build_parser() -> argparse.ArgumentParser:
     secp.set_defaults(func=_ops.cmd_security_audit)
 
     dbg = sub.add_parser("debug", help="bundle a redacted debug report")
-    dbg.add_argument("action", nargs="?", choices=["share"], default="share")
+    dbg.add_argument("action", nargs="?", choices=["share", "delete"], default="share")
     dbg.set_defaults(func=_ops.cmd_debug)
 
     sec2 = sub.add_parser("secrets", help="sync secrets from a manager (bitwarden)")
