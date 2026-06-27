@@ -7,7 +7,7 @@ Generated from `aegis.cli.main.build_parser()`.
 | --- | --- | --- |
 | aegis ab | replay a session on a different model and diff the result | `aegis ab [-h] [--model MODEL] [--provider PROVIDER] [--json] session_id` |
 | aegis acp | run as an ACP stdio server for IDEs | `aegis acp [-h]` |
-| aegis auth | API-key / OAuth authentication | `aegis auth [-h] [--manual]                   {status,login,logout,import-claude,pool} [provider]` |
+| aegis auth | API-key / OAuth authentication | `aegis auth [-h] [--manual] [--replace]                   [--strategy {fill_first,round_robin,least_used,random}]                   [--cooldown-hours COOLDOWN_HOURS]                   {status,list,login,logout,add,remove,reset,import-claude,pool}                   [provider] [values ...]` |
 | aegis background | list background tasks | `aegis background [-h]` |
 | aegis backup | back up ~/.aegis to a zip | `aegis backup [-h] [--out OUT] [--quick]` |
 | aegis batch | run a prompt per line of a file (or - for stdin) | `aegis batch [-h] [-m MODEL] [--provider PROVIDER] file` |

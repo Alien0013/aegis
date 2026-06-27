@@ -159,6 +159,26 @@ def reset() -> None:
         _POOLS.clear()
 
 
+def reset_provider_state(provider: str | None = None) -> int:
+    """Clear persisted credential-pool cooldown/usage state.
+
+    Configured keys remain in config.yaml; this only forgets runtime state such
+    as billing cooldowns and least-used counters. Returns the number of provider
+    sections removed so CLIs can report whether anything was cleared.
+    """
+    with _LOCK:
+        state = _load_state()
+        if provider:
+            removed = 1 if provider in state else 0
+            state.pop(provider, None)
+        else:
+            removed = len(state)
+            state = {}
+        _save_state(state)
+        _POOLS.clear()
+        return removed
+
+
 def cmd_auth_pool(args, config) -> int:
     """`aegis auth pool [provider]` — show configured credential pools and their state."""
     from .providers.registry import _specs_for

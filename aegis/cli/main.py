@@ -250,16 +250,169 @@ def cmd_model(args, config: Config) -> int:
 # --------------------------------------------------------------------------- #
 # auth
 # --------------------------------------------------------------------------- #
+def _mask_auth_secret(value: str) -> str:
+    value = str(value or "")
+    if len(value) > 12:
+        return f"{value[:6]}…{value[-4:]}"
+    return "key"
+
+
+def _auth_key_values(values: list[str] | tuple[str, ...] | None) -> list[str]:
+    keys: list[str] = []
+    for value in values or []:
+        for item in str(value).split(","):
+            item = item.strip()
+            if item:
+                keys.append(item)
+    return list(dict.fromkeys(keys))
+
+
+def _auth_config_pools(config: Config) -> dict:
+    pools = config.data.setdefault("credential_pools", {})
+    return pools if isinstance(pools, dict) else {}
+
+
+def _cmd_auth_list(args, config: Config, store) -> int:
+    provider = str(getattr(args, "provider", "") or "").strip()
+    pools = config.get("credential_pools", {}) or {}
+    logins = [name for name in store.list_logins() if not provider or name == provider]
+    rows = [
+        (name, section)
+        for name, section in sorted(pools.items())
+        if isinstance(section, dict) and (not provider or name == provider)
+    ]
+
+    _print("Stored auth:")
+    shown = 0
+    for name in logins:
+        _print(f"  {name:<14} OAuth login")
+        shown += 1
+    for name, section in rows:
+        keys = list(section.get("keys", []) or [])
+        strategy = section.get("strategy", "fill_first")
+        cooldown = section.get("cooldown_hours", 24)
+        _print(f"  {name:<14} {len(keys)} key(s) · strategy={strategy} · cooldown={cooldown}h")
+        for idx, key in enumerate(keys, start=1):
+            _print(f"    #{idx} {_mask_auth_secret(str(key))}")
+        shown += 1
+    if shown == 0:
+        _print("  no stored OAuth logins or credential-pool keys")
+    return 0
+
+
+def _cmd_auth_add(args, config: Config) -> int:
+    from .. import credentials
+    from ..providers import registry
+
+    provider = str(getattr(args, "provider", "") or "").strip()
+    if not provider:
+        return _die("usage: aegis auth add <provider> <api-key> [api-key ...]")
+    if not registry.get_spec(provider):
+        return _die(f"unknown provider: {provider}")
+    keys = _auth_key_values(getattr(args, "values", []) or [])
+    if not keys:
+        return _die("usage: aegis auth add <provider> <api-key> [api-key ...]")
+
+    strategy = str(getattr(args, "strategy", "") or "").strip()
+    valid_strategies = {"fill_first", "round_robin", "least_used", "random"}
+    if strategy and strategy not in valid_strategies:
+        return _die("unknown credential strategy: " + strategy)
+    cooldown = getattr(args, "cooldown_hours", None)
+    if cooldown is not None and cooldown <= 0:
+        return _die("--cooldown-hours must be greater than zero")
+
+    pools = _auth_config_pools(config)
+    section = {} if getattr(args, "replace", False) else dict(pools.get(provider) or {})
+    existing = [] if getattr(args, "replace", False) else list(section.get("keys", []) or [])
+    merged = list(dict.fromkeys([*existing, *keys]))
+    added = len([key for key in keys if key not in existing])
+    section["keys"] = merged
+    if strategy:
+        section["strategy"] = strategy
+    if cooldown is not None:
+        section["cooldown_hours"] = float(cooldown)
+    pools[provider] = section
+    config.save()
+    credentials.reset()
+    _print(f"added {added} credential(s) to {provider} ({len(merged)} total)")
+    return 0
+
+
+def _cmd_auth_remove(args, config: Config, store) -> int:
+    from .. import credentials
+
+    provider = str(getattr(args, "provider", "") or "").strip()
+    if not provider:
+        return _die("usage: aegis auth remove <provider> [index|masked-key|api-key]")
+    values = list(getattr(args, "values", []) or [])
+    pools = _auth_config_pools(config)
+    section = dict(pools.get(provider) or {})
+    keys = list(section.get("keys", []) or [])
+
+    if values:
+        target = str(values[0]).strip()
+        remove_index: int | None = None
+        if target.isdigit():
+            candidate = int(target) - 1
+            if 0 <= candidate < len(keys):
+                remove_index = candidate
+        if remove_index is None:
+            for idx, key in enumerate(keys):
+                if target in {str(key), _mask_auth_secret(str(key))}:
+                    remove_index = idx
+                    break
+        if remove_index is None:
+            return _die(f"credential not found for {provider}")
+        del keys[remove_index]
+        if keys:
+            section["keys"] = keys
+            pools[provider] = section
+        else:
+            pools.pop(provider, None)
+        config.save()
+        credentials.reset()
+        credentials.reset_provider_state(provider)
+        _print(f"removed credential #{remove_index + 1} from {provider}")
+        return 0
+
+    store.delete(provider)
+    pools.pop(provider, None)
+    config.save()
+    credentials.reset_provider_state(provider)
+    _print(f"removed stored auth for {provider}")
+    return 0
+
+
+def _cmd_auth_reset(args) -> int:
+    from .. import credentials
+
+    provider = str(getattr(args, "provider", "") or "").strip()
+    if not provider:
+        return _die("usage: aegis auth reset <provider>")
+    credentials.reset_provider_state(provider)
+    _print(f"reset credential pool state for {provider}")
+    return 0
+
+
 def cmd_auth(args, config: Config) -> int:
     from ..providers import registry
     from ..providers.auth import AuthError, AuthStore, CodexBackendAuth, CodexCliAuth, OAuthAuth
 
     store = AuthStore()
-    if args.action == "pool":
+    action = getattr(args, "action", None)
+    if action == "pool":
         from .. import credentials
         args.name = args.provider
         return credentials.cmd_auth_pool(args, config)
-    if args.action == "status":
+    if action == "list":
+        return _cmd_auth_list(args, config, store)
+    if action == "add":
+        return _cmd_auth_add(args, config)
+    if action == "remove":
+        return _cmd_auth_remove(args, config, store)
+    if action == "reset":
+        return _cmd_auth_reset(args)
+    if action == "status":
         _print("Provider auth status:")
         for name in registry.list_providers():
             spec = registry.get_spec(name)
@@ -279,7 +432,7 @@ def cmd_auth(args, config: Config) -> int:
                 codex = "—"
             _print(f"  {name:<12} api-key: {api:<5} oauth: {oauth:<30} codex: {codex}")
         return 0
-    if args.action == "login":
+    if action == "login":
         if not args.provider:
             return _die("usage: aegis auth login <provider> [--manual]")
         spec = registry.get_spec(args.provider)
@@ -299,20 +452,20 @@ def cmd_auth(args, config: Config) -> int:
         except AuthError as e:
             return _die(str(e))
         return 0
-    if args.action == "logout":
+    if action == "logout":
         if not args.provider:
             return _die("usage: aegis auth logout <provider>")
         store.delete(args.provider)
         _print(f"logged out of {args.provider}.")
         return 0
-    if args.action == "import-claude":
+    if action == "import-claude":
         from ..providers.auth import import_claude_cli_login
         ok, detail = import_claude_cli_login(store)
         _print(("✓ " if ok else "! ") + detail)
         if ok:
             _print("  set `aegis model set anthropic claude-sonnet-4-5` and you're ready.")
         return 0 if ok else 1
-    return _die("usage: aegis auth [status|login|logout|import-claude]")
+    return _die("usage: aegis auth [status|list|login|logout|add|remove|reset|import-claude|pool]")
 
 
 # --------------------------------------------------------------------------- #
@@ -3215,9 +3368,20 @@ def build_parser() -> argparse.ArgumentParser:
     m.set_defaults(func=cmd_model)
 
     a = sub.add_parser("auth", help="API-key / OAuth authentication")
-    a.add_argument("action", choices=["status", "login", "logout", "import-claude", "pool"])
+    a.add_argument(
+        "action",
+        choices=["status", "list", "login", "logout", "add", "remove", "reset", "import-claude", "pool"],
+    )
     a.add_argument("provider", nargs="?")
+    a.add_argument("values", nargs="*", help="API keys or removal target for credential-pool commands")
     a.add_argument("--manual", action="store_true", help="manual code-paste OAuth flow")
+    a.add_argument("--replace", action="store_true", help="replace existing configured keys for `auth add`")
+    a.add_argument(
+        "--strategy",
+        choices=["fill_first", "round_robin", "least_used", "random"],
+        help="credential-pool selection strategy for `auth add`",
+    )
+    a.add_argument("--cooldown-hours", type=float, help="billing cooldown hours for `auth add`")
     a.set_defaults(func=cmd_auth)
 
     s = sub.add_parser("setup", help="interactive setup wizard")
