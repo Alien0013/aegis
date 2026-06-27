@@ -1288,6 +1288,38 @@ def cmd_profile(args, config: Config) -> int:
                 detail = f"clone from {profiles.label(getattr(args, 'clone_from', None) or cfg.current_profile())}"
             _print(f"created profile {args.profile_name}: {path} ({detail})")
             return 0
+        if action == "alias":
+            name = cfg.profile_name(args.profile_name)
+            if not name or not profiles.profile_exists(name):
+                return _die(f"profile '{args.profile_name}' does not exist")
+            alias_name = getattr(args, "alias_name", None) or f"aegis-{name}"
+            alias_path = cfg.sub("bin") / alias_name
+            if getattr(args, "remove", False):
+                if alias_path.exists():
+                    alias_path.unlink()
+                _print(f"removed profile alias {alias_path}")
+                return 0
+            alias_path.parent.mkdir(parents=True, exist_ok=True)
+            alias_path.write_text(
+                "#!/usr/bin/env sh\n"
+                f"AEGIS_PROFILE={shlex.quote(name)} exec aegis \"$@\"\n",
+                encoding="utf-8",
+            )
+            alias_path.chmod(0o755)
+            _print(f"created profile alias {alias_path}")
+            return 0
+        if action == "install":
+            path = profiles.install_profile(
+                args.source,
+                name=getattr(args, "name", None),
+                force=bool(getattr(args, "force", False)),
+            )
+            _print(f"installed profile {path.name}: {path}")
+            return 0
+        if action == "update":
+            path = profiles.update_profile(args.profile_name, force=bool(getattr(args, "force", False)))
+            _print(f"updated profile {args.profile_name}: {path}")
+            return 0
         if action == "clone":
             path = profiles.clone_profile(args.source_profile, args.profile_name,
                                           clone_all=bool(getattr(args, "clone_all", False)))
@@ -4354,6 +4386,20 @@ def build_parser() -> argparse.ArgumentParser:
     pf_create.add_argument("--clone-from", metavar="SOURCE",
                            help="source profile to clone from; implies --clone")
     pf_create.set_defaults(func=cmd_profile)
+    pf_alias = pf_sub.add_parser("alias", help="create or remove a profile launcher alias")
+    pf_alias.add_argument("profile_name")
+    pf_alias.add_argument("--name", dest="alias_name", help="alias script name; defaults to aegis-<profile>")
+    pf_alias.add_argument("--remove", action="store_true", help="remove the alias instead of creating it")
+    pf_alias.set_defaults(func=cmd_profile)
+    pf_install = pf_sub.add_parser("install", help="install a profile from a local directory or archive")
+    pf_install.add_argument("source")
+    pf_install.add_argument("--name", help="profile name to install as")
+    pf_install.add_argument("--force", action="store_true", help="replace an existing profile")
+    pf_install.set_defaults(func=cmd_profile)
+    pf_update = pf_sub.add_parser("update", help="update a directory-installed profile")
+    pf_update.add_argument("profile_name")
+    pf_update.add_argument("--force", action="store_true", help="reserved for future conflict handling")
+    pf_update.set_defaults(func=cmd_profile)
     pf_clone = pf_sub.add_parser("clone", help="clone one profile to another")
     pf_clone.add_argument("source_profile")
     pf_clone.add_argument("profile_name")

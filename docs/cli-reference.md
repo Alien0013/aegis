@@ -55,7 +55,8 @@ Generated from `aegis.cli.main.build_parser()`.
 | aegis plugins | manage manifest and drop-in plugins | `aegis plugins [-h] [--force]                      [{list,doctor,path,install,update,enable,disable,remove}]                      [name]` |
 | aegis portal | open the AEGIS control panel in your browser | `aegis portal [-h] [--host HOST] [--port PORT] [--no-open]` |
 | aegis postinstall | post-install compatibility check | `aegis postinstall [-h]` |
-| aegis profile | manage isolated runtime profiles | `aegis profile [-h]                      {list,use,create,clone,show,info,describe,rename,delete,rm,remove,export,import} ...` |
+| aegis profile | manage isolated runtime profiles | `aegis profile [-h]                      {list,use,create,alias,install,update,clone,show,info,describe,rename,delete,rm,remove,export,import} ...` |
+| aegis profile alias | create or remove a profile launcher alias | `aegis profile alias [-h] [--name ALIAS_NAME] [--remove] profile_name` |
 | aegis profile clone | clone one profile to another | `aegis profile clone [-h] [--clone-all] source_profile profile_name` |
 | aegis profile create | create a profile | `aegis profile create [-h] [--clone] [--clone-all] [--clone-from SOURCE]                             profile_name` |
 | aegis profile delete | delete a profile | `aegis profile delete [-h] profile_name` |
@@ -63,11 +64,13 @@ Generated from `aegis.cli.main.build_parser()`.
 | aegis profile export | export a profile to tar.gz | `aegis profile export [-h] [-o OUT] [--include-history]                             [--include-secrets]                             [profile_name]` |
 | aegis profile import | import a profile archive | `aegis profile import [-h] [--name NAME] archive` |
 | aegis profile info |  | `aegis profile show [-h] [profile_name]` |
+| aegis profile install | install a profile from a local directory or archive | `aegis profile install [-h] [--name NAME] [--force] source` |
 | aegis profile list | list profiles | `aegis profile list [-h]` |
 | aegis profile remove |  | `aegis profile delete [-h] profile_name` |
 | aegis profile rename | rename a profile | `aegis profile rename [-h] source_profile profile_name` |
 | aegis profile rm |  | `aegis profile delete [-h] profile_name` |
 | aegis profile show | show profile details | `aegis profile show [-h] [profile_name]` |
+| aegis profile update | update a directory-installed profile | `aegis profile update [-h] [--force] profile_name` |
 | aegis profile use | set sticky default profile | `aegis profile use [-h] profile_name` |
 | aegis profiles | list isolated runtime profiles | `aegis profiles [-h]` |
 | aegis project | manage projects (named, multi-folder workspaces) | `aegis project [-h]                      {create,list,ls,show,add-folder,remove-folder,rename,set-primary,use,switch,select,current,status,archive,restore,bind-board} ...` |

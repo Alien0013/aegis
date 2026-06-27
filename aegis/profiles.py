@@ -379,3 +379,49 @@ def import_profile(archive_path: str | Path, *, name: str | None = None) -> Path
         shutil.move(str(source), str(destination))
     _seed_profile_home(destination)
     return destination
+
+
+def install_profile(source_path: str | Path, *, name: str | None = None, force: bool = False) -> Path:
+    """Install a profile from a local directory or exported archive."""
+
+    source = Path(source_path).expanduser()
+    if not source.exists():
+        raise FileNotFoundError(f"profile source not found: {source}")
+    if source.is_file():
+        return import_profile(source, name=name)
+    if not source.is_dir():
+        raise ValueError(f"profile source is not a directory: {source}")
+    target_name = _profile_name(name or source.name)
+    if not target_name:
+        raise ValueError("installing over the default profile is not supported; pass --name")
+    destination = _path(target_name)
+    if destination.exists():
+        if not force:
+            raise FileExistsError(f"profile '{target_name}' already exists at {destination}")
+        shutil.rmtree(destination)
+    ensure_dir(destination.parent)
+    shutil.copytree(source, destination, ignore=_copytree_ignore(source, include_history=False, include_secrets=True))
+    _seed_profile_home(destination)
+    atomic_write(destination / ".aegis-profile-source", str(source.resolve()))
+    return destination
+
+
+def update_profile(profile: str, *, force: bool = False) -> Path:
+    """Refresh a directory-installed profile from its recorded source."""
+
+    name = _profile_name(profile)
+    if not name:
+        raise ValueError("the default profile cannot be updated from a distribution")
+    destination = _path(name)
+    marker = destination / ".aegis-profile-source"
+    if not destination.is_dir():
+        raise FileNotFoundError(f"profile '{name}' does not exist at {destination}")
+    if not marker.exists():
+        raise ValueError(f"profile '{name}' has no recorded install source")
+    source = Path(marker.read_text(encoding="utf-8").strip()).expanduser()
+    if not source.is_dir():
+        raise FileNotFoundError(f"profile source not found: {source}")
+    _clone_selected(source, destination)
+    _seed_profile_home(destination)
+    atomic_write(marker, str(source.resolve()))
+    return destination

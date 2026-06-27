@@ -83,3 +83,45 @@ def test_profile_info_describe_rename_delete_aliases(monkeypatch, tmp_path, caps
 
     assert main(["profile", "delete", "default"]) == 1
     assert "default profile cannot be deleted" in capsys.readouterr().err
+
+
+def test_profile_alias_create_and_remove(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.cli.main import main
+
+    assert main(["profile", "create", "worker"]) == 0
+    capsys.readouterr()
+
+    assert main(["profile", "alias", "worker"]) == 0
+    out = capsys.readouterr().out
+    alias = tmp_path / "bin" / "aegis-worker"
+    assert alias.exists()
+    assert "created profile alias" in out.lower()
+    assert "AEGIS_PROFILE=worker" in alias.read_text(encoding="utf-8")
+
+    assert main(["profile", "alias", "worker", "--remove"]) == 0
+    out = capsys.readouterr().out
+    assert "removed profile alias" in out.lower()
+    assert not alias.exists()
+
+
+def test_profile_install_and_update_from_directory(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path / "home"))
+    from aegis.cli.main import main
+
+    source = tmp_path / "dist"
+    source.mkdir()
+    (source / "config.yaml").write_text("model:\n  default: v1\n", encoding="utf-8")
+    (source / "SOUL.md").write_text("v1 soul\n", encoding="utf-8")
+
+    assert main(["profile", "install", str(source), "--name", "worker"]) == 0
+    out = capsys.readouterr().out
+    home = tmp_path / "home" / "profiles" / "worker"
+    assert "installed profile worker" in out.lower()
+    assert "v1" in (home / "config.yaml").read_text(encoding="utf-8")
+
+    (source / "config.yaml").write_text("model:\n  default: v2\n", encoding="utf-8")
+    assert main(["profile", "update", "worker"]) == 0
+    out = capsys.readouterr().out
+    assert "updated profile worker" in out.lower()
+    assert "v2" in (home / "config.yaml").read_text(encoding="utf-8")
