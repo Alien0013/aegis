@@ -103,6 +103,80 @@ def cmd_verify(args, config: Config) -> int:
     return subprocess.call(cmd, cwd=root)
 
 
+def _find_lsp_server(name: str):
+    from ..lsp.servers import SERVERS
+
+    target = str(name or "").strip().lower()
+    if target and not target.startswith(".") and target not in {"dockerfile"}:
+        dot_target = f".{target}"
+    else:
+        dot_target = target
+    return next(
+        (
+            server for server in SERVERS
+            if target in {server.id.lower(), server.command[0].lower()} or dot_target in server.extensions
+        ),
+        None,
+    )
+
+
+def _lsp_dry_run_command(kind: str, package: str) -> str:
+    from ..lsp.install import lsp_dir
+
+    if kind == "npm":
+        parts = ["npm", "install", "--prefix", str(lsp_dir()), "--silent", "--no-fund", "--no-audit", *package.split()]
+        return shlex.join(parts)
+    if kind == "pip":
+        return shlex.join([str(lsp_dir() / "venv" / "bin" / "python"), "-m", "pip", "install", "--quiet", *package.split()])
+    if kind == "go":
+        return f"GOBIN={shlex.quote(str(lsp_dir() / 'gobin'))} {shlex.join(['go', 'install', package])}"
+    return f"unsupported installer kind: {kind}"
+
+
+def cmd_lsp(args, config: Config) -> int:
+    """Inspect or trigger AEGIS' managed language-server installer."""
+
+    from ..lsp.install import existing_binary, lsp_dir, try_install
+    from ..lsp.servers import SERVERS
+
+    action = getattr(args, "action", None) or "status"
+    if action == "status":
+        import shutil
+
+        _print("AEGIS LSP")
+        _print(f"Managed dir: {lsp_dir()}")
+        _print(f"auto_install: {bool(config.get('lsp.auto_install', True))}")
+        _print("Servers:")
+        for server in SERVERS:
+            binary = server.command[0]
+            path = shutil.which(binary) or existing_binary(binary) or ""
+            install = "managed" if server.install else "manual"
+            state = path or "missing"
+            _print(f"  - {server.id:<18} {','.join(server.extensions):<28} {install:<7} {binary} [{state}]")
+        return 0
+
+    if action == "install":
+        server = _find_lsp_server(getattr(args, "server", ""))
+        if server is None:
+            return _die(f"unknown LSP server or extension: {getattr(args, 'server', '')}")
+        if not server.install:
+            _print(f"{server.id} has no managed installer; configure lsp.servers manually if needed.")
+            return 1
+        kind, package, binary = server.install
+        if getattr(args, "dry_run", False):
+            _print(f"dry run: install {server.id}")
+            _print(f"command: {_lsp_dry_run_command(kind, package)}")
+            _print(f"binary:  {binary}")
+            return 0
+        result = existing_binary(binary) or try_install(kind, package, binary)
+        if result:
+            _print(f"installed {server.id}: {result}")
+            return 0
+        return _die(f"failed to install {server.id}; configure lsp.servers manually")
+
+    return _die("usage: aegis lsp [status|install]")
+
+
 # --------------------------------------------------------------------------- #
 # chat / interactive
 # --------------------------------------------------------------------------- #
@@ -4503,8 +4577,15 @@ def build_parser() -> argparse.ArgumentParser:
     ac = sub.add_parser("acp", help="run as an ACP stdio server for IDEs")
     ac.set_defaults(func=_acp.cmd_acp)
 
-    lsp = sub.add_parser("lsp", help="show LSP/code-intelligence readiness")
-    lsp.set_defaults(func=cmd_command_aliases)
+    lsp = sub.add_parser("lsp", help="inspect/install managed language-server support")
+    lsp_sub = lsp.add_subparsers(dest="action")
+    lsp_status = lsp_sub.add_parser("status", help="show LSP/code-intelligence readiness")
+    lsp_status.set_defaults(func=cmd_lsp)
+    lsp_install = lsp_sub.add_parser("install", help="install a managed language server by id or extension")
+    lsp_install.add_argument("server", help="server id, binary, or extension, e.g. pyright or .py")
+    lsp_install.add_argument("--dry-run", action="store_true", help="print the install command without running it")
+    lsp_install.set_defaults(func=cmd_lsp)
+    lsp.set_defaults(func=cmd_lsp)
 
     from ..gateway.pairing import cmd_pairing as _cmd_pairing
     pr = sub.add_parser("pairing", help="approve/revoke gateway users")

@@ -39,6 +39,11 @@ def test_cli_parser_exposes_upgrade_commands():
     assert parser.parse_args(["config", "setup"]).action == "setup"
     assert parser.parse_args(["security", "audit", "--json"]).json is True
     assert parser.parse_args(["security", "audit", "--markdown"]).markdown is True
+    assert parser.parse_args(["lsp", "status"]).action == "status"
+    lsp_install = parser.parse_args(["lsp", "install", "pyright", "--dry-run"])
+    assert lsp_install.action == "install"
+    assert lsp_install.server == "pyright"
+    assert lsp_install.dry_run is True
     assert parser.parse_args(["setup", "tools"]).section == "tools"
     assert parser.parse_args(["setup", "gateway", "--non-interactive"]).section == "gateway"
     assert parser.parse_args(["onboard", "terminal", "--exec-mode", "smart"]).exec_mode == "smart"

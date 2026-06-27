@@ -48,7 +48,9 @@ Generated from `aegis.cli.main.build_parser()`.
 | aegis login | login to a provider account (alias of `aegis auth login`) | `aegis login [-h] [--manual] [provider]` |
 | aegis logout | logout to a provider account (alias of `aegis auth logout`) | `aegis logout [-h] [--manual] [provider]` |
 | aegis logs | tail agent/desktop/errors/gateway/gui logs | `aegis logs [-h] [-n LINES] [-f]                   [{agent,desktop,errors,gateway,gui,legacy}]` |
-| aegis lsp | show LSP/code-intelligence readiness | `aegis lsp [-h]` |
+| aegis lsp | inspect/install managed language-server support | `aegis lsp [-h] {status,install} ...` |
+| aegis lsp install | install a managed language server by id or extension | `aegis lsp install [-h] [--dry-run] server` |
+| aegis lsp status | show LSP/code-intelligence readiness | `aegis lsp status [-h]` |
 | aegis mcp | manage MCP servers (or `serve` to be one) | `aegis mcp [-h] [--include INCLUDE] [--exclude EXCLUDE] [--all]                  [{list,add,remove,test,serve,catalog,install,tools,configure,login,picker}]                  [name] [cmd]` |
 | aegis memory | show/add/replace/remove/status long-term memory | `aegis memory [-h] [--old-text OLD_TEXT] [--user] [--yes]                     [--target {all,memory,user}]                     [{show,add,replace,remove,clear,status,setup,off,reset}]                     [text ...]` |
 | aegis migrate | migrate/normalize config (alias of `aegis config migrate`) | `aegis migrate [-h] [--dry-run] [--json] {xai} ...` |
