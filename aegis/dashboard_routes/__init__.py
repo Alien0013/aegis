@@ -7,6 +7,7 @@ def register_all(app, config, chat_runner) -> None:
     """Register every dashboard route group onto ``app`` in the original order."""
     from . import (
         appearance,
+        model_analytics,
         static_auth,
         config_profiles,
         skills_plugins,
@@ -22,6 +23,7 @@ def register_all(app, config, chat_runner) -> None:
         static_auth,
         config_profiles,
         appearance,
+        model_analytics,
         skills_plugins,
         tools_mcp,
         sessions,

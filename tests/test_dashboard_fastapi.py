@@ -681,6 +681,10 @@ def test_fastapi_files_upload_and_mkdir(tmp_path, monkeypatch):
     assert "series" in analytics_body
     assert "balance" in analytics_body
 
+    analytics_models = asyncio.run(_request(app, "GET", "/api/analytics/models?days=7", headers=headers))
+    assert analytics_models.status_code == 200
+    assert "models" in analytics_models.json()
+
 
 def test_fastapi_registers_live_and_pty_websockets(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
@@ -1226,6 +1230,21 @@ def test_fastapi_model_route_aliases(tmp_path, monkeypatch):
     vision = next(row for row in aux_after.json()["tasks"] if row["task"] == "vision")
     assert vision["provider"] == "auto"
     assert vision["model"] == "small-helper"
+
+    moa = asyncio.run(_request(app, "GET", "/api/model/moa", headers=headers))
+    assert moa.status_code == 200
+    assert "models" in moa.json()
+
+    moa_update = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/model/moa",
+        json={"models": ["openrouter/model-a", "openrouter/model-b"]},
+        headers=headers,
+    ))
+    assert moa_update.status_code == 200
+    assert moa_update.json()["ok"] is True
+    assert moa_update.json()["models"] == ["openrouter/model-a", "openrouter/model-b"]
 
 
 def test_fastapi_main_model_set_persists_and_clears_base_url(tmp_path, monkeypatch):

@@ -12,6 +12,8 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/admin/actions/status | GET | api_actions_status |
 | /api/admin/status | GET | api_admin_status |
 | /api/agent/oneshot | POST | api_llm_oneshot |
+| /api/analytics/models | GET | api_analytics_models |
+| /api/analytics/usage | GET | api_analytics_usage |
 | /api/audio/transcribe | POST | api_audio_transcribe |
 | /api/audio/tts | POST | api_audio_tts |
 | /api/audio/voices | GET | api_audio_voices |
@@ -170,6 +172,13 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/messaging/platforms/{platform_id} | GET | api_platform_registry_detail |
 | /api/messaging/platforms/{platform_id} | PUT | api_messaging_platform_update |
 | /api/messaging/platforms/{platform_id}/test | POST | api_messaging_platform_test |
+| /api/model/auxiliary | GET | api_model_auxiliary |
+| /api/model/info | GET | api_model_info |
+| /api/model/moa | GET | api_model_moa |
+| /api/model/moa | PUT | api_model_moa_update |
+| /api/model/options | GET | api_model_options |
+| /api/model/recommended-default | GET | api_model_recommended_default |
+| /api/model/set | POST | api_model_set |
 | /api/observability | GET | api_observability_contract |
 | /api/observability/contract | GET | api_observability_contract |
 | /api/observability/events | GET | api_observability_contract |
