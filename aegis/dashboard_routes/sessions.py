@@ -117,6 +117,45 @@ def register(app, config, chat_runner):
         result = _delete_sessions(ids)
         return JSONResponse(result, status_code=200 if result.get("ok") else 400)
 
+    @app.get("/api/sessions/{session_id}/latest-descendant")
+    async def api_session_latest_descendant(session_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from ..session import SessionStore
+
+        lineage = SessionStore().lineage(session_id)
+        if not lineage.get("found"):
+            return JSONResponse({"ok": False, "error": "Session not found"}, status_code=404)
+        current = lineage.get("current") or {}
+        requested = str(current.get("id") or session_id)
+        children: dict[str, list[dict]] = {}
+        for row in lineage.get("descendants", []) or []:
+            if isinstance(row, dict) and row.get("id") and row.get("parent_id"):
+                children.setdefault(str(row["parent_id"]), []).append(row)
+        path = [requested]
+        seen = {requested}
+        cursor = requested
+        while children.get(cursor):
+            candidates = [row for row in children[cursor] if str(row.get("id")) not in seen]
+            if not candidates:
+                break
+            candidates.sort(
+                key=lambda row: (
+                    str(row.get("updated_at") or ""),
+                    str(row.get("created_at") or ""),
+                    str(row.get("id") or ""),
+                ),
+                reverse=True,
+            )
+            cursor = str(candidates[0]["id"])
+            path.append(cursor)
+            seen.add(cursor)
+        return JSONResponse({
+            "requested_session_id": requested,
+            "session_id": cursor,
+            "path": path,
+            "changed": cursor != requested,
+        })
+
     @app.get("/api/sessions/{session_id}")
     async def api_session_detail(session_id: str, request: Request) -> JSONResponse:
         _require_request(request, config)

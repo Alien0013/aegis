@@ -275,6 +275,7 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/sessions/{session_id} | GET | api_session_detail |
 | /api/sessions/{session_id} | PATCH | api_session_patch |
 | /api/sessions/{session_id}/export | GET | api_session_export |
+| /api/sessions/{session_id}/latest-descendant | GET | api_session_latest_descendant |
 | /api/sessions/{session_id}/lineage | GET | api_session_lineage |
 | /api/sessions/{session_id}/messages | GET | api_session_messages |
 | /api/sessions/{session_id}/messages | POST | api_session_message_add |

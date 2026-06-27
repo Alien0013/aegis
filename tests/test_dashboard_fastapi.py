@@ -2667,6 +2667,20 @@ def test_fastapi_sessions_control_plane(tmp_path, monkeypatch):
     assert lineage_body["current"]["id"] == child_session.id
     assert lineage_body["current"]["origin"]["kind"] == "dashboard_branch"
 
+    latest_descendant = asyncio.run(_request(
+        app,
+        "GET",
+        f"/api/sessions/{session.id}/latest-descendant",
+        headers=headers,
+    ))
+    assert latest_descendant.status_code == 200
+    assert latest_descendant.json() == {
+        "requested_session_id": session.id,
+        "session_id": child_session.id,
+        "path": [session.id, child_session.id],
+        "changed": True,
+    }
+
     session.meta["system_prompt_hash"] = "hash_typed"
     session.meta["system_prompt_chars"] = 12
     session.meta["system_prompt_tokens"] = 3
