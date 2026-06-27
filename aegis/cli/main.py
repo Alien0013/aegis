@@ -893,12 +893,17 @@ def cmd_rpc(args, config: Config) -> int:
 
 
 def cmd_cron(args, config: Config) -> int:
-    from ..cron import CronStore, run_scheduler
+    from ..cron import CronStore, run_scheduler, tick
 
     store = CronStore()
-    if args.action == "add":
+    action = args.action
+    if action == "create":
+        action = "add"
+    if action == "remove":
+        action = "rm"
+    if action == "add":
         if not args.schedule or not args.prompt:
-            return _die('usage: aegis cron add "<schedule>" "<prompt>"')
+            return _die('usage: aegis cron add|create "<schedule>" "<prompt>"')
         prompt = " ".join(args.prompt) if isinstance(args.prompt, list) else args.prompt
         skills = [s.strip() for s in (getattr(args, "skills", "") or "").split(",") if s.strip()]
         context_from = [s.strip() for s in (getattr(args, "context_from", "") or "").split(",") if s.strip()]
@@ -912,27 +917,67 @@ def cmd_cron(args, config: Config) -> int:
                         context_from=context_from)
         _print(f"added cron {job.id}: [{job.schedule}] {job.prompt[:60]}")
         return 0
-    if args.action == "rm":
+    if action == "edit":
+        job_id = args.schedule or ""
+        parts = list(args.prompt or [])
+        if not job_id or not parts:
+            return _die('usage: aegis cron edit <job_id> "<schedule>" [prompt...]')
+        updates = {"schedule": parts[0]}
+        if len(parts) > 1:
+            updates["prompt"] = " ".join(parts[1:])
+        if getattr(args, "script", None) is not None:
+            updates["script"] = args.script or ""
+        if getattr(args, "skills", None) is not None:
+            updates["skills"] = [s.strip() for s in (args.skills or "").split(",") if s.strip()]
+        if getattr(args, "context_from", None) is not None:
+            refs = [s.strip() for s in (args.context_from or "").split(",") if s.strip()]
+            for ref in refs:
+                if store.resolve(ref) is None:
+                    return _die(f"context_from job not found: {ref}")
+            updates["context_from"] = refs
+        if getattr(args, "deliver", None) is not None:
+            updates["deliver"] = args.deliver or ""
+        if getattr(args, "no_agent", False):
+            updates["no_agent"] = True
+        job = store.update(job_id, **updates)
+        if job is None:
+            return _die(f"cron job not found: {job_id}")
+        _print(f"updated cron {job.id}: [{job.schedule}] {job.prompt[:60]}")
+        return 0
+    if action in {"pause", "resume"}:
+        job_id = args.schedule or ""
+        if not job_id:
+            return _die(f"usage: aegis cron {action} <job_id>")
+        enabled = action == "resume"
+        if not store.set_enabled(job_id, enabled):
+            return _die(f"cron job not found: {job_id}")
+        _print(f"{action}d cron {job_id}")
+        return 0
+    if action == "rm":
         _print("removed" if store.remove(args.schedule or "") else "not found")
         return 0
-    if args.action == "run":
+    if action == "tick":
+        ran = tick(config)
+        _print(f"ran {ran} cron job(s)")
+        return 0
+    if action == "run":
         run_scheduler(config)
         return 0
-    if args.action == "install":
+    if action == "install":
         from ..daemon import install_cron_service
         res = install_cron_service(config, enable_now=not getattr(args, "no_start", False))
         _print(("✓ " if res.ok else "! ") + res.message)
         return 0 if res.ok else 1
-    if args.action == "status":
+    if action == "status":
         from ..daemon import cron_service_status
         _print(f"aegis-cron.service: {cron_service_status()}")
         return 0
-    if args.action in ("start", "stop", "restart"):
+    if action in ("start", "stop", "restart"):
         from ..daemon import control_cron_service
-        res = control_cron_service(args.action)
+        res = control_cron_service(action)
         _print(("✓ " if res.ok else "! ") + res.message)
         return 0 if res.ok else 1
-    if args.action == "uninstall":
+    if action == "uninstall":
         from ..daemon import remove_cron_service
         res = remove_cron_service()
         _print(("✓ " if res.ok else "! ") + res.message)
@@ -3971,8 +4016,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     cr = sub.add_parser("cron", help="schedule recurring agent tasks")
     cr.add_argument("action", nargs="?",
-                    choices=["list", "add", "rm", "run", "install", "uninstall",
-                             "status", "start", "stop", "restart"],
+                    choices=["list", "add", "create", "rm", "remove", "edit", "pause", "resume",
+                             "run", "tick", "install", "uninstall", "status", "start", "stop", "restart"],
                     default="list")
     cr.add_argument("schedule", nargs="?", help='e.g. "30m", "@daily", or 5-field cron')
     cr.add_argument("prompt", nargs="*")
