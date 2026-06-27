@@ -252,6 +252,12 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/provider-auth/{provider} | GET | api_provider_auth_detail |
 | /api/providers | GET | api_providers_get |
 | /api/providers/matrix | GET | api_providers_matrix |
+| /api/providers/oauth | GET | api_providers_oauth |
+| /api/providers/oauth/sessions/{session_id} | DELETE | api_providers_oauth_session_delete |
+| /api/providers/oauth/{provider_id} | DELETE | api_providers_oauth_delete |
+| /api/providers/oauth/{provider_id}/poll/{session_id} | GET | api_providers_oauth_poll |
+| /api/providers/oauth/{provider_id}/start | POST | api_providers_oauth_start |
+| /api/providers/oauth/{provider_id}/submit | POST | api_providers_oauth_submit |
 | /api/providers/probe | POST | api_providers_probe |
 | /api/providers/validate | POST | api_providers_validate |
 | /api/pty | WEBSOCKET | pty_socket |

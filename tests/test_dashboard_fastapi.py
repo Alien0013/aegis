@@ -1383,6 +1383,60 @@ def test_fastapi_provider_and_gateway_control_plane_routes(tmp_path, monkeypatch
     assert body["active"]
     assert body["provider_matrix"]["totals"]["providers"] >= 1
 
+    oauth = asyncio.run(_request(app, "GET", "/api/providers/oauth", headers=headers))
+    assert oauth.status_code == 200
+    oauth_body = oauth.json()
+    assert oauth_body["providers"]
+    openai_oauth = next(row for row in oauth_body["providers"] if row["id"] == "openai")
+    assert openai_oauth["provider"] == "openai"
+    assert "auth_methods" in openai_oauth
+
+    oauth_start = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/providers/oauth/openai/start",
+        json={},
+        headers=headers,
+    ))
+    assert oauth_start.status_code == 200
+    start_body = oauth_start.json()
+    assert start_body["ok"] is True
+    assert start_body["provider"] == "openai"
+    assert start_body["session_id"]
+
+    oauth_poll = asyncio.run(_request(
+        app,
+        "GET",
+        f"/api/providers/oauth/openai/poll/{start_body['session_id']}",
+        headers=headers,
+    ))
+    assert oauth_poll.status_code == 200
+    assert oauth_poll.json()["status"] == "pending"
+
+    oauth_submit = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/providers/oauth/openai/submit",
+        json={"session_id": start_body["session_id"], "access_token": "oauth-token"},
+        headers=headers,
+    ))
+    assert oauth_submit.status_code == 200
+    assert oauth_submit.json()["status"] == "approved"
+    assert "oauth-token" not in json.dumps(oauth_submit.json())
+
+    oauth_session_delete = asyncio.run(_request(
+        app,
+        "DELETE",
+        f"/api/providers/oauth/sessions/{start_body['session_id']}",
+        headers=headers,
+    ))
+    assert oauth_session_delete.status_code == 200
+    assert oauth_session_delete.json()["ok"] is True
+
+    oauth_delete = asyncio.run(_request(app, "DELETE", "/api/providers/oauth/openai", headers=headers))
+    assert oauth_delete.status_code == 200
+    assert oauth_delete.json()["ok"] is True
+
     matrix = asyncio.run(_request(app, "GET", "/api/providers/matrix", headers=headers))
     assert matrix.status_code == 200
     matrix_body = matrix.json()

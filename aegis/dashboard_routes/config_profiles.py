@@ -54,6 +54,9 @@ from ..dashboard_fastapi import (
 )
 
 
+_OAUTH_DASHBOARD_SESSIONS: dict[str, dict] = {}
+
+
 def register(app, config, chat_runner):
     @app.get("/api/auth/providers")
     async def api_auth_providers(request: Request) -> JSONResponse:
@@ -361,6 +364,129 @@ def register(app, config, chat_runner):
 
         ok, detail = import_claude_cli_login(AuthStore())
         return JSONResponse({"ok": bool(ok), "detail": detail}, status_code=200 if ok else 400)
+
+    def _oauth_provider_rows() -> list[dict]:
+        from ..providers import registry
+
+        auth = _provider_auth_payload(config)
+        auth_by_name = {str(row.get("name") or row.get("provider") or ""): row for row in auth.get("providers", [])}
+        rows: list[dict] = []
+        for row in registry.oauth_catalog(config):
+            name = str(row.get("name") or "").strip()
+            if not name:
+                continue
+            auth_row = auth_by_name.get(name, {})
+            status = str(row.get("oauth_status") or "")
+            rows.append({
+                "id": name,
+                "provider": name,
+                "name": row.get("display_name") or name,
+                "display_name": row.get("display_name") or name,
+                "oauth": bool(row.get("oauth")),
+                "oauth_status": status,
+                "status": status,
+                "logged_in": bool(auth_row.get("ready")),
+                "ready": bool(auth_row.get("ready")),
+                "auth_methods": list(row.get("auth_methods") or []),
+                "env_vars": list(row.get("env_vars") or []),
+                "known_provider": bool(row.get("known_provider", True)),
+                "catalog_only": bool(row.get("catalog_only", False)),
+                "notes": row.get("notes") or "",
+            })
+        return rows
+
+    def _oauth_provider(provider_id: str) -> dict | None:
+        safe = _safe_resource_name(provider_id, "provider")
+        return next((row for row in _oauth_provider_rows() if row.get("id") == safe), None)
+
+    def _oauth_session_public(session: dict) -> dict:
+        return {k: v for k, v in session.items() if k not in {"access_token", "refresh_token"}}
+
+    @app.get("/api/providers/oauth")
+    async def api_providers_oauth(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        providers = _oauth_provider_rows()
+        return JSONResponse({"ok": True, "providers": providers, "count": len(providers)})
+
+    @app.post("/api/providers/oauth/{provider_id}/start")
+    async def api_providers_oauth_start(provider_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        provider = _oauth_provider(provider_id)
+        if provider is None:
+            return JSONResponse({"ok": False, "error": "unknown provider", "provider": provider_id}, status_code=404)
+        session_id = "oauth_" + secrets.token_urlsafe(12)
+        session = {
+            "ok": True,
+            "session_id": session_id,
+            "provider": provider["provider"],
+            "provider_id": provider["id"],
+            "flow": "manual_token",
+            "status": "pending",
+            "auth_url": "",
+            "verification_url": "",
+            "message": "Paste an access_token to submit this OAuth session.",
+        }
+        _OAUTH_DASHBOARD_SESSIONS[session_id] = dict(session)
+        return JSONResponse(session)
+
+    @app.get("/api/providers/oauth/{provider_id}/poll/{session_id}")
+    async def api_providers_oauth_poll(provider_id: str, session_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        provider = _oauth_provider(provider_id)
+        session = _OAUTH_DASHBOARD_SESSIONS.get(session_id)
+        if provider is None or session is None or session.get("provider_id") != provider.get("id"):
+            return JSONResponse({"ok": False, "error": "OAuth session not found"}, status_code=404)
+        return JSONResponse(_oauth_session_public(session))
+
+    @app.post("/api/providers/oauth/{provider_id}/submit")
+    async def api_providers_oauth_submit(provider_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        provider = _oauth_provider(provider_id)
+        if provider is None:
+            return JSONResponse({"ok": False, "error": "unknown provider", "provider": provider_id}, status_code=404)
+        body = await request.json()
+        body = body if isinstance(body, dict) else {}
+        session_id = str(body.get("session_id") or "").strip()
+        session = _OAUTH_DASHBOARD_SESSIONS.get(session_id) if session_id else None
+        if session is None or session.get("provider_id") != provider.get("id"):
+            return JSONResponse({"ok": False, "error": "OAuth session not found"}, status_code=404)
+        access_token = str(body.get("access_token") or body.get("token") or "").strip()
+        if not access_token:
+            session["status"] = "pending"
+            return JSONResponse({"ok": False, "status": "pending", "error": "access_token is required"}, status_code=400)
+        creds = {
+            "access_token": access_token,
+            "refresh_token": body.get("refresh_token"),
+            "token_type": body.get("token_type") or "Bearer",
+            "expires_at": body.get("expires_at"),
+            "scope": body.get("scope"),
+            "quarantined": False,
+        }
+        from ..providers.auth import AuthStore
+
+        AuthStore().save(str(provider["provider"]), creds)
+        session.update({"ok": True, "status": "approved", "approved": True})
+        return JSONResponse(_oauth_session_public(session))
+
+    @app.delete("/api/providers/oauth/sessions/{session_id}")
+    async def api_providers_oauth_session_delete(session_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        existed = _OAUTH_DASHBOARD_SESSIONS.pop(session_id, None) is not None
+        return JSONResponse({"ok": True, "session_id": session_id, "removed": existed})
+
+    @app.delete("/api/providers/oauth/{provider_id}")
+    async def api_providers_oauth_delete(provider_id: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        provider = _oauth_provider(provider_id)
+        if provider is None:
+            return JSONResponse({"ok": False, "error": "unknown provider", "provider": provider_id}, status_code=404)
+        from ..providers.auth import AuthStore
+
+        AuthStore().delete(str(provider["provider"]))
+        removed_sessions = [sid for sid, row in _OAUTH_DASHBOARD_SESSIONS.items() if row.get("provider_id") == provider["id"]]
+        for sid in removed_sessions:
+            _OAUTH_DASHBOARD_SESSIONS.pop(sid, None)
+        return JSONResponse({"ok": True, "provider": provider["provider"], "removed_sessions": removed_sessions})
 
     @app.get("/api/dashboard/preferences")
     async def api_dashboard_preferences(request: Request) -> JSONResponse:
