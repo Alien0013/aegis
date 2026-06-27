@@ -886,6 +886,28 @@ def cmd_serve(args, config: Config) -> int:
     return 0
 
 
+def cmd_proxy(args, config: Config) -> int:
+    action = getattr(args, "action", None) or "start"
+    if action == "start":
+        return cmd_serve(args, config)
+    if action == "status":
+        host = args.host or config.get("server.host", "127.0.0.1")
+        port = args.port or int(config.get("server.port", 8790))
+        _print(f"OpenAI-compatible proxy: {host}:{port}")
+        _print(f"provider: {config.get('model.provider')}/{config.get('model.default')}")
+        return 0
+    if action == "providers":
+        from ..providers import registry
+
+        for name in registry.list_providers(config):
+            spec = registry.get_spec(name, config)
+            if spec is None:
+                continue
+            _print(f"  {name:<16} {spec.default_model}")
+        return 0
+    return _die("usage: aegis proxy [start|status|providers]")
+
+
 def cmd_rpc(args, config: Config) -> int:
     from ..rpc import run_rpc_server
     run_rpc_server(config)
@@ -3989,10 +4011,11 @@ def build_parser() -> argparse.ArgumentParser:
     sv.add_argument("--port", type=int)
     sv.set_defaults(func=cmd_serve)
 
-    prx = sub.add_parser("proxy", help="run the OpenAI-compatible API server (alias of serve)")
+    prx = sub.add_parser("proxy", help="run or inspect the OpenAI-compatible API proxy")
+    prx.add_argument("action", nargs="?", choices=["start", "status", "providers"], default="start")
     prx.add_argument("--host")
     prx.add_argument("--port", type=int)
-    prx.set_defaults(func=cmd_command_aliases)
+    prx.set_defaults(func=cmd_proxy)
 
     rp = sub.add_parser("rpc", help="run a local JSON-RPC agent server over stdio")
     rp.set_defaults(func=cmd_rpc)
