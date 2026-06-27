@@ -30,7 +30,7 @@ Generated from `aegis.cli.main.build_parser()`.
 | aegis doctor | diagnose (and optionally repair) the installation | `aegis doctor [-h] [--fix] [--probe] [--release]` |
 | aegis dump | print a redacted config dump | `aegis dump [-h] [--json]` |
 | aegis eval | run/list/show offline eval suites | `aegis eval [-h] [--limit LIMIT] [--json] [{list,run,show}] [path]` |
-| aegis fallback | show model/provider fallback diagnostics | `aegis fallback [-h]` |
+| aegis fallback | list/add/remove model fallback providers | `aegis fallback [-h] [{list,add,remove}] [provider] [model]` |
 | aegis gateway | run the multi-channel gateway | `aegis gateway [-h] [--channels CHANNELS]                      [{run,install,uninstall,status,start,stop,restart}]` |
 | aegis gstack | run a goal through a sprint of roles (think→plan→build→review→test→ship→reflect) | `aegis gstack [-h] [--phases PHASES] [--from FROM_PHASE] [--dry]                     [goal ...]` |
 | aegis gui | open the AEGIS control panel in your browser | `aegis gui [-h] [--host HOST] [--port PORT] [--no-open]` |

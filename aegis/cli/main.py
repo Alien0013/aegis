@@ -247,6 +247,66 @@ def cmd_model(args, config: Config) -> int:
     return 0
 
 
+def cmd_fallback(args, config: Config) -> int:
+    from ..providers import registry
+
+    action = getattr(args, "action", None) or "list"
+    chain = [dict(row) for row in (config.get("fallback_providers", []) or []) if isinstance(row, dict)]
+    if action == "list":
+        _print("fallback providers:")
+        if not chain:
+            _print("  (none)")
+            return 0
+        for idx, row in enumerate(chain, start=1):
+            _print(f"  #{idx} {row.get('provider', '')} / {row.get('model', '')}")
+        return 0
+
+    if action == "add":
+        provider = str(getattr(args, "provider", "") or "").strip()
+        if not provider:
+            return _die("usage: aegis fallback add <provider> [model]")
+        spec = registry.get_spec(provider, config)
+        model = str(getattr(args, "model", "") or "").strip() or (spec.default_model if spec else "default")
+        validation = registry.validate_model_choice(provider, model, config)
+        if not validation.get("ok", True):
+            return _die(registry.model_validation_message(validation))
+        row = {"provider": provider, "model": model}
+        if any(existing.get("provider") == provider and existing.get("model") == model for existing in chain):
+            return _die(f"fallback already exists: {provider}/{model}")
+        chain.append(row)
+        config.data["fallback_providers"] = chain
+        config.save()
+        _print(f"added fallback {provider}/{model}")
+        warning = registry.model_validation_message(validation)
+        if warning and validation.get("warning"):
+            _print(f"warning: {warning}")
+        return 0
+
+    if action == "remove":
+        target = str(getattr(args, "provider", "") or "").strip()
+        if not target:
+            return _die("usage: aegis fallback remove <index|provider>")
+        remove_index: int | None = None
+        if target.isdigit():
+            candidate = int(target) - 1
+            if 0 <= candidate < len(chain):
+                remove_index = candidate
+        if remove_index is None:
+            for idx, row in enumerate(chain):
+                if target in {str(row.get("provider") or ""), f"{row.get('provider')}/{row.get('model')}"}:
+                    remove_index = idx
+                    break
+        if remove_index is None:
+            return _die(f"fallback not found: {target}")
+        removed = chain.pop(remove_index)
+        config.data["fallback_providers"] = chain
+        config.save()
+        _print(f"removed fallback #{remove_index + 1} {removed.get('provider')}/{removed.get('model')}")
+        return 0
+
+    return _die("usage: aegis fallback [list|add|remove]")
+
+
 # --------------------------------------------------------------------------- #
 # auth
 # --------------------------------------------------------------------------- #
@@ -3410,8 +3470,11 @@ def build_parser() -> argparse.ArgumentParser:
     dump.add_argument("--json", action="store_true", help="reserved for compatibility; dump is YAML")
     dump.set_defaults(func=cmd_command_aliases)
 
-    fb = sub.add_parser("fallback", help="show model/provider fallback diagnostics")
-    fb.set_defaults(func=cmd_command_aliases)
+    fb = sub.add_parser("fallback", help="list/add/remove model fallback providers")
+    fb.add_argument("action", nargs="?", choices=["list", "add", "remove"], default="list")
+    fb.add_argument("provider", nargs="?")
+    fb.add_argument("model", nargs="?")
+    fb.set_defaults(func=cmd_fallback)
 
     ps = sub.add_parser("prompt-size", help="show active context and compression sizing")
     ps.set_defaults(func=cmd_command_aliases)
