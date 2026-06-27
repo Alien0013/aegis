@@ -233,6 +233,57 @@ def test_dashboard_appearance_theme_and_font_routes(tmp_path, monkeypatch):
     assert invalid_font.json() == {"ok": True, "font": "theme"}
 
 
+def test_dashboard_explicit_file_api_compat_routes(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+    work = tmp_path / "work"
+    work.mkdir()
+    note = work / "note.txt"
+    note.write_text("hello", encoding="utf-8")
+
+    default_cwd = asyncio.run(_request(app, "GET", "/api/fs/default-cwd", headers=headers))
+    assert default_cwd.status_code == 200
+    assert "cwd" in default_cwd.json()
+
+    listing = asyncio.run(_request(app, "GET", "/api/files", headers=headers, params={"path": str(work)}))
+    assert listing.status_code == 200
+    assert any(row["name"] == "note.txt" for row in listing.json()["entries"])
+
+    fs_listing = asyncio.run(_request(app, "GET", "/api/fs/list", headers=headers, params={"path": str(work)}))
+    assert fs_listing.status_code == 200
+    assert any(row["name"] == "note.txt" for row in fs_listing.json()["entries"])
+
+    read_text = asyncio.run(_request(app, "GET", "/api/fs/read-text", headers=headers, params={"path": str(note)}))
+    assert read_text.status_code == 200
+    assert read_text.json()["text"] == "hello"
+
+    read_file = asyncio.run(_request(app, "GET", "/api/files/read", headers=headers, params={"path": str(note)}))
+    assert read_file.status_code == 200
+    assert read_file.json()["data_url"].startswith("data:text/plain;base64,")
+
+    write = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/fs/write-text",
+        headers=headers,
+        json={"path": str(note), "content": "updated"},
+    ))
+    assert write.status_code == 200
+    assert write.json()["ok"] is True
+    assert note.read_text(encoding="utf-8") == "updated"
+
+    mkdir = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/files/mkdir",
+        headers=headers,
+        json={"path": str(work / "child")},
+    ))
+    assert mkdir.status_code == 200
+    assert mkdir.json()["ok"] is True
+    assert (work / "child").is_dir()
+
+
 def test_fastapi_security_policy_simulator_redacts_and_explains(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
     headers = {"X-Aegis-Token": "t"}

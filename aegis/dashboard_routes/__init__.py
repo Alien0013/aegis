@@ -14,6 +14,7 @@ def register_all(app, config, chat_runner) -> None:
         sessions,
         cron_jobs,
         gateway_messaging,
+        file_browser,
         misc,
         fallback,
     )
@@ -26,6 +27,7 @@ def register_all(app, config, chat_runner) -> None:
         sessions,
         cron_jobs,
         gateway_messaging,
+        file_browser,
         misc,
         fallback,
     ):
