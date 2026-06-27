@@ -16,6 +16,20 @@ def test_install_sh_syntax():
     assert res.returncode == 0, res.stderr
 
 
+def test_scripts_install_wrappers_delegate_to_root_installers():
+    sh = ROOT / "scripts" / "install.sh"
+    ps1 = ROOT / "scripts" / "install.ps1"
+    cmd = ROOT / "scripts" / "install.cmd"
+    assert sh.exists()
+    assert ps1.exists()
+    assert cmd.exists()
+    res = subprocess.run(["bash", "-n", str(sh)], cwd=ROOT, capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    assert "../install.sh" in sh.read_text(encoding="utf-8")
+    assert "../install.ps1" in ps1.read_text(encoding="utf-8")
+    assert "install.ps1" in cmd.read_text(encoding="utf-8")
+
+
 def test_uninstall_sh_syntax():
     res = subprocess.run(["bash", "-n", "uninstall.sh"], cwd=ROOT, capture_output=True, text=True)
     assert res.returncode == 0, res.stderr
