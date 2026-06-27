@@ -3408,6 +3408,41 @@ def cmd_gateway(args, config: Config) -> int:
 
 
 # --------------------------------------------------------------------------- #
+# mixture-of-agents
+# --------------------------------------------------------------------------- #
+def cmd_moa(args, config: Config) -> int:
+    action = getattr(args, "action", None) or "list"
+    models = [str(model).strip() for model in (config.get("moa.models", []) or []) if str(model).strip()]
+
+    if action in {"list", "ls"}:
+        _print("moa models:")
+        if models:
+            for model in models:
+                _print(f"  {model}")
+        else:
+            _print("  (none configured)")
+            _print("  configure with: aegis moa configure --models model-a,model-b")
+        return 0
+
+    if action in {"configure", "config"}:
+        raw = getattr(args, "models", None) or ""
+        configured = [part.strip() for part in raw.split(",") if part.strip()]
+        if not configured:
+            _print("usage: aegis moa configure --models model-a,model-b")
+            return 1
+        config.set("moa.models", configured)
+        _print("configured moa models: " + ", ".join(configured))
+        return 0
+
+    if action == "delete":
+        config.set("moa.models", [])
+        _print("cleared moa models")
+        return 0
+
+    return 1
+
+
+# --------------------------------------------------------------------------- #
 # doctor
 # --------------------------------------------------------------------------- #
 def cmd_doctor(args, config: Config) -> int:
@@ -4635,6 +4670,11 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("user_id", nargs="?", help="user/channel id for gateway enroll")
     g.add_argument("--channels", help="comma list: cli,telegram (default cli)")
     g.set_defaults(func=cmd_gateway)
+
+    moa = sub.add_parser("moa", help="manage Mixture-of-Agents model slots")
+    moa.add_argument("action", nargs="?", choices=["list", "ls", "configure", "config", "delete"], default="list")
+    moa.add_argument("--models", help="comma-separated model specs used by /moa")
+    moa.set_defaults(func=cmd_moa)
 
     for _name in ("slack", "whatsapp", "whatsapp-cloud"):
         platform_cmd = sub.add_parser(_name, help=f"run gateway for {_name}")
