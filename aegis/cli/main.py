@@ -1176,6 +1176,13 @@ def cmd_tools(args, config: Config) -> int:
                 _print(f"  ✗ {t.name:<16} {t.toolset:<9} {reason}")
         _print(f"\n{len(reg.all()) - unusable}/{len(reg.all())} tools usable in this environment.")
         return 1 if unusable or not validation.ok else 0
+    if action == "post-setup":
+        _print("Tool post-setup")
+        _print("  No automatic optional setup is required for the current AEGIS tool registry.")
+        _print("  Optional setup reminders:")
+        _print("    browser:  pip install 'aegis-agent-harness[browser]' && playwright install chromium")
+        _print("    computer: pip install 'aegis-agent-harness[computer]' && aegis tools enable computer")
+        return 0
     inv = tool_inventory(config)
     enabled = set(inv.enabled_names)
     _print(f"enabled toolsets: {', '.join(inv.toolsets)}")
@@ -4137,7 +4144,7 @@ def build_parser() -> argparse.ArgumentParser:
     cr.set_defaults(func=cmd_cron)
 
     t = sub.add_parser("tools", help="list tools; enable/disable toolsets or individual tools")
-    t.add_argument("action", nargs="?", choices=["list", "status", "doctor", "enable", "disable"], default="list")
+    t.add_argument("action", nargs="?", choices=["list", "status", "doctor", "post-setup", "enable", "disable"], default="list")
     t.add_argument("name", nargs="?", help="tool or toolset for enable/disable")
     t.set_defaults(func=cmd_tools)
 
