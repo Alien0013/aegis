@@ -70,6 +70,8 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/dashboard/agent-plugins/{name:path}/disable | POST | api_dashboard_agent_plugin_disable |
 | /api/dashboard/agent-plugins/{name:path}/enable | POST | api_dashboard_agent_plugin_enable |
 | /api/dashboard/agent-plugins/{name:path}/update | POST | api_dashboard_agent_plugin_update |
+| /api/dashboard/font | GET | api_dashboard_font |
+| /api/dashboard/font | PUT | api_dashboard_font_set |
 | /api/dashboard/plugin-providers | PUT | api_dashboard_plugin_providers |
 | /api/dashboard/plugins | GET | api_dashboard_plugins |
 | /api/dashboard/plugins/hub | GET | api_dashboard_plugins_hub |
@@ -78,6 +80,8 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/dashboard/plugins/{name:path}/visibility | POST | api_dashboard_plugin_visibility |
 | /api/dashboard/preferences | GET | api_dashboard_preferences |
 | /api/dashboard/preferences | PUT | api_dashboard_preferences_put |
+| /api/dashboard/theme | PUT | api_dashboard_theme_set |
+| /api/dashboard/themes | GET | api_dashboard_themes |
 | /api/env | DELETE | api_env_delete_body |
 | /api/env | GET | api_env_list |
 | /api/env | POST | api_env_set |

@@ -183,6 +183,56 @@ def test_fastapi_tools_validation_and_permission_dry_run(tmp_path, monkeypatch):
     assert "visibility" in body
 
 
+def test_dashboard_appearance_theme_and_font_routes(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    themes = asyncio.run(_request(app, "GET", "/api/dashboard/themes", headers=headers))
+    assert themes.status_code == 200
+    themes_body = themes.json()
+    assert themes_body["active"] == "system"
+    assert any(row["name"] == "aegis-dark" for row in themes_body["themes"])
+
+    set_theme = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/dashboard/theme",
+        headers=headers,
+        json={"name": "midnight"},
+    ))
+    assert set_theme.status_code == 200
+    assert set_theme.json() == {"ok": True, "theme": "midnight"}
+
+    font = asyncio.run(_request(app, "GET", "/api/dashboard/font", headers=headers))
+    assert font.status_code == 200
+    assert font.json() == {"font": "theme"}
+
+    set_font = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/dashboard/font",
+        headers=headers,
+        json={"font": "jetbrains-mono"},
+    ))
+    assert set_font.status_code == 200
+    assert set_font.json() == {"ok": True, "font": "jetbrains-mono"}
+
+    from aegis.config import Config
+    saved = Config.load()
+    assert saved.get("display.theme") == "midnight"
+    assert saved.get("display.font") == "jetbrains-mono"
+
+    invalid_font = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/dashboard/font",
+        headers=headers,
+        json={"font": "https://example.invalid/font.css"},
+    ))
+    assert invalid_font.status_code == 200
+    assert invalid_font.json() == {"ok": True, "font": "theme"}
+
+
 def test_fastapi_security_policy_simulator_redacts_and_explains(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
     headers = {"X-Aegis-Token": "t"}
