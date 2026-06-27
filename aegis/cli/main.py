@@ -4896,6 +4896,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from ..agent.process_bootstrap import _install_safe_stdio
+
+    _install_safe_stdio()
     parser = build_parser()
     args = parser.parse_args(argv)
     if getattr(args, "strict", False):
