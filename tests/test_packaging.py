@@ -133,6 +133,30 @@ def test_desktop_update_relaunch_app_path_exposes_relaunch_decision_helper():
     assert "AEGIS_HOME" in source
 
 
+def test_desktop_bootstrap_platform_app_path_exposes_aegis_platform_helper():
+    helper = ROOT / "apps" / "desktop" / "electron" / "bootstrap-platform.cjs"
+    helper_test = ROOT / "apps" / "desktop" / "electron" / "bootstrap-platform.test.cjs"
+
+    assert helper.is_file()
+    assert helper_test.is_file()
+    source = helper.read_text(encoding="utf-8")
+    assert "AEGIS_DESKTOP_DISABLE_GPU" in source
+    assert "isWslEnvironment" in source
+    assert "detectRemoteDisplay" in source
+
+
+def test_desktop_bootstrap_runner_app_path_exposes_aegis_install_runner():
+    helper = ROOT / "apps" / "desktop" / "electron" / "bootstrap-runner.cjs"
+    helper_test = ROOT / "apps" / "desktop" / "electron" / "bootstrap-runner.test.cjs"
+
+    assert helper.is_file()
+    assert helper_test.is_file()
+    source = helper.read_text(encoding="utf-8")
+    assert "installScriptName" in source
+    assert "resolveLocalInstallScript" in source
+    assert "AEGIS_NONINTERACTIVE_ONBOARD" in source
+
+
 def test_shared_package_exports_aegis_runtime_contract():
     manifest = json.loads((ROOT / "apps" / "shared" / "package.json").read_text(encoding="utf-8"))
     source = (ROOT / "apps" / "shared" / "src" / "index.ts").read_text(encoding="utf-8")
