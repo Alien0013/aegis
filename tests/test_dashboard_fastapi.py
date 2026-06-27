@@ -899,6 +899,7 @@ def test_fastapi_registers_live_and_pty_websockets(tmp_path, monkeypatch):
         "/api/cron/jobs",
         "/api/cron/service",
         "/api/gateway/status",
+        "/api/gateway/drain",
         "/api/messaging/platforms",
         "/api/platforms",
         "/api/platforms/registry",
@@ -5474,6 +5475,28 @@ def test_fastapi_gateway_control_plane(tmp_path, monkeypatch):
     assert "reasoning_effort" in status.json()
     assert "service_tier" in status.json()
     assert status.json()["outbox"]["failed"] == 2
+
+    drain = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/gateway/drain",
+        json={"action": "drain"},
+        headers=headers,
+    ))
+    assert drain.status_code == 200
+    assert drain.json()["ok"] is True
+    assert drain.json()["action"] == "drain"
+    assert drain.json()["draining"] is True
+
+    drain_cancel = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/gateway/drain",
+        json={"action": "cancel"},
+        headers=headers,
+    ))
+    assert drain_cancel.status_code == 200
+    assert drain_cancel.json() == {"ok": True, "action": "cancel", "was_draining": True}
 
     outbox = asyncio.run(_request(app, "GET", "/api/gateway/outbox?status=failed", headers=headers))
     assert outbox.status_code == 200

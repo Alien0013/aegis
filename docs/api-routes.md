@@ -125,6 +125,7 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/gateway/dead-letter | GET | api_gateway_dead_letter |
 | /api/gateway/dead-letter/{message_id}/discard | POST | api_gateway_dead_letter_discard |
 | /api/gateway/dead-letter/{message_id}/retry | POST | api_gateway_dead_letter_retry |
+| /api/gateway/drain | POST | api_gateway_drain |
 | /api/gateway/outbox | GET | api_gateway_outbox |
 | /api/gateway/outbox/{message_id}/discard | POST | api_gateway_outbox_discard |
 | /api/gateway/outbox/{message_id}/retry | POST | api_gateway_outbox_retry |

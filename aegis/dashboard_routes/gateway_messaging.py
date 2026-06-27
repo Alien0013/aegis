@@ -9,6 +9,8 @@ register_all preserves the original cross-module order so the catch-alls registe
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from ..dashboard_fastapi import (
     JSONResponse,
     Request,
@@ -31,11 +33,36 @@ from ..dashboard_fastapi import (
 )
 
 
+_GATEWAY_DRAIN_STATE: dict[str, str] = {}
+
+
 def register(app, config, chat_runner):
     @app.get("/api/gateway/status")
     async def api_gateway_status(request: Request) -> JSONResponse:
         _require_request(request, config)
         return JSONResponse(_gateway_status(config))
+
+    @app.post("/api/gateway/drain")
+    async def api_gateway_drain(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            body = {}
+        action = str((body if isinstance(body, dict) else {}).get("action") or "drain").strip().lower()
+        if action == "cancel":
+            was_draining = bool(_GATEWAY_DRAIN_STATE)
+            _GATEWAY_DRAIN_STATE.clear()
+            return JSONResponse({"ok": True, "action": "cancel", "was_draining": was_draining})
+        if action != "drain":
+            return JSONResponse({
+                "ok": False,
+                "error": "unknown drain action; expected 'drain' or 'cancel'",
+                "action": action,
+            }, status_code=400)
+        requested_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        _GATEWAY_DRAIN_STATE.update({"requested_at": requested_at, "principal": "dashboard"})
+        return JSONResponse({"ok": True, "action": "drain", "requested_at": requested_at, "draining": True})
 
     @app.get("/api/gateway/outbox")
     async def api_gateway_outbox(request: Request) -> JSONResponse:
