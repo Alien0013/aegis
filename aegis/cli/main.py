@@ -1198,6 +1198,56 @@ def cmd_tools(args, config: Config) -> int:
     return 0
 
 
+def cmd_computer_use(args, config: Config) -> int:
+    from ..tools.browser import ComputerTool
+
+    action = getattr(args, "action", None) or "status"
+    tool = ComputerTool()
+    ok, reason = tool.available()
+    toolsets = list(config.get("tools.toolsets", []) or ["core"])
+    enabled = "all" in toolsets or tool.toolset in toolsets
+
+    if action == "status":
+        _print("Computer Use")
+        _print(f"  computer tool: {'ready' if ok else 'unavailable'}")
+        if reason:
+            _print(f"  reason: {reason}")
+        _print(f"  toolset enabled: {'yes' if enabled else 'no'}")
+        if not enabled:
+            _print("  enable with: aegis tools enable computer")
+        return 0
+
+    if action == "doctor":
+        _print("Computer Use diagnostics")
+        _print(f"  platform: {sys.platform}")
+        _print(f"  pyautogui dependency: {'ok' if ok else 'missing'}")
+        if reason:
+            _print(f"  install hint: {reason}")
+        _print(f"  toolset enabled: {'yes' if enabled else 'no'}")
+        return 0 if ok and enabled else 1
+
+    if action == "install":
+        _print("AEGIS computer-use uses the local pyautogui-backed computer tool.")
+        _print("Install optional dependency with:")
+        _print("  pip install 'aegis-agent-harness[computer]'")
+        _print("Then enable it with: aegis tools enable computer")
+        return 0
+
+    if action == "permissions":
+        _print("Computer Use permissions")
+        if sys.platform == "darwin":
+            _print("  Grant Accessibility and Screen Recording to the terminal/desktop app running AEGIS.")
+        elif sys.platform.startswith("linux"):
+            _print("  Linux desktop automation may require an active X11/XWayland display and input permissions.")
+        elif sys.platform.startswith("win"):
+            _print("  Windows desktop automation may require running in an interactive desktop session.")
+        else:
+            _print("  No platform-specific permission guidance is available.")
+        return 0
+
+    return _die("usage: aegis computer-use [status|doctor|install|permissions]")
+
+
 def _cost_surface_report(config: Config) -> dict[str, object]:
     from ..agent.agent import _matches_deferred_selector
     from ..skills import SkillsLoader
@@ -4157,7 +4207,8 @@ def build_parser() -> argparse.ArgumentParser:
     send.set_defaults(func=cmd_command_aliases)
 
     cu = sub.add_parser("computer-use", help="show computer-use tool readiness")
-    cu.set_defaults(func=cmd_command_aliases)
+    cu.add_argument("action", nargs="?", choices=["status", "doctor", "install", "permissions"], default="status")
+    cu.set_defaults(func=cmd_computer_use)
 
     post = sub.add_parser("postinstall", help="post-install compatibility check")
     post.set_defaults(func=cmd_command_aliases)
