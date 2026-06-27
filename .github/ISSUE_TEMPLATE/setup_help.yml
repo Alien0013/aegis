@@ -1,0 +1,111 @@
+name: "🔧 Setup / Installation Help"
+description: Having trouble installing or configuring AEGIS? Ask here.
+title: "[Setup]: "
+labels: ["setup"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting an install or setup problem. The details below help us reproduce and fix it.
+
+        **Quick checks first:**
+        - Run `aegis debug share` and paste the links in the Debug Report section below
+        - From chat, `/debug` collects the same diagnostic bundle
+        - Try `aegis update` to get the latest version
+        - Check the README troubleshooting section
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What's Going Wrong?
+      description: Describe what you're trying to do and where it fails.
+      placeholder: |
+        I ran `aegis setup` and selected my provider, but when I try to
+        start the gateway I get...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps Taken
+      description: What did you do? Include the exact commands you ran.
+      placeholder: |
+        1. Ran the install script: `curl -fsSL ... | bash`
+        2. Ran `aegis setup` and chose quick setup
+        3. Selected a provider and entered the key
+        4. Ran `aegis chat` and got an error...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: Installation Method
+      options:
+        - Install script (curl | bash)
+        - Manual clone + pip/uv install
+        - PowerShell installer (Windows)
+        - Docker
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating System
+      placeholder: Ubuntu 24.04 / macOS 15.2 / Windows 11
+    validations:
+      required: true
+
+  - type: input
+    id: python-version
+    attributes:
+      label: Python Version
+      description: Output of `python --version` or `python3 --version`
+      placeholder: "3.12.7"
+
+  - type: input
+    id: aegis-version
+    attributes:
+      label: AEGIS Version
+      description: Output of `aegis version` if install got that far
+      placeholder: "0.1.0"
+
+  - type: textarea
+    id: debug-report
+    attributes:
+      label: Debug Report
+      description: |
+        Run `aegis debug share` from your terminal and paste the links it prints here.
+        This should include system info, config summary, and recent logs.
+
+        If you're in an interactive chat session, you can also use the `/debug` slash command.
+
+        If upload fails or install did not get that far, run `aegis debug share --local` and paste the output directly.
+        If even that does not work, run `aegis doctor` and paste that output instead.
+      placeholder: |
+        Report      https://paste.example/report
+        agent.log   https://paste.example/agent
+        gateway.log https://paste.example/gateway
+      render: shell
+
+  - type: textarea
+    id: error-output
+    attributes:
+      label: Full Error Output
+      description: Paste the full error text or traceback; the template will format it as shell output.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: tried
+    attributes:
+      label: What I've Already Tried
+      description: List any fixes or workarounds you've already attempted.
+      placeholder: |
+        - Ran `aegis update`
+        - Tried reinstalling with `pip install -e ".[all]"`
+        - Checked that the provider API key is set in `$AEGIS_HOME/.env`
