@@ -1,0 +1,13 @@
+{
+  "name": "aegis-website",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Workspace wrapper for the AEGIS documentation site package.",
+  "scripts": {
+    "dev": "npm --prefix ../site-next run dev",
+    "build": "npm --prefix ../site-next run build",
+    "start": "npm --prefix ../site-next run start",
+    "typecheck": "npm --prefix ../site-next run typecheck",
+    "check": "npm --prefix ../site-next run check"
+  }
+}

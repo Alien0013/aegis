@@ -4,9 +4,12 @@
   "description": "AEGIS agent harness frontend, TUI, desktop, and documentation package workspace.",
   "private": true,
   "workspaces": [
+    "apps/desktop",
     "web",
     "desktop",
+    "ui-tui",
     "aegis/tui_ink",
+    "website",
     "site-next"
   ],
   "scripts": {

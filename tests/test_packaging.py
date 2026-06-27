@@ -28,6 +28,23 @@ def test_root_package_json_exposes_frontend_workspaces_and_scripts():
     assert scripts["test:desktop"] == "npm --prefix desktop run test:desktop"
 
 
+def test_package_wrapper_roots_delegate_to_native_aegis_packages():
+    root_package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+    workspaces = set(root_package.get("workspaces") or [])
+    expected = {
+        "apps/desktop": ("aegis-app-desktop", "npm --prefix ../../desktop run test:desktop"),
+        "website": ("aegis-website", "npm --prefix ../site-next run build"),
+        "ui-tui": ("aegis-ui-tui", "npm --prefix ../aegis/tui_ink run build"),
+    }
+    for workspace, (name, build_or_test_script) in expected.items():
+        assert workspace in workspaces
+        manifest = json.loads((ROOT / workspace / "package.json").read_text(encoding="utf-8"))
+        assert manifest["name"] == name
+        assert manifest["private"] is True
+        scripts = manifest.get("scripts") or {}
+        assert build_or_test_script in scripts.values()
+
+
 def test_pyproject_extras_expose_native_compatibility_aliases():
     import tomllib
 

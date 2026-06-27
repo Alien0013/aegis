@@ -1,0 +1,13 @@
+{
+  "name": "aegis-app-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Workspace wrapper for the AEGIS desktop app package.",
+  "scripts": {
+    "start": "npm --prefix ../../desktop run start",
+    "test": "npm --prefix ../../desktop run test:desktop",
+    "test:desktop": "npm --prefix ../../desktop run test:desktop",
+    "pack": "npm --prefix ../../desktop run pack",
+    "dist": "npm --prefix ../../desktop run dist"
+  }
+}

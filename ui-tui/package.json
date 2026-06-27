@@ -1,0 +1,11 @@
+{
+  "name": "aegis-ui-tui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Workspace wrapper for the AEGIS terminal UI package.",
+  "scripts": {
+    "build": "npm --prefix ../aegis/tui_ink run build",
+    "typecheck": "npm --prefix ../aegis/tui_ink run typecheck",
+    "dev": "npm --prefix ../aegis/tui_ink run dev"
+  }
+}
