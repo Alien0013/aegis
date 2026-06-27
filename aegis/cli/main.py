@@ -1035,6 +1035,62 @@ def cmd_skills(args, config: Config) -> int:
 def cmd_mcp(args, config: Config) -> int:
     from ..mcp.client import build_manager
 
+    if args.action == "configure":
+        if not args.name:
+            return _die("usage: aegis mcp configure <name> [--include a,b|--exclude a,b|--all]")
+        servers = dict(config.get("mcp.servers", {}) or {})
+        spec = dict(servers.get(args.name) or {})
+        if not spec:
+            return _die(f"MCP server '{args.name}' not found")
+        if getattr(args, "all", False):
+            spec.pop("tool_filter", None)
+        elif getattr(args, "include", None):
+            spec["tool_filter"] = {"include": [s.strip() for s in args.include.split(",") if s.strip()]}
+        elif getattr(args, "exclude", None):
+            spec["tool_filter"] = {"exclude": [s.strip() for s in args.exclude.split(",") if s.strip()]}
+        else:
+            raw_filter = spec.get("tool_filter")
+            filter_spec = raw_filter if isinstance(raw_filter, dict) else {}
+            mode = "include" if "include" in filter_spec else ("exclude" if filter_spec.get("exclude") else "all")
+            values = filter_spec.get("include") or filter_spec.get("exclude") or []
+            _print(f"{args.name}: mode={mode} tools={', '.join(values) or '(all)'}")
+            return 0
+        servers[args.name] = spec
+        config.data.setdefault("mcp", {})["servers"] = servers
+        config.save()
+        _print(f"configured MCP server '{args.name}'")
+        return 0
+    if args.action == "login":
+        if not args.name:
+            return _die("usage: aegis mcp login <name>")
+        servers = dict(config.get("mcp.servers", {}) or {})
+        spec = servers.get(args.name)
+        if not isinstance(spec, dict):
+            return _die(f"MCP server '{args.name}' not found")
+        if not spec.get("oauth"):
+            _print(f"MCP server '{args.name}' does not declare OAuth; no login required")
+            return 0
+        _print(f"MCP server '{args.name}' declares OAuth; configure credentials in mcp.servers.{args.name}.oauth")
+        return 0
+    if args.action == "picker":
+        servers = config.get("mcp.servers", {}) or {}
+        _print("installed MCP servers:")
+        if servers:
+            for name, spec in sorted(servers.items()):
+                target = spec.get("url") or " ".join([spec.get("command", ""), *(spec.get("args") or [])])
+                _print(f"  {name:<18} {target.strip()}")
+        else:
+            _print("  (none)")
+        from ..mcp.client import catalog
+        entries = catalog(config)
+        _print("catalog MCP servers:")
+        if entries:
+            for entry in entries:
+                target = entry.get("url") or " ".join([entry.get("command", ""), *(entry.get("args") or [])])
+                _print(f"  {entry.get('name', ''):<18} {entry.get('description', '')}\n      {target.strip()}")
+        else:
+            _print("  (none)")
+        return 0
     if args.action == "catalog":
         from ..mcp.client import catalog
         entries = catalog(config)
@@ -4283,10 +4339,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     mc = sub.add_parser("mcp", help="manage MCP servers (or `serve` to be one)")
     mc.add_argument("action", nargs="?",
-                    choices=["list", "add", "remove", "test", "serve", "catalog", "install", "tools"],
+                    choices=[
+                        "list", "add", "remove", "test", "serve", "catalog", "install", "tools",
+                        "configure", "login", "picker",
+                    ],
                     default="list")
     mc.add_argument("name", nargs="?")
     mc.add_argument("cmd", nargs="?", help='command line, e.g. "npx -y @modelcontextprotocol/server-filesystem /tmp"')
+    mc.add_argument("--include", help="comma-separated MCP tools to include for `configure`")
+    mc.add_argument("--exclude", help="comma-separated MCP tools to exclude for `configure`")
+    mc.add_argument("--all", action="store_true", help="clear MCP tool filters for `configure`")
     mc.set_defaults(func=cmd_mcp)
 
     tr = sub.add_parser("trace", help="inspect/export session traces")
