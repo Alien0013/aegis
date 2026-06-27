@@ -1,0 +1,28 @@
+{
+  "name": "aegis-agent-harness",
+  "version": "0.1.0",
+  "description": "AEGIS agent harness frontend, TUI, desktop, and documentation package workspace.",
+  "private": true,
+  "workspaces": [
+    "web",
+    "desktop",
+    "aegis/tui_ink",
+    "site-next"
+  ],
+  "scripts": {
+    "install:web": "npm --prefix web install",
+    "install:tui": "npm --prefix aegis/tui_ink install",
+    "install:desktop": "npm --prefix desktop install",
+    "install:site": "npm --prefix site-next install",
+    "typecheck": "npm --prefix web run typecheck && npm --prefix aegis/tui_ink run typecheck",
+    "build:web": "npm --prefix web run build",
+    "build:tui": "npm --prefix aegis/tui_ink run build",
+    "build:site": "npm --prefix site-next run build",
+    "test:desktop": "npm --prefix desktop run test:desktop",
+    "verify:web": "npm --prefix web run typecheck && npm --prefix web run build",
+    "verify:desktop": "npm --prefix desktop run test:desktop"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

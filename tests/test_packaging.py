@@ -9,6 +9,25 @@ import pathlib
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
+def test_root_package_json_exposes_frontend_workspaces_and_scripts():
+    package_path = ROOT / "package.json"
+    assert package_path.exists(), "root package.json should expose AEGIS npm surfaces"
+    package = json.loads(package_path.read_text(encoding="utf-8"))
+    workspaces = package.get("workspaces") or []
+    for workspace in ("web", "desktop", "aegis/tui_ink", "site-next"):
+        assert workspace in workspaces
+        assert (ROOT / workspace / "package.json").exists()
+    names = []
+    for workspace in workspaces:
+        manifest = json.loads((ROOT / workspace / "package.json").read_text(encoding="utf-8"))
+        names.append(manifest["name"])
+    assert len(names) == len(set(names))
+    scripts = package.get("scripts") or {}
+    assert scripts["typecheck"] == "npm --prefix web run typecheck && npm --prefix aegis/tui_ink run typecheck"
+    assert scripts["build:web"] == "npm --prefix web run build"
+    assert scripts["test:desktop"] == "npm --prefix desktop run test:desktop"
+
+
 def test_pyproject_packages_bundled_skills():
     """The wheel must include SKILL.md data files, not just .py modules."""
     txt = pathlib.Path("pyproject.toml").read_text()
