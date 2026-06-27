@@ -4862,7 +4862,7 @@ def build_parser() -> argparse.ArgumentParser:
     slack_manifest.add_argument("--name", help="Slack bot display name")
     slack_manifest.add_argument("--description", help="Slack bot description")
     slack_manifest.add_argument("--slashes-only", action="store_true", help="print only slash command manifest entries")
-    slack_manifest.add_argument("--no-assistant", action="store_true", help="accepted for Hermes compatibility; ignored by AEGIS")
+    slack_manifest.add_argument("--no-assistant", action="store_true", help="accepted for compatibility; ignored by AEGIS")
     slack_manifest.set_defaults(func=cmd_slack)
     slack.set_defaults(func=cmd_slack)
 

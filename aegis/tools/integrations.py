@@ -1,4 +1,4 @@
-"""Optional Hermes-compatible integration tools.
+"""Optional AEGIS integration tools with compatibility aliases.
 
 These tools close exact-name/toolset parity for optional integrations while
 keeping unsafe or credential-bound surfaces hidden until configured.  Where the
@@ -315,7 +315,7 @@ class FeishuTool(OptionalIntegrationTool):
         if missing:
             return missing
         return ToolResult.error(
-            f"{self.name} is registered for Hermes-compatible Feishu parity, but this AEGIS build "
+            f"{self.name} is registered for Feishu compatibility parity, but this AEGIS build "
             "does not yet include the full Feishu REST adapter. Install/enable a Feishu plugin "
             "or continue the Feishu parity slice."
         )

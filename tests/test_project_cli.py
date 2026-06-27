@@ -44,19 +44,19 @@ def test_project_cli_path_switch_and_current_aliases(monkeypatch, tmp_path, caps
     repo = tmp_path / "repo"
     repo.mkdir()
 
-    assert main(["project", "create", "Hermes Parity", "--path", str(repo)]) == 0
+    assert main(["project", "create", "Aegis Parity", "--path", str(repo)]) == 0
     out = capsys.readouterr().out
-    assert "Created project hermes-parity" in out
+    assert "Created project aegis-parity" in out
     assert f"primary: {repo}" in out
 
-    assert main(["project", "switch", "hermes-parity"]) == 0
+    assert main(["project", "switch", "aegis-parity"]) == 0
     out = capsys.readouterr().out
-    assert "Active project: hermes-parity" in out
+    assert "Active project: aegis-parity" in out
 
     assert main(["project", "current"]) == 0
     out = capsys.readouterr().out
     assert "active project:" in out
-    assert "hermes-parity" in out
+    assert "aegis-parity" in out
     assert f"primary: {repo}" in out
 
 

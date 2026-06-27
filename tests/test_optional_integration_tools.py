@@ -1,4 +1,4 @@
-"""Hermes-compatible optional integration tools."""
+"""Optional integration tools exposed by AEGIS."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ OPTIONAL_TOOLS = {
 }
 
 
-def test_optional_hermes_integration_tools_are_registered(monkeypatch):
+def test_optional_integration_tools_are_registered(monkeypatch):
     for env in {item for _toolset, envs in OPTIONAL_TOOLS.values() for item in envs}:
         monkeypatch.delenv(env, raising=False)
 

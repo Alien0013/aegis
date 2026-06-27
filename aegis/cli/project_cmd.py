@@ -1,4 +1,4 @@
-"""Hermes-compatible Project CLI commands for AEGIS."""
+"""AEGIS Project CLI commands with compatibility aliases."""
 
 from __future__ import annotations
 

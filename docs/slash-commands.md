@@ -7,8 +7,8 @@ Generated from `aegis.cli.repl.SLASH_COMMANDS`.
 | --- | --- | --- | --- |
 | /agents | agents | list background agents | /agents |
 | /background | agents | launch a background agent task | /background <prompt> |
-| /bg | agents | Hermes alias for /background | /bg <prompt> |
-| /btw | agents | Hermes alias for /background | /btw <prompt> |
+| /bg | agents | compatibility alias for /background | /bg <prompt> |
+| /btw | agents | compatibility alias for /background | /btw <prompt> |
 | /cron | agents | show cron command guidance | /cron |
 | /kanban | agents | multi-agent task board | /kanban [list\|create <title>\|show <id>\|dispatch\|stats] |
 | /moa | agents | run one prompt through configured Mixture-of-Agents models | /moa <prompt> |
@@ -16,13 +16,13 @@ Generated from `aegis.cli.repl.SLASH_COMMANDS`.
 | /approve | approvals | approval guidance for pending tool/API/gateway requests | /approve |
 | /deny | approvals | denial guidance for pending tool/API/gateway requests | /deny |
 | /blueprint | automation | show cron blueprint guidance | /blueprint |
-| /bp | automation | Hermes alias for /blueprint | /bp |
+| /bp | automation | compatibility alias for /blueprint | /bp |
 | /handoff | channels | hand this session to a gateway channel | /handoff <platform> <chat_id> |
-| /generate-pet | compatibility | Hermes alias for /hatch | /generate-pet [description] |
+| /generate-pet | compatibility | compatibility alias for /hatch | /generate-pet [description] |
 | /hatch | compatibility | pet generation compatibility guidance | /hatch [description] |
 | /pet | compatibility | external companion UI: intentionally out of scope | /pet |
 | /skin | compatibility | external skin UI: use AEGIS themes instead | /skin |
-| /suggest | compatibility | Hermes alias for /suggestions | /suggest |
+| /suggest | compatibility | compatibility alias for /suggestions | /suggest |
 | /suggestions | compatibility | show suggestion guidance | /suggestions |
 | /compress | context | compact context now | /compress [here N\|focus topic] |
 | /context | context | show the token budget breakdown (system, history, tools) | /context |
@@ -30,8 +30,8 @@ Generated from `aegis.cli.repl.SLASH_COMMANDS`.
 | /save | context | export this session to markdown | /save [path] |
 | /undo | context | remove the last user turn and its response | /undo |
 | /commands | discover | compatibility alias for /help | /commands [term] |
-| /compose | discover | Hermes alias for /prompt in the terminal surface | /compose |
-| /gateway | discover | Hermes alias for /platforms | /gateway |
+| /compose | discover | compatibility alias for /prompt in the terminal surface | /compose |
+| /gateway | discover | compatibility alias for /platforms | /gateway |
 | /help | discover | show or search slash commands | /help [term] |
 | /model | discover | show the active provider and model | /model |
 | /platform | discover | show one gateway platform's configuration status | /platform <name> |
@@ -42,16 +42,16 @@ Generated from `aegis.cli.repl.SLASH_COMMANDS`.
 | /status | discover | show runtime, session, recap, and trace status | /status |
 | /tools | discover | list enabled tools | /tools |
 | /toolsets | discover | list active toolsets and compatibility aliases | /toolsets |
-| /v | discover | Hermes alias for /version | /v |
+| /v | discover | compatibility alias for /version | /v |
 | /version | discover | show the AEGIS version and runtime | /version |
 | /whoami | discover | show local profile, workspace, provider, and session identity | /whoami |
 | /footer | display | toggle post-turn status footer | /footer on\|off\|status |
 | /indicator | display | show status indicator settings | /indicator |
 | /redraw | display | redraw current status/footer | /redraw |
-| /sb | display | Hermes alias for /statusbar | /sb on\|off\|status |
+| /sb | display | compatibility alias for /statusbar | /sb on\|off\|status |
 | /statusbar | display | toggle terminal status bar | /statusbar on\|off\|status |
 | /timestamps | display | toggle terminal timestamps | /timestamps on\|off\|status |
-| /ts | display | Hermes alias for /timestamps | /ts on\|off\|status |
+| /ts | display | compatibility alias for /timestamps | /ts on\|off\|status |
 | /verbose | display | toggle verbose tool progress | /verbose on\|off\|status |
 | /exit | exit | leave the terminal surface | /exit |
 | /quit | exit | leave the terminal surface | /quit |
@@ -70,14 +70,14 @@ Generated from `aegis.cli.repl.SLASH_COMMANDS`.
 | /voice | media | show voice/STT/TTS status and commands | /voice [status\|on\|off] |
 | /busy | model control | show or set busy input behavior | /busy [queue\|steer\|interrupt\|status] |
 | /fast | model control | toggle priority/fast mode | /fast [on\|off\|status] |
-| /q | model control | Hermes alias for /queue | /q |
+| /q | model control | compatibility alias for /queue | /q |
 | /queue | model control | compatibility alias for /busy queue | /queue |
 | /reasoning | model control | set reasoning visibility or effort | /reasoning off\|none\|summary\|live\|... |
 | /reload | model control | refresh volatile prompt state and runtime context | /reload |
 | /reload-mcp | model control | show MCP reload guidance for the active runtime | /reload-mcp |
 | /reload-skills | model control | reload skills into the active agent | /reload-skills |
-| /reload_mcp | model control | Hermes alias for /reload-mcp | /reload_mcp |
-| /reload_skills | model control | Hermes alias for /reload-skills | /reload_skills |
+| /reload_mcp | model control | compatibility alias for /reload-mcp | /reload_mcp |
+| /reload_skills | model control | compatibility alias for /reload-skills | /reload_skills |
 | /restart | model control | show gateway/API restart guidance | /restart |
 | /steer | model control | compatibility alias for /busy steer | /steer |
 | /stop | model control | interrupt guidance for active gateway/API turns | /stop |
@@ -95,10 +95,10 @@ Generated from `aegis.cli.repl.SLASH_COMMANDS`.
 | /ultracode | planning | run the rigorous autonomous plan→implement→verify loop | /ultracode <task> |
 | /branch | sessions | fork this conversation into a named child session | /branch [title] |
 | /clear | sessions | start a fresh session | /clear |
-| /fork | sessions | Hermes alias for /branch | /fork [title] |
+| /fork | sessions | compatibility alias for /branch | /fork [title] |
 | /history | sessions | compatibility alias for /sessions | /history [query] |
 | /new | sessions | start a fresh session | /new |
-| /reset | sessions | Hermes alias for /new | /reset |
+| /reset | sessions | compatibility alias for /new | /reset |
 | /resume | sessions | resume by picker number, id, title, or unique search | /resume [number\|id\|title] |
 | /sessions | sessions | pick recent sessions or search history | /sessions [query] |
 | /start | sessions | compatibility alias for /new | /start |
@@ -106,17 +106,17 @@ Generated from `aegis.cli.repl.SLASH_COMMANDS`.
 | /topic | sessions | compatibility alias for /title | /topic <name> |
 | /billing | setup | show provider billing/usage guidance | /billing |
 | /codex-runtime | setup | show Codex-compatible runtime status | /codex-runtime |
-| /codex_runtime | setup | Hermes alias for /codex-runtime | /codex_runtime |
+| /codex_runtime | setup | compatibility alias for /codex-runtime | /codex_runtime |
 | /config | setup | show config command guidance | /config |
 | /credits | setup | show provider credits/usage guidance | /credits |
 | /plugins | setup | show plugin command guidance | /plugins |
 | /profile | setup | show profile command guidance | /profile |
 | /secret | setup | store a local secret with hidden input | /secret set <ENV_KEY> |
-| /set-home | setup | Hermes alias for /sethome | /set-home |
+| /set-home | setup | compatibility alias for /sethome | /set-home |
 | /sethome | setup | show AEGIS_HOME/profile home guidance | /sethome |
 | /update | setup | show runtime update command guidance | /update |
 | /diff | workspace | show changes since the last checkpoint | /diff [checkpoint-id] |
 | /rollback | workspace | restore files from a checkpoint | /rollback [checkpoint-id] |
-| /snap | workspace | Hermes alias for /snapshot | /snap |
+| /snap | workspace | compatibility alias for /snapshot | /snap |
 | /snapshot | workspace | show snapshot/checkpoint command guidance | /snapshot |
 | /yolo | workspace | toggle this session's existing approval bypass | /yolo |

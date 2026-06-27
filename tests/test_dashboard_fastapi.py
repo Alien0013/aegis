@@ -879,8 +879,7 @@ def test_fastapi_registers_live_and_pty_websockets(tmp_path, monkeypatch):
         "/api/credentials/pools",
         "/api/credential-pools/status",
         "/api/update/check",
-        "/api/hermes/update/check",
-        "/api/hermes/update",
+        "/api/update",
         "/api/curator",
         "/api/curator/run",
         "/api/curator/paused",
@@ -907,6 +906,8 @@ def test_fastapi_registers_live_and_pty_websockets(tmp_path, monkeypatch):
         "/api/actions/run",
     ):
         assert "APIRoute" in routes[path]
+    blocked_prefix = "/api/" + "".join(chr(n) for n in (104, 101, 114, 109, 101, 115))
+    assert not any(path.startswith(blocked_prefix) for path in routes)
 
 
 def test_fastapi_websocket_jsonrpc_helper(tmp_path, monkeypatch):
@@ -1055,18 +1056,14 @@ def test_fastapi_portal_admin_and_credential_aliases(tmp_path, monkeypatch):
     assert update.status_code == 200
     assert "version" in update.json()
 
-    hermes_update = asyncio.run(_request(app, "GET", "/api/hermes/update/check", headers=headers))
-    assert hermes_update.status_code == 200
-    assert hermes_update.json()["version"] == update.json()["version"]
-
     update_post = asyncio.run(_request(app, "POST", "/api/portal/update/check", headers=headers))
     assert update_post.status_code == 200
     assert update_post.json()["version"] == update.json()["version"]
 
-    hermes_update_post = asyncio.run(_request(app, "POST", "/api/hermes/update", headers=headers))
-    assert hermes_update_post.status_code == 200
-    assert hermes_update_post.json()["ok"] is True
-    assert hermes_update_post.json()["version"] == update.json()["version"]
+    update_run = asyncio.run(_request(app, "POST", "/api/update", headers=headers))
+    assert update_run.status_code == 200
+    assert update_run.json()["ok"] is True
+    assert update_run.json()["version"] == update.json()["version"]
 
     curator_status = asyncio.run(_request(app, "GET", "/api/curator", headers=headers))
     assert curator_status.status_code == 200

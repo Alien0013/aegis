@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -71,6 +72,29 @@ def test_cli_parser_exposes_upgrade_commands():
     assert cfg_setup.toolsets == "core,browser"
     assert cfg_setup.skills == "web-research,summarize"
     assert cfg_setup.install_services is True
+
+
+def test_tracked_text_does_not_use_upstream_branding():
+    brand = "".join(chr(n) for n in (72, 101, 114, 109, 101, 115))
+    forbidden = (brand, brand.lower(), f"/api/{brand.lower()}")
+    root = Path(__file__).resolve().parents[1]
+    listed = subprocess.run(
+        ["git", "ls-files"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    offenders: list[str] = []
+    for rel in listed.stdout.splitlines():
+        path = root / rel
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        if any(token in text for token in forbidden):
+            offenders.append(rel)
+    assert offenders == []
 
 
 def test_config_summary_prints_aegis_style_terminal_surface(monkeypatch, capsys):
@@ -656,7 +680,7 @@ def test_terminal_slash_help_is_searchable():
         "/toolsets",
         "/version",
         "/whoami",
-        # Hermes exact alias parity.
+        # Exact compatibility aliases.
         "/bg",
         "/bp",
         "/btw",

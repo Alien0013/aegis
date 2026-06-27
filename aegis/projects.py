@@ -1,6 +1,6 @@
 """First-class project/workspace store.
 
-AEGIS keeps Projects profile-local, matching the reference Hermes semantics:
+AEGIS keeps Projects profile-local, matching the reference semantics:
 a Project is an explicit named workspace with an optional primary folder and an
 active-project pointer.  The desktop/TUI can use the same store as the tool layer
 instead of inferring workspaces from recent session cwd values.

@@ -103,7 +103,6 @@ def register(app, config, chat_runner):
         return JSONResponse(_credential_pools_payload(config))
 
     @app.get("/api/update/check")
-    @app.get("/api/hermes/update/check")
     @app.get("/api/portal/update/check")
     @app.get("/api/check/update")
     async def api_update_check(request: Request) -> JSONResponse:
@@ -117,11 +116,10 @@ def register(app, config, chat_runner):
         _require_request(request, config)
         return JSONResponse(dash._update_check())
 
-    @app.post("/api/hermes/update")
-    async def api_hermes_update(request: Request) -> JSONResponse:
+    @app.post("/api/update")
+    async def api_update(request: Request) -> JSONResponse:
         _require_request(request, config)
-        update = dash._update_check()
-        return JSONResponse({"ok": True, **update})
+        return JSONResponse({"ok": True, **dash._update_check()})
 
     @app.get("/api/curator")
     async def api_curator_status(request: Request) -> JSONResponse:

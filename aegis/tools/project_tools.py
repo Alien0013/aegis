@@ -1,4 +1,4 @@
-"""Hermes-compatible Project tools."""
+"""AEGIS Project tools with compatibility aliases."""
 
 from __future__ import annotations
 

@@ -134,8 +134,6 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/gateway/status | GET | api_gateway_status |
 | /api/gateway/stop | POST | api_gateway_stop |
 | /api/health | GET | api_health |
-| /api/hermes/update | POST | api_hermes_update |
-| /api/hermes/update/check | GET | api_update_check |
 | /api/hooks | GET | api_observability_contract |
 | /api/hooks/contract | GET | api_observability_contract |
 | /api/hooks/test | POST | api_observability_hook_test |
@@ -336,6 +334,7 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/tools/toolsets/{name}/post-setup | POST | api_toolset_post_setup |
 | /api/tools/toolsets/{name}/provider | PUT | api_toolset_provider |
 | /api/tools/validation | GET | api_tools_validation |
+| /api/update | POST | api_update |
 | /api/update/check | GET | api_update_check |
 | /api/update/check | POST | api_update_check_post |
 | /api/webhooks | GET | api_webhooks_list |
