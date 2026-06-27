@@ -1836,6 +1836,72 @@ def test_fastapi_typed_config_profile_gateway_and_plugin_routes(tmp_path, monkey
     assert patched.status_code == 200
     assert patched.json()["profile"]["content"] == "Build small, verify, then ship.\n"
 
+    active_profile = asyncio.run(_request(app, "GET", "/api/profiles/active", headers=headers))
+    assert active_profile.status_code == 200
+    assert active_profile.json()["active"] == "builder"
+
+    sessions_by_profile = asyncio.run(_request(app, "GET", "/api/profiles/sessions", headers=headers))
+    assert sessions_by_profile.status_code == 200
+    assert sessions_by_profile.json()["ok"] is True
+    assert "sessions" in sessions_by_profile.json()
+
+    setup_command = asyncio.run(_request(app, "GET", "/api/profiles/builder/setup-command", headers=headers))
+    assert setup_command.status_code == 200
+    assert "aegis profile use builder" in setup_command.json()["command"]
+
+    soul = asyncio.run(_request(app, "GET", "/api/profiles/builder/soul", headers=headers))
+    assert soul.status_code == 200
+    assert soul.json()["exists"] is True
+    assert "Build small" in soul.json()["content"]
+
+    updated_soul = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/profiles/builder/soul",
+        json={"content": "# Builder\n\nPrefer tests first."},
+        headers=headers,
+    ))
+    assert updated_soul.status_code == 200
+    assert updated_soul.json()["ok"] is True
+
+    described = asyncio.run(_request(app, "POST", "/api/profiles/builder/describe-auto", headers=headers))
+    assert described.status_code == 200
+    assert described.json()["description"] == "Builder"
+
+    description = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/profiles/builder/description",
+        json={"description": "Builder profile"},
+        headers=headers,
+    ))
+    assert description.status_code == 200
+    assert description.json() == {"ok": True, "description": "Builder profile", "description_auto": False}
+
+    model = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/profiles/builder/model",
+        json={"provider": "openrouter", "model": "nous/test"},
+        headers=headers,
+    ))
+    assert model.status_code == 200
+    assert model.json() == {"ok": True, "provider": "openrouter", "model": "nous/test"}
+
+    opened = asyncio.run(_request(app, "POST", "/api/profiles/builder/open-terminal", headers=headers))
+    assert opened.status_code == 200
+    assert opened.json()["ok"] is True
+
+    active_set = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/profiles/active",
+        json={"name": "builder"},
+        headers=headers,
+    ))
+    assert active_set.status_code == 200
+    assert active_set.json()["active"] == "builder"
+
     activated = asyncio.run(_request(app, "POST", "/api/profiles/default/activate", headers=headers))
     assert activated.status_code == 200
     assert activated.json()["active"] == ""

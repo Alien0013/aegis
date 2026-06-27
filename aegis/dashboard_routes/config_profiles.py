@@ -402,6 +402,49 @@ def register(app, config, chat_runner):
         except ValueError as exc:
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
 
+    @app.get("/api/profiles/active")
+    async def api_profiles_active_get(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        active = str(config.get("agent.personality") or "")
+        return JSONResponse({"active": active or "default", "current": active or "default"})
+
+    @app.post("/api/profiles/active")
+    async def api_profiles_active_post(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        raw_name = str((body or {}).get("name") or (body or {}).get("profile") or "").strip()
+        if raw_name in {"", "default", "none", "_default"}:
+            config.set("agent.personality", "")
+            return JSONResponse({"ok": True, "active": "default", "profiles": _profiles_payload(config)})
+        try:
+            name = _safe_resource_name(raw_name, "profile")
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        if not _profile_path(name).exists():
+            return JSONResponse({"ok": False, "error": "profile not found", "active": name}, status_code=404)
+        config.set("agent.personality", name)
+        return JSONResponse({"ok": True, "active": name, "profiles": _profiles_payload(config)})
+
+    @app.get("/api/profiles/sessions")
+    async def api_profiles_sessions(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        try:
+            limit = max(1, min(200, int(str(request.query_params.get("limit") or "20"))))
+        except ValueError:
+            limit = 20
+        try:
+            from ..session import SessionStore
+
+            sessions = SessionStore().list(limit)
+        except Exception:  # noqa: BLE001
+            sessions = []
+        return JSONResponse({
+            "ok": True,
+            "active": config.get("agent.personality") or "",
+            "sessions": sessions,
+            "profiles": _profiles_payload(config),
+        })
+
     @app.get("/api/profiles/{name}")
     async def api_profile_get(name: str, request: Request) -> JSONResponse:
         _require_request(request, config)
@@ -447,6 +490,87 @@ def register(app, config, chat_runner):
             return JSONResponse(result, status_code=404)
         config.set("agent.personality", str(result["name"]))
         return JSONResponse({"ok": True, "active": result["name"], "profiles": _profiles_payload(config)})
+
+    @app.get("/api/profiles/{name}/setup-command")
+    async def api_profile_setup_command(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        try:
+            safe_name = _safe_resource_name(name, "profile")
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        return JSONResponse({"command": f"aegis profile use {safe_name} && aegis"})
+
+    @app.post("/api/profiles/{name}/open-terminal")
+    async def api_profile_open_terminal(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        try:
+            safe_name = _safe_resource_name(name, "profile")
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        command = f"aegis profile use {safe_name} && aegis"
+        return JSONResponse({"ok": True, "command": command})
+
+    @app.get("/api/profiles/{name}/soul")
+    async def api_profile_soul_get(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        detail = _profile_detail(config, name)
+        if not detail.get("ok"):
+            return JSONResponse({"content": "", "exists": False, "error": detail.get("error")}, status_code=404)
+        return JSONResponse({"content": detail.get("content", ""), "exists": True})
+
+    @app.put("/api/profiles/{name}/soul")
+    async def api_profile_soul_put(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        try:
+            result = _write_profile(config, name, str((body or {}).get("content") or ""))
+            return JSONResponse({"ok": True, **result})
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+    @app.put("/api/profiles/{name}/description")
+    async def api_profile_description_put(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        try:
+            safe_name = _safe_resource_name(name, "profile")
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        text = str((body or {}).get("description") or "").strip()
+        config.data.setdefault("profile_descriptions", {})[safe_name] = text
+        config.save()
+        return JSONResponse({"ok": True, "description": text, "description_auto": False})
+
+    @app.put("/api/profiles/{name}/model")
+    async def api_profile_model_put(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        try:
+            safe_name = _safe_resource_name(name, "profile")
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        provider = str((body or {}).get("provider") or "").strip()
+        model = str((body or {}).get("model") or "").strip()
+        if not provider or not model:
+            return JSONResponse({"ok": False, "error": "provider and model are required"}, status_code=400)
+        config.data.setdefault("profile_models", {})[safe_name] = {"provider": provider, "model": model}
+        config.save()
+        return JSONResponse({"ok": True, "provider": provider, "model": model})
+
+    @app.post("/api/profiles/{name}/describe-auto")
+    async def api_profile_describe_auto(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        detail = _profile_detail(config, name)
+        if not detail.get("ok"):
+            return JSONResponse(detail, status_code=404)
+        lines = str(detail.get("content") or "").strip().splitlines()
+        description = lines[0].lstrip("# ").strip() if lines else str(detail.get("name") or name)
+        return JSONResponse({
+            "ok": True,
+            "reason": "derived from AEGIS profile content",
+            "description": description,
+            "description_auto": True,
+        })
 
     @app.get("/api/runtime-profiles")
     async def api_runtime_profiles_get(request: Request) -> JSONResponse:
