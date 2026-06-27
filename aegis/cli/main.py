@@ -733,6 +733,75 @@ def cmd_skills(args, config: Config) -> int:
         for r in results:
             _print(f"  {r['name']:<24} {r['description'][:70]}\n      {r['source']}")
         return 0
+    if args.action == "check":
+        from .. import marketplace
+        lock = marketplace.installed()
+        names = [args.name] if args.name else sorted(lock)
+        if not names:
+            _print("(no tracked marketplace skills installed)")
+            return 0
+        for name in names:
+            record = lock.get(name)
+            if not record:
+                _print(f"  {name:<24} not tracked")
+                continue
+            source = str(record.get("source") or "")
+            try:
+                report = marketplace.preview(source, force=getattr(args, "force", False))
+                rows = report.get("skills", [])
+                row = next((r for r in rows if r.get("name") == name), rows[0] if rows else {})
+                status = "outdated" if row.get("digest") != record.get("digest") else "current"
+                if not row.get("installable", True):
+                    status = "blocked"
+                _print(f"  {name:<24} {status}  {source}")
+            except Exception as e:  # noqa: BLE001
+                _print(f"  {name:<24} error: {e}")
+        return 0
+    if args.action == "update":
+        from .. import marketplace
+        lock = marketplace.installed()
+        names = [args.name] if args.name else sorted(lock)
+        if not names:
+            _print("(no tracked marketplace skills installed)")
+            return 0
+        ok = True
+        for name in names:
+            record = lock.get(name)
+            if not record:
+                _print(f"  {name:<24} not tracked")
+                ok = False
+                continue
+            source = str(record.get("source") or "")
+            try:
+                report = marketplace.preview(source, force=getattr(args, "force", False))
+                rows = report.get("skills", [])
+                row = next((r for r in rows if r.get("name") == name), rows[0] if rows else {})
+                if row.get("digest") == record.get("digest"):
+                    _print(f"  {name:<24} current")
+                    continue
+                installed = marketplace.install(source, force=True)
+                _print(f"updated {name}" + (f" ({', '.join(installed)})" if installed else ""))
+            except Exception as e:  # noqa: BLE001
+                _print(f"  {name:<24} error: {e}")
+                ok = False
+        return 0 if ok else 1
+    if args.action == "audit":
+        rows = [s for s in sorted(loader.available(), key=lambda s: s.name)
+                if not args.name or s.name == args.name]
+        if args.name and not rows:
+            return _die(f"skill '{args.name}' not found")
+        if not rows:
+            _print("(no skills installed)")
+            return 0
+        ok = True
+        for skill in rows:
+            satisfied, reason = skill.satisfied()
+            if satisfied:
+                _print(f"  [ok] {skill.name:<24} {skill.description[:70]}")
+            else:
+                ok = False
+                _print(f"  [FAIL] {skill.name:<24} {reason}")
+        return 0 if ok else 1
     if args.action in {"remove", "uninstall"}:
         from .. import marketplace
         _print("removed" if marketplace.remove(args.name) else "not found")
@@ -3977,7 +4046,8 @@ def build_parser() -> argparse.ArgumentParser:
     sk.add_argument("action", nargs="?",
                     choices=[
                         "list", "view", "new", "install", "search", "remove", "uninstall", "hub",
-                        "preview", "inspect", "browse", "bundles", "bundle", "unbundle",
+                        "preview", "inspect", "browse", "check", "update", "audit",
+                        "bundles", "bundle", "unbundle",
                     ],
                     default="list")
     sk.add_argument("name", nargs="?", help="skill name, install source, or hub name")
