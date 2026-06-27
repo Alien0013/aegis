@@ -3857,7 +3857,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     from ..gateway.pairing import cmd_pairing as _cmd_pairing
     pr = sub.add_parser("pairing", help="approve/revoke gateway users")
-    pr.add_argument("action", nargs="?", choices=["list", "approve", "revoke"], default="list")
+    pr.add_argument("action", nargs="?", choices=["list", "approve", "revoke", "clear-pending"], default="list")
     pr.add_argument("platform", nargs="?")
     pr.add_argument("code", nargs="?")
     pr.set_defaults(func=_cmd_pairing)

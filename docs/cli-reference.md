@@ -50,7 +50,7 @@ Generated from `aegis.cli.main.build_parser()`.
 | aegis model | show/set the model | `aegis model [-h] [{list,set,doctor}] [provider] [model]` |
 | aegis models | show/refresh model metadata (context window from models.dev) | `aegis models [-h] [{show,refresh}]` |
 | aegis onboard | interactive setup wizard (alias of setup) | `aegis onboard [-h] [--quick] [--advanced] [--no-probe] [--no-services]                      [--non-interactive] [--accept-risk] [--json]                      [--provider PROVIDER]                      [--auth {skip,api-key,local,oauth,codex}] [--model MODEL]                      [--web WEB] [--toolsets TOOLSETS] [--skills SKILLS]                      [--channels CHANNELS]                      [--exec-mode {ask,auto,allowlist,deny,full,smart}]                      [--install-services]                      [{model,terminal,tools,gateway,agent,web,memory,dashboard,services}]` |
-| aegis pairing | approve/revoke gateway users | `aegis pairing [-h] [{list,approve,revoke}] [platform] [code]` |
+| aegis pairing | approve/revoke gateway users | `aegis pairing [-h]                      [{list,approve,revoke,clear-pending}] [platform] [code]` |
 | aegis pets | show visible-agent alternatives | `aegis pets [-h]` |
 | aegis plugins | manage manifest and drop-in plugins | `aegis plugins [-h] [--force]                      [{list,doctor,path,install,enable,disable,remove}] [name]` |
 | aegis portal | open the AEGIS control panel in your browser | `aegis portal [-h] [--host HOST] [--port PORT] [--no-open]` |

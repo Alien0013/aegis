@@ -88,6 +88,14 @@ class PairingStore:
             return True
         return False
 
+    def clear_pending(self) -> int:
+        data = self._load()
+        count = sum(len(codes) for codes in data.get("pending", {}).values())
+        data["pending"] = {}
+        if count:
+            self._save(data)
+        return count
+
     def list(self) -> dict:
         return self._load()
 
@@ -107,6 +115,13 @@ def cmd_pairing(args, config) -> int:
             print("usage: aegis pairing revoke <platform> <userid>")
             return 1
         print("revoked" if store.revoke(args.platform, args.code) else "not found")
+        return 0
+    if action == "clear-pending":
+        count = store.clear_pending()
+        if count:
+            print(f"Cleared {count} pending pairing request(s).")
+        else:
+            print("No pending requests to clear.")
         return 0
     data = store.list()
     print("approved:")
