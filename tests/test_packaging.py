@@ -59,13 +59,52 @@ def test_shared_package_exports_aegis_runtime_contract():
 
 
 def test_bootstrap_installer_package_wraps_native_install_scripts():
-    manifest = json.loads((ROOT / "apps" / "bootstrap-installer" / "package.json").read_text(encoding="utf-8"))
-    verifier = ROOT / "apps" / "bootstrap-installer" / "scripts" / "verify-installer-surface.mjs"
+    root = ROOT / "apps" / "bootstrap-installer"
+    manifest = json.loads((root / "package.json").read_text(encoding="utf-8"))
+    verifier = root / "scripts" / "verify-installer-surface.mjs"
     assert manifest["name"] == "@aegis/bootstrap-installer"
     assert manifest["private"] is True
     assert manifest["aegis"]["installer_scripts"] == ["../../install.sh", "../../install.ps1"]
+    assert manifest["aegis"]["ui_routes"] == ["welcome", "progress", "success", "failure"]
     assert manifest["scripts"]["typecheck"] == "node ./scripts/verify-installer-surface.mjs"
     assert verifier.is_file()
+
+    required = [
+        ".gitignore",
+        "index.html",
+        "src/app.tsx",
+        "src/main.tsx",
+        "src/store.ts",
+        "src/styles.css",
+        "src/lib/utils.ts",
+        "src/components/button.tsx",
+        "src/routes/welcome.tsx",
+        "src/routes/progress.tsx",
+        "src/routes/success.tsx",
+        "src/routes/failure.tsx",
+        "src/vite-env.d.ts",
+        "src-tauri/Cargo.toml",
+        "src-tauri/build.rs",
+        "src-tauri/tauri.conf.json",
+        "src-tauri/capabilities/default.json",
+        "src-tauri/src/bootstrap.rs",
+        "src-tauri/src/events.rs",
+        "src-tauri/src/install_script.rs",
+        "src-tauri/src/lib.rs",
+        "src-tauri/src/main.rs",
+        "src-tauri/src/paths.rs",
+        "src-tauri/src/powershell.rs",
+        "src-tauri/src/update.rs",
+        "tsconfig.json",
+        "tsconfig.node.json",
+        "vite.config.ts",
+    ]
+    for rel in required:
+        assert (root / rel).is_file(), rel
+    assert "AEGIS Bootstrap Installer" in (root / "index.html").read_text(encoding="utf-8")
+    assert "Install AEGIS" in (root / "src" / "routes" / "welcome.tsx").read_text(encoding="utf-8")
+    assert "install.sh" in (root / "src-tauri" / "src" / "install_script.rs").read_text(encoding="utf-8")
+    assert "install.ps1" in (root / "src-tauri" / "src" / "powershell.rs").read_text(encoding="utf-8")
 
 
 def test_whatsapp_bridge_package_wraps_native_webhook_bridge():

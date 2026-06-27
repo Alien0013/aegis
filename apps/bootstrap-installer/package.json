@@ -3,14 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "AEGIS installer package surface that verifies the native one-line install scripts.",
+  "description": "AEGIS bootstrap installer UI and package surface for native one-line installers.",
   "scripts": {
     "typecheck": "node ./scripts/verify-installer-surface.mjs",
     "build": "node ./scripts/verify-installer-surface.mjs"
   },
   "aegis": {
     "installer_scripts": ["../../install.sh", "../../install.ps1"],
-    "compatibility": "AEGIS uses repository-native shell and PowerShell installers instead of a separate bundled installer UI."
+    "ui_routes": ["welcome", "progress", "success", "failure"],
+    "native_commands": ["bootstrap_plan", "run_bootstrap_install", "open_update_docs"],
+    "compatibility": "Guided UI that delegates to repository-native shell and PowerShell installers."
   },
   "engines": {
     "node": ">=20.0.0"
