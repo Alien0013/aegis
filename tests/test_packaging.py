@@ -28,6 +28,25 @@ def test_root_package_json_exposes_frontend_workspaces_and_scripts():
     assert scripts["test:desktop"] == "npm --prefix desktop run test:desktop"
 
 
+def test_pyproject_extras_expose_native_compatibility_aliases():
+    import tomllib
+
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    extras = pyproject["project"]["optional-dependencies"]
+    for name in ("cli", "cron", "pty", "web", "messaging", "gateway", "computer-use"):
+        assert name in extras
+    assert extras["cli"] == []
+    assert extras["cron"] == []
+    assert extras["pty"] == []
+    assert extras["web"] == []
+    assert extras["computer-use"] == extras["computer"]
+    for dep in extras["discord"] + extras["slack"] + extras["matrix"]:
+        assert dep in extras["messaging"]
+        assert dep in extras["gateway"]
+    unsupported = {"anthropic", "google", "youtube", "mcp", "acp"}
+    assert unsupported.isdisjoint(extras)
+
+
 def test_pyproject_packages_bundled_skills():
     """The wheel must include SKILL.md data files, not just .py modules."""
     txt = pathlib.Path("pyproject.toml").read_text()

@@ -33,13 +33,20 @@ dependencies = [
 dev = ["pytest>=8.0,<9", "ruff>=0.8,<1"]
 browser = ["playwright>=1.46,<2"]
 computer = ["pyautogui>=0.9.54,<1", "Pillow>=10,<12"]
+computer-use = ["pyautogui>=0.9.54,<1", "Pillow>=10,<12"]
 discord = ["discord.py>=2.4,<3"]
 slack = ["slack_bolt>=1.21,<2"]
 matrix = ["matrix-nio>=0.24,<0.26"]
+messaging = ["discord.py>=2.4,<3", "slack_bolt>=1.21,<2", "matrix-nio>=0.24,<0.26"]
+gateway = ["discord.py>=2.4,<3", "slack_bolt>=1.21,<2", "matrix-nio>=0.24,<0.26"]
 honcho = ["honcho-ai>=1.0,<2"]
 mem0 = ["mem0ai>=0.1,<0.3"]
 memory = ["honcho-ai>=1.0,<2", "mem0ai>=0.1,<0.3"]
 tokenizer = ["tiktoken>=0.7,<1"]
+cli = []
+cron = []
+pty = []
+web = []
 all = [
     "playwright>=1.46,<2", "pyautogui>=0.9.54,<1", "Pillow>=10,<12", "discord.py>=2.4,<3",
     "slack_bolt>=1.21,<2", "matrix-nio>=0.24,<0.26", "honcho-ai>=1.0,<2", "mem0ai>=0.1,<0.3",
