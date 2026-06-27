@@ -8,6 +8,7 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | / | GET | index |
 | /api/actions/run | POST | api_actions_run |
 | /api/actions/status | GET | api_actions_status |
+| /api/actions/{name}/status | GET | api_action_status |
 | /api/admin/actions/run | POST | api_actions_run |
 | /api/admin/actions/status | GET | api_actions_status |
 | /api/admin/status | GET | api_admin_status |
@@ -45,6 +46,9 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/config/yaml | GET | api_config_yaml |
 | /api/config/yaml | POST | api_config_yaml_put |
 | /api/credential-pools/status | GET | api_credential_pools_status |
+| /api/credentials/pool | GET | api_credentials_pool_alias |
+| /api/credentials/pool | POST | api_credentials_pool_add |
+| /api/credentials/pool/{provider}/{index} | DELETE | api_credentials_pool_delete |
 | /api/credentials/pools | GET | api_credentials_pools |
 | /api/credentials/pools/{provider} | GET | api_credentials_pool_detail |
 | /api/cron/blueprints | GET | api_cron_blueprints |
@@ -184,6 +188,10 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/observability/events | GET | api_observability_contract |
 | /api/observability/hooks | GET | api_observability_contract |
 | /api/observability/hooks/test | POST | api_observability_hook_test |
+| /api/pairing | GET | api_pairing_list |
+| /api/pairing/approve | POST | api_pairing_approve |
+| /api/pairing/clear-pending | POST | api_pairing_clear_pending |
+| /api/pairing/revoke | POST | api_pairing_revoke |
 | /api/platforms | GET | api_platforms_registry |
 | /api/platforms/registry | GET | api_platforms_registry |
 | /api/platforms/{platform_id} | GET | api_platform_registry_detail |
@@ -268,6 +276,11 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/tools/validation | GET | api_tools_validation |
 | /api/update/check | GET | api_update_check |
 | /api/update/check | POST | api_update_check_post |
+| /api/webhooks | GET | api_webhooks_list |
+| /api/webhooks | POST | api_webhooks_create |
+| /api/webhooks/enable | POST | api_webhooks_enable |
+| /api/webhooks/{name} | DELETE | api_webhooks_delete |
+| /api/webhooks/{name}/enabled | PUT | api_webhooks_enabled |
 | /api/ws | WEBSOCKET | event_socket |
 | /api/{path:path} | GET | api_get |
 | /api/{path:path} | POST | api_post |

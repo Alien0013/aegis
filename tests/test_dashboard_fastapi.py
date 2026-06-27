@@ -675,6 +675,35 @@ def test_fastapi_files_upload_and_mkdir(tmp_path, monkeypatch):
     assert pairing.status_code == 200
     assert set(pairing.json()) >= {"approved", "pending"}
 
+    from aegis.gateway.pairing import PairingStore
+
+    pairing_store = PairingStore()
+    pairing_code = pairing_store.request_code("telegram", "tj-user")
+    approve_pairing = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/pairing/approve",
+        json={"platform": "telegram", "code": pairing_code},
+        headers=headers,
+    ))
+    assert approve_pairing.status_code == 200
+    assert approve_pairing.json()["ok"] is True
+
+    revoke_pairing = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/pairing/revoke",
+        json={"platform": "telegram", "user_id": "tj-user"},
+        headers=headers,
+    ))
+    assert revoke_pairing.status_code == 200
+    assert revoke_pairing.json()["ok"] is True
+
+    pairing_store.request_code("telegram", "tj-user")
+    clear_pairing = asyncio.run(_request(app, "POST", "/api/pairing/clear-pending", headers=headers))
+    assert clear_pairing.status_code == 200
+    assert clear_pairing.json()["cleared"] >= 1
+
     analytics = asyncio.run(_request(app, "GET", "/api/analytics/usage?days=7", headers=headers))
     assert analytics.status_code == 200
     analytics_body = analytics.json()
@@ -838,6 +867,31 @@ def test_fastapi_portal_admin_and_credential_aliases(tmp_path, monkeypatch):
     assert status_alias.status_code == 200
     assert status_alias.json()["count"] >= 1
 
+    singular = asyncio.run(_request(app, "GET", "/api/credentials/pool", headers=headers))
+    assert singular.status_code == 200
+    assert singular.json()["count"] >= 1
+
+    add_pool_key = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/credentials/pool",
+        json={"provider": "anthropic", "key": "sk-ant...3333"},
+        headers=headers,
+    ))
+    assert add_pool_key.status_code == 200
+    assert add_pool_key.json()["ok"] is True
+    assert add_pool_key.json()["provider"] == "anthropic"
+    assert "sk-ant...3333" not in json.dumps(add_pool_key.json())
+
+    remove_pool_key = asyncio.run(_request(
+        app,
+        "DELETE",
+        "/api/credentials/pool/anthropic/3",
+        headers=headers,
+    ))
+    assert remove_pool_key.status_code == 200
+    assert remove_pool_key.json()["ok"] is True
+
     update = asyncio.run(_request(app, "GET", "/api/update/check", headers=headers))
     assert update.status_code == 200
     assert "version" in update.json()
@@ -855,6 +909,11 @@ def test_fastapi_portal_admin_and_credential_aliases(tmp_path, monkeypatch):
     actions = asyncio.run(_request(app, "GET", "/api/actions/status", headers=headers))
     assert actions.status_code == 200
     assert any(row["id"] == "update_check" for row in actions.json()["actions"])
+
+    action_status = asyncio.run(_request(app, "GET", "/api/actions/update_check/status", headers=headers))
+    assert action_status.status_code == 200
+    assert action_status.json()["ok"] is True
+    assert action_status.json()["action"]["id"] == "update_check"
 
     run_action = asyncio.run(_request(
         app,
@@ -3191,6 +3250,35 @@ def test_fastapi_webhooks_status_redacts_security_posture(tmp_path, monkeypatch)
     assert body["runtime"]["rate_limiter"]["allowed_count"] >= 0
     assert body["runtime"]["rate_limiter"]["limited_count"] >= 0
     assert body["runtime"]["rate_limiter"]["pruned_windows"] >= 0
+
+    enable = asyncio.run(_request(app, "POST", "/api/webhooks/enable", headers=headers))
+    assert enable.status_code == 200
+    assert enable.json()["ok"] is True
+
+    created = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/webhooks",
+        json={"name": "alerts", "prompt": "summarize alert"},
+        headers=headers,
+    ))
+    assert created.status_code == 200
+    assert created.json()["ok"] is True
+    assert created.json()["webhook"]["name"] == "alerts"
+
+    toggled = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/webhooks/alerts/enabled",
+        json={"enabled": False},
+        headers=headers,
+    ))
+    assert toggled.status_code == 200
+    assert toggled.json() == {"ok": True, "name": "alerts", "enabled": False}
+
+    deleted = asyncio.run(_request(app, "DELETE", "/api/webhooks/alerts", headers=headers))
+    assert deleted.status_code == 200
+    assert deleted.json() == {"ok": True, "name": "alerts"}
 
 
 def test_fastapi_config_preferences_memory_provider_and_plugins(tmp_path, monkeypatch):
