@@ -23,7 +23,7 @@ def test_root_package_json_exposes_frontend_workspaces_and_scripts():
         names.append(manifest["name"])
     assert len(names) == len(set(names))
     scripts = package.get("scripts") or {}
-    assert scripts["typecheck"] == "npm --prefix web run typecheck && npm --prefix aegis/tui_ink run typecheck"
+    assert scripts["typecheck"] == "npm --prefix apps/shared run typecheck && npm --prefix web run typecheck && npm --prefix aegis/tui_ink run typecheck"
     assert scripts["build:web"] == "npm --prefix web run build"
     assert scripts["test:desktop"] == "npm --prefix desktop run test:desktop"
 
@@ -33,6 +33,7 @@ def test_package_wrapper_roots_delegate_to_native_aegis_packages():
     workspaces = set(root_package.get("workspaces") or [])
     expected = {
         "apps/desktop": ("aegis-app-desktop", "npm --prefix ../../desktop run test:desktop"),
+        "apps/shared": ("@aegis/shared", "node ../../web/node_modules/typescript/bin/tsc -p . --noEmit"),
         "website": ("aegis-website", "npm --prefix ../site-next run build"),
         "ui-tui": ("aegis-ui-tui", "npm --prefix ../aegis/tui_ink run build"),
     }
@@ -43,6 +44,16 @@ def test_package_wrapper_roots_delegate_to_native_aegis_packages():
         assert manifest["private"] is True
         scripts = manifest.get("scripts") or {}
         assert build_or_test_script in scripts.values()
+
+
+def test_shared_package_exports_aegis_runtime_contract():
+    manifest = json.loads((ROOT / "apps" / "shared" / "package.json").read_text(encoding="utf-8"))
+    source = (ROOT / "apps" / "shared" / "src" / "index.ts").read_text(encoding="utf-8")
+    assert manifest["exports"] == {".": "./src/index.ts"}
+    assert manifest["types"] == "./src/index.ts"
+    assert "AEGIS_PRODUCT_NAME" in source
+    assert "AEGIS_PROTOCOL_SCHEME" in source
+    assert "aegis" in source
 
 
 def test_pyproject_extras_expose_native_compatibility_aliases():

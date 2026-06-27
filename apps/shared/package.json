@@ -1,0 +1,17 @@
+{
+  "name": "@aegis/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared AEGIS product/runtime constants for UI, desktop, and terminal packages.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "node ../../web/node_modules/typescript/bin/tsc -p . --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
