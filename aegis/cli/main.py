@@ -993,6 +993,10 @@ def cmd_profile(args, config: Config) -> int:
     from .. import profiles
 
     action = getattr(args, "profile_action", None) or "show"
+    if action in {"info", "describe"}:
+        action = "show"
+    if action in {"rm", "remove"}:
+        action = "delete"
     try:
         if action == "list":
             rows = profiles.list_profiles()
@@ -1029,6 +1033,17 @@ def cmd_profile(args, config: Config) -> int:
                                           clone_all=bool(getattr(args, "clone_all", False)))
             _print(f"cloned profile {args.source_profile} -> {args.profile_name}: {path}")
             return 0
+        if action == "rename":
+            path = profiles.rename_profile(args.source_profile, args.profile_name)
+            _print(f"renamed profile {args.source_profile} -> {args.profile_name}: {path}")
+            return 0
+        if action == "delete":
+            deleted = profiles.delete_profile(args.profile_name)
+            if deleted:
+                _print(f"deleted profile {args.profile_name}")
+            else:
+                _print(f"profile not found: {args.profile_name}")
+            return 0 if deleted else 1
         if action == "show":
             requested = getattr(args, "profile_name", None)
             name = cfg.current_profile() if requested is None else cfg.profile_name(requested)
@@ -3993,9 +4008,16 @@ def build_parser() -> argparse.ArgumentParser:
     pf_clone.add_argument("--clone-all", action="store_true",
                           help="copy profile state, excluding session history and logs")
     pf_clone.set_defaults(func=cmd_profile)
-    pf_show = pf_sub.add_parser("show", help="show profile details")
+    pf_show = pf_sub.add_parser("show", aliases=["info", "describe"], help="show profile details")
     pf_show.add_argument("profile_name", nargs="?", help="profile name; defaults to active")
     pf_show.set_defaults(func=cmd_profile)
+    pf_rename = pf_sub.add_parser("rename", help="rename a profile")
+    pf_rename.add_argument("source_profile")
+    pf_rename.add_argument("profile_name")
+    pf_rename.set_defaults(func=cmd_profile)
+    pf_delete = pf_sub.add_parser("delete", aliases=["rm", "remove"], help="delete a profile")
+    pf_delete.add_argument("profile_name")
+    pf_delete.set_defaults(func=cmd_profile)
     pf_export = pf_sub.add_parser("export", help="export a profile to tar.gz")
     pf_export.add_argument("profile_name", nargs="?", help="profile name; defaults to active")
     pf_export.add_argument("-o", "--out", help="archive path")

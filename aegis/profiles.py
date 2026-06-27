@@ -207,6 +207,27 @@ def delete_profile(profile: str) -> bool:
     return True
 
 
+def rename_profile(source: str, destination_name: str) -> Path:
+    source_name = _profile_name(source)
+    destination_profile = _profile_name(destination_name)
+    if not source_name:
+        raise ValueError("the default profile cannot be renamed")
+    if not destination_profile:
+        raise ValueError("cannot rename a profile to default")
+    source_path = _path(source_name)
+    destination_path = _path(destination_profile)
+    if not source_path.exists():
+        raise FileNotFoundError(f"profile '{source_name}' does not exist at {source_path}")
+    if destination_path.exists():
+        raise FileExistsError(f"profile '{destination_profile}' already exists at {destination_path}")
+    ensure_dir(destination_path.parent)
+    shutil.move(str(source_path), str(destination_path))
+    if cfg.current_profile() == source_name:
+        cfg.set_active_profile(destination_profile)
+        cfg.set_profile(None)
+    return destination_path
+
+
 def list_profiles() -> list[ProfileInfo]:
     active = cfg.current_profile()
     names = cfg.available_profiles()

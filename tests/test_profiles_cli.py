@@ -54,3 +54,32 @@ def test_profile_clone_from_default_copies_core_files(monkeypatch, tmp_path):
     assert "test-model" in (worker / "config.yaml").read_text(encoding="utf-8")
     assert "project fact" in (worker / "memories" / "MEMORY.md").read_text(encoding="utf-8")
     assert (worker / "skills" / "s1" / "SKILL.md").exists()
+
+
+def test_profile_info_describe_rename_delete_aliases(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis import config as cfg
+    from aegis.cli.main import main
+
+    cfg.set_profile(None)
+    assert main(["profile", "create", "alpha"]) == 0
+    assert main(["profile", "use", "alpha"]) == 0
+
+    assert main(["profile", "info", "alpha"]) == 0
+    assert "Profile:  alpha" in capsys.readouterr().out
+    assert main(["profile", "describe", "alpha"]) == 0
+    assert "Profile:  alpha" in capsys.readouterr().out
+
+    assert main(["profile", "rename", "alpha", "beta"]) == 0
+    assert not (tmp_path / "profiles" / "alpha").exists()
+    assert (tmp_path / "profiles" / "beta" / "SOUL.md").exists()
+    assert cfg.current_profile() == "beta"
+    assert "renamed profile alpha -> beta" in capsys.readouterr().out
+
+    assert main(["profile", "delete", "beta"]) == 0
+    assert not (tmp_path / "profiles" / "beta").exists()
+    assert cfg.current_profile() == ""
+    assert "deleted profile beta" in capsys.readouterr().out
+
+    assert main(["profile", "delete", "default"]) == 1
+    assert "default profile cannot be deleted" in capsys.readouterr().err
