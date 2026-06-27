@@ -1456,6 +1456,44 @@ def install(source: str, config, *, force: bool = False) -> str:
     return str(result["plugin_name"])
 
 
+def update(name: str, config) -> dict[str, Any]:
+    manifest = _find_manifest(name, config)
+    if manifest is None:
+        return {"ok": False, "error": f"plugin '{name}' not found"}
+    target = manifest.path
+    if target.is_file():
+        if target.name in MANIFEST_NAMES:
+            target = target.parent
+        else:
+            return {"ok": False, "error": f"Plugin '{name}' is not installed from git; cannot update."}
+    if not (target / ".git").exists():
+        return {"ok": False, "error": f"Plugin '{name}' is not installed from git; cannot update."}
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(target), "pull", "--ff-only"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    except FileNotFoundError:
+        return {"ok": False, "error": "git is not installed or not in PATH"}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "Git pull timed out after 120 seconds"}
+    output = (result.stdout or result.stderr or "").strip()
+    if result.returncode != 0:
+        return {"ok": False, "error": output or "Git pull failed"}
+    _copy_example_files(target)
+    clear_runtime_cache()
+    return {
+        "ok": True,
+        "name": manifest.name,
+        "target": str(target),
+        "output": output,
+        "already_current": "Already up to date" in output,
+    }
+
+
 def remove(name: str, config) -> bool:
     base = _plugin_base()
     manifests = list_manifests(config)

@@ -1407,6 +1407,19 @@ def cmd_plugins(args, config: Config) -> int:
             return 0
         except Exception as e:  # noqa: BLE001
             return _die(str(e))
+    if action == "update":
+        if not getattr(args, "name", None):
+            return _die("usage: aegis plugins update <name>")
+        result = plugin_runtime.update(args.name, config)
+        if not result.get("ok"):
+            return _die(str(result.get("error") or "plugin update failed"))
+        if result.get("already_current"):
+            _print(f"plugin '{result.get('name') or args.name}' is already up to date")
+        else:
+            _print(f"updated plugin '{result.get('name') or args.name}'")
+            if result.get("output"):
+                _print(str(result["output"]))
+        return 0
     if action == "enable":
         if plugin_runtime.enable(args.name, config):
             _print(f"enabled {args.name}")
@@ -3985,7 +3998,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     pl = sub.add_parser("plugins", help="manage manifest and drop-in plugins")
     pl.add_argument("action", nargs="?",
-                    choices=["list", "doctor", "path", "install", "enable", "disable", "remove"],
+                    choices=["list", "doctor", "path", "install", "update", "enable", "disable", "remove"],
                     default="list")
     pl.add_argument("name", nargs="?")
     pl.add_argument("--force", action="store_true", help="replace an installed local plugin")
