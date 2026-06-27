@@ -145,6 +145,39 @@ def test_fastapi_dashboard_auth_and_cookie(tmp_path, monkeypatch):
     assert "runs" in body["api_adapter"]["stores"]
     assert "jobs" in body["api_adapter"]["stores"]
 
+    me_unauthorized = asyncio.run(_request(app, "GET", "/api/auth/me"))
+    assert me_unauthorized.status_code == 401
+
+    me = asyncio.run(_request(app, "GET", "/api/auth/me", headers={"X-Aegis-Token": "t"}))
+    assert me.status_code == 200
+    me_body = me.json()
+    assert me_body["authenticated"] is True
+    assert me_body["auth_required"] is True
+    assert me_body["user"] == "local"
+    assert "token" in me_body["providers"]
+    assert me_body.get("token") is None
+    assert me_body.get("access_token") is None
+    assert all(value != "t" for value in me_body.values() if isinstance(value, str))
+
+    ticket_response = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/auth/ws-ticket",
+        headers={"X-Aegis-Token": "t"},
+        json={},
+    ))
+    assert ticket_response.status_code == 200
+    ticket_body = ticket_response.json()
+    assert ticket_body["ok"] is True
+    assert ticket_body["ticket"]
+    assert ticket_body["ticket"] != "t"
+    assert ticket_body["ttl_seconds"] > 0
+
+    from aegis.dashboard_fastapi import _consume_ws_ticket
+
+    assert _consume_ws_ticket(ticket_body["ticket"]) is True
+    assert _consume_ws_ticket(ticket_body["ticket"]) is False
+
 
 def test_fastapi_tools_validation_and_permission_dry_run(tmp_path, monkeypatch):
     import aegis.dashboard_routes.tools_mcp as tools_routes

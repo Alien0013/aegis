@@ -10,16 +10,21 @@ import { useSearchParams } from "react-router-dom";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { TOKEN } from "../lib/api";
+import { authWsTicket } from "../lib/api";
 import { compact } from "../lib/format";
 import { useTheme } from "../themes/ThemeProvider";
 import { Badge } from "../components/ui";
 import { Icon } from "../components/icons";
 
-function ptyUrl(term: Terminal, resume: string): string {
+async function ptyUrl(term: Terminal, resume: string): Promise<string> {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   const q = new URLSearchParams();
-  if (TOKEN) q.set("token", TOKEN);
+  try {
+    const ticket = await authWsTicket();
+    if (ticket.ticket) q.set("ticket", ticket.ticket);
+  } catch {
+    // Same-origin WebSockets can still authenticate via secure session/cookie paths.
+  }
   q.set("cols", String(term.cols));
   q.set("rows", String(term.rows));
   if (resume) q.set("resume", resume);
@@ -63,30 +68,37 @@ export function Chat() {
     fit.fit();
     term.focus();
 
-    const ws = new WebSocket(ptyUrl(term, resume));
-    ws.binaryType = "arraybuffer";
-    wsRef.current = ws;
+    let disposed = false;
+    let ws: WebSocket | null = null;
+    wsRef.current = null;
     setStatus("connecting");
 
     const sendResize = () => {
-      try { fit.fit(); if (ws.readyState === WebSocket.OPEN) ws.send(resizeFrame(term)); } catch { /* disposing */ }
+      try { fit.fit(); if (ws?.readyState === WebSocket.OPEN) ws.send(resizeFrame(term)); } catch { /* disposing */ }
     };
     const ro = new ResizeObserver(sendResize);
     ro.observe(host);
-    const dataSub = term.onData((d) => { if (ws.readyState === WebSocket.OPEN) ws.send(d); });
+    const dataSub = term.onData((d) => { if (ws?.readyState === WebSocket.OPEN) ws.send(d); });
 
-    ws.onopen = () => { setStatus("connected"); sendResize(); };
-    ws.onmessage = async (e) => {
-      if (typeof e.data === "string") term.write(e.data);
-      else if (e.data instanceof ArrayBuffer) term.write(new Uint8Array(e.data));
-      else if (e.data instanceof Blob) term.write(new Uint8Array(await e.data.arrayBuffer()));
-    };
-    ws.onerror = () => setStatus("error");
-    ws.onclose = () => setStatus((s) => (s === "error" ? "error" : "closed"));
+    void ptyUrl(term, resume).then((url) => {
+      if (disposed) return;
+      ws = new WebSocket(url);
+      ws.binaryType = "arraybuffer";
+      wsRef.current = ws;
+      ws.onopen = () => { setStatus("connected"); sendResize(); };
+      ws.onmessage = async (e) => {
+        if (typeof e.data === "string") term.write(e.data);
+        else if (e.data instanceof ArrayBuffer) term.write(new Uint8Array(e.data));
+        else if (e.data instanceof Blob) term.write(new Uint8Array(await e.data.arrayBuffer()));
+      };
+      ws.onerror = () => setStatus("error");
+      ws.onclose = () => setStatus((s) => (s === "error" ? "error" : "closed"));
+    });
 
     return () => {
+      disposed = true;
       dataSub.dispose(); ro.disconnect();
-      try { ws.close(); } catch { /* closed */ }
+      try { ws?.close(); } catch { /* closed */ }
       term.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

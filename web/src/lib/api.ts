@@ -67,6 +67,28 @@ export function del<T = unknown>(path: string): Promise<T> {
     .then((r) => parse<T>(r, path));
 }
 
+export interface AuthMe {
+  authenticated?: boolean;
+  auth_required?: boolean;
+  providers?: string[];
+  user?: string;
+}
+
+export interface AuthWsTicket {
+  ok?: boolean;
+  ticket: string;
+  ttl_seconds?: number;
+  expires_at?: string;
+}
+
+export function authMe(): Promise<AuthMe> {
+  return api<AuthMe>("auth/me");
+}
+
+export async function authWsTicket(): Promise<AuthWsTicket> {
+  return post<AuthWsTicket>("auth/ws-ticket", {});
+}
+
 export interface DashboardPluginApiMount {
   status?: string;
   mounted?: boolean;

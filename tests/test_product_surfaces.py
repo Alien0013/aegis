@@ -172,6 +172,20 @@ def test_extension_pages_expose_contract_and_mcp_filters():
     assert "excluded_tool_count" in mcp
 
 
+def test_dashboard_chat_uses_one_time_ws_tickets_for_pty_auth():
+    api = Path("web/src/lib/api.ts").read_text(encoding="utf-8")
+    chat = Path("web/src/pages/Chat.tsx").read_text(encoding="utf-8")
+
+    assert "export interface AuthMe" in api
+    assert "export function authMe" in api
+    assert "export interface AuthWsTicket" in api
+    assert "export async function authWsTicket" in api
+    assert 'post<AuthWsTicket>("auth/ws-ticket"' in api
+    assert "authWsTicket" in chat
+    assert 'q.set("ticket"' in chat
+    assert 'q.set("token"' not in chat
+
+
 def test_security_page_and_audit_outputs_are_structured_and_redacted(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
 
