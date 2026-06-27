@@ -748,6 +748,11 @@ def test_fastapi_registers_live_and_pty_websockets(tmp_path, monkeypatch):
         "/api/credentials/pools",
         "/api/credential-pools/status",
         "/api/update/check",
+        "/api/hermes/update/check",
+        "/api/hermes/update",
+        "/api/curator",
+        "/api/curator/run",
+        "/api/curator/paused",
         "/api/portal",
         "/api/actions/status",
         "/api/admin/status",
@@ -859,6 +864,7 @@ def test_fastapi_portal_admin_and_credential_aliases(tmp_path, monkeypatch):
     from aegis.config import Config
     from aegis.credentials import reset as reset_credential_pools
     from aegis.dashboard_fastapi import create_app
+    from aegis import curator
 
     cfg = Config.load()
     cfg.set("credential_pools.anthropic.keys", [
@@ -867,6 +873,8 @@ def test_fastapi_portal_admin_and_credential_aliases(tmp_path, monkeypatch):
     ])
     cfg.set("credential_pools.anthropic.strategy", "round_robin")
     reset_credential_pools()
+    monkeypatch.setattr(curator, "apply_transitions", lambda dry_run=True: {"stale": [], "to_archive": [], "dry_run": dry_run})
+    monkeypatch.setattr(curator, "run", lambda config, dry_run=False: {"promoted": [], "archived": [], "deleted": [], "dry_run": dry_run})
     app = create_app(cfg)
     headers = {"X-Aegis-Token": "t"}
 
@@ -914,9 +922,39 @@ def test_fastapi_portal_admin_and_credential_aliases(tmp_path, monkeypatch):
     assert update.status_code == 200
     assert "version" in update.json()
 
+    hermes_update = asyncio.run(_request(app, "GET", "/api/hermes/update/check", headers=headers))
+    assert hermes_update.status_code == 200
+    assert hermes_update.json()["version"] == update.json()["version"]
+
     update_post = asyncio.run(_request(app, "POST", "/api/portal/update/check", headers=headers))
     assert update_post.status_code == 200
     assert update_post.json()["version"] == update.json()["version"]
+
+    hermes_update_post = asyncio.run(_request(app, "POST", "/api/hermes/update", headers=headers))
+    assert hermes_update_post.status_code == 200
+    assert hermes_update_post.json()["ok"] is True
+    assert hermes_update_post.json()["version"] == update.json()["version"]
+
+    curator_status = asyncio.run(_request(app, "GET", "/api/curator", headers=headers))
+    assert curator_status.status_code == 200
+    assert curator_status.json()["stale"] == []
+    assert curator_status.json()["to_archive"] == []
+
+    curator_run = asyncio.run(_request(app, "POST", "/api/curator/run", headers=headers))
+    assert curator_run.status_code == 200
+    assert curator_run.json()["ok"] is True
+    assert curator_run.json()["result"]["promoted"] == []
+
+    curator_paused = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/curator/paused",
+        json={"paused": True},
+        headers=headers,
+    ))
+    assert curator_paused.status_code == 200
+    assert curator_paused.json() == {"ok": True, "paused": True, "enabled": False}
+    assert cfg.get("curator.enabled") is False
 
     portal = asyncio.run(_request(app, "GET", "/api/portal", headers=headers))
     assert portal.status_code == 200

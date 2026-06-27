@@ -72,6 +72,9 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/cron/jobs/{job_id}/trigger | POST | api_cron_job_trigger |
 | /api/cron/service | GET | api_cron_service_get |
 | /api/cron/service | POST | api_cron_service_post |
+| /api/curator | GET | api_curator_status |
+| /api/curator/paused | PUT | api_curator_paused |
+| /api/curator/run | POST | api_curator_run |
 | /api/dashboard/agent-plugins/install | POST | api_dashboard_agent_plugins_install |
 | /api/dashboard/agent-plugins/{name:path} | DELETE | api_dashboard_agent_plugin_delete |
 | /api/dashboard/agent-plugins/{name:path} | GET | api_dashboard_agent_plugin_detail |
@@ -129,6 +132,8 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/gateway/status | GET | api_gateway_status |
 | /api/gateway/stop | POST | api_gateway_stop |
 | /api/health | GET | api_health |
+| /api/hermes/update | POST | api_hermes_update |
+| /api/hermes/update/check | GET | api_update_check |
 | /api/hooks | GET | api_observability_contract |
 | /api/hooks/contract | GET | api_observability_contract |
 | /api/hooks/test | POST | api_observability_hook_test |

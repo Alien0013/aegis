@@ -102,6 +102,7 @@ def register(app, config, chat_runner):
         return JSONResponse(_credential_pools_payload(config))
 
     @app.get("/api/update/check")
+    @app.get("/api/hermes/update/check")
     @app.get("/api/portal/update/check")
     @app.get("/api/check/update")
     async def api_update_check(request: Request) -> JSONResponse:
@@ -114,6 +115,37 @@ def register(app, config, chat_runner):
     async def api_update_check_post(request: Request) -> JSONResponse:
         _require_request(request, config)
         return JSONResponse(dash._update_check())
+
+    @app.post("/api/hermes/update")
+    async def api_hermes_update(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        update = dash._update_check()
+        return JSONResponse({"ok": True, **update})
+
+    @app.get("/api/curator")
+    async def api_curator_status(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from ..curator import apply_transitions
+
+        return JSONResponse(apply_transitions(dry_run=True))
+
+    @app.post("/api/curator/run")
+    async def api_curator_run(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(dash._ops_action("curator_run", {}, config))
+
+    @app.put("/api/curator/paused")
+    async def api_curator_paused(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        raw = await request.body()
+        try:
+            body = json.loads(raw) if raw else {}
+        except ValueError:
+            body = {}
+        paused = bool(body.get("paused")) if isinstance(body, dict) else False
+        enabled = not paused
+        config.set("curator.enabled", enabled)
+        return JSONResponse({"ok": True, "paused": paused, "enabled": enabled})
 
     @app.get("/api/portal")
     @app.get("/api/portal/status")
