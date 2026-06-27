@@ -7,6 +7,7 @@ import copy
 import importlib.metadata as importlib_metadata
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -305,6 +306,74 @@ def cmd_fallback(args, config: Config) -> int:
         return 0
 
     return _die("usage: aegis fallback [list|add|remove]")
+
+
+def cmd_routing(args, config: Config) -> int:
+    from ..providers import registry
+
+    action = getattr(args, "action", None) or "list"
+    routes = [dict(row) for row in (config.get("routing", []) or []) if isinstance(row, dict)]
+    if action == "list":
+        _print("prompt routes:")
+        if not routes:
+            _print("  (none)")
+            return 0
+        for idx, row in enumerate(routes, start=1):
+            _print(f"  #{idx} /{row.get('match', '')}/ -> {row.get('provider', '')} / {row.get('model', '')}")
+        return 0
+
+    if action == "add":
+        pattern = str(getattr(args, "pattern", "") or "").strip()
+        provider = str(getattr(args, "provider", "") or "").strip()
+        if not pattern or not provider:
+            return _die("usage: aegis routing add <regex> <provider> [model]")
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            return _die(f"invalid route regex: {exc}")
+        spec = registry.get_spec(provider, config)
+        model = str(getattr(args, "model", "") or "").strip() or (spec.default_model if spec else "default")
+        validation = registry.validate_model_choice(provider, model, config)
+        if not validation.get("ok", True):
+            return _die(registry.model_validation_message(validation))
+        route = {"match": pattern, "provider": provider, "model": model}
+        if any(
+            row.get("match") == pattern and row.get("provider") == provider and row.get("model") == model
+            for row in routes
+        ):
+            return _die(f"route already exists: /{pattern}/ -> {provider}/{model}")
+        routes.append(route)
+        config.data["routing"] = routes
+        config.save()
+        _print(f"added route /{pattern}/ -> {provider}/{model}")
+        warning = registry.model_validation_message(validation)
+        if warning and validation.get("warning"):
+            _print(f"warning: {warning}")
+        return 0
+
+    if action == "remove":
+        target = str(getattr(args, "pattern", "") or "").strip()
+        if not target:
+            return _die("usage: aegis routing remove <index|regex>")
+        remove_index: int | None = None
+        if target.isdigit():
+            candidate = int(target) - 1
+            if 0 <= candidate < len(routes):
+                remove_index = candidate
+        if remove_index is None:
+            for idx, row in enumerate(routes):
+                if target == str(row.get("match") or ""):
+                    remove_index = idx
+                    break
+        if remove_index is None:
+            return _die(f"route not found: {target}")
+        removed = routes.pop(remove_index)
+        config.data["routing"] = routes
+        config.save()
+        _print(f"removed route #{remove_index + 1} /{removed.get('match')}/")
+        return 0
+
+    return _die("usage: aegis routing [list|add|remove]")
 
 
 # --------------------------------------------------------------------------- #
@@ -3475,6 +3544,14 @@ def build_parser() -> argparse.ArgumentParser:
     fb.add_argument("provider", nargs="?")
     fb.add_argument("model", nargs="?")
     fb.set_defaults(func=cmd_fallback)
+
+    for route_cmd in ("routing", "route"):
+        rt = sub.add_parser(route_cmd, help="list/add/remove prompt-based model routes")
+        rt.add_argument("action", nargs="?", choices=["list", "add", "remove"], default="list")
+        rt.add_argument("pattern", nargs="?", help="regex for add/remove, or index for remove")
+        rt.add_argument("provider", nargs="?")
+        rt.add_argument("model", nargs="?")
+        rt.set_defaults(func=cmd_routing)
 
     ps = sub.add_parser("prompt-size", help="show active context and compression sizing")
     ps.set_defaults(func=cmd_command_aliases)

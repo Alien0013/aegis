@@ -79,6 +79,8 @@ Generated from `aegis.cli.main.build_parser()`.
 | aegis project use | set or clear the active project | `aegis project use [-h] [project]` |
 | aegis prompt-size | show active context and compression sizing | `aegis prompt-size [-h]` |
 | aegis proxy | run the OpenAI-compatible API server (alias of serve) | `aegis proxy [-h] [--host HOST] [--port PORT]` |
+| aegis route | list/add/remove prompt-based model routes | `aegis route [-h] [{list,add,remove}] [pattern] [provider] [model]` |
+| aegis routing | list/add/remove prompt-based model routes | `aegis routing [-h] [{list,add,remove}] [pattern] [provider] [model]` |
 | aegis rpc | run a local JSON-RPC agent server over stdio | `aegis rpc [-h]` |
 | aegis secret | store a local secret in ~/.aegis/.env with hidden input | `aegis secret [-h] [--stdin] [{set,path}] [key]` |
 | aegis secrets | sync secrets from a manager (bitwarden) | `aegis secrets [-h] [provider]` |
