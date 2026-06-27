@@ -152,11 +152,16 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/mcp/servers/{name}/test | POST | api_mcp_server_test |
 | /api/mcp/servers/{name}/tools | GET | api_mcp_server_tools |
 | /api/mcp/servers/{name}/tools | POST | api_mcp_server_tools_post |
+| /api/memory | GET | api_memory_status |
 | /api/memory/provider | GET | api_memory_provider_active |
+| /api/memory/provider | PUT | api_memory_provider_select |
 | /api/memory/providers | GET | api_memory_providers |
 | /api/memory/providers/{name} | GET | api_memory_provider_status |
+| /api/memory/providers/{name}/config | GET | api_memory_provider_config |
+| /api/memory/providers/{name}/config | PUT | api_memory_provider_config_update |
 | /api/memory/providers/{name}/schema | GET | api_memory_provider_schema |
 | /api/memory/providers/{name}/setup | GET | api_memory_provider_setup |
+| /api/memory/reset | POST | api_memory_reset |
 | /api/messaging/platforms | GET | api_messaging_platforms |
 | /api/messaging/platforms/registry | GET | api_platforms_registry |
 | /api/messaging/platforms/{platform_id} | GET | api_platform_registry_detail |

@@ -3252,6 +3252,62 @@ def test_fastapi_config_preferences_memory_provider_and_plugins(tmp_path, monkey
     assert "errors" in plugins.json()
 
 
+def test_fastapi_memory_compat_provider_config_and_reset_routes(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    memory = asyncio.run(_request(app, "GET", "/api/memory", headers=headers))
+    assert memory.status_code == 200
+    memory_body = memory.json()
+    assert "builtin_files" in memory_body
+    assert any(row["name"] == "jsonl" for row in memory_body["providers"])
+
+    provider = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/memory/provider",
+        json={"provider": "jsonl"},
+        headers=headers,
+    ))
+    assert provider.status_code == 200
+    assert provider.json() == {"ok": True, "active": "jsonl"}
+
+    config_view = asyncio.run(_request(app, "GET", "/api/memory/providers/jsonl/config", headers=headers))
+    assert config_view.status_code == 200
+    assert config_view.json()["name"] == "jsonl"
+    assert "memory.jsonl.max_recent" in config_view.json()["properties"]
+
+    config_update = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/memory/providers/jsonl/config",
+        json={"values": {"memory.jsonl.max_recent": 3}},
+        headers=headers,
+    ))
+    assert config_update.status_code == 200
+    assert config_update.json()["ok"] is True
+
+    from aegis.config import Config
+    from aegis.memory import MemoryStore
+    saved = Config.load()
+    assert saved.get("memory.provider") == "jsonl"
+    assert saved.get("memory.jsonl.max_recent") == 3
+
+    store = MemoryStore()
+    store.add("memory", "alpha memory")
+    reset = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/memory/reset",
+        json={"target": "memory"},
+        headers=headers,
+    ))
+    assert reset.status_code == 200
+    assert reset.json()["ok"] is True
+    assert "MEMORY.md" in reset.json()["deleted"]
+    assert store.raw("memory") == ""
+
+
 def test_fastapi_dashboard_plugins_manifest_assets_and_api(tmp_path, monkeypatch):
     plug = tmp_path / "plugins" / "demo"
     (plug / "dashboard" / "dist").mkdir(parents=True)

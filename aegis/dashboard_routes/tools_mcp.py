@@ -10,7 +10,7 @@ register_all preserves the original cross-module order so the catch-alls registe
 from __future__ import annotations
 
 import tempfile
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import File, Form, UploadFile
 
@@ -28,6 +28,74 @@ from ..dashboard_fastapi import (
     dash,
     json,
 )
+
+
+def _memory_builtin_file_sizes() -> dict[str, int]:
+    from ..memory import MemoryStore
+
+    store = MemoryStore()
+    out: dict[str, int] = {}
+    for target in ("memory", "user"):
+        try:
+            out[target] = store._path(target).stat().st_size
+        except OSError:
+            out[target] = 0
+    return out
+
+
+def _memory_payload(config) -> dict[str, Any]:
+    from ..memory_providers import memory_provider_report
+
+    base = dash._dashboard_memory_payload()
+    report = memory_provider_report(config)
+    catalog = report.get("provider_catalog", [])
+    return {
+        **base,
+        "active": report.get("provider", ""),
+        "provider": report.get("provider", ""),
+        "providers": catalog,
+        "provider_catalog": catalog,
+        "builtin_files": _memory_builtin_file_sizes(),
+        "config_schema": report.get("config_schema", {}),
+    }
+
+
+def _memory_provider_config_payload(name: str, config) -> tuple[dict[str, Any], int]:
+    from ..memory_providers import memory_provider_config_schema, memory_provider_metadata
+
+    schema = memory_provider_config_schema(name)
+    if not schema.get("known"):
+        return {"name": schema.get("name", name), "label": name, "fields": [], "properties": {}}, 404
+    meta = memory_provider_metadata(name)
+    properties = dict(schema.get("properties", {}) or {})
+    values: dict[str, Any] = {}
+    fields: list[dict[str, Any]] = []
+    for key, spec in properties.items():
+        if key == "memory.provider":
+            value = name
+        else:
+            value = config.get(key, spec.get("default"))
+        if spec.get("secret") or spec.get("secret_values"):
+            redacted = {"configured": value not in (None, "", {}, [])}
+            values[key] = redacted
+            field_value = redacted
+        else:
+            values[key] = value
+            field_value = value
+        fields.append({"key": key, "value": field_value, **spec})
+    return {
+        "name": schema.get("name", name),
+        "label": meta.get("display_name") or schema.get("name", name),
+        "fields": fields,
+        "properties": properties,
+        "values": values,
+        "schema": schema,
+    }, 200
+
+
+def _memory_provider_values(body: dict[str, Any]) -> dict[str, Any]:
+    values = body.get("values", body)
+    return values if isinstance(values, dict) else {}
 
 
 def register(app, config, chat_runner):
@@ -223,6 +291,40 @@ def register(app, config, chat_runner):
         except KeyError:
             return JSONResponse({"ok": False, "error": "server not found", "name": name}, status_code=404)
 
+    @app.get("/api/memory")
+    async def api_memory_status(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_memory_payload(config))
+
+    @app.put("/api/memory/provider")
+    async def api_memory_provider_select(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        provider = str((body if isinstance(body, dict) else {}).get("provider") or "").strip()
+        if provider.lower() in {"built-in", "builtin", "none"}:
+            provider = ""
+        if provider:
+            from ..memory_providers import memory_provider_status
+
+            status = memory_provider_status(provider, config)
+            if not status.get("known"):
+                return JSONResponse({"ok": False, "error": f"unknown memory provider: {provider}"}, status_code=400)
+        config.set("memory.provider", provider)
+        return JSONResponse({"ok": True, "active": provider})
+
+    @app.post("/api/memory/reset")
+    async def api_memory_reset(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        target = str((body if isinstance(body, dict) else {}).get("target") or "all").strip().lower()
+        if target not in {"all", "memory", "user"}:
+            return JSONResponse({"ok": False, "error": "target must be all, memory, or user"}, status_code=400)
+        targets = ["memory", "user"] if target == "all" else [target]
+        reset = [dash._reset_memory_file(item) for item in targets]
+        failed = [item for item in reset if not item.get("ok")]
+        deleted = [{"memory": "MEMORY.md", "user": "USER.md"}[item] for item in targets]
+        return JSONResponse({"ok": not failed, "deleted": deleted, "reset": reset}, status_code=200 if not failed else 500)
+
     @app.get("/api/memory/providers")
     async def api_memory_providers(request: Request) -> JSONResponse:
         _require_request(request, config)
@@ -244,6 +346,30 @@ def register(app, config, chat_runner):
 
         status = memory_provider_status(name, config)
         return JSONResponse(status, status_code=200 if status.get("known") else 404)
+
+    @app.get("/api/memory/providers/{name}/config")
+    async def api_memory_provider_config(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        payload, status = _memory_provider_config_payload(name, config)
+        return JSONResponse(payload, status_code=status)
+
+    @app.put("/api/memory/providers/{name}/config")
+    async def api_memory_provider_config_update(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from ..memory_providers import memory_provider_config_schema
+
+        body = await request.json()
+        schema = memory_provider_config_schema(name)
+        if not schema.get("known"):
+            return JSONResponse({"ok": False, "error": f"unknown memory provider: {name}"}, status_code=404)
+        properties = dict(schema.get("properties", {}) or {})
+        for key, value in _memory_provider_values(body if isinstance(body, dict) else {}).items():
+            if key in properties and key != "memory.provider":
+                config.set(key, value)
+        active = str(schema.get("name") or name)
+        config.set("memory.provider", active)
+        payload, _status = _memory_provider_config_payload(name, config)
+        return JSONResponse({"ok": True, "active": active, "config": payload})
 
     @app.get("/api/memory/providers/{name}/setup")
     async def api_memory_provider_setup(name: str, request: Request) -> JSONResponse:
