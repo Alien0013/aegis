@@ -395,6 +395,14 @@ def test_fastapi_basic_login_session_and_logout(tmp_path, monkeypatch):
     assert "<form method='post' action='/auth/login'>" in deep_link.text
     assert "window.__AEGIS_SESSION_TOKEN__" not in deep_link.text
 
+    auth_login_page = asyncio.run(_request(app, "GET", "/auth/login"))
+    assert auth_login_page.status_code == 200
+    assert "<form method='post' action='/auth/login'>" in auth_login_page.text
+
+    auth_callback = asyncio.run(_request(app, "GET", "/auth/callback?provider=test"))
+    assert auth_callback.status_code == 200
+    assert auth_callback.json() == {"ok": True, "provider": "test", "callback": True}
+
     bad = asyncio.run(_request(
         app,
         "POST",
@@ -411,6 +419,16 @@ def test_fastapi_basic_login_session_and_logout(tmp_path, monkeypatch):
     ))
     assert good.status_code == 200
     session_cookie = good.cookies["aegis_dashboard_session"]
+
+    password_login = asyncio.run(_request(
+        app,
+        "POST",
+        "/auth/password-login",
+        json={"username": "admin", "password": "pw-secret"},
+    ))
+    assert password_login.status_code == 200
+    assert password_login.json()["ok"] is True
+    assert "aegis_dashboard_session" in password_login.cookies
 
     authed = asyncio.run(_request(
         app,

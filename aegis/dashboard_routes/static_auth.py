@@ -52,6 +52,37 @@ def register(app, config, chat_runner):
     async def login_page() -> HTMLResponse:
         return _login_page()
 
+    @app.get("/auth/login", response_class=HTMLResponse)
+    async def auth_login_page() -> HTMLResponse:
+        return _login_page()
+
+    @app.get("/auth/callback")
+    async def auth_callback(request: Request) -> JSONResponse:
+        return JSONResponse({"ok": True, "provider": str(request.query_params.get("provider") or ""), "callback": True})
+
+    @app.post("/auth/password-login")
+    async def auth_password_login(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            body = {}
+        username = str((body or {}).get("username") or "")
+        password = str((body or {}).get("password") or "")
+        if not _basic_auth_configured():
+            return JSONResponse({"ok": False, "error": "username/password login is not configured"}, status_code=400)
+        expected_user, expected_password = _basic_auth_credentials()
+        if not (hmac.compare_digest(username, expected_user)
+                and hmac.compare_digest(password, expected_password)):
+            return JSONResponse({"ok": False, "error": "invalid username or password"}, status_code=401)
+        response = JSONResponse({"ok": True, "user": username})
+        response.set_cookie(
+            _SESSION_COOKIE,
+            _make_session_cookie(username, config),
+            httponly=True,
+            samesite="lax",
+        )
+        return response
+
     @app.post("/auth/login")
     async def login_form(username: Annotated[str, Form()] = "",
                          password: Annotated[str, Form()] = "") -> Response:
