@@ -238,6 +238,7 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/providers | GET | api_providers_get |
 | /api/providers/matrix | GET | api_providers_matrix |
 | /api/providers/probe | POST | api_providers_probe |
+| /api/providers/validate | POST | api_providers_validate |
 | /api/pty | WEBSOCKET | pty_socket |
 | /api/pub | POST | api_pub |
 | /api/runs/{run_id}/timeline | GET | api_run_timeline |
@@ -297,10 +298,16 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/skills/{name}/unpin | POST | api_skill_unpin |
 | /api/status | GET | api_status |
 | /api/system/stats | GET | api_system_stats |
+| /api/tools/computer-use/permissions/grant | POST | api_computer_use_permissions_grant |
+| /api/tools/computer-use/status | GET | api_computer_use_status |
 | /api/tools/inventory | GET | api_tools_inventory |
 | /api/tools/permission-dry-run | POST | api_tools_permission_dry_run |
 | /api/tools/toolsets | GET | api_toolsets |
 | /api/tools/toolsets/{name} | PUT | api_toolset_toggle |
+| /api/tools/toolsets/{name}/config | GET | api_toolset_config |
+| /api/tools/toolsets/{name}/env | PUT | api_toolset_env |
+| /api/tools/toolsets/{name}/post-setup | POST | api_toolset_post_setup |
+| /api/tools/toolsets/{name}/provider | PUT | api_toolset_provider |
 | /api/tools/validation | GET | api_tools_validation |
 | /api/update/check | GET | api_update_check |
 | /api/update/check | POST | api_update_check_post |

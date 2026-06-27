@@ -18,9 +18,11 @@ from ..dashboard_fastapi import (
     JSONResponse,
     Path,
     Request,
+    _env_set_payload,
     _mcp_catalog_install_response,
     _mcp_servers,
     _mcp_spec_from_body,
+    _provider_probe,
     _require_request,
     _safe_resource_name,
     _save_mcp_servers,
@@ -152,6 +154,93 @@ def register(app, config, chat_runner):
             {**result, "toolsets_detail": dash._dashboard_toolsets(config)},
             status_code=200 if result.get("ok") else 400,
         )
+
+    @app.get("/api/tools/toolsets/{name}/config")
+    async def api_toolset_config(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        safe = _safe_resource_name(name, "toolset")
+        toolsets = dash._dashboard_toolsets(config)
+        match = next((row for row in toolsets if row.get("name") == safe), None)
+        payload = {
+            "ok": bool(match),
+            "name": safe,
+            "toolset": match,
+            "provider": config.get(f"tools.toolset_providers.{safe}", ""),
+            "env": {},
+            "post_setup": [],
+        }
+        return JSONResponse(payload, status_code=200 if match else 404)
+
+    @app.put("/api/tools/toolsets/{name}/env")
+    async def api_toolset_env(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        safe = _safe_resource_name(name, "toolset")
+        body = await request.json()
+        values = (body if isinstance(body, dict) else {}).get("env", body)
+        if not isinstance(values, dict):
+            return JSONResponse({"ok": False, "error": "env must be an object"}, status_code=400)
+        keys: list[str] = []
+        errors: dict[str, str] = {}
+        for key, value in values.items():
+            payload, status = _env_set_payload({"key": key, "value": value})
+            if status == 200 and payload.get("ok"):
+                keys.append(str(payload.get("key") or key))
+            else:
+                errors[str(key)] = str(payload.get("error") or "invalid env value")
+        if errors:
+            return JSONResponse({"ok": False, "name": safe, "keys": keys, "errors": errors}, status_code=400)
+        return JSONResponse({"ok": True, "name": safe, "keys": sorted(keys)})
+
+    @app.put("/api/tools/toolsets/{name}/provider")
+    async def api_toolset_provider(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        safe = _safe_resource_name(name, "toolset")
+        body = await request.json()
+        provider = str((body if isinstance(body, dict) else {}).get("provider") or "").strip()
+        if not provider:
+            return JSONResponse({"ok": False, "error": "provider is required"}, status_code=400)
+        config.set(f"tools.toolset_providers.{safe}", provider)
+        return JSONResponse({"ok": True, "name": safe, "provider": provider})
+
+    @app.post("/api/tools/toolsets/{name}/post-setup")
+    async def api_toolset_post_setup(name: str, request: Request) -> JSONResponse:
+        _require_request(request, config)
+        safe = _safe_resource_name(name, "toolset")
+        body = await request.json()
+        key = str((body if isinstance(body, dict) else {}).get("key") or safe).strip()
+        return JSONResponse({"ok": True, "name": safe, "key": key, "status": "not_required"})
+
+    @app.get("/api/tools/computer-use/status")
+    async def api_computer_use_status(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        import sys
+
+        return JSONResponse({
+            "ok": True,
+            "platform": sys.platform,
+            "available": False,
+            "permissions": {"grant_required": sys.platform == "darwin"},
+            "message": "Computer-use permissions are managed by the local OS.",
+        })
+
+    @app.post("/api/tools/computer-use/permissions/grant")
+    async def api_computer_use_permissions_grant(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        import sys
+
+        return JSONResponse({
+            "ok": True,
+            "platform": sys.platform,
+            "granted": sys.platform != "darwin",
+            "message": "No interactive permission grant is required on this platform." if sys.platform != "darwin"
+            else "Open the OS privacy settings to grant computer-use permissions.",
+        })
+
+    @app.post("/api/providers/validate")
+    async def api_providers_validate(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await request.json()
+        return JSONResponse(_provider_probe(config, body if isinstance(body, dict) else {}))
 
     @app.get("/api/mcp/servers")
     async def api_mcp_servers(request: Request) -> JSONResponse:

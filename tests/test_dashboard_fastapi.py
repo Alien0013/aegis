@@ -147,6 +147,14 @@ def test_fastapi_dashboard_auth_and_cookie(tmp_path, monkeypatch):
 
 
 def test_fastapi_tools_validation_and_permission_dry_run(tmp_path, monkeypatch):
+    import aegis.dashboard_routes.tools_mcp as tools_routes
+
+    monkeypatch.setattr(
+        tools_routes,
+        "_provider_probe",
+        lambda config, body: {"ok": True, "status": "ready", "provider": body.get("provider", "")},
+        raising=False,
+    )
     app = _app(tmp_path, monkeypatch)
     headers = {"X-Aegis-Token": "t"}
 
@@ -181,6 +189,68 @@ def test_fastapi_tools_validation_and_permission_dry_run(tmp_path, monkeypatch):
     assert body["args"]["token"] == "[REDACTED]"
     assert body["explanation"]["decision"] in {"allow", "deny", "prompt"}
     assert "visibility" in body
+
+    toolset_config = asyncio.run(_request(app, "GET", "/api/tools/toolsets/core/config", headers=headers))
+    assert toolset_config.status_code == 200
+    assert toolset_config.json()["name"] == "core"
+    assert "toolset" in toolset_config.json()
+
+    toolset_env = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/tools/toolsets/core/env",
+        headers=headers,
+        json={"env": {"OPENAI_API_KEY": "sk-test-toolset"}},
+    ))
+    assert toolset_env.status_code == 200
+    assert toolset_env.json()["ok"] is True
+    assert toolset_env.json()["keys"] == ["OPENAI_API_KEY"]
+    assert "sk-test-toolset" not in json.dumps(toolset_env.json())
+
+    toolset_provider = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/tools/toolsets/core/provider",
+        headers=headers,
+        json={"provider": "openai"},
+    ))
+    assert toolset_provider.status_code == 200
+    assert toolset_provider.json() == {"ok": True, "name": "core", "provider": "openai"}
+
+    post_setup = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/tools/toolsets/core/post-setup",
+        headers=headers,
+        json={"key": "noop"},
+    ))
+    assert post_setup.status_code == 200
+    assert post_setup.json()["ok"] is True
+    assert post_setup.json()["name"] == "core"
+
+    computer_status = asyncio.run(_request(app, "GET", "/api/tools/computer-use/status", headers=headers))
+    assert computer_status.status_code == 200
+    assert computer_status.json()["ok"] is True
+    assert "platform" in computer_status.json()
+
+    computer_grant = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/tools/computer-use/permissions/grant",
+        headers=headers,
+    ))
+    assert computer_grant.status_code == 200
+    assert computer_grant.json()["ok"] is True
+
+    provider_validation = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/providers/validate",
+        headers=headers,
+        json={"provider": "openai"},
+    ))
+    assert provider_validation.status_code == 200
+    assert provider_validation.json() == {"ok": True, "status": "ready", "provider": "openai"}
 
 
 def test_dashboard_appearance_theme_and_font_routes(tmp_path, monkeypatch):
