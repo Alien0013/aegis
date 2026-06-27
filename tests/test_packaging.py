@@ -110,6 +110,29 @@ def test_desktop_update_remote_app_path_exposes_aegis_remote_helper():
     assert "isOfficialSshRemote" in source
 
 
+def test_desktop_update_rebuild_app_path_exposes_retry_helper():
+    helper = ROOT / "apps" / "desktop" / "electron" / "update-rebuild.cjs"
+    helper_test = ROOT / "apps" / "desktop" / "electron" / "update-rebuild.test.cjs"
+
+    assert helper.is_file()
+    assert helper_test.is_file()
+    source = helper.read_text(encoding="utf-8")
+    assert "shouldRetryRebuild" in source
+    assert "runRebuildWithRetry" in source
+
+
+def test_desktop_update_relaunch_app_path_exposes_relaunch_decision_helper():
+    helper = ROOT / "apps" / "desktop" / "electron" / "update-relaunch.cjs"
+    helper_test = ROOT / "apps" / "desktop" / "electron" / "update-relaunch.test.cjs"
+
+    assert helper.is_file()
+    assert helper_test.is_file()
+    source = helper.read_text(encoding="utf-8")
+    assert "resolveUnpackedRelease" in source
+    assert "decideRelaunchOutcome" in source
+    assert "AEGIS_HOME" in source
+
+
 def test_shared_package_exports_aegis_runtime_contract():
     manifest = json.loads((ROOT / "apps" / "shared" / "package.json").read_text(encoding="utf-8"))
     source = (ROOT / "apps" / "shared" / "src" / "index.ts").read_text(encoding="utf-8")
