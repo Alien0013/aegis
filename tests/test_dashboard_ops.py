@@ -105,5 +105,25 @@ def test_gateway_bad_op_rejected():
     assert res["ok"] is False and "start" in res["error"]
 
 
+def test_compatibility_ops_actions_have_native_payloads():
+    cfg = _config()
+
+    prompt = dash._ops_action("prompt_size", {}, cfg)
+    assert prompt["ok"] is True
+    assert "context_window" in prompt
+
+    migrate = dash._ops_action("config_migrate", {"dry_run": True}, cfg)
+    assert migrate["ok"] is True
+    assert "config migration preview" in migrate["output"]
+
+    dump = dash._ops_action("dump", {}, cfg)
+    assert dump["ok"] is True
+    assert "model:" in dump["output"]
+
+    missing_import = dash._ops_action("import", {}, cfg)
+    assert missing_import["ok"] is False
+    assert "path" in missing_import["error"]
+
+
 def test_unknown_action():
     assert "error" in dash._ops_action("nope", {}, _config())

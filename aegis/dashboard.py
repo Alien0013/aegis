@@ -974,6 +974,54 @@ def _ops_action(action: str, body: dict, config: Config) -> dict:
     if action == "security_audit":
         from .ops import cmd_security_audit
         return _capture_cli(lambda: cmd_security_audit(type("A", (), {"fail_on": None})(), config))
+    if action == "config_migrate":
+        from .cli.main import cmd_config
+        args = type("A", (), {
+            "action": "migrate",
+            "dry_run": bool(body.get("dry_run", False)),
+            "force": False,
+            "json": False,
+            "key": None,
+            "secrets": False,
+            "value": [],
+        })()
+        return _capture_cli(lambda: cmd_config(args, config))
+    if action == "debug_share":
+        from .ops import cmd_debug
+        return _capture_cli(lambda: cmd_debug(type("A", (), {"action": "share"})(), config))
+    if action == "dump":
+        from .cli.main import cmd_config
+        args = type("A", (), {
+            "action": "dump",
+            "dry_run": False,
+            "force": False,
+            "json": False,
+            "key": None,
+            "secrets": False,
+            "value": [],
+        })()
+        return _capture_cli(lambda: cmd_config(args, config))
+    if action == "import":
+        source = str(body.get("path") or body.get("backup") or "").strip()
+        if not source:
+            return {"ok": False, "error": "path is required"}
+        from .backup import cmd_import
+        return _capture_cli(lambda: cmd_import(type("A", (), {"path": source})(), config))
+    if action == "prompt_size":
+        from .providers import registry
+
+        active = registry.provider_report(config).get("active", {})
+        context = int(active.get("context_length") or config.get("agent.max_context_tokens", 0) or 0)
+        threshold = float(config.get("context_compression.threshold", 0.5) or 0.5)
+        protect_last = int(config.get("context_compression.protect_last", 0) or 0)
+        return {
+            "ok": True,
+            "provider": config.get("model.provider"),
+            "model": config.get("model.default"),
+            "context_window": context,
+            "compression_threshold": threshold,
+            "protected_tail": protect_last,
+        }
     return {"error": f"unknown operation: {action}"}
 
 

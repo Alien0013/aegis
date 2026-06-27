@@ -10,6 +10,7 @@ register_all preserves the original cross-module order so the catch-alls registe
 from __future__ import annotations
 
 import mimetypes
+from dataclasses import asdict
 
 from fastapi.responses import FileResponse
 
@@ -163,6 +164,129 @@ def register(app, config, chat_runner):
     async def api_admin_status(request: Request) -> JSONResponse:
         _require_request(request, config)
         return JSONResponse(_admin_status_payload(config))
+
+    def _ops_action_response(action: str, body: dict | None = None) -> JSONResponse:
+        payload = dash._ops_action(action, body or {}, config)
+        return JSONResponse(payload, status_code=200 if payload.get("ok", True) else 400)
+
+    async def _request_body(request: Request) -> dict:
+        raw = await request.body()
+        try:
+            body = json.loads(raw) if raw else {}
+        except ValueError:
+            body = {}
+        return body if isinstance(body, dict) else {}
+
+    def _ops_hooks_payload() -> dict:
+        from .. import hooks
+
+        return {"ok": True, "events": list(hooks.EVENTS), "hooks": hooks.list_hooks(config)}
+
+    def _ops_hook_event(event: str) -> tuple[str, str]:
+        from .. import hooks
+
+        safe = str(event or "").strip()
+        if safe not in hooks.EVENTS:
+            return "", "unknown hook event"
+        return safe, ""
+
+    @app.get("/api/ops/hooks")
+    async def api_ops_hooks(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_ops_hooks_payload())
+
+    @app.post("/api/ops/hooks")
+    async def api_ops_hooks_add(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await _request_body(request)
+        event, error = _ops_hook_event(str(body.get("event") or ""))
+        command = str(body.get("command") or "").strip()
+        if error or not command:
+            return JSONResponse({"ok": False, "error": error or "command is required"}, status_code=400)
+        commands = config.get(f"hooks.{event}", []) or []
+        if isinstance(commands, str):
+            commands = [commands]
+        rows = [str(row) for row in commands]
+        if command not in rows:
+            rows.append(command)
+        config.set(f"hooks.{event}", rows)
+        return JSONResponse({"ok": True, "event": event, "command": command, **_ops_hooks_payload()})
+
+    @app.delete("/api/ops/hooks")
+    async def api_ops_hooks_delete(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        body = await _request_body(request)
+        event, error = _ops_hook_event(str(body.get("event") or ""))
+        if error:
+            return JSONResponse({"ok": False, "error": error}, status_code=400)
+        command = str(body.get("command") or "").strip()
+        commands = config.get(f"hooks.{event}", []) or []
+        if isinstance(commands, str):
+            commands = [commands]
+        rows = [str(row) for row in commands]
+        if command:
+            kept = [row for row in rows if row != command]
+        else:
+            kept = []
+        removed = len(rows) - len(kept)
+        config.set(f"hooks.{event}", kept)
+        return JSONResponse({"ok": True, "event": event, "removed": removed, **_ops_hooks_payload()})
+
+    @app.get("/api/ops/checkpoints")
+    async def api_ops_checkpoints(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from ..checkpoints import CheckpointStore
+
+        rows = [asdict(row) for row in CheckpointStore().list()]
+        return JSONResponse({"ok": True, "checkpoints": rows, "sessions": rows, "count": len(rows)})
+
+    @app.post("/api/ops/checkpoints/prune")
+    async def api_ops_checkpoints_prune(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from ..checkpoints import CheckpointStore
+
+        removed = CheckpointStore().clear()
+        return JSONResponse({"ok": True, "removed": removed})
+
+    @app.post("/api/ops/backup")
+    async def api_ops_backup(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return _ops_action_response("backup", await _request_body(request))
+
+    @app.post("/api/ops/doctor")
+    async def api_ops_doctor(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return _ops_action_response("doctor", await _request_body(request))
+
+    @app.post("/api/ops/security-audit")
+    async def api_ops_security_audit(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return _ops_action_response("security_audit", await _request_body(request))
+
+    @app.post("/api/ops/config-migrate")
+    async def api_ops_config_migrate(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return _ops_action_response("config_migrate", await _request_body(request))
+
+    @app.post("/api/ops/debug-share")
+    async def api_ops_debug_share(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return _ops_action_response("debug_share", await _request_body(request))
+
+    @app.post("/api/ops/dump")
+    async def api_ops_dump(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return _ops_action_response("dump", await _request_body(request))
+
+    @app.post("/api/ops/import")
+    async def api_ops_import(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return _ops_action_response("import", await _request_body(request))
+
+    @app.post("/api/ops/prompt-size")
+    async def api_ops_prompt_size(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return _ops_action_response("prompt_size", await _request_body(request))
 
     @app.post("/api/actions/run")
     @app.post("/api/admin/actions/run")

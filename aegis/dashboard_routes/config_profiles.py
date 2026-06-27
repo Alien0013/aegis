@@ -167,6 +167,7 @@ def register(app, config, chat_runner):
         return JSONResponse(dash._redacted_config(config))
 
     @app.post("/api/config")
+    @app.put("/api/config")
     async def api_config_set(request: Request) -> JSONResponse:
         _require_request(request, config)
         body = await request.json()

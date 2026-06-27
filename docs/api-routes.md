@@ -38,6 +38,7 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/check/update | POST | api_update_check_post |
 | /api/config | GET | api_config_get |
 | /api/config | POST | api_config_set |
+| /api/config | PUT | api_config_set |
 | /api/config/defaults | GET | api_config_defaults |
 | /api/config/export | GET | api_config_export |
 | /api/config/fields | PATCH | api_config_fields_patch |
@@ -195,6 +196,19 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/observability/events | GET | api_observability_contract |
 | /api/observability/hooks | GET | api_observability_contract |
 | /api/observability/hooks/test | POST | api_observability_hook_test |
+| /api/ops/backup | POST | api_ops_backup |
+| /api/ops/checkpoints | GET | api_ops_checkpoints |
+| /api/ops/checkpoints/prune | POST | api_ops_checkpoints_prune |
+| /api/ops/config-migrate | POST | api_ops_config_migrate |
+| /api/ops/debug-share | POST | api_ops_debug_share |
+| /api/ops/doctor | POST | api_ops_doctor |
+| /api/ops/dump | POST | api_ops_dump |
+| /api/ops/hooks | DELETE | api_ops_hooks_delete |
+| /api/ops/hooks | GET | api_ops_hooks |
+| /api/ops/hooks | POST | api_ops_hooks_add |
+| /api/ops/import | POST | api_ops_import |
+| /api/ops/prompt-size | POST | api_ops_prompt_size |
+| /api/ops/security-audit | POST | api_ops_security_audit |
 | /api/pairing | GET | api_pairing_list |
 | /api/pairing/approve | POST | api_pairing_approve |
 | /api/pairing/clear-pending | POST | api_pairing_clear_pending |

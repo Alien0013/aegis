@@ -1058,6 +1058,78 @@ def test_fastapi_portal_admin_and_credential_aliases(tmp_path, monkeypatch):
     reset_credential_pools()
 
 
+def test_fastapi_ops_checkpoints_hooks_aliases(tmp_path, monkeypatch):
+    import aegis.dashboard_routes.misc as misc_routes
+
+    monkeypatch.setattr(
+        misc_routes.dash,
+        "_ops_action",
+        lambda action, body, config: {"ok": True, "action": action},
+    )
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    hooks = asyncio.run(_request(app, "GET", "/api/ops/hooks", headers=headers))
+    assert hooks.status_code == 200
+    assert hooks.json()["ok"] is True
+    assert "user_prompt" in hooks.json()["events"]
+
+    created_hook = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/ops/hooks",
+        headers=headers,
+        json={"event": "user_prompt", "command": "echo hook"},
+    ))
+    assert created_hook.status_code == 200
+    assert created_hook.json()["hooks"]["user_prompt"] == ["echo hook"]
+
+    deleted_hook = asyncio.run(_request(
+        app,
+        "DELETE",
+        "/api/ops/hooks",
+        headers=headers,
+        json={"event": "user_prompt", "command": "echo hook"},
+    ))
+    assert deleted_hook.status_code == 200
+    assert deleted_hook.json()["removed"] == 1
+
+    checkpoints = asyncio.run(_request(app, "GET", "/api/ops/checkpoints", headers=headers))
+    assert checkpoints.status_code == 200
+    assert checkpoints.json()["ok"] is True
+    assert "sessions" in checkpoints.json()
+
+    prune = asyncio.run(_request(app, "POST", "/api/ops/checkpoints/prune", headers=headers))
+    assert prune.status_code == 200
+    assert prune.json()["ok"] is True
+
+    expected_actions = {
+        "/api/ops/backup": "backup",
+        "/api/ops/doctor": "doctor",
+        "/api/ops/security-audit": "security_audit",
+        "/api/ops/config-migrate": "config_migrate",
+        "/api/ops/debug-share": "debug_share",
+        "/api/ops/dump": "dump",
+        "/api/ops/import": "import",
+        "/api/ops/prompt-size": "prompt_size",
+    }
+    for path, action in expected_actions.items():
+        result = asyncio.run(_request(app, "POST", path, headers=headers, json={}))
+        assert result.status_code == 200
+        assert result.json()["ok"] is True
+        assert result.json()["action"] == action
+
+    config_put = asyncio.run(_request(
+        app,
+        "PUT",
+        "/api/config",
+        headers=headers,
+        json={"key": "display.skin", "value": "matrix"},
+    ))
+    assert config_put.status_code == 200
+    assert config_put.json()["ok"] is True
+
+
 def test_fastapi_observability_contract_and_hook_test(tmp_path, monkeypatch):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
     monkeypatch.setenv("AEGIS_DASHBOARD_TOKEN", "t")
