@@ -27,6 +27,9 @@ run "$PYTHON" scripts/release_provenance.py --artifact-dir "$release_smoke_artif
 run "$PYTHON" scripts/release_provenance.py --artifact-dir "$release_smoke_artifacts" --out "$release_smoke_out" --check
 
 if command -v npm >/dev/null 2>&1; then
+  if [ -f apps/bootstrap-installer/package.json ]; then
+    (cd apps/bootstrap-installer && run npm run typecheck)
+  fi
   if [ -f apps/shared/package.json ]; then
     (cd apps/shared && run npm run typecheck)
   fi

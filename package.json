@@ -4,6 +4,7 @@
   "description": "AEGIS agent harness frontend, TUI, desktop, and documentation package workspace.",
   "private": true,
   "workspaces": [
+    "apps/bootstrap-installer",
     "apps/desktop",
     "apps/shared",
     "web",

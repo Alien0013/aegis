@@ -1,0 +1,18 @@
+{
+  "name": "@aegis/bootstrap-installer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AEGIS installer package surface that verifies the native one-line install scripts.",
+  "scripts": {
+    "typecheck": "node ./scripts/verify-installer-surface.mjs",
+    "build": "node ./scripts/verify-installer-surface.mjs"
+  },
+  "aegis": {
+    "installer_scripts": ["../../install.sh", "../../install.ps1"],
+    "compatibility": "AEGIS uses repository-native shell and PowerShell installers instead of a separate bundled installer UI."
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

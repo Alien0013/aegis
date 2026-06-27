@@ -33,6 +33,7 @@ def test_package_wrapper_roots_delegate_to_native_aegis_packages():
     workspaces = set(root_package.get("workspaces") or [])
     expected = {
         "apps/desktop": ("aegis-app-desktop", "npm --prefix ../../desktop run test:desktop"),
+        "apps/bootstrap-installer": ("@aegis/bootstrap-installer", "node ./scripts/verify-installer-surface.mjs"),
         "apps/shared": ("@aegis/shared", "node ../../web/node_modules/typescript/bin/tsc -p . --noEmit"),
         "website": ("aegis-website", "npm --prefix ../site-next run build"),
         "ui-tui": ("aegis-ui-tui", "npm --prefix ../aegis/tui_ink run build"),
@@ -54,6 +55,16 @@ def test_shared_package_exports_aegis_runtime_contract():
     assert "AEGIS_PRODUCT_NAME" in source
     assert "AEGIS_PROTOCOL_SCHEME" in source
     assert "aegis" in source
+
+
+def test_bootstrap_installer_package_wraps_native_install_scripts():
+    manifest = json.loads((ROOT / "apps" / "bootstrap-installer" / "package.json").read_text(encoding="utf-8"))
+    verifier = ROOT / "apps" / "bootstrap-installer" / "scripts" / "verify-installer-surface.mjs"
+    assert manifest["name"] == "@aegis/bootstrap-installer"
+    assert manifest["private"] is True
+    assert manifest["aegis"]["installer_scripts"] == ["../../install.sh", "../../install.ps1"]
+    assert manifest["scripts"]["typecheck"] == "node ./scripts/verify-installer-surface.mjs"
+    assert verifier.is_file()
 
 
 def test_pyproject_extras_expose_native_compatibility_aliases():
