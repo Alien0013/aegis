@@ -140,6 +140,8 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/jobs/{job_id}/runs | GET | api_job_runs |
 | /api/jobs/{job_id}/trigger | POST | api_job_trigger |
 | /api/llm/oneshot | POST | api_llm_oneshot |
+| /api/logs | GET | api_logs |
+| /api/mcp/catalog | GET | api_mcp_catalog |
 | /api/mcp/catalog/install | POST | api_mcp_catalog_install_body |
 | /api/mcp/catalog/{name}/install | POST | api_mcp_catalog_install |
 | /api/mcp/servers | GET | api_mcp_servers |
@@ -152,6 +154,7 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/mcp/servers/{name}/test | POST | api_mcp_server_test |
 | /api/mcp/servers/{name}/tools | GET | api_mcp_server_tools |
 | /api/mcp/servers/{name}/tools | POST | api_mcp_server_tools_post |
+| /api/media | GET | api_media |
 | /api/memory | GET | api_memory_status |
 | /api/memory/provider | GET | api_memory_provider_active |
 | /api/memory/provider | PUT | api_memory_provider_select |
@@ -247,6 +250,8 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/skills/{name}/pin | POST | api_skill_pin |
 | /api/skills/{name}/toggle | PUT | api_skill_toggle |
 | /api/skills/{name}/unpin | POST | api_skill_unpin |
+| /api/status | GET | api_status |
+| /api/system/stats | GET | api_system_stats |
 | /api/tools/inventory | GET | api_tools_inventory |
 | /api/tools/permission-dry-run | POST | api_tools_permission_dry_run |
 | /api/tools/toolsets | GET | api_toolsets |

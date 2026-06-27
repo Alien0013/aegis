@@ -159,6 +159,12 @@ def register(app, config, chat_runner):
         live = str(request.query_params.get("live") or "").lower() in {"1", "true", "yes"}
         return JSONResponse(dash._dashboard_mcp_catalog(config, live=live))
 
+    @app.get("/api/mcp/catalog")
+    async def api_mcp_catalog(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        live = str(request.query_params.get("live") or "").lower() in {"1", "true", "yes"}
+        return JSONResponse(dash._dashboard_mcp_catalog(config, live=live))
+
     @app.post("/api/mcp/servers")
     async def api_mcp_server_create(request: Request) -> JSONResponse:
         _require_request(request, config)

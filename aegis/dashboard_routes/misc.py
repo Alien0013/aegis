@@ -19,12 +19,14 @@ from ..dashboard_fastapi import (
     Path,
     Request,
     _admin_status_payload,
+    _api_get,
     _credential_pools_payload,
     _dashboard_action_catalog,
     _delete_managed_file,
     _hook_test_payload,
     _observability_contract_payload,
     _portal_status_payload,
+    _query_dict,
     _require_request,
     _safe_resource_name,
     dash,
@@ -33,6 +35,26 @@ from ..dashboard_fastapi import (
 
 
 def register(app, config, chat_runner):
+    @app.get("/api/status")
+    async def api_status(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(dash._dashboard_status(config))
+
+    @app.get("/api/system/stats")
+    async def api_system_stats(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(dash._system_stats())
+
+    @app.get("/api/logs")
+    async def api_logs(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_api_get("/api/logs", _query_dict(request), config))
+
+    @app.get("/api/media")
+    async def api_media(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(_api_get("/api/media", _query_dict(request), config))
+
     @app.get("/api/files/download")
     async def download_file(request: Request) -> FileResponse:
         _require_request(request, config)

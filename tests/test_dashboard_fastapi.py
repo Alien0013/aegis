@@ -284,6 +284,23 @@ def test_dashboard_explicit_file_api_compat_routes(tmp_path, monkeypatch):
     assert (work / "child").is_dir()
 
 
+def test_dashboard_explicit_observability_api_compat_routes(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    headers = {"X-Aegis-Token": "t"}
+
+    status = asyncio.run(_request(app, "GET", "/api/status", headers=headers))
+    assert status.status_code == 200
+    assert status.json()["api_adapter"]["ok"] is True
+
+    stats = asyncio.run(_request(app, "GET", "/api/system/stats", headers=headers))
+    assert stats.status_code == 200
+    assert "cpu_count" in stats.json()
+
+    catalog = asyncio.run(_request(app, "GET", "/api/mcp/catalog", headers=headers))
+    assert catalog.status_code == 200
+    assert "catalog" in catalog.json()
+
+
 def test_fastapi_security_policy_simulator_redacts_and_explains(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
     headers = {"X-Aegis-Token": "t"}
