@@ -1,0 +1,20 @@
+{
+  "name": "@aegis/photon-sidecar",
+  "private": true,
+  "version": "0.1.0",
+  "description": "AEGIS package surface for a future Photon/Spectrum sidecar, verified against native gateway platform metadata.",
+  "type": "module",
+  "scripts": {
+    "start": "node index.mjs",
+    "verify": "node ./verify-sidecar-surface.mjs",
+    "typecheck": "node ./verify-sidecar-surface.mjs"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "aegis": {
+    "native_bridge": "relay",
+    "status": "metadata-only",
+    "env_prefix": "PHOTON_CHANNEL"
+  }
+}

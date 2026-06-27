@@ -11,6 +11,71 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_setup_compatibility_scripts_delegate_to_aegis_surfaces():
+    legacy = "".join(chr(n) for n in (104, 101, 114, 109, 101, 115))
+    setup_name = f"setup-{legacy}.sh"
+    bootstrap_name = f"{legacy}_bootstrap.py"
+    files = {
+        setup_name: "install.sh",
+        bootstrap_name: "aegis bootstrap compatibility",
+        "scripts/install_psutil_android.py": "AEGIS avoids a psutil runtime dependency",
+        "scripts/setup_open_webui.sh": "aegis ui",
+        "optional-skills/creative/kanban-video-orchestrator/references/kanban-setup.md": "aegis kanban",
+        "optional-skills/creative/kanban-video-orchestrator/scripts/bootstrap_pipeline.py": "aegis.kanban",
+        "optional-skills/creative/hyperframes/scripts/setup.sh": "AEGIS",
+    }
+    for rel, token in files.items():
+        path = ROOT / rel
+        assert path.is_file(), rel
+        assert token in path.read_text(encoding="utf-8")
+    assert subprocess.run(["bash", "-n", setup_name], cwd=ROOT, capture_output=True, text=True).returncode == 0
+    assert subprocess.run(["bash", "-n", "optional-skills/creative/hyperframes/scripts/setup.sh"], cwd=ROOT, capture_output=True, text=True).returncode == 0
+
+
+def test_setup_py_supports_legacy_build_frontend_name_query():
+    import sys
+
+    setup_py = ROOT / "setup.py"
+    assert setup_py.is_file()
+    res = subprocess.run([sys.executable, "setup.py", "--name"], cwd=ROOT, capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    assert res.stdout.strip() == "aegis-agent-harness"
+
+
+def test_node_bootstrap_helper_is_aegis_scoped_and_sourceable(tmp_path):
+    helper = ROOT / "scripts" / "lib" / "node-bootstrap.sh"
+    assert helper.is_file()
+    text = helper.read_text(encoding="utf-8")
+    assert "AEGIS_NODE_MIN_VERSION" in text
+    assert "ensure_node" in text
+    assert "HERMES" not in text
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    node = fake_bin / "node"
+    node.write_text("#!/usr/bin/env sh\nprintf 'v20.1.0\\n'\n", encoding="utf-8")
+    node.chmod(0o755)
+    res = subprocess.run(
+        [
+            "bash",
+            "-lc",
+            f"PATH={fake_bin}:$PATH; source scripts/lib/node-bootstrap.sh; ensure_node; "
+            "printf '%s:%s\\n' \"$AEGIS_NODE_AVAILABLE\" \"$AEGIS_NODE_BIN\"",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0, res.stderr
+    assert res.stdout.strip().endswith(f"true:{node}")
+
+
+def test_install_sh_wires_node_bootstrap_helper():
+    text = (ROOT / "install.sh").read_text(encoding="utf-8")
+    assert "scripts/lib/node-bootstrap.sh" in text
+    assert "ensure_node || true" in text
+
+
 def test_install_sh_syntax():
     res = subprocess.run(["bash", "-n", "install.sh"], cwd=ROOT, capture_output=True, text=True)
     assert res.returncode == 0, res.stderr

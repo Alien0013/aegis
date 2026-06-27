@@ -270,6 +270,13 @@ fi
 ok "Using $("$PYTHON" --version) ($(command -v "$PYTHON"))"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
+if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/scripts/lib/node-bootstrap.sh" ]; then
+  # shellcheck source=scripts/lib/node-bootstrap.sh
+  . "$SCRIPT_DIR/scripts/lib/node-bootstrap.sh"
+  if wants_browser; then
+    ensure_node || true
+  fi
+fi
 EXTRAS_APPLIED=0
 if [ -n "$REPO" ]; then
   SOURCE="git+$REPO"

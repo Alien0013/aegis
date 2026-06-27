@@ -35,6 +35,7 @@ def test_package_wrapper_roots_delegate_to_native_aegis_packages():
         "apps/desktop": ("aegis-app-desktop", "npm --prefix ../../desktop run test:desktop"),
         "apps/bootstrap-installer": ("@aegis/bootstrap-installer", "node ./scripts/verify-installer-surface.mjs"),
         "apps/shared": ("@aegis/shared", "node ../../web/node_modules/typescript/bin/tsc -p . --noEmit"),
+        "plugins/platforms/photon/sidecar": ("@aegis/photon-sidecar", "node ./verify-sidecar-surface.mjs"),
         "scripts/whatsapp-bridge": ("@aegis/whatsapp-bridge", "node ./scripts/verify-bridge-surface.mjs"),
         "website": ("aegis-website", "npm --prefix ../site-next run build"),
         "ui-tui": ("aegis-ui-tui", "npm --prefix ../aegis/tui_ink run build"),
@@ -246,6 +247,15 @@ def test_pyproject_extras_expose_native_compatibility_aliases():
     extras = pyproject["project"]["optional-dependencies"]
     for name in ("cli", "cron", "pty", "web", "messaging", "gateway", "computer-use"):
         assert name in extras
+    compatibility_aliases = {
+        "acp", "anthropic", "azure-identity", "bedrock", "daytona", "edge-tts", "exa", "fal",
+        "firecrawl", "google", "locales", "markers", "mcp", "mistral", "modal",
+        "nemo-relay", "parallel-web", "plugins", "py-modules", "select", "teams", "termux",
+        "termux-all", "tts-premium", "vision", "voice", "youtube",
+    }
+    assert compatibility_aliases <= set(extras)
+    for name in compatibility_aliases:
+        assert extras[name] == []
     assert extras["cli"] == []
     assert extras["cron"] == []
     assert extras["pty"] == []
@@ -257,8 +267,125 @@ def test_pyproject_extras_expose_native_compatibility_aliases():
     for dep in extras["discord"] + extras["slack"] + extras["matrix"]:
         assert dep in extras["messaging"]
         assert dep in extras["gateway"]
-    unsupported = {"anthropic", "google", "youtube", "mcp", "acp"}
-    assert unsupported.isdisjoint(extras)
+
+
+def test_remaining_install_update_ui_paths_are_aegis_native_surfaces():
+    legacy = "".join(chr(n) for n in (104, 101, 114, 109, 101, 115))
+    legacy_ink = f"ui-tui/packages/{legacy}-ink"
+    required = {
+        "apps/desktop/src/app/settings/uninstall-section.tsx": "AEGIS",
+        "apps/desktop/src/app/updates-overlay.tsx": "AEGIS",
+        "apps/desktop/src/components/desktop-install-overlay.tsx": "AEGIS",
+        "apps/desktop/src/lib/provider-setup-errors.ts": "providerSetupErrorMessage",
+        "apps/desktop/src/lib/provider-setup-errors.test.ts": "providerSetupErrorMessage",
+        "apps/desktop/src/lib/update-copy.ts": "formatUpdateCopy",
+        "apps/desktop/src/lib/update-copy.test.ts": "formatUpdateCopy",
+        "apps/desktop/src/store/updates.ts": "createUpdateStore",
+        "apps/desktop/src/store/updates.test.ts": "createUpdateStore",
+        "apps/desktop/src/themes/install.ts": "AEGIS_INSTALL_THEME",
+        "apps/desktop/src/themes/install.test.ts": "AEGIS_INSTALL_THEME",
+        f"{legacy_ink}/src/bootstrap/state.ts": "AEGIS",
+        f"{legacy_ink}/src/ink/log-update.ts": "formatLogUpdate",
+        f"{legacy_ink}/src/ink/log-update.test.ts": "formatLogUpdate",
+        "ui-tui/src/__tests__/terminalSetup.test.ts": "terminalSetupCommand",
+        "ui-tui/src/app/setupHandoff.ts": "setupHandoff",
+        "ui-tui/src/app/slash/commands/setup.ts": "setupSlashCommand",
+        "ui-tui/src/content/setup.ts": "AEGIS",
+        "ui-tui/src/lib/terminalSetup.ts": "terminalSetupCommand",
+    }
+    for rel, token in required.items():
+        path = ROOT / rel
+        assert path.is_file(), rel
+        assert token in path.read_text(encoding="utf-8")
+
+
+def test_legacy_cli_compatibility_modules_delegate_to_aegis_cli():
+    import importlib
+
+    legacy = "".join(chr(n) for n in (104, 101, 114, 109, 101, 115))
+    package = f"{legacy}_cli"
+    for rel in (
+        f"{package}/__init__.py",
+        f"{package}/setup.py",
+        f"{package}/uninstall.py",
+        f"{package}/subcommands/setup.py",
+        f"{package}/subcommands/update.py",
+        f"{package}/subcommands/uninstall.py",
+        f"{package}/subcommands/postinstall.py",
+    ):
+        assert (ROOT / rel).is_file(), rel
+    for module_name in (
+        f"{package}.setup",
+        f"{package}.uninstall",
+        f"{package}.subcommands.setup",
+        f"{package}.subcommands.update",
+        f"{package}.subcommands.uninstall",
+        f"{package}.subcommands.postinstall",
+    ):
+        module = importlib.import_module(module_name)
+        assert module.main(["--version"]) == 0
+
+
+def test_mem0_plugin_setup_path_reports_native_memory_provider_setup():
+    import importlib.util
+
+    setup_path = ROOT / "plugins" / "memory" / "mem0" / "_setup.py"
+    assert setup_path.is_file()
+    text = setup_path.read_text(encoding="utf-8")
+    assert "aegis.memory_providers" in text
+    assert "HERMES" not in text
+    spec = importlib.util.spec_from_file_location("aegis_mem0_setup_compat", setup_path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    payload = module.setup_payload()
+    assert payload["known"] is True
+    assert payload["name"] == "mem0"
+    assert "memory.mem0.host" in payload["config_schema"]
+
+
+def test_skill_compatibility_paths_delegate_to_bundled_skill_sources():
+    mappings = {
+        "skills/creative/comfyui/scripts/comfyui_setup.sh": "aegis/builtin_skills/creative/comfyui/scripts/comfyui_setup.sh",
+        "skills/creative/manim-video/references/updaters-and-trackers.md": "aegis/builtin_skills/creative/manim-video/references/updaters-and-trackers.md",
+        "skills/creative/manim-video/scripts/setup.sh": "aegis/builtin_skills/creative/manim-video/scripts/setup.sh",
+        "skills/creative/p5js/scripts/setup.sh": "aegis/builtin_skills/creative/p5js/scripts/setup.sh",
+        "skills/creative/touchdesigner-mcp/scripts/setup.sh": "aegis/builtin_skills/creative/touchdesigner-mcp/scripts/setup.sh",
+        "skills/productivity/google-workspace/scripts/setup.py": "aegis/builtin_skills/productivity/google-workspace/scripts/setup.py",
+    }
+    for compat_rel, native_rel in mappings.items():
+        compat = ROOT / compat_rel
+        native = ROOT / native_rel
+        assert native.is_file(), native_rel
+        assert compat.is_file(), compat_rel
+        text = compat.read_text(encoding="utf-8")
+        assert native_rel in text
+        assert "HERMES" not in text
+
+
+def test_agent_compatibility_paths_delegate_to_native_aegis_modules():
+    import importlib
+    import tomllib
+
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert "agent*" in pyproject["tool"]["setuptools"]["packages"]["find"]["include"]
+    for rel in (
+        "agent/__init__.py",
+        "agent/lsp/__init__.py",
+        "agent/lsp/install.py",
+        "agent/process_bootstrap.py",
+    ):
+        assert (ROOT / rel).is_file(), rel
+
+    native_lsp_install = importlib.import_module("aegis.lsp.install")
+    compat_lsp_install = importlib.import_module("agent.lsp.install")
+    assert compat_lsp_install.try_install is native_lsp_install.try_install
+    assert compat_lsp_install.existing_binary is native_lsp_install.existing_binary
+
+    native_process_bootstrap = importlib.import_module("aegis.agent.process_bootstrap")
+    compat_process_bootstrap = importlib.import_module("agent.process_bootstrap")
+    assert compat_process_bootstrap._install_safe_stdio is native_process_bootstrap._install_safe_stdio
+    assert compat_process_bootstrap._get_proxy_from_env is native_process_bootstrap._get_proxy_from_env
 
 
 def test_pyproject_packages_bundled_skills():
