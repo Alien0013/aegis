@@ -7,6 +7,7 @@ const {
   packagedBackendPathEntries,
   resolveAegisCommand,
 } = require("./backend-env.cjs");
+const { desktopUninstallPlan } = require("./desktop-uninstall.cjs");
 
 const GPU_OVERRIDE_ON = new Set(["1", "true", "yes", "on"]);
 const GPU_OVERRIDE_OFF = new Set(["0", "false", "no", "off"]);
@@ -220,6 +221,7 @@ function desktopDiagnostics({
   const updateCheckReason = updateEligibility.ok
     ? (updateChecking ? "an update check is already running" : "")
     : updateEligibility.reason;
+  const uninstallPlan = desktopUninstallPlan({ desktopRoot, resourcesPath, platform, exists });
   const checks = [
     {
       id: "install_stamp",
@@ -310,6 +312,13 @@ function desktopDiagnostics({
           description: "Restart AEGIS and install the already-downloaded update.",
           disabled: !updateEligibility.ok || !updateInstallable,
           reason: updateInstallReason,
+        },
+        {
+          id: "uninstall_app",
+          label: "Uninstall AEGIS",
+          description: "Run the native uninstall script. Local data is kept unless the script is run with purge.",
+          disabled: !uninstallPlan.available,
+          reason: uninstallPlan.reason,
         },
       ],
     },

@@ -11,7 +11,7 @@
     "test:desktop": "node --test electron/*.test.cjs scripts/*.test.cjs",
     "build:stamp": "node scripts/write-build-stamp.cjs",
     "build:backend": "node scripts/stage-backend.cjs",
-    "build:prepare": "npm run build:stamp && npm run build:backend",
+    "build:prepare": "npm run build:stamp && npm run build:backend && node scripts/stage-uninstall.cjs",
     "builder": "electron-builder",
     "pack": "npm run build:prepare && npm run builder -- --dir",
     "dist": "npm run build:prepare && npm run builder",
@@ -52,6 +52,7 @@
       { "from": "build/install-stamp.json", "to": "install-stamp.json" },
       { "from": "build/backend-manifest.json", "to": "backend-manifest.json" },
       { "from": "build/backend", "to": "backend" },
+      { "from": "build/uninstall.sh", "to": "uninstall.sh" },
       { "from": "build/icon.png", "to": "icon.png" }
     ],
     "mac": {

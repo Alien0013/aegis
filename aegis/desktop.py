@@ -23,6 +23,7 @@ DESKTOP_FILES = (
     "electron/desktop-settings.cjs", "electron/desktop-settings.test.cjs",
     "electron/desktop-lifecycle.cjs", "electron/desktop-lifecycle.test.cjs",
     "electron/desktop-status.cjs", "electron/desktop-status.test.cjs",
+    "electron/desktop-uninstall.cjs", "electron/desktop-uninstall.test.cjs",
     "electron/updater-status.cjs", "electron/updater-status.test.cjs",
     "electron/gateway-update-coordination.cjs", "electron/gateway-update-coordination.test.cjs",
     "electron/preload.js", "electron/preload-app.js", "electron/boot.html",
@@ -31,7 +32,7 @@ DESKTOP_FILES = (
     "scripts/before-build.cjs", "scripts/write-build-stamp.cjs",
     "scripts/write-build-stamp.test.cjs", "scripts/notarize-mac.cjs",
     "scripts/notarize-mac.test.cjs", "scripts/stage-backend.cjs",
-    "scripts/stage-backend.test.cjs",
+    "scripts/stage-backend.test.cjs", "scripts/stage-uninstall.cjs",
     "build/icon.png", "build/icon.ico",
 )
 DESKTOP_MANIFEST = ".aegis-desktop-files.json"

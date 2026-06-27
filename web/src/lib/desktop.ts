@@ -41,6 +41,8 @@ export interface DesktopRepairAction {
   id: string;
   label?: string;
   description?: string;
+  disabled?: boolean;
+  reason?: string;
 }
 
 export interface DesktopRepairPanel {

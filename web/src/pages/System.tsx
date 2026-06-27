@@ -346,10 +346,10 @@ export function System() {
                         key={action.id}
                         sm
                         icon={repairIcon(action.id)}
-                        disabled={!!repairBusy}
+                        disabled={!!repairBusy || action.disabled}
                         variant={action.id === "restart_backend" ? "primary" : "ghost"}
                         onClick={() => runRepairAction(action)}
-                        title={action.description}
+                        title={action.reason || action.description}
                       >
                         {action.label || action.id}
                       </Button>

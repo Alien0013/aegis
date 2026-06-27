@@ -450,7 +450,10 @@ def test_desktop_builder_config_matches_release_parity():
     assert "scripts/notarize-mac.cjs" in desktop.DESKTOP_FILES
     assert "scripts/notarize-mac.test.cjs" in desktop.DESKTOP_FILES
     assert "scripts/stage-backend.cjs" in desktop.DESKTOP_FILES
+    assert "scripts/stage-uninstall.cjs" in desktop.DESKTOP_FILES
     assert "electron/desktop-status.cjs" in desktop.DESKTOP_FILES
+    assert "electron/desktop-uninstall.cjs" in desktop.DESKTOP_FILES
+    assert "electron/desktop-uninstall.test.cjs" in desktop.DESKTOP_FILES
     assert "electron/updater-status.cjs" in desktop.DESKTOP_FILES
     assert "electron/updater-status.test.cjs" in desktop.DESKTOP_FILES
     assert "scripts/desktop-copy-drift.test.cjs" in desktop.DESKTOP_FILES
@@ -459,11 +462,12 @@ def test_desktop_builder_config_matches_release_parity():
     assert resources["install-stamp.json"] == "build/install-stamp.json"
     assert resources["backend-manifest.json"] == "build/backend-manifest.json"
     assert resources["backend"] == "build/backend"
+    assert resources["uninstall.sh"] == "build/uninstall.sh"
     assert "msi" in build["win"]["target"]
     assert build["win"]["signAndEditExecutable"] is False
     assert build["nsis"]["warningsAsErrors"] is False
     assert "rpm" in build["linux"]["target"]
-    assert package["scripts"]["build:prepare"] == "npm run build:stamp && npm run build:backend"
+    assert package["scripts"]["build:prepare"] == "npm run build:stamp && npm run build:backend && node scripts/stage-uninstall.cjs"
     assert "build:prepare" in package["scripts"]["dist:win"]
     assert "msi" in package["scripts"]["dist:win"]
     assert "build:prepare" in package["scripts"]["dist:linux"]

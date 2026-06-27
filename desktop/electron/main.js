@@ -50,6 +50,7 @@ const {
   pauseGatewayForUpdate,
   resumeGatewayAfterUpdate,
 } = require("./gateway-update-coordination.cjs");
+const { desktopUninstallPlan } = require("./desktop-uninstall.cjs");
 const {
   initialDesktopLifecycle,
   lifecyclePublicSnapshot,
@@ -603,6 +604,19 @@ async function runDesktopRepairAction(action) {
   }
   if (id === "install_update") {
     return { action: id, ...installDownloadedUpdate() };
+  }
+  if (id === "uninstall_app") {
+    const plan = desktopUninstallPlan({
+      desktopRoot: path.resolve(__dirname, ".."),
+      resourcesPath: process.resourcesPath || "",
+      platform: process.platform,
+    });
+    if (!plan.available) return { ok: false, action: id, error: plan.reason };
+    setDesktopLifecycle("repairing", { phase: id, message: "Starting native uninstall script." });
+    const child = spawn(plan.command, plan.args, hiddenWindowsChildOptions({ detached: true, stdio: "ignore" }));
+    child.unref();
+    setTimeout(() => app.quit(), 100);
+    return { ok: true, action: id, started: true, scriptPath: plan.scriptPath };
   }
   return { ok: false, action: id, error: `unknown repair action: ${id || "<missing>"}` };
 }
