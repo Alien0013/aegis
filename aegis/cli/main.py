@@ -2871,13 +2871,31 @@ def cmd_logs(args, config: Config) -> int:  # noqa: ARG001
     return 0
 
 
-_CMDS = (
-    "ab acp auth background backup batch bench budget chat checkpoints completion config cost cron "
-    "curator daemon dashboard debug deksktop desktop doctor eval gateway gstack hooks import improve "
-    "insights kanban learn logs mcp memory model models onboard pairing plugins profile profiles rpc "
-    "secret secrets security serve sessions setup skills snapshot spec status tools trace trajectory tui ui "
-    "uninstall update watch webhook"
-)
+def _completion_spec() -> tuple[list[str], dict[str, list[str]]]:
+    """Return parser-derived top-level and first-action completion words."""
+    parser = build_parser()
+    top_subparsers = next(
+        (action for action in parser._actions if isinstance(action, argparse._SubParsersAction)),
+        None,
+    )
+    if top_subparsers is None:
+        return [], {}
+    commands = sorted(str(name) for name in top_subparsers.choices)
+    actions: dict[str, list[str]] = {}
+    for name, subparser in top_subparsers.choices.items():
+        words: set[str] = set()
+        for action in subparser._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                words.update(str(choice) for choice in action.choices)
+            elif not action.option_strings and action.choices:
+                words.update(str(choice) for choice in action.choices)
+        if words:
+            actions[str(name)] = sorted(words)
+    return commands, actions
+
+
+def _completion_words(words: list[str]) -> str:
+    return " ".join(words)
 
 
 def cmd_checkpoints(args, config: Config) -> int:
@@ -2907,15 +2925,44 @@ def cmd_background(args, config: Config) -> int:
 
 
 def cmd_completion(args, config: Config) -> int:
+    commands, actions = _completion_spec()
+    top_words = _completion_words(commands)
     if args.shell == "bash":
+        cases = "\n".join(
+            f"    {name}) COMPREPLY=( $(compgen -W \"{_completion_words(words)}\" -- \"$cur\") ); return ;;"
+            for name, words in actions.items()
+        )
         _print(f"""_aegis_completion() {{
-  COMPREPLY=( $(compgen -W "{_CMDS}" -- "${{COMP_WORDS[COMP_CWORD]}}") )
+  local cur cmd
+  COMPREPLY=()
+  cur="${{COMP_WORDS[COMP_CWORD]}}"
+  if [[ $COMP_CWORD -eq 1 ]]; then
+    COMPREPLY=( $(compgen -W "{top_words}" -- "$cur") )
+    return
+  fi
+  cmd="${{COMP_WORDS[1]}}"
+  case "$cmd" in
+{cases}
+  esac
 }}
 complete -F _aegis_completion aegis""")
     elif args.shell == "zsh":
-        _print(f"#compdef aegis\n_arguments '1:command:({_CMDS})'")
+        cases = "\n".join(
+            f"    {name}) _describe '{name} action' '({ _completion_words(words) })' ;;"
+            for name, words in actions.items()
+        )
+        _print(f"""#compdef aegis
+_arguments '1:command:({top_words})' '2:action:->aegis_actions'
+case $words[2] in
+{cases}
+esac""")
     elif args.shell == "fish":
-        _print(f"complete -c aegis -f -n '__fish_use_subcommand' -a '{_CMDS}'")
+        lines = [f"complete -c aegis -f -n '__fish_use_subcommand' -a '{top_words}'"]
+        for name, words in actions.items():
+            lines.append(
+                f"complete -c aegis -f -n '__fish_seen_subcommand_from {name}' -a '{_completion_words(words)}'"
+            )
+        _print("\n".join(lines))
     return 0
 
 
