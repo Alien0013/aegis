@@ -45,3 +45,21 @@ def test_fallback_cli_rejects_duplicate(monkeypatch, tmp_path, capsys):
     assert main(["fallback", "add", "ollama", "llama3.1"]) == 1
     err = capsys.readouterr().err
     assert "already exists" in err
+
+
+def test_fallback_cli_clear_removes_all_entries(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path / "home"))
+    from aegis.cli.main import main
+    from aegis.config import Config
+
+    cfg = Config.load()
+    cfg.data["fallback_providers"] = [
+        {"provider": "ollama", "model": "llama3.1"},
+        {"provider": "openai", "model": "gpt-4o-mini"},
+    ]
+    cfg.save()
+
+    assert main(["fallback", "clear"]) == 0
+    out = capsys.readouterr().out
+    assert "cleared 2 fallback providers" in out
+    assert Config.load().get("fallback_providers") == []

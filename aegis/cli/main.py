@@ -305,7 +305,14 @@ def cmd_fallback(args, config: Config) -> int:
         _print(f"removed fallback #{remove_index + 1} {removed.get('provider')}/{removed.get('model')}")
         return 0
 
-    return _die("usage: aegis fallback [list|add|remove]")
+    if action == "clear":
+        count = len(chain)
+        config.data["fallback_providers"] = []
+        config.save()
+        _print(f"cleared {count} fallback providers")
+        return 0
+
+    return _die("usage: aegis fallback [list|add|remove|clear]")
 
 
 def cmd_routing(args, config: Config) -> int:
@@ -3539,8 +3546,8 @@ def build_parser() -> argparse.ArgumentParser:
     dump.add_argument("--json", action="store_true", help="reserved for compatibility; dump is YAML")
     dump.set_defaults(func=cmd_command_aliases)
 
-    fb = sub.add_parser("fallback", help="list/add/remove model fallback providers")
-    fb.add_argument("action", nargs="?", choices=["list", "add", "remove"], default="list")
+    fb = sub.add_parser("fallback", help="list/add/remove/clear model fallback providers")
+    fb.add_argument("action", nargs="?", choices=["list", "add", "remove", "clear"], default="list")
     fb.add_argument("provider", nargs="?")
     fb.add_argument("model", nargs="?")
     fb.set_defaults(func=cmd_fallback)

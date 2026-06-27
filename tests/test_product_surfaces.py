@@ -24,6 +24,7 @@ def test_cli_parser_exposes_upgrade_commands():
     assert parser.parse_args(["rpc"]).command == "rpc"
     assert parser.parse_args(["tui", "--once"]).command == "tui"
     assert parser.parse_args(["model", "doctor"]).action == "doctor"
+    assert parser.parse_args(["fallback", "clear"]).action == "clear"
     assert parser.parse_args(["doctor", "--release"]).release is True
     assert parser.parse_args(["chat", "--skills", "frontend-design,ultracode", "build"]).skills == (
         "frontend-design,ultracode"
