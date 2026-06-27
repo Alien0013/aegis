@@ -209,6 +209,17 @@ def cmd_secrets(args, config) -> int:
     if getattr(args, "provider", None) != "bitwarden":
         print("usage: aegis secrets bitwarden   (requires the `bw` CLI, logged in + unlocked)")
         return 1
+    action = getattr(args, "action", None) or "sync"
+    if action in {"status", "setup"}:
+        bw = shutil.which("bw")
+        bws = shutil.which("bws")
+        if bw or bws:
+            print(f"Bitwarden CLI available: {bw or bws}")
+        else:
+            print("Bitwarden CLI not found. Install `bw` or `bws`, then run `aegis secrets bitwarden sync`.")
+        if action == "setup":
+            print("Setup: install Bitwarden CLI, login/unlock it, and export BW_SESSION before syncing.")
+        return 0
     if not shutil.which("bw"):
         print("Bitwarden CLI `bw` not found. Install it and run `bw login && bw unlock`.")
         return 1

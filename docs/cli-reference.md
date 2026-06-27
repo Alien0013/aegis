@@ -7,7 +7,7 @@ Generated from `aegis.cli.main.build_parser()`.
 | --- | --- | --- |
 | aegis ab | replay a session on a different model and diff the result | `aegis ab [-h] [--model MODEL] [--provider PROVIDER] [--json] session_id` |
 | aegis acp | run as an ACP stdio server for IDEs | `aegis acp [-h]` |
-| aegis auth | API-key / OAuth authentication | `aegis auth [-h] [--manual] [--replace]                   [--strategy {fill_first,round_robin,least_used,random}]                   [--cooldown-hours COOLDOWN_HOURS]                   {status,list,login,logout,add,remove,reset,import-claude,pool}                   [provider] [values ...]` |
+| aegis auth | API-key / OAuth authentication | `aegis auth [-h] [--manual] [--replace]                   [--strategy {fill_first,round_robin,least_used,random}]                   [--cooldown-hours COOLDOWN_HOURS]                   {status,list,login,logout,add,remove,reset,import-claude,pool,spotify}                   [provider] [values ...]` |
 | aegis background | list background tasks | `aegis background [-h]` |
 | aegis backup | back up ~/.aegis to a zip | `aegis backup [-h] [--out OUT] [--quick]` |
 | aegis batch | run a prompt per line of a file (or - for stdin) | `aegis batch [-h] [-m MODEL] [--provider PROVIDER] file` |
@@ -27,7 +27,8 @@ Generated from `aegis.cli.main.build_parser()`.
 | aegis cron | schedule recurring agent tasks | `aegis cron [-h] [--script SCRIPT] [--skills SKILLS]                   [--context-from CONTEXT_FROM] [--deliver DELIVER]                   [--no-agent] [--no-start]                   [{list,add,create,rm,remove,edit,pause,resume,run,tick,install,uninstall,status,start,stop,restart}]                   [schedule] [prompt ...]` |
 | aegis curator | background skill maintenance | `aegis curator [-h] [--apply] [--dry-run] [--id ID] [--list]                      [{status,review,prune,archive,restore,transitions,pin,unpin,run,backup,rollback,list-archived}]                      [name]` |
 | aegis daemon | install/control user services | `aegis daemon [-h] [--channels CHANNELS] [--no-start]                     [{status,install,start,stop,restart,remove}]` |
-| aegis dashboard | open the AEGIS control panel in your browser | `aegis dashboard [-h] [--host HOST] [--port PORT] [--no-open]` |
+| aegis dashboard | open the AEGIS control panel in your browser | `aegis dashboard [-h] [--host HOST] [--port PORT] [--no-open]                        {register} ...` |
+| aegis dashboard register | register or preview dashboard OAuth metadata | `aegis dashboard register [-h] [--dry-run] [--client-name CLIENT_NAME]` |
 | aegis debug | bundle a redacted debug report | `aegis debug [-h] [{share,delete}]` |
 | aegis desktop | install/update and launch the native desktop app | `aegis desktop [-h] [--status] [--doctor] [--install-only] [--reinstall]                      [--sandbox] [--source] [--cwd CWD] [--package [TARGET]]` |
 | aegis doctor | diagnose (and optionally repair) the installation | `aegis doctor [-h] [--fix] [--probe] [--release]` |
@@ -36,7 +37,8 @@ Generated from `aegis.cli.main.build_parser()`.
 | aegis fallback | list/add/remove/clear model fallback providers | `aegis fallback [-h] [{list,add,remove,clear}] [provider] [model]` |
 | aegis gateway | run or configure the multi-channel gateway | `aegis gateway [-h] [--channels CHANNELS]                      [{run,install,uninstall,status,start,stop,restart,setup,list,enroll,migrate-legacy}]                      [platform] [user_id]` |
 | aegis gstack | run a goal through a sprint of roles (think→plan→build→review→test→ship→reflect) | `aegis gstack [-h] [--phases PHASES] [--from FROM_PHASE] [--dry]                     [goal ...]` |
-| aegis gui | open the AEGIS control panel in your browser | `aegis gui [-h] [--host HOST] [--port PORT] [--no-open]` |
+| aegis gui | open the AEGIS control panel in your browser | `aegis gui [-h] [--host HOST] [--port PORT] [--no-open] {register} ...` |
+| aegis gui register | register or preview dashboard OAuth metadata | `aegis gui register [-h] [--dry-run] [--client-name CLIENT_NAME]` |
 | aegis hooks | lifecycle shell hooks | `aegis hooks [-h] [{list,test,doctor,revoke,remove,rm}] [event]` |
 | aegis import | restore a backup zip | `aegis import [-h] path` |
 | aegis improve | verified self-improvement: keep curator edits only if the benchmark holds | `aegis improve [-h] [--min-delta MIN_DELTA] [--limit LIMIT] [{run,log}]` |
@@ -49,7 +51,8 @@ Generated from `aegis.cli.main.build_parser()`.
 | aegis lsp | show LSP/code-intelligence readiness | `aegis lsp [-h]` |
 | aegis mcp | manage MCP servers (or `serve` to be one) | `aegis mcp [-h] [--include INCLUDE] [--exclude EXCLUDE] [--all]                  [{list,add,remove,test,serve,catalog,install,tools,configure,login,picker}]                  [name] [cmd]` |
 | aegis memory | show/add/replace/remove/status long-term memory | `aegis memory [-h] [--old-text OLD_TEXT] [--user] [--yes]                     [--target {all,memory,user}]                     [{show,add,replace,remove,clear,status,setup,off,reset}]                     [text ...]` |
-| aegis migrate | migrate/normalize config (alias of `aegis config migrate`) | `aegis migrate [-h] [--dry-run] [--json]` |
+| aegis migrate | migrate/normalize config (alias of `aegis config migrate`) | `aegis migrate [-h] [--dry-run] [--json] {xai} ...` |
+| aegis migrate xai | diagnose retired xAI model references | `aegis migrate xai [-h] [--dry-run] [--apply] [--no-backup]` |
 | aegis moa | manage Mixture-of-Agents model slots | `aegis moa [-h] [--models MODELS] [{list,ls,configure,config,delete}]` |
 | aegis model | show/set the model | `aegis model [-h] [{list,set,doctor}] [provider] [model]` |
 | aegis models | show/refresh model metadata (context window from models.dev) | `aegis models [-h] [{show,refresh}]` |
@@ -57,7 +60,8 @@ Generated from `aegis.cli.main.build_parser()`.
 | aegis pairing | approve/revoke gateway users | `aegis pairing [-h]                      [{list,approve,revoke,clear-pending}] [platform] [code]` |
 | aegis pets | show visible-agent alternatives | `aegis pets [-h]` |
 | aegis plugins | manage manifest and drop-in plugins | `aegis plugins [-h] [--force]                      [{list,doctor,path,install,update,enable,disable,remove}]                      [name]` |
-| aegis portal | open the AEGIS control panel in your browser | `aegis portal [-h] [--host HOST] [--port PORT] [--no-open]` |
+| aegis portal | open the AEGIS control panel in your browser | `aegis portal [-h] [--host HOST] [--port PORT] [--no-open]                     {register} ...` |
+| aegis portal register | register or preview dashboard OAuth metadata | `aegis portal register [-h] [--dry-run] [--client-name CLIENT_NAME]` |
 | aegis postinstall | post-install compatibility check | `aegis postinstall [-h]` |
 | aegis profile | manage isolated runtime profiles | `aegis profile [-h]                      {list,use,create,alias,install,update,clone,show,info,describe,rename,delete,rm,remove,export,import} ...` |
 | aegis profile alias | create or remove a profile launcher alias | `aegis profile alias [-h] [--name ALIAS_NAME] [--remove] profile_name` |
@@ -100,14 +104,16 @@ Generated from `aegis.cli.main.build_parser()`.
 | aegis routing | list/add/remove prompt-based model routes | `aegis routing [-h] [{list,add,remove}] [pattern] [provider] [model]` |
 | aegis rpc | run a local JSON-RPC agent server over stdio | `aegis rpc [-h]` |
 | aegis secret | store a local secret in ~/.aegis/.env with hidden input | `aegis secret [-h] [--stdin] [{set,path}] [key]` |
-| aegis secrets | sync secrets from a manager (bitwarden) | `aegis secrets [-h] [provider]` |
+| aegis secrets | sync secrets from a manager (bitwarden) | `aegis secrets [-h] {bitwarden} ...` |
+| aegis secrets bitwarden | sync/status/setup Bitwarden secrets | `aegis secrets bitwarden [-h] [{sync,status,setup}]` |
 | aegis security | security audit of deps/MCP/plugins/skills | `aegis security [-h] [--fail-on FAIL_ON] [--json] [--markdown] [{audit}]` |
 | aegis send | show gateway delivery/send guidance | `aegis send [-h] [args ...]` |
 | aegis serve | run an OpenAI-compatible API server | `aegis serve [-h] [--host HOST] [--port PORT]` |
 | aegis sessions | list/show/export/rename/remove/check sessions | `aegis sessions [-h] [--json] [--limit LIMIT] [--include-internal]                       [--yes] [--older-than-days OLDER_THAN_DAYS] [--repair]                       [--session-limit SESSION_LIMIT] [--run-limit RUN_LIMIT]                       [--stale-running-seconds STALE_RUNNING_SECONDS]                       [--stale-resume-pending-seconds STALE_RESUME_PENDING_SECONDS]                       [{list,ls,browse,show,rename,rm,delete,remove,export,prune,optimize,stats,summarize,search,check,repair}]                       [id] [value ...]` |
 | aegis setup | interactive setup wizard | `aegis setup [-h] [--quick] [--advanced] [--no-probe] [--no-services]                    [--non-interactive] [--accept-risk] [--json]                    [--provider PROVIDER]                    [--auth {skip,api-key,local,oauth,codex}] [--model MODEL]                    [--web WEB] [--toolsets TOOLSETS] [--skills SKILLS]                    [--channels CHANNELS]                    [--exec-mode {ask,auto,allowlist,deny,full,smart}]                    [--install-services]                    [{model,terminal,tools,gateway,agent,web,memory,dashboard,services}]` |
 | aegis skills | list/view/create/install/search/remove/uninstall skills | `aegis skills [-h] [--force] [--json] [--members MEMBERS]                     [--description DESCRIPTION] [--instruction INSTRUCTION]                     [--to {local,github,clawhub}] [--repo REPO]                     [{list,view,new,install,search,remove,uninstall,hub,preview,inspect,browse,check,update,audit,config,opt-in,opt-out,tap,snapshot,list-modified,diff,reset,repair-official,publish,bundles,bundle,unbundle}]                     [name] [target]` |
-| aegis slack | run gateway for slack | `aegis slack [-h]` |
+| aegis slack | run Slack gateway or generate Slack app manifest | `aegis slack [-h] {manifest} ...` |
+| aegis slack manifest | generate a Slack app manifest JSON | `aegis slack manifest [-h] [--write [WRITE]] [--name NAME]                             [--description DESCRIPTION] [--slashes-only]                             [--no-assistant]` |
 | aegis snapshot | config/state snapshots (auto before updates) | `aegis snapshot [-h] [{create,restore,prune,list}] [label]` |
 | aegis spec | spec-driven dev: list/show persistent requirements→design→tasks | `aegis spec [-h] [{list,show}] [slug]` |
 | aegis status | show install/auth/tools/skills/plugins/service status | `aegis status [-h] [--json]` |
@@ -115,7 +121,8 @@ Generated from `aegis.cli.main.build_parser()`.
 | aegis trace | inspect/export session traces | `aegis trace [-h] [--session SESSION] [--status STATUS] [--limit LIMIT]                    [--spans] [--out OUT] [--json]                    [{list,show,export}] [id]` |
 | aegis trajectory | record/export/compress session trajectories | `aegis trajectory [-h] [--out OUT]                         [--format {aegis,openai,hf,sharegpt,toolxml}]                         [--summarize]                         [{stats,export,compress}]` |
 | aegis tui | open the terminal agent (compatibility alias) | `aegis tui [-h] [--once] [--watch] [--interval INTERVAL] [--no-color]                  [-m MODEL] [--provider PROVIDER] [--resume RESUME]                  [--classic] [--dev] [--yolo]` |
-| aegis ui | open the AEGIS control panel in your browser | `aegis ui [-h] [--host HOST] [--port PORT] [--no-open]` |
+| aegis ui | open the AEGIS control panel in your browser | `aegis ui [-h] [--host HOST] [--port PORT] [--no-open] {register} ...` |
+| aegis ui register | register or preview dashboard OAuth metadata | `aegis ui register [-h] [--dry-run] [--client-name CLIENT_NAME]` |
 | aegis uninstall | remove AEGIS (--purge also deletes ~/.aegis) | `aegis uninstall [-h] [--purge]` |
 | aegis update | update AEGIS to the latest version | `aegis update [-h] [--check] [--dry-run] [--json] [--branch BRANCH]` |
 | aegis verify | run the full Python/web/desktop/docs release gate | `aegis verify [-h] ...` |

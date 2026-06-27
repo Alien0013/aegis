@@ -571,6 +571,11 @@ def cmd_auth(args, config: Config) -> int:
                 codex = "—"
             _print(f"  {name:<12} api-key: {api:<5} oauth: {oauth:<30} codex: {codex}")
         return 0
+    if action == "spotify":
+        _print("Spotify OAuth setup")
+        _print("  AEGIS exposes Spotify through optional tools when credentials are configured.")
+        _print("  Add SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET to `aegis config env-path`, then enable the spotify toolset.")
+        return 0
     if action == "login":
         if not args.provider:
             return _die("usage: aegis auth login <provider> [--manual]")
@@ -3952,6 +3957,102 @@ def _die(msg: str) -> int:
     return 1
 
 
+def _walk_values(value):
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from _walk_values(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _walk_values(item)
+    else:
+        yield value
+
+
+def cmd_migrate_xai(args, config: Config) -> int:
+    retired = {"grok-2-latest", "grok-2-1212", "grok-2-vision-1212"}
+    refs = sorted({str(value) for value in _walk_values(config.data) if str(value) in retired})
+    apply = bool(getattr(args, "apply", False))
+    _print("xAI model retirement migration" + ("" if apply else " dry-run"))
+    if not refs:
+        _print("  no retired xAI models found; no changes written")
+        return 0
+    _print("  retired references: " + ", ".join(refs))
+    if not apply:
+        _print("  no changes written; rerun with --apply to update config")
+        return 0
+    # Keep apply intentionally conservative: AEGIS can report the affected refs,
+    # but model replacement depends on the user's provider/account availability.
+    _print("  no automatic rewrite performed; choose a current xAI model with `aegis model set xai <model>`")
+    return 0
+
+
+def cmd_dashboard_entry(args, config: Config) -> int:
+    action = getattr(args, "dashboard_action", None)
+    if action == "register":
+        name = getattr(args, "client_name", None) or "AEGIS local dashboard"
+        if getattr(args, "dry_run", False):
+            _print("dashboard register dry-run")
+            _print(f"  client name: {name}")
+            _print("  no network requests or config writes performed")
+            return 0
+        config.set("server.dashboard_client_name", name)
+        _print(f"dashboard register: recorded local dashboard client name `{name}`")
+        return 0
+    from .. import dashboard as _dash
+
+    return _dash.cmd_dashboard(args, config)
+
+
+def cmd_slack(args, config: Config) -> int:
+    action = getattr(args, "slack_action", None) or "run"
+    if action != "manifest":
+        args.action = "run"
+        args.channels = "slack"
+        return cmd_gateway(args, config)
+    from .repl import SLASH_COMMANDS
+
+    name = getattr(args, "name", None) or "AEGIS"
+    description = getattr(args, "description", None) or "Your AEGIS agent on Slack"
+    slash_commands = [
+        {
+            "command": cmd.name,
+            "description": (cmd.summary or "AEGIS command")[:2000],
+            "usage_hint": (cmd.usage or cmd.name)[:1000],
+            "should_escape": False,
+        }
+        for cmd in SLASH_COMMANDS
+    ]
+    manifest = {
+        "display_information": {
+            "name": name[:35],
+            "description": description[:140],
+            "background_color": "#101828",
+        },
+        "features": {
+            "bot_user": {"display_name": name[:80], "always_online": True},
+            "slash_commands": slash_commands,
+        },
+        "oauth_config": {
+            "scopes": {"bot": ["app_mentions:read", "chat:write", "commands", "im:history", "im:write"]},
+        },
+        "settings": {"socket_mode_enabled": True, "interactivity": {"is_enabled": True}},
+    }
+    if getattr(args, "slashes_only", False):
+        payload = slash_commands
+    else:
+        payload = manifest
+    text = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+    target = getattr(args, "write", None)
+    if target is not None:
+        path = cfg.sub("slack-manifest.json") if target is True else Path(str(target)).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        _print(f"Slack manifest written to: {path}")
+        return 0
+    _print(text.rstrip())
+    return 0
+
+
 def cmd_command_aliases(args, config: Config) -> int:
     """Small top-level command aliases for common agent CLI muscle memory."""
 
@@ -3965,6 +4066,8 @@ def cmd_command_aliases(args, config: Config) -> int:
         args.manual = bool(getattr(args, "manual", False))
         return cmd_auth(args, config)
     if name == "migrate":
+        if getattr(args, "migrate_type", None) == "xai":
+            return cmd_migrate_xai(args, config)
         args.action = "migrate"
         args.key = None
         args.value = []
@@ -4136,7 +4239,7 @@ def build_parser() -> argparse.ArgumentParser:
     a = sub.add_parser("auth", help="API-key / OAuth authentication")
     a.add_argument(
         "action",
-        choices=["status", "list", "login", "logout", "add", "remove", "reset", "import-claude", "pool"],
+        choices=["status", "list", "login", "logout", "add", "remove", "reset", "import-claude", "pool", "spotify"],
     )
     a.add_argument("provider", nargs="?")
     a.add_argument("values", nargs="*", help="API keys or removal target for credential-pool commands")
@@ -4170,6 +4273,12 @@ def build_parser() -> argparse.ArgumentParser:
     mig = sub.add_parser("migrate", help="migrate/normalize config (alias of `aegis config migrate`)")
     mig.add_argument("--dry-run", action="store_true", help="preview config migration without writing")
     mig.add_argument("--json", action="store_true", help="print machine-readable migration output")
+    mig_sub = mig.add_subparsers(dest="migrate_type")
+    mig_xai = mig_sub.add_parser("xai", help="diagnose retired xAI model references")
+    mig_xai.add_argument("--dry-run", action="store_true", help="preview without writing")
+    mig_xai.add_argument("--apply", action="store_true", help="apply migration guidance")
+    mig_xai.add_argument("--no-backup", action="store_true", help="accepted for compatibility")
+    mig_xai.set_defaults(func=cmd_command_aliases)
     mig.set_defaults(func=cmd_command_aliases)
 
     dump = sub.add_parser("dump", help="print a redacted config dump")
@@ -4237,7 +4346,6 @@ def build_parser() -> argparse.ArgumentParser:
     from .. import acp as _acp
     from .. import backup as _backup
     from .. import curator as _curator
-    from .. import dashboard as _dash
     from .. import desktop as _desktop
     from .. import hooks as _hooks
     from .. import insights as _insights
@@ -4340,7 +4448,12 @@ def build_parser() -> argparse.ArgumentParser:
         db.add_argument("--host")
         db.add_argument("--port", type=int)
         db.add_argument("--no-open", action="store_true", help="don't auto-open the browser")
-        db.set_defaults(func=_dash.cmd_dashboard if _name in {"dashboard", "ui"} else cmd_command_aliases)
+        db_sub = db.add_subparsers(dest="dashboard_action")
+        db_register = db_sub.add_parser("register", help="register or preview dashboard OAuth metadata")
+        db_register.add_argument("--dry-run", action="store_true", help="preview dashboard registration without network/config writes")
+        db_register.add_argument("--client-name", help="display name for dashboard registration")
+        db_register.set_defaults(func=cmd_dashboard_entry)
+        db.set_defaults(func=cmd_dashboard_entry if _name in {"dashboard", "ui"} else cmd_command_aliases)
 
     tu = sub.add_parser("tui", help="open the terminal agent (compatibility alias)")
     tu.add_argument("--once", action="store_true", help="show status and exit")
@@ -4421,8 +4534,11 @@ def build_parser() -> argparse.ArgumentParser:
     dbg.set_defaults(func=_ops.cmd_debug)
 
     sec2 = sub.add_parser("secrets", help="sync secrets from a manager (bitwarden)")
-    sec2.add_argument("provider", nargs="?", default="bitwarden")
-    sec2.set_defaults(func=_ops.cmd_secrets)
+    secrets_sub = sec2.add_subparsers(dest="provider")
+    bw = secrets_sub.add_parser("bitwarden", help="sync/status/setup Bitwarden secrets")
+    bw.add_argument("action", nargs="?", choices=["sync", "status", "setup"], default="sync")
+    bw.set_defaults(func=_ops.cmd_secrets)
+    sec2.set_defaults(func=_ops.cmd_secrets, provider="bitwarden", action="sync")
 
     from .. import learn as _learn
     ln = sub.add_parser("learn", help="review sessions; promote learned memories/skills")
@@ -4739,7 +4855,18 @@ def build_parser() -> argparse.ArgumentParser:
     moa.add_argument("--models", help="comma-separated model specs used by /moa")
     moa.set_defaults(func=cmd_moa)
 
-    for _name in ("slack", "whatsapp", "whatsapp-cloud"):
+    slack = sub.add_parser("slack", help="run Slack gateway or generate Slack app manifest")
+    slack_sub = slack.add_subparsers(dest="slack_action")
+    slack_manifest = slack_sub.add_parser("manifest", help="generate a Slack app manifest JSON")
+    slack_manifest.add_argument("--write", nargs="?", const=True, help="write manifest to a path, or default under AEGIS_HOME")
+    slack_manifest.add_argument("--name", help="Slack bot display name")
+    slack_manifest.add_argument("--description", help="Slack bot description")
+    slack_manifest.add_argument("--slashes-only", action="store_true", help="print only slash command manifest entries")
+    slack_manifest.add_argument("--no-assistant", action="store_true", help="accepted for Hermes compatibility; ignored by AEGIS")
+    slack_manifest.set_defaults(func=cmd_slack)
+    slack.set_defaults(func=cmd_slack)
+
+    for _name in ("whatsapp", "whatsapp-cloud"):
         platform_cmd = sub.add_parser(_name, help=f"run gateway for {_name}")
         platform_cmd.set_defaults(func=cmd_command_aliases)
 
