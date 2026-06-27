@@ -2285,7 +2285,114 @@ def cmd_sessions(args, config: Config) -> int:
     from ..session import SessionStore
 
     store = SessionStore()
-    if args.action == "check":
+    action = getattr(args, "action", "list") or "list"
+    limit = max(1, int(getattr(args, "limit", 50) or 50))
+    include_internal = bool(getattr(args, "include_internal", False))
+
+    def session_rows(max_rows: int | None = None) -> list[dict]:
+        return store.list(max_rows or limit, include_internal=include_internal)
+
+    def session_payload(session) -> dict:
+        return {
+            "id": session.id,
+            "title": session.title,
+            "created_at": session.created_at,
+            "updated_at": session.updated_at,
+            "parent_id": session.parent_id,
+            "profile": session.profile,
+            "meta": session.meta,
+            "todos": session.todos,
+            "messages": [m.to_dict() for m in session.messages],
+        }
+
+    if action in {"delete", "remove"}:
+        action = "rm"
+    if action == "ls":
+        action = "list"
+
+    if action == "browse":
+        data = store.browse_sessions(limit=limit)
+        for item in data.get("results", []):
+            preview = (item.get("preview") or "").replace("\n", " ")[:80]
+            suffix = f"  {preview}" if preview else ""
+            _print(f"  {item['session_id']}  {item['title'][:40]:<40}  {item['updated_at']}{suffix}")
+        return 0
+
+    if action == "rename":
+        if not args.id or not getattr(args, "value", None):
+            return _die("usage: aegis sessions rename <id> <new title>")
+        session = store.load(args.id)
+        if not session:
+            return _die("session not found")
+        title = " ".join(str(part) for part in args.value).strip()
+        if not title:
+            return _die("new title is required")
+        old_id = session.id
+        session.title = title
+        session.meta["title_locked"] = True
+        store.save(session)
+        _print(f"renamed {old_id} -> {title}")
+        return 0
+
+    if action == "export":
+        if not args.id:
+            return _die("usage: aegis sessions export <out.jsonl>")
+        out = Path(args.id).expanduser()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        count = 0
+        with out.open("w", encoding="utf-8") as fh:
+            for row in session_rows(limit):
+                session = store.load(row["id"])
+                if not session:
+                    continue
+                fh.write(json.dumps(session_payload(session), sort_keys=True) + "\n")
+                count += 1
+        _print(f"exported {count} session(s) -> {out}")
+        return 0
+
+    if action == "stats":
+        rows = session_rows(100000)
+        message_count = 0
+        user_facing = 0
+        internal = 0
+        for row in rows:
+            if (row.get("source") or "") in {"internal", "review", "curator"}:
+                internal += 1
+            else:
+                user_facing += 1
+            session = store.load(row["id"])
+            if session:
+                message_count += len(session.messages)
+        payload = {
+            "sessions": len(rows),
+            "user_facing_sessions": user_facing,
+            "internal_sessions": internal,
+            "messages": message_count,
+        }
+        if getattr(args, "json", False):
+            _print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            _print(f"sessions: {payload['sessions']}")
+            _print(f"user-facing sessions: {payload['user_facing_sessions']}")
+            _print(f"internal sessions: {payload['internal_sessions']}")
+            _print(f"messages: {payload['messages']}")
+        return 0
+
+    if action == "prune":
+        older_than = float(getattr(args, "older_than_days", 0.0) or 0.0)
+        confirmed = bool(getattr(args, "yes", False))
+        victims = store.prune_empty(older_than_days=older_than, dry_run=not confirmed)
+        verb = "pruned" if confirmed else "would prune"
+        _print(f"{verb} {len(victims)} empty session(s)")
+        for sid in victims[:20]:
+            _print(f"  {sid}")
+        if len(victims) > 20:
+            _print(f"  ... {len(victims) - 20} more")
+        if not confirmed:
+            _print("pass --yes to delete these empty sessions")
+        return 0
+
+    if action == "check":
         from ..session_checks import cross_session_integrity_report, repair_cross_session_integrity
 
         stale_running_arg = getattr(args, "stale_running_seconds", None)
@@ -2345,7 +2452,7 @@ def cmd_sessions(args, config: Config) -> int:
                 f"skipped: {repair.get('skipped', 0)}"
             )
         return 0 if report.get("error_count", 0) == 0 else 1
-    if args.action == "show":
+    if action == "show":
         s = store.load(args.id) if args.id else None
         if not s:
             return _die("session not found")
@@ -2372,18 +2479,18 @@ def cmd_sessions(args, config: Config) -> int:
             if m.role in ("user", "assistant") and m.content:
                 _print(f"[{m.role}] {m.content[:500]}")
         return 0
-    if args.action == "rm":
-        _print("removed" if store.delete(args.id) else "not found")
+    if action == "rm":
+        _print(f"removed {args.id}" if store.delete(args.id) else "not found")
         return 0
-    if args.action == "summarize":
+    if action == "summarize":
         s = store.summarize(args.id, config=config) if args.id else None
         _print(s or "usage: aegis sessions summarize <id>")
         return 0
-    if args.action == "search":
+    if action == "search":
         for h in store.search_messages(args.id or ""):
             _print(f"  [{h['when']}] {h['title']} ({h['session'][:14]})\n    {h['role']}: {h['snippet']}")
         return 0
-    for s in store.list(50):
+    for s in session_rows(limit):
         _print(f"  {s['id']}  {s['title'][:40]:<40}  {s['updated_at']}")
     return 0
 
@@ -3515,11 +3622,19 @@ def build_parser() -> argparse.ArgumentParser:
     sc.add_argument("--stdin", action="store_true", help="read the value from stdin instead of prompting")
     sc.set_defaults(func=cmd_secret)
 
-    se = sub.add_parser("sessions", help="list/show/remove/check sessions")
-    se.add_argument("action", nargs="?", choices=["list", "show", "rm", "summarize", "search", "check"],
+    se = sub.add_parser("sessions", help="list/show/export/rename/remove/check sessions")
+    se.add_argument("action", nargs="?", choices=[
+        "list", "ls", "browse", "show", "rename", "rm", "delete", "remove",
+        "export", "prune", "stats", "summarize", "search", "check",
+    ],
                     default="list")
     se.add_argument("id", nargs="?")
+    se.add_argument("value", nargs="*")
     se.add_argument("--json", action="store_true", help="print session check output as JSON")
+    se.add_argument("--limit", type=int, default=50, help="maximum sessions for list/browse/export")
+    se.add_argument("--include-internal", action="store_true", help="include review/curator sessions")
+    se.add_argument("--yes", "-y", action="store_true", help="confirm destructive prune/delete-style actions")
+    se.add_argument("--older-than-days", type=float, default=0.0, help="only prune empty sessions older than this many days")
     se.add_argument("--repair", action="store_true", help="repair stale running run records")
     se.add_argument("--session-limit", type=int, default=500)
     se.add_argument("--run-limit", type=int, default=500)
