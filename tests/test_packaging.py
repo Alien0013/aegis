@@ -23,7 +23,7 @@ def test_root_package_json_exposes_frontend_workspaces_and_scripts():
         names.append(manifest["name"])
     assert len(names) == len(set(names))
     scripts = package.get("scripts") or {}
-    assert scripts["typecheck"] == "npm --prefix apps/shared run typecheck && npm --prefix web run typecheck && npm --prefix aegis/tui_ink run typecheck"
+    assert scripts["typecheck"] == "npm --prefix apps/desktop run typecheck && npm --prefix apps/shared run typecheck && npm --prefix web run typecheck && npm --prefix aegis/tui_ink run typecheck"
     assert scripts["build:web"] == "npm --prefix web run build"
     assert scripts["test:desktop"] == "npm --prefix desktop run test:desktop"
 
@@ -46,6 +46,35 @@ def test_package_wrapper_roots_delegate_to_native_aegis_packages():
         assert manifest["private"] is True
         scripts = manifest.get("scripts") or {}
         assert build_or_test_script in scripts.values()
+
+
+def test_desktop_wrapper_maps_install_update_surfaces_to_native_desktop():
+    root = ROOT / "apps" / "desktop"
+    manifest = json.loads((root / "package.json").read_text(encoding="utf-8"))
+    verifier = root / "scripts" / "verify-desktop-surface.mjs"
+
+    assert manifest["name"] == "aegis-app-desktop"
+    assert manifest["scripts"]["typecheck"] == "node ./scripts/verify-desktop-surface.mjs && node --test electron/*.test.cjs"
+    assert verifier.is_file()
+    native = manifest["aegis"]["native_install_update_surfaces"]
+    assert native["desktop-uninstall"] == "../../desktop/electron/desktop-uninstall.cjs"
+    assert native["update-status"] == "../../desktop/electron/updater-status.cjs"
+    assert native["gateway-update-coordination"] == "../../desktop/electron/gateway-update-coordination.cjs"
+    assert native["build-stamp"] == "../../desktop/scripts/write-build-stamp.cjs"
+    assert native["stage-backend"] == "../../desktop/scripts/stage-backend.cjs"
+    assert native["stage-uninstall"] == "../../desktop/scripts/stage-uninstall.cjs"
+
+
+def test_desktop_uninstall_app_path_delegates_to_native_desktop_module():
+    wrapper = ROOT / "apps" / "desktop" / "electron" / "desktop-uninstall.cjs"
+    wrapper_test = ROOT / "apps" / "desktop" / "electron" / "desktop-uninstall.test.cjs"
+    native = ROOT / "desktop" / "electron" / "desktop-uninstall.cjs"
+
+    assert wrapper.is_file()
+    assert wrapper_test.is_file()
+    text = wrapper.read_text(encoding="utf-8")
+    assert "../../../desktop/electron/desktop-uninstall.cjs" in text
+    assert "desktopUninstallPlan" in native.read_text(encoding="utf-8")
 
 
 def test_shared_package_exports_aegis_runtime_contract():

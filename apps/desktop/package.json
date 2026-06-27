@@ -4,10 +4,21 @@
   "private": true,
   "description": "Workspace wrapper for the AEGIS desktop app package.",
   "scripts": {
+    "typecheck": "node ./scripts/verify-desktop-surface.mjs && node --test electron/*.test.cjs",
     "start": "npm --prefix ../../desktop run start",
     "test": "npm --prefix ../../desktop run test:desktop",
     "test:desktop": "npm --prefix ../../desktop run test:desktop",
     "pack": "npm --prefix ../../desktop run pack",
     "dist": "npm --prefix ../../desktop run dist"
+  },
+  "aegis": {
+    "native_install_update_surfaces": {
+      "desktop-uninstall": "../../desktop/electron/desktop-uninstall.cjs",
+      "update-status": "../../desktop/electron/updater-status.cjs",
+      "gateway-update-coordination": "../../desktop/electron/gateway-update-coordination.cjs",
+      "build-stamp": "../../desktop/scripts/write-build-stamp.cjs",
+      "stage-backend": "../../desktop/scripts/stage-backend.cjs",
+      "stage-uninstall": "../../desktop/scripts/stage-uninstall.cjs"
+    }
   }
 }

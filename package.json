@@ -20,7 +20,7 @@
     "install:tui": "npm --prefix aegis/tui_ink install",
     "install:desktop": "npm --prefix desktop install",
     "install:site": "npm --prefix site-next install",
-    "typecheck": "npm --prefix apps/shared run typecheck && npm --prefix web run typecheck && npm --prefix aegis/tui_ink run typecheck",
+    "typecheck": "npm --prefix apps/desktop run typecheck && npm --prefix apps/shared run typecheck && npm --prefix web run typecheck && npm --prefix aegis/tui_ink run typecheck",
     "build:web": "npm --prefix web run build",
     "build:tui": "npm --prefix aegis/tui_ink run build",
     "build:site": "npm --prefix site-next run build",
