@@ -3197,6 +3197,11 @@ def build_parser() -> argparse.ArgumentParser:
     tu.add_argument("--watch", action="store_true", help="refresh status until interrupted")
     tu.add_argument("--interval", type=float, default=5.0, help="watch refresh interval in seconds")
     tu.add_argument("--no-color", action="store_true", help="disable ANSI color")
+    tu.add_argument("-m", "--model", help="model override for the TUI session")
+    tu.add_argument("--provider", help="provider override for the TUI session")
+    tu.add_argument("--classic", "--cli", dest="classic", action="store_true", help="force the classic line terminal")
+    tu.add_argument("--dev", dest="tui_dev", action="store_true", help="mark this TUI launch as a dev/source-mode session")
+    tu.add_argument("--yolo", action="store_true", help="bypass dangerous command approval prompts for this TUI session")
     tu.set_defaults(func=_tui.cmd_tui)
 
     for _name in ("desktop", "deksktop"):

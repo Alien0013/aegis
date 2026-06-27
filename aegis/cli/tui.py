@@ -1,15 +1,17 @@
 """Terminal UI compatibility entrypoint.
 
-AEGIS' terminal product surface is the chat REPL.  The old store-backed
-``aegis tui`` status dashboard was intentionally removed as a separate UX so the CLI
-matches AEGIS' model more closely: one terminal agent surface, with status
-available through ``aegis status``.
+`aegis tui` is the explicit terminal-agent surface.  It prefers the bundled
+Node/Ink UI when a real terminal is available, and falls back to the classic
+line REPL when the bundle/runtime is missing or the user asks for `--classic`.
+`--once` and non-interactive invocations remain read-only status aliases for
+scripts.
 """
 
 from __future__ import annotations
 
 import sys
 import time
+import os
 from argparse import Namespace
 
 from ..config import Config
@@ -21,21 +23,77 @@ def _render_status(config: Config) -> int:
     return cmd_status(Namespace(json=False), config)
 
 
-def _open_terminal_agent(config: Config) -> int:
+def _open_ink_terminal_agent(
+    config: Config,
+    *,
+    model=None,
+    provider_name=None,
+    auto: bool = False,
+    dev: bool = False,
+) -> int:
+    from .tui_ink import launch_ink_tui
+
+    launch_ink_tui(config, model=model, provider_name=provider_name, auto=auto, dev=dev)
+    return 0
+
+
+def _open_classic_terminal_agent(config: Config, *, model=None, provider_name=None, auto: bool = False) -> int:
     from ..session import Session, SessionStore
     from . import repl
 
     store = SessionStore()
-    repl.interactive(config, session=store.latest() or Session.create(), store=store)
+    previous = os.environ.get("AEGIS_CLASSIC_TUI")
+    os.environ["AEGIS_CLASSIC_TUI"] = "1"
+    try:
+        repl.interactive(
+            config,
+            model=model,
+            provider_name=provider_name,
+            session=store.latest() or Session.create(),
+            store=store,
+            auto=auto,
+        )
+    finally:
+        if previous is None:
+            os.environ.pop("AEGIS_CLASSIC_TUI", None)
+        else:
+            os.environ["AEGIS_CLASSIC_TUI"] = previous
     return 0
+
+
+def _open_terminal_agent(
+    config: Config,
+    *,
+    model=None,
+    provider_name=None,
+    auto: bool = False,
+    classic: bool = False,
+    dev: bool = False,
+) -> int:
+    from . import repl
+
+    if not classic:
+        try:
+            return _open_ink_terminal_agent(
+                config,
+                model=model,
+                provider_name=provider_name,
+                auto=auto,
+                dev=dev,
+            )
+        except repl._FullscreenUnavailable:
+            pass
+        except Exception as exc:  # noqa: BLE001
+            print(f"Ink terminal failed ({exc}); falling back to classic terminal.", file=sys.stderr)
+    return _open_classic_terminal_agent(config, model=model, provider_name=provider_name, auto=auto)
 
 
 def cmd_tui(args: Namespace, config: Config) -> int:
     """Open the terminal agent.
 
-    ``--once`` and non-interactive invocations are kept as compatibility aliases
-    for ``aegis status`` so legacy snapshot scripts still get useful read-only
-    output without seeing a separate terminal UI.
+    ``--once`` and non-interactive invocations are compatibility aliases for
+    ``aegis status`` so scripts get useful read-only output without launching a
+    full-screen UI.
     """
 
     if getattr(args, "watch", False):
@@ -50,4 +108,11 @@ def cmd_tui(args: Namespace, config: Config) -> int:
     if getattr(args, "once", False) or not (sys.stdin.isatty() and sys.stdout.isatty()):
         return _render_status(config)
 
-    return _open_terminal_agent(config)
+    return _open_terminal_agent(
+        config,
+        model=getattr(args, "model", None),
+        provider_name=getattr(args, "provider", None),
+        auto=bool(getattr(args, "yolo", False)),
+        classic=bool(getattr(args, "classic", False) or getattr(args, "cli", False)),
+        dev=bool(getattr(args, "tui_dev", False)),
+    )

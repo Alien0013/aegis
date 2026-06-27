@@ -31,7 +31,7 @@ def ink_available() -> bool:
 
 def launch_ink_tui(config: Config, *, model=None, provider_name=None,
                    session: Session | None = None, store: SessionStore | None = None,
-                   auto: bool = False) -> None:
+                   auto: bool = False, dev: bool = False) -> None:
     """Start the gateway + Node/Ink client and block until the client exits."""
     node = shutil.which("node")
     if not node:
@@ -57,6 +57,8 @@ def launch_ink_tui(config: Config, *, model=None, provider_name=None,
     # dashboard's theme names (AEGIS_TUI_THEME in the environment still wins if set).
     if "AEGIS_TUI_THEME" not in env:
         env["AEGIS_TUI_THEME"] = str(config.get("display.theme", "aegis-dark") or "aegis-dark")
+    if dev:
+        env["AEGIS_TUI_DEV"] = "1"
 
     # The child owns the terminal; ignore SIGINT in the parent so ^C reaches Ink, which
     # turns it into an interrupt/exit rather than killing the gateway out from under it.
