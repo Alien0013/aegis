@@ -102,6 +102,7 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/env/{key} | DELETE | api_env_delete |
 | /api/env/{key}/reveal | GET | api_env_reveal |
 | /api/events | GET | api_events |
+| /api/events | WEBSOCKET | event_socket |
 | /api/extensions/status | GET | api_extensions_status |
 | /api/files | DELETE | api_files_delete |
 | /api/files | GET | api_files_list |
@@ -255,6 +256,7 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/providers/validate | POST | api_providers_validate |
 | /api/pty | WEBSOCKET | pty_socket |
 | /api/pub | POST | api_pub |
+| /api/pub | WEBSOCKET | event_socket |
 | /api/runs/{run_id}/timeline | GET | api_run_timeline |
 | /api/runtime-profiles | GET | api_runtime_profiles_get |
 | /api/runtime-profiles | POST | api_runtime_profiles_create |

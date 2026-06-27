@@ -145,6 +145,8 @@ def register(app, config, chat_runner):
         return JSONResponse(_publish_dashboard_event(body))
 
     @app.websocket("/api/ws")
+    @app.websocket("/api/events")
+    @app.websocket("/api/pub")
     async def event_socket(ws: WebSocket) -> None:
         if not _websocket_authorized(ws, config):
             await ws.close(code=4401, reason="unauthorized")

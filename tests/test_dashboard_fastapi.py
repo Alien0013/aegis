@@ -806,9 +806,13 @@ def test_fastapi_files_upload_and_mkdir(tmp_path, monkeypatch):
 def test_fastapi_registers_live_and_pty_websockets(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
 
-    routes = {getattr(route, "path", ""): type(route).__name__ for route in app.routes}
-    assert routes["/api/ws"] == "APIWebSocketRoute"
-    assert routes["/api/pty"] == "APIWebSocketRoute"
+    routes: dict[str, set[str]] = {}
+    for route in app.routes:
+        routes.setdefault(getattr(route, "path", ""), set()).add(type(route).__name__)
+    assert "APIWebSocketRoute" in routes["/api/ws"]
+    assert "APIWebSocketRoute" in routes["/api/pty"]
+    assert "APIWebSocketRoute" in routes["/api/events"]
+    assert "APIWebSocketRoute" in routes["/api/pub"]
     for path in (
         "/api/auth/me",
         "/api/auth/providers",
@@ -842,8 +846,10 @@ def test_fastapi_registers_live_and_pty_websockets(tmp_path, monkeypatch):
         "/api/messaging/platforms",
         "/api/platforms",
         "/api/platforms/registry",
+        "/api/admin/status",
+        "/api/actions/run",
     ):
-        assert routes[path] == "APIRoute"
+        assert "APIRoute" in routes[path]
 
 
 def test_fastapi_websocket_jsonrpc_helper(tmp_path, monkeypatch):
