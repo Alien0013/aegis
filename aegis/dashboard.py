@@ -70,12 +70,32 @@ def _dist_file(path: str) -> tuple[bytes, str] | None:
     return data, ctype
 
 
-def _page_with_bootstrap(config: Config) -> bytes:
+def _dashboard_auth_required(config: Config) -> bool:
+    """Whether the dashboard SPA should use authenticated fetch/WS flows.
+
+    This lives in the lightweight dashboard module (rather than dashboard_fastapi)
+    so HTML bootstrapping can declare auth mode without importing the FastAPI app
+    and creating a circular dependency.
+    """
+    import os
+
+    if _dashboard_token(config):
+        return True
+    if os.environ.get("AEGIS_DASHBOARD_BASIC_AUTH_USERNAME") and os.environ.get("AEGIS_DASHBOARD_BASIC_AUTH_PASSWORD"):
+        return True
+    host = str(config.get("server.dashboard_host", "127.0.0.1") or "127.0.0.1").split(":", 1)[0].strip("[]").lower()
+    return host not in {"", "127.0.0.1", "localhost", "::1"} and not host.startswith("127.")
+
+
+def _page_with_bootstrap(config: Config, base_path: str = "") -> bytes:
     page = _page()
     token = _dashboard_token(config) or ""
+    normalized_base = "/" + base_path.strip("/") if base_path.strip("/") else ""
     bootstrap = (
         "<script>"
         f"window.__AEGIS_SESSION_TOKEN__={json.dumps(token)};"
+        f"window.__AEGIS_AUTH_REQUIRED__={json.dumps(_dashboard_auth_required(config))};"
+        f"window.__AEGIS_BASE_PATH__={json.dumps(normalized_base)};"
         "</script>"
     ).encode()
     if b"</head>" in page:
@@ -3114,9 +3134,9 @@ def _dashboard_token(config: Config) -> str | None:
 
 
 def _dashboard_url(config: Config, host: str, port: int) -> str:
-    token = _dashboard_token(config)
-    base = f"http://{host}:{port}"
-    return f"{base}/?token={token}" if token else base
+    # The HTML bootstrap sets a loopback-only HttpOnly cookie for token-backed
+    # dashboards, so the browser-open URL does not need to carry the token.
+    return f"http://{host}:{port}/"
 
 
 def serve_dashboard(config: Config, host: str = "127.0.0.1", port: int = 9119,

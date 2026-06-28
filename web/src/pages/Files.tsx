@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { api, post, TOKEN } from "../lib/api";
+import { api, authedFetch, downloadUrl, post } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { bytes, compact } from "../lib/format";
 import { Button, Card, Empty, Field, Input, Loading, PageHeader, toast } from "../components/ui";
@@ -29,9 +29,7 @@ export function Files() {
   }
 
   function downloadFile(target: string) {
-    const params = new URLSearchParams({ path: target });
-    if (TOKEN) params.set("token", TOKEN);
-    window.location.href = `/api/files/download?${params.toString()}`;
+    window.location.href = downloadUrl("files/download", { path: target });
   }
 
   async function jumpDefaultCwd() {
@@ -72,9 +70,7 @@ export function Files() {
       const form = new FormData();
       form.append("path", data.path);
       form.append("file", item);
-      const headers: Record<string, string> = {};
-      if (TOKEN) headers["X-Aegis-Token"] = TOKEN;
-      const response = await fetch("/api/files/upload", { method: "POST", headers, body: form });
+      const response = await authedFetch("files/upload", { method: "POST", body: form });
       const body = await response.json();
       if (!response.ok || body.ok === false) toast(body.error || `Upload failed (${response.status})`, "err");
       else { toast("Uploaded"); reload(); }

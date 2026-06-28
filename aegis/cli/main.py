@@ -2044,8 +2044,7 @@ def cmd_status(args, config: Config) -> int:
 
     host = config.get("server.dashboard_host", "127.0.0.1")
     port = int(config.get("server.dashboard_port", 9119))
-    token = config.get("server.dashboard_token")
-    url = f"http://{host}:{port}/" + ("?token=[REDACTED]" if token else "")
+    url = f"http://{host}:{port}/"
     display = {
         "reasoning": config.get("display.reasoning", "off") or "off",
         "timestamps": bool(config.get("display.timestamps", False)),

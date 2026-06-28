@@ -186,9 +186,11 @@ def test_dashboard_chat_uses_one_time_ws_tickets_for_pty_auth():
     assert "export interface AuthWsTicket" in api
     assert "export async function authWsTicket" in api
     assert 'post<AuthWsTicket>("auth/ws-ticket"' in api
-    assert "authWsTicket" in chat
-    assert 'q.set("ticket"' in chat
+    assert "buildWsUrl" in chat
+    assert "authWsTicket" in api
+    assert 'qs.set(auth[0], auth[1])' in api
     assert 'q.set("token"' not in chat
+    assert 'token=' not in chat
 
 
 def test_security_page_and_audit_outputs_are_structured_and_redacted(tmp_path, monkeypatch, capsys):

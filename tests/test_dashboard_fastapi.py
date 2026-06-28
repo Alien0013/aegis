@@ -234,6 +234,21 @@ def test_dashboard_overview_surfaces_setup_readiness_card():
     assert "next_command" in overview
 
 
+def test_dashboard_bootstrap_declares_auth_mode_without_browser_storage_tokens(tmp_path, monkeypatch):
+    """The SPA gets auth state from the served HTML instead of URL/localStorage tokens."""
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    monkeypatch.setenv("AEGIS_DASHBOARD_TOKEN", "bootstrap-token")
+    from aegis.config import Config
+    from aegis.dashboard import _page_with_bootstrap
+
+    html = _page_with_bootstrap(Config.load()).decode("utf-8", errors="ignore")
+
+    assert "window.__AEGIS_SESSION_TOKEN__=" in html
+    assert "bootstrap-token" in html
+    assert "window.__AEGIS_AUTH_REQUIRED__=true" in html
+    assert "window.__AEGIS_BASE_PATH__=\"\"" in html
+
+
 def test_fastapi_tools_validation_and_permission_dry_run(tmp_path, monkeypatch):
     import aegis.dashboard_routes.tools_mcp as tools_routes
 

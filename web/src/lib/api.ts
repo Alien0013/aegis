@@ -1,15 +1,39 @@
 // Typed client for the AEGIS dashboard backend (aegis/dashboard_fastapi.py).
-// The session token is injected into index.html as window.__AEGIS_SESSION_TOKEN__,
-// or passed as ?token=… on first load; we persist it and send it on every call.
+// Auth state is injected by the dashboard HTML. The client intentionally does
+// not persist long-lived tokens in localStorage or copy them into regular links;
+// REST uses headers/cookies and WebSockets use short-lived /api/auth/ws-ticket
+// credentials.
 
-const url = new URL(window.location.href);
-const fromQuery = url.searchParams.get("token");
-if (fromQuery) localStorage.setItem("aegis_token", fromQuery);
-const fromBootstrap = (window as unknown as { __AEGIS_SESSION_TOKEN__?: string })
-  .__AEGIS_SESSION_TOKEN__ || "";
-if (fromBootstrap) localStorage.setItem("aegis_token", fromBootstrap);
+declare global {
+  interface Window {
+    __AEGIS_SESSION_TOKEN__?: string;
+    __AEGIS_AUTH_REQUIRED__?: boolean;
+    __AEGIS_BASE_PATH__?: string;
+  }
+}
 
-export const TOKEN = localStorage.getItem("aegis_token") || "";
+function readBasePath(): string {
+  const raw = window.__AEGIS_BASE_PATH__ || "";
+  if (!raw) return "";
+  const withLead = raw.startsWith("/") ? raw : `/${raw}`;
+  return withLead.replace(/\/+$/, "");
+}
+
+export const AEGIS_BASE_PATH = readBasePath();
+export const AUTH_REQUIRED = Boolean(window.__AEGIS_AUTH_REQUIRED__);
+
+export function getSessionToken(): string {
+  return window.__AEGIS_SESSION_TOKEN__ || "";
+}
+
+// Back-compat for plugin contexts that read sdk.token. Prefer authedFetch(),
+// buildWsUrl(), and downloadUrl(); TOKEN is never persisted or appended to UI links.
+export const TOKEN = getSessionToken();
+
+function apiPath(path: string): string {
+  const clean = String(path || "").replace(/^\/+/, "").replace(/^api\//, "");
+  return `${AEGIS_BASE_PATH}/api/${clean}`;
+}
 
 function headers(extra: Record<string, string> = {}): Record<string, string> {
   const h: Record<string, string> = { ...extra };
@@ -35,35 +59,38 @@ async function parse<T>(r: Response, path: string): Promise<T> {
 }
 
 export function api<T = unknown>(path: string): Promise<T> {
-  return fetch(`/api/${path}`, { headers: headers() }).then((r) => parse<T>(r, path));
+  return fetch(apiPath(path), { headers: headers(), credentials: "include" }).then((r) => parse<T>(r, path));
 }
 
 export function post<T = unknown>(path: string, body?: unknown): Promise<T> {
-  return fetch(`/api/${path}`, {
+  return fetch(apiPath(path), {
     method: "POST",
     headers: headers({ "Content-Type": "application/json" }),
     body: JSON.stringify(body ?? {}),
+    credentials: "include",
   }).then((r) => parse<T>(r, path));
 }
 
 export function put<T = unknown>(path: string, body?: unknown): Promise<T> {
-  return fetch(`/api/${path}`, {
+  return fetch(apiPath(path), {
     method: "PUT",
     headers: headers({ "Content-Type": "application/json" }),
     body: JSON.stringify(body ?? {}),
+    credentials: "include",
   }).then((r) => parse<T>(r, path));
 }
 
 export function patch<T = unknown>(path: string, body?: unknown): Promise<T> {
-  return fetch(`/api/${path}`, {
+  return fetch(apiPath(path), {
     method: "PATCH",
     headers: headers({ "Content-Type": "application/json" }),
     body: JSON.stringify(body ?? {}),
+    credentials: "include",
   }).then((r) => parse<T>(r, path));
 }
 
 export function del<T = unknown>(path: string): Promise<T> {
-  return fetch(`/api/${path}`, { method: "DELETE", headers: headers() })
+  return fetch(apiPath(path), { method: "DELETE", headers: headers(), credentials: "include" })
     .then((r) => parse<T>(r, path));
 }
 
@@ -87,6 +114,46 @@ export function authMe(): Promise<AuthMe> {
 
 export async function authWsTicket(): Promise<AuthWsTicket> {
   return post<AuthWsTicket>("auth/ws-ticket", {});
+}
+
+export async function buildWsAuthParam(): Promise<[string, string] | null> {
+  try {
+    const ticket = await authWsTicket();
+    if (ticket.ticket) return ["ticket", ticket.ticket];
+  } catch {
+    // Cookie-authenticated WebSockets may still succeed. Do not fall back to a
+    // long-lived token in the URL.
+  }
+  return null;
+}
+
+export async function buildWsUrl(path: string, params: Record<string, string> = {}): Promise<string> {
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const rawPath = path.startsWith("/") ? path : `/api/${path.replace(/^api\//, "")}`;
+  const qs = new URLSearchParams(params);
+  const auth = await buildWsAuthParam();
+  if (auth) qs.set(auth[0], auth[1]);
+  return `${proto}//${window.location.host}${AEGIS_BASE_PATH}${rawPath}?${qs.toString()}`;
+}
+
+export function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const raw = String(path || "");
+  const url = /^(https?:)?\/\//i.test(raw)
+    ? raw
+    : raw.startsWith("/api/")
+      ? `${AEGIS_BASE_PATH}${raw}`
+      : apiPath(raw);
+  const h = new Headers(init.headers || {});
+  const token = getSessionToken();
+  if (token && !h.has("X-Aegis-Token")) h.set("X-Aegis-Token", token);
+  return fetch(url, { ...init, headers: h, credentials: init.credentials ?? "include" });
+}
+
+export function downloadUrl(path: string, params: Record<string, string> = {}): string {
+  const raw = path.startsWith("/") ? path : `/api/${path.replace(/^api\//, "")}`;
+  const qs = new URLSearchParams(params);
+  const query = qs.toString();
+  return `${AEGIS_BASE_PATH}${raw}${query ? `?${query}` : ""}`;
 }
 
 export interface DashboardPluginApiMount {
@@ -322,9 +389,7 @@ export const pluginsApi = {
 
 /** Subscribe to a server-sent-events endpoint. Returns an unsubscribe fn. */
 export function sse(path: string, onMessage: (data: unknown) => void): () => void {
-  const sep = path.includes("?") ? "&" : "?";
-  const q = TOKEN ? `${path}${sep}token=${encodeURIComponent(TOKEN)}` : path;
-  const es = new EventSource(`/api/${q}`);
+  const es = new EventSource(apiPath(path), { withCredentials: true });
   es.onmessage = (e) => {
     try { onMessage(JSON.parse(e.data)); } catch { /* ignore non-JSON frames */ }
   };
@@ -338,11 +403,12 @@ export async function postStream(
   onEvent: (data: Record<string, unknown>) => void,
   options: { signal?: AbortSignal } = {},
 ): Promise<void> {
-  const r = await fetch(`/api/${path}`, {
+  const r = await fetch(apiPath(path), {
     method: "POST",
     headers: headers({ "Content-Type": "application/json" }),
     body: JSON.stringify(body),
     signal: options.signal,
+    credentials: "include",
   });
   if (!r.ok) throw new ApiError(path, r.status);
   if (!r.body) throw new ApiError(path, 0, "no stream body");

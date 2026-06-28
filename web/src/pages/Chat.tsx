@@ -10,25 +10,18 @@ import { useSearchParams } from "react-router-dom";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { authWsTicket } from "../lib/api";
+import { buildWsUrl } from "../lib/api";
 import { compact } from "../lib/format";
 import { useTheme } from "../themes/ThemeProvider";
 import { Badge } from "../components/ui";
 import { Icon } from "../components/icons";
 
 async function ptyUrl(term: Terminal, resume: string): Promise<string> {
-  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const q = new URLSearchParams();
-  try {
-    const ticket = await authWsTicket();
-    if (ticket.ticket) q.set("ticket", ticket.ticket);
-  } catch {
-    // Same-origin WebSockets can still authenticate via secure session/cookie paths.
-  }
-  q.set("cols", String(term.cols));
-  q.set("rows", String(term.rows));
-  if (resume) q.set("resume", resume);
-  return `${proto}//${window.location.host}/api/pty?${q.toString()}`;
+  return buildWsUrl("/api/pty", {
+    cols: String(term.cols),
+    rows: String(term.rows),
+    ...(resume ? { resume } : {}),
+  });
 }
 
 const resizeFrame = (t: Terminal) => `\x1b]1337;Resize=cols=${t.cols};rows=${t.rows}\x07`;

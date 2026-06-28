@@ -5,7 +5,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { desktop, isDesktop } from "../lib/desktop";
-import { TOKEN } from "../lib/api";
 import { NAV_ITEMS } from "../lib/nav";
 import { pluginNavItems } from "../lib/pluginNav";
 import { useDashboardPluginHost } from "../plugins/host";
@@ -90,7 +89,7 @@ export function CommandPalette() {
     if (isDesktop) {
       list.push({
         id: "open-browser", label: "Open in browser", group: "Desktop", icon: "external",
-        run: () => desktop?.openExternal(`${location.origin}/?token=${TOKEN}`),
+        run: () => desktop?.openExternal(`${location.origin}/`),
       });
       list.push({
         id: "restart-backend", label: "Restart backend", group: "Desktop", icon: "refresh",

@@ -1,7 +1,7 @@
 import * as React from "react";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { api, TOKEN } from "../lib/api";
+import { AEGIS_BASE_PATH, api, getSessionToken, TOKEN } from "../lib/api";
 import { Card, Empty, Loading } from "../components/ui";
 
 export interface DashboardPluginApiMount {
@@ -264,8 +264,9 @@ function isSameHost(url: string): boolean {
 function pluginFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const url = pluginUrl(path);
   const headers = new Headers(init.headers || {});
-  if (TOKEN && isSameHost(url) && !headers.has("X-Aegis-Token")) headers.set("X-Aegis-Token", TOKEN);
-  return window.fetch(url, { ...init, headers });
+  const token = getSessionToken();
+  if (token && isSameHost(url) && !headers.has("X-Aegis-Token")) headers.set("X-Aegis-Token", token);
+  return window.fetch(url, { ...init, headers, credentials: init.credentials ?? "include" });
 }
 
 async function pluginFetchJSON<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
@@ -279,12 +280,32 @@ async function pluginFetchJSON<T = unknown>(path: string, init: RequestInit = {}
   return (contentType.includes("application/json") ? JSON.parse(text) : text) as T;
 }
 
+function mintWsTicketSync(): string {
+  try {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${AEGIS_BASE_PATH}/api/auth/ws-ticket`, false);
+    xhr.withCredentials = true;
+    const token = getSessionToken();
+    if (token) xhr.setRequestHeader("X-Aegis-Token", token);
+    xhr.setRequestHeader("Content-Type", "application/json");
+    xhr.send("{}");
+    if (xhr.status >= 200 && xhr.status < 300) {
+      const body = JSON.parse(xhr.responseText || "{}");
+      return String(body.ticket || "");
+    }
+  } catch {
+    // Fall through: cookie-authenticated sockets may still be accepted.
+  }
+  return "";
+}
+
 function pluginWebSocket(path: string, protocols?: string | string[]): WebSocket {
   const url = new URL(pluginUrl(path), window.location.href);
   if (url.protocol === "http:") url.protocol = "ws:";
   else if (url.protocol === "https:") url.protocol = "wss:";
-  if (TOKEN && url.host === window.location.host && !url.searchParams.has("token")) {
-    url.searchParams.set("token", TOKEN);
+  if (url.host === window.location.host && !url.searchParams.has("ticket")) {
+    const ticket = mintWsTicketSync();
+    if (ticket) url.searchParams.set("ticket", ticket);
   }
   return new WebSocket(url.toString(), protocols);
 }

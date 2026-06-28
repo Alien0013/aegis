@@ -6,7 +6,7 @@
 // each tool call shows as a live card (running → ok/error) paired by event id.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, post, postStream } from "../lib/api";
+import { api, authedFetch, post, postStream } from "../lib/api";
 import { desktop, isDesktop } from "../lib/desktop";
 import { Icon } from "../components/icons";
 import { Mark } from "../components/Mark";
@@ -403,9 +403,7 @@ export function GraphicalChat({
     setQueuedPrompts([]);
     setRuntimeDirty(false);
     if (!sessionId) return;
-    fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
-      headers: { "X-Aegis-Token": localStorage.getItem("aegis_token") || "" },
-    })
+    authedFetch(`sessions/${encodeURIComponent(sessionId)}`)
       .then((r) => (r.ok ? r.json() : { found: r.status === 404 ? false : undefined, error: `session load failed: ${r.status}` }))
       .then((data: SessionPayload | null) => {
         if (cancelled) return;

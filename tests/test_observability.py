@@ -618,7 +618,8 @@ def test_status_redacts_dashboard_token(capsys):
     cmd_status(object(), cfg)
     out = capsys.readouterr().out
 
-    assert "?token=[REDACTED]" in out
+    assert "http://127.0.0.1:9119/" in out
+    assert "?token=" not in out
     assert "plain-dashboard-token" not in out
 
 

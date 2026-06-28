@@ -1753,7 +1753,7 @@ def _configure_dashboard(config: Config, state: OnboardingState, out: Output) ->
                 break
         else:
             out(f"! dashboard port {original} is busy and no free nearby port was found.")
-    state.dashboard_url = f"http://{host}:{port}/?token={token}"
+    state.dashboard_url = f"http://{host}:{port}/"
 
 
 def _configure_services(

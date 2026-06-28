@@ -569,7 +569,10 @@ def _login_page(error: str = "") -> HTMLResponse:
 def _html_response(config: Config, request: Request | None = None) -> HTMLResponse:
     if request is not None and _basic_auth_configured() and not _request_authorized(request, config):
         return _login_page()
-    response = HTMLResponse(dash._page_with_bootstrap(config))
+    base_path = ""
+    if request is not None:
+        base_path = str(request.headers.get("X-Forwarded-Prefix") or request.headers.get("X-Script-Name") or "")
+    response = HTMLResponse(dash._page_with_bootstrap(config, base_path=base_path))
     token = dash._dashboard_token(config)
     client_host = getattr(getattr(request, "client", None), "host", "") if request is not None else "127.0.0.1"
     if token and _is_loopback_host(client_host):
