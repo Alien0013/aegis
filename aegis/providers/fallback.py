@@ -128,6 +128,24 @@ def reduce_long_context_tier(provider, exc: Exception, *, target_context: int = 
     }
 
 
+def _report_provider_failure(provider: Provider, reason: str) -> bool:
+    """Notify a provider's auth strategy about a classified failure.
+
+    API-key pools use this signal to rotate or bench credentials. The boolean
+    return value lets the fallback chain retry the same provider once when the
+    failure class is explicitly recoverable by credential rotation (auth/billing),
+    instead of burning a configured fallback provider unnecessarily.
+    """
+    auth = getattr(provider, "auth", None)
+    report = getattr(auth, "report", None)
+    if not callable(report):
+        return False
+    try:
+        return bool(report(reason))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 class FallbackProvider:
     def __init__(self, primary: Provider, fallbacks: list[Provider]):
         self.primary = primary
@@ -173,63 +191,74 @@ class FallbackProvider:
         chain = self._chain()
         last_err: Exception | None = None
         for index, prov in enumerate(chain):
-            attempt = {
-                "index": index,
-                "provider": getattr(prov, "name", ""),
-                "model": getattr(prov, "model", ""),
-                "api_mode": str(getattr(getattr(prov, "api_mode", ""), "value", getattr(prov, "api_mode", "")) or ""),
-            }
-            if callable(on_attempt):
+            rotated_retry = False
+            while True:
+                attempt = {
+                    "index": index,
+                    "provider": getattr(prov, "name", ""),
+                    "model": getattr(prov, "model", ""),
+                    "api_mode": str(getattr(getattr(prov, "api_mode", ""), "value", getattr(prov, "api_mode", "")) or ""),
+                }
+                if rotated_retry:
+                    attempt["retry"] = "credential_rotation"
+                if callable(on_attempt):
+                    try:
+                        on_attempt({**attempt, "event": "pre"})
+                    except Exception:  # noqa: BLE001
+                        pass
+                import time
+                started = time.perf_counter()
                 try:
-                    on_attempt({**attempt, "event": "pre"})
-                except Exception:  # noqa: BLE001
-                    pass
-            import time
-            started = time.perf_counter()
-            try:
-                resp = prov.complete(messages, tools=tools, **kw)
-                self.active = prov
-                if callable(on_attempt):
-                    try:
-                        on_attempt({
-                            **attempt,
-                            "event": "post",
-                            "status": "ok",
-                            "duration_ms": int((time.perf_counter() - started) * 1000),
-                        })
-                    except Exception:  # noqa: BLE001
-                        pass
-                return resp
-            except Exception as e:  # noqa: BLE001
-                reason = classify_provider_error(e)
-                action = recovery_action(reason)
-                self.last_trigger = (getattr(prov, "name", "?"), reason)
-                last_err = e
-                if callable(on_attempt):
-                    try:
-                        on_attempt({
-                            **attempt,
-                            "event": "error",
-                            "status": "error",
-                            "duration_ms": int((time.perf_counter() - started) * 1000),
-                            "error": {
-                                "type": type(e).__name__,
-                                "message": str(e),
-                                "reason": reason,
-                                "recovery": action,
-                            },
-                        })
-                    except Exception:  # noqa: BLE001
-                        pass
-                # content_policy / context_overflow: another provider can't fix it (the request
-                # itself is the problem) — stop failing over and let the caller handle it
-                # (the loop compresses on context_overflow). Saves wasted calls down the chain.
-                if action in ("abort", "compress"):
-                    raise
-                from .._log import info
-                info(f"fallback: {getattr(prov, 'name', '?')} failed ({reason}); "
-                     + ("trying next provider" if prov is not chain[-1] else "chain exhausted"))
-                continue
+                    resp = prov.complete(messages, tools=tools, **kw)
+                    self.active = prov
+                    if callable(on_attempt):
+                        try:
+                            on_attempt({
+                                **attempt,
+                                "event": "post",
+                                "status": "ok",
+                                "duration_ms": int((time.perf_counter() - started) * 1000),
+                            })
+                        except Exception:  # noqa: BLE001
+                            pass
+                    return resp
+                except Exception as e:  # noqa: BLE001
+                    reason = classify_provider_error(e)
+                    action = recovery_action(reason)
+                    credential_rotated = _report_provider_failure(prov, reason)
+                    self.last_trigger = (getattr(prov, "name", "?"), reason)
+                    last_err = e
+                    if callable(on_attempt):
+                        try:
+                            on_attempt({
+                                **attempt,
+                                "event": "error",
+                                "status": "error",
+                                "duration_ms": int((time.perf_counter() - started) * 1000),
+                                "error": {
+                                    "type": type(e).__name__,
+                                    "message": str(e),
+                                    "reason": reason,
+                                    "recovery": action,
+                                    "credential_rotated": credential_rotated,
+                                },
+                            })
+                        except Exception:  # noqa: BLE001
+                            pass
+                    # content_policy / context_overflow: another provider can't fix it (the request
+                    # itself is the problem) — stop failing over and let the caller handle it
+                    # (the loop compresses on context_overflow). Saves wasted calls down the chain.
+                    if action in ("abort", "compress"):
+                        raise
+                    from .._log import info
+                    if action == "rotate" and credential_rotated and not rotated_retry:
+                        rotated_retry = True
+                        info(f"fallback: {getattr(prov, 'name', '?')} failed ({reason}); "
+                             "retrying with rotated credential")
+                        continue
+                    info(f"fallback: {getattr(prov, 'name', '?')} failed ({reason}); "
+                         + ("trying next provider" if prov is not chain[-1] else "chain exhausted"))
+                    break
         raise last_err or RuntimeError("all providers failed")
 
     def cancel_response(self, response_id: str) -> dict | None:

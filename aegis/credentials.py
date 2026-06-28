@@ -98,9 +98,9 @@ class CredentialPool:
         self._idx = (self._idx + 1) % len(self.keys)
         return True
 
-    def report(self, kind: str, key: str | None = None) -> None:
+    def report(self, kind: str, key: str | None = None) -> bool:
         """Apply pool policy for a classified failure: billing -> cooldown + rotate; rate_limit
-        / auth -> rotate."""
+        / auth -> rotate. Returns True when a different credential can be tried immediately."""
         key = key or self.current()
         if kind == "billing" and key:
             with _LOCK:
@@ -108,9 +108,10 @@ class CredentialPool:
                 self._section(st).setdefault("cooldown", {})[_mask(key)] = (
                     _now() + timedelta(hours=self.cooldown_hours)).isoformat()
                 _save_state(st)
-            self.rotate()
+            return self.rotate()
         elif kind in ("rate_limit", "auth"):
-            self.rotate()
+            return self.rotate()
+        return False
 
     def record_use(self, key: str | None = None) -> None:
         key = key or self.current()

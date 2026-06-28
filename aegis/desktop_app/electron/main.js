@@ -50,6 +50,7 @@ const {
   pauseGatewayForUpdate,
   resumeGatewayAfterUpdate,
 } = require("./gateway-update-coordination.cjs");
+const { adoptServedDashboardToken } = require("./dashboard-token.cjs");
 const { desktopUninstallPlan } = require("./desktop-uninstall.cjs");
 const {
   initialDesktopLifecycle,
@@ -452,6 +453,20 @@ function waitForBackendReadyAnnouncement(timeoutMs = 2500) {
   ]);
 }
 
+async function adoptLocalDashboardToken() {
+  if (remoteConnection().enabled || !backendBaseUrl() || !token) return token;
+  const servedToken = await adoptServedDashboardToken(backendBaseUrl(), token, {
+    childAlive: () => Boolean(backend && !backend.killed && backend.exitCode === null),
+    label: "AEGIS backend",
+    rememberLog: (line) => log(line),
+  });
+  if (servedToken && servedToken !== token) {
+    token = servedToken;
+    dashboardUrl = dashboardUrlForBase(localBackendBaseUrl(), token);
+  }
+  return token;
+}
+
 function connectionDescriptor() {
   const baseUrl = backendBaseUrl();
   const remote = remoteConnection();
@@ -696,6 +711,7 @@ async function onBackendCrash() {
   try {
     await startBackend();
     await waitForBackendReadyAnnouncement(2500);
+    await adoptLocalDashboardToken();
     await probe(`${backendBaseUrl()}/api/health`, 50);
     if (win && !win.isDestroyed()) win.loadURL(route(DEFAULT_ROUTE));
   } catch (e) { log(`restart failed: ${e.message}`); onBackendCrash(); }
@@ -978,6 +994,7 @@ async function run() {
     });
     boot({ pct: 30, message: "Waiting for the agent to come online…" });
     const readyAnnouncement = await waitForBackendReadyAnnouncement(2500);
+    await adoptLocalDashboardToken();
     await probe(`${backendBaseUrl()}/api/health`, readyAnnouncement ? 20 : 70, (done, total) =>
       boot({ pct: 30 + Math.round((done / total) * 55), message: "Waiting for the agent to come online…" }));
     boot({ pct: 90, message: "Opening AEGIS…" });

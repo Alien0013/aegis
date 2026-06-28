@@ -1914,6 +1914,61 @@ def test_fallback_provider_retries():
     assert FallbackProvider(Down(), [Up()]).complete([]).text == "ok"
 
 
+def test_fallback_provider_retries_primary_after_auth_rotation():
+    from aegis.providers.chat_completions import ProviderHTTPError
+    from aegis.providers.fallback import FallbackProvider
+    from aegis.types import LLMResponse
+
+    class RotatingAuth:
+        def __init__(self):
+            self.key_index = 0
+            self.reports: list[str] = []
+
+        def report(self, kind: str) -> bool:
+            self.reports.append(kind)
+            self.key_index += 1
+            return True
+
+    class Primary:
+        context_length = 64_000
+        name = "primary"
+        model = "m"
+        api_mode = None
+
+        def __init__(self):
+            self.auth = RotatingAuth()
+            self.calls: list[int] = []
+
+        def describe(self): return self.name
+
+        def complete(self, *a, **k):
+            self.calls.append(self.auth.key_index)
+            if self.auth.key_index == 0:
+                raise ProviderHTTPError(401, "invalid api key")
+            return LLMResponse(text="primary-ok")
+
+    class Fallback(Primary):
+        name = "fallback"
+
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        def complete(self, *a, **k):
+            self.calls.append(self.auth.key_index)
+            return LLMResponse(text="fallback-ok")
+
+    primary = Primary()
+    fallback = Fallback()
+    provider = FallbackProvider(primary, [fallback])
+
+    assert provider.complete([]).text == "primary-ok"
+    assert primary.calls == [0, 1]
+    assert primary.auth.reports == ["auth"]
+    assert fallback.calls == []
+    assert provider.active is primary
+
+
 def test_fallback_provider_uses_active_first_after_failover():
     from aegis.providers.fallback import FallbackProvider
     from aegis.types import LLMResponse

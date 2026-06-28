@@ -113,14 +113,19 @@ class ApiKeyAuth(AuthProvider):
         self._idx = (self._idx + 1) % len(simple)
         return True
 
-    def report(self, kind: str) -> None:
+    def report(self, kind: str) -> bool:
         """Apply credential-pool failure policy for a classified error kind
-        (billing -> cooldown+rotate; rate_limit/auth -> rotate)."""
+        (billing -> cooldown+rotate; rate_limit/auth -> rotate).
+
+        Returns True when a different credential is now active and the caller can
+        safely retry the same provider once before escalating to a fallback.
+        """
         pool = self._credential_pool()
         if pool is not None:
-            pool.report(kind)
+            return bool(pool.report(kind))
         elif kind in ("billing", "rate_limit", "auth"):
-            self.rotate()
+            return self.rotate()
+        return False
 
     def available(self) -> bool:
         return self.scheme == "none" or self._key() is not None

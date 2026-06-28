@@ -149,6 +149,31 @@ def header_snapshot(agent: Any) -> dict:
     }
 
 
+def ready_header(agent: Any, config: Config) -> dict:
+    """Header payload for the initial Ink handshake.
+
+    The full-screen terminal should surface provider setup/readiness before the
+    user sends a prompt.  Keep the status-bar fields from ``header_snapshot`` and
+    attach a small nested setup object for the welcome banner.
+    """
+
+    header = header_snapshot(agent)
+    header["setup"] = setup_status(config)
+    return header
+
+
+_BUSY_MODE_HINTS = {
+    "queue": "new input waits behind the active run",
+    "steer": "new input is sent as guidance to the active run",
+    "interrupt": "new input stops the active run and starts fresh",
+}
+
+
+def _busy_mode(value: Any) -> str:
+    mode = str(value or "queue").strip().lower()
+    return mode if mode in _BUSY_MODE_HINTS else "queue"
+
+
 class TuiGateway:
     """Serves one Ink client and drives one agent for the life of the connection."""
 
@@ -168,6 +193,8 @@ class TuiGateway:
         self._running = False
         self._agent = None
         self._runner = None
+        self._queued_input = ""
+        self._queued_lock = threading.Lock()
 
         # answer bridge (worker thread blocks until the client replies)
         self._answer_event: threading.Event | None = None
@@ -257,6 +284,52 @@ class TuiGateway:
         if result == "break":
             self._emit_threadsafe({"type": "exit"})
 
+    # ------------------------------------------------------------- busy input
+    def _queue_input(self, text: str) -> None:
+        clean = str(text or "").strip()
+        if not clean:
+            return
+        with self._queued_lock:
+            self._queued_input = f"{self._queued_input}\n\n{clean}" if self._queued_input else clean
+
+    def _pop_queued_input(self) -> str:
+        with self._queued_lock:
+            text, self._queued_input = self._queued_input, ""
+        return text
+
+    def _call_cancel(self) -> None:
+        agent = self._agent
+        for name in ("cancel", "interrupt"):
+            fn = getattr(agent, name, None)
+            if not callable(fn):
+                continue
+            try:
+                fn()
+            except Exception:  # noqa: BLE001
+                pass
+            return
+
+    def _handle_busy_input(self, text: str) -> None:
+        clean = str(text or "").strip()
+        if not clean:
+            return
+        mode = _busy_mode(self.config.get("gateway.busy_mode", "queue"))
+        if mode == "steer":
+            steer = getattr(self._agent, "steer", None)
+            if callable(steer):
+                try:
+                    if steer(clean):
+                        self._emit_threadsafe({"type": "output", "text": "  steered input into the running turn\n"})
+                        return
+                except Exception as exc:  # noqa: BLE001
+                    self._emit_threadsafe({"type": "output", "text": f"  steer failed; queued input instead ({exc})\n"})
+        elif mode == "interrupt":
+            self._emit_threadsafe({"type": "output", "text": "  interrupting current turn; queued input will run next\n"})
+            self._call_cancel()
+        else:
+            self._emit_threadsafe({"type": "output", "text": "  queued input for the next turn\n"})
+        self._queue_input(clean)
+
     # --------------------------------------------------------------- server
     async def _handler(self, ws) -> None:
         self._loop = asyncio.get_running_loop()
@@ -278,7 +351,7 @@ class TuiGateway:
         # banner into the pane, then ready
         from .cli import repl
         commands = [{"name": c.name, "summary": c.summary} for c in repl.SLASH_COMMANDS]
-        await ws.send(json.dumps({"type": "ready", "header": header_snapshot(self._agent),
+        await ws.send(json.dumps({"type": "ready", "header": ready_header(self._agent, self.config),
                                   "commands": commands}))
         # The Ink client renders its own themed brand banner on `ready`; sending the
         # plain Rich banner here too would duplicate it, so the terminal banner is
@@ -310,10 +383,11 @@ class TuiGateway:
     async def _dispatch(self, ws, msg: dict) -> None:
         kind = msg.get("type")
         if kind == "input":
-            if self._running:
-                return
             text = str(msg.get("text") or "").strip()
             if not text:
+                return
+            if self._running:
+                self._handle_busy_input(text)
                 return
             self._running = True
             await self._emit_status(running=True)
@@ -358,16 +432,24 @@ class TuiGateway:
 
     async def _run_turn(self, ws, text: str) -> None:
         loop = asyncio.get_running_loop()
+        queued = ""
         try:
             await loop.run_in_executor(None, self._do_turn, text)
         finally:
-            self._running = False
             try:
                 self.store.save(self._agent.session)
             except Exception:  # noqa: BLE001
                 pass
             self._emit_threadsafe({"type": "turn_done"})
-            await self._emit_status(running=False)
+            queued = self._pop_queued_input()
+        if queued:
+            self._emit_threadsafe({"type": "output", "text": "  running queued input\n"})
+            self._running = True
+            await self._emit_status(running=True)
+            asyncio.create_task(self._run_turn(ws, queued))
+            return
+        self._running = False
+        await self._emit_status(running=False)
 
     async def _emit_status(self, *, running: bool) -> None:
         if self._agent is None:

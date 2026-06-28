@@ -179,11 +179,14 @@ const BANNER_ASCII = [
 ];
 const TAGLINE = 'the local-first agent workbench you own';
 
+type SetupStatus = {provider_configured?: boolean; provider?: string; model?: string};
+
 type Header = {
-  brand?: string; model?: string; session_id?: string; session_title?: string;
+  brand?: string; model?: string; provider?: string; session_id?: string; session_title?: string;
   ctx_used?: number; ctx_window?: number; ctx_percent?: number;
   input_tokens?: number; output_tokens?: number; cost?: number;
   reasoning?: string; perms?: string; busy?: string; cwd?: string; version?: string;
+  setup?: SetupStatus;
 };
 
 type Msg =
@@ -528,6 +531,10 @@ const Banner: React.FC<{header: Header; g: G; uni: boolean}> = ({header, g, uni}
   const art = uni ? BANNER_UNI : BANNER_ASCII;
   const model = header.model || '?';
   const session = (header.session_title || header.session_id || 'new session').slice(0, 36);
+  const setup = header.setup;
+  const setupMissing = setup && setup.provider_configured === false;
+  const setupProvider = setup?.provider || header.provider || 'provider';
+  const setupModel = setup?.model || header.model || '';
   return (
     <Box flexDirection="column" marginLeft={1} marginTop={1}>
       {art.map((line, i) => (
@@ -542,6 +549,11 @@ const Banner: React.FC<{header: Header; g: G; uni: boolean}> = ({header, g, uni}
         <Text color={MUTED}>{`  ${g.sep}  ${session}  ${g.sep}  `}</Text>
         <Text color={MUTED}>{`type a message, or /help`}</Text>
       </Box>
+      {setupMissing ? (
+        <Box>
+          <Text color={AMBER}>{`  ${g.dot} provider setup needed: ${setupProvider}${setupModel ? `/${setupModel}` : ''} is not ready — run /setup`}</Text>
+        </Box>
+      ) : null}
       <Box marginTop={1}><Text color={BORDER}>{g.rule.repeat(48)}</Text></Box>
     </Box>
   );
@@ -770,7 +782,8 @@ const App: React.FC<{url: string; token: string}> = ({url, token}) => {
       setAsking(null);
       return;
     }
-    if (running) { setPending([]); return; }
+    // busy submission is sent to the gateway; it applies queue/steer/interrupt policy
+    // and returns a notice frame, so typed prompts are never silently discarded mid-run.
     // trailing backslash = newline continuation: keep composing instead of sending
     if (text.endsWith('\\')) {
       setPending((p) => [...p, text.slice(0, -1)]);

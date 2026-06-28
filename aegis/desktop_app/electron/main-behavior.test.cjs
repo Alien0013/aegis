@@ -82,6 +82,15 @@ test("restart and splash lifecycle is single-flight", () => {
   requireSnippet("quitting || restartingBackend");
 });
 
+test("boot flow adopts the dashboard session token served by the backend", () => {
+  requireSnippet('require("./dashboard-token.cjs")');
+  requireSnippet("function adoptLocalDashboardToken");
+  requireSnippet("adoptServedDashboardToken(backendBaseUrl(), token");
+  requireSnippet("childAlive: () => Boolean(backend && !backend.killed && backend.exitCode === null)");
+  requireSnippet("dashboardUrl = dashboardUrlForBase(localBackendBaseUrl(), token);");
+  requireSnippet("await adoptLocalDashboardToken();");
+});
+
 test("auto-updater setup is idempotent and bounded", () => {
   requireSnippet("autoUpdaterConfigured");
   requireSnippet("updateCheckInFlight");

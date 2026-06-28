@@ -6,6 +6,8 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import threading
+import types
 from pathlib import Path
 
 import pytest
@@ -71,6 +73,140 @@ def test_gateway_setup_status_uses_provider_readiness(monkeypatch):
     )
     ready = tui_gateway.setup_status(Config.load())
     assert ready == {"provider_configured": True, "provider": "openai", "model": "gpt-5.5"}
+
+
+def test_gateway_ready_header_merges_setup_readiness(monkeypatch):
+    from aegis import tui_gateway
+
+    monkeypatch.setattr(tui_gateway, "header_snapshot", lambda _agent: {"brand": "AEGIS"})
+    monkeypatch.setattr(
+        tui_gateway,
+        "setup_status",
+        lambda _config: {"provider_configured": False, "provider": "openai", "model": "gpt-test"},
+    )
+
+    header = tui_gateway.ready_header(object(), Config.load())
+
+    assert header["brand"] == "AEGIS"
+    assert header["setup"] == {"provider_configured": False, "provider": "openai", "model": "gpt-test"}
+
+
+async def _wait_until(predicate, *, timeout: float = 2.0):
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        if predicate():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("condition was not met before timeout")
+
+
+def test_gateway_busy_input_queues_and_drains_after_current_turn(monkeypatch):
+    from aegis.tui_gateway import TuiGateway
+
+    cfg = Config.load()
+    cfg.data.setdefault("gateway", {})["busy_mode"] = "queue"
+    gateway = TuiGateway(cfg)
+    gateway._agent = types.SimpleNamespace(config=cfg)
+    frames: list[dict] = []
+    started = threading.Event()
+    release = threading.Event()
+    calls: list[str] = []
+
+    async def fake_status(*, running: bool):
+        frames.append({"type": "status", "running": running})
+
+    def fake_turn(text: str):
+        calls.append(text)
+        if text == "first":
+            started.set()
+            assert release.wait(2), "test did not release the first turn"
+
+    monkeypatch.setattr(gateway, "_emit_threadsafe", frames.append)
+    monkeypatch.setattr(gateway, "_emit_status", fake_status)
+    monkeypatch.setattr(gateway, "_do_turn", fake_turn)
+
+    async def drive():
+        await gateway._dispatch(None, {"type": "input", "text": "first"})
+        assert await asyncio.to_thread(started.wait, 2)
+        await gateway._dispatch(None, {"type": "input", "text": "second"})
+        release.set()
+        await _wait_until(lambda: calls == ["first", "second"] and gateway._running is False)
+
+    asyncio.run(drive())
+
+    assert calls == ["first", "second"]
+    assert any(
+        frame.get("type") == "output" and "queued input" in frame.get("text", "")
+        for frame in frames
+    )
+
+
+def test_gateway_busy_interrupt_cancels_and_queues(monkeypatch):
+    from aegis.tui_gateway import TuiGateway
+
+    cfg = Config.load()
+    cfg.data.setdefault("gateway", {})["busy_mode"] = "interrupt"
+    cancel_calls: list[bool] = []
+    gateway = TuiGateway(cfg)
+    gateway._agent = types.SimpleNamespace(config=cfg, cancel=lambda: cancel_calls.append(True))
+    frames: list[dict] = []
+    started = threading.Event()
+    release = threading.Event()
+    calls: list[str] = []
+
+    async def fake_status(*, running: bool):
+        frames.append({"type": "status", "running": running})
+
+    def fake_turn(text: str):
+        calls.append(text)
+        if text == "first":
+            started.set()
+            assert release.wait(2), "test did not release the first turn"
+
+    monkeypatch.setattr(gateway, "_emit_threadsafe", frames.append)
+    monkeypatch.setattr(gateway, "_emit_status", fake_status)
+    monkeypatch.setattr(gateway, "_do_turn", fake_turn)
+
+    async def drive():
+        await gateway._dispatch(None, {"type": "input", "text": "first"})
+        assert await asyncio.to_thread(started.wait, 2)
+        await gateway._dispatch(None, {"type": "input", "text": "second"})
+        assert cancel_calls == [True]
+        release.set()
+        await _wait_until(lambda: calls == ["first", "second"] and gateway._running is False)
+
+    asyncio.run(drive())
+
+    assert calls == ["first", "second"]
+    assert any(
+        frame.get("type") == "output" and "interrupting current turn" in frame.get("text", "")
+        for frame in frames
+    )
+
+
+def test_gateway_busy_steer_uses_live_agent_guidance(monkeypatch):
+    from aegis.tui_gateway import TuiGateway
+
+    cfg = Config.load()
+    cfg.data.setdefault("gateway", {})["busy_mode"] = "steer"
+    steered: list[str] = []
+    gateway = TuiGateway(cfg)
+    gateway._running = True
+    gateway._agent = types.SimpleNamespace(
+        config=cfg,
+        steer=lambda text: steered.append(text) or True,
+    )
+    frames: list[dict] = []
+    monkeypatch.setattr(gateway, "_emit_threadsafe", frames.append)
+
+    asyncio.run(gateway._dispatch(None, {"type": "input", "text": "nudge the run"}))
+
+    assert steered == ["nudge the run"]
+    assert gateway._running is True
+    assert any(
+        frame.get("type") == "output" and "steered input" in frame.get("text", "")
+        for frame in frames
+    )
 
 
 # ---------------------------------------------------------------------------- gating
@@ -153,6 +289,18 @@ def test_safe_event_stringifies_unknown_values():
     assert safe["duration_ms"] == 5
     assert "extra" not in safe  # only whitelisted keys survive
     json.dumps(safe)
+
+
+def test_ink_composer_keeps_busy_submissions_for_gateway_queue():
+    src = (_INK / "src" / "entry.tsx").read_text(encoding="utf-8")
+    assert "if (running) { setPending([]); return; }" not in src
+    assert "busy submission is sent to the gateway" in src
+
+
+def test_ink_banner_surfaces_setup_readiness():
+    src = (_INK / "src" / "entry.tsx").read_text(encoding="utf-8")
+    assert "provider setup needed" in src
+    assert "run /setup" in src
 
 
 def test_gateway_handshake_and_turn():

@@ -17,6 +17,7 @@ DESKTOP_FILES = (
     "package.json", "package-lock.json", "launch.js",
     "electron/main.js", "electron/main-behavior.test.cjs",
     "electron/api-proxy.cjs", "electron/api-proxy.test.cjs",
+    "electron/dashboard-token.cjs", "electron/dashboard-token.test.cjs",
     "electron/backend-ready.cjs", "electron/backend-ready.test.cjs",
     "electron/backend-env.cjs", "electron/backend-env.test.cjs",
     "electron/windows-user-env.cjs", "electron/windows-user-env.test.cjs",
