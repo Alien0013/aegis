@@ -48,6 +48,20 @@ def register(app, config, chat_runner):
         _require_request(request, config)
         return JSONResponse(setup_readiness_payload(config, source="dashboard"))
 
+    @app.get("/api/maturity")
+    async def api_maturity(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from ..maturity import build_maturity_report
+
+        return JSONResponse(build_maturity_report())
+
+    @app.get("/api/live-qa")
+    async def api_live_qa(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        from ..maturity import build_live_qa_matrix
+
+        return JSONResponse(build_live_qa_matrix())
+
     @app.get("/api/system/stats")
     async def api_system_stats(request: Request) -> JSONResponse:
         _require_request(request, config)

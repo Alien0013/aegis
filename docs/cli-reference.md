@@ -51,6 +51,7 @@ Generated from `aegis.cli.main.build_parser()`.
 | aegis lsp | inspect/install managed language-server support | `aegis lsp [-h] {status,install} ...` |
 | aegis lsp install | install a managed language server by id or extension | `aegis lsp install [-h] [--dry-run] server` |
 | aegis lsp status | show LSP/code-intelligence readiness | `aegis lsp status [-h]` |
+| aegis maturity | show architecture maturity and live-QA accounting | `aegis maturity [-h] [--json] [--check] [--write [WRITE]] [--verbose]` |
 | aegis mcp | manage MCP servers (or `serve` to be one) | `aegis mcp [-h] [--include INCLUDE] [--exclude EXCLUDE] [--all]                  [{list,add,remove,test,serve,catalog,install,tools,configure,login,picker}]                  [name] [cmd]` |
 | aegis memory | show/add/replace/remove/status long-term memory | `aegis memory [-h] [--old-text OLD_TEXT] [--user] [--yes]                     [--target {all,memory,user}]                     [{show,add,replace,remove,clear,status,setup,off,reset}]                     [text ...]` |
 | aegis migrate | migrate/normalize config (alias of `aegis config migrate`) | `aegis migrate [-h] [--dry-run] [--json] {xai} ...` |

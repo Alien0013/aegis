@@ -5817,6 +5817,14 @@ def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
         from .setup_readiness import setup_readiness_payload
 
         return setup_readiness_payload(config, source="dashboard")
+    if path == "/api/maturity":
+        from .maturity import build_maturity_report
+
+        return build_maturity_report()
+    if path == "/api/live-qa":
+        from .maturity import build_live_qa_matrix
+
+        return build_live_qa_matrix()
     if path == "/api/activity":
         from .activity import snapshot
 

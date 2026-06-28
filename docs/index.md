@@ -24,6 +24,8 @@ Use this page as the product map.
 | Memory, skills, and learning | [memory-skills.md](memory-skills.md) |
 | MCP | [mcp.md](mcp.md) |
 | Gateway and channels | [gateway.md](gateway.md) |
+| Maturity matrix | [maturity.md](maturity.md), [live-qa-matrix.md](live-qa-matrix.md), and [operations-contracts.md](operations-contracts.md) |
+| User guides | [configuration](user-guide/configuration.md), [messaging](user-guide/messaging.md), [cron](user-guide/cron.md), [sessions](user-guide/sessions.md), [browser](user-guide/browser.md), [TTS](user-guide/tts.md), [environment variables](user-guide/environment-variables.md), [Docker](user-guide/docker.md), [hooks](user-guide/hooks.md), [profile distributions](user-guide/profile-distributions.md) |
 | Tracing and evals | [tracing-evals.md](tracing-evals.md) |
 | Architecture | [architecture.md](architecture.md) |
 | Generated reference drift | `scripts/generate_reference_docs.py --check` through `scripts/verify_all.sh` |

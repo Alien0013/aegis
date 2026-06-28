@@ -153,8 +153,10 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/jobs/{job_id}/run | POST | api_job_run |
 | /api/jobs/{job_id}/runs | GET | api_job_runs |
 | /api/jobs/{job_id}/trigger | POST | api_job_trigger |
+| /api/live-qa | GET | api_live_qa |
 | /api/llm/oneshot | POST | api_llm_oneshot |
 | /api/logs | GET | api_logs |
+| /api/maturity | GET | api_maturity |
 | /api/mcp/catalog | GET | api_mcp_catalog |
 | /api/mcp/catalog/install | POST | api_mcp_catalog_install_body |
 | /api/mcp/catalog/{name}/install | POST | api_mcp_catalog_install |

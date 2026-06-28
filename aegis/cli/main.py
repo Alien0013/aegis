@@ -103,6 +103,41 @@ def cmd_verify(args, config: Config) -> int:
     return subprocess.call(cmd, cwd=root)
 
 
+def cmd_maturity(args, config: Config) -> int:
+    """Print the full-agent maturity matrix and live-QA accounting."""
+
+    from ..maturity import build_maturity_report, dumps_report, render_maturity_markdown, write_maturity_markdown
+
+    root = Path(__file__).resolve().parents[2]
+    report = build_maturity_report(root)
+    write_path = getattr(args, "write", None)
+    if write_path:
+        target = root / write_path if not Path(write_path).is_absolute() else Path(write_path)
+        write_maturity_markdown(target, root)
+        _print(f"wrote {target}")
+    if getattr(args, "json", False):
+        _print(dumps_report(report))
+    else:
+        summary = report["summary"]
+        _print("AEGIS maturity report")
+        _print(
+            f"Architecture layers: {summary['local_ready_layers']}/{summary['architecture_layers']} local-ready"
+        )
+        _print(
+            "Live QA targets: "
+            f"{summary['live_targets']} total; "
+            f"{summary['requires_credentials']} credentialed; "
+            f"{summary['manual_os_runners']} manual OS; "
+            f"{summary['live_claimed_ready']} claimed ready"
+        )
+        _print("Docs: docs/maturity.md, docs/live-qa-matrix.md, docs/operations-contracts.md")
+        if getattr(args, "verbose", False):
+            _print(render_maturity_markdown(report))
+    if getattr(args, "check", False) and not report.get("ok"):
+        return 1
+    return 0
+
+
 def _find_lsp_server(name: str):
     from ..lsp.servers import SERVERS
 
@@ -4434,6 +4469,13 @@ def build_parser() -> argparse.ArgumentParser:
     vf = sub.add_parser("verify", help="run the full Python/web/desktop/docs release gate")
     vf.add_argument("verify_args", nargs=argparse.REMAINDER, help="arguments passed to scripts/verify_all.sh")
     vf.set_defaults(func=cmd_verify)
+
+    mt = sub.add_parser("maturity", help="show architecture maturity and live-QA accounting")
+    mt.add_argument("--json", action="store_true", help="print the machine-readable maturity report")
+    mt.add_argument("--check", action="store_true", help="exit non-zero if local maturity proofs are incomplete")
+    mt.add_argument("--write", nargs="?", const="docs/maturity-report.md", help="write a Markdown report to the given path")
+    mt.add_argument("--verbose", action="store_true", help="include the rendered matrix in text output")
+    mt.set_defaults(func=cmd_maturity)
 
     lg = sub.add_parser("logs", help="tail agent/desktop/errors/gateway/gui logs")
     lg.add_argument(
