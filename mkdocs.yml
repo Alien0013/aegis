@@ -46,12 +46,16 @@ nav:
   - Memory, Skills & Learning: memory-skills.md
   - Gateway & Channels: gateway.md
   - Web Dashboard: dashboard.md
+  - Desktop Shell: desktop.md
   - Python SDK: sdk.md
   - MCP: mcp.md
   - Plugins: plugins.md
   - Tracing & Evals: tracing-evals.md
   - Serve API: serve.md
   - Security: security.md
+  - Internal / Planning:
+      - Dashboard Internal Map: DASHBOARD_INTERNAL_MAP.md
+      - Production Harness Plan: production-harness-plan.md
   - CLI Reference: cli.md
   - Generated References:
       - CLI Commands: cli-reference.md

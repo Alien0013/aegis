@@ -16,7 +16,7 @@ Use this page as the product map.
 | Full CLI reference | [cli.md](cli.md) and generated [cli-reference.md](cli-reference.md) |
 | Slash command reference | Generated [slash-commands.md](slash-commands.md) |
 | Browser dashboard | [dashboard.md](dashboard.md) |
-| Desktop app | [../desktop/README.md](../desktop/README.md) |
+| Desktop app | [desktop.md](desktop.md) |
 | OpenAI-compatible API and JSON-RPC | [serve.md](serve.md) and generated [api-routes.md](api-routes.md) |
 | Python SDK | [sdk.md](sdk.md) |
 | Providers and auth | [providers.md](providers.md) |

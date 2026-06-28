@@ -1,8 +1,8 @@
 export const systemStats = [
   { label: "Provider presets", value: "29", detail: "OpenAI-compatible, OAuth-capable, local, and hosted model routes share one config surface." },
-  { label: "Registered tools", value: "45", detail: "File, shell, web, browser, LSP, memory, skills, schedules, MCP, and agent-state tools are policy checked." },
-  { label: "Bundled skills", value: "41", detail: "Reusable SKILL.md playbooks teach the agent repeatable workflows and verification habits." },
-  { label: "Test baseline", value: "973+", detail: "Offline regression tests plus generated docs checks are the local proof baseline." },
+  { label: "Registered tools", value: "126", detail: "Generated from docs/tools-reference.md so public claims track the built-in registry." },
+  { label: "Bundled skills", value: "71", detail: "Reusable SKILL.md playbooks teach the agent repeatable workflows and verification habits." },
+  { label: "Test functions", value: "1,750+", detail: "Offline regression tests, generated docs checks, and release gates are the local proof baseline." },
 ];
 
 export const runtimeSteps = [
@@ -172,4 +172,10 @@ export const liveQaHighlights = [
   "Providers require real API-key or OAuth smoke tests before billing/auth readiness is claimed.",
   "Desktop parity requires Linux, Windows, and macOS installer/open/update/uninstall evidence.",
   "Every live proof records sanitized command, date, commit SHA, and failure reason without credentials.",
+];
+
+export const docsRouteIndex = [
+  ...documentationPillars.map((item) => ({ title: item.title, href: item.href, body: item.body })),
+  ...developerGuideCards.map((item) => ({ title: item.title, href: item.href, body: item.body })),
+  ...i18nLocales.map((item) => ({ title: item.label, href: item.href, body: item.note })),
 ];

@@ -8,6 +8,7 @@ party integration is ready unless a credentialed/manual smoke can prove it.
 from __future__ import annotations
 
 import json
+import shlex
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -45,7 +46,7 @@ ARCHITECTURE_LAYERS: tuple[ArchitectureLayer, ...] = (
         "Bounded conversation execution, provider calls, tool dispatch, continuation, compression, and role hygiene.",
         ("aegis/agent/agent.py", "aegis/agent/loop.py", "aegis/agent/governance.py"),
         "docs/maturity.md",
-        ("tests/test_agent_runtime.py", "tests/test_agentic_upgrades.py", "bash scripts/run_tests.sh"),
+        ("tests/test_agentic_upgrades.py", "tests/test_ultracode_loop.py", "bash scripts/run_tests.sh"),
     ),
     ArchitectureLayer(
         "prompt_context",
@@ -53,7 +54,7 @@ ARCHITECTURE_LAYERS: tuple[ArchitectureLayer, ...] = (
         "Stable/context/volatile prompt assembly, project references, context limits, scanner boundaries, and compression metadata.",
         ("aegis/agent/context.py", "aegis/context_refs.py", "aegis/agent/compaction.py"),
         "docs/maturity.md",
-        ("tests/test_context_refs.py", "tests/test_prompt_builder.py", "tests/test_agent_context.py"),
+        ("tests/test_context_command.py", "tests/test_coding_context.py", "tests/test_compaction_boundaries.py"),
     ),
     ArchitectureLayer(
         "tool_registry",
@@ -69,7 +70,7 @@ ARCHITECTURE_LAYERS: tuple[ArchitectureLayer, ...] = (
         "Foreground commands, background processes, process registry actions, PTY-adjacent execution, and backend isolation.",
         ("aegis/tools/process.py", "aegis/tools/process_registry.py", "aegis/tools/backends.py"),
         "docs/maturity.md",
-        ("tests/test_process_tool.py", "tests/test_terminal_backend.py", "tests/test_agent_perms.py"),
+        ("tests/test_tools.py", "tests/test_phases.py", "tests/test_agent_perms.py"),
     ),
     ArchitectureLayer(
         "memory_layers",
@@ -85,7 +86,7 @@ ARCHITECTURE_LAYERS: tuple[ArchitectureLayer, ...] = (
         "SQLite-backed sessions, search, lineage, run linkage, trace metadata, export, and crash recovery UX.",
         ("aegis/session.py", "aegis/session_checks.py", "aegis/runs.py"),
         "docs/maturity.md",
-        ("tests/test_session_store.py", "tests/test_session_checks.py", "tests/test_dashboard_fastapi.py"),
+        ("tests/test_session_checks.py", "tests/test_sessions_cli.py", "tests/test_memory_wiring.py"),
     ),
     ArchitectureLayer(
         "skills_curator",
@@ -93,7 +94,7 @@ ARCHITECTURE_LAYERS: tuple[ArchitectureLayer, ...] = (
         "SKILL.md packages, skill management, usage tracking, curation, archive/pin transitions, and self-learning candidates.",
         ("aegis/skills.py", "aegis/curator.py", "aegis/tools/skill_manage.py"),
         "docs/maturity.md",
-        ("tests/test_skills_parity_cli.py", "tests/test_curator.py", "tests/test_skill_manager_tool.py"),
+        ("tests/test_skills_parity_cli.py", "tests/test_compaction_curator.py", "tests/test_overhaul_wave1.py"),
     ),
     ArchitectureLayer(
         "gateway_messaging",
@@ -110,7 +111,7 @@ ARCHITECTURE_LAYERS: tuple[ArchitectureLayer, ...] = (
         "Durable scheduled jobs, scripts, delivery sinks, background jobs, dry-runs, previews, and dashboard controls.",
         ("aegis/cron.py", "aegis/tools/cronjob_tool.py", "aegis/dashboard_routes/cron_jobs.py"),
         "docs/maturity.md",
-        ("tests/test_cron.py", "tests/test_cron_cli.py", "tests/test_dashboard_fastapi.py"),
+        ("tests/test_cronjob_tool.py", "tests/test_cron_cli.py", "tests/test_dashboard_fastapi.py"),
     ),
     ArchitectureLayer(
         "delegation_subagents",
@@ -118,7 +119,7 @@ ARCHITECTURE_LAYERS: tuple[ArchitectureLayer, ...] = (
         "Isolated subagent spawning, background summaries, parent verification, kanban workers, and task orchestration.",
         ("aegis/tools/agentic.py", "aegis/background.py", "aegis/kanban_auto.py"),
         "docs/maturity.md",
-        ("tests/test_agentic_upgrades.py", "tests/test_background_jobs.py", "tests/test_kanban.py"),
+        ("tests/test_agentic_upgrades.py", "tests/test_typed_subagents.py", "tests/test_kanban_kernel.py"),
     ),
     ArchitectureLayer(
         "providers_auth",
@@ -152,7 +153,7 @@ ARCHITECTURE_LAYERS: tuple[ArchitectureLayer, ...] = (
         "Command approvals, redaction, dashboard token minimization, WebSocket tickets, file safety, and policy simulation.",
         ("aegis/tools/permissions.py", "aegis/redact.py", "aegis/tools/file_safety.py"),
         "docs/maturity.md",
-        ("tests/test_security.py", "tests/test_dashboard_web_token_safety.py", "docs/security.md"),
+        ("tests/test_smoke.py", "tests/test_dashboard_web_token_safety.py", "docs/security.md"),
     ),
     ArchitectureLayer(
         "extensibility",
@@ -160,7 +161,7 @@ ARCHITECTURE_LAYERS: tuple[ArchitectureLayer, ...] = (
         "Native extension points for plugins, MCP, webhooks, skills, tool gating, dashboards, and generated references.",
         ("aegis/plugins.py", "aegis/dashboard_routes/tools_mcp.py", "aegis/webhook.py"),
         "docs/maturity.md",
-        ("tests/test_plugins.py", "tests/test_mcp.py", "tests/test_webhooks.py"),
+        ("tests/test_plugins_update_cli.py", "tests/test_mcp_cli.py", "tests/test_webhook_cli.py"),
     ),
 )
 
@@ -168,26 +169,47 @@ ARCHITECTURE_LAYER_IDS: tuple[str, ...] = tuple(row.id for row in ARCHITECTURE_L
 
 
 LIVE_QA_TARGETS: tuple[LiveQATarget, ...] = (
-    LiveQATarget("telegram", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_TELEGRAM=1 bash scripts/run_tests.sh tests/live/test_telegram.py", ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")),
-    LiveQATarget("discord", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_DISCORD=1 bash scripts/run_tests.sh tests/live/test_discord.py", ("DISCORD_BOT_TOKEN", "DISCORD_CHANNEL_ID")),
-    LiveQATarget("slack", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_SLACK=1 bash scripts/run_tests.sh tests/live/test_slack.py", ("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN")),
-    LiveQATarget("matrix", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_MATRIX=1 bash scripts/run_tests.sh tests/live/test_matrix.py", ("MATRIX_HOMESERVER", "MATRIX_USER", "MATRIX_PASSWORD")),
-    LiveQATarget("signal", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_SIGNAL=1 bash scripts/run_tests.sh tests/live/test_signal.py", ("SIGNAL_CLI_ACCOUNT",)),
-    LiveQATarget("email", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_EMAIL=1 bash scripts/run_tests.sh tests/live/test_email.py", ("EMAIL_IMAP_HOST", "EMAIL_SMTP_HOST", "EMAIL_ADDRESS")),
-    LiveQATarget("sms", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_SMS=1 bash scripts/run_tests.sh tests/live/test_sms.py", ("TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM")),
-    LiveQATarget("whatsapp", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_WHATSAPP=1 bash scripts/run_tests.sh tests/live/test_whatsapp.py", ("WHATSAPP_BRIDGE_URL",)),
-    LiveQATarget("whatsapp_cloud", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_WHATSAPP_CLOUD=1 bash scripts/run_tests.sh tests/live/test_whatsapp_cloud.py", ("WHATSAPP_CLOUD_TOKEN", "WHATSAPP_CLOUD_PHONE_ID")),
-    LiveQATarget("ntfy", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_NTFY=1 bash scripts/run_tests.sh tests/live/test_ntfy.py", ("NTFY_TOPIC",)),
-    LiveQATarget("mattermost", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_MATTERMOST=1 bash scripts/run_tests.sh tests/live/test_mattermost.py", ("MATTERMOST_URL", "MATTERMOST_TOKEN")),
-    LiveQATarget("feishu", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_FEISHU=1 bash scripts/run_tests.sh tests/live/test_feishu.py", ("FEISHU_APP_ID", "FEISHU_APP_TOKEN")),
-    LiveQATarget("wecom", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_WECOM=1 bash scripts/run_tests.sh tests/live/test_wecom.py", ("WECOM_CORP_ID", "WECOM_AGENT_ID")),
-    LiveQATarget("weixin", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_WEIXIN=1 bash scripts/run_tests.sh tests/live/test_weixin.py", ("WEIXIN_APP_ID", "WEIXIN_TOKEN")),
-    LiveQATarget("dingtalk", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_DINGTALK=1 bash scripts/run_tests.sh tests/live/test_dingtalk.py", ("DINGTALK_CLIENT_ID", "DINGTALK_TOKEN")),
-    LiveQATarget("qqbot", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_QQBOT=1 bash scripts/run_tests.sh tests/live/test_qqbot.py", ("QQBOT_APP_ID", "QQBOT_TOKEN")),
-    LiveQATarget("yuanbao", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_YUANBAO=1 bash scripts/run_tests.sh tests/live/test_yuanbao.py", ("YUANBAO_SESSION",)),
-    LiveQATarget("openai_provider", "provider", "model", "tests/test_providers.py", "AEGIS_LIVE_OPENAI=1 bash scripts/run_tests.sh tests/live/test_openai_provider.py", ("OPENAI_API_KEY",)),
-    LiveQATarget("anthropic_provider", "provider", "model", "tests/test_providers.py", "AEGIS_LIVE_ANTHROPIC=1 bash scripts/run_tests.sh tests/live/test_anthropic_provider.py", ("ANTHROPIC_API_KEY",)),
-    LiveQATarget("google_provider", "provider", "model", "tests/test_providers.py", "AEGIS_LIVE_GOOGLE=1 bash scripts/run_tests.sh tests/live/test_google_provider.py", ("GOOGLE_API_KEY",)),
+    LiveQATarget("api_server", "gateway", "local_api", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_TARGET=api_server AEGIS_LIVE_API_SERVER=1 bash scripts/run_tests.sh tests/live/test_gateway_smoke.py", ("API_SERVER_KEY",)),
+    LiveQATarget("webhook", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_TARGET=webhook AEGIS_LIVE_WEBHOOK=1 bash scripts/run_tests.sh tests/live/test_gateway_smoke.py", ("WEBHOOK_SECRET", "WEBHOOK_URL")),
+    LiveQATarget("telegram", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_TARGET=telegram AEGIS_LIVE_TELEGRAM=1 bash scripts/run_tests.sh tests/live/test_gateway_smoke.py", ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")),
+    LiveQATarget("discord", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_TARGET=discord AEGIS_LIVE_DISCORD=1 bash scripts/run_tests.sh tests/live/test_gateway_smoke.py", ("DISCORD_BOT_TOKEN", "DISCORD_CHANNEL_ID")),
+    LiveQATarget("slack", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_TARGET=slack AEGIS_LIVE_SLACK=1 bash scripts/run_tests.sh tests/live/test_gateway_smoke.py", ("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN")),
+    LiveQATarget("matrix", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_TARGET=matrix AEGIS_LIVE_MATRIX=1 bash scripts/run_tests.sh tests/live/test_gateway_smoke.py", ("MATRIX_HOMESERVER", "MATRIX_USER", "MATRIX_PASSWORD")),
+    LiveQATarget("signal", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_TARGET=signal AEGIS_LIVE_SIGNAL=1 bash scripts/run_tests.sh tests/live/test_gateway_smoke.py", ("SIGNAL_CLI_ACCOUNT",)),
+    LiveQATarget("email", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_TARGET=email AEGIS_LIVE_EMAIL=1 bash scripts/run_tests.sh tests/live/test_gateway_smoke.py", ("EMAIL_IMAP_HOST", "EMAIL_SMTP_HOST", "EMAIL_ADDRESS", "EMAIL_PASSWORD")),
+    LiveQATarget("sms", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_TARGET=sms AEGIS_LIVE_SMS=1 bash scripts/run_tests.sh tests/live/test_gateway_smoke.py", ("TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM")),
+    LiveQATarget("whatsapp", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_TARGET=whatsapp AEGIS_LIVE_WHATSAPP=1 bash scripts/run_tests.sh tests/live/test_gateway_smoke.py", ("WHATSAPP_BRIDGE_URL",)),
+    LiveQATarget("whatsapp_cloud", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_TARGET=whatsapp_cloud AEGIS_LIVE_WHATSAPP_CLOUD=1 bash scripts/run_tests.sh tests/live/test_gateway_smoke.py", ("WHATSAPP_CLOUD_TOKEN", "WHATSAPP_CLOUD_PHONE_ID")),
+    LiveQATarget("ntfy", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_TARGET=ntfy AEGIS_LIVE_NTFY=1 bash scripts/run_tests.sh tests/live/test_gateway_smoke.py", ("NTFY_TOPIC",)),
+    LiveQATarget("mattermost", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_TARGET=mattermost AEGIS_LIVE_MATTERMOST=1 bash scripts/run_tests.sh tests/live/test_gateway_smoke.py", ("MATTERMOST_URL", "MATTERMOST_BOT_TOKEN")),
+    LiveQATarget("homeassistant", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_TARGET=homeassistant AEGIS_LIVE_HOMEASSISTANT=1 bash scripts/run_tests.sh tests/live/test_gateway_smoke.py", ("HOMEASSISTANT_CHANNEL_OUTBOUND_URL",)),
+    LiveQATarget("dingtalk", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_TARGET=dingtalk AEGIS_LIVE_DINGTALK=1 bash scripts/run_tests.sh tests/live/test_gateway_smoke.py", ("DINGTALK_CLIENT_ID", "DINGTALK_TOKEN")),
+    LiveQATarget("feishu", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_TARGET=feishu AEGIS_LIVE_FEISHU=1 bash scripts/run_tests.sh tests/live/test_gateway_smoke.py", ("FEISHU_APP_ID", "FEISHU_APP_TOKEN")),
+    LiveQATarget("wecom", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_TARGET=wecom AEGIS_LIVE_WECOM=1 bash scripts/run_tests.sh tests/live/test_gateway_smoke.py", ("WECOM_CORP_ID", "WECOM_AGENT_ID")),
+    LiveQATarget("weixin", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_TARGET=weixin AEGIS_LIVE_WEIXIN=1 bash scripts/run_tests.sh tests/live/test_gateway_smoke.py", ("WEIXIN_APP_ID", "WEIXIN_TOKEN")),
+    LiveQATarget("bluebubbles", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_TARGET=bluebubbles AEGIS_LIVE_BLUEBUBBLES=1 bash scripts/run_tests.sh tests/live/test_gateway_smoke.py", ("BLUEBUBBLES_CHANNEL_OUTBOUND_URL",)),
+    LiveQATarget("qqbot", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_TARGET=qqbot AEGIS_LIVE_QQBOT=1 bash scripts/run_tests.sh tests/live/test_gateway_smoke.py", ("QQBOT_APP_ID", "QQBOT_TOKEN")),
+    LiveQATarget("yuanbao", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_TARGET=yuanbao AEGIS_LIVE_YUANBAO=1 bash scripts/run_tests.sh tests/live/test_gateway_smoke.py", ("YUANBAO_SESSION",)),
+    LiveQATarget("relay", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_TARGET=relay AEGIS_LIVE_RELAY=1 bash scripts/run_tests.sh tests/live/test_gateway_smoke.py", ("RELAY_CHANNEL_OUTBOUND_URL",)),
+    LiveQATarget("msgraph_webhook", "gateway", "messaging", "tests/test_gateway_adapter_contract.py", "AEGIS_LIVE_TARGET=msgraph_webhook AEGIS_LIVE_MSGRAPH_WEBHOOK=1 bash scripts/run_tests.sh tests/live/test_gateway_smoke.py", ("MSGRAPH_WEBHOOK_CHANNEL_OUTBOUND_URL",)),
+    LiveQATarget("openai_provider", "provider", "model", "tests/test_providers.py", "AEGIS_LIVE_PROVIDER=openai AEGIS_LIVE_OPENAI=1 bash scripts/run_tests.sh tests/live/test_provider_smoke.py", ("OPENAI_API_KEY",)),
+    LiveQATarget("anthropic_provider", "provider", "model", "tests/test_providers.py", "AEGIS_LIVE_PROVIDER=anthropic AEGIS_LIVE_ANTHROPIC=1 bash scripts/run_tests.sh tests/live/test_provider_smoke.py", ("ANTHROPIC_API_KEY",)),
+    LiveQATarget("google_provider", "provider", "model", "tests/test_providers.py", "AEGIS_LIVE_PROVIDER=google AEGIS_LIVE_GOOGLE=1 bash scripts/run_tests.sh tests/live/test_provider_smoke.py", ("GEMINI_API_KEY", "GOOGLE_API_KEY")),
+    LiveQATarget("openrouter_provider", "provider", "model", "tests/test_providers.py", "AEGIS_LIVE_PROVIDER=openrouter AEGIS_LIVE_OPENROUTER=1 bash scripts/run_tests.sh tests/live/test_provider_smoke.py", ("OPENROUTER_API_KEY",)),
+    LiveQATarget("groq_provider", "provider", "model", "tests/test_providers.py", "AEGIS_LIVE_PROVIDER=groq AEGIS_LIVE_GROQ=1 bash scripts/run_tests.sh tests/live/test_provider_smoke.py", ("GROQ_API_KEY",)),
+    LiveQATarget("deepseek_provider", "provider", "model", "tests/test_providers.py", "AEGIS_LIVE_PROVIDER=deepseek AEGIS_LIVE_DEEPSEEK=1 bash scripts/run_tests.sh tests/live/test_provider_smoke.py", ("DEEPSEEK_API_KEY",)),
+    LiveQATarget("xai_provider", "provider", "model", "tests/test_providers.py", "AEGIS_LIVE_PROVIDER=xai AEGIS_LIVE_XAI=1 bash scripts/run_tests.sh tests/live/test_provider_smoke.py", ("XAI_API_KEY",)),
+    LiveQATarget("mistral_provider", "provider", "model", "tests/test_providers.py", "AEGIS_LIVE_PROVIDER=mistral AEGIS_LIVE_MISTRAL=1 bash scripts/run_tests.sh tests/live/test_provider_smoke.py", ("MISTRAL_API_KEY",)),
+    LiveQATarget("together_provider", "provider", "model", "tests/test_providers.py", "AEGIS_LIVE_PROVIDER=together AEGIS_LIVE_TOGETHER=1 bash scripts/run_tests.sh tests/live/test_provider_smoke.py", ("TOGETHER_API_KEY",)),
+    LiveQATarget("huggingface_provider", "provider", "model", "tests/test_providers.py", "AEGIS_LIVE_PROVIDER=huggingface AEGIS_LIVE_HUGGINGFACE=1 bash scripts/run_tests.sh tests/live/test_provider_smoke.py", ("HF_TOKEN", "HUGGINGFACE_API_KEY")),
+    LiveQATarget("novita_provider", "provider", "model", "tests/test_providers.py", "AEGIS_LIVE_PROVIDER=novita AEGIS_LIVE_NOVITA=1 bash scripts/run_tests.sh tests/live/test_provider_smoke.py", ("NOVITA_API_KEY",)),
+    LiveQATarget("qwen_provider", "provider", "model", "tests/test_providers.py", "AEGIS_LIVE_PROVIDER=qwen AEGIS_LIVE_QWEN=1 bash scripts/run_tests.sh tests/live/test_provider_smoke.py", ("QWEN_API_KEY", "DASHSCOPE_API_KEY")),
+    LiveQATarget("nvidia_provider", "provider", "model", "tests/test_providers.py", "AEGIS_LIVE_PROVIDER=nvidia AEGIS_LIVE_NVIDIA=1 bash scripts/run_tests.sh tests/live/test_provider_smoke.py", ("NVIDIA_API_KEY",)),
+    LiveQATarget("dashscope_provider", "provider", "model", "tests/test_providers.py", "AEGIS_LIVE_PROVIDER=dashscope AEGIS_LIVE_DASHSCOPE=1 bash scripts/run_tests.sh tests/live/test_provider_smoke.py", ("DASHSCOPE_API_KEY",)),
+    LiveQATarget("cerebras_provider", "provider", "model", "tests/test_providers.py", "AEGIS_LIVE_PROVIDER=cerebras AEGIS_LIVE_CEREBRAS=1 bash scripts/run_tests.sh tests/live/test_provider_smoke.py", ("CEREBRAS_API_KEY",)),
+    LiveQATarget("perplexity_provider", "provider", "model", "tests/test_providers.py", "AEGIS_LIVE_PROVIDER=perplexity AEGIS_LIVE_PERPLEXITY=1 bash scripts/run_tests.sh tests/live/test_provider_smoke.py", ("PERPLEXITY_API_KEY",)),
+    LiveQATarget("fireworks_provider", "provider", "model", "tests/test_providers.py", "AEGIS_LIVE_PROVIDER=fireworks AEGIS_LIVE_FIREWORKS=1 bash scripts/run_tests.sh tests/live/test_provider_smoke.py", ("FIREWORKS_API_KEY",)),
+    LiveQATarget("sambanova_provider", "provider", "model", "tests/test_providers.py", "AEGIS_LIVE_PROVIDER=sambanova AEGIS_LIVE_SAMBANOVA=1 bash scripts/run_tests.sh tests/live/test_provider_smoke.py", ("SAMBANOVA_API_KEY",)),
     LiveQATarget("desktop_linux", "desktop", "installer", "desktop", "AEGIS_LIVE_DESKTOP_LINUX=1 bash scripts/run_tests.sh tests/live/test_desktop_linux.py", manual_runner="Linux desktop runner"),
     LiveQATarget("desktop_windows", "desktop", "installer", "desktop", "AEGIS_LIVE_DESKTOP_WINDOWS=1 pwsh -File tests/live/test_desktop_windows.ps1", manual_runner="Windows desktop runner"),
     LiveQATarget("desktop_macos", "desktop", "installer", "desktop", "AEGIS_LIVE_DESKTOP_MACOS=1 bash tests/live/test_desktop_macos.sh", manual_runner="macOS notarized desktop runner"),
@@ -213,6 +235,30 @@ def _exists(root: Path, rel: str) -> bool:
     return (root / rel).exists()
 
 
+def _command_repo_paths(command: str) -> list[str]:
+    paths: list[str] = []
+    for token in shlex.split(command):
+        if token.startswith(("tests/", "scripts/", "docs/", "aegis/", "desktop/", "web/", "site-next/")):
+            paths.append(token)
+    return paths
+
+
+def _proof_exists(root: Path, proof: str) -> bool:
+    proof = str(proof or "").strip()
+    if not proof:
+        return False
+    paths = _command_repo_paths(proof)
+    if paths:
+        return all(_exists(root, path) for path in paths)
+    if proof.startswith(("tests/", "scripts/", "docs/", "aegis/", "desktop", "web", "site-next/")):
+        return _exists(root, proof)
+    return True
+
+
+def _command_path_status(root: Path, command: str) -> dict[str, bool]:
+    return {path: _exists(root, path) for path in _command_repo_paths(command)}
+
+
 def _count_markdown(root: Path, rel: str) -> int:
     base = root / rel
     if not base.exists():
@@ -232,7 +278,8 @@ def _count_locale_dirs(root: Path) -> int:
 def _layer_row(layer: ArchitectureLayer, root: Path) -> dict[str, Any]:
     source_exists = {path: _exists(root, path) for path in layer.source_paths}
     doc_exists = _exists(root, layer.doc)
-    local_ready = all(source_exists.values()) and doc_exists and bool(layer.local_proofs)
+    local_proof_exists = {proof: _proof_exists(root, proof) for proof in layer.local_proofs}
+    local_ready = all(source_exists.values()) and doc_exists and bool(local_proof_exists) and all(local_proof_exists.values())
     row = asdict(layer)
     row.update(
         {
@@ -241,6 +288,7 @@ def _layer_row(layer: ArchitectureLayer, root: Path) -> dict[str, Any]:
             "live_requirements": list(layer.live_requirements),
             "source_exists": source_exists,
             "doc_exists": doc_exists,
+            "local_proof_exists": local_proof_exists,
             "status": "local-ready" if local_ready else "needs-local-proof",
         }
     )
@@ -249,6 +297,8 @@ def _layer_row(layer: ArchitectureLayer, root: Path) -> dict[str, Any]:
 
 def _live_row(target: LiveQATarget, root: Path) -> dict[str, Any]:
     local_exists = _exists(root, target.local_proof)
+    live_command_paths_exist = _command_path_status(root, target.live_proof_command)
+    live_command_paths_ready = bool(live_command_paths_exist) and all(live_command_paths_exist.values())
     if target.manual_runner:
         status = "manual-os-runner"
     elif target.credential_envs:
@@ -260,6 +310,8 @@ def _live_row(target: LiveQATarget, root: Path) -> dict[str, Any]:
         {
             "credential_envs": list(target.credential_envs),
             "local_proof_exists": local_exists,
+            "live_command_paths_exist": live_command_paths_exist,
+            "live_command_paths_ready": live_command_paths_ready,
             "status": status,
             "claims_live_ready": False,
         }
@@ -273,6 +325,7 @@ def build_maturity_report(root: str | Path | None = None) -> dict[str, Any]:
     live = [_live_row(target, repo) for target in LIVE_QA_TARGETS]
     local_ready = sum(1 for row in layers if row["status"] == "local-ready")
     claimed_live = sum(1 for row in live if row["claims_live_ready"])
+    live_command_ready = sum(1 for row in live if row["live_command_paths_ready"])
     requires_credentials = sum(1 for row in live if row["status"] == "requires-credentials")
     manual_os = sum(1 for row in live if row["status"] == "manual-os-runner")
     public_docs_pages = _count_markdown(repo, "docs")
@@ -289,6 +342,7 @@ def build_maturity_report(root: str | Path | None = None) -> dict[str, Any]:
             "local_ready_layers": local_ready,
             "live_targets": len(live),
             "live_claimed_ready": claimed_live,
+            "live_command_path_ready_targets": live_command_ready,
             "requires_credentials": requires_credentials,
             "manual_os_runners": manual_os,
             "gap_buckets": len(REMAINING_GAP_BUCKETS),
@@ -316,6 +370,7 @@ def build_live_qa_matrix(root: str | Path | None = None) -> dict[str, Any]:
         "ok": True,
         "total": len(targets),
         "claimed_ready": sum(1 for row in targets if row["claims_live_ready"]),
+        "live_command_path_ready_targets": sum(1 for row in targets if row["live_command_paths_ready"]),
         "requires_credentials": sum(1 for row in targets if row["status"] == "requires-credentials"),
         "manual_os_runners": sum(1 for row in targets if row["status"] == "manual-os-runner"),
         "targets": targets,

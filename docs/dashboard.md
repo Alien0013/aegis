@@ -136,7 +136,7 @@ npm start
 npm run test:desktop
 ```
 
-See [../desktop/README.md](../desktop/README.md) for packaging commands and
+See [desktop.md](desktop.md) for packaging commands and
 release caveats. Signed Windows installers and notarized macOS artifacts are
 not claimed unless the required credentials and release artifacts are present.
 

@@ -22,8 +22,8 @@ The dashboard exposes the same target list at `/api/live-qa`.
 
 | Target family | Examples | Local proof | Live proof |
 | --- | --- | --- | --- |
-| Messaging gateway | Telegram, Discord, Slack, Matrix, Signal, email, SMS, WhatsApp, ntfy, Mattermost, Feishu, WeCom, Weixin, DingTalk, QQBot, Yuanbao | `tests/test_gateway_adapter_contract.py` | `AEGIS_LIVE_<CHANNEL>=1 ...` with real platform credentials. |
-| Providers | OpenAI-compatible API, Anthropic, Google/Gemini, OpenRouter-style endpoints | `tests/test_providers.py` and `docs/providers.md` | opt-in provider smoke with a real API key or OAuth account. |
+| Messaging gateway | API server, webhook, Telegram, Discord, Slack, Matrix, Signal, email, SMS, WhatsApp, WhatsApp Cloud, ntfy, Mattermost, Home Assistant, Feishu, WeCom, Weixin, DingTalk, BlueBubbles, QQBot, Yuanbao, Relay, Microsoft Graph webhook | `tests/test_gateway_adapter_contract.py` plus `tests/live/test_gateway_smoke.py` preflight | `AEGIS_LIVE_TARGET=<id> AEGIS_LIVE_<ID>=1 bash scripts/run_tests.sh tests/live/test_gateway_smoke.py` with real platform credentials. |
+| Providers | OpenAI, Anthropic, Google/Gemini, OpenRouter, Groq, DeepSeek, xAI, Mistral, Together, HuggingFace, Novita, Qwen, NVIDIA, DashScope, Cerebras, Perplexity, Fireworks, SambaNova | `tests/test_providers.py`, `docs/providers.md`, and `tests/live/test_provider_smoke.py` preflight | `AEGIS_LIVE_PROVIDER=<id> AEGIS_LIVE_<ID>=1 bash scripts/run_tests.sh tests/live/test_provider_smoke.py` with a real API key or OAuth account. |
 | Desktop installers | Linux, Windows, macOS | `desktop` node tests and release smoke | signed/notarized or local OS runner install/open/update/uninstall proof. |
 | Container install | Docker or CI image | `scripts/verify_all.sh` | clean-container install from a fresh checkout. |
 
@@ -53,6 +53,6 @@ aegis maturity --check
 bash scripts/run_tests.sh tests/test_gateway_adapter_contract.py tests/test_providers.py
 
 # example live style, only when credentials are configured
-AEGIS_LIVE_TELEGRAM=1 bash scripts/run_tests.sh tests/live/test_telegram.py
-AEGIS_LIVE_OPENAI=1 bash scripts/run_tests.sh tests/live/test_openai_provider.py
+AEGIS_LIVE_TARGET=telegram AEGIS_LIVE_TELEGRAM=1 bash scripts/run_tests.sh tests/live/test_gateway_smoke.py
+AEGIS_LIVE_PROVIDER=openai AEGIS_LIVE_OPENAI=1 bash scripts/run_tests.sh tests/live/test_provider_smoke.py
 ```

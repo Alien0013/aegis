@@ -42,6 +42,10 @@ section { margin-top: 28px; }
   max-width: 900px;
 }
 
+.compactHero {
+  padding-bottom: 24px;
+}
+
 .eyebrow {
   margin: 0 0 14px;
   color: var(--accent);

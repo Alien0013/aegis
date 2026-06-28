@@ -4391,6 +4391,29 @@ def _validate_cron_context_refs(store: Any, refs: list[str]) -> str:
     return ""
 
 
+def _normalize_dashboard_cron_deliver(raw: Any) -> tuple[str, str]:
+    if raw is None:
+        return "", ""
+    if isinstance(raw, (list, tuple, set)):
+        parts = [str(part).strip() for part in raw if str(part).strip()]
+    else:
+        parts = [part.strip() for part in str(raw).split(",") if part.strip()]
+    if not parts:
+        return "", ""
+    normalized: list[str] = []
+    for part in parts:
+        lower = part.lower()
+        if lower in {"local", "origin"}:
+            continue
+        if lower == "all":
+            return "", "deliver='all' is not supported by AEGIS cron; use explicit platform:chat_id targets"
+        if ":" not in part:
+            return "", f"delivery target must be platform:chat_id, got {part!r}"
+        if part not in normalized:
+            normalized.append(part)
+    return ",".join(normalized), ""
+
+
 _CRON_BLUEPRINTS: list[dict[str, Any]] = [
     {
         "id": "daily_digest",
@@ -4530,6 +4553,9 @@ def _cron_job_create_response(config: Config, body: dict[str, Any], profile: str
     prompt_error = _scan_cron_prompt(str(body.get("prompt") or ""))
     if prompt_error:
         return JSONResponse({"ok": False, "error": prompt_error}, status_code=400)
+    deliver, deliver_error = _normalize_dashboard_cron_deliver(body.get("deliver"))
+    if deliver_error:
+        return JSONResponse({"ok": False, "error": deliver_error}, status_code=400)
     try:
         job = store.add(
             str(body["schedule"]),
@@ -4539,7 +4565,7 @@ def _cron_job_create_response(config: Config, body: dict[str, Any], profile: str
             script=str(body.get("script") or ""),
             skills=list(skills),
             context_from=context_from,
-            deliver=str(body.get("deliver") or ""),
+            deliver=deliver,
             no_agent=_coerce_dashboard_bool(body.get("no_agent"), False),
             model=str(body.get("model") or ""),
             enabled_toolsets=_cron_context_refs(body.get("enabled_toolsets") or body.get("toolsets")),
@@ -4577,6 +4603,11 @@ def _cron_job_patch_response(
             return JSONResponse({"ok": False, "error": context_error}, status_code=400)
     if "enabled_toolsets" in updates:
         updates["enabled_toolsets"] = _cron_context_refs(updates["enabled_toolsets"])
+    if "deliver" in updates:
+        deliver, deliver_error = _normalize_dashboard_cron_deliver(updates["deliver"])
+        if deliver_error:
+            return JSONResponse({"ok": False, "error": deliver_error, "id": job_id}, status_code=400)
+        updates["deliver"] = deliver
     if "prompt" in updates:
         prompt_error = _scan_cron_prompt(str(updates.get("prompt") or ""))
         if prompt_error:
@@ -6209,6 +6240,9 @@ def _api_post(
             skills = body.get("skills") or []
             if isinstance(skills, str):
                 skills = [s.strip() for s in skills.split(",") if s.strip()]
+            deliver, deliver_error = _normalize_dashboard_cron_deliver(body.get("deliver"))
+            if deliver_error:
+                return {"ok": False, "error": deliver_error}
             try:
                 j = cs.add(
                     body["schedule"],
@@ -6216,7 +6250,7 @@ def _api_post(
                     body.get("channel", ""),
                     script=str(body.get("script") or ""),
                     skills=list(skills),
-                    deliver=str(body.get("deliver") or ""),
+                    deliver=deliver,
                     no_agent=_coerce_dashboard_bool(body.get("no_agent"), False),
                     context_from=context_from,
                     model=str(body.get("model") or ""),

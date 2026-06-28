@@ -5144,6 +5144,43 @@ def test_fastapi_cron_control_plane(tmp_path, monkeypatch):
     string_false_job_id = string_false_no_agent.json()["id"]
     assert string_false_no_agent.json()["job"]["no_agent"] is False
 
+    local_deliver = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/cron/jobs",
+        json={
+            "schedule": "every 2h",
+            "prompt": "local delivery clears delivery targets",
+            "deliver": "local",
+        },
+        headers=headers,
+    ))
+    assert local_deliver.status_code == 200
+    local_deliver_id = local_deliver.json()["id"]
+    assert local_deliver.json()["job"]["deliver"] == ""
+    local_preview = asyncio.run(_request(
+        app,
+        "GET",
+        f"/api/cron/jobs/{local_deliver_id}/preview",
+        headers=headers,
+    ))
+    assert local_preview.status_code == 200
+    assert local_preview.json()["targets"] == []
+
+    bare_deliver = asyncio.run(_request(
+        app,
+        "POST",
+        "/api/cron/jobs",
+        json={
+            "schedule": "every 2h",
+            "prompt": "bad bare target",
+            "deliver": "telegram",
+        },
+        headers=headers,
+    ))
+    assert bare_deliver.status_code == 400
+    assert "platform:chat_id" in bare_deliver.json()["error"]
+
     alias_bad_workdir = asyncio.run(_request(
         app,
         "POST",
@@ -5265,7 +5302,7 @@ def test_fastapi_cron_control_plane(tmp_path, monkeypatch):
     ))
     assert put_patch.status_code == 200
     assert put_patch.json()["job"]["name"] == "Put digest"
-    assert put_patch.json()["job"]["deliver"] == "local"
+    assert put_patch.json()["job"]["deliver"] == ""
 
     bad_patch_workdir = asyncio.run(_request(
         app,
