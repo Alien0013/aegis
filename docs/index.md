@@ -25,6 +25,8 @@ Use this page as the product map.
 | MCP | [mcp.md](mcp.md) |
 | Gateway and channels | [gateway.md](gateway.md) |
 | Maturity matrix | [maturity.md](maturity.md), [live-qa-matrix.md](live-qa-matrix.md), and [operations-contracts.md](operations-contracts.md) |
+| Public docs / i18n | [i18n status](i18n/index.md) and localized snapshots: [French](i18n/fr/index.md), [Spanish](i18n/es/index.md), [Simplified Chinese](i18n/zh-Hans/index.md), [Punjabi](i18n/pa/index.md) |
+| Developer guide | [adding platform adapters](developer-guide/adding-platform-adapters.md), [plugin LLM access](developer-guide/plugin-llm-access.md), [session storage](developer-guide/session-storage.md), [context compression and caching](developer-guide/context-compression-and-caching.md), [provider routing](developer-guide/provider-routing.md), [dashboard/desktop contracts](developer-guide/dashboard-desktop-contracts.md), [security approvals](developer-guide/security-approvals.md) |
 | User guides | [configuration](user-guide/configuration.md), [messaging](user-guide/messaging.md), [cron](user-guide/cron.md), [sessions](user-guide/sessions.md), [browser](user-guide/browser.md), [TTS](user-guide/tts.md), [environment variables](user-guide/environment-variables.md), [Docker](user-guide/docker.md), [hooks](user-guide/hooks.md), [profile distributions](user-guide/profile-distributions.md) |
 | Tracing and evals | [tracing-evals.md](tracing-evals.md) |
 | Architecture | [architecture.md](architecture.md) |

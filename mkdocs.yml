@@ -9,12 +9,38 @@ theme:
       primary: deep purple
   features:
     - navigation.sections
+    - navigation.expand
     - content.code.copy
 
 nav:
   - Home: index.md
   - Install: install.md
   - Quickstart: quickstart.md
+  - Architecture: architecture.md
+  - Public Maturity:
+      - Maturity Matrix: maturity.md
+      - Live QA Matrix: live-qa-matrix.md
+      - Operations Contracts: operations-contracts.md
+      - I18n Status: i18n/index.md
+  - User Guide:
+      - Configuration: user-guide/configuration.md
+      - Messaging: user-guide/messaging.md
+      - Cron: user-guide/cron.md
+      - Sessions: user-guide/sessions.md
+      - Browser: user-guide/browser.md
+      - TTS: user-guide/tts.md
+      - Environment Variables: user-guide/environment-variables.md
+      - Docker: user-guide/docker.md
+      - Hooks: user-guide/hooks.md
+      - Profile Distributions: user-guide/profile-distributions.md
+  - Developer Guide:
+      - Adding Platform Adapters: developer-guide/adding-platform-adapters.md
+      - Plugin LLM Access: developer-guide/plugin-llm-access.md
+      - Session Storage: developer-guide/session-storage.md
+      - Context Compression and Caching: developer-guide/context-compression-and-caching.md
+      - Provider Routing: developer-guide/provider-routing.md
+      - Dashboard and Desktop Contracts: developer-guide/dashboard-desktop-contracts.md
+      - Security Approvals: developer-guide/security-approvals.md
   - Providers & Auth: providers.md
   - Tools & Permissions: tools.md
   - Memory, Skills & Learning: memory-skills.md
@@ -27,7 +53,16 @@ nav:
   - Serve API: serve.md
   - Security: security.md
   - CLI Reference: cli.md
-  - Architecture: architecture.md
+  - Generated References:
+      - CLI Commands: cli-reference.md
+      - Slash Commands: slash-commands.md
+      - API Routes: api-routes.md
+      - Tools Reference: tools-reference.md
+  - Localized Snapshots:
+      - Français: i18n/fr/index.md
+      - Español: i18n/es/index.md
+      - 简体中文: i18n/zh-Hans/index.md
+      - ਪੰਜਾਬੀ: i18n/pa/index.md
 
 markdown_extensions:
   - admonition

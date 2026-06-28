@@ -89,10 +89,14 @@ p {
 .heroActions,
 .surfaceGrid,
 .stats,
-.cardGrid { display: grid; }
+.cardGrid,
+.docGrid,
+.localeGrid,
+.guideGrid,
+.qaGrid { display: grid; }
 
 .heroActions {
-  grid-template-columns: repeat(2, fit-content(220px));
+  grid-template-columns: repeat(3, fit-content(220px));
   gap: 12px;
   margin-top: 30px;
 }
@@ -125,6 +129,7 @@ p {
 .statCard,
 .panel,
 .infoCard,
+.linkCard,
 .callout {
   border: 1px solid var(--line);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.025));
@@ -132,7 +137,8 @@ p {
 }
 
 .statCard,
-.infoCard {
+.infoCard,
+.linkCard {
   border-radius: 20px;
   padding: 22px;
 }
@@ -153,7 +159,8 @@ p {
 }
 
 .statCard p,
-.infoCard p { font-size: 0.94rem; }
+.infoCard p,
+.linkCard p { font-size: 0.94rem; }
 
 .panel,
 .callout {
@@ -223,6 +230,63 @@ p {
   gap: 14px;
 }
 
+.docGrid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.localeGrid,
+.guideGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.linkCard {
+  display: block;
+  color: var(--text);
+  text-decoration: none;
+  background-color: rgba(14, 21, 38, 0.78);
+  transition: transform 160ms ease, border-color 160ms ease;
+}
+
+.linkCard:hover,
+.linkCard:focus-visible {
+  border-color: rgba(125, 211, 252, 0.72);
+  transform: translateY(-2px);
+}
+
+.linkCard h3 { color: var(--text); }
+
+.localeCard span {
+  display: inline-flex;
+  margin-bottom: 12px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--success);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.qaGrid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin: 26px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.qaGrid li {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(0, 0, 0, 0.16);
+  padding: 14px;
+  color: var(--text);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
 .infoCard { background-color: rgba(14, 21, 38, 0.78); }
 
 .callout {
@@ -235,7 +299,9 @@ p {
 
 @media (max-width: 900px) {
   .stats,
-  .cardGrid { grid-template-columns: repeat(2, 1fr); }
+  .cardGrid,
+  .docGrid,
+  .qaGrid { grid-template-columns: repeat(2, 1fr); }
 
   .split { grid-template-columns: 1fr; }
 }
@@ -248,6 +314,10 @@ p {
   .heroActions,
   .stats,
   .cardGrid,
+  .docGrid,
+  .localeGrid,
+  .guideGrid,
+  .qaGrid,
   .surfaceGrid { grid-template-columns: 1fr; }
 
   .timeline li { grid-template-columns: 1fr; }

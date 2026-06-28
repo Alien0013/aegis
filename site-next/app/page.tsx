@@ -1,4 +1,13 @@
-import { internals, runtimeSteps, surfaces, systemStats } from "@/lib/content";
+import {
+  developerGuideCards,
+  documentationPillars,
+  i18nLocales,
+  internals,
+  liveQaHighlights,
+  runtimeSteps,
+  surfaces,
+  systemStats,
+} from "@/lib/content";
 
 export default function Home() {
   return (
@@ -12,7 +21,8 @@ export default function Home() {
         </p>
         <div className="heroActions" aria-label="Primary actions">
           <a href="#runtime" className="button primary">Explore the runtime</a>
-          <a href="#internals" className="button secondary">See the internals</a>
+          <a href="#docs" className="button secondary">Open the docs matrix</a>
+          <a href="#i18n" className="button secondary">See localization</a>
         </div>
       </section>
 
@@ -74,12 +84,83 @@ export default function Home() {
         </div>
       </section>
 
+      <section className="panel" id="docs" aria-labelledby="docs-title">
+        <div className="sectionHeading">
+          <p className="eyebrow">Public documentation parity</p>
+          <h2 id="docs-title">A real docs surface, not a README pile</h2>
+          <p>
+            The public docs site now carries a single navigable map for user guides, generated references,
+            integration/plugin docs, operations contracts, live QA, and file-family maturity evidence.
+          </p>
+        </div>
+        <div className="docGrid">
+          {documentationPillars.map((pillar) => (
+            <a key={pillar.title} className="linkCard" href={pillar.href}>
+              <h3>{pillar.title}</h3>
+              <p>{pillar.body}</p>
+            </a>
+          ))}
+        </div>
+      </section>
+
+      <section className="panel" id="i18n" aria-labelledby="i18n-title">
+        <div className="sectionHeading">
+          <p className="eyebrow">Internationalization</p>
+          <h2 id="i18n-title">Localization is tracked as a docs contract</h2>
+          <p>
+            English remains canonical, while localized snapshot pages make public translation status explicit
+            for readers and contributors instead of hiding i18n work in an issue backlog.
+          </p>
+        </div>
+        <div className="localeGrid">
+          {i18nLocales.map((locale) => (
+            <a key={locale.locale} className="linkCard localeCard" href={locale.href}>
+              <span>{locale.locale}</span>
+              <h3>{locale.label}</h3>
+              <p><strong>{locale.status}.</strong> {locale.note}</p>
+            </a>
+          ))}
+        </div>
+      </section>
+
+      <section className="panel" id="developer-guides" aria-labelledby="developer-guides-title">
+        <div className="sectionHeading">
+          <p className="eyebrow">Developer guide</p>
+          <h2 id="developer-guides-title">Contracts for extending AEGIS safely</h2>
+          <p>
+            Platform adapters, plugins, session storage, prompt context, providers, dashboard/desktop,
+            and security approvals now have first-class developer-guide entry points.
+          </p>
+        </div>
+        <div className="guideGrid">
+          {developerGuideCards.map((guide) => (
+            <a key={guide.title} className="linkCard" href={guide.href}>
+              <h3>{guide.title}</h3>
+              <p>{guide.body}</p>
+            </a>
+          ))}
+        </div>
+      </section>
+
+      <section className="callout" id="live-qa" aria-labelledby="live-qa-title">
+        <p className="eyebrow">Live QA truthfulness</p>
+        <h2 id="live-qa-title">Local proof and external proof are separate by design</h2>
+        <p>
+          AEGIS can prove local contracts continuously, but it does not call a Telegram bot, provider account,
+          SMS bridge, or macOS installer live-ready until a credentialed or OS-runner smoke records evidence.
+        </p>
+        <ul className="qaGrid">
+          {liveQaHighlights.map((highlight) => <li key={highlight}>{highlight}</li>)}
+        </ul>
+      </section>
+
       <section className="callout" aria-labelledby="ship-title">
         <p className="eyebrow">Shippable story</p>
         <h2 id="ship-title">Transparent by default, extensible when needed</h2>
         <p>
           This Next.js page explains the runtime in plain language while keeping the claims grounded in the repository:
-          shared surfaces, local state, provider routing, guarded tools, memory, skills, traces, evals, and rollback.
+          shared surfaces, local state, provider routing, guarded tools, memory, skills, traces, evals, rollback,
+          public docs, i18n status, and live-QA evidence boundaries.
         </p>
       </section>
     </main>

@@ -131,6 +131,12 @@ def cmd_maturity(args, config: Config) -> int:
             f"{summary['live_claimed_ready']} claimed ready"
         )
         _print("Docs: docs/maturity.md, docs/live-qa-matrix.md, docs/operations-contracts.md")
+        _print(
+            "Public docs: "
+            f"{summary.get('public_docs_pages', 0)} pages; "
+            f"{summary.get('developer_guides', 0)} developer guides; "
+            f"{summary.get('i18n_locales', 0)} localized snapshot locales"
+        )
         if getattr(args, "verbose", False):
             _print(render_maturity_markdown(report))
     if getattr(args, "check", False) and not report.get("ok"):

@@ -198,9 +198,11 @@ LIVE_QA_TARGET_IDS: tuple[str, ...] = tuple(row.id for row in LIVE_QA_TARGETS)
 
 
 REMAINING_GAP_BUCKETS: tuple[dict[str, str], ...] = (
+    {"id": "public_docs_i18n", "status": "covered-by-docs-site", "next_proof": "mkdocs.yml + site-next + docs/i18n/"},
     {"id": "public_docs", "status": "covered-by-docs", "next_proof": "docs/maturity.md + docs/user-guide/"},
     {"id": "user_guides", "status": "covered-by-docs", "next_proof": "docs/user-guide/*.md"},
     {"id": "plugin_integration_docs", "status": "covered-by-docs", "next_proof": "docs/operations-contracts.md"},
+    {"id": "developer_guides", "status": "covered-by-docs", "next_proof": "docs/developer-guide/*.md"},
     {"id": "operations_contracts", "status": "covered-by-docs", "next_proof": "docs/operations-contracts.md"},
     {"id": "external_live_qa", "status": "requires-credentials", "next_proof": "docs/live-qa-matrix.md"},
     {"id": "file_family_depth", "status": "tracked-by-maturity-matrix", "next_proof": "aegis maturity --check"},
@@ -209,6 +211,22 @@ REMAINING_GAP_BUCKETS: tuple[dict[str, str], ...] = (
 
 def _exists(root: Path, rel: str) -> bool:
     return (root / rel).exists()
+
+
+def _count_markdown(root: Path, rel: str) -> int:
+    base = root / rel
+    if not base.exists():
+        return 0
+    if base.is_file():
+        return 1 if base.suffix.lower() == ".md" else 0
+    return sum(1 for path in base.rglob("*.md") if path.is_file())
+
+
+def _count_locale_dirs(root: Path) -> int:
+    base = root / "docs" / "i18n"
+    if not base.exists():
+        return 0
+    return sum(1 for path in base.iterdir() if path.is_dir() and (path / "index.md").is_file())
 
 
 def _layer_row(layer: ArchitectureLayer, root: Path) -> dict[str, Any]:
@@ -257,6 +275,10 @@ def build_maturity_report(root: str | Path | None = None) -> dict[str, Any]:
     claimed_live = sum(1 for row in live if row["claims_live_ready"])
     requires_credentials = sum(1 for row in live if row["status"] == "requires-credentials")
     manual_os = sum(1 for row in live if row["status"] == "manual-os-runner")
+    public_docs_pages = _count_markdown(repo, "docs")
+    i18n_locales = _count_locale_dirs(repo)
+    developer_guides = _count_markdown(repo, "docs/developer-guide")
+    user_guides = _count_markdown(repo, "docs/user-guide")
     ok = local_ready == len(layers) and claimed_live == 0
     return {
         "object": "aegis.maturity.report",
@@ -270,6 +292,10 @@ def build_maturity_report(root: str | Path | None = None) -> dict[str, Any]:
             "requires_credentials": requires_credentials,
             "manual_os_runners": manual_os,
             "gap_buckets": len(REMAINING_GAP_BUCKETS),
+            "public_docs_pages": public_docs_pages,
+            "i18n_locales": i18n_locales,
+            "developer_guides": developer_guides,
+            "user_guides": user_guides,
         },
         "architecture_layers": layers,
         "live_qa_matrix": live,
@@ -311,6 +337,10 @@ def render_maturity_markdown(report: dict[str, Any] | None = None) -> str:
         f"- Credentialed targets still requiring external proof: {payload['summary']['requires_credentials']}",
         f"- Manual OS runners still requiring proof: {payload['summary']['manual_os_runners']}",
         f"- Live targets claimed ready without proof: {payload['summary']['live_claimed_ready']}",
+        f"- Public docs pages: {payload['summary'].get('public_docs_pages', 0)}",
+        f"- User-guide pages: {payload['summary'].get('user_guides', 0)}",
+        f"- Developer-guide pages: {payload['summary'].get('developer_guides', 0)}",
+        f"- Localized snapshot locales: {payload['summary'].get('i18n_locales', 0)}",
         "",
         "## Architecture layers",
         "",
