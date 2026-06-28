@@ -266,6 +266,7 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/pty | WEBSOCKET | pty_socket |
 | /api/pub | POST | api_pub |
 | /api/pub | WEBSOCKET | event_socket |
+| /api/readiness | GET | api_setup_readiness |
 | /api/runs/{run_id}/timeline | GET | api_run_timeline |
 | /api/runtime-profiles | GET | api_runtime_profiles_get |
 | /api/runtime-profiles | POST | api_runtime_profiles_create |
@@ -296,6 +297,7 @@ Generated from `aegis.dashboard_fastapi.create_app()` using default config.
 | /api/sessions/{session_id}/prompt-audit | GET | api_session_prompt_audit |
 | /api/sessions/{session_id}/rename | POST | api_session_rename |
 | /api/sessions/{session_id}/timeline | GET | api_session_timeline |
+| /api/setup/status | GET | api_setup_readiness |
 | /api/skills | GET | api_skills_list |
 | /api/skills | POST | api_skills_create |
 | /api/skills/bundles | GET | api_skill_bundles |

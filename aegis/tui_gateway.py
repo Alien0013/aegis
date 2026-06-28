@@ -110,22 +110,9 @@ class _StructuredEmitter:
 def setup_status(config: Config) -> dict[str, object]:
     """Report whether the TUI has enough provider setup to start useful turns."""
 
-    from .providers.registry import provider_capability_matrix
+    from .setup_readiness import setup_status_summary
 
-    matrix = provider_capability_matrix(config)
-    raw_totals = matrix.get("totals")
-    raw_active = matrix.get("active")
-    totals: dict[str, object] = raw_totals if isinstance(raw_totals, dict) else {}
-    active: dict[str, object] = raw_active if isinstance(raw_active, dict) else {}
-    ready_text = str(totals.get("ready") or "0").strip().lower()
-    ready = ready_text not in {"", "0", "false", "none"}
-    provider = str(active.get("provider") or active.get("name") or config.get("model.provider", "") or "")
-    model = str(active.get("model") or config.get("model.default", "") or "")
-    return {
-        "provider_configured": ready,
-        "provider": provider,
-        "model": model,
-    }
+    return setup_status_summary(config)
 
 
 def header_snapshot(agent: Any) -> dict:

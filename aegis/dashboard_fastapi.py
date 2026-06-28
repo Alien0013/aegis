@@ -5810,6 +5810,10 @@ def _ws_rpc_error(request_id: Any, code: int, message: str, *, is_jsonrpc: bool)
 def _api_get(path: str, query: dict[str, list[str]], config: Config) -> dict:
     if path == "/api/status":
         return dash._dashboard_status(config)
+    if path in {"/api/setup/status", "/api/readiness"}:
+        from .setup_readiness import setup_readiness_payload
+
+        return setup_readiness_payload(config, source="dashboard")
     if path == "/api/activity":
         from .activity import snapshot
 

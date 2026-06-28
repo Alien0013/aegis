@@ -179,6 +179,61 @@ def test_fastapi_dashboard_auth_and_cookie(tmp_path, monkeypatch):
     assert _consume_ws_ticket(ticket_body["ticket"]) is False
 
 
+def test_dashboard_setup_readiness_routes_are_explicit_and_secret_safe(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    monkeypatch.setenv("AEGIS_DASHBOARD_TOKEN", "secret-token-123")
+    from aegis.config import Config
+    import aegis.providers.registry as registry
+    from aegis.dashboard_fastapi import _dashboard_ws_rpc_response, create_app
+
+    monkeypatch.setattr(
+        registry,
+        "provider_capability_matrix",
+        lambda _config: {
+            "totals": {"ready": 0},
+            "active": {"provider": "anthropic", "model": "claude-test"},
+            "providers": [],
+        },
+    )
+    app = create_app(Config.load())
+    route_paths = {getattr(route, "path", "") for route in app.routes}
+    assert "/api/setup/status" in route_paths
+    assert "/api/readiness" in route_paths
+
+    headers = {"X-Aegis-Token": "secret-token-123"}
+    response = asyncio.run(_request(app, "GET", "/api/setup/status", headers=headers))
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is False
+    assert body["object"] == "aegis.setup.readiness"
+    assert body["product"] == "AEGIS"
+    assert body["provider_configured"] is False
+    assert body["provider"] == "anthropic"
+    assert body["model"] == "claude-test"
+    assert body["next_command"] == "aegis setup"
+    assert body["surfaces"]["dashboard"]["route"] == "/api/setup/status"
+    assert body["surfaces"]["tui"]["slash_command"] == "/setup status"
+    assert "secret-token-123" not in json.dumps(body)
+
+    alias = asyncio.run(_request(app, "GET", "/api/readiness", headers=headers))
+    assert alias.status_code == 200
+    assert alias.json()["object"] == "aegis.setup.readiness"
+
+    rpc = _dashboard_ws_rpc_response(
+        '{"jsonrpc":"2.0","id":"setup","method":"dashboard.get","params":{"path":"/api/setup/status"}}',
+        Config.load(),
+    )
+    assert rpc is not None
+    assert rpc["result"]["provider_configured"] is False
+
+
+def test_dashboard_overview_surfaces_setup_readiness_card():
+    overview = (Path(__file__).resolve().parents[1] / "web/src/pages/Overview.tsx").read_text(encoding="utf-8")
+    assert 'api<SetupReadiness>("setup/status")' in overview
+    assert "Setup readiness" in overview
+    assert "next_command" in overview
+
+
 def test_fastapi_tools_validation_and_permission_dry_run(tmp_path, monkeypatch):
     import aegis.dashboard_routes.tools_mcp as tools_routes
 

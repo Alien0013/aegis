@@ -33,6 +33,7 @@ from ..dashboard_fastapi import (
     dash,
     json,
 )
+from ..setup_readiness import setup_readiness_payload
 
 
 def register(app, config, chat_runner):
@@ -40,6 +41,12 @@ def register(app, config, chat_runner):
     async def api_status(request: Request) -> JSONResponse:
         _require_request(request, config)
         return JSONResponse(dash._dashboard_status(config))
+
+    @app.get("/api/setup/status")
+    @app.get("/api/readiness")
+    async def api_setup_readiness(request: Request) -> JSONResponse:
+        _require_request(request, config)
+        return JSONResponse(setup_readiness_payload(config, source="dashboard"))
 
     @app.get("/api/system/stats")
     async def api_system_stats(request: Request) -> JSONResponse:

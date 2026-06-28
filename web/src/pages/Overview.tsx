@@ -19,6 +19,14 @@ interface Status {
   busy_mode?: string;
   toolsets?: string[];
 }
+interface SetupReadiness {
+  ok?: boolean;
+  provider_configured?: boolean;
+  provider?: string;
+  model?: string;
+  next_command?: string;
+  checks?: Array<{ id?: string; label?: string; ok?: boolean; detail?: string; command?: string }>;
+}
 interface SessionRow { id: string; title?: string; updated_at?: string; message_count?: number }
 interface RunRow {
   id: string;
@@ -55,12 +63,14 @@ interface Cockpit {
 
 export function Overview() {
   const [data, setData] = useState<Cockpit | null>(null);
+  const [setup, setSetup] = useState<SetupReadiness | null>(null);
   const [err, setErr] = useState("");
 
   useEffect(() => {
     api<Cockpit>("cockpit")
       .then(setData)
       .catch((e) => api<Status>("status").then((s) => setData({ status: s })).catch(() => setErr(String(e))));
+    api<SetupReadiness>("setup/status").then(setSetup).catch(() => setSetup(null));
   }, []);
 
   if (err) return <><PageHeader title="Dashboard" /><Card><Empty icon="alert">Couldn't load - {err}</Empty></Card></>;
@@ -210,6 +220,16 @@ export function Overview() {
               <HealthLine label="Tools" ok={availableTools > 0} detail={`${availableTools}/${s.tools || 0} available`} />
               <HealthLine label="Secrets" ok={missingKeys === 0} detail={missingKeys ? `${missingKeys} missing` : "configured"} />
               <HealthLine label="Plugins" ok detail={`${data.plugins?.enabled?.length || 0} enabled`} />
+            </div>
+          </Card>
+
+          <Card title="Setup readiness" sub={setup?.ok ? "ready" : "attention"}>
+            <div className="space-y-2">
+              <HealthLine label="Provider auth" ok={!!setup?.provider_configured} detail={setup?.provider || s.provider || "run setup"} />
+              {(setup?.checks || []).slice(1, 4).map((check) => (
+                <HealthLine key={check.id || check.label} label={check.label || check.id || "check"} ok={!!check.ok} detail={check.detail || check.command || "-"} />
+              ))}
+              <InfoLine label="Next command" value={setup?.next_command || "aegis setup"} />
             </div>
           </Card>
 
